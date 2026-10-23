@@ -466,7 +466,8 @@ public sealed class PlayerbotInitiativeTests
         await PassAsync(world, now);
         Assert.Equal(1, Lane(world).Openings);
         await HelpTestKit.UntilAsync(() => !client.Calls.IsEmpty, "the model to be asked for the first line");
-        Assert.True(Lane(world).NextOpeningFor(first.PlayerGuid) > now + PlayerbotInitiativeLane.BotGapMs, "held while the line is phrased");
+        long held = await world.Host.OnWorldAsync(() => Lane(world).NextOpeningFor(first.PlayerGuid));
+        Assert.True(held > now + PlayerbotInitiativeLane.BotGapMs, "held while the line is phrased");
 
         // The model answers and the limiter refuses the line: nothing will be said, so the hold is given back at once.
         gate.SetResult();
@@ -475,6 +476,34 @@ public sealed class PlayerbotInitiativeTests
         long later = GreetingTime(second, now + PlayerbotInitiativeLane.BotGapMs + 5_000);
         await PassAsync(world, later);
         Assert.Equal(2, Lane(world).Openings);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AModelThatGivesNothingOrThrows_ReleasesThePlayer_SoTheWorkerFailureDoesNotHoldItForTenMinutes(bool throws)
+    {
+        // The chain ends in the built-in template, so a model that merely fails still gets its opening said. The worker gives up on the line only when a
+        // model's moderation step flags it (the null path) or the client faults with an exception the request path does not translate (the catch path).
+        var client = new FakeBotChatClient();
+        if (throws) client.Default = (_, _) => throw new FormatException("the provider blew up");
+        else client.Moderation = _ => new BotChatModeration(BotChatModerationVerdict.Flagged);
+        await using SocialWorld world = await StartWithClientAsync(client, options =>
+        {
+            if (throws) return;
+            options.Chat.Providers[0].Moderation = PlayerbotChatModerationKind.Endpoint;
+            options.Chat.Providers[0].ModerationBaseUrl = "https://moderation.invalid/v1";
+        });
+        string suffix = throws ? "t" : "n";
+        await using WorldTestClient player = await world.AddPlayerAsync("Initnone" + suffix);
+        Pair first = await FamiliarAsync(world, "Initnonea" + suffix, "Initnone" + suffix);
+        long now = GreetingTime(first);
+        await PassAsync(world, now);
+        Assert.Equal(1, Lane(world).Openings);
+
+        // The worker gave up on the line: the speech's Dropped callback must reach the lane on a world-thread drain, which gives the hold back.
+        await HelpTestKit.UntilAsync(() => throws ? !client.Calls.IsEmpty : !client.Moderations.IsEmpty, "the worker to reach the provider");
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => Lane(world).NextOpeningFor(first.PlayerGuid)).Result <= now, "the failed line to release the player");
     }
 
     [Fact]
