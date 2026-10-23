@@ -126,6 +126,7 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
     private const uint MaxGroups = 4096;
 
     private readonly ConcurrentDictionary<(IClientFileSource Source, string Key), Lazy<Entry>> _entries = new();
+    // Guards byte accounting: Clear, counting a finished load and Evict all take it, so _bytes only ever holds counted, still-cached entries.
     private readonly Lock _evictGate = new();
     private long _bytes;
     private long _clock;
@@ -139,6 +140,9 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
         public long Bytes { get; } = bytes;
 
         public long LastUse;
+
+        // Set under _evictGate once Bytes are in _bytes.
+        public bool Counted;
     }
 
     public long Bytes => Interlocked.Read(ref _bytes);
@@ -167,8 +171,11 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
     /// <summary>Drops every cached model.</summary>
     public void Clear()
     {
-        _entries.Clear();
-        Interlocked.Exchange(ref _bytes, 0);
+        lock (_evictGate)
+        {
+            _entries.Clear();
+            Interlocked.Exchange(ref _bytes, 0);
+        }
     }
 
     private static Entry LoadWmo(IClientFileSource files, string clientPath)
@@ -242,12 +249,7 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
     {
         (IClientFileSource, string) id = (files, key);
         Lazy<Entry> lazy = _entries.GetOrAdd(id, _ => new Lazy<Entry>(
-            () =>
-            {
-                Entry created = load();
-                Interlocked.Add(ref _bytes, created.Bytes);
-                return created;
-            },
+            load,
             LazyThreadSafetyMode.ExecutionAndPublication));
         Entry entry;
         try
@@ -262,6 +264,16 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
         }
 
         entry.LastUse = Interlocked.Increment(ref _clock);
+        lock (_evictGate)
+        {
+            // A Clear that ran while this load was in flight already dropped the entry; counting it now would leak bytes.
+            if (!entry.Counted && _entries.TryGetValue(id, out Lazy<Entry>? current) && ReferenceEquals(current, lazy))
+            {
+                entry.Counted = true;
+                Interlocked.Add(ref _bytes, entry.Bytes);
+            }
+        }
+
         Evict(id);
         return entry;
     }
@@ -282,18 +294,18 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
             }
 
             var candidates = _entries
-                .Where(p => p.Value.IsValueCreated && !p.Key.Equals(keep))
-                .Select(p => (p.Key, Entry: p.Value.Value))
+                .Where(p => p.Value.IsValueCreated && !p.Key.Equals(keep) && p.Value.Value.Counted)
+                .Select(p => (p.Key, Lazy: p.Value, Entry: p.Value.Value))
                 .OrderBy(c => c.Entry.LastUse)
                 .ToList();
-            foreach ((var key, Entry entry) in candidates)
+            foreach ((var key, Lazy<Entry> lazy, Entry entry) in candidates)
             {
                 if (over <= 0)
                 {
                     break;
                 }
 
-                if (_entries.TryRemove(key, out _))
+                if (_entries.TryRemove(new KeyValuePair<(IClientFileSource, string), Lazy<Entry>>(key, lazy)))
                 {
                     Interlocked.Add(ref _bytes, -entry.Bytes);
                     over -= entry.Bytes;

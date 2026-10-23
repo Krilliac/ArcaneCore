@@ -120,16 +120,22 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
         }
         catch (Exception commitError)
         {
-            FaultLedger.Shared.Record("data.loot-store", commitError);
-            AnomalyLedger.Shared.Report("database", "loot-commit-failed", request.Key.ToString(), commitError.Message, AnomalySeverity.Warning);
+            if (commitError is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("data.loot-store", commitError);
+                AnomalyLedger.Shared.Report("database", "loot-commit-failed", request.Key.ToString(), commitError.Message, AnomalySeverity.Warning);
+            }
             try
             {
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception rollbackError)
             {
-                FaultLedger.Shared.Record("data.loot-store", rollbackError);
-                AnomalyLedger.Shared.Report("database", "loot-rollback-failed", request.Key.ToString(), rollbackError.Message, AnomalySeverity.Error);
+                if (rollbackError is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("data.loot-store", rollbackError);
+                    AnomalyLedger.Shared.Report("database", "loot-rollback-failed", request.Key.ToString(), rollbackError.Message, AnomalySeverity.Error);
+                }
                 throw new AggregateException("Loot commit and rollback failed; discard the context.", commitError, rollbackError);
             }
 

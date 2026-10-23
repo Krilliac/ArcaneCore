@@ -89,6 +89,14 @@ public sealed class DbcFile
     public string GetString(int record, int field)
     {
         uint offset = GetUInt32(record, field);
+        // A zero-size block is well-formed (Parse accepts it); offset 0 is the documented "" there.
+        // Deliberate small divergence from cmangos' stringOffset < stringSize assert. Only the empty
+        // block is special-cased so a non-empty block with no leading NUL keeps its byte-0 string.
+        if (offset == 0 && _stringBlockSize == 0)
+        {
+            return string.Empty;
+        }
+
         if (offset >= _stringBlockSize)
         {
             throw new InvalidDataException($"string offset {offset} outside the {_stringBlockSize}-byte string block");

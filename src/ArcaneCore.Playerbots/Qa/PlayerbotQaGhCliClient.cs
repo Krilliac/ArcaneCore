@@ -26,6 +26,7 @@ internal interface IQaProcessRunner
 internal sealed class QaProcessRunner : IQaProcessRunner
 {
     private const int MaxOutputChars = 8 * 1024 * 1024;
+    internal const string OutputCapMessage = "gh printed more than 8 MiB";
 
     public async Task<QaProcessResult> RunAsync(QaProcessRequest request, CancellationToken cancellationToken)
     {
@@ -59,23 +60,58 @@ internal sealed class QaProcessRunner : IQaProcessRunner
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(request.Timeout);
+        Task<string>? stdout = null;
+        Task<string>? stderr = null;
         try
         {
             process.StandardInput.Close();
-            Task<string> stdout = ReadCappedAsync(process.StandardOutput, timeout.Token);
-            Task<string> stderr = ReadCappedAsync(process.StandardError, timeout.Token);
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            stdout = ReadCappedAsync(process.StandardOutput, timeout.Token);
+            stderr = ReadCappedAsync(process.StandardError, timeout.Token);
+            Task exit = process.WaitForExitAsync(timeout.Token);
+
+            // A reader that hits the cap stops draining its pipe, so the child would block and never exit: watch the readers too and fail the moment one faults.
+            Task<string>? pendingOut = stdout;
+            Task<string>? pendingErr = stderr;
+            while (true)
+            {
+                Task finished = await Task.WhenAny(exit, pendingOut ?? exit, pendingErr ?? exit).ConfigureAwait(false);
+                if (ReferenceEquals(finished, exit)) break;
+                await finished.ConfigureAwait(false); // throws the cap error (or the cancellation); a reader that ended normally is simply done
+                if (ReferenceEquals(finished, pendingOut)) pendingOut = null;
+                else pendingErr = null;
+            }
+
+            await exit.ConfigureAwait(false);
             return new QaProcessResult(process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false), TimedOut: false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            Kill(process);
+            await StopAsync(process, timeout, stdout, stderr).ConfigureAwait(false);
             return new QaProcessResult(-1, string.Empty, string.Empty, TimedOut: true);
         }
         catch
         {
-            Kill(process);
+            await StopAsync(process, timeout, stdout, stderr).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>Kills the child (before the readers are awaited, or the await could hang on a held pipe), cancels the readers and observes both so a faulted one is never left unobserved.</summary>
+    private static async Task StopAsync(Process process, CancellationTokenSource timeout, Task<string>? stdout, Task<string>? stderr)
+    {
+        Kill(process);
+        await timeout.CancelAsync().ConfigureAwait(false);
+        foreach (Task? reader in new Task?[] { stdout, stderr })
+        {
+            if (reader is null) continue;
+            try
+            {
+                await reader.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // already surfaced through the main path (or a cancellation); awaiting only marks the task observed
+            }
         }
     }
 
@@ -86,7 +122,7 @@ internal sealed class QaProcessRunner : IQaProcessRunner
         int read;
         while ((read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
         {
-            if (sb.Length + read > MaxOutputChars) throw new PlayerbotQaPublishException("gh printed more than 8 MiB", transient: false);
+            if (sb.Length + read > MaxOutputChars) throw new PlayerbotQaPublishException(OutputCapMessage, transient: false);
             sb.Append(buffer, 0, read);
         }
 
@@ -251,7 +287,17 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
                 args.Add(label);
             }
 
-            QaProcessResult result = await RunAsync(args, "issue create", cancellationToken).ConfigureAwait(false);
+            QaProcessResult result;
+            try
+            {
+                result = await RunAsync(args, "issue create", cancellationToken).ConfigureAwait(false);
+            }
+            catch (PlayerbotQaPublishException ex) when (!ex.Transient && ex.Message == QaProcessRunner.OutputCapMessage)
+            {
+                // The child was killed mid-run, so the issue may already exist: transient, so the pass stops and the next list settles it (a permanent failure would be retried as a new create).
+                throw new PlayerbotQaPublishException(ex.Message, transient: true, ex);
+            }
+
             // gh prints the new issue's URL as the last line.
             string last = result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? string.Empty;
             Match m = IssueUrlPattern().Match(last);

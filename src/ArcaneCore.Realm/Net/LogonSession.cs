@@ -1194,6 +1194,9 @@ public sealed class LogonSession(
         Invariant.Assert(_srp is null, "an authenticated logon session holds no SRP state");
 
         IReadOnlyList<RealmEntry> realms = await realmStore.GetRealmsAsync(cancellationToken).ConfigureAwait(false);
+        // Known gap: charactersPerRealm is always 0 because the realm server has no characters-DB source to count
+        // the account's characters per realm; the client's realm list therefore never shows character counts.
+        // A realm list over the wire limits makes Build throw; RunAsync records it in the fault ledger and closes the session.
         ReadOnlyMemory<byte> packet = RealmListWriter.Build(realms, charactersPerRealm: 0);
         await SendAsync(packet, cancellationToken).ConfigureAwait(false);
         logger.LogInformation("[{Endpoint}] sent realm list ({Count} realm(s))", remoteEndpoint, realms.Count);

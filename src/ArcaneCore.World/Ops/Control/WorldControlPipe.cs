@@ -555,7 +555,12 @@ public sealed partial class WorldControlPipe : IHostedService
                     int read = await stream.ReadAsync(_buffer, token).ConfigureAwait(false);
                     if (read == 0)
                     {
-                        return _line.Length > 0 ? (Take(), false) : (null, false);
+                        if (_line.Length == 0)
+                        {
+                            return (null, false);
+                        }
+
+                        return ContentLength() > maxBytes ? (null, true) : (Take(), false);
                     }
 
                     _start = 0;
@@ -566,21 +571,25 @@ public sealed partial class WorldControlPipe : IHostedService
                 int stop = newline < 0 ? _end : newline;
                 _line.Write(_buffer, _start, stop - _start);
                 _start = newline < 0 ? _end : newline + 1;
-                if (_line.Length > maxBytes)
+                // One pending byte beyond the limit is allowed: it may be the carriage return of a CRLF line of exactly maxBytes.
+                if (_line.Length > maxBytes + 1L)
                 {
                     return (null, true);
                 }
 
                 if (newline >= 0)
                 {
-                    return (Take(), false);
+                    return ContentLength() > maxBytes ? (null, true) : (Take(), false);
                 }
             }
         }
 
+        /// <summary>The pending line's length without the single '\r' that precedes the '\n'.</summary>
+        private long ContentLength() => _line.Length > 0 && _line.GetBuffer()[_line.Length - 1] == (byte)'\r' ? _line.Length - 1 : _line.Length;
+
         private string Take()
         {
-            string text = Encoding.UTF8.GetString(_line.GetBuffer(), 0, (int)_line.Length).TrimEnd('\r');
+            string text = Encoding.UTF8.GetString(_line.GetBuffer(), 0, (int)ContentLength());
             _line.SetLength(0);
             return text;
         }

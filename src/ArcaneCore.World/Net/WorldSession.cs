@@ -970,7 +970,7 @@ public sealed partial class WorldSession : IPlayerSession
         // Ban rows and IP bans (live bans): a store error propagates and closes the connection (fail closed).
         // Unlike retail's cached IP list (AccountMgr.cpp:317-327) this reads the rows, so a fresh ban is seen at once.
         IBanStore? bans = Services.GetService<IBanStore>();
-        if (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false))
+        if (bans is not null && await IsBannedAsync(bans, stored.Id, _kick.Token).ConfigureAwait(false))
         {
             _logger.LogInformation("[{Endpoint}] refused world login for banned account or address", RemoteEndpoint);
             _guard?.RecordAuthFailure(_address);
@@ -997,7 +997,7 @@ public sealed partial class WorldSession : IPlayerSession
         // not-yet-registered session through the live-ban events, so look once more now that it can be found.
         Account? recheck = await accounts.FindByUsernameAsync(account).ConfigureAwait(false);
         if ((recheck is not null && recheck.Status != AccountStatus.Active)
-            || (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false)))
+            || (bans is not null && await IsBannedAsync(bans, stored.Id, _kick.Token).ConfigureAwait(false)))
         {
             _logger.LogInformation("[{Endpoint}] '{Account}' was banned while authenticating; refusing", RemoteEndpoint, account);
             _guard?.RecordAuthFailure(_address);
@@ -1030,14 +1030,14 @@ public sealed partial class WorldSession : IPlayerSession
     }
 
     /// <summary>An account ban row in force, or an IP ban on this connection's address (WorldSocket.cpp:339).</summary>
-    private async Task<bool> IsBannedAsync(IBanStore bans, int accountId)
+    private async Task<bool> IsBannedAsync(IBanStore bans, int accountId, CancellationToken cancellationToken)
     {
-        if (await bans.GetActiveAccountBanAsync(accountId).ConfigureAwait(false) is not null)
+        if (await bans.GetActiveAccountBanAsync(accountId, cancellationToken).ConfigureAwait(false) is not null)
         {
             return true;
         }
 
-        return RemoteAddress is { } address && await bans.GetActiveIpBanAsync(address).ConfigureAwait(false) is not null;
+        return RemoteAddress is { } address && await bans.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null;
     }
 
     /// <summary>

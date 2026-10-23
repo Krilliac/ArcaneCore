@@ -99,8 +99,16 @@ public sealed class HangStackCaptureTests : IDisposable
     [Fact]
     public void TheToolPath_ExpandsEnvironmentVariables()
     {
-        Environment.SetEnvironmentVariable("ARCANECORE_TEST_STACKTOOL_DIR", "D:/x");
-        var capture = new HangStackCapture(Options(tool: "%ARCANECORE_TEST_STACKTOOL_DIR%/dotnet-stack.exe"), new RecordingLogger<TickMonitor>());
-        Assert.Equal("D:/x/dotnet-stack.exe", capture.Tool);
+        var name = "ARCANECORE_TEST_STACKTOOL_DIR_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(name, "D:/x");
+        try
+        {
+            var capture = new HangStackCapture(Options(tool: "%" + name + "%/dotnet-stack.exe"), new RecordingLogger<TickMonitor>());
+            Assert.Equal("D:/x/dotnet-stack.exe", capture.Tool);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
     }
 }

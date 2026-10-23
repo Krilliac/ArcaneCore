@@ -285,8 +285,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             }
 
             IBanStore? bans = scope.ServiceProvider.GetService<IBanStore>();
-            banned = bans is not null && (await bans.GetActiveAccountBanAsync(stored.Id).ConfigureAwait(false) is not null
-                || (AccountBanEvaluator.AddressOfEndpoint(RemoteEndpoint) is { } address && await bans.GetActiveIpBanAsync(address).ConfigureAwait(false) is not null));
+            banned = bans is not null && (await bans.GetActiveAccountBanAsync(stored.Id, token).ConfigureAwait(false) is not null
+                || (AccountBanEvaluator.AddressOfEndpoint(RemoteEndpoint) is { } address && await bans.GetActiveIpBanAsync(address, token).ConfigureAwait(false) is not null));
         }
 
         if (banned)
