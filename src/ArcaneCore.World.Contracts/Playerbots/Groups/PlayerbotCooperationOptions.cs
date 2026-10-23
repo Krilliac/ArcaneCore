@@ -46,9 +46,9 @@ public sealed class PlayerbotCooperationOptions
     public int MaxLfgAnswersPerLine { get; set; } = 4;
 
     /// <summary>
-    /// How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). Time is cut into windows of this length:
-    /// the candidate's roll for the group is made once per window, so a bot that refused is not asked again inside the window and gets a fresh
-    /// roll in the next one, when the group is still waiting.
+    /// How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). The refusal is stored with its time: the
+    /// candidate is not asked again until this long after it, and then rolls afresh (when the group is still waiting). The roll is made once per
+    /// window of this length, with windows shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over together.
     /// </summary>
     public int RefusalMemoryMinutes { get; set; } = 10;
 

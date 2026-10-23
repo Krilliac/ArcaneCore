@@ -165,7 +165,7 @@ credit with members in reward range), or, without a quest, when the objective cr
 group then walks out, then disbands. The brains turn the quests in.
 
 **Failure**: two wipes, 30 minutes on one goal, a step (gather, travel, enter, leave, regroup) taking more than 5 minutes, two minutes at
-the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left, or the leader gone. The goal is then set aside for every member for
+the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left (a real player counts toward the two only while online: when the player of a one-bot-and-one-player pair disconnects or logs out the group ends at once with `player-gone`, with no grace period; a group that has already succeeded, or is walking out, is not failed by it), or the leader gone. The goal is then set aside for every member for
 10 minutes (its quest and objective in the brain's suspensions, so the brain does not walk into it alone either), and the group walks
 out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service (at most `MaxBringOuts`, 2 times, before it disbands).
 
@@ -194,8 +194,9 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   below `RefuseAffinity` (-40) (either direction), never joins. It accepts with chance
   `clamp(RecruitBaseChance (0.35) + 0.4 x Sociability + 0.003 x affinity toward the leader + 0.2 if it fills a missing role, 0, 0.95)`
   (+`GuildBonus` 0.2 for a guildmate of the waiting group, +`LfgAnswerBonus` 0.15 when it answered a call), rolled by a hash of the bot and
-  the group's stable id and the current refusal window (`RefusalMemoryMinutes`, 10): a candidate that refuses is not asked again in that window
-  and gets a fresh roll in the next one while the group still waits. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
+  the group's stable id and the pair's current refusal window: a candidate that refuses is remembered with the time of the refusal and is not asked
+  again for `RefusalMemoryMinutes` (10) from then, and gets a fresh roll afterwards while the group still waits. The roll's window is the clock
+  divided by that period, shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over at the same instant. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
   quest through the usual quest share; one that cannot take the quest still joins and helps. The group cap is `MaxGroups` (16); when it
   holds waiting bots back that is logged and noted once a minute.
 * **Answering calls** (`AnswerBotCalls`). A bot that hears another bot's looking-for-group line in a channel offers itself to the
@@ -203,7 +204,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   `LfgAnswerBonus`, passes) it is pledged and joins at the next scan without the wait, and only then replies in the channel ("inv me,
   I'll tank"). With no real match it says nothing. A hearer that is busy, of the other team, on another map or out of the level range
   is turned away at once, the post's candidates are worked out once for all its hearers however many ticks they hear it over, and at most `MaxLfgAnswersPerLine` (4) hearers
-  get a place from one post (the count lives about 30 seconds with the post, up to 64 posts at a time).
+  get a place from one post (the count lives as long as the post, `Chat:Voice:PostLifeSeconds`, 600 by default, up to 64 posts at a time).
 * **Guild calls** (`GuildCalls`). When the coordinator really has a dungeon or raid group forming, its longest-waiting bot says
   "anyone for <dungeon>?" in guild chat (once per ten minutes per guild and goal, dropped if the group is gone by then). Guildmates that
   heard it are weighed at the next scan without the wait.
@@ -361,9 +362,9 @@ given up (`wiped`), so a run gets `MaxWipes` - 1 retries (`Wipes >= MaxWipes` gi
 `travel` step checks for one (`CheckWipe`, signal `PlayerbotRunSignal.Wipe`) and the machine counts a wipe in any step except `wiped`. The run is also given up (reason in the events and the machine's `Reason`) for: `travel-timeout` or
 `enter-refused-or-timeout` (`TravelTimeoutMinutes`, 30; the enter step 5 minutes), `run-timeout` (`MaxRunMinutes`: 90 for a dungeon, 240
 for a raid, from formation), `no-path-to-entrance` / `no-path-to-boss` (the leader could not plan a way for 30 seconds), `too-few` (fewer
-than two bots left), `leader-gone`, or `leader-stopped` (the leader's bot stopped: `Forget`). A follower that stops leaves the group and
+than two bots left), `leader-gone`, `player-gone` (the group's real player is no longer online), or `leader-stopped` (the leader's bot stopped: `Forget`). A follower that stops leaves the group and
 the run goes on. A given-up run walks out of the instance first, then disbands; every bot still in it sets the wing aside. Totals:
-`completed` and `given-up` in the runs line. A run that ends for a content or code reason (`no-path-*`, a real step timeout, `objective-missing`, `stalled`, `wiped`) is also reported to bot QA as a `run failed` finding (docs/areas/playbots-qa.md; operator and lifecycle ends such as `leader-stopped`, `leader-left`, `leader-gone`, `too-few`, `invites-unanswered` and `disbanded` are not): its instance map, wing, the stage it failed at, the boss it was heading for and the reason, never the group or a bot, so repeated give-ups at one stage aggregate into one issue. Metric: `arcanecore_playerbot_runs_total{outcome}` with `completed`, `given_up` and `timeout` (a reason ending in `timeout`: `gather-timeout`, `travel-timeout`, `enter-refused-or-timeout`, `regroup-timeout`, `run-timeout`; every other end, operator stops included, is `given_up`) (docs/ops/metrics.md).
+`completed` and `given-up` in the runs line. A run that ends for a content or code reason (`no-path-*`, a real step timeout, `objective-missing`, `stalled`, `wiped`) is also reported to bot QA as a `run failed` finding (docs/areas/playbots-qa.md; operator and lifecycle ends such as `leader-stopped`, `leader-left`, `leader-gone`, `player-gone`, `too-few`, `invites-unanswered` and `disbanded` are not): its instance map, wing, the stage it failed at, the boss it was heading for and the reason, never the group or a bot, so repeated give-ups at one stage aggregate into one issue. Metric: `arcanecore_playerbot_runs_total{outcome}` with `completed`, `given_up` and `timeout` (a reason ending in `timeout`: `gather-timeout`, `travel-timeout`, `enter-refused-or-timeout`, `regroup-timeout`, `run-timeout`; every other end, operator stops included, is `given_up`) (docs/ops/metrics.md).
 
 After a completed run has left the instance, its leader sends `CMSG_RESET_INSTANCES` while the group still exists, then every bot
 disbands. This is observability: the leader asks the way a client would and the coordinator records each `SMSG_INSTANCE_RESET` or
