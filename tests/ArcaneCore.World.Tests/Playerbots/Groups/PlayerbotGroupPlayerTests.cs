@@ -104,7 +104,7 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
         await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
 
-        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await AcceptAsync(player);
         Assert.True(await world.RunUntilAsync(10_000, () => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Joined))), await world.TraceAsync());
 
         // Several coordinator passes later (each 2 s) the pair is still one group, and it has moved on from forming.
@@ -116,6 +116,29 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Accepts the invitation and waits for the server's answer (the player's group list), which is read from the socket in real time: the
+    /// manual clock does not wait for a packet still on its way, so advancing it right after the send can use up the budget before the
+    /// server has even read the accept.
+    /// </summary>
+    private static async Task AcceptAsync(WorldTestClient player)
+    {
+        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await player.ReadUntilAsync(WorldOpcode.SmsgGroupList);
+    }
+
+    /// <summary>Advances the world clock in small steps, pausing in real time between them, so that a packet sent just before is read and handled well inside the budget.</summary>
+    private static async Task<bool> PatientlyAsync(GroupTestWorld world, uint budgetMs, Func<bool> condition)
+    {
+        for (uint spent = 0; spent < budgetMs; spent += 200)
+        {
+            if (await world.RunUntilAsync(200, condition)) return true;
+            await Task.Delay(50);
+        }
+
+        return false;
+    }
+
     /// <summary>A one-bot, one-player group that has moved on from forming (the player accepted the bot's invitation).</summary>
     private static async Task<WorldTestClient> FormPairAsync(GroupTestWorld world, string accountName, string playerName, string botName)
     {
@@ -125,9 +148,24 @@ public sealed class PlayerbotGroupPlayerTests
         await RememberPlayerAsync(world, bot, playerName, 30);
         Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
         await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
-        await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await AcceptAsync(player);
         Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)), await world.TraceAsync());
         return player;
+    }
+
+    /// <summary>
+    /// Logs the player out on the world thread, as a completed logout does (the same <c>LogoutPlayer</c> an instant logout calls). A logout
+    /// request is not used: it is refused in combat (the pair is fighting), and otherwise runs a 20 s countdown that starts only when the
+    /// packet is read from the socket, which the virtual clock does not wait for.
+    /// </summary>
+    private static async Task LogOutAsync(GroupTestWorld world, string name)
+    {
+        await world.OnWorldAsync(() =>
+        {
+            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(name)!);
+            return true;
+        });
+        Assert.Null(await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(name)));
     }
 
     /// <summary>The server keeps a logged-out player in its group, so the pair is still "two members"; a player who is not online does not count toward the two.</summary>
@@ -137,8 +175,7 @@ public sealed class PlayerbotGroupPlayerTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
         await using WorldTestClient player = await FormPairAsync(world, "GROUPGONE", "Groupgone", "Askergone");
 
-        await player.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
-        Assert.True(await world.RunUntilAsync(30_000, () => world.World.Host.World.FindOnlinePlayer("Groupgone") is null), "the logout completes in world time");
+        await LogOutAsync(world, "Groupgone");
 
         Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("player-gone", StringComparison.Ordinal));
@@ -152,7 +189,7 @@ public sealed class PlayerbotGroupPlayerTests
         await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVING", "Groupleaving", "Askerleaving");
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
 
-        await player.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+        int held = 0;
         // The group has succeeded and is walking out (held in Leaving, as a bot still inside an instance would hold it) until the logout completes.
         Assert.True(await world.RunUntilAsync(40_000, () =>
         {
@@ -163,6 +200,7 @@ public sealed class PlayerbotGroupPlayerTests
                 group.Reason = null;
                 group.State = PlayerbotGroupState.Leaving;
                 group.StateSinceMs = world.World.Host.World.NowMs;
+                if (++held == 3) world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer("Groupleaving")!);
             }
 
             return !online;
@@ -183,7 +221,7 @@ public sealed class PlayerbotGroupPlayerTests
 
         await player.SendAsync(WorldOpcode.CmsgGroupDisband, []);
 
-        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(await PatientlyAsync(world, 15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Groupleave left", StringComparison.Ordinal));
         Assert.Contains(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
     }
