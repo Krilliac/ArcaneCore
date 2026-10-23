@@ -780,17 +780,29 @@ internal sealed class PlayerbotPartyAI
         });
     }
 
-    /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>
+    /// <summary>
+    /// mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted. With helping on
+    /// (<see cref="BotSocial.PlayerbotSocialHelpingOptions.Enabled"/>) a same-faction player the bot does not hold as a rival is accepted too (a stranger who
+    /// raises a dead bot); any other offer is declined.
+    /// </summary>
     private void OnResurrectRequest(Player player, byte[] payload)
     {
         if (payload.Length < 8) return;
         var caster = new ObjectGuid(BitConverter.ToUInt64(payload, 0));
-        bool member = caster != player.Guid && Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true;
+        bool member = caster != player.Guid && (Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true || AcceptsStrangersRez(player, caster));
         var response = new PacketWriter(9);
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
         if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
+    }
+
+    private bool AcceptsStrangersRez(Player player, ObjectGuid caster)
+    {
+        if (caster == player.Guid || !_options.Social.Helping.Enabled || !_options.Social.Helping.ResurrectStrangers) return false;
+        if (_session.World.FindOnlinePlayer(caster) is not { } other || other.Team != player.Team) return false;
+        if (Social is not { Enabled: true } social) return true;
+        return !social.Memory.TryGet(_botId, caster.Value, out ArcaneCore.Kernel.Characters.PlayerbotRelation relation) || !social.Memory.IsRival(relation);
     }
 
     /// <summary>

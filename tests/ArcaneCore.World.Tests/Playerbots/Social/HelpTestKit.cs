@@ -31,7 +31,8 @@ internal static class HelpTestKit
     /// <summary>World thread: a hostile creature nobody updates (it neither moves nor attacks on its own) beside <paramref name="near"/>.</summary>
     public static Creature SpawnMob(Player near, float dx = 3f)
     {
-        CreatureMapSystem system = Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, new CreatureContent([Mob], [], [], [], []), random: new Random(1)));
+        CreatureMapSystem system = near.Map!.FindUpdater<CreatureMapSystem>()
+            ?? Systems.GetValue(near.Map!, map => new CreatureMapSystem(map, new CreatureContent([Mob], [], [], [], []), random: new Random(1)));
         return system.SpawnTemporary(Mob, near.X + dx, near.Y, near.Z, 0f);
     }
 
@@ -62,6 +63,14 @@ internal static class HelpTestKit
     public static PlayerbotBrain BrainOf(SocialWorld world, Guid bot) => PartyTestHost.Feature(world.Host).FindBrain(bot)!;
 
     public static Task UntilAsync(Func<bool> condition, string what, int seconds = 20) => PlayerbotSocialTriggerWorldTests.UntilAsync(condition, what, seconds);
+
+    /// <summary>The first world time (a whole second, as a pass runs) at which <paramref name="yes"/> holds; throws when none does in a long search.</summary>
+    public static long NowWhere(Func<long, bool> yes)
+    {
+        for (long second = 1; second < 200_000; second++)
+            if (yes(second * 1000L)) return second * 1000L;
+        throw new InvalidOperationException("no world time gives the wanted roll");
+    }
 
     /// <summary>The world time of the first 15-second bucket (see <see cref="PlayerbotHelpLane"/>) in which <paramref name="yes"/> holds; throws when none does in a long search.</summary>
     public static long BucketWhere(Func<uint, bool> yes)

@@ -227,6 +227,22 @@ attack is a normal attack, and a priest, paladin, druid or shaman heals the aske
 `HelpedThem` / `HelpedBy` (`PlayerbotSocialRecorder.NoteHelp` counts a pair once per fight). On no it stays and, about one time in six and never
 to someone it dislikes, says "Sorry, can't" through the announcement path. A bot decides about one asker once a minute.
 
+**The trouble scan** (`World:Playerbots:Social:Helping:Enabled`, `TroubleRadiusYards`). Each pass looks at up to 24 free bots, round robin, each at most once per 5 seconds, and
+at the same-faction players it sees within `TroubleRadiusYards` (default 30; the sight list is capped). A player is *in trouble* when it is
+alive, in a fight (not a duel) and below 40% health, or a caster below 20% mana that is moving (running). The first sighting starts an episode
+(it ends after 20 seconds without trouble); the bot's yes or no is one hash roll of the bot, the victim and the episode start, scaled by
+helpfulness and by `1 + affinity / 100`, so the answer is the same on every pass of one fight and a rival is never helped. The bot must be free
+(see above) and take the victim's attacker under the flag rule below; the help is the same assist lane as answering a call.
+
+**Resurrecting** (`ResurrectStrangers`). A priest, paladin, druid or shaman that is free and sees a same-faction player dead within reach (25 yards,
+unit or, once released, the corpse) rolls once per corpse and casts its resurrection spell (the group AI's `FindResurrectionSpell`: highest
+rank, reagents carried). A dead player the bot owes a favour (gratitude, below) bypasses the roll. A flagged corpse is not raised by an unflagged
+bot. A bot that is raised by a same-faction player it does not hold as a rival accepts (`OnResurrectRequest`; a group member is accepted as before).
+
+**Buffing** (`BuffStrangers`, `BuffCooldownMinutes`). A free priest (Power Word: Fortitude), druid (Mark of the Wild), mage (Arcane Intellect) or
+paladin (Blessing of Might) that passes a same-faction player out of combat within 25 yards offers the buff with a small hash chance, once per
+bot and stranger per `BuffCooldownMinutes` (default 30), never to a player who carries it already or to a flagged one when the bot is not flagged.
+
 **Never against a fight that would flag the bot.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP:
 the bot takes such a fight only when it is flagged already or `World:Playerbots:Social:WarMode:Enabled` is on, and the brain's targets are
 creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
@@ -246,4 +262,6 @@ state is in memory or read back from it.
 `tests/ArcaneCore.World.Tests/Playerbots/Social/`: `PlayerbotGuildFoundingWorldTests`, `PlayerbotGuildInviteWorldTests`,
 `PlayerbotGuildChatWorldTests`, `PlayerbotGuildRulesTests`, `PlayerbotGuildNamesTests`, `PlayerbotSocialRateLimiterTests`,
 `PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
-by affinity and their weekly limit).
+by affinity and their weekly limit), `PlayerbotHelpRulesTests` (trouble, rolls, classes, help-call text), `PlayerbotHelpAnswerWorldTests`
+(a `/helpme` through the real packets to a bot that fights), `PlayerbotTroubleWorldTests` (the scan, the flag rule, rivals, switches),
+`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown).

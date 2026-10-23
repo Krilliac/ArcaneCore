@@ -1293,7 +1293,7 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// The resurrection spell <paramref name="player"/> knows (its highest rank) and carries the reagents for, or null: what the group's healer
-    /// and a bot lending a hand to a stranger (<c>PlayerbotBrain.RequestResurrect</c>) cast.
+    /// and a bot lending a hand to a stranger (<c>PlayerbotBrain.RequestHelp</c>) cast.
     /// </summary>
     internal static SpellInfo? FindResurrectionSpell(WorldSession session, Player player)
     {
