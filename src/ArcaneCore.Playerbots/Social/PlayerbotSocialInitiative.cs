@@ -188,9 +188,6 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>Surroundings comments made.</summary>
     internal int Comments { get; private set; }
 
-    /// <summary>Queue the follow-through of a bot-to-bot yes (the tests' way to stage the answer without the chat model that speaks the opening): <paramref name="answerer"/> offers itself to <paramref name="bot"/>'s group.</summary>
-    internal void FollowBot(Guid bot, Guid answerer, ObjectGuid answererGuid, long nowMs) => _follow.Add(new Follow(bot, answerer, answererGuid, nowMs + FollowMs));
-
     /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
     internal bool PendingFor(Guid bot, ObjectGuid player) => _pending.ContainsKey((bot, player.Value));
 
@@ -407,10 +404,19 @@ internal sealed class PlayerbotInitiativeLane
         return budget > 0 && options.CommentsEnabled && TryComment(pass, recorder, options, bot, traits, mood);
     }
 
+    /// <summary>The quest and creature a bot works on: its brain's, or, while it waits for a group, the goal it waits for (a waiting bot's own quest id is 0).</summary>
+    private static (uint Quest, uint Entry) ObjectiveOf(PlayerbotSocialPass pass, PlayerbotSocialBot bot)
+    {
+        PlayerbotBrain brain = bot.Brain!;
+        if (brain.QuestId != 0 && brain.TargetEntry != 0) return (brain.QuestId, brain.TargetEntry);
+        return pass.Coordinator is { } coordinator && coordinator.TryGetWaitingGoal(bot.Id, out PlayerbotGroupGoal? goal) && goal.Kind == PlayerbotGroupGoalKind.Quest && goal.ObjectiveEntry != 0
+            ? (goal.QuestId, goal.ObjectiveEntry) : (0, 0);
+    }
+
     private PlayerbotOpeningKind? KindFor(PlayerbotSocialPass pass, PlayerbotSocialBot bot, Player other, PlayerbotRelation? relation, bool arrival, float sociability, float mood, bool mayGreet)
     {
         Player self = bot.Player;
-        if (bot.Brain!.QuestId != 0 && bot.Brain.TargetEntry != 0 && pass.Coordinator?.SharesGoal(bot.Id, other) == true && Ready(bot.Id, other, PlayerbotOpeningKind.Objective, pass.NowMs)
+        if (ObjectiveOf(pass, bot).Entry != 0 && pass.Coordinator?.SharesGoal(bot.Id, other) == true && Ready(bot.Id, other, PlayerbotOpeningKind.Objective, pass.NowMs)
             && PlayerbotInitiativeRules.Rolls(self.Guid.Value, other.Guid.Value, pass.NowMs, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective), PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, sociability, mood)))
             return PlayerbotOpeningKind.Objective;
         if (relation is null || !mayGreet) return null;
@@ -449,8 +455,7 @@ internal sealed class PlayerbotInitiativeLane
         switch (kind)
         {
             case PlayerbotOpeningKind.Objective:
-                entry = bot.Brain!.TargetEntry;
-                quest = bot.Brain.QuestId;
+                (quest, entry) = ObjectiveOf(pass, bot);
                 values["objective"] = pass.Quests?.Quests.Get(quest)?.Title is { Length: > 0 } title ? title : "same quest";
                 key = "social.team";
                 instruction = $"You are working on the same quest as {other.Name}, who stands nearby: {values["objective"]}. Ask in one short line whether they want to team up.";

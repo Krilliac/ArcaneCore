@@ -9,6 +9,7 @@ using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Tests.Playerbots.Party;
 using ArcaneCore.World.Tests.Playerbots.Chat;
 using ArcaneCore.World.Tests.Playerbots.Groups;
 using Microsoft.Extensions.DependencyInjection;
@@ -155,33 +156,85 @@ public sealed class PlayerbotInitiativeGroupWorldTests
     }
 
     /// <summary>
-    /// Review I10: another bot's yes to a bot's team-up line is followed through by the coordinator (the answering bot pledges to the group the asking
-    /// bot waits in), instead of dying as a signal. The yes is staged (the opening needs a chat model to be spoken); the follow-through is the lane's own.
+    /// Review I10 and I5: another bot's yes to a bot's team-up line is followed through by the coordinator (the answering bot pledges to the group the
+    /// asking bot waits in). The whole path is the lane's own, through <c>Open</c>: the asker's roll, the line (phrased by the fake model and said by the
+    /// speech path), the answerer's roll, the group signal and the follow-through. Only the model's phrasing is staged.
     /// </summary>
     [Fact]
-    public async Task AnotherBotsYes_IsFollowedThrough_AsAPledgeToTheAskersGroup()
+    public async Task AnotherBotsYes_ToATeamUpLine_RaisesTheAskersSignal_AndReachesTheAskersGroup()
     {
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
         {
+            options.Groups.InvitePlayers = true;
             options.MoveSpeed = 0.1f;
             options.Social.Guilds.Enabled = false;
+            options.Groups.Cooperation.RecruitBaseChance = 0f; // the coordinator does not recruit the healer on its own: only the lane's follow-through can
+            options.Chat.Enabled = true;
+            ChatSamples.NoScreeningDeadline(options.Chat);
+            options.Chat.Providers = [new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.Anthropic, ApiKeyEnvironmentVariable = "TEST_TEAM_KEY" }];
+        }, services: services =>
+        {
+            services.AddSingleton<IBotChatClient>(new FakeBotChatClient());
+            services.AddSingleton<IBotChatEnvironment>(new FakeBotChatEnvironment(new() { ["TEST_TEAM_KEY"] = "sk-team" }));
         });
-        var tank = await world.AddBotAsync("Teamtank", Human, Warrior, 10, [Taunt]);
-        var mage = await world.AddBotAsync("Teammage", Human, 8, 10, [133]);
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Count() == 2), await world.TraceAsync());
-        var healer = await world.AddBotAsync("Teamheal", Human, 5, 10, [2050, 585], new System.Numerics.Vector3(StartX, StartY - 150f, StartZ));
+        await using WorldTestClient listener = await world.World.EnterWorldAsync("TEAMLISTEN", "Teamlisten", AccountSecurity.Player);
+        var tank = await world.AddBotAsync("Teamtank", Human, Warrior, 1, []);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Count() == 1), await world.TraceAsync()); // the asker waits for a partner for the shared quest
+        var healer = await world.AddBotAsync("Teamheal", Human, Warrior, 1, [], new System.Numerics.Vector3(StartX, StartY - 150f, StartZ));
+        // The healer and a real listener stand beside the waiting pair.
+        await world.OnWorldAsync(() =>
+        {
+            Player anchor = world.Player(tank.Id);
+            world.Player(healer.Id).Relocate(anchor.X + 3f, anchor.Y, anchor.Z, 0, world.World.Host.World.NowMs);
+            world.World.Host.World.FindOnlinePlayer("Teamlisten")!.Relocate(anchor.X + 5f, anchor.Y, anchor.Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+        await world.RunAsync(600); // the characters see each other
+
         PlayerbotInitiativeLane lane = SocialTestKit.Feature(world.World.Host).Initiative;
+        ObjectGuid tankGuid = await world.OnWorldAsync(() => world.Player(tank.Id).Guid);
         ObjectGuid healerGuid = await world.OnWorldAsync(() => world.Player(healer.Id).Guid);
         Assert.False(world.Coordinator.IsPledged(healer.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry)));
+        // A world time at which an asker's roll and the healer's answering roll both say yes.
+        long Asks(ObjectGuid asker) => HelpTestKit.NowWhere(t =>
+            PlayerbotInitiativeRules.Rolls(asker.Value, healerGuid.Value, t, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective),
+                PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, PlayerbotTraits.For(asker.Value).Sociability, 0f))
+            && PlayerbotInitiativeRules.Rolls(healerGuid.Value, asker.Value, t, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective) ^ 0xA25E12UL,
+                PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, PlayerbotTraits.For(healerGuid.Value).Sociability, 0f)));
+        long at = Asks(tankGuid);
+        // The healer holds the shared quest only now, so it has not started to wait for a group of its own: the pledge is the lane's doing, not the coordinator's own matching.
+        await GivePlayerQuestAsync(world, "Teamheal", DuoQuest);
 
         await world.OnWorldAsync(() =>
         {
-            lane.FollowBot(tank.Id, healer.Id, healerGuid, world.World.Host.World.NowMs);
-            lane.Run(SocialTestKit.BotPass(world.World.Host, world.World.Host.World.NowMs));
+            lane.Run(SocialTestKit.BotPass(world.World.Host, at));
             return true;
         });
+        Assert.True(lane.Openings >= 1, "the asker opened");
+        // The line is phrased by the model and said in real time (the wait for an answer, and the healer's own roll, start when it is said).
+        PlayerbotBrain askerBrain = PartyTestHost.Feature(world.World.Host).FindBrain(tank.Id)!;
+        for (int i = 0; i < 200 && await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal) is null; i++)
+        {
+            await Task.Delay(10);
+            await world.RunAsync(50);
+        }
 
-        Assert.Equal(1, lane.BotOffers);
-        Assert.True(world.Coordinator.IsPledged(healer.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry)));
+        // The answering bot's yes raised the asker's group signal, and the follow-through (one offer per pass until the asker waits) ran from the lane's passes.
+        PlayerbotGroupSignal? signal = await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal);
+        Assert.True(signal.HasValue);
+        Assert.Equal(PlayerbotGroupSignal.ContentionSource, signal!.Value.Source);
+        for (int i = 0; i < 100 && !(lane.BotOffers >= 1 || await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(tankGuid, healerGuid))); i++)
+        {
+            await Task.Delay(10);
+            await world.RunAsync(50);
+            await world.OnWorldAsync(() =>
+            {
+                lane.Run(SocialTestKit.BotPass(world.World.Host, at + 1_000 + i * 50L));
+                return true;
+            });
+        }
+
+        // Either the lane's offer pledged the healer, or the coordinator (both bots hold the quest here) had already put the two in one group: the healer is in the asker's group.
+        Assert.True(lane.BotOffers >= 1 || await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(tankGuid, healerGuid)), await world.TraceAsync());
     }
 }

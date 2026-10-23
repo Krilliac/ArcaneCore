@@ -128,6 +128,8 @@ public sealed class PlayerbotHelpCastWorldTests
         (Guid bot, ObjectGuid botGuid, ObjectGuid deadGuid) = await SetUpAsync(world, "Helpstubborn", PlayerbotGroupResurrectionTests.RealResurrectionSpells());
         float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
         long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(botGuid.Value, deadGuid.Value, (uint)t, helpfulness, 0));
+        // The body may lie 60 minutes before it is too old to raise: the one-offer-per-death memory, not the corpse age, is what holds the second offer back.
+        await world.Host.OnWorldAsync(() => world.Options.Social.Helping.ResurrectMaxCorpseMinutes = 60);
         await world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helpstubborn").Map!.Combat.KillPlayer(HelpTestKit.Online(world, "Helpstubborn")));
 
         await ScanAsync(world, now);

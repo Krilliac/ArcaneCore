@@ -352,6 +352,19 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal IEnumerable<(Guid BotId, string Name, PlayerbotGroupGoal Goal, uint SinceMs)> WaitingBots
         => _waiting.Select(w => (w.Key, w.Value.Name, w.Value.Goal, w.Value.SinceMs));
 
+    /// <summary>The goal of a waiting bot (world thread); false when it does not wait.</summary>
+    internal bool TryGetWaitingGoal(Guid botId, out PlayerbotGroupGoal goal)
+    {
+        if (_waiting.TryGetValue(botId, out Waiting? waiting))
+        {
+            goal = waiting.Goal;
+            return true;
+        }
+
+        goal = default!;
+        return false;
+    }
+
     /// <summary>Whether <paramref name="botId"/> set aside the goal with <paramref name="key"/> (tests and status).</summary>
     internal bool IsSetAside(Guid botId, (PlayerbotGroupGoalKind, uint) key)
         => _setAside.TryGetValue((botId, key), out uint until) && unchecked((int)(until - Now)) > 0;
