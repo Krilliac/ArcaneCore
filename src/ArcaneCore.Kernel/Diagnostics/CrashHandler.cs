@@ -217,6 +217,14 @@ public sealed class CrashHandler : IDisposable
             return true;
         }
 
+        // A cancelled or timed-out HTTP request surfaces as IOException -> SocketException (e.g. 995), which is
+        // the same expected cancellation signal as the bare exceptions above. Like the bare-SocketException rule this also hides genuine
+        // connection resets (10054) from the first-chance log; unhandled and fatal reports are unaffected.
+        if (exception is IOException && InnerChainContainsCancellationOrSocket(exception))
+        {
+            return true;
+        }
+
         if (exception is ArgumentOutOfRangeException { ParamName: "packet" or "payload" })
         {
             return true;
@@ -248,6 +256,21 @@ public sealed class CrashHandler : IDisposable
             && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true)
         {
             return true;
+        }
+
+        return false;
+    }
+
+    private static bool InnerChainContainsCancellationOrSocket(Exception exception)
+    {
+        const int MaxDepth = 8;
+        Exception? inner = exception.InnerException;
+        for (int depth = 0; inner is not null && depth < MaxDepth; depth++, inner = inner.InnerException)
+        {
+            if (inner is OperationCanceledException or System.Net.Sockets.SocketException)
+            {
+                return true;
+            }
         }
 
         return false;
