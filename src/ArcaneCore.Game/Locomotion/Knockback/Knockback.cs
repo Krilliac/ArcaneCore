@@ -71,7 +71,7 @@ public static class KnockbackService
             return false;
         }
 
-        float angle = ReferenceEquals(unit, source) ? unit.Orientation + MathF.PI : AngleFromTo(source, unit);
+        float angle = ReferenceEquals(unit, source) ? unit.Orientation + MathF.PI : ForcedMovement.BearingFromTo(source, unit);
         return KnockBack(system, unit, angle, horizontalSpeed, verticalSpeed);
     }
 
@@ -128,16 +128,4 @@ public static class KnockbackService
     /// <summary>vmangos HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT).</summary>
     private static bool IsStunnedOrRooted(Unit unit)
         => (unit.UnitFlags & UnitFlags.Stunned) != 0 || unit is Player { IsRooted: true } || unit.Movement.HasFlag(MovementFlags.Root);
-
-    /// <summary>vmangos WorldObject::GetAngle(target) as seen from <paramref name="from"/>: atan2 of the offset, in [0, 2 pi).</summary>
-    private static float AngleFromTo(Unit from, Unit to)
-    {
-        float angle = MathF.Atan2(to.Y - from.Y, to.X - from.X);
-        if (angle < 0)
-        {
-            angle += 2 * MathF.PI;
-        }
-
-        return angle;
-    }
 }
