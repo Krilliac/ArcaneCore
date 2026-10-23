@@ -296,8 +296,8 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             if (target is null) continue;
             _lastAffinityInvite[guild.Id] = pass.NowMs;
             PlayerbotSocialPackets.Send(inviter.Session, WorldOpcode.CmsgGuildInvite, PlayerbotSocialPackets.GuildInvite(target.Name));
+            _offeredAt[target.Guid.Low] = pass.NowMs; // the target's week starts when it was asked, whether or not the server took the invitation
             if (guilds.InvitedTo(target) != guild.Id) continue;
-            _offeredAt[target.Guid.Low] = pass.NowMs;
             _offered[target.Guid.Low] = (guild.Id, pass.NowMs);
         }
 

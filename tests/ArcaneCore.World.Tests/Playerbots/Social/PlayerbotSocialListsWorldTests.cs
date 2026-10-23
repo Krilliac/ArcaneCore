@@ -216,6 +216,27 @@ public sealed class PlayerbotSocialListsWorldTests
         Assert.Null(await world.GuildOfAsync("Pfriend"));
     }
 
+    [Fact]
+    public async Task AnInvitationTheServerRefuses_StillStartsTheTargetsCooldown()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.TargetSize = 10, frozen: true);
+        await world.AddBotAsync("Rleader");
+        await world.AddBotAsync("Rtarget");
+        await world.FoundGuildAsync("Rleader", "Refusing Guild");
+        await RememberAsync(world, "Rleader", "Rtarget", 90, 12);
+        // The target ignores the leader: the server refuses the invitation ("is ignoring you").
+        await world.Host.OnWorldAsync(() => SocialTestKit.Social(world.Host).Context.Friends.AddIgnore(world.Host.World.FindOnlinePlayer("Rtarget")!, "Rleader"));
+        var membership = new PlayerbotGuildMembership(NullLogger.Instance);
+
+        await world.Host.OnWorldAsync(() => membership.InviteByAffinity(SocialTestKit.BotPass(world.Host, 1_000)));
+        Assert.Equal(1, world.Log.Count("Rleader", WorldOpcode.CmsgGuildInvite));
+        Assert.Equal(0, await world.Host.OnWorldAsync(() => world.Guilds.InvitedTo(world.Host.World.FindOnlinePlayer("Rtarget")!)));
+
+        // Long after the guild's own spacing, but within the target's week: it is not asked again.
+        await world.Host.OnWorldAsync(() => membership.InviteByAffinity(SocialTestKit.BotPass(world.Host, 600_000)));
+        Assert.Equal(1, world.Log.Count("Rleader", WorldOpcode.CmsgGuildInvite));
+    }
+
     /// <summary>A real player leading a guild invites a guildless bot; the bot answers by the guild invite policy and its affinity.</summary>
     private static async Task<bool> PlayerInvitesBotAsync(SocialWorld world, WorldTestClient leader, string bot, Guild guild, short affinityToLeader, string leaderName)
     {
