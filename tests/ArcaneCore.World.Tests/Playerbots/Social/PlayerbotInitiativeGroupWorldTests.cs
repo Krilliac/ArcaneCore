@@ -169,6 +169,8 @@ public sealed class PlayerbotInitiativeGroupWorldTests
             options.MoveSpeed = 0.1f;
             options.Social.Guilds.Enabled = false;
             options.Groups.Cooperation.RecruitBaseChance = 0f; // the coordinator does not recruit the healer on its own: only the lane's follow-through can
+            options.Groups.Cooperation.RecruitWaitSeconds = 3600; // no waiting-time recruiting either: the pledge below can only be the lane's
+            options.Groups.Cooperation.LfgAnswerBonus = 1f; // and the healer's yes to the call is certain
             options.Chat.Enabled = true;
             ChatSamples.NoScreeningDeadline(options.Chat);
             options.Chat.Providers = [new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.Anthropic, ApiKeyEnvironmentVariable = "TEST_TEAM_KEY" }];
@@ -204,6 +206,12 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         long at = Asks(tankGuid);
         // The healer holds the shared quest only now, so it has not started to wait for a group of its own: the pledge is the lane's doing, not the coordinator's own matching.
         await GivePlayerQuestAsync(world, "Teamheal", DuoQuest);
+        // The healer sets the shared quest aside (the coordinator's own need search skips a suspended quest), so the coordinator can never pair the two itself.
+        await world.OnWorldAsync(() =>
+        {
+            PartyTestHost.Feature(world.World.Host).FindBrain(healer.Id)!.Suspensions.SuspendQuest(DuoQuest, world.World.Host.World.NowMs, countsAsSetAside: false);
+            return true;
+        });
 
         await world.OnWorldAsync(() =>
         {
@@ -223,7 +231,7 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         PlayerbotGroupSignal? signal = await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal);
         Assert.True(signal.HasValue);
         Assert.Equal(PlayerbotGroupSignal.ContentionSource, signal!.Value.Source);
-        for (int i = 0; i < 100 && !(lane.BotOffers >= 1 || await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(tankGuid, healerGuid))); i++)
+        for (int i = 0; i < 100 && lane.BotOffers == 0; i++)
         {
             await Task.Delay(10);
             await world.RunAsync(50);
@@ -234,7 +242,8 @@ public sealed class PlayerbotInitiativeGroupWorldTests
             });
         }
 
-        // Either the lane's offer pledged the healer, or the coordinator (both bots hold the quest here) had already put the two in one group: the healer is in the asker's group.
-        Assert.True(lane.BotOffers >= 1 || await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(tankGuid, healerGuid)), await world.TraceAsync());
+        // The coordinator never paired the two itself (the healer set the quest aside), so the lane's follow-through is the only way the healer can have joined.
+        Assert.Equal(1, lane.BotOffers);
+        Assert.True(world.Coordinator.IsPledged(healer.Id, (PlayerbotGroupGoalKind.Quest, OgreEntry)) || await world.OnWorldAsync(() => world.GroupManager.AreInSameGroup(tankGuid, healerGuid)), await world.TraceAsync());
     }
 }
