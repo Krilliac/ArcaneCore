@@ -1210,6 +1210,23 @@ internal static class PlayerbotNavigation
     /// <summary>How far from the bot the starts beside it lie (<see cref="FromBeside"/>), eight directions each.</summary>
     private static readonly float[] BesideYards = [2.5f, 5f];
 
+    /// <summary>How far toward the target a doodad-aware sight starts in <see cref="FromBeside"/>, clear of the bot's own contact.</summary>
+    internal const float FragmentContactYards = 1f;
+
+    /// <summary>
+    /// <paramref name="start"/> moved <see cref="FragmentContactYards"/> toward <paramref name="toward"/> (flat), or
+    /// <paramref name="start"/> itself when nearer than that. A start on a mesh fragment lying on a rock or root is blocked in
+    /// every direction by that doodad; a sight from one yard out sees only what lies beyond it.
+    /// </summary>
+    private static Vector3 OffStart(Vector3 start, Vector3 toward)
+    {
+        Vector2 flat = Flat(toward) - Flat(start);
+        float length = flat.Length();
+        if (!float.IsFinite(length) || length <= FragmentContactYards) return start;
+        Vector2 step = flat / length * FragmentContactYards;
+        return new Vector3(start.X + step.X, start.Y + step.Y, start.Z);
+    }
+
     /// <summary>
     /// A route that steps from <paramref name="start"/> to ground beside it (a stepped terrain leg: floor within a step, in sight)
     /// and follows the mesh from there to <paramref name="destination"/>, or null. At most sixteen queries.
@@ -1225,11 +1242,13 @@ internal static class PlayerbotNavigation
                 float floor = map.Collision.GetHeight(x, y, start.Z + 2f);
                 if (InvalidHeight(floor) || MathF.Abs(floor - start.Z) > 2.5f) continue;
                 Vector3 beside = new(x, y, floor + 0.05f);
+                // The doodad-blind sight covers the whole hop; the doodad-aware one starts clear of the bot's own contact (OffStart), since the start
+                // is often a rock or root and a sight from inside it is blocked in every direction.
                 if (!map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2, beside.X, beside.Y, beside.Z + 2)
-                    || !PlayerbotMoveCheck.LineClear(map.Collision, start, beside)) continue;
+                    || !PlayerbotMoveCheck.LineClear(map.Collision, OffStart(start, beside), beside)) continue;
                 PathResult path = Query(map, beside, destination, options, partial, steep: false, out bool capped);
                 if ((path.Type & PathType.TilesPending) != 0) return null;
-                if (path.Points.Count > 0 && !PlayerbotMoveCheck.LineClear(map.Collision, start, path.Points[0])) continue;
+                if (path.Points.Count > 0 && !PlayerbotMoveCheck.LineClear(map.Collision, OffStart(start, path.Points[0]), path.Points[0])) continue;
                 // The same arrival rule as Usable: an end at the destination's own spot (EndsAt) reaches it.
                 bool reaches = Reaches(path) || EndsAt(path, destination);
                 if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath)) != 0
