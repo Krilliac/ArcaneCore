@@ -124,6 +124,45 @@ public sealed class PlayerbotHelpCastWorldTests
     }
 
     [Fact]
+    public async Task OldBones_DoNotShadowADeadStrangerFurtherAway()
+    {
+        await using SocialWorld world = await StartWorldAsync();
+        await using WorldTestClient first = await world.AddPlayerAsync("Helpbonea");
+        await using WorldTestClient second = await world.AddPlayerAsync("Helpboneb");
+        (Guid bot, ObjectGuid botGuid, ObjectGuid firstGuid) = await SetUpAsync(world, "Helpbonea", PlayerbotGroupResurrectionTests.RealResurrectionSpells());
+        ObjectGuid secondGuid = await world.Host.PlayerStateAsync("Helpboneb", p => p.Guid);
+        float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
+        long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(botGuid.Value, secondGuid.Value, (uint)t, helpfulness, 0));
+        // A dies 2 yd from the priest and its body turns to bones (an insignia was taken); A then stands 100 yd away, still dead, while B lies dead 10 yd off.
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player a = HelpTestKit.Online(world, "Helpbonea");
+            a.Map!.Combat.KillPlayer(a);
+            Assert.True(a.Map!.Combat.RepopPlayer(a)); // released: a body lies where A fell
+            Assert.NotNull(a.Map!.Combat.ConvertCorpseToBones(a.Combat.Corpse!));
+        });
+        await HelpTestKit.StandAsync(world, "Helpprie", ("Helpboneb", 10f));
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player priest = HelpTestKit.Online(world, "Helpprie");
+            Player a = HelpTestKit.Online(world, "Helpbonea");
+            a.Relocate(priest.X + 100f, priest.Y, priest.Z, 0f, world.Host.World.NowMs);
+            Player b = HelpTestKit.Online(world, "Helpboneb");
+            b.Map!.Combat.KillPlayer(b);
+            Assert.False(b.IsAlive);
+        });
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => HelpTestKit.Online(world, "Helpprie").VisibleObjects.Any(g => g.High == HighGuid.Corpse)).Result, "the priest to see a body");
+
+        await ScanAsync(world, now);
+
+        PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
+        Assert.Equal(1, lane.Resurrections);
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
+        await HelpTestKit.UntilAsync(() => brain.HelpsDone == 1, "the priest to start the resurrection");
+        Assert.Equal(secondGuid, brain.LastHelpTarget);
+    }
+
+    [Fact]
     public async Task ACorpseThatKeepsDeclining_GetsExactlyOneOfferPerDeath_EvenHalfAnHourLater()
     {
         await using SocialWorld world = await StartWorldAsync();

@@ -209,8 +209,8 @@ internal sealed class PlayerbotHelpLane
             if (guid.High == HighGuid.Corpse)
             {
                 // A released ghost stands at its graveyard: the body that can be raised is the corpse, so a corpse in sight is a dead player in reach too.
-                if (self.Map?.FindObject(guid) is ArcaneCore.Game.Combat.Corpse { IsInWorld: true } lying && lying.Owner.IsPlayer && lying.Owner != self.Guid
-                    && pass.World.FindOnlinePlayer(lying.Owner) is { IsAlive: false } owner && ReferenceEquals(owner.Map, self.Map) && owner.Team == self.Team)
+                if (self.Map?.FindObject(guid) is ArcaneCore.Game.Combat.Corpse { IsInWorld: true, IsBones: false } lying && lying.Owner.IsPlayer && lying.Owner != self.Guid
+                    && pass.World.FindOnlinePlayer(lying.Owner) is { IsAlive: false } owner && ReferenceEquals(owner.Combat.Corpse, lying) && ReferenceEquals(owner.Map, self.Map) && owner.Team == self.Team)
                 {
                     float bodyYards = Distance(self, lying);
                     if (bodyYards <= radius)
