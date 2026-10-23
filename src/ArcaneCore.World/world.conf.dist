@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       637 keys
+#   WORLD                       675 keys
 #
 ###############################################################################
 
@@ -15280,6 +15280,460 @@ World.Playerbots.Social.Guilds.MaxBotGuilds = 4
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Guilds.TargetSize = 25
+
+#
+#    World.Playerbots.Social.Memory.AffinityHalfLifeDays
+#        Description: Days after which a relation's affinity has drifted half-way back to 0 when it
+#                     is not refreshed (1..365). Rivals use RivalHalfLifeDays.
+#        Type: int
+#        Default: 14
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityHalfLifeDays = 14
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerAbandonedRun
+#        Description: Affinity change toward a member who left the group during a dungeon or raid
+#                     run (-100..0).
+#        Type: int
+#        Default: -10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerAbandonedRun = -10
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerApology
+#        Description: Affinity gained when someone the bot dislikes says sorry to it (a chat line or
+#                     the sorry emote), at most once per pair per UTC day (0..50).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerApology = 10
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerChat
+#        Description: Affinity gained when a chat exchange with the bot happens (0..20).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerChat = 1
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerFriendlyEmote
+#        Description: Affinity gained when someone makes a friendly emote at the bot (0..20).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerFriendlyEmote = 2
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerGroup
+#        Description: Affinity gained when the bot is grouped with someone (0..30).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerGroup = 3
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerGroupSuccess
+#        Description: Affinity gained when a group the bot was in succeeds at its run (0..30).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerGroupSuccess = 5
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerHelp
+#        Description: Affinity gained toward someone who helped the bot, and toward someone the bot
+#                     helped (0..50).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerHelp = 8
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerKick
+#        Description: Affinity change toward a player who kicks the bot from a group (-100..0).
+#        Type: int
+#        Default: -10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerKick = -10
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerKillSteal
+#        Description: Affinity change toward a player who took a mob the bot was already fighting
+#                     (-100..0).
+#        Type: int
+#        Default: -6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerKillSteal = -6
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerKilledBy
+#        Description: Affinity change toward someone who killed the bot in PvP (-100..0).
+#        Type: int
+#        Default: -20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerKilledBy = -20
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerKilledThem
+#        Description: Affinity change toward someone the bot killed in PvP (-100..0); rivalry cuts
+#                     both ways.
+#        Type: int
+#        Default: -5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerKilledThem = -5
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerNinjaLoot
+#        Description: Affinity change toward a groupmate who won a Need roll on an item it could not
+#                     use while the bot also needed it (-100..0).
+#        Type: int
+#        Default: -8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerNinjaLoot = -8
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerRudeEmote
+#        Description: Affinity change when someone makes a rude emote at the bot (-100..0).
+#        Type: int
+#        Default: -5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerRudeEmote = -5
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerStrike
+#        Description: Affinity change when the chat safety screen strikes a player's line to the bot
+#                     (-100..0).
+#        Type: int
+#        Default: -15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerStrike = -15
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerTrade
+#        Description: Affinity gained when a trade with the bot completes (0..30).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerTrade = 3
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerWatchedDie
+#        Description: Affinity change toward a same-faction bystander who watched the bot die
+#                     without helping (-100..0).
+#        Type: int
+#        Default: -12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerWatchedDie = -12
+
+#
+#    World.Playerbots.Social.Memory.AnswerHelpEnabled
+#        Description: Let a managed bot that is asked for help join the fight, by its helpfulness
+#                     and its liking for the asker.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AnswerHelpEnabled = true
+
+#
+#    World.Playerbots.Social.Memory.BystanderMinHealthPercent
+#        Description: The least health percent a bystander needs to count as able to help (1..100).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.BystanderMinHealthPercent = 50
+
+#
+#    World.Playerbots.Social.Memory.BystanderMinSeconds
+#        Description: The shortest low-health window, in seconds, in which a bystander's inaction
+#                     counts (1..60).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.BystanderMinSeconds = 5
+
+#
+#    World.Playerbots.Social.Memory.BystanderRadiusYards
+#        Description: How close, in yards, a unit must stay to the bot through its low-health window
+#                     to count as a bystander (5..60).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.BystanderRadiusYards = 30
+
+#
+#    World.Playerbots.Social.Memory.CallForHelpBaseChance
+#        Description: The base chance that a bot in a losing fight with a candidate nearby asks for
+#                     help (0..1); sociability and liking add to it.
+#        Type: float
+#        Default: 0.25
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.CallForHelpBaseChance = 0.25
+
+#
+#    World.Playerbots.Social.Memory.CallForHelpEnabled
+#        Description: Let a bot that is losing a fight decide, once per fight, to call for help from
+#                     a healthy same-faction passer-by (a line and a help emote) or go it alone.
+#                     Only the units it asked can later be blamed (AffinityPerWatchedDie).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.CallForHelpEnabled = true
+
+#
+#    World.Playerbots.Social.Memory.CallForHelpSociabilityWeight
+#        Description: How much the bot's sociability trait adds to the chance of asking for help
+#                     (0..1).
+#        Type: float
+#        Default: 0.6
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.CallForHelpSociabilityWeight = 0.6
+
+#
+#    World.Playerbots.Social.Memory.ChatFamiliarityCooldownMinutes
+#        Description: A chat exchange or emote raises familiarity at most once per pair in this
+#                     window, in minutes (0..1440; 0 counts every one).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.ChatFamiliarityCooldownMinutes = 10
+
+#
+#    World.Playerbots.Social.Memory.Enabled
+#        Description: Record and use the memory (on by default). Off: nothing is noted and the
+#                     speech ignores any stored relations.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.Enabled = true
+
+#
+#    World.Playerbots.Social.Memory.FamiliarityHalfLifeDays
+#        Description: Days after which a relation's familiarity has halved when it is not refreshed
+#                     (1..365).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.FamiliarityHalfLifeDays = 30
+
+#
+#    World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair
+#        Description: The most affinity one pair can gain in one UTC day, whatever the sources
+#                     (0..200; 0 is unlimited). Kept in memory only: a restart resets the day.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair = 20
+
+#
+#    World.Playerbots.Social.Memory.MaxRelationsPerBot
+#        Description: The most relations one bot keeps (16..1024). Past it the least familiar,
+#                     oldest entry that is not a strong bond or grudge is dropped; with War Mode on
+#                     and RemoveCaps, one the war layer holds a grudge against stays as a war-only
+#                     entry that only War Mode sees (a bot holds at most four times this many
+#                     entries in all).
+#        Type: int
+#        Default: 256
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.MaxRelationsPerBot = 256
+
+#
+#    World.Playerbots.Social.Memory.RivalAffinity
+#        Description: At or below this affinity the Rival flag is set; above it again, the flag is
+#                     cleared (-100..0).
+#        Type: int
+#        Default: -50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.RivalAffinity = -50
+
+#
+#    World.Playerbots.Social.Memory.RivalHalfLifeDays
+#        Description: The same half-life for a relation flagged Rival: a grudge fades slower
+#                     (1..3650).
+#        Type: int
+#        Default: 45
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.RivalHalfLifeDays = 45
+
+#
+#    World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe
+#        Description: Trust (permille) change toward the member who died first in a wipe
+#                     (-500..500).
+#        Type: int
+#        Default: -30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe = -30
+
+#
+#    World.Playerbots.Social.Memory.TrustPerGroupSuccess
+#        Description: Trust (permille) gained toward every member of a group that finished its run
+#                     (-500..500).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
+
+#
+#    World.Playerbots.Social.WarMode.ClearOnDisable
+#        Description: Wipe the war layer of every bot, running or not, at the first checkpoint after
+#                     War Mode is switched off, and write every bot it changed once (off by default:
+#                     the layer stays dormant and comes back when War Mode is switched on again).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.ClearOnDisable = false
+
+#
+#    World.Playerbots.Social.WarMode.Enabled
+#        Description: Hold grudges harder and longer (off by default).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.Enabled = false
+
+#
+#    World.Playerbots.Social.WarMode.NegativeMultiplier
+#        Description: While enabled, every negative affinity change is multiplied by this (1..10);
+#                     positive changes are untouched.
+#        Type: float
+#        Default: 3
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.NegativeMultiplier = 3
+
+#
+#    World.Playerbots.Social.WarMode.NeverForget
+#        Description: In the war layer negative affinity never drifts back toward 0 and the war
+#                     Rival flag is never cleared by drift, only by positive events that lift the
+#                     war affinity back over the threshold.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.NeverForget = true
+
+#
+#    World.Playerbots.Social.WarMode.RemoveCaps
+#        Description: In the war layer the daily affinity gain cap and the one-apology-a-day limit
+#                     are lifted, and a relation a full memory drops from the normal layer stays for
+#                     the war layer when the war layer holds a grudge against it (a war-only entry:
+#                     the normal layer, and War Mode while it is off, never see it).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.WarMode.RemoveCaps = true
 
 #
 #    World.Playerbots.StallSeconds

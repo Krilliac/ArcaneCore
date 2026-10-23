@@ -228,21 +228,34 @@ public sealed partial class ManagedPlayerbotFeature
                 logger.LogInformation("Playerbot fleet reset: stopped {Stopped} bots ({Failed} failed to stop)", stopped, stopFailed);
 
                 var counts = new ResetCounts();
-                int position = 0;
-                foreach (FleetResetBot bot in census.Bots)
+                try
                 {
-                    position++;
-                    await DeleteBotForResetAsync(bot, counts, cancellationToken).ConfigureAwait(false);
-                    if (position % 25 == 0 || position == census.Bots.Count)
-                        progress(string.Create(CultureInfo.InvariantCulture,
-                            $"Fleet reset: {position}/{census.Bots.Count} bot accounts processed, {counts.CharactersDeleted} characters deleted, {counts.CharactersFailed} failed."));
+                    int position = 0;
+                    foreach (FleetResetBot bot in census.Bots)
+                    {
+                        position++;
+                        await DeleteBotForResetAsync(bot, counts, cancellationToken).ConfigureAwait(false);
+                        if (position % 25 == 0 || position == census.Bots.Count)
+                            progress(string.Create(CultureInfo.InvariantCulture,
+                                $"Fleet reset: {position}/{census.Bots.Count} bot accounts processed, {counts.CharactersDeleted} characters deleted, {counts.CharactersFailed} failed."));
+                    }
                 }
-
-                lock (_snapshotGate)
+                finally
                 {
-                    HashSet<Guid> gone = [.. census.Bots.Where(b => counts.Removed.Contains(b.BotId)).Select(b => b.BotId)];
-                    Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => !gone.Contains(s.BotId)).ToArray());
-                    _snapshotEpoch++;
+                    // A cancelled reset has still deleted some bots: forget exactly those (counts.Forgotten holds the bots deleted so far), so the survivors
+                    // keep no relation toward a character that is gone.
+                    if (counts.Forgotten.Count > 0)
+                    {
+                        await using AsyncServiceScope relationScope = scopes.CreateAsyncScope();
+                        await ForgetRelationsAsync(relationScope.ServiceProvider, counts.Forgotten).ConfigureAwait(false);
+                    }
+
+                    lock (_snapshotGate)
+                    {
+                        HashSet<Guid> gone = [.. census.Bots.Where(b => counts.Removed.Contains(b.BotId)).Select(b => b.BotId)];
+                        Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => !gone.Contains(s.BotId)).ToArray());
+                        _snapshotEpoch++;
+                    }
                 }
 
                 logger.LogInformation(
@@ -282,6 +295,10 @@ public sealed partial class ManagedPlayerbotFeature
         public int MembersRemoved;
         public int GuildsReleased;
         public HashSet<Guid> Removed { get; } = [];
+        public List<(Guid BotId, IReadOnlyList<int> CharacterIds)> Forgotten { get; } = [];
+
+        /// <summary>The bots in <see cref="Forgotten"/> whose list of deleted characters is still growing (a bot is listed at its first deleted character).</summary>
+        public Dictionary<Guid, List<int>> DeletedCharacters { get; } = [];
     }
 
     /// <summary>World thread: cancel every trade a running bot is in (both sides are told, as a logout does).</summary>
@@ -387,7 +404,19 @@ public sealed partial class ManagedPlayerbotFeature
                     foreach (CharacterRecord character in held)
                     {
                         if (await ReleaseGuildLeadershipAsync(character.Id).ConfigureAwait(false)) counts.GuildsReleased++;
-                        if (await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false)) counts.CharactersDeleted++;
+                        if (await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
+                        {
+                            counts.CharactersDeleted++;
+                            // From the first deleted character on, the bot's relations and everyone's relation toward that character are to be forgotten, whatever
+                            // happens next (a cancellation, a refused second character, a store that throws): the character is gone.
+                            if (!counts.DeletedCharacters.TryGetValue(bot.BotId, out List<int>? deletedIds))
+                            {
+                                counts.DeletedCharacters[bot.BotId] = deletedIds = [];
+                                counts.Forgotten.Add((bot.BotId, deletedIds));
+                            }
+
+                            deletedIds.Add(character.Id);
+                        }
                         else
                         {
                             allGone = false;
@@ -427,6 +456,8 @@ public sealed partial class ManagedPlayerbotFeature
                 await setAsides.ReplaceAsync(bot.BotId, [], cancellationToken).ConfigureAwait(false);
             _homes.TryRemove(bot.BotId, out _);
             _loadedSetAsides.TryRemove(bot.BotId, out _);
+            // The relations go in one batch after the last bot (ForgetRelationsAsync). A bot whose characters were already gone has none deleted above.
+            if (!counts.DeletedCharacters.ContainsKey(bot.BotId)) counts.Forgotten.Add((bot.BotId, bot.CharacterIds));
             counts.Removed.Add(bot.BotId);
             _spareAccounts.Enqueue(new SpareAccount(bot.AccountId, bot.AccountName));
         }

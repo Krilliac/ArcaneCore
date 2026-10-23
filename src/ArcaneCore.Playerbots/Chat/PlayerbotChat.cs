@@ -98,7 +98,10 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         _environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _safety = new PlayerbotChatSafety(() => _options.Chat, time, logger);
+        _safety = new PlayerbotChatSafety(() => _options.Chat, time, logger)
+        {
+            OnStrike = ask => Social?.NoteById(ask.BotId, ask.BotGuid, ask.SenderGuid, BotSocial.PlayerbotSocialEvent.ChatStrike),
+        };
     }
 
     private PlayerbotChatOptions Options => _options.Chat;
@@ -256,8 +259,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// </summary>
     internal event Action<BotHeardLine>? LineHeard;
 
-    /// <summary>Whether anything listens to <see cref="LineHeard"/> or answers through <see cref="Responder"/> (the party AI skips building the line otherwise).</summary>
-    internal bool HasHearers => LineHeard is not null || Responder is not null;
+    /// <summary>Whether anything listens to <see cref="LineHeard"/> (only while the social memory is enabled, live) or answers through <see cref="Responder"/> (the party AI skips building the line otherwise).</summary>
+    internal bool HasHearers => (LineHeard is not null && Social is { Enabled: true }) || Responder is not null;
 
     /// <summary>
     /// World thread: the one feature that may answer a heard line itself (the bot voice, <see cref="PlayerbotNeedsVoice"/>: an "inv" to an
@@ -824,7 +827,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             StateOf(provider).Succeed(now);
         }
 
-        if (answer.Text is { } text) Remember(ask, text, answer.Intent);
+        if (answer.Text is { } text) Remember(ask, text, answer.Intent, fromTemplate: true);
         return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, answer.Text, answer.Command, AcknowledgeCommand: true, provider.Label,
             Action: SocialAction(ask, answer.Action));
     }
@@ -1083,8 +1086,14 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
     }
 
-    private void Remember(BotChatAsk ask, string reply, BuiltinChatIntent? intent = null)
+    /// <summary>The bots' social memory seam (set by the feature; null in a host or a test without it).</summary>
+    internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
+
+    // <paramref name="fromTemplate"/>: the reply is one of the built-in lines. Only that text is kept in the social memory (as the bot's own
+    // summary of the talk); a model's reply and the player's line never are.
+    private void Remember(BotChatAsk ask, string reply, BuiltinChatIntent? intent = null, bool fromTemplate = false)
     {
+        Social?.SetTopic(ask.BotId, ask.SenderGuid, intent?.ToString() ?? "chat", fromTemplate ? reply : string.Empty);
         lock (_gate)
         {
             var key = (ask.BotId, ask.SenderGuid.Value);

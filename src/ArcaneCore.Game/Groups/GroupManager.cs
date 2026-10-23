@@ -57,6 +57,9 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>A member left or was removed without disbanding the group (world thread).</summary>
     public event Action<Group, ObjectGuid>? MemberRemoved;
 
+    /// <summary>A member was removed from its group by another member's uninvite (kicker first, kicked second); raised just before the removal (world thread).</summary>
+    public event Action<ObjectGuid, ObjectGuid>? MemberKicked;
+
     /// <summary>The group is about to be disbanded; members are still listed. The GUID is the leaving member, or empty (world thread).</summary>
     public event Action<Group, ObjectGuid>? Disbanding;
 
@@ -400,6 +403,7 @@ public sealed partial class GroupManager(SocialContext context)
                 return;
             }
 
+            MemberKicked?.Invoke(player.Guid, slot.Guid);
             RemoveFromGroup(group, slot.Guid, kicked: true);
             return;
         }
@@ -439,6 +443,7 @@ public sealed partial class GroupManager(SocialContext context)
         Group group = GetGroup(player.Guid)!;
         if (group.IsMember(guid))
         {
+            MemberKicked?.Invoke(player.Guid, guid);
             RemoveFromGroup(group, guid, kicked: true);
         }
         else if (group.IsInvited(guid))

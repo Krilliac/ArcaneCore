@@ -85,7 +85,14 @@ internal sealed class MemoryPopulationStore : IPlayerbotPopulationStore
         return Task.CompletedTask;
     }
 
-    public Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default) => Task.FromResult(_items.TryRemove(botId, out _));
+    /// <summary>Called with the bot id at every <see cref="DeleteAsync"/> (before the row goes).</summary>
+    public Action<Guid>? OnDelete { get; set; }
+
+    public Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default)
+    {
+        OnDelete?.Invoke(botId);
+        return Task.FromResult(_items.TryRemove(botId, out _));
+    }
 
     /// <summary>Add a row as if a previous run had written it.</summary>
     public void Seed(PlayerbotPopulationMember member) => _items[member.BotId] = member;

@@ -36,6 +36,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotContention _contention = new(options, claims);
+
+    /// <summary>The bots' social memory seam (set by the feature; null in a host or a test without it).</summary>
+    internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
     private PlayerbotRoute? _route;
     private bool _routeAbandoned;
 
@@ -616,6 +619,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         PlayerbotNavigation.SetStallWatch(player, _stall);
         WatchKills(player);
+        // The engagement ends with the bot's death, a change of target, the mob's death, or the bot leaving combat (not in combat and not on the mob's threat list).
+        if (_engagedMob != 0 && (!player.IsAlive || _target is not { IsAlive: true } engagedTarget || engagedTarget.Guid.Value != _engagedMob
+            || !player.Combat.IsInCombat && !player.Combat.ThreatenedBy.Contains(engagedTarget))) ClearEngagement();
         SyncHomeFilters(player);
         _recovery.UnsafeBody ??= JudgeBody;
         _recovery.LandingUnsafe ??= (bot, at) => Risk.TooStrongAt(bot, at) is not null;
@@ -2490,11 +2496,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         if (creature.Map is not { } map) return null;
         ObjectGuid tap = creature.LootTapper;
-        if (!tap.IsEmpty)
-        {
-            if (map.FindPlayer(tap) is { } tapper) return tapper;
-            if (map.FindObject(tap) is Unit pet && pet.CharmerOrOwnerGuid.IsPlayer && map.FindPlayer(pet.CharmerOrOwnerGuid) is { } owner) return owner;
-        }
+        if (!tap.IsEmpty && TapperOf(map, tap) is { } tapper) return tapper;
 
         if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups)) return victim;
         if (!creature.Combat.HasThreatList) return null;
@@ -2502,6 +2504,50 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         for (int index = 0; index < entries.Count; index++)
             if (entries[index].Target is Player other && IsStranger(player, other, groups)) return other;
         return null;
+    }
+
+    /// <summary>The player a tap belongs to: the tapper itself, or the owner of the pet that tapped. Null when neither is on the map.</summary>
+    private static Player? TapperOf(Map map, ObjectGuid tap)
+    {
+        if (map.FindPlayer(tap) is { } tapper) return tapper;
+        if (map.FindObject(tap) is Unit pet && pet.CharmerOrOwnerGuid.IsPlayer && map.FindPlayer(pet.CharmerOrOwnerGuid) is { } owner) return owner;
+        return null;
+    }
+
+    /// <summary>
+    /// The kill-steal rule (spec 12.3: only when the other side started second). Tracks the mob the bot is engaged with (on its threat list while nobody
+    /// outside the bot's group holds its tap) in <see cref="_engagedMob"/>, and records the steal when an outsider takes the tag while the bot is still on the list.
+    /// Tag and group are sampled once per think: a groupmate who tags and leaves the group (or is kicked) within one think is seen first as a stranger holding the tag,
+    /// which differs from the stored tapper (none yet), and so can be blamed for a steal.
+    /// </summary>
+    private void NoteEngagement(Player player, Creature held, bool onThreatList, GroupManager? groups)
+    {
+        ulong mob = held.Guid.Value;
+        if (!onThreatList)
+        {
+            // Not (or no longer) on its threat list: the bot was walking up, or the mob evaded or reset. Whatever tags it next took nothing from the bot.
+            if (_engagedMob == mob) ClearEngagement();
+            return;
+        }
+
+        ObjectGuid tap = held.LootTapper;
+        Player? tapper = tap.IsEmpty || held.Map is not { } map ? null : TapperOf(map, tap);
+        if (tap.IsEmpty || tapper is not null && !IsStranger(player, tapper, groups))
+        {
+            // Untagged, or tagged by the bot or its group: the bot has it. The tapper is stored as it is now: a tap that is unchanged when the group
+            // changes under it (the player leaves, kicks the bot, the group disbands) turns that tapper into a stranger, but takes nothing from the bot.
+            _engagedMob = mob;
+            _engagedTapper = tapper?.Guid.Value ?? 0;
+            return;
+        }
+
+        // An outsider holds the tag. It is a steal only if the tag CHANGED to them since the bot engaged (from untagged or from the own side):
+        // the bot engaged first and the other side started second.
+        if (tapper is not null && _engagedMob == mob && tapper.Guid.Value != _engagedTapper)
+        {
+            ClearEngagement(); // once per engagement
+            Social?.Note(player.Guid, tapper.Guid, BotSocial.PlayerbotSocialEvent.KillSteal, tapper.Team != player.Team);
+        }
     }
 
     /// <summary>
@@ -2636,6 +2682,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private readonly Dictionary<ObjectGuid, uint> _fruitless = [];
 
+    // The mob the bot is on the threat list of while nobody outside its group holds the tap (NoteEngagement): the only mob another player's tag can steal.
+    // Cleared when the bot's target changes or dies (UpdateCore), and when the bot is off the mob's threat list (evade, reset, walking up).
+    private ulong _engagedMob;
+
+    // The player behind the tap of _engagedMob when the engagement was last noted (pets resolved to their owner), 0 when the mob was untagged.
+    // A KillSteal needs the current tapper to be a stranger who differs from it.
+    private ulong _engagedTapper;
+
+    private void ClearEngagement()
+    {
+        _engagedMob = 0;
+        _engagedTapper = 0;
+    }
+
     private void MarkFruitless(Creature creature)
     {
         uint now = _session.World.NowMs;
@@ -2682,6 +2742,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         uint now = _session.World.NowMs;
         ulong mob = held.Guid.Value;
         bool mine = player.Combat.ThreatenedBy.Contains(held) || ReferenceEquals(held.Combat.Victim, player);
+        GroupManager? groups = GroupsOf(player);
+        // Before the early exit below: a bot still on the threat list is "mine", and that is exactly when a tag taken from it is a steal.
+        // (_attacking says only that a swing was sent; it can be stale.)
+        NoteEngagement(player, held, mine, groups);
 
         if (_contention.IsAssisting(held.Guid))
         {
@@ -2695,7 +2759,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (mine) return;
         if (_contention.IsSetAside(mob, now)) { LeaveSomeoneElses(player, held, now); return; }
-        GroupManager? groups = GroupsOf(player);
         if (!IsSomeoneElses(player, held, groups)) return;
 
         // Only a tagged mob has a tagger to help: an untagged one that merely fights a stranger is left alone (helping would take its tag).
@@ -2712,6 +2775,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_contention.Decide(facts, player.Guid.Value, mob, now) == PlayerbotHelpDecision.Help && tagger is not null)
         {
             _contention.BeginAssist(held.Guid, tagger.Guid);
+            Social?.NoteHelp(player, tagger);
             _contention.ReleaseClaim();
             return;
         }
@@ -2786,7 +2850,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || tagger.MaxHealth == 0 || tagger.Health * 100f >= 85f * tagger.MaxHealth) return false;
         // A self-only heal such as Desperate Prayer would heal the bot, not its tagger; a scripted (Holy Light) or chain (Healing Wave) heal lands on the target.
         PlayerbotAbilities abilities = _combatSpells.Abilities(player);
-        return _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+        bool healed = _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
+        if (healed) Social?.NoteHelp(player, tagger);
+        return healed;
     }
 
     private void RememberAttackers(Player player)

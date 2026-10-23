@@ -41,6 +41,9 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         new ChatCommand("anomalies", AccountSecurity.GameMaster,
             "Syntax: .playerbot anomalies $name\nShow the recent anomaly history recorded for a bot.",
             Anomalies),
+        new ChatCommand("social", AccountSecurity.Administrator,
+            "Syntax: .playerbot social $id|$name\nShow a running bot's temperament and its ten best-known relations (affinity, familiarity, trust, flags, last topic, last seen). Read-only.",
+            Social),
         new ChatCommand("gear", AccountSecurity.GameMaster,
             "Syntax: .playerbot gear $id|$name\nShow a running bot's equipped items, free bag slots, gold and skills.",
             Gear),
@@ -150,6 +153,60 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         context.Reply($"{botPlayer.Name} ({botId}) — {party.DebugLine(botPlayer)}");
         context.Reply(party.StatusLine(botPlayer));
         return true;
+    }
+
+    /// <summary><c>.playerbot social $bot</c>: the bot's traits and its top relations (read-only).</summary>
+    internal static bool Social(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        string? targetArg = args.ExtractArg();
+        if (string.IsNullOrEmpty(targetArg) || !args.IsEmpty) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>() is not { } feature)
+        {
+            context.Reply("Playerbot service is unavailable.");
+            return true;
+        }
+
+        if (!feature.TryResolveBotId(targetArg, out Guid botId, out string botName))
+        {
+            context.Reply("Playerbot not found.");
+            return true;
+        }
+
+        if (feature.FindSession(botId)?.Player is not { } bot)
+        {
+            context.Reply("Playerbot is not running.");
+            return true;
+        }
+
+        BotSocial.PlayerbotSocialMemory memory = feature.Social.Memory;
+        foreach (string line in SocialLines(botName, BotSocial.PlayerbotTraits.For(bot.Guid.Value), memory.Enabled, memory.Top(botId, 10),
+                     guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, memory.NowMs))
+            context.Reply(line);
+        return true;
+    }
+
+    /// <summary>The reply lines of <c>.playerbot social</c> (a name for a guid is looked up with <paramref name="nameOf"/>; unknown ones show the guid).</summary>
+    internal static IEnumerable<string> SocialLines(string botName, BotSocial.PlayerbotTraits traits, bool enabled,
+        IReadOnlyList<PlayerbotRelation> top, Func<ulong, string?> nameOf, long nowMs)
+    {
+        CultureInfo c = CultureInfo.InvariantCulture;
+        yield return string.Create(c, $"{botName}: sociability {traits.Sociability:F2}, chattiness {traits.Chattiness:F2}, generosity {traits.Generosity:F2}, curiosity {traits.Curiosity:F2}, helpfulness {traits.Helpfulness:F2}.");
+        if (!enabled) yield return "Social memory is off (World:Playerbots:Social:Memory:Enabled).";
+        if (top.Count == 0)
+        {
+            yield return "No relations yet.";
+            yield break;
+        }
+
+        foreach (PlayerbotRelation r in top)
+        {
+            string who = nameOf(r.OtherGuid) ?? ("guid " + r.OtherGuid.ToString("X", c));
+            long ageMs = Math.Max(0, nowMs - r.LastSeenUnixMs);
+            string age = ageMs >= 86_400_000 ? string.Create(c, $"{ageMs / 86_400_000}d") : ageMs >= 3_600_000 ? string.Create(c, $"{ageMs / 3_600_000}h") : string.Create(c, $"{ageMs / 60_000}m");
+            yield return string.Create(c,
+                $"{who} ({(r.OtherIsBot ? "bot" : "player")}): affinity {r.Affinity}, familiarity {r.Familiarity}, trust {r.TrustPermille}, flags {r.Flags}, topic {(r.LastTopic.Length == 0 ? "-" : r.LastTopic)}, seen {age} ago{((r.WarFlags & PlayerbotRelationFlags.WarSeeded) != 0 ? $", war affinity {r.WarAffinity}" : string.Empty)}");
+        }
     }
 
     internal static bool Gear(CommandContext context, string text)

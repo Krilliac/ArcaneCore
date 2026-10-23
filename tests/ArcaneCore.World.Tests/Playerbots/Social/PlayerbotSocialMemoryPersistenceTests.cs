@@ -1,0 +1,193 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Playerbots;
+using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots.Social;
+
+/// <summary>The social memory survives a bot stop and a server restart, the way set-asides do.</summary>
+public sealed class PlayerbotSocialMemoryPersistenceTests
+{
+    internal sealed class MemoryRelationStore : IPlayerbotRelationStore
+    {
+        private readonly Dictionary<Guid, PlayerbotRelation[]> _rows = [];
+        public bool ThrowOnReplace { get; set; }
+        public int Replaces { get; private set; }
+
+        public Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PlayerbotRelation>>([.. _rows.Values.SelectMany(rows => rows)]);
+
+        public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnReplace) throw new InvalidOperationException("relation-storage-refused");
+            Replaces++;
+            _rows[botId] = [.. rows];
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Relation_NotedBeforeStop_IsPresentAfterRestart()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new MemoryRelationStore();
+        Guid id;
+        await using (WorldTestHost first = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store)))
+        {
+            var feature = first.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+            await feature.StartupAsync(default);
+            id = Assert.IsType<Guid>((await feature.CreateAsync("Relbot", 1, 1)).BotId);
+            Assert.True((await feature.StartAsync(id.ToString())).Success);
+            int characterId = (await owners.FindAsync(id))!.CharacterId;
+            feature.Social.Memory.Note(id, characterId, 4242, false, PlayerbotSocialEvent.Grouped);
+            feature.Social.Memory.SetTopic(id, 4242, "greeting", "Hello there.");
+            await feature.ShutdownBeforeWorldStopAsync();
+        }
+
+        PlayerbotRelation saved = Assert.Single(await store.LoadAllAsync());
+        Assert.Equal((id, 4242UL, (short)3), (saved.BotId, saved.OtherGuid, saved.Affinity));
+
+        await using WorldTestHost second = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var restarted = second.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await restarted.StartupAsync(default);
+        Assert.True(restarted.Social.Memory.TryGet(id, 4242, out PlayerbotRelation loaded));
+        Assert.Equal("greeting", loaded.LastTopic);
+        Assert.Equal("Hello there.", loaded.Summary);
+        Assert.True((await restarted.StartAsync(id.ToString())).Success);
+        int writes = store.Replaces;
+        await restarted.ShutdownBeforeWorldStopAsync();
+        Assert.Equal(writes, store.Replaces); // nothing changed: nothing written
+    }
+
+    [Fact]
+    public async Task DeletingABot_ForgetsItsRelations_AndEveryOtherBotsRelationTowardIt_InMemoryAndInTheStore()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new MemoryRelationStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Deletedrel", 1, 1)).BotId);
+        Guid kept = Assert.IsType<Guid>((await feature.CreateAsync("Keptrel", 1, 1)).BotId);
+        int goneCharacter = (await owners.FindAsync(gone))!.CharacterId, keptCharacter = (await owners.FindAsync(kept))!.CharacterId;
+        ulong goneGuid = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;
+        PlayerbotSocialMemory memory = feature.Social.Memory;
+        memory.Note(gone, goneCharacter, 4242, false, PlayerbotSocialEvent.Grouped);
+        memory.Note(kept, keptCharacter, goneGuid, true, PlayerbotSocialEvent.Grouped);
+        memory.Note(kept, keptCharacter, 4242, false, PlayerbotSocialEvent.Grouped);
+        await store.ReplaceAsync(gone, memory.Snapshot(gone));
+        await store.ReplaceAsync(kept, memory.Snapshot(kept));
+        Assert.Equal(3, (await store.LoadAllAsync()).Count);
+
+        Assert.True((await feature.DeleteAsync(gone.ToString())).Success);
+
+        Assert.Empty(memory.Snapshot(gone));
+        Assert.False(memory.TryGet(kept, goneGuid, out _));
+        Assert.True(memory.TryGet(kept, 4242, out _)); // the others' other relations stay
+        PlayerbotRelation left = Assert.Single(await store.LoadAllAsync());
+        Assert.Equal((kept, 4242UL), (left.BotId, left.OtherGuid));
+    }
+
+    private const long Day = 86_400_000L;
+    private static readonly Guid RestartBot = Guid.Parse("00000000-0000-0000-0000-0000000000e1");
+
+    private static PlayerbotSocialMemory Fresh(PlayerbotSocialMemoryOptions options, Func<long> clock, PlayerbotRelation[]? rows = null, PlayerbotWarModeOptions? war = null)
+    {
+        var memory = new PlayerbotSocialMemory(options, clock, war);
+        memory.SetSelf(RestartBot, 1);
+        if (rows is not null) memory.Load(rows);
+        return memory;
+    }
+
+    [Fact]
+    public void ADailyContact_WithARestartBetweenEveryContact_StillBuildsFamiliarity()
+    {
+        long now = 20_000 * Day;
+        var options = new PlayerbotSocialMemoryOptions();
+        PlayerbotSocialMemory memory = Fresh(options, () => now);
+        for (int day = 0; day < 10; day++)
+        {
+            memory.Note(RestartBot, 1, 42, false, PlayerbotSocialEvent.Grouped);
+            now += Day;
+            memory = Fresh(options, () => now, memory.Snapshot(RestartBot).ToArray()); // save, restart, reload
+        }
+
+        Assert.True(memory.TryGet(RestartBot, 42, out PlayerbotRelation r));
+        Assert.True(r.Familiarity >= 3, $"familiarity {r.Familiarity}");
+    }
+
+    [Fact]
+    public async Task AfterARestartThroughTheRealStore_TheExactValuesAndAnchorsAreBitForBitThoseOfARunWithoutOne()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new CharacterDbContext(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 11, Name = "Restartbot", Race = 1, Class = 1, Level = 1 });
+        var store = new EfPlayerbotRelationStore(db);
+
+        long plainNow = 20_000 * Day, restartNow = plainNow;
+        var options = new PlayerbotSocialMemoryOptions { MaxDailyAffinityGainPerPair = 0 };
+        var war = new PlayerbotWarModeOptions { Enabled = true };
+        PlayerbotSocialMemory plain = Fresh(options, () => plainNow, war: war);
+        PlayerbotSocialMemory restarted = Fresh(options, () => restartNow, war: war);
+        var random = new Random(7);
+        PlayerbotSocialEvent[] events = [PlayerbotSocialEvent.HelpedBy, PlayerbotSocialEvent.KilledBy, PlayerbotSocialEvent.Grouped, PlayerbotSocialEvent.TradeCompleted];
+        for (int step = 0; step < 60; step++)
+        {
+            long advance = random.Next(3_600_000, (int)(Day * 2));
+            plainNow += advance;
+            restartNow += advance;
+            PlayerbotSocialEvent e = events[random.Next(events.Length)];
+            plain.Note(RestartBot, character.Id, 42, false, e);
+            restarted.Note(RestartBot, character.Id, 42, false, e);
+            // Save and restart: the rows go through the real store (sqlite, as the production providers' EF mapping) and are loaded into a new memory.
+            await store.ReplaceAsync(RestartBot, restarted.Snapshot(RestartBot));
+            restarted = Fresh(options, () => restartNow, (await store.LoadAllAsync()).ToArray(), war);
+            PlayerbotRelation a = plain.Snapshot(RestartBot).Single(), b = restarted.Snapshot(RestartBot).Single();
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.AffinityExact), BitConverter.DoubleToInt64Bits(b.AffinityExact));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.FamiliarityExact), BitConverter.DoubleToInt64Bits(b.FamiliarityExact));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(a.WarAffinityExact), BitConverter.DoubleToInt64Bits(b.WarAffinityExact));
+            Assert.Equal((a.DecayAnchorUnixMs, a.WarDecayAnchorUnixMs, a.LastSeenUnixMs), (b.DecayAnchorUnixMs, b.WarDecayAnchorUnixMs, b.LastSeenUnixMs));
+        }
+
+        Assert.True(plain.TryGet(RestartBot, 42, out PlayerbotRelation pa));
+        Assert.True(restarted.TryGet(RestartBot, 42, out PlayerbotRelation pb));
+        Assert.Equal(pa, pb);
+    }
+
+    [Fact]
+    public async Task ThrowingStore_NeverBlocksTheStop_AndLeavesTheBotStopped()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new MemoryRelationStore { ThrowOnReplace = true };
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultrel", 1, 1)).BotId);
+        Assert.True((await feature.StartAsync(id.ToString())).Success);
+        feature.Social.Memory.Note(id, (await owners.FindAsync(id))!.CharacterId, 77, false, PlayerbotSocialEvent.TradeCompleted);
+
+        await feature.ShutdownBeforeWorldStopAsync();
+
+        Assert.Equal(ManagedPlayerbotState.Stopped, (await owners.FindAsync(id))!.State);
+        Assert.Empty(await store.LoadAllAsync());
+    }
+}

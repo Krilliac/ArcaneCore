@@ -25,6 +25,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
+using BotChat = ArcaneCore.World.Playerbots.Chat;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -202,6 +203,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     private long _clockMs;
     private Chat.PlayerbotChat? _chat;
+    private BotSocial.PlayerbotSocialRecorder? _social;
+    private BotSocial.PlayerbotPvpKillFeed? _pvpKills;
+
+    /// <summary>The feed of this world's player deaths for the social memory (null before the attach; tests).</summary>
+    internal BotSocial.PlayerbotPvpKillFeed? PvpKills => _pvpKills;
+
+    /// <summary>
+    /// The bots' social memory and the one seam events are recorded through (docs/areas/playbots-social.md, "Social memory"). Created on first
+    /// use from the live <c>World:Playerbots:Social:Memory</c> options and the feature's clock; any thread.
+    /// </summary>
+    internal BotSocial.PlayerbotSocialRecorder Social => _social ?? CreateSocial();
+
+    // Two threads may race to the first use: the loser's empty recorder is dropped and both see the winner's.
+    private BotSocial.PlayerbotSocialRecorder CreateSocial()
+    {
+        var created = new BotSocial.PlayerbotSocialRecorder(
+            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger);
+        return Interlocked.CompareExchange(ref _social, created, null) ?? created;
+    }
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
@@ -321,6 +341,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private const string HandoverControllers = "playerbots.controllers";
     private const string HandoverSharedSetAsides = "playerbots.sharedSetAsides";
     private const string HandoverLoadedSetAsides = "playerbots.loadedSetAsides";
+    private const string HandoverRelations = "playerbots.socialRelations";
     private const string HandoverHomes = "playerbots.homes";
     private const string HandoverHomeStore = "playerbots.homeStore";
     private const string HandoverClock = "playerbots.clockMs";
@@ -368,10 +389,24 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 services.GetService<Chat.IBotChatEnvironment>() ?? new Chat.ProcessBotChatEnvironment(),
                 services.GetService<TimeProvider>() ?? TimeProvider.System, logger);
             if (_options.Enabled) _chat.LogConfiguration();
+            _chat.Social = Social;
+            BotSocial.PlayerbotSocialRecorder recorder = Social;
+            // A line addressed to a bot is an exchange with its sender; the recorder never throws into the chat service.
+            _chat.LineHeard += line =>
+            {
+                if (line.AddressesBot && line.SenderGuid != line.BotGuid) recorder.NoteChatLine(line.BotId, line.BotGuid, line.SenderGuid, line.Text);
+            };
         }
+
+        if (coordinator is { } groupCoordinator) groupCoordinator.Social = Social;
 
         _world = world;
         _sharedSetAsides.World = world;
+        // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this
+        // world, so a kill reaches only this world's memory, exactly once, whether or not a bot has thought since it changed maps; the detach takes it off.
+        BotSocial.PlayerbotSocialRecorder pvpRecorder = Social;
+        _pvpKills = new BotSocial.PlayerbotPvpKillFeed(world, pvpRecorder.NotePvpKill);
+        subscriptions.Add(_pvpKills);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
@@ -403,6 +438,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 brain.Suspensions.Restore(rows, world.NowMs, unixNow);
             ActiveBot active = NewActiveBot(entry, brain);
             active.SavedSetAsideVersion = -1; // written again at the next checkpoint
+            active.SavedRelationVersion = -1;
             if (controllers?.TryGetValue(entry.BotId, out IPlayerbotController? controller) == true) active.Controller = controller;
             if (_active.TryAdd(entry.BotId, active)) Interlocked.Increment(ref _activeVersion);
         }
@@ -489,6 +525,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverControllers, controllers);
         handover.Set(HandoverSharedSetAsides, _sharedSetAsides.Export(nowMs, unixNow));
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
+        handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -518,6 +555,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
+        if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -581,11 +619,36 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // A group whose lead its master handed to a bot (PlayerbotGroupCoordinator.Handoff.cs) owns the bot until an order takes the lead back.
             GroupOwns = (member, master, command) => coordinator?.OwnsAgainst(member, master, command) == true,
         };
-        var active = new ActiveBot(entry, brain, party);
+        party.Social = Social;
+        Social.Track(entry.BotId, entry.Record.CharacterId);
+        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
+        active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
+        {
+            Recorder = Social,
+            CallForHelp = (bot, nearest) => SayCallForHelp(active, bot, nearest),
+        };
         // The chat persona's goal: the bot-led group's while the coordinator drives the bot, otherwise the brain's (GoalOf).
         active.Party.BrainGoal = () => { var goal = GoalOf(active); return (goal.Goal, goal.QuestId); };
         active.Party.BrainDiagnostics = p => FormatBotDiagnostics(active, p);
         return active;
+    }
+
+    /// <summary>
+    /// A bot losing a fight calls for help: one line through the chat service (its limits, safety screen and disclosure rules apply) and the help
+    /// text emote at the nearest asked unit. True when either was taken. World thread.
+    /// </summary>
+    private bool SayCallForHelp(ActiveBot active, Player bot, Player nearest)
+    {
+        if (_chat is not { IsActive: true } chat) return false;
+        Guid botId = active.Record.BotId;
+        var speech = new BotChat.BotSpeech(BotChat.BotSpeechChannel.Yell, string.Empty, "call-for-help", BotChat.BotSpeechPriority.High);
+        var topic = new BotChat.BotChatTopic("callhelp", "You are losing a fight and a healthy player is nearby. Call out for help in one short line.",
+            new Dictionary<string, string>(), string.Empty);
+        var ask = new BotChat.BotChatAsk(botId, bot.Guid, active.Party.PersonaFor(bot), bot.Guid, bot.Name, ChatType.Yell,
+            "You are losing a fight and call out for help.", FromMaster: false, InviteAllowed: false, SenderAccountId: 0, Topic: topic, Speech: speech);
+        bool said = chat.TryAnnounce(ask) == BotChat.BotChatAdmission.Queued;
+        bool waved = chat.TrySpeak(botId, bot.Guid, BotChat.BotSpeech.EmoteAt(BotSocial.PlayerbotEmoteMoods.HelpMe, nearest.Guid, "call-for-help")) == BotChat.BotSpeechAdmission.Queued;
+        return said || waved;
     }
 
     /// <summary>The core's view of a bot session while this feature is attached (<see cref="IManagedBotSessionPolicy"/>).</summary>
@@ -622,9 +685,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }, cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _savedSharedSetAsideVersion, _sharedSetAsides.Version);
         }
+        if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } relationStore)
+        {
+            try { Social.Memory.Load(await relationStore.LoadAllAsync(cancellationToken).ConfigureAwait(false)); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            {
+                FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+                logger.LogWarning(ex, "Playerbot social memory could not be loaded ({Type}); the bots start with none", ex.GetType().Name);
+            }
+        }
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
+
             foreach (PlayerbotHome home in await homeStore.LoadAllAsync(cancellationToken).ConfigureAwait(false))
                 _homes[home.BotId] = home;
         }
@@ -641,6 +714,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                     .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
                 _homes.TryRemove(bot.BotId, out _);
+                await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
                 orphans.Add(bot.BotId);
                 continue;
             }
@@ -1010,6 +1084,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>Whether the bot is in the active set (test seam; <see cref="FindBrain"/> also hides a paused one).</summary>
     internal bool IsActive(Guid botId) => _active.ContainsKey(botId);
+
+    /// <summary>The bot's fight tracker (null for an unknown bot; tests and inspection).</summary>
+    internal BotSocial.PlayerbotFightSocial? FightOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? active.Fight : null;
 
     /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
@@ -1652,6 +1729,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
             _quarantine.TryRemove(bot.BotId, out _);
             _homes.TryRemove(bot.BotId, out _);
+            await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
             lock (_snapshotGate)
             {
                 Volatile.Write(ref _snapshot, Volatile.Read(ref _snapshot).Where(s => s.BotId != bot.BotId).ToArray());
@@ -1669,6 +1747,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Volatile.Write(ref _stopping, true);
         coordinator?.BeginShutdown();
         await _checkpoint.ConfigureAwait(false);
+        try { await _warWipeTask.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); } // the war layer wipe (no new one starts once stopping)
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException) { logger.LogWarning("The playerbot war layer wipe did not finish before shutdown ({Type}); the next start finds the rows as they were", ex.GetType().Name); }
         await _operations.WaitAsync().ConfigureAwait(false);
         List<Exception> failures = [];
         try
@@ -1782,7 +1862,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>A brain for the bot. <paramref name="restoreLoaded"/>: put back the set-asides read at startup (a start); a brain that replaces a running one gets the running one's state instead (<see cref="ReplaceBrain"/>), which the startup rows are older than.</summary>
     private PlayerbotBrain NewBrain(WorldSession session, Guid botId, bool restoreLoaded = true)
     {
-        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy };
+        // Every brain records through the feature's recorder (kill steals, help), a replacement too (ReplaceBrain), and has it before it is
+        // registered anywhere below.
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy, Social = Social };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
         {
@@ -1913,6 +1995,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
                 _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
+                Social.Untrack(bot.CharacterId);
             }
 
             bool stoppingWritten = false;
@@ -1928,6 +2011,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     FaultLedger.Shared.Record("playerbot.feature", ex);
                     logger.LogWarning(ex, "Managed playerbot {BotId} set-aside stop save failed ({Type})", bot.BotId, ex.GetType().Name);
                 }
+
+                await SaveBotRelationsAsync(active).ConfigureAwait(false);
 
                 Quiesce();
                 // A reason, so the stop is no session/kick-no-reason (live: ~300 per restart and a steady trickle from the rotation).
@@ -2312,7 +2397,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             active.StarvedReported = false;
             try
             {
-                if (active.Session.Player is { IsInWorld: true } observed) active.Brain.ObserveKillingBlows(observed);
+                if (active.Session.Player is { IsInWorld: true } observed)
+                {
+                    active.Brain.ObserveKillingBlows(observed);
+                    active.Fight?.Observe(observed, world, world.NowMs);
+                }
                 if (active.Controller is { } controller)
                 {
                     // Scripted mode: the brain is suppressed and the shared action budget does not apply.
@@ -2709,6 +2798,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task CheckpointAsync()
     {
         if (SplitBrainLatched) return; // another world process owns the rows: this one issues no playerbot writes
+        KickWarLayerWipe(); // with no bot running there is no bot save to kick it
         if (!await _operations.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
@@ -2821,7 +2911,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             if (SplitBrainLatched) return;
             foreach ((ActiveBot active, _) in live)
-                if (!conflicted.Contains(active)) await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+            {
+                if (conflicted.Contains(active)) continue;
+                await SaveBotSetAsidesAsync(active).ConfigureAwait(false);
+                await SaveBotRelationsAsync(active).ConfigureAwait(false);
+            }
             await SaveSharedSetAsidesAsync().ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -2931,12 +3025,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 FaultLedger.Shared.Record("playerbot.checkpoint", ex);
                 logger.LogWarning(ex, "Playerbot {BotId} set-aside save failed ({Type})", botId, ex.GetType().Name);
             }
+
+            await SaveBotRelationsAsync(active).ConfigureAwait(false);
         }
 
         await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
         if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
+        Social.Untrack(active.Record.CharacterId);
         try { if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(botId); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -3091,6 +3188,214 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (force) _loadedSetAsides[active.Record.BotId] = rows;
         lock (active.SetAsideGate)
             if (ReferenceEquals(active.Brain, brain)) Volatile.Write(ref active.SavedSetAsideVersion, version);
+    }
+
+    private int _warLayerLive = 1;
+    private int _warWipeRequested;
+    private int _warWipeRunning;
+    private Task _warWipeTask = Task.CompletedTask;
+
+    // The bots whose war layer was wiped in memory and whose rows are not yet written: a bot leaves the set only after its write succeeded, so a failed write is
+    // tried again at the next kick.
+    private readonly ConcurrentDictionary<Guid, byte> _warWipePending = new();
+
+    // Deleted bots whose rows are gone from the store and whose gate was retired: nothing is written for them again (a write would only make a gate to put [] in).
+    private readonly ConcurrentDictionary<Guid, byte> _retiredBots = new();
+
+    // War Mode on marks the war layer live; once it is off and ClearOnDisable is set, the layer is wiped (once) by a background task of its own, started here
+    // and guarded so that only one runs at a time. A bot's save (a checkpoint, a stop, a pause) only kicks it and never waits for it or for another bot's write.
+    // The wipe is memory-wide, so it also reaches the bots that are not running; the checkpoint kicks it on every tick, so it does not depend on a running bot.
+    private void KickWarLayerWipe()
+    {
+        BotSocial.PlayerbotWarModeOptions war = _options.Social.WarMode;
+        if (war.Enabled) { Volatile.Write(ref _warLayerLive, 1); return; }
+        if (!war.ClearOnDisable || _stopping) return;
+        if (Interlocked.Exchange(ref _warLayerLive, 0) == 1) Volatile.Write(ref _warWipeRequested, 1);
+        if (Volatile.Read(ref _warWipeRequested) == 0 && _warWipePending.IsEmpty) return;
+        if (Interlocked.CompareExchange(ref _warWipeRunning, 1, 0) != 0) return;
+        _warWipeTask = Task.Run(RunWarLayerWipeAsync);
+    }
+
+    private async Task RunWarLayerWipeAsync()
+    {
+        try
+        {
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            do
+            {
+                if (Interlocked.Exchange(ref _warWipeRequested, 0) == 1)
+                {
+                    List<Guid> changed = [];
+                    memory.ClearWarLayers(changed);
+                    foreach (Guid botId in changed) _warWipePending[botId] = 0;
+                }
+
+                if (_warWipePending.IsEmpty) continue;
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store)
+                {
+                    _warWipePending.Clear();
+                    continue;
+                }
+
+                foreach (Guid botId in _warWipePending.Keys)
+                {
+                    if (_retiredBots.ContainsKey(botId)) { _warWipePending.TryRemove(botId, out _); continue; }
+                    try
+                    {
+                        await WriteBotRelationsAsync(store, memory, botId).ConfigureAwait(false);
+                        _warWipePending.TryRemove(botId, out _); // only a written bot is done; a failed one stays for the next kick
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+                        logger.LogWarning(ex, "Playerbot {BotId} social memory could not be written after the war layer was cleared ({Type}); it is tried again", botId, ex.GetType().Name);
+                    }
+                }
+            }
+            while (Volatile.Read(ref _warWipeRequested) != 0);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot war layer wipe failed ({Type})", ex.GetType().Name);
+        }
+        finally
+        {
+            Volatile.Write(ref _warWipeRunning, 0);
+        }
+
+        if (Volatile.Read(ref _warWipeRequested) != 0) KickWarLayerWipe(); // a switch-off that arrived as the task ended
+    }
+
+    /// <summary>The bots whose cleared war layer still waits for a successful write (tests).</summary>
+    internal int WarWipePendingCount => _warWipePending.Count;
+
+    /// <summary>Completes when the war layer wipe task that is running now (if any) has ended (tests).</summary>
+    internal Task WarWipeIdle => _warWipeTask;
+
+    // One bot's rows written through its gate; a running bot's saved version is recorded with the write (taken before the snapshot, so it never runs ahead of the rows).
+    private Task WriteBotRelationsAsync(IPlayerbotRelationStore store, BotSocial.PlayerbotSocialMemory memory, Guid botId)
+    {
+        long version = 0;
+        return WriteRelationsAsync(store, botId, () =>
+        {
+            version = memory.Version(botId);
+            return memory.Snapshot(botId);
+        }, () =>
+        {
+            if (_active.TryGetValue(botId, out ActiveBot? active)) Volatile.Write(ref active.SavedRelationVersion, version);
+        });
+    }
+
+    /// <summary>The saved relation version of a running bot, or -2 when it is not running (tests).</summary>
+    internal long SavedRelationVersionOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? Volatile.Read(ref active.SavedRelationVersion) : -2;
+
+    /// <summary>Whether the bot has a write gate (tests).</summary>
+    internal bool HasRelationGate(Guid botId) => _relationGates.ContainsKey(botId);
+
+    // One writer per bot at a time: a forget and a checkpoint (or two forgets) never replace the same bot's rows concurrently, and each takes its
+    // snapshot inside the gate, so the last writer holds the newest rows.
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _relationGates = new();
+
+    // A deleted bot's gate is retired by its last write (retire: true): taken out of the map while held, so no later write finds it. A write that was already
+    // waiting on it gets it after the release, sees it is no longer the bot's gate and starts over on a fresh one. The retired semaphore is never disposed:
+    // a queued waiter would then be released onto a disposed object, and a SemaphoreSlim whose wait handle was never asked for holds nothing to free.
+    internal async Task WriteRelationsAsync(IPlayerbotRelationStore store, Guid botId, Func<IReadOnlyList<PlayerbotRelation>> rows, Action? written = null, bool retire = false)
+    {
+        while (true)
+        {
+            SemaphoreSlim gate = _relationGates.GetOrAdd(botId, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
+            bool attempted = false;
+            try
+            {
+                if (!_relationGates.TryGetValue(botId, out SemaphoreSlim? current) || !ReferenceEquals(current, gate)) continue; // retired while this write waited
+                attempted = true;
+                IReadOnlyList<PlayerbotRelation> snapshot = rows();
+                await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, snapshot), CancellationToken.None).ConfigureAwait(false);
+                written?.Invoke();
+                return;
+            }
+            finally
+            {
+                // Retired whether or not the write succeeded: the bot is deleted either way, and a failed write must not leave its gate in the map.
+                if (retire && attempted) _relationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(botId, gate));
+                gate.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A bot was deleted (or its character was already gone): forget its relations in memory and in the store, and the other bots' relations
+    /// toward its character, which are written again without it. Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
+    /// </summary>
+    internal Task ForgetRelationsAsync(IServiceProvider provider, Guid botId, int characterId)
+        => ForgetRelationsAsync(provider, [(botId, characterId > 0 ? new[] { characterId } : [])]);
+
+    /// <summary>
+    /// Several bots were deleted (a fleet reset): every one is forgotten in memory first (the bot, then everyone's relation toward its characters),
+    /// then each removed bot's rows are deleted once and each surviving bot that knew one of them is written once, without all of them.
+    /// Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
+    /// </summary>
+    private async Task ForgetRelationsAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed)
+    {
+        try
+        {
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            foreach ((Guid botId, _) in removed) memory.Forget(botId);
+            HashSet<Guid> survivors = [];
+            foreach ((_, IReadOnlyList<int> characterIds) in removed)
+                foreach (int characterId in characterIds)
+                    if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
+            if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
+            foreach ((Guid botId, _) in removed)
+            {
+                if (_retiredBots.ContainsKey(botId)) continue; // already deleted from the store and its gate retired: nothing to write, no gate to make
+                await WriteRelationsAsync(store, botId, static () => [], retire: true).ConfigureAwait(false);
+                _retiredBots[botId] = 0; // only after the write went through: a failed delete is tried again by the next forget
+            }
+
+            foreach (Guid other in survivors)
+                await WriteBotRelationsAsync(store, memory, other).ConfigureAwait(false); // and its saved version moves, so the next checkpoint does not write it again
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot social memory of {Count} deleted bots could not be removed ({Type})", removed.Count, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Write the bot's social memory when it changed since the last write. Off the world thread: the memory is thread-safe and the rows are
+    /// a copy. A failure is recorded at <c>playerbot.social-memory</c> and logged; it never blocks a stop or a checkpoint, and the next
+    /// call tries again (the saved version is only recorded after the write).
+    /// </summary>
+    private async Task SaveBotRelationsAsync(ActiveBot active)
+    {
+        Guid botId = active.Record.BotId;
+        try
+        {
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            KickWarLayerWipe();
+            if (Volatile.Read(ref active.SavedRelationVersion) == memory.Version(botId)) return;
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } store)
+            {
+                long version = 0;
+                await WriteRelationsAsync(store, botId, () =>
+                {
+                    version = memory.Version(botId); // before the snapshot: the saved version never runs ahead of the rows
+                    return memory.Snapshot(botId);
+                }, () => Volatile.Write(ref active.SavedRelationVersion, version)).ConfigureAwait(false);
+            }
+            else Volatile.Write(ref active.SavedRelationVersion, memory.Version(botId));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot {BotId} social memory save failed ({Type})", botId, ex.GetType().Name);
+        }
     }
 
     private async Task SaveSharedSetAsidesAsync()
@@ -3474,6 +3779,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public WorldSession Session => Entry.Session;
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
+        public long SavedRelationVersion;
+
+        /// <summary>The bot's social view of its fights (helpers, the low-health window, the call for help); survives a brain replacement.</summary>
+        public BotSocial.PlayerbotFightSocial? Fight;
         public readonly object SetAsideGate = new();
         public PlayerbotPartyAI Party { get; } = party;
         public bool PartyDriven;

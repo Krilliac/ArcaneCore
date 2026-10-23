@@ -237,7 +237,12 @@ public sealed partial class PlayerbotGroupCoordinator
         SiegeOutcome = reason == "won" ? "won" : "stopped: " + reason;
         foreach (PlayerbotSiegeRaid raid in siege.Raids)
             if (raid.Group is { } group && _groups.Contains(group) && group.State != PlayerbotGroupState.Disbanding)
+            {
+                // Only a won siege is a success the members remember; a stop (GM, event ended, raids ended) ends the groups the same way
+                // but records no GroupSucceeded (marking the success as noted keeps every later end of the group from recording it).
+                if (reason != "won") group.SuccessNoted = true;
                 Finish(group, success: true, "siege-" + reason, setAside: false);
+            }
         TellWatchers(siege, $"Siege {siege.Id} ended: {SiegeOutcome}");
         siege.Watchers.Clear();
         Note($"siege {siege.Id} ended: {SiegeOutcome}");

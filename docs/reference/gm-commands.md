@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 561 |
+| `Administrator` | 6 | 562 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -545,7 +545,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.botctl wait` | 3 | GameMaster | stored level through the map | Syntax: .botctl wait &lt;bots&gt; &lt;condition&gt; [timeout &lt;s&gt;] [--any] [--failonerror] Wait until a condition holds for every bot (--any: one). Conditions: arrived, idle, following, combat, nocombat, alive, dead, dead &lt;unit&gt;, targetdead, hp\|power &lt;op&gt; &lt;pct&gt;, quest &lt;id&gt; &lt;status&gt;, item &lt;entry&gt; [&lt;op&gt;] &lt;n&gt;, aura &lt;spell&gt;, noaura &lt;spell&gt;, level &lt;op&gt; &lt;n&gt;, map &lt;id&gt;, near &lt;x&gt; &lt;y&gt; &lt;z&gt; [r] \| near &lt;unit&gt; [r], casting, notcasting, event &lt;kind&gt;, invited. Default timeout 30 s. |
 | `.botctl sleep` | 3 | GameMaster | stored level through the map | Syntax: .botctl sleep &lt;milliseconds&gt; Pause (in .botctl run sequences). |
 | `.botctl run` | 6 | Administrator | stored level through the map | Syntax: .botctl run &lt;bots&gt; &lt;step&gt; ; &lt;step&gt; ; ... [--continue] Run verbs one after another for the same bots ('take ; move 1 2 3 ; wait arrived timeout 60 ; cast 133 target'); stops at the first failure unless --continue. |
-| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|splitbrain\|list\|inspect\|invite\|home\|chat\|groups\|battlegrounds\|travel\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive\|fleet\|population\|qa\|chaos&gt; Manage server-owned autonomous players. |
+| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|splitbrain\|list\|inspect\|invite\|home\|chat\|groups\|battlegrounds\|travel\|scenario\|summon\|send\|follow\|stay\|dismiss\|near\|revive\|fleet\|population\|qa\|chaos\|social&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name\|$prefix*\|all [force] Start a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
 | `.playerbot stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot stop $id\|$name\|$prefix*\|all [force] Stop a persistent bot, or every bot whose name starts with the prefix (or all; more than the bulk cap needs force). |
@@ -578,6 +578,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot debug` | 3 | GameMaster | stored level through the map | Syntax: .playerbot debug [$id\|$name] Show internal brain, motion, route, stall, risk and trace diagnostics for a running bot. |
 | `.playerbot cadence` | 3 | GameMaster | stored level through the map | Syntax: .playerbot cadence Show how often the bots think: the think gap percentiles (all bots and the combat/dead lane), thinks per tick, the think time budget and the share of ticks that ended on a budget, for the last minute. |
 | `.playerbot anomalies` | 3 | GameMaster | stored level through the map | Syntax: .playerbot anomalies $name Show the recent anomaly history recorded for a bot. |
+| `.playerbot social` | 6 | Administrator | stored level through the map | Syntax: .playerbot social $id\|$name Show a running bot's temperament and its ten best-known relations (affinity, familiarity, trust, flags, last topic, last seen). Read-only. |
 | `.playerbot gear` | 3 | GameMaster | stored level through the map | Syntax: .playerbot gear $id\|$name Show a running bot's equipped items, free bag slots, gold and skills. |
 | `.playerbot raid` | 3 | GameMaster | stored level through the map | Syntax: .playerbot raid #count Gather #count online autonomous bots near your level into your raid and summon them to you. With no group a raid is formed; a party is converted to a raid (you must lead it). The count is clamped to the free raid slots (40 members); tanks and healers are mixed in as for a bot raid run. |
 | `.playerbot party` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot party &lt;fill\|add\|remove\|list&gt; Manage playerbot party members. |

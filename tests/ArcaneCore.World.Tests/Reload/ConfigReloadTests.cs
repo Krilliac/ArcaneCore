@@ -743,6 +743,14 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Emotes:{property.Name}");
         }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialMemoryOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Memory:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotWarModeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:WarMode:{property.Name}");
+        }
 
         // The bot economy section is live key by key (docs/areas/playbots-economy.md).
         foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))

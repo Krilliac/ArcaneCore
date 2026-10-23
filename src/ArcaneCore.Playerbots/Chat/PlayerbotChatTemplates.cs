@@ -31,6 +31,11 @@ internal static class PlayerbotChatTemplates
     {
         // --- answers to a player --------------------------------------------------------------------------------------------
         ["greeting"] = ["Hey, {player}.", "Hello there, {player}.", "Hi {player}, need something?", "Oh, hey {player}.", "hey", "yo {player}", "sup {player}", "hi :)"],
+        // A player the bot knows (met at least 3 times and liked, or disliked: BuiltinChatIntent.Greeting, PlayerbotBuiltinChat.GreetingVariant).
+        ["greeting.back"] = ["Welcome back, {player}!", "{player}! Good to see you again.", "Oh hey {player}, back again?", "Hey {player}, good to see you."],
+        ["greeting.curt"] = ["{player}.", "Yes?", "What do you want, {player}?", "Hm."],
+        // A bot losing a fight calls out (Social memory: PlayerbotFightSocial).
+        ["callhelp"] = ["Help!", "I need help over here!", "Someone, help me!", "A hand, please!", "Little help here?"],
         ["greeting.race.Orc"] = ["Lok'tar, {player}."],
         ["greeting.race.NightElf"] = ["Ishnu-alah, {player}."],
         ["greeting.race.Dwarf"] = ["Well met, {player}!"],

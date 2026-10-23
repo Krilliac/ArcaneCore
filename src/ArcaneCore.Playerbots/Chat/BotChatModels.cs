@@ -24,7 +24,33 @@ internal sealed record BotChatPersona(
     bool InGroup,
     IReadOnlyList<string> RecentEvents,
     string? DebugSummary = null,
-    BotChatFacts? Facts = null);
+    BotChatFacts? Facts = null,
+    BotChatRelation? Relation = null);
+
+/// <summary>How a bot feels about the person it is talking to (<see cref="BotChatRelation"/>.Affinity).</summary>
+internal enum BotChatAffinityBand : byte
+{
+    Dislike,
+    Neutral,
+    Like,
+    Close,
+}
+
+/// <summary>
+/// What a bot remembers of the player it is talking to, as bands and bot-side text only (never the player's own words): how often they met,
+/// how the bot feels about them, the role they like to play, the topic key of the last talk and the bot's own short summary of it, and the
+/// bot's sociability and chattiness bands (0 low, 1 middle, 2 high; <see cref="BotSocial.PlayerbotTraits"/>).
+/// </summary>
+internal sealed record BotChatRelation(
+    int Familiarity,
+    int AffinityScore,
+    BotChatAffinityBand Affinity,
+    bool Rival,
+    BotChatRole? PreferredRole,
+    string? LastTopic,
+    string? Summary,
+    int SociabilityBand,
+    int ChattinessBand);
 
 /// <summary>A bot's role in a group, from its class and talent build.</summary>
 internal enum BotChatRole : byte

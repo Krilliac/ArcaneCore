@@ -13,6 +13,7 @@ using ArcaneCore.Protocol;
 using GridDefines = ArcaneCore.Game.Maps.Grid.GridDefines;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Groups;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -303,6 +304,29 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.True(world.Coordinator.SiegeOutcome == "won", world.Coordinator.SiegeOutcome + Environment.NewLine + await world.TraceAsync());
         Assert.Contains(siege.Raids, r => r.Announcer.Sent.Any(line => line.Contains("Siege complete", StringComparison.Ordinal)));
         Assert.True(await world.OnWorldAsync(() => world.Coordinator.Groups.Count(g => g.Siege is not null) == 0));
+    }
+
+    [Fact]
+    public async Task AStoppedSiege_RecordsNoGroupSuccess_WhereAWonOneDoes()
+    {
+        // Trust moves only on a success (or the first death in a wipe): the exact witness of GroupSucceeded for a pair.
+        int successTrust = 500 + new PlayerbotSocialMemoryOptions().TrustPerGroupSuccess;
+
+        await using GroupTestWorld stopped = await StartWorld(guards: true);
+        (Guid Id, string Name)[] stoppedBots = await Enlist(stopped, 20f, 40f);
+        await Start(stopped, stoppedBots, raids: 2);
+        Assert.True(await stopped.OnWorldAsync(() => stopped.Coordinator.StopSiege("gm")));
+        Assert.True(await stopped.RunUntilAsync(60_000, () => stopped.Coordinator.Groups.Count == 0), await stopped.TraceAsync());
+        Assert.Equal("stopped: gm", stopped.Coordinator.SiegeOutcome);
+        Assert.Contains(stoppedBots, b => stopped.Bots.Social.Memory.Snapshot(b.Id).Count > 0); // the raids formed, so the bots did meet
+        Assert.All(stoppedBots, b => Assert.All(stopped.Bots.Social.Memory.Snapshot(b.Id), r => Assert.Equal((short)500, r.TrustPermille)));
+
+        await using GroupTestWorld won = await StartWorld(guards: true);
+        (Guid Id, string Name)[] wonBots = await Enlist(won, 20f, 40f);
+        await Start(won, wonBots, raids: 2);
+        Assert.True(await won.RunUntilAsync(300_000, () => won.Coordinator.Siege is null), await won.TraceAsync());
+        Assert.Equal("won", won.Coordinator.SiegeOutcome);
+        Assert.Contains(wonBots, b => won.Bots.Social.Memory.Snapshot(b.Id).Any(r => r.TrustPermille == successTrust));
     }
 
     private sealed class FrozenDeathClock(long seconds) : DeathClock

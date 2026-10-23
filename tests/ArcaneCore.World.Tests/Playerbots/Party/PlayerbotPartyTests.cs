@@ -233,7 +233,7 @@ public sealed class PlayerbotPartyTests
         public override bool CanAttack(Unit attacker, Unit victim) => !ReferenceEquals(attacker, victim);
     }
 
-    private sealed class StubEconomyStore : ArcaneCore.Kernel.Economy.IEconomyStore
+    internal sealed class StubEconomyStore : ArcaneCore.Kernel.Economy.IEconomyStore
     {
         public Task<ArcaneCore.Kernel.Economy.EconomyCommitResult> CommitAsync(
             ArcaneCore.Kernel.Economy.EconomyCommitRequest request,

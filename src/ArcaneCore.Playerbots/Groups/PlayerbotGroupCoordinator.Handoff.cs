@@ -60,6 +60,8 @@ public sealed partial class PlayerbotGroupCoordinator
         if (_leadersWatched is not null) _leadersWatched.LeaderChanged -= OnLeaderChanged; // also undone by the bag at detach (a second -= does nothing)
         _leadersWatched = groups;
         if (groups is not null) bag.Subscribe<Action<Group, ObjectGuid>>(OnLeaderChanged, h => groups.LeaderChanged += h, h => groups.LeaderChanged -= h);
+        // A bot removed from its group by another member remembers who did it (a kick is the only uninvite that removes a member).
+        if (groups is not null) bag.Subscribe<Action<ObjectGuid, ObjectGuid>>(OnMemberKicked, h => groups.MemberKicked += h, h => groups.MemberKicked -= h);
     }
 
     /// <summary>GroupManager.LeaderChanged (world thread, inside the packet handler): queued, handled at the coordinator's next update.</summary>
@@ -319,6 +321,7 @@ public sealed partial class PlayerbotGroupCoordinator
         if (group.Handoff is not { } handoff || !_groups.Contains(group)) return;
         group.Succeeded = success;
         group.Reason = success ? "completed" : reason;
+        if (success) NoteSuccess(group);
         if (!success) group.Run?.Apply(PlayerbotRunSignal.Abort(reason));
         if (!_shuttingDown && _world is { } world && group.LeaderPlayer(world) is { } leader
             && _bots.TryGetValue(group.LeaderBotId, out PlayerbotGroupBot bot) && bot.Session.Player?.Guid == leader.Guid)
