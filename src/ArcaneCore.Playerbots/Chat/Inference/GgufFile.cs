@@ -1,11 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
-using System.Runtime.CompilerServices;
 using System.Text;
-
-// The model probe (tools/ArcaneCore.ChatModelProbe) drives the same engine the in-process chat provider runs.
-[assembly: InternalsVisibleTo("ArcaneCore.ChatModelProbe")]
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 

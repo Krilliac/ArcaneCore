@@ -42,6 +42,9 @@
        each entry into a public seam or a contract before the pack loads collectibly. -->
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.Playerbots" />
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />
+    <InternalsVisibleTo Include="ArcaneCore.Gateway.Tests" />
   </ItemGroup>
 
   <ItemGroup>
