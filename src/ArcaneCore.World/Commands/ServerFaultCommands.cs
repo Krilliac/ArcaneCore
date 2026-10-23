@@ -390,7 +390,7 @@ public sealed class ServerFaultCommands : ICommandExtension
 
             string subject = snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject;
             reply(string.Create(CultureInfo.InvariantCulture,
-                $"{shown,2}. {snap.Key} x{snap.Count} ({snap.DistinctSubjects} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago, {Rates(snap.Timing)} [{subject}]"));
+                $"{shown,2}. {snap.Key} x{snap.Count} ({snap.SubjectsCountText} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago, {Rates(snap.Timing)} [{subject}]"));
         }
 
         if (all.Count > top)
@@ -419,7 +419,7 @@ public sealed class ServerFaultCommands : ICommandExtension
             index++;
             string subject = snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject;
             reply(string.Create(CultureInfo.InvariantCulture,
-                $"{index,2}. {snap.Key} x{snap.Count} ({snap.DistinctSubjects} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago, {Rates(snap.Timing)} [{subject}]"));
+                $"{index,2}. {snap.Key} x{snap.Count} ({snap.SubjectsCountText} subjects, {snap.Severity}), last {Age(now - snap.LastSeen)} ago, {Rates(snap.Timing)} [{subject}]"));
         }
     }
 
@@ -439,7 +439,7 @@ public sealed class ServerFaultCommands : ICommandExtension
 
         reply(string.Create(CultureInfo.InvariantCulture, $"Anomaly {snap.Key} (subsystem {snap.Subsystem}, code {snap.Code}, severity {snap.Severity})"));
         reply(string.Create(CultureInfo.InvariantCulture,
-            $"Count {snap.Count} ({snap.DistinctSubjects} distinct subjects); first {snap.FirstSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC, last {snap.LastSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC ({Age(now - snap.LastSeen)} ago)"));
+            $"Count {snap.Count} ({snap.SubjectsCountText} distinct subjects); first {snap.FirstSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC, last {snap.LastSeen.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC ({Age(now - snap.LastSeen)} ago)"));
         reply("Subject: " + (snap.LastSubject.Length == 0 ? "(none)" : snap.LastSubject.ReplaceLineEndings(" ")));
         reply("Detail: " + (snap.LastDetail.Length == 0 ? "(none)" : snap.LastDetail.ReplaceLineEndings(" ")));
         reply("Rate: " + snap.Timing.Describe());

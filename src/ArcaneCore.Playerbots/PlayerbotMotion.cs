@@ -1221,7 +1221,11 @@ internal static class PlayerbotMotion
     }
 
     /// <summary>The scheduler's measured main-lane full-pass time (ms; 0 = none yet) as this bot's motion should see it.</summary>
-    internal static void NoteSchedulerPass(Player player, uint passMs) => Of(player).PassMs = passMs;
+    internal static void NoteSchedulerPass(Player player, uint passMs)
+    {
+        // 0 is "not measured" (a fresh feature after a reload): it never wipes a pass the bot's motion already knows.
+        if (passMs != 0) Of(player).PassMs = passMs;
+    }
 
     /// <summary>The scheduler pass the bot's motion last saw (<see cref="NoteSchedulerPass"/>), or 0 when none.</summary>
     internal static uint SchedulerPassMsOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.PassMs : 0;

@@ -161,6 +161,28 @@ public sealed class ServerAnomalyCommandsTests
     }
 
     [Fact]
+    public void ASaturatedSubjectCount_IsPrintedAsAFloor_InEveryListing()
+    {
+        var ledger = new AnomalyLedger();
+        for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects + 5; i++) ledger.Report("bot-nav", "stuck", "bot " + i, "d");
+        ledger.Report("bot-nav", "few", "bot 1", "d");
+
+        string floor = AnomalyLedger.MaxTrackedSubjects.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var overview = new List<string>();
+        Assert.True(ServerFaultCommands.RunAnomalies(string.Empty, AccountSecurity.GameMaster, ledger, T0, overview.Add));
+        Assert.Contains(overview, l => l.Contains($"bot-nav/stuck x{AnomalyLedger.MaxTrackedSubjects + 5} (>={floor} subjects,", StringComparison.Ordinal));
+        Assert.Contains(overview, l => l.Contains("bot-nav/few x1 (1 subjects,", StringComparison.Ordinal));
+
+        var subsystem = new List<string>();
+        Assert.True(ServerFaultCommands.RunAnomalies("bot-nav", AccountSecurity.GameMaster, ledger, T0, subsystem.Add));
+        Assert.Contains(subsystem, l => l.Contains($"(>={floor} subjects,", StringComparison.Ordinal));
+
+        var show = new List<string>();
+        Assert.True(ServerFaultCommands.RunAnomalies("show bot-nav/stuck", AccountSecurity.GameMaster, ledger, T0, show.Add));
+        Assert.Contains(show, l => l.Contains($"(>={floor} distinct subjects)", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RatesLine_AndEmptyTimingLine()
     {
         var clock = new FixedClock(T0);

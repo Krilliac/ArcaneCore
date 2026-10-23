@@ -110,6 +110,35 @@ public sealed class PlayerbotThinkRotationTests
     }
 
     [Fact]
+    public void ThePriorityCursor_AlsoFollowsTheLastVisitedId_AcrossARebuild()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        Guid[] bots = Ids(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+
+        // The even ids are in the first lane (due); that lane has two thinks a tick, the main lane none.
+        List<Guid> Tick(Guid[] population)
+        {
+            rotation.Track(population, id => id);
+            var thought = new List<Guid>();
+            int priorityBudget = 2;
+            rotation.TickLanes(population.Length, 100, 0.5,
+                index => BitConverter.ToInt32(population[index].ToByteArray()) % 2 == 0 ? PlayerbotThinkRotation.ThinkLane.Priority : PlayerbotThinkRotation.ThinkLane.Normal,
+                (index, lane) =>
+                {
+                    if (lane != PlayerbotThinkRotation.ThinkLane.Priority || priorityBudget == 0) return false;
+                    priorityBudget--;
+                    thought.Add(population[index]);
+                    return true;
+                }, () => 0);
+            return thought;
+        }
+
+        Assert.Equal(Ids(2, 4), Tick(bots));
+        // Bot 1 leaves: every index moves down one. The first lane resumes at bot 6, the next due bot after the last one it did (4).
+        Assert.Equal(Ids(6, 8), Tick(bots[1..]));
+    }
+
+    [Fact]
     public void ABotJoiningBeforeTheCursor_DoesNotMakeABotThinkTwiceInAPass()
     {
         var rotation = new PlayerbotThinkRotation();

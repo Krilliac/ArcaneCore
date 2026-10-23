@@ -115,6 +115,13 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>The main lane's measured full-pass time in ms, 0 before the first main-lane gap (tests).</summary>
     internal uint MainPassMs => _mainPass.Ms;
+
+    /// <summary>Test seam: sets the main-lane pass estimate; with <paramref name="pin"/> it is then held there (the samples change nothing).</summary>
+    internal void SeedMainPassForTests(uint ms, bool pin = false)
+    {
+        _mainPass.Seed(ms);
+        _mainPass.Pinned = pin;
+    }
     private readonly PlayerbotThinkBudget _thinkBudget = new();
     private double _lastOwnMs;
     private double _lastBudgetMs = PlayerbotThinkRotation.TickBudgetMs;
@@ -354,6 +361,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private const string HandoverQuarantine = "playerbots.quarantine";
     private const string HandoverConflicts = "playerbots.conflictLogged";
     private const string HandoverSnapshot = "playerbots.snapshot";
+    private const string HandoverMainPass = "playerbots.mainPassMs";
 
     private FeatureSubscriptions? _subscriptions;
     private volatile bool _detaching;
@@ -538,6 +546,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverQuarantine, new Dictionary<Guid, Quarantine>(_quarantine));
         handover.Set(HandoverConflicts, _conflictLogged.Keys.ToArray());
         handover.Set(HandoverSnapshot, Volatile.Read(ref _snapshot));
+        handover.Set(HandoverMainPass, _mainPass.Ms);
 
         _active.Clear();
         Interlocked.Increment(ref _activeVersion);
@@ -556,11 +565,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _world = null;
     }
 
+    /// <summary>Takes the main-lane pass estimate over from the previous feature (it is a property of the population, not of the code).</summary>
+    private void RestoreMainPass(FeatureHandover handover)
+    {
+        if (handover.TryGet(HandoverMainPass, out uint mainPassMs)) _mainPass.Seed(mainPassMs);
+    }
+
+    /// <summary>Test seam: <see cref="RestoreMainPass"/> alone.</summary>
+    internal void RestoreMainPassForTests(FeatureHandover handover) => RestoreMainPass(handover);
+
     /// <summary>Put back what <see cref="Detach"/> handed over (before the bots are rebuilt).</summary>
     private void RestoreHandover(FeatureHandover handover, WorldRuntime world)
     {
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
+        RestoreMainPass(handover);
         if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;

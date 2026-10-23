@@ -126,8 +126,7 @@ internal sealed class PlayerbotThinkBudget
     /// <c>CoverageFraction * boundMs / tickMs</c> of them) plus <paramref name="priorityMs"/>, the time the combat lane takes of the budget first.
     /// The combat lane is measured rather than guessed from its share, so the floor does not depend on the starvation feedback
     /// (<see cref="PlayerbotThinkStarvation.PriorityScale"/>) to give time back. 1000 bots, 50 ms ticks, a 10 s bound, 1.6 ms a visit: 16 ms plus the
-    /// combat lane; the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Twice as long a tick needs twice the budget:
-    /// the bots then take up to 30 ms of every tick, more than half of a 50 ms one. Pure.
+    /// combat lane; the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Pure.
     /// </summary>
     internal static double CoverageMs(int bots, double tickMs, double boundMs, double visitMs, double priorityMs = 0)
     {
@@ -150,30 +149,41 @@ internal sealed class PlayerbotThinkBudget
 }
 
 /// <summary>
-/// The time the main think lane needs for a full pass over the bots, measured: an average, quick to rise and slow to fall, of the gaps between two main-lane thinks of
-/// one bot (every bot is visited once a pass, so the mean gap is the pass). It sizes the motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>)
-/// and, with it, the fairness bound of the think-starved report; neither may feed back into the think budget. World thread only.
+/// An estimate of the time the main think lane needs for a full pass over the bots: a smoothed value of the gaps between two main-lane thinks of
+/// one bot (every bot is visited once a pass, so a typical gap is the pass). It is not a mean: it moves up quickly (weight 1/<see cref="RiseWindow"/>)
+/// and down slowly (1/<see cref="Window"/>), so it sits above the mean when the gaps vary, which is the safe side for both users. It sizes the
+/// motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>) and the fairness bound of the think-starved report; neither may feed back into
+/// the think budget. A gap over <see cref="MaxSampleMs"/> counts as <see cref="MaxSampleMs"/> (it is capped, not dropped), so the estimate
+/// still follows a pass that really is longer (up to 5000 bots); the report bound at 1.5 x that cap, 180 s, is the intended absolute backstop.
+/// World thread only.
 /// </summary>
 internal sealed class PlayerbotMainPass
 {
-    /// <summary>Weight of one sample in the average is 1/this when the pass falls: a pass of a thousand bots is a thousand samples.</summary>
+    /// <summary>Weight of one sample is 1/this when the estimate falls: a pass of a thousand bots is a thousand samples.</summary>
     internal const int Window = 64;
 
-    /// <summary>Weight of one sample is 1/this when the pass rises (bots joining, a slower world): the lease and the bound catch up within a few thinks, not a pass.</summary>
+    /// <summary>Weight of one sample is 1/this when the estimate rises (bots joining, a slower world): the lease and the bound catch up within a few thinks, not a pass.</summary>
     internal const int RiseWindow = 8;
 
-    /// <summary>A sample over this is no pass of a live rotation (a stalled world or a long pause) and is ignored.</summary>
+    /// <summary>The longest gap one sample counts for (ms); a longer gap is taken as this.</summary>
     internal const uint MaxSampleMs = PlayerbotMotion.HardMaxGapLeaseMs;
 
     private uint _ms;
 
-    /// <summary>The measured full-pass time in ms; 0 until the first sample.</summary>
+    /// <summary>Test seam: while set, <see cref="Note"/> changes nothing, so a test can hold the estimate below the gaps it sees.</summary>
+    internal bool Pinned { get; set; }
+
+    /// <summary>The estimated full-pass time in ms; 0 until the first sample.</summary>
     internal uint Ms => _ms;
 
-    /// <summary>One bot's main-lane think came <paramref name="gapMs"/> ms after its previous one. The first sample is taken as is.</summary>
+    /// <summary>Sets the estimate (a hot reload handing it over, tests), capped at <see cref="MaxSampleMs"/>.</summary>
+    internal void Seed(uint ms) => _ms = Math.Min(ms, MaxSampleMs);
+
+    /// <summary>One bot's main-lane think came <paramref name="gapMs"/> ms after its previous one (0 is no gap). The first sample is taken as is.</summary>
     internal void Note(uint gapMs)
     {
-        if (gapMs == 0 || gapMs > MaxSampleMs) return;
+        if (gapMs == 0 || Pinned) return;
+        gapMs = Math.Min(gapMs, MaxSampleMs);
         int window = gapMs > _ms ? RiseWindow : Window;
         _ms = _ms == 0 ? gapMs : (uint)(((long)_ms * (window - 1) + gapMs + window / 2) / window);
     }

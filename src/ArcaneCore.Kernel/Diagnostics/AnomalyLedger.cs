@@ -488,6 +488,9 @@ public sealed record AnomalySnapshot(
     /// <summary>Whether <see cref="DistinctSubjects"/> hit <see cref="AnomalyLedger.MaxTrackedSubjects"/>: more subjects than that may have reported, so the count is a floor.</summary>
     public bool SubjectsSaturated => DistinctSubjects >= AnomalyLedger.MaxTrackedSubjects;
 
+    /// <summary>The subject count alone for a log line: <c>12</c>, or <c>&gt;=256</c> when <see cref="SubjectsSaturated"/>.</summary>
+    public string SubjectsCountText => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{(SubjectsSaturated ? ">=" : "")}{DistinctSubjects}");
+
     /// <summary>The subject count for a log line: <c>subjects=12</c>, or <c>subjects&gt;=256</c> when <see cref="SubjectsSaturated"/> (the real number is unknown).</summary>
     public string SubjectsText => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"subjects{(SubjectsSaturated ? ">=" : "=")}{DistinctSubjects}");
 
