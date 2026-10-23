@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
@@ -30,8 +29,6 @@ namespace ArcaneCore.Gateway;
 /// </summary>
 public sealed class GatewayClientConnection : IGatewaySessionSink
 {
-    private const int MaxClientPacketSize = WorldSession.MaxClientPacketSize;
-
     private readonly GatewayServer _server;
     private readonly TcpClient _client;
     private readonly NetGuard _guard;
@@ -155,9 +152,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             {
                 await stream.ReadExactlyAsync(header.AsMemory(1), deadline.Token).ConfigureAwait(false);
                 _crypt.DecryptHeader(header);
-                ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
-                rawOpcode = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
-                if (size < 4 || size > MaxClientPacketSize || rawOpcode > ushort.MaxValue)
+                if (!WorldFrameCodec.TryParseClientHeader(header, out ushort size, out rawOpcode))
                 {
                     _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting", RemoteEndpoint, size, rawOpcode);
                     return;
@@ -268,7 +263,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
                 return false;
             }
 
-            byte[] expected = Sha1.Hash(Encoding.ASCII.GetBytes(request.Account), new byte[4], Le(request.ClientSeed), Le(_serverSeed), stored.SessionKey);
+            byte[] expected = WowAuthDigest.Compute(request.Account, request.ClientSeed, _serverSeed, stored.SessionKey);
             if (!CryptographicOperations.FixedTimeEquals(expected, request.ClientDigest.Span))
             {
                 _guard.RecordAuthFailure(_address);
@@ -373,7 +368,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     /// <summary>Encrypt the header and queue the frame (thread-safe; cipher order equals queue order).</summary>
     private void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
-        if (payload.Length > WorldSession.MaxServerPayload)
+        if (payload.Length > WorldFrameCodec.MaxServerPayload)
         {
             _logger.LogWarning("[{Endpoint}] {Opcode} payload of {Length} bytes exceeds the SMSG size field; dropped", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length);
             return;
@@ -381,7 +376,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
         int headerLength = _crypt.OutgoingHeaderLength;
         byte[] frame = new byte[headerLength + payload.Length];
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
+        WorldFrameCodec.WriteServerSize(frame, payload.Length);
         lock (_sendLock)
         {
             if (_state == ConnectionState.Closed)
@@ -389,7 +384,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
                 return;
             }
 
-            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), _protocol.Opcodes.ToWire(opcode));
+            WorldFrameCodec.WriteServerOpcode(frame, _protocol.Opcodes.ToWire(opcode));
             payload.CopyTo(frame.AsSpan(headerLength));
             _crypt.EncryptHeader(frame.AsSpan(0, headerLength));
             if (!_outbound.Writer.TryWrite(frame))
@@ -503,12 +498,5 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         {
             return "unknown";
         }
-    }
-
-    private static byte[] Le(uint value)
-    {
-        byte[] bytes = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
-        return bytes;
     }
 }
