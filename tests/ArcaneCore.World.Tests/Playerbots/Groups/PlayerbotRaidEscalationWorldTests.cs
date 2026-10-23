@@ -84,11 +84,16 @@ public sealed class PlayerbotRaidEscalationWorldTests
     [Fact]
     public async Task ARaidGoalFromTheRealRiskEstimate_WithTooFewBots_GivesUpAfterTheFormationTimeout()
     {
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options); // FormationTimeoutSeconds 60
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
         await TankAssessesAsync(world, 10_000);
+        long assessedAt = world.World.Host.World.NowMs;
         await AddRaidersAsync(world, 1);
 
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Events.Any(e => e.Contains("found no partners", StringComparison.Ordinal))), await world.TraceAsync());
+        // Not before the formation timeout (the goal exists from the assessment on, so counting from it is the earliest it can run out), then soon after it.
+        long timeoutMs = world.Options.Groups.FormationTimeoutSeconds * 1000L;
+        await world.RunAsync((uint)Math.Max(0, assessedAt + timeoutMs - 5_000 - world.World.Host.World.NowMs));
+        Assert.DoesNotContain(world.Coordinator.Events, e => e.Contains("found no partners", StringComparison.Ordinal));
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Events.Any(e => e.Contains("found no partners", StringComparison.Ordinal))), await world.TraceAsync());
         Assert.DoesNotContain(world.Coordinator.Groups, g => g.Goal.Size == 8);
     }
 

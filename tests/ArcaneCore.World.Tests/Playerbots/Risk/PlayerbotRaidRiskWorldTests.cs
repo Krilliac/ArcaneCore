@@ -16,7 +16,7 @@ public sealed class PlayerbotRaidRiskWorldTests
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(entry, level: 4, health: health, minDamage: 10, maxDamage: maxDamage, rank: rank), 25, 0));
         await world.SeeAsync(mob);
-                (PlayerbotGroupSignal? signal, int probes) = await world.OnWorldAsync(() =>
+        (PlayerbotGroupSignal? signal, int probes) = await world.OnWorldAsync(() =>
         {
             world.Brain.Risk.Assess(world.Player, mob, true, out _);
             return (world.Brain.Risk.GroupSignal, world.Brain.Risk.LastGroupProbes);
