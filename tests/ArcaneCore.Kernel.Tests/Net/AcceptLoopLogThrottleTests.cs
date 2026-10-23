@@ -41,7 +41,7 @@ public sealed class AcceptLoopLogThrottleTests
 
             done.TrySetResult();
             // Cancelled from stop.Cancel()'s own thread through the registration: no pool thread is needed to end the accept.
-            var pending = new TaskCompletionSource<TcpClient>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pending = new TaskCompletionSource<TcpClient>(); // inline continuation: the loop resumes on the Cancel() thread too
             ct.Register(() => pending.TrySetCanceled(ct));
             return new ValueTask<TcpClient>(pending.Task);
         }
