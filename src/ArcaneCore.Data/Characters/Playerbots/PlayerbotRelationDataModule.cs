@@ -71,7 +71,8 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
     // The bits a stored row may carry: Flags never holds WarSeeded, WarFlags only Rival and WarSeeded.
     private const PlayerbotRelationFlags KnownFlags = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage
         | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.NoWhispers | PlayerbotRelationFlags.OwesFavour | PlayerbotRelationFlags.Grouped
-        | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarOnly;
+        | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarOnly
+        | PlayerbotRelationFlags.Interacted;
 
     private const PlayerbotRelationFlags KnownWarFlags = PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarSeeded;
 

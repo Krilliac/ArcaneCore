@@ -1,3 +1,4 @@
+using ArcaneCore.Protocol;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
@@ -41,14 +42,19 @@ public sealed class PlayerbotInitiativeTests
         Assert.True(PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Greeting, 0.5f, -1f) < PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Greeting, 0.5f, 0f));
         Assert.Equal(3.0, PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Greeting, 0.5f, 1f) / PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Greeting, 0.5f, -1f), 6);
         Assert.Equal(1.0, PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, 1f, 1f));
-        Assert.Equal(BotSpeechChannel.Whisper, PlayerbotInitiativeRules.ChannelFor(true, -5));
-        Assert.Equal(BotSpeechChannel.Whisper, PlayerbotInitiativeRules.ChannelFor(false, 10));
-        Assert.Equal(BotSpeechChannel.Say, PlayerbotInitiativeRules.ChannelFor(false, 9));
+        Assert.Equal(BotSpeechChannel.Whisper, PlayerbotInitiativeRules.ChannelFor(true, -5, false));
+        Assert.Equal(BotSpeechChannel.Whisper, PlayerbotInitiativeRules.ChannelFor(false, 10, true));
+        Assert.Equal(BotSpeechChannel.Say, PlayerbotInitiativeRules.ChannelFor(false, 9, true));
+        Assert.Equal(BotSpeechChannel.Say, PlayerbotInitiativeRules.ChannelFor(false, 40, false)); // affinity the bot earned by helping is no invitation
         Assert.Equal(30 * 60_000L, PlayerbotInitiativeRules.CooldownMs(30, 0));
         Assert.Equal(60 * 60_000L, PlayerbotInitiativeRules.CooldownMs(30, 1));
         Assert.Equal(30 * 60_000L * 16, PlayerbotInitiativeRules.CooldownMs(30, 9));
         foreach (string yes in new[] { "yes", "Sure, why not", "ok!", "yeah invite me" }) Assert.True(PlayerbotInitiativeRules.IsPositiveReply(yes), yes);
-        foreach (string no in new[] { "no", "no thanks", "sure but I am busy", "hello", "", "i am busy" }) Assert.False(PlayerbotInitiativeRules.IsPositiveReply(no), no);
+        foreach (string no in new[] { "no", "no thanks", "sure but I am busy", "hello", "", "i am busy", "not sure", "not now", "sure, I can't", "ok but I won't" })
+            Assert.False(PlayerbotInitiativeRules.IsPositiveReply(no), no);
+        Assert.Equal(PlayerbotInitiativeRules.Reply.No, PlayerbotInitiativeRules.Classify("not sure"));
+        Assert.Equal(PlayerbotInitiativeRules.Reply.Other, PlayerbotInitiativeRules.Classify("hello again"));
+        Assert.Equal(PlayerbotInitiativeRules.Reply.Yes, PlayerbotInitiativeRules.Classify("sure"));
         for (long t = 0; t < 200_000; t += 60_000)
             Assert.Equal(PlayerbotInitiativeRules.Rolls(1, 2, t, 3, 0.5), PlayerbotInitiativeRules.Rolls(1, 2, t, 3, 0.5));
     }
@@ -192,7 +198,7 @@ public sealed class PlayerbotInitiativeTests
         Assert.True(Lane(world).NextOpeningFor(pair.PlayerGuid) >= now + PlayerbotInitiativeLane.ReplyWaitMs + 60 * 60_000L);
 
         // An answered opening is not counted against the player.
-        Lane(world).Expect(pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now + 200_000);
+        Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now + 200_000);
         HelpTestKit.RecorderOf(world).NoteChatLine(pair.Bot, pair.BotGuid, pair.PlayerGuid, "hello again");
         await PassAsync(world, now + 200_000 + PlayerbotInitiativeLane.ReplyWaitMs + 1_000);
         Assert.Equal(1, Lane(world).Ignored);
@@ -206,13 +212,14 @@ public sealed class PlayerbotInitiativeTests
         Pair pair = await FamiliarAsync(world, "Initquest", "Initteam");
         PlayerbotBrain brain = HelpTestKit.BrainOf(world, pair.Bot);
 
-        Lane(world).Expect(pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, 1_000);
+        Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, 1_000);
         HelpTestKit.RecorderOf(world).NoteChatLine(pair.Bot, pair.BotGuid, pair.PlayerGuid, "no thanks, I am busy");
         await PassAsync(world, 2_000);
         Assert.Equal(0, Lane(world).Accepted);
         Assert.Null(await world.Host.OnWorldAsync(() => brain.Risk.GroupSignal));
+        Assert.True(Lane(world).NextOpeningFor(pair.PlayerGuid) >= 2_000 + 60 * 60_000L); // a no backs the bots off: the cooldown doubles
 
-        Lane(world).Expect(pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, 3_000);
+        Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Objective, 1234, 77, 3_000);
         HelpTestKit.RecorderOf(world).NoteChatLine(pair.Bot, pair.BotGuid, pair.PlayerGuid, "yes sure, let's team up");
         await PassAsync(world, 4_000);
         Assert.Equal(1, Lane(world).Accepted);
@@ -220,6 +227,77 @@ public sealed class PlayerbotInitiativeTests
         Assert.Equal(1234u, signal.Entry);
         Assert.Equal(77u, signal.QuestId);
         Assert.Equal(PlayerbotGroupSignal.ContentionSource, signal.Source);
+    }
+
+    // Run passes until the lane has taken the answer (the player's say reaches the bot on its own thread of the world).
+    private static Task AnswerTakenAsync(SocialWorld world, Pair pair, long nowMs)
+        => HelpTestKit.UntilAsync(() =>
+        {
+            PassAsync(world, nowMs).GetAwaiter().GetResult();
+            return Lane(world).PendingFor(pair.Bot, pair.PlayerGuid) == false;
+        }, "the lane to take the player's answer");
+
+    [Fact]
+    public async Task ThePlayersNextSay_IsTheReply_NamedOrNot_ANoBacksOffWithoutAPenalty_APositiveOneDoesNot()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initreply");
+        Pair pair = await FamiliarAsync(world, "Initheard", "Initreply");
+        PlayerbotSocialMemory memory = HelpTestKit.RecorderOf(world).Memory;
+        Assert.True(memory.TryGet(pair.Bot, pair.PlayerGuid.Value, out PlayerbotRelation before));
+        long now = 10_000;
+
+        // A "no" the bot is not even named in, said within earshot.
+        await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now));
+        await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
+        await AnswerTakenAsync(world, pair, now + 1_000);
+        Assert.Equal(0, Lane(world).Ignored); // it answered: never marked unanswered
+        Assert.True(Lane(world).NextOpeningFor(pair.PlayerGuid) >= now + 1_000 + 60 * 60_000L); // but the cooldown doubled
+        Assert.True(memory.TryGet(pair.Bot, pair.PlayerGuid.Value, out PlayerbotRelation after));
+        Assert.Equal(before.Affinity, after.Affinity); // and no penalty in affinity
+
+        // A friendly reply: the back-off is cleared, so the next cooldown is the plain one.
+        await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now + 2_000));
+        await player.SendChatAsync(ChatType.Say, Language.Common, "hello there");
+        await AnswerTakenAsync(world, pair, now + 3_000);
+        Assert.Equal(0, Lane(world).Ignored);
+        Assert.True(memory.TryGet(pair.Bot, pair.PlayerGuid.Value, out PlayerbotRelation last));
+        Assert.Equal(before.Affinity, last.Affinity);
+        Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
+    }
+
+    [Fact]
+    public async Task HelpTheBotGaveAlone_IsNoInvitationToGreetOrWhisper_ButAnInteractionIs()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient player = await world.AddPlayerAsync("Initquiet");
+        Guid id = await world.AddBotAsync("Initbuffer");
+        await HelpTestKit.StandAsync(world, "Initbuffer", ("Initquiet", 5f));
+        ObjectGuid botGuid = await world.Host.PlayerStateAsync("Initbuffer", p => p.Guid);
+        ObjectGuid playerGuid = await world.Host.PlayerStateAsync("Initquiet", p => p.Guid);
+        var pair = new Pair(id, botGuid, playerGuid);
+        PlayerbotSocialMemory memory = HelpTestKit.RecorderOf(world).Memory;
+
+        // Two buffs the bot gave a stranger who never said a word: familiar enough, liked enough, but nothing came from their side.
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < 2; i++) HelpTestKit.RecorderOf(world).Note(botGuid, playerGuid, PlayerbotSocialEvent.HelpedThem);
+        });
+        Assert.True(memory.TryGet(id, playerGuid.Value, out PlayerbotRelation relation));
+        Assert.True(relation.Familiarity >= 2 && memory.EffectiveAffinity(relation) >= PlayerbotInitiativeRules.WhisperAffinity);
+        Assert.Equal(PlayerbotRelationFlags.None, relation.Flags & PlayerbotRelationFlags.Interacted);
+        long now = GreetingTime(pair);
+        await PassAsync(world, now);
+        Assert.Equal(0, Lane(world).Openings); // no whisper and no greeting
+        Assert.Equal(0, Lane(world).Whispers);
+
+        // One word back from the player (an exchange) and the same relation may be greeted, by a whisper.
+        await world.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(world).NoteChatLine(id, botGuid, playerGuid, "hi"));
+        Assert.True(memory.TryGet(id, playerGuid.Value, out PlayerbotRelation talked));
+        Assert.NotEqual(PlayerbotRelationFlags.None, talked.Flags & PlayerbotRelationFlags.Interacted);
+        await PassAsync(world, GreetingTime(pair, now + PlayerbotInitiativeLane.ArrivalGapMs + 60_000)); // a fresh arrival
+        Assert.Equal(1, Lane(world).Openings);
+        Assert.Equal(1, Lane(world).Whispers);
     }
 
     // --- comments -----------------------------------------------------------------------------------------------------------------

@@ -23,6 +23,12 @@ public enum PlayerbotRelationFlags : int
     /// fields of such a row are blank and every normal read treats it as absent (a war read, with War Mode on, sees it).
     /// </summary>
     WarOnly = 1024,
+
+    /// <summary>
+    /// The other side has done something toward this bot (chatted with it, traded, helped it, emoted kindly, apologised, grouped): set by the bot's own
+    /// social memory, never by a player-facing command. Unprompted whispers and greetings to a player who has not opted in to AI chat need it.
+    /// </summary>
+    Interacted = 2048,
 }
 
 /// <summary>

@@ -189,6 +189,7 @@ internal static class SocialTestKit
             PartyTestHost.Feature(host).Chat, registered, registryLoaded: true, timings ?? new PlayerbotSocialTimings(), new Random(seed), nowMs, elapsedMs, () => bots)
         {
             Recorder = PartyTestHost.Feature(host).Social,
+            Coordinator = host.WorldServices.GetService<ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator>(),
         };
     }
 

@@ -64,8 +64,12 @@ internal static class PlayerbotInitiativeRules
     internal static bool Rolls(ulong botGuid, ulong otherGuid, long nowMs, ulong salt, double chance)
         => (PlayerbotContention.Mix(PlayerbotContention.Mix(botGuid, otherGuid), salt ^ (ulong)(nowMs / 60_000L)) >> 11) * (1.0 / 9007199254740992.0) < chance;
 
-    /// <summary>The channel of an unprompted opening: a whisper to a player who opted in to AI chat or whom the bot likes, else a public say.</summary>
-    internal static BotSpeechChannel ChannelFor(bool optedIn, int affinity) => optedIn || affinity >= WhisperAffinity ? BotSpeechChannel.Whisper : BotSpeechChannel.Say;
+    /// <summary>
+    /// The channel of an unprompted opening: a whisper to a player who opted in to AI chat, or whom the bot likes <b>and</b> who has done something toward it
+    /// (<see cref="PlayerbotRelationFlags.Interacted"/>: affinity the bot earned alone, by helping, is not an invitation), else a public say.
+    /// </summary>
+    internal static BotSpeechChannel ChannelFor(bool optedIn, int affinity, bool interacted)
+        => optedIn || (affinity >= WhisperAffinity && interacted) ? BotSpeechChannel.Whisper : BotSpeechChannel.Say;
 
     /// <summary>The milliseconds before any bot opens with a player again: the cooldown, doubled for each opening they ignored (at most <see cref="MaxBackoff"/> times).</summary>
     internal static long CooldownMs(int cooldownMinutes, int ignored) => cooldownMinutes * 60_000L * Math.Min(MaxBackoff, 1 << Math.Min(ignored, 4));
@@ -73,19 +77,38 @@ internal static class PlayerbotInitiativeRules
     private static readonly string[] Yes = ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "ye", "y", "team", "group", "invite", "please", "gladly", "definitely"];
     private static readonly string[] No = ["no", "nope", "nah", "dont", "don't", "never", "busy", "alone"];
 
-    /// <summary>Whether a reply to an offer to team up is a yes: a yes word and no no word.</summary>
-    internal static bool IsPositiveReply(string? text)
+    /// <summary>How a reply to an opening reads.</summary>
+    internal enum Reply : byte
     {
-        if (string.IsNullOrWhiteSpace(text)) return false;
+        /// <summary>Neither: a remark, a greeting, a question.</summary>
+        Other,
+
+        /// <summary>A yes word and no no word.</summary>
+        Yes,
+
+        /// <summary>A no word, or a "not" ("not sure", "not now"; "why not" is a yes).</summary>
+        No,
+    }
+
+    /// <summary>Read a reply to an opening: a no word or a negation ("not", "can't") is a no; else a yes word is a yes.</summary>
+    internal static Reply Classify(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return Reply.Other;
         bool yes = false;
+        string? previous = null;
         foreach (string word in text.ToLowerInvariant().Split([' ', ',', '.', '!', '?', ';', ':'], StringSplitOptions.RemoveEmptyEntries))
         {
-            if (Array.IndexOf(No, word) >= 0) return false;
+            if (Array.IndexOf(No, word) >= 0) return Reply.No;
+            if ((word == "not" && previous != "why") || word.EndsWith("n't", StringComparison.Ordinal) || word is "cant" or "wont") return Reply.No;
             if (Array.IndexOf(Yes, word) >= 0) yes = true;
+            previous = word;
         }
 
-        return yes;
+        return yes ? Reply.Yes : Reply.Other;
     }
+
+    /// <summary>Whether a reply to an offer to team up is a yes.</summary>
+    internal static bool IsPositiveReply(string? text) => Classify(text) == Reply.Yes;
 }
 
 /// <summary>
@@ -94,9 +117,13 @@ internal static class PlayerbotInitiativeRules
 /// <list type="bullet">
 /// <item>A round of free bots (a bounded slice per pass) looks at the characters near it. An opening needs a reason: the same quest objective, a familiar character
 /// to follow up with, or a familiar character who has just arrived. A bot opens with another bot only where a real player can hear.</item>
-/// <item>A real player hears from bots once per cooldown; one who answers resets the back-off, one who does not (120 seconds) costs the bot 1 affinity and doubles the cooldown.</item>
-/// <item>A yes to "want to team up?" raises a group signal (the coordinator matches by objective) and tells the coordinator the player is welcome.</item>
-/// <item>A free bot also remarks, rarely, on a rare creature in sight, a world event that started, an enemy raid, or a friend's first mount: once per bot per
+/// <item>A real player hears from bots once per cooldown. While an opening is pending the player's next say (or a line to the bot) within hearing is the reply, named or
+/// not. A positive reply clears the back-off; any other reply (a no included) doubles the cooldown but costs no affinity; silence for 120 seconds costs the bot
+/// 1 affinity and doubles the cooldown.</item>
+/// <item>A yes to "want to team up?" raises a group signal and asks the coordinator to match that player (<c>Volunteer</c>: the invitation is the leader's ordinary
+/// CMSG_GROUP_INVITE); a bot's yes to another bot's offer is a recruit through the coordinator (<c>OfferLfg</c>).</item>
+/// <item>A free bot also remarks, rarely, on a rare creature in sight, a world event that started, an enemy raid of real players, or a friend's first mount (one it
+/// saw unmounted at level 40 or more before; memory only): once per bot per
 /// <c>CommentBotGapMinutes</c> and per zone per <c>CommentZoneGapSeconds</c>.</item>
 /// </list>
 /// All of it is memory only and bounded. Never to someone the bot dislikes or holds as a rival, never to a player who ignores it.
@@ -113,10 +140,18 @@ internal sealed class PlayerbotInitiativeLane
     internal const float RareYards = 60f;
     internal const float RaidYards = 80f;
     internal const int RaidPlayers = 4;
+    internal const int FirstMountLevel = 40;
     private const int Bound = 4096;
 
     private sealed record Pending(ObjectGuid BotGuid, long AtMs, PlayerbotOpeningKind Kind, uint Entry, uint Quest);
 
+    // A team-up the coordinator is to act on: a player's yes (Answerer empty) or another bot's.
+    private sealed record Follow(Guid Bot, Guid Answerer, ObjectGuid Player, long UntilMs);
+
+    internal const long FollowMs = 2 * 60_000L;
+
+    private readonly List<Follow> _follow = [];
+    private readonly HashSet<(Guid Bot, ulong Other)> _unmounted = [];
     private readonly Dictionary<ulong, long> _playerNext = [];
     private readonly Dictionary<ulong, int> _ignored = [];
     private readonly Dictionary<(Guid Bot, ulong Other), Pending> _pending = [];
@@ -144,11 +179,20 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>Openings answered with a yes to teaming up.</summary>
     internal int Accepted { get; private set; }
 
+    /// <summary>Bots that said yes to another bot's offer to team up and were taken into its group's plan by the coordinator.</summary>
+    internal int BotOffers { get; private set; }
+
     /// <summary>Openings nobody answered.</summary>
     internal int Ignored { get; private set; }
 
     /// <summary>Surroundings comments made.</summary>
     internal int Comments { get; private set; }
+
+    /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
+    internal bool PendingFor(Guid bot, ObjectGuid player) => _pending.ContainsKey((bot, player.Value));
+
+    /// <summary>How many openings in a row the player has ignored or turned down (the cooldown doubles with each, tests).</summary>
+    internal int BackoffOf(ObjectGuid player) => _ignored.GetValueOrDefault(player.Value);
 
     /// <summary>The player's cooldown for openings ends at (world milliseconds), 0 when none runs (tests).</summary>
     internal long NextOpeningFor(ObjectGuid player) => _playerNext.GetValueOrDefault(player.Value);
@@ -162,15 +206,23 @@ internal sealed class PlayerbotInitiativeLane
         {
             while (recorder.TryTakeReply(out _, out _, out _)) { }
             _pending.Clear();
+            _follow.Clear();
+            recorder.ClearExpected();
             return;
         }
 
         Sweep(pass.NowMs);
-        Replies(pass, recorder);
+        Replies(pass, recorder, options);
         Unanswered(pass, recorder);
+        FollowThrough(pass);
         if (options.CommentsEnabled) NoteEvents(pass);
         IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
-        if (bots.Count == 0) return;
+        if (bots.Count == 0)
+        {
+            _newEvents.Clear();
+            return;
+        }
+
         int budget = options.MaxOpeningsPerPass;
         int count = Math.Min(BotsPerPass, bots.Count);
         for (int i = 0; i < count && budget > 0; i++)
@@ -187,20 +239,66 @@ internal sealed class PlayerbotInitiativeLane
 
     // --- replies and silences ------------------------------------------------------------------------------------------------
 
-    private void Replies(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder)
+    private void Replies(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, PlayerbotSocialInitiativeOptions options)
     {
         for (int budget = 32; budget > 0 && recorder.TryTakeReply(out Guid botId, out ObjectGuid sender, out string? text); budget--)
         {
             if (!_pending.Remove((botId, sender.Value), out Pending? pending)) continue;
-            _ignored.Remove(sender.Value);
-            if (pending.Kind != PlayerbotOpeningKind.Objective || !PlayerbotInitiativeRules.IsPositiveReply(text)) continue;
+            recorder.Unexpect(botId, sender);
+            PlayerbotInitiativeRules.Reply reply = PlayerbotInitiativeRules.Classify(text);
+            // An offer to team up wants a yes; a greeting or a follow-up is answered by anything but a no.
+            bool positive = pending.Kind == PlayerbotOpeningKind.Objective ? reply == PlayerbotInitiativeRules.Reply.Yes : reply != PlayerbotInitiativeRules.Reply.No;
+            if (positive) _ignored.Remove(sender.Value);
+            else
+            {
+                // Only a positive reply clears the back-off: a no (or any other answer) backs the bots off, with no penalty in affinity (the player did answer).
+                int ignored = _ignored[sender.Value] = _ignored.GetValueOrDefault(sender.Value) + 1;
+                _playerNext[sender.Value] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, ignored);
+            }
+
+            if (pending.Kind != PlayerbotOpeningKind.Objective || reply != PlayerbotInitiativeRules.Reply.Yes) continue;
             Accepted++;
             if (!pass.ByCharacter.TryGetValue(pending.BotGuid.Low, out PlayerbotSocialBot? bot) || pending.Entry == 0 || bot.Brain is null) continue;
-            Player self = bot.Player;
-            // The coordinator matches by objective; the player is welcome whatever the bot's affinity toward them is.
-            bot.Brain.Risk.RaiseGroupSignal(new PlayerbotGroupSignal(pending.Entry, 2, self.MapId, new System.Numerics.Vector3(self.X, self.Y, self.Z), pass.World.NowMs,
-                PlayerbotGroupSignal.ContentionSource, pending.Quest));
-            pass.Coordinator?.Welcome(sender, unchecked(pass.World.NowMs + 5 * 60_000u));
+            RaiseSignal(pass, bot, pending.Entry, pending.Quest);
+            // The coordinator matches that very player ahead of recruiting free bots (its checks still apply); until the bot waits for a group the offer is retried.
+            if (_follow.Count < Bound) _follow.Add(new Follow(bot.Id, Guid.Empty, sender, pass.NowMs + FollowMs));
+            FollowThrough(pass);
+        }
+    }
+
+    private static void RaiseSignal(PlayerbotSocialPass pass, PlayerbotSocialBot bot, uint entry, uint quest)
+    {
+        Player self = bot.Player;
+        bot.Brain!.Risk.RaiseGroupSignal(new PlayerbotGroupSignal(entry, 2, self.MapId, new System.Numerics.Vector3(self.X, self.Y, self.Z), pass.World.NowMs,
+            PlayerbotGroupSignal.ContentionSource, quest));
+    }
+
+    // A yes the coordinator could not act on yet (the bot does not wait for a group until its next tick) is offered again for a while.
+    private void FollowThrough(PlayerbotSocialPass pass)
+    {
+        if (_follow.Count == 0) return;
+        if (pass.Coordinator is not { } coordinator)
+        {
+            _follow.Clear();
+            return;
+        }
+
+        for (int i = _follow.Count - 1; i >= 0; i--)
+        {
+            Follow follow = _follow[i];
+            bool done = pass.NowMs >= follow.UntilMs;
+            if (!done && follow.Answerer != Guid.Empty)
+            {
+                PlayerbotLfgOfferOutcome outcome = coordinator.OfferLfg(follow.Answerer, follow.Bot).Outcome;
+                done = outcome != PlayerbotLfgOfferOutcome.NotWaiting;
+                if (outcome == PlayerbotLfgOfferOutcome.Pledged) BotOffers++;
+            }
+            else if (!done)
+            {
+                done = pass.World.FindOnlinePlayer(follow.Player) is not { } player || coordinator.Volunteer(follow.Bot, player).Outcome != PlayerbotVolunteerOutcome.NotWaiting;
+            }
+
+            if (done) _follow.RemoveAt(i);
         }
     }
 
@@ -211,6 +309,7 @@ internal sealed class PlayerbotInitiativeLane
         {
             if (pass.NowMs - entry.Value.AtMs < ReplyWaitMs) continue;
             _pending.Remove(entry.Key);
+            recorder.Unexpect(entry.Key.Bot, new ObjectGuid(entry.Key.Other));
             Ignored++;
             _ignored[entry.Key.Other] = _ignored.GetValueOrDefault(entry.Key.Other) + 1;
             _playerNext[entry.Key.Other] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(pass.Options.Initiative.OpeningCooldownMinutes, _ignored[entry.Key.Other]);
@@ -240,6 +339,7 @@ internal sealed class PlayerbotInitiativeLane
             bool real = other.Session is WorldSession { IsManaged: false };
             if (real)
             {
+                NoteMount(bot.Id, other);
                 if (_playerNext.TryGetValue(guid.Value, out long until) && until > pass.NowMs) continue;
                 if (pass.Social.IsIgnoring(other, self.Guid)) continue;
             }
@@ -258,7 +358,9 @@ internal sealed class PlayerbotInitiativeLane
             if (known && recorder.Memory.IsRival(relation)) continue;
             int affinity = known ? recorder.Memory.EffectiveAffinity(relation) : 0;
             if (affinity < 0) continue;
-            PlayerbotOpeningKind? kind = KindFor(pass, bot, other, known ? relation : null, arrival, traits.Sociability, mood);
+            // A greeting or a follow-up to a player who never opted in and never did anything toward the bot is unprompted: only a reason (an objective) justifies a line.
+            bool mayGreet = !real || (known && (relation.Flags & PlayerbotRelationFlags.Interacted) != 0) || pass.Chat?.Safety.Player(other.Name)?.AiReplies == true;
+            PlayerbotOpeningKind? kind = KindFor(pass, bot, other, known ? relation : null, arrival, traits.Sociability, mood, mayGreet);
             if (kind is not { } chosen) continue;
             if (Open(pass, recorder, options, bot, other, real, known ? relation : null, affinity, chosen))
             {
@@ -270,13 +372,13 @@ internal sealed class PlayerbotInitiativeLane
         return budget > 0 && options.CommentsEnabled && TryComment(pass, recorder, options, bot, traits, mood);
     }
 
-    private PlayerbotOpeningKind? KindFor(PlayerbotSocialPass pass, PlayerbotSocialBot bot, Player other, PlayerbotRelation? relation, bool arrival, float sociability, float mood)
+    private PlayerbotOpeningKind? KindFor(PlayerbotSocialPass pass, PlayerbotSocialBot bot, Player other, PlayerbotRelation? relation, bool arrival, float sociability, float mood, bool mayGreet)
     {
         Player self = bot.Player;
         if (bot.Brain!.QuestId != 0 && bot.Brain.TargetEntry != 0 && pass.Coordinator?.SharesGoal(bot.Id, other) == true && Ready(bot.Id, other, PlayerbotOpeningKind.Objective, pass.NowMs)
             && PlayerbotInitiativeRules.Rolls(self.Guid.Value, other.Guid.Value, pass.NowMs, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective), PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, sociability, mood)))
             return PlayerbotOpeningKind.Objective;
-        if (relation is null) return null;
+        if (relation is null || !mayGreet) return null;
         if (relation.Familiarity >= PlayerbotBuiltinChat.WelcomeBackFamiliarity && relation.LastTopic.Length > 0 && Ready(bot.Id, other, PlayerbotOpeningKind.FollowUp, pass.NowMs)
             && PlayerbotInitiativeRules.Rolls(self.Guid.Value, other.Guid.Value, pass.NowMs, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.FollowUp), PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.FollowUp, sociability, mood)))
             return PlayerbotOpeningKind.FollowUp;
@@ -304,7 +406,7 @@ internal sealed class PlayerbotInitiativeLane
         if (pass.Chat is not { IsActive: true } chat) return false;
         Player self = bot.Player;
         BotSpeechChannel channel = !real ? BotSpeechChannel.Say
-            : PlayerbotInitiativeRules.ChannelFor(chat.Safety.Player(other.Name)?.AiReplies == true, affinity);
+            : PlayerbotInitiativeRules.ChannelFor(chat.Safety.Player(other.Name)?.AiReplies == true, affinity, relation is not null && (relation.Flags & PlayerbotRelationFlags.Interacted) != 0);
         var values = new Dictionary<string, string>();
         string instruction;
         string key;
@@ -341,16 +443,29 @@ internal sealed class PlayerbotInitiativeLane
         if (real)
         {
             _playerNext[other.Guid.Value] = pass.NowMs + PlayerbotInitiativeRules.CooldownMs(options.OpeningCooldownMinutes, _ignored.GetValueOrDefault(other.Guid.Value));
-            Expect(bot.Id, self.Guid, other.Guid, kind, entry, quest, pass.NowMs);
+            Expect(recorder, bot.Id, self.Guid, other.Guid, kind, entry, quest, pass.NowMs);
+        }
+        else if (kind == PlayerbotOpeningKind.Objective && entry != 0 && pass.ByCharacter.TryGetValue(other.Guid.Low, out PlayerbotSocialBot? answerer) && answerer.Brain is not null)
+        {
+            // The other bot answers the offer too: a hash of the two and the minute against its own sociability and mood. A yes is a recruit for this bot's group.
+            PlayerbotTraits theirs = PlayerbotTraits.For(other.Guid.Value);
+            if (PlayerbotInitiativeRules.Rolls(other.Guid.Value, self.Guid.Value, pass.NowMs, PlayerbotInitiativeRules.SaltOf(PlayerbotOpeningKind.Objective) ^ 0xA25E12UL,
+                    PlayerbotInitiativeRules.Chance(PlayerbotOpeningKind.Objective, theirs.Sociability, recorder.Mood.Get(answerer.Id))))
+            {
+                RaiseSignal(pass, bot, entry, quest);
+                if (_follow.Count < Bound) _follow.Add(new Follow(bot.Id, answerer.Id, other.Guid, pass.NowMs + FollowMs));
+            }
         }
 
         return true;
     }
 
-    /// <summary>Wait for the answer of <paramref name="other"/> to an opening (also the tests' way to stage one).</summary>
-    internal void Expect(Guid bot, ObjectGuid botGuid, ObjectGuid other, PlayerbotOpeningKind kind, uint entry, uint quest, long nowMs)
+    /// <summary>Wait for the answer of <paramref name="other"/> to an opening (also the tests' way to stage one): the player's next say within hearing is the reply.</summary>
+    internal void Expect(PlayerbotSocialRecorder recorder, Guid bot, ObjectGuid botGuid, ObjectGuid other, PlayerbotOpeningKind kind, uint entry, uint quest, long nowMs)
     {
-        if (_pending.Count < Bound) _pending[(bot, other.Value)] = new Pending(botGuid, nowMs, kind, entry, quest);
+        if (_pending.Count >= Bound) return;
+        _pending[(bot, other.Value)] = new Pending(botGuid, nowMs, kind, entry, quest);
+        recorder.Expect(bot, other);
     }
 
     // --- surroundings comments -------------------------------------------------------------------------------------------------
@@ -358,13 +473,20 @@ internal sealed class PlayerbotInitiativeLane
     private void NoteEvents(PlayerbotSocialPass pass)
     {
         if (pass.Services.GetService<GameEventFeature>() is not { } feature) return;
-        HashSet<ushort> now = [.. feature.ActiveEvents];
         if (_eventsKnown)
-            foreach (ushort id in now)
+            foreach (ushort id in feature.ActiveEvents)
                 if (!_events.Contains(id)) _newEvents.Add(id);
         _events.Clear();
-        foreach (ushort id in now) _events.Add(id);
+        foreach (ushort id in feature.ActiveEvents) _events.Add(id);
         _eventsKnown = true;
+    }
+
+    // A real player seen unmounted at level 40 or more by this bot: a later sight of them mounted is a first mount (memory only, so a restart forgets and stays quiet).
+    private void NoteMount(Guid bot, Player other)
+    {
+        if (other.Level < FirstMountLevel || other.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0) return;
+        if (_unmounted.Count >= Bound) _unmounted.Clear();
+        _unmounted.Add((bot, other.Guid.Value));
     }
 
     private bool TryComment(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, PlayerbotSocialInitiativeOptions options, PlayerbotSocialBot bot, PlayerbotTraits traits, float mood)
@@ -389,10 +511,10 @@ internal sealed class PlayerbotInitiativeLane
                 if (guid == self.Guid || pass.World.FindOnlinePlayer(guid) is not { } other || !ReferenceEquals(other.Map, self.Map)) continue;
                 if (other.Team != self.Team)
                 {
-                    if (other.IsAlive && Distance(self, other) <= RaidYards) enemies++;
+                    if (other.IsAlive && other.Session is WorldSession { IsManaged: false } && Distance(self, other) <= RaidYards) enemies++;
                 }
                 else if (mounted is null && other.Session is WorldSession { IsManaged: false } && other.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0 && !_mounted.Contains(guid.Value)
-                    && recorder.Memory.TryGet(bot.Id, guid.Value, out _))
+                    && _unmounted.Remove((bot.Id, guid.Value)))
                 {
                     mounted = other.Name;
                     if (_mounted.Count > Bound) _mounted.Clear();

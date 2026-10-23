@@ -199,6 +199,28 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     }
 
     private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Sender, string? Text)> _replies = new();
+    private readonly ConcurrentDictionary<(Guid Bot, ulong Player), byte> _expected = new();
+
+    /// <summary>The initiative lane opened with <paramref name="player"/> and waits for the answer: their next say within the bot's hearing is it, named or not.</summary>
+    internal void Expect(Guid botId, ObjectGuid player)
+    {
+        if (_expected.Count < 1024) _expected[(botId, player.Value)] = 1;
+    }
+
+    /// <summary>The answer came (or the wait is over): the bot no longer listens for it.</summary>
+    internal void Unexpect(Guid botId, ObjectGuid player) => _expected.TryRemove((botId, player.Value), out _);
+
+    /// <summary>Forget every awaited answer (the lane is switched off).</summary>
+    internal void ClearExpected() => _expected.Clear();
+
+    /// <summary>
+    /// A say the bot heard that is not addressed to it: when the sender is the player it is waiting on, it is the answer to its opening. Called from the chat
+    /// service's line hook (world thread); anything else is ignored.
+    /// </summary>
+    public void NoteHeardSay(Guid botId, ObjectGuid sender, string? text)
+    {
+        if (sender.IsPlayer && _replies.Count < 256 && _expected.ContainsKey((botId, sender.Value))) _replies.Enqueue((botId, sender, text));
+    }
 
     /// <summary>Take the oldest line a character addressed to a bot (the answer to an opening, <see cref="PlayerbotInitiativeLane"/>).</summary>
     internal bool TryTakeReply(out Guid botId, out ObjectGuid sender, out string? text)
