@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Sockets;
@@ -121,7 +122,11 @@ public sealed class AutoPatchTests : IDisposable
             Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, "X"), WowSrp6.KeyLength),
         });
 
-        await using NetworkStream client = await StartAsync(accounts, catalog, new AuthOptions { MaxSessionDurationSeconds = 2 });
+        // Timing is measured from before the connect, so the server's cap clock (started at accept) is never ahead of
+        // this stopwatch; a slow handshake on a loaded runner then shifts nothing, it only has to finish within the cap.
+        const int capSeconds = 6;
+        var elapsed = Stopwatch.StartNew();
+        await using NetworkStream client = await StartAsync(accounts, catalog, new AuthOptions { MaxSessionDurationSeconds = capSeconds });
         await client.WriteAsync(Challenge(5464));
         await Read(client, 3 + 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
         byte[] proof = new byte[1 + 32 + 20 + 20 + 1 + 1];
@@ -129,18 +134,27 @@ public sealed class AutoPatchTests : IDisposable
         await client.WriteAsync(proof);
         await Read(client, 2 + 1 + 1 + 5 + 8 + 16);
 
-        await Task.Delay(1500); // most of the 2 s cap is used before the download starts
+        await DelayUntil(elapsed, TimeSpan.FromSeconds(capSeconds * 0.75)); // most of the cap is used before the download starts
         await client.WriteAsync(new byte[] { (byte)AuthCommand.XferAccept });
         byte[] chunkHead = await Read(client, 3);
         Assert.Equal(data, await Read(client, BinaryPrimitives.ReadUInt16LittleEndian(chunkHead.AsSpan(1))));
 
-        await Task.Delay(1000); // past the original cap: the chunk restarted it, so the connection is still open
+        await DelayUntil(elapsed, TimeSpan.FromSeconds(capSeconds + 0.5)); // past the original cap: the chunk restarted it, so the connection is still open
         await client.WriteAsync(new byte[] { (byte)AuthCommand.XferResume, 0, 0, 0, 0, 0, 0, 0, 0 });
         Assert.Equal(0x31, (await Read(client, 3))[0]);
         await Read(client, data.Length);
 
         // Idle afterwards: the cap closes the connection.
-        Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, await client.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(capSeconds + 14)));
+    }
+
+    private static async Task DelayUntil(Stopwatch elapsed, TimeSpan target)
+    {
+        TimeSpan remaining = target - elapsed.Elapsed;
+        if (remaining > TimeSpan.Zero)
+        {
+            await Task.Delay(remaining);
+        }
     }
 
     [Fact]
