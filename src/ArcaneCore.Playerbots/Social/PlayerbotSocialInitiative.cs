@@ -188,10 +188,10 @@ internal sealed class PlayerbotInitiativeLane
     /// <summary>Surroundings comments made.</summary>
     internal int Comments { get; private set; }
 
-    /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
     /// <summary>Queue the follow-through of a bot-to-bot yes (the tests' way to stage the answer without the chat model that speaks the opening): <paramref name="answerer"/> offers itself to <paramref name="bot"/>'s group.</summary>
     internal void FollowBot(Guid bot, Guid answerer, ObjectGuid answererGuid, long nowMs) => _follow.Add(new Follow(bot, answerer, answererGuid, nowMs + FollowMs));
 
+    /// <summary>Whether an opening of the bot to the player still waits for its answer (tests).</summary>
     internal bool PendingFor(Guid bot, ObjectGuid player) => _pending.ContainsKey((bot, player.Value));
 
     /// <summary>How many openings in a row the player has ignored or turned down (the cooldown doubles with each, tests).</summary>

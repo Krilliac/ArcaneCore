@@ -104,7 +104,19 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         Assert.Equal(bot.Name, new PacketReader(invite).ReadCString());
         await player.SendAsync(WorldOpcode.CmsgGroupAccept, []);
 
-        Assert.True(await world.RunUntilAsync(20_000, () => world.GroupManager.AreInSameGroup(botGuid, playerGuid)), await world.TraceAsync());
+        // The accept crosses a socket in real time while the world clock is manual: step the clock in small slices. The coordinator's own rule (a group with fewer than two bots is
+        // given up as "too-few") disbands this bot-and-player pair a tick after it forms, so the proof is the coordinator's record that the player joined it as a member.
+        string trace = string.Empty;
+        for (int i = 0; i < 200 && !trace.Contains("Teamyes damage", StringComparison.Ordinal); i++)
+        {
+            await Task.Delay(25);
+            await world.RunAsync(100);
+            trace = await world.TraceAsync();
+        }
+
+        Assert.Contains("formed for", trace);
+        Assert.Contains("Teambotone tank, Teamyes damage", trace);
+        Assert.Contains("complete: 2 members", trace);
     }
 
     [Fact]
