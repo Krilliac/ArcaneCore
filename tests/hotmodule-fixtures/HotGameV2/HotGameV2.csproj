@@ -2,6 +2,7 @@
 
   <!-- Version 2 of HotGame: the same source with the V2 symbol (one more creature entry). -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotGame</AssemblyName>
     <RootNamespace>HotGame</RootNamespace>
     <IsPackable>false</IsPackable>

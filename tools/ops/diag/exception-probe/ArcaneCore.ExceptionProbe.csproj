@@ -5,6 +5,7 @@
        TraceEvent is fetched with PackageDownload (that package alone) and referenced by path: its PackageReference would pull a
        netstandard1.x shim graph (System.Reflection.TypeExtensions and friends) the net11.0 runtime already provides. -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>

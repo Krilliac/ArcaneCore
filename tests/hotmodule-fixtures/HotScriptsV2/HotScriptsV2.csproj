@@ -2,6 +2,7 @@
 
   <!-- Version 2 of HotScripts: the same source with the V2 symbol (the spell script serves one more spell id). -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <AssemblyName>HotScripts</AssemblyName>
     <RootNamespace>HotScripts</RootNamespace>
     <IsPackable>false</IsPackable>
