@@ -2316,7 +2316,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         LastLaneActions = (combatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, budgetMs);
-        ReportStarvedBots(bots, now, starvedBoundMs);
+        ReportStarvedBots(bots, now, starvedBoundMs, PlayerbotThinkStarvation.ReportBoundMs(starvedBoundMs, _mainPass.Ms));
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
@@ -2343,10 +2343,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
            && active.Session.Player is { } player && (!player.IsAlive || player.Combat.IsInCombat);
 
     /// <summary>
-    /// Reports each bot that has gone longer than <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> without a think, once per episode
-    /// (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). One compare per bot per tick.
+    /// Reports each bot that has gone longer than <paramref name="reportBound"/> without a think (<see cref="PlayerbotThinkStarvation.ReportBoundMs"/>:
+    /// <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> raised to 1.5 x the measured full pass, so a bot behind the rotation is reported and a
+    /// uniformly slow rotation is not), once per episode (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). The oldest
+    /// silence it records for the first lane's yield is judged against the unraised <paramref name="bound"/>. One compare per bot per tick.
     /// </summary>
-    private void ReportStarvedBots(ActiveBot[] bots, uint now, uint bound)
+    private void ReportStarvedBots(ActiveBot[] bots, uint now, uint bound, uint reportBound)
     {
         _oldestSilentMs = 0;
         if (bound == 0) return;
@@ -2356,11 +2358,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (active.Paused || !active.GapPrimed || active.Session.State != SessionState.InWorld) continue;
             uint silentMs = unchecked(now - active.LastUpdateMs);
             if (silentMs > oldest && silentMs <= int.MaxValue) oldest = silentMs;
-            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, bound, ref active.StarvedReported)) continue;
+            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, reportBound, ref active.StarvedReported)) continue;
             if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
             PlayerbotAnomalies.Report(player, "cadence", "think-starved",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {bound} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
+                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {reportBound} ms, configured {bound} ms, full pass {_mainPass.Ms} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
         }
 
         _oldestSilentMs = oldest;
