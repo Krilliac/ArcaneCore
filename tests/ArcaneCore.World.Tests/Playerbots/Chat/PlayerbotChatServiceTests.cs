@@ -180,6 +180,42 @@ public sealed class PlayerbotChatServiceTests
         Assert.Equal(3, rig.Client.Calls.Count);
         rig.Client.ThenReturn(BotChatResult.Fail(outcome));
         await rig.AskAsync(ChatSamples.Ask("five"));
+        Assert.Equal(4, rig.Client.Calls.Count); // the last request did reach the client
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
+    }
+
+    [Fact]
+    public async Task ADifferentFailureInBetween_ResetsTheBadStreak()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.Refused));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        await rig.AskAsync(ChatSamples.Ask("two"));
+        await rig.AskAsync(ChatSamples.Ask("three"));
+        Assert.Equal(3, rig.Client.Calls.Count);
+        Assert.Equal("bad-response", rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds); // two bad answers, but not in a row
+    }
+
+    [Fact]
+    public async Task InProcessBadResponses_AreAboutTheContent_NotTheProvider_SoTheyNeverBackOff()
+    {
+        PlayerbotChatProviderOptions inProcess = new() { Kind = PlayerbotChatProviderKind.InProcess, Model = "tiny" };
+        await using var rig = new Rig(chat =>
+        {
+            chat.Providers = [inProcess];
+            chat.InProcess.ModelPath = "model.gguf";
+            chat.TimeoutSeconds = 5;
+            chat.InProcess.BudgetMs = 2000;
+        });
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        await rig.AskAsync(ChatSamples.Ask("two"));
+        Assert.Equal(2, rig.Client.Calls.Count);
+        Assert.Equal("bad-response", rig.Chat.Status().Providers[0].LastError);
         Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
     }
 

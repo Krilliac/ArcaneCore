@@ -672,7 +672,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
                 if (moderation.Verdict != BotChatModerationVerdict.Clean)
                 {
-                    Fail(provider, index, "moderation-failed", TimeSpan.Zero); // never sent unchecked: the next provider answers
+                    FailModeration(provider, index, moderation); // never sent unchecked: the next provider answers
                     continue;
                 }
             }
@@ -756,7 +756,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
                 if (moderation.Verdict != BotChatModerationVerdict.Clean)
                 {
-                    Fail(provider, index, "moderation-failed", TimeSpan.Zero);
+                    FailModeration(provider, index, moderation);
                     continue;
                 }
             }
@@ -949,7 +949,8 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 AddSpend(provider, result, _time.GetUtcNow());
             }
 
-            return result.Outcome == BotChatOutcome.Ok ? PlayerbotChatPrompts.ReadClassification(result.Text) : new BotChatModeration(BotChatModerationVerdict.Failed);
+            if (result.Outcome == BotChatOutcome.Ok) return PlayerbotChatPrompts.ReadClassification(result.Text);
+            return new BotChatModeration(BotChatModerationVerdict.Failed, result.Outcome == BotChatOutcome.ReasoningOnly ? ClassifierReasoningOnly : null);
         }
         catch (OperationCanceledException error) when (!_stop.IsCancellationRequested)
         {
@@ -1000,8 +1001,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 return;
             }
 
-            state.BadStreak = result.Outcome is BotChatOutcome.BadResponse or BotChatOutcome.ReasoningOnly ? state.BadStreak + 1 : 0;
-            badRepeat = state.BadStreak >= 2;
+            badRepeat = CountBad(provider, state, result.Outcome);
         }
 
         TimeSpan? cooldown = result.Outcome switch
@@ -1014,6 +1014,42 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         // A single unreadable or empty answer costs nothing, but the second in a row backs off like any other provider failure.
         bool backOff = badRepeat || result.Outcome is BotChatOutcome.RateLimited or BotChatOutcome.Unavailable or BotChatOutcome.Timeout or BotChatOutcome.NetworkError;
         Fail(provider, index, ErrorClass(result.Outcome), cooldown ?? (backOff ? null : TimeSpan.Zero));
+    }
+
+    /// <summary>
+    /// Under <see cref="_gate"/>: count <paramref name="outcome"/> in the provider's run of unreadable answers and say whether it is the second
+    /// in a row. Only an HTTP provider's answer counts: an in-process model's bad answer is about the content (context, error, filtered), not
+    /// the health of a provider, so it never backs anything off. Any other outcome ends the run.
+    /// </summary>
+    private static bool CountBad(PlayerbotChatProviderOptions provider, ProviderState state, BotChatOutcome outcome)
+    {
+        bool http = provider.Kind is PlayerbotChatProviderKind.OpenAICompatible or PlayerbotChatProviderKind.Anthropic;
+        state.BadStreak = http && (outcome is BotChatOutcome.BadResponse or BotChatOutcome.ReasoningOnly) ? state.BadStreak + 1 : 0;
+        return state.BadStreak >= 2;
+    }
+
+    /// <summary>The <see cref="BotChatModeration.Category"/> of a Failed verdict whose classifier call only thought (never a flag category).</summary>
+    private const string ClassifierReasoningOnly = "reasoning-only";
+
+    /// <summary>
+    /// A moderation step did not return a verdict. A classifier that only thought is counted like a reasoning-only reply (<see cref="Record"/>:
+    /// the second in a row backs the provider off, and the first logs the hint); any other failure is "moderation-failed" with no cooldown.
+    /// </summary>
+    private void FailModeration(PlayerbotChatProviderOptions provider, int index, BotChatModeration moderation)
+    {
+        if (moderation.Category != ClassifierReasoningOnly)
+        {
+            Fail(provider, index, "moderation-failed", TimeSpan.Zero);
+            return;
+        }
+
+        bool badRepeat;
+        lock (_gate)
+        {
+            badRepeat = CountBad(provider, StateOf(provider), BotChatOutcome.ReasoningOnly);
+        }
+
+        Fail(provider, index, ErrorClass(BotChatOutcome.ReasoningOnly), badRepeat ? null : TimeSpan.Zero);
     }
 
     /// <summary>Under <see cref="_gate"/>: add a request's estimated cost to the day's spend.</summary>

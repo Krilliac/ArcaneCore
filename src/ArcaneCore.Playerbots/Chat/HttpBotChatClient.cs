@@ -176,7 +176,7 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
             ["messages"] = messages,
             ["stream"] = false,
         };
-        if (!string.IsNullOrWhiteSpace(provider.ReasoningEffort)) body["reasoning_effort"] = provider.ReasoningEffort.Trim().ToLowerInvariant();
+        if (provider.ReasoningEffortToSend is { } effort) body["reasoning_effort"] = effort;
         return body;
     }
 

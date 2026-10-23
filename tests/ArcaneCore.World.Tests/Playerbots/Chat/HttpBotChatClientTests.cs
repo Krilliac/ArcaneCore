@@ -162,8 +162,36 @@ public sealed class HttpBotChatClientTests
         Assert.Equal("none", HttpBotChatClient.OpenAIBody(provider, Prompt)["reasoning_effort"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void OpenAIBody_NormalisesReasoningEffort_AndOmitSendsNothing()
+    {
+        var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://localhost:11434/v1", Model = "m", ReasoningEffort = " LOW " };
+        Assert.Equal("low", HttpBotChatClient.OpenAIBody(provider, Prompt)["reasoning_effort"]!.GetValue<string>());
+        Assert.Null(provider.Problem());
+        Assert.Equal(provider.Signature, new PlayerbotChatProviderOptions { Kind = provider.Kind, BaseUrl = provider.BaseUrl, Model = "m", ReasoningEffort = "low" }.Signature);
+
+        provider.ReasoningEffort = "Omit";
+        Assert.False(HttpBotChatClient.OpenAIBody(provider, Prompt).ContainsKey("reasoning_effort"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not a url")]
+    [InlineData("/relative")]
+    public void ClassifierReasoningEffort_NeverThrows_OnAMalformedBaseUrl(string baseUrl)
+    {
+        var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = baseUrl, Model = "m" };
+        Assert.Equal(string.Empty, provider.ClassifierReasoningEffort);
+        provider.BaseUrl = null!;
+        Assert.Equal(string.Empty, provider.ClassifierReasoningEffort);
+    }
+
     [Theory]
     [InlineData("", true)]
+    [InlineData("omit", true)]
+    [InlineData(" Omit ", true)]
+    [InlineData("minimal", true)]
+    [InlineData("xhigh", true)]
     [InlineData("none", true)]
     [InlineData("LOW", true)]
     [InlineData("medium", true)]

@@ -290,9 +290,11 @@ public sealed class PlayerbotChatProviderOptions
     public string TokenLimitParameter { get; set; } = "max_tokens";
 
     /// <summary>
-    /// OpenAICompatible only: the <c>reasoning_effort</c> body field, one of <c>none</c>, <c>low</c>, <c>medium</c>, <c>high</c> (any case), or empty
-    /// to send nothing (the default). A thinking model (e.g. qwen3.5 on Ollama) otherwise spends the whole <see cref="MaxTokens"/> reasoning and
-    /// returns no text; <c>none</c> turns that off.
+    /// OpenAICompatible only: the <c>reasoning_effort</c> body field, one of <c>none</c>, <c>minimal</c>, <c>low</c>, <c>medium</c>, <c>high</c>,
+    /// <c>xhigh</c> (any case, surrounding spaces ignored), or empty to send nothing on a hosted server (the default; the moderation classifier
+    /// still sends <c>none</c> to a server on this machine). A thinking model (e.g. qwen3.5 on Ollama) otherwise spends the whole
+    /// <see cref="MaxTokens"/> reasoning and returns no text; <c>none</c> turns that off. <c>omit</c> never sends the field, to either the reply
+    /// or the classifier call (for a server that rejects it).
     /// </summary>
     public string ReasoningEffort { get; set; } = string.Empty;
 
@@ -394,12 +396,22 @@ public sealed class PlayerbotChatProviderOptions
     /// hosted endpoint that rejects the field is never sent one it was not asked for.
     /// </summary>
     internal string ClassifierReasoningEffort
-        => !string.IsNullOrWhiteSpace(ReasoningEffort) ? ReasoningEffort
+        => NormalizedReasoningEffort == OmitReasoningEffort ? string.Empty
+            : NormalizedReasoningEffort.Length > 0 ? NormalizedReasoningEffort
             : Kind == PlayerbotChatProviderKind.OpenAICompatible && Uri.TryCreate(BaseUrl?.Trim(), UriKind.Absolute, out Uri? root) && IsLoopback(root) ? "none"
             : string.Empty;
 
     /// <summary>What identifies this provider's runtime state (hour window, cooldown) across a reload.</summary>
-    internal string Signature => $"{Kind}|{BaseUrl.Trim()}|{EffectiveModel}|{EffectiveKeyVariable}|{ReasoningEffort}";
+    internal string Signature => $"{Kind}|{BaseUrl.Trim()}|{EffectiveModel}|{EffectiveKeyVariable}|{NormalizedReasoningEffort}";
+
+    /// <summary>The <c>ReasoningEffort</c> option value meaning "never send the field".</summary>
+    internal const string OmitReasoningEffort = "omit";
+
+    /// <summary><see cref="ReasoningEffort"/> trimmed and lower-cased (empty when unset).</summary>
+    internal string NormalizedReasoningEffort => ReasoningEffort?.Trim().ToLowerInvariant() ?? string.Empty;
+
+    /// <summary>The value of the body's <c>reasoning_effort</c>, or null when the field is not sent (unset or <c>omit</c>).</summary>
+    internal string? ReasoningEffortToSend => NormalizedReasoningEffort is { Length: > 0 } effort && effort != OmitReasoningEffort ? effort : null;
 
     /// <summary>This entry's problem (null when valid).</summary>
     internal string? Problem()
@@ -425,8 +437,8 @@ public sealed class PlayerbotChatProviderOptions
             && (variable.Trim().Length > 128 || !variable.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c == '_')))
             return "ApiKeyEnvironmentVariable must be a variable name (letters, digits, underscores; at most 128)";
         if (TokenLimitParameter is not ("max_tokens" or "max_completion_tokens")) return "TokenLimitParameter must be max_tokens or max_completion_tokens";
-        if (ReasoningEffort is null || !(ReasoningEffort.Length == 0 || ReasoningEffort.ToLowerInvariant() is "none" or "low" or "medium" or "high"))
-            return "ReasoningEffort must be empty, none, low, medium or high";
+        if (ReasoningEffort is null || !(NormalizedReasoningEffort.Length == 0 || NormalizedReasoningEffort is "none" or "minimal" or "low" or "medium" or "high" or "xhigh" or OmitReasoningEffort))
+            return "ReasoningEffort must be empty, none, minimal, low, medium, high, xhigh or omit";
         if (InputUsdPerMillionTokens is { } input && (!double.IsFinite(input) || input is < 0 or > 1000)) return "InputUsdPerMillionTokens must be 0..1000";
         if (OutputUsdPerMillionTokens is { } output && (!double.IsFinite(output) || output is < 0 or > 1000)) return "OutputUsdPerMillionTokens must be 0..1000";
         if (ModerationProblem() is { } moderation) return moderation;
