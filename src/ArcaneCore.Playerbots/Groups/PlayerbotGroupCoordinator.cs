@@ -665,7 +665,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         if (_options.Groups.Enabled) Match();
-        if (_options.Groups.Enabled) Mentor();
+        if (_options.Groups.Enabled) MentorSafely();
         if (_options.Groups.Enabled) StartRuns();
     }
 
@@ -1861,7 +1861,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal uint SetAsideLeftMs(Guid botId, (PlayerbotGroupGoalKind, uint) key)
         => _setAside.TryGetValue((botId, key), out uint until) && unchecked((int)(until - Now)) > 0 ? unchecked(until - Now) : 0;
 
-    private void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain, bool failed = false)
+    internal void SetAside(Guid botId, PlayerbotGroupGoal goal, bool suspendInBrain, bool failed = false)
     {
         uint ms = SetAsideMs;
         if (failed)

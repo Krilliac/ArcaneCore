@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Groups;
@@ -105,5 +106,118 @@ public sealed class PlayerbotMentorWorldTests
         await world.OnWorldAsync(() => { world.Coordinator.NoteHelpCall(low.Id); return true; });
         await world.RunAsync(100_000);
         Assert.Equal(0, world.Coordinator.MentorGroupCount);
+    }
+
+    /// <summary>A mentor of the tests that likes the bot and is its friend.</summary>
+    private static Task BefriendAsync(GroupTestWorld world, (Guid Id, string Name) low, (Guid Id, string Name) mentorBot)
+        => world.OnWorldAsync(() =>
+        {
+            Player lowPlayer = world.Player(low.Id), mentor = world.Player(mentorBot.Id);
+            PlayerbotSocialMemory memory = world.Bots.Social.Memory;
+            memory.Load([new PlayerbotRelation(mentorBot.Id, (int)mentor.Guid.Low, lowPlayer.Guid.Value, true, 40, 6, 500, PlayerbotRelationFlags.None, memory.NowMs, "", "")]);
+            world.World.Services.GetRequiredService<SocialFeature>().Context.Friends.AddFriend(mentor, lowPlayer.Name);
+            return true;
+        });
+
+    private static void SoloOptions(PlayerbotOptions options)
+    {
+        Options(options);
+        options.Groups.Cooperation.MentorChance = 1f;
+    }
+
+    [Fact]
+    public async Task ABotSoloingAQuest_ThatIsNotWaiting_AndCallsForHelp_IsMentoredOnThatQuest()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([SoloQuest], Options);
+        var low = await world.AddBotAsync("Mentee", Human, Warrior, 1, []);
+        var mentors = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < 6; i++)
+            mentors.Add(await world.AddBotAsync("Mentor" + (char)('a' + i), Human, Mage, 12, [Fireball], South + new Vector3(i * 3f, 0, 0)));
+        List<Guid> passing = await MakeFriendsAsync(world, low, mentors, befriend: true);
+        Assert.NotEmpty(passing);
+
+        // The bot takes the solo quest and, as it sets out on it (its brain's current quest), calls for help the way its fight social does
+        // (the feature's SayCallForHelp, which tells the coordinator and names the quest).
+        bool called = false;
+        Assert.True(await world.RunUntilAsync(60_000, () =>
+        {
+            if (world.Bots.FindBrain(low.Id) is not { QuestId: SoloQuest } || !world.HasQuest(low.Id, SoloQuest)) return false;
+            world.Bots.FightOf(low.Id)!.CallForHelp!(world.Player(low.Id), world.Player(passing[0]));
+            return called = true;
+        }), await world.TraceAsync());
+        Assert.True(called);
+        Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == low.Id);
+        Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.MentorGroupCount == 1), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Source == PlayerbotGroupCoordinator.MentorSource);
+        Assert.Equal(passing[0], group.LeaderBotId);
+        Assert.NotNull(group.Find(low.Id));
+        Assert.Equal(SoloQuest, group.Goal.QuestId);
+        Assert.Equal(RatEntry, group.Goal.ObjectiveEntry);
+        Assert.Equal(2, group.Members.Count);
+    }
+
+    [Fact]
+    public async Task ABotWithNoQuest_ThatCallsForHelp_IsNeverMentored()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
+        var low = await world.AddBotAsync("Mentee", Human, Warrior, 1, []);
+        var mentors = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < 6; i++)
+            mentors.Add(await world.AddBotAsync("Mentor" + (char)('a' + i), Human, Mage, 12, [Fireball], South + new Vector3(i * 3f, 0, 0)));
+        List<Guid> passing = await MakeFriendsAsync(world, low, mentors, befriend: true);
+        Assert.NotEmpty(passing);
+        await world.OnWorldAsync(() => { world.Coordinator.NoteHelpCall(low.Id); return true; });
+        await world.RunAsync(100_000);
+        Assert.Equal(0, world.Coordinator.MentorGroupCount);
+    }
+
+    [Fact]
+    public async Task AMentorGroupOnASetAsideQuest_LiftsTheBrainsSuspensionOfThatQuest()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], SoloOptions);
+        var (low, mentors) = await SetupAsync(world, 12);
+        foreach ((Guid Id, string Name) mentor in mentors) await BefriendAsync(world, low, mentor); // the roll per mentor is a hash: some pass
+
+        // As a failed group leaves it: the goal set aside, the quest and its creature suspended in the brain.
+        bool suspended = await world.OnWorldAsync(() =>
+        {
+            PlayerbotGroupGoal goal = world.Coordinator.WaitingBots.Single(w => w.BotId == low.Id).Goal;
+            world.Coordinator.SetAside(low.Id, goal, suspendInBrain: true, failed: true);
+            PlayerbotSuspensions brain = world.Bots.FindBrain(low.Id)!.Suspensions;
+            uint now = world.World.Host.World.NowMs;
+            return brain.IsQuestSuspended(DuoQuest, now) && brain.IsEntrySuspended(OgreEntry, now);
+        });
+        Assert.True(suspended, "the set-aside suspends the quest in the brain");
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.MentorGroupCount == 1), await world.TraceAsync());
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotSuspensions brain = world.Bots.FindBrain(low.Id)!.Suspensions;
+            uint now = world.World.Host.World.NowMs;
+            Assert.False(brain.IsQuestSuspended(DuoQuest, now), "the mentor group works the quest: it is not suspended any more");
+            Assert.False(brain.IsEntrySuspended(OgreEntry, now));
+            return true;
+        });
+    }
+
+    private sealed class MentorProbeFault : Exception
+    {
+        public MentorProbeFault() : base("mentor probe fault") { }
+    }
+
+    [Fact]
+    public async Task AFaultInTheMentorScan_IsRecordedUnderPlayerbotGroups_AndTheScanGoesOn()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], Options);
+        int probes = 0;
+        world.Coordinator.MentorProbe = () =>
+        {
+            probes++;
+            throw new MentorProbeFault();
+        };
+        var bot = await world.AddBotAsync("Probee", Human, Warrior, 1, []);
+        Assert.True(await world.RunUntilAsync(120_000, () => probes >= 2), await world.TraceAsync());
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "playerbot.groups" && f.ExceptionType.Contains(nameof(MentorProbeFault), StringComparison.Ordinal));
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), "the rest of the scan ran: the bot waits for a group");
     }
 }

@@ -208,7 +208,9 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   `MentorAffinity` 30, no rival) whose quest was set aside, failed twice, or who called for help in a fight, may team up with it as a group
   of two with chance `MentorChance` (0.3) x its Helpfulness. The goal is the friend's quest objective (`source=mentor`); it ends with the
   objective like any quest group, or after `MentorMaxMinutes` (20). Strangers and bots within ten levels never mentor. The scan runs every
-  30 seconds.
+  30 seconds, inside a guard that records a fault under `playerbot.groups`. A bot that soloes a quest and is neither waiting nor set aside
+  but calls for help is mentored on the quest it was on when it called (its brain's current quest, else the first unfinished objective with
+  a spawn on its map); a bot on no quest is not mentored. The mentor group lifts the brain's set-aside of that quest and creature.
 * **Raid escalation** (`RaidEscalation`, needs `RaidsEnabled`). A risk signal ("too strong alone, feasible for N") may now ask for up to
   `MaxRaidSize` (40) instead of five; a group of more than five converts to a raid (`CMSG_GROUP_RAID_CONVERT`) and recruits as above.
   With too few bots around it times out like any group goal (`FormationTimeoutSeconds`) and is set aside.

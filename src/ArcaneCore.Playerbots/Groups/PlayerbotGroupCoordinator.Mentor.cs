@@ -7,7 +7,11 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.BotSocial;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,14 +35,18 @@ public sealed partial class PlayerbotGroupCoordinator
     internal const uint HelpCallLifeMs = 120_000;
 
     private readonly Dictionary<Guid, (PlayerbotGroupGoal Goal, uint AtMs)> _struggles = [];
-    private readonly Dictionary<Guid, uint> _helpCalls = [];
+    private readonly Dictionary<Guid, (uint AtMs, uint QuestId)> _helpCalls = [];
     private readonly Dictionary<Guid, uint> _mentored = [];
     private uint _mentorScanMs;
 
-    /// <summary>A bot called for help in a fight (the feature tells the coordinator; world thread). Counts as a struggle for <see cref="HelpCallLifeMs"/>.</summary>
-    internal void NoteHelpCall(Guid botId)
+    /// <summary>
+    /// A bot called for help in a fight (the feature tells the coordinator; world thread). Counts as a struggle for <see cref="HelpCallLifeMs"/>.
+    /// <paramref name="questId"/> is the quest the bot was on when it called (<c>Brain.QuestId</c>; 0: none): a bot that soloes a quest and is
+    /// in no struggle and no wait is mentored on that quest.
+    /// </summary>
+    internal void NoteHelpCall(Guid botId, uint questId = 0)
     {
-        if (_helpCalls.Count < MaxPledges) _helpCalls[botId] = Now;
+        if (_helpCalls.Count < MaxPledges || _helpCalls.ContainsKey(botId)) _helpCalls[botId] = (Now, questId);
     }
 
     /// <summary>The groups that are mentor groups (tests, status).</summary>
@@ -58,6 +66,23 @@ public sealed partial class PlayerbotGroupCoordinator
         if (goal.QuestId != 0 && goal.Source != MentorSource) _struggles[botId] = (goal, Now);
     }
 
+    /// <summary>Test seam: runs first in every mentor scan that is due (a throw is the fault the scan must survive).</summary>
+    internal Action? MentorProbe { get; set; }
+
+    /// <summary>The mentors' scan inside the coordinator scan's guard: a fault is recorded under <c>playerbot.groups</c> and the scan goes on.</summary>
+    private void MentorSafely()
+    {
+        try
+        {
+            Mentor();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.groups", ex);
+            logger.LogFault("playerbot.group-mentor", ex, "Playerbot mentoring scan failed");
+        }
+    }
+
     /// <summary>The mentors' scan: every <see cref="MentorScanMs"/>, each struggling bot gets at most one mentor.</summary>
     private void Mentor()
     {
@@ -65,10 +90,11 @@ public sealed partial class PlayerbotGroupCoordinator
         uint now = Now;
         if (!coop.Mentoring || Social is not { Enabled: true } || unchecked(now - _mentorScanMs) < MentorScanMs) return;
         _mentorScanMs = now;
+        MentorProbe?.Invoke();
         foreach (var (botId, struggle) in _struggles)
             if (unchecked(now - struggle.AtMs) >= SetAsideMs || !_bots.ContainsKey(botId)) _struggles.Remove(botId);
-        foreach (var (botId, at) in _helpCalls)
-            if (unchecked(now - at) >= HelpCallLifeMs) _helpCalls.Remove(botId);
+        foreach (var (botId, call) in _helpCalls)
+            if (unchecked(now - call.AtMs) >= HelpCallLifeMs) _helpCalls.Remove(botId);
         foreach (var (botId, until) in _mentored)
             if (unchecked((int)(until - now)) <= 0) _mentored.Remove(botId);
 
@@ -77,6 +103,43 @@ public sealed partial class PlayerbotGroupCoordinator
             if (!QuestGroupSlotFree()) return;
             if (TryMentorFor(lowId, now, coop)) _mentored[lowId] = unchecked(now + SetAsideMs);
         }
+    }
+
+    /// <summary>
+    /// The group goal of the first unfinished objective of <paramref name="questId"/> in <paramref name="low"/>'s log that has a creature (or an
+    /// item's dropper) spawning on the bot's map: the nearest spawn is the meeting point. Null for no quest (0), a quest not in the log or no longer
+    /// incomplete, or an objective with no spawn on this map: such a bot is not mentored.
+    /// </summary>
+    private PlayerbotGroupGoal? QuestObjectiveGoal(Player low, uint questId)
+    {
+        if (questId == 0 || services.GetService<QuestNpcFeature>()?.Services is not { } quests || services.GetService<CreatureWorldFeature>()?.Content is not { } creatures
+            || QuestState(low) is not { } state || state.Quests.Get(questId) is not { Status: QuestStatus.Incomplete } status || quests.Quests.Get(questId) is not { } quest)
+            return null;
+        for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
+        {
+            int raw = quest.ReqCreatureOrGOId[index];
+            if (raw > 0 && status.CreatureOrGOCount[index] < quest.ReqCreatureOrGOCount[index] && MentorGoalAt(low, quest, (uint)raw, 0, creatures) is { } goal) return goal;
+        }
+
+        for (int index = 0; index < quest.ReqItemId.Count; index++)
+        {
+            uint item = quest.ReqItemId[index];
+            if (item == 0 || quest.ReqItemCount[index] == 0 || low.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
+            IReadOnlyList<uint> droppers = DroppersOf(item);
+            for (int d = 0; d < droppers.Count; d++)
+                if (MentorGoalAt(low, quest, droppers[d], item, creatures) is { } goal) return goal;
+        }
+
+        return null;
+    }
+
+    private static PlayerbotGroupGoal? MentorGoalAt(Player low, Quest quest, uint entry, uint item, CreatureContent creatures)
+    {
+        IReadOnlyList<CreatureSpawn> spawns = creatures.GetSpawns(low.MapId, entry);
+        if (spawns.Count == 0) return null;
+        CreatureSpawn nearest = NearestSpawn(spawns, low.X, low.Y);
+        var at = new Vector3(nearest.X, nearest.Y, nearest.Z);
+        return new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, quest.Id, entry, low.MapId, low.MapId, at, 0, at, 2, quest.MinLevel, MentorSource, item);
     }
 
     private FriendsService? FriendsOrNull()
@@ -96,7 +159,9 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (_mentored.ContainsKey(lowId) || _memberOf.ContainsKey(lowId) || !_bots.TryGetValue(lowId, out PlayerbotGroupBot low) || !low.Free || low.Scripted) return false;
         if (low.Session.Player is not { IsInWorld: true, IsAlive: true } lowPlayer) return false; // a bot in a losing fight is the one that needs help
-        PlayerbotGroupGoal? goal = _struggles.TryGetValue(lowId, out var struggle) ? struggle.Goal : _waiting.TryGetValue(lowId, out Waiting? waiting) ? waiting.Goal : null;
+        // The goal: the struggle's, else the one the bot waits for, else (it soloes a quest and called for help) that quest's objective.
+        PlayerbotGroupGoal? goal = _struggles.TryGetValue(lowId, out var struggle) ? struggle.Goal : _waiting.TryGetValue(lowId, out Waiting? waiting) ? waiting.Goal
+            : QuestObjectiveGoal(lowPlayer, low.Brain.QuestId != 0 ? low.Brain.QuestId : _helpCalls.TryGetValue(lowId, out var call) ? call.QuestId : 0);
         if (goal is null || goal.QuestId == 0 || QuestState(lowPlayer) is not { } state || state.Quests.Get(goal.QuestId) is not { Status: QuestStatus.Incomplete }) return false;
         if (GroupManagerOrNull() is not { } groups || groups.GetGroup(lowPlayer.Guid) is not null || groups.GetInvite(lowPlayer.Guid) is not null) return false;
         PlayerbotSocialMemory memory = Social!.Memory;
@@ -142,6 +207,9 @@ public sealed partial class PlayerbotGroupCoordinator
         ]);
         Unhold(lowId, null);
         Form(goal with { Size = 2, Source = MentorSource }, plan);
+        // The quest was set aside in the brain (a failed group, a stall): the group works it now, and the turn-in after it is the brain's.
+        low.Brain.Suspensions.ReleaseQuest(goal.QuestId, now);
+        low.Brain.Suspensions.ReleaseEntry(goal.ObjectiveEntry, now);
         Note($"{best.Name} mentors {lowPlayer.Name} on quest {goal.QuestId} ({goal})");
         return true;
     }
