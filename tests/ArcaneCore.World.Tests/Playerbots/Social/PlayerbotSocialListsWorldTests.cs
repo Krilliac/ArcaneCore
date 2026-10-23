@@ -188,4 +188,25 @@ public sealed class PlayerbotSocialListsWorldTests
         await world.Host.OnWorldAsync(() => new PlayerbotGuildMembership(NullLogger.Instance).InviteByAffinity(SocialTestKit.BotPass(world.Host, 1_000)));
         Assert.Equal(0, world.Log.Count("Hleader", WorldOpcode.CmsgGuildInvite));
     }
+
+    [Fact]
+    public async Task ABotOfficer_InAGuildLedByARealPlayer_InvitesNobodyByAffinity()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.TargetSize = 10, frozen: true);
+        await using WorldTestClient leader = await world.AddPlayerAsync("Realleader");
+        foreach (string name in new[] { "Pofficer", "Pfriend" }) await world.AddBotAsync(name);
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint leaderId = world.Host.World.FindOnlinePlayer("Realleader")!.Guid.Low, officerId = world.Host.World.FindOnlinePlayer("Pofficer")!.Guid.Low;
+            Assert.Equal(GuildAdminResult.Ok, world.Guilds.Create(leaderId, "Player Run Guild", out Guild? guild));
+            Assert.Equal(GuildAdminResult.Ok, world.Guilds.AdminInvite(officerId, "Player Run Guild"));
+            Assert.Equal(GuildAdminResult.Ok, world.Guilds.AdminSetRank(officerId, Guild.OfficerRank));
+            Assert.True(guild!.HasRight(Guild.OfficerRank, GuildRights.Invite), "an officer may invite: only the leader's kind keeps it from doing so");
+        });
+        await RememberAsync(world, "Pofficer", "Pfriend", 90, 12); // liked and known well: a bot-led guild would invite it
+
+        await world.Host.OnWorldAsync(() => new PlayerbotGuildMembership(NullLogger.Instance).InviteByAffinity(SocialTestKit.BotPass(world.Host, 1_000)));
+        Assert.Equal(0, world.Log.Count("Pofficer", WorldOpcode.CmsgGuildInvite));
+        Assert.Null(await world.GuildOfAsync("Pfriend"));
+    }
 }

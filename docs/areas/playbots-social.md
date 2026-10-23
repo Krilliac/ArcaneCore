@@ -42,7 +42,8 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
   (`CMSG_GUILD_DECLINE`); one from a real player is accepted by `World:Playerbots:Social:Guilds:InvitePolicy` (`None`,
   `GuildOrFriends` (default), `Anyone`, `Affinity`; the same rules as `World:Playerbots:Party:InvitePolicy`) and always for the names in
   `World:Playerbots:Party:Allowlist`. The same policy decides whether a bot signs a real player's charter.
-* **Invitations by affinity** (`World:Playerbots:Social:Guilds:AffinityInvites`, on). A guild's master or an officer also invites a
+* **Invitations by affinity** (`World:Playerbots:Social:Guilds:AffinityInvites`, on). A bot-led guild's master or an officer (a guild whose
+  master is a real player is never recruited for by the bots) also invites a
   guildless same-team character, player or bot, that it knows and likes: affinity at least `GuildInviteAffinity` (60) and familiarity at
   least `GuildInviteMinFamiliarity` (8), never a rival or a game master, and at most one invitation per character per
   `GuildInviteCooldownDays` (7), within `TargetSize` as above. A guildless bot accepts an invitation, from a player or a bot, whose sender it

@@ -249,7 +249,7 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
     }
 
     /// <summary>
-    /// A guild's master or officer invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
+    /// A bot-led guild's master or officer (a guild whose leader is no registered bot is left alone, as in <see cref="Recruit"/>) invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
     /// one invitation per character per <see cref="PlayerbotSocialGuildOptions.GuildInviteCooldownDays"/> and one per guild per
     /// <see cref="PlayerbotSocialTimings.RecruitSpacingMs"/>, while the guild has room. The guild invite goes through CMSG_GUILD_INVITE, so the
     /// server's rights check applies; the invited bot answers it by <see cref="AcceptsByAffinity"/>.
@@ -269,6 +269,7 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         long cooldownMs = options.GuildInviteCooldownDays * 86_400_000L;
         foreach (Guild guild in guilds.All.ToArray())
         {
+            if (!pass.Registered.Contains(guild.LeaderId)) continue; // a guild led by a real player is theirs to recruit for (as in Recruit)
             if (_lastAffinityInvite.TryGetValue(guild.Id, out long last) && pass.NowMs - last < pass.Timings.RecruitSpacingMs) continue;
             if (InviteRoom(guild.MemberCount, PendingFor(guild.Id), options.TargetSize) <= 0) continue;
             if (InviterOf(pass, guild) is not { } inviter) continue;
