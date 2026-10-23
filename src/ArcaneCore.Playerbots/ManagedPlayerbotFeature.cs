@@ -661,6 +661,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private bool SayCallForHelp(ActiveBot active, Player bot, Player nearest)
     {
+        coordinator?.NoteHelpCall(active.Record.BotId);
         if (_chat is not { IsActive: true } chat) return false;
         Guid botId = active.Record.BotId;
         var speech = new BotChat.BotSpeech(BotChat.BotSpeechChannel.Yell, string.Empty, "call-for-help", BotChat.BotSpeechPriority.High);

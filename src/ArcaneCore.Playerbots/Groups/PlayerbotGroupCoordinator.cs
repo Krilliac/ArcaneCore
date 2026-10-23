@@ -665,6 +665,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         if (_options.Groups.Enabled) Match();
+        if (_options.Groups.Enabled) Mentor();
         if (_options.Groups.Enabled) StartRuns();
     }
 
@@ -1172,6 +1173,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         SyncRun(group);
+        if (MentorTimedOut(group, now))
+        {
+            Finish(group, success: false, "mentor-timeout", setAside: false);
+            return;
+        }
+
         if (group.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding or PlayerbotGroupState.Leaving)
             && unchecked(now - group.FormedMs) > GoalTimeoutOf(group))
         {
@@ -1866,6 +1873,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         _setAside[(botId, goal.Key)] = unchecked(Now + ms);
+        NoteStruggle(botId, goal);
         if (!suspendInBrain || _world is null || !_bots.TryGetValue(botId, out PlayerbotGroupBot bot)) return;
         if (goal.QuestId != 0) bot.Brain.Suspensions.SuspendQuest(goal.QuestId, Now);
         bot.Brain.Suspensions.SuspendEntry(goal.ObjectiveEntry, Now);
