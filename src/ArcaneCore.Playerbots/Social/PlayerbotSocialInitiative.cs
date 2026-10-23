@@ -552,6 +552,7 @@ internal sealed class PlayerbotInitiativeLane
     {
         if (other.Level < FirstMountLevel || other.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0) return;
         if (_unmounted.Add((bot, other.Guid.Value))) _unmountedOrder.Enqueue((bot, other.Guid.Value));
+        // a sighting removed here leaves its queue entry; the queue is capped at 2 x Bound and a stale entry evicts nothing
         while ((_unmounted.Count > Bound || _unmountedOrder.Count > 2 * Bound) && _unmountedOrder.TryDequeue(out (Guid, ulong) oldest)) _unmounted.Remove(oldest); // the oldest sightings go first
     }
 

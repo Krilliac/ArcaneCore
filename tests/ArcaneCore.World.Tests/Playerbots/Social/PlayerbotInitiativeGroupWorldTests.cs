@@ -88,7 +88,6 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         // The packet crosses a socket in real time while the world's clock is manual: give the server real time to read it.
         for (int i = 0; i < 100 && lane.Accepted == 0; i++)
         {
-            await Task.Delay(50);
             await world.RunAsync(200);
             await world.OnWorldAsync(() =>
             {
@@ -110,7 +109,6 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         string trace = string.Empty;
         for (int i = 0; i < 200 && !trace.Contains("Teamyes damage", StringComparison.Ordinal); i++)
         {
-            await Task.Delay(25);
             await world.RunAsync(100);
             trace = await world.TraceAsync();
         }
@@ -223,7 +221,6 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         PlayerbotBrain askerBrain = PartyTestHost.Feature(world.World.Host).FindBrain(tank.Id)!;
         for (int i = 0; i < 200 && await world.OnWorldAsync(() => askerBrain.Risk.GroupSignal) is null; i++)
         {
-            await Task.Delay(10);
             await world.RunAsync(50);
         }
 
@@ -233,7 +230,6 @@ public sealed class PlayerbotInitiativeGroupWorldTests
         Assert.Equal(PlayerbotGroupSignal.ContentionSource, signal!.Value.Source);
         for (int i = 0; i < 100 && lane.BotOffers == 0; i++)
         {
-            await Task.Delay(10);
             await world.RunAsync(50);
             await world.OnWorldAsync(() =>
             {

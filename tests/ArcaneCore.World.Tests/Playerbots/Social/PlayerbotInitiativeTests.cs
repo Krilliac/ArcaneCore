@@ -414,13 +414,13 @@ public sealed class PlayerbotInitiativeTests
         long now = GreetingTime(pair);
         await PassAsync(world, now);
         Assert.Equal(1, Lane(world).Openings);
-        await Task.Delay(1500); // long enough for the queued line to reach the speech path and be refused there
+        await Task.Delay(1500); // nothing to observe: a refused line leaves no trace; this is only long enough for the queued line to reach the speech path and be refused there
         // Nothing was said, so the player's cooldown is only the short hold that keeps a second bot from piling on, not the 30 minutes of a real opening.
         Assert.True(Lane(world).NextOpeningFor(pair.PlayerGuid) <= now + PlayerbotInitiativeLane.BotGapMs, "the cooldown of an unsaid opening");
 
         // The player says something: it is not the answer to a line nobody heard.
         await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
-        await Task.Delay(500);
+        await Task.Delay(500); // nothing to observe: a say nobody waits for is not queued (so no counter moves); the delay only gives the server time to read it
         await PassAsync(world, now + 1_000);
         Assert.False(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid));
         Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
@@ -442,8 +442,9 @@ public sealed class PlayerbotInitiativeTests
         long now = 10_000;
         await world.Host.OnWorldAsync(() => Lane(world).Expect(HelpTestKit.RecorderOf(world), pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now));
 
+        int heard = HelpTestKit.RecorderOf(world).RepliesHeard;
         await player.SendChatAsync(ChatType.Say, Language.Common, "hey Initfriendb no thanks");
-        await Task.Delay(500);
+        await HelpTestKit.UntilAsync(() => HelpTestKit.RecorderOf(world).RepliesHeard > heard, "the say to be heard");
         await PassAsync(world, now + 1_000);
         Assert.True(Lane(world).PendingFor(pair.Bot, pair.PlayerGuid)); // still waiting
         Assert.Equal(0, Lane(world).BackoffOf(pair.PlayerGuid));
@@ -468,8 +469,9 @@ public sealed class PlayerbotInitiativeTests
             Lane(world).Expect(recorder, pair.Bot, pair.BotGuid, pair.PlayerGuid, PlayerbotOpeningKind.Greeting, 0, 0, now);
         });
 
+        int heard = HelpTestKit.RecorderOf(world).RepliesHeard;
         await player.SendChatAsync(ChatType.Say, Language.Common, "no thanks");
-        await Task.Delay(500);
+        await HelpTestKit.UntilAsync(() => HelpTestKit.RecorderOf(world).RepliesHeard > heard, "the reply to be heard");
         // The lane drains 32 lines a pass: a few passes later it has reached the reply, which was kept although the queue was full.
         for (int i = 0; i < 20 && Lane(world).PendingFor(pair.Bot, pair.PlayerGuid); i++) await PassAsync(world, now + 1_000 + i * 100);
 
