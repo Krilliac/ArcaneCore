@@ -118,6 +118,99 @@ public sealed class PlayerbotSocialWarPersistenceTests
         Assert.Equal(noted.Familiarity, cleared.Familiarity);
     }
 
+    /// <summary>A relation store that holds the writes of chosen bots until released, and can be made to refuse the writes of one bot.</summary>
+    private sealed class GatedRelationStore(PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore inner) : IPlayerbotRelationStore
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Guid _holdBot;
+        public Guid FailBot { get; set; }
+        public Task Held => _held.Task;
+
+        public void Hold(Guid bot) => _holdBot = bot;
+
+        public void Release() => _release.TrySetResult();
+
+        public Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default) => inner.LoadAllAsync(cancellationToken);
+
+        public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
+        {
+            if (botId == FailBot) throw new InvalidOperationException("relation-storage-refused");
+            if (botId == _holdBot)
+            {
+                _held.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            await inner.ReplaceAsync(botId, rows, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task ABotStoppedRightAfterWarModeWentOffWithClearOnDisable_IsNotDelayedByAnotherBotsWrite()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var inner = new PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        var store = new GatedRelationStore(inner);
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: options => options.Social.WarMode.Enabled = true,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid running = Assert.IsType<Guid>((await feature.CreateAsync("Warstopper", 1, 1)).BotId);
+        Guid idle = Assert.IsType<Guid>((await feature.CreateAsync("Warsleeper", 1, 1)).BotId);
+        Assert.True((await feature.StartAsync(running.ToString())).Success);
+        NoteBoth(feature, running, (await owners.FindAsync(running))!.CharacterId);
+        NoteBoth(feature, idle, (await owners.FindAsync(idle))!.CharacterId);
+
+        // The idle bot's write is held inside the store: whatever waits for it waits for good, until the test lets it go.
+        store.Hold(idle);
+        PlayerbotWarModeOptions war = PartyTestHost.PlayerbotOptionsOf(host).Social.WarMode;
+        war.ClearOnDisable = true;
+        war.Enabled = false;
+
+        var stopped = await feature.StopAsync(running.ToString()).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(stopped.Success, stopped.Code);
+        await store.Held.WaitAsync(TimeSpan.FromSeconds(30)); // the wipe task is writing the idle bot meanwhile: the stop did not wait for it
+        Assert.NotEqual(0, feature.WarWipePendingCount);
+        store.Release();
+        await PlayerbotSocialTriggerWorldTests.UntilAsync(() => feature.WarWipePendingCount == 0, "the wipe task to finish its writes", seconds: 30);
+        Assert.Equal((short)0, Assert.Single(await inner.LoadAllAsync(), r => r.BotId == idle).WarAffinity);
+    }
+
+    [Fact]
+    public async Task AFailedWipeWrite_LeavesTheBotPending_AndTheNextKickWritesIt()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var inner = new PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        var store = new GatedRelationStore(inner);
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: options => options.Social.WarMode.Enabled = true,
+            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        var feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid idle = Assert.IsType<Guid>((await feature.CreateAsync("Warfailer", 1, 1)).BotId);
+        NoteBoth(feature, idle, (await owners.FindAsync(idle))!.CharacterId);
+        await inner.ReplaceAsync(idle, feature.Social.Memory.Snapshot(idle));
+
+        store.FailBot = idle;
+        PlayerbotWarModeOptions war = PartyTestHost.PlayerbotOptionsOf(host).Social.WarMode;
+        war.ClearOnDisable = true;
+        war.Enabled = false;
+        // No bot runs: the checkpoint's own kick starts the wipe. Its write is refused, so the bot stays pending and the row keeps the war layer.
+        await PlayerbotSocialTriggerWorldTests.UntilAsync(() => feature.WarWipePendingCount == 1, "the wipe to mark the idle bot", seconds: 30);
+        await feature.WarWipeIdle;
+        Assert.Equal(1, feature.WarWipePendingCount);
+        Assert.NotEqual((short)0, Assert.Single(await inner.LoadAllAsync(), r => r.BotId == idle).WarAffinity);
+
+        // The store takes writes again: the next kick (the next checkpoint) writes the bot, and only then is it done.
+        store.FailBot = Guid.Empty;
+        await PlayerbotSocialTriggerWorldTests.UntilAsync(() => feature.WarWipePendingCount == 0, "the next kick to write the pending bot", seconds: 60);
+        Assert.Equal((short)0, Assert.Single(await inner.LoadAllAsync(), r => r.BotId == idle).WarAffinity);
+    }
+
     [Fact]
     public async Task ClearOnDisable_AlsoWipesAndWritesTheBotsThatAreNotRunning_OnceEach()
     {

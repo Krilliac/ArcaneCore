@@ -189,7 +189,7 @@ public sealed class FleetResetTests
             memory.Note(survivor, 9001, guids[j], true, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
         foreach (Guid id in ids.Append(survivor)) await store.ReplaceAsync(id, memory.Snapshot(id));
 
-        // The reset is cancelled while the third bot is being deleted (a store that observes the token, as the real ones do): the first two bots are fully deleted.
+        // The reset is cancelled while the third bot is being deleted (a store that observes the token, as the real ones do): the first two bots are fully deleted, the third lost its character before the cancellation.
         using var cancel = new CancellationTokenSource();
         var order = new List<Guid>();
         world.Members.OnDelete = id =>
@@ -202,12 +202,12 @@ public sealed class FleetResetTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => world.Bots.ResetFleetAsync(new FleetResetPromise(4, 4), _ => { }, cancel.Token));
 
         Assert.Equal(3, order.Count);
-        HashSet<ulong> deletedGuids = [.. order.Take(2).Select(id => guids[Array.IndexOf(ids, id)])];
+        HashSet<ulong> deletedGuids = [.. order.Select(id => guids[Array.IndexOf(ids, id)])];
         HashSet<ulong> keptGuids = [.. guids.Where(g => !deletedGuids.Contains(g))];
         IReadOnlyList<PlayerbotRelation> stored = await store.LoadAllAsync();
-        Assert.Equal(keptGuids.OrderBy(g => g), memory.Snapshot(survivor).Select(r => r.OtherGuid).OrderBy(g => g)); // exactly the two deleted bots were forgotten
+        Assert.Equal(keptGuids.OrderBy(g => g), memory.Snapshot(survivor).Select(r => r.OtherGuid).OrderBy(g => g)); // the three bots whose character was deleted were forgotten, the third included
         Assert.Equal(keptGuids.OrderBy(g => g), stored.Where(r => r.BotId == survivor).Select(r => r.OtherGuid).OrderBy(g => g));
-        foreach (Guid id in order.Take(2))
+        foreach (Guid id in order)
         {
             Assert.Empty(memory.Snapshot(id));
             Assert.DoesNotContain(stored, r => r.BotId == id);

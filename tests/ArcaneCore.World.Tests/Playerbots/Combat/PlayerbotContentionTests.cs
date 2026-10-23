@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -302,6 +303,97 @@ public sealed class PlayerbotContentionTests
             Assert.True(recorder.Memory.TryGet(botId, stranger.Player!.Guid.Value, out PlayerbotRelation blamed), "the hunter tagged the new life after the bot engaged it");
             Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerKillSteal, blamed.Affinity);
         });
+
+    [Fact]
+    public async Task AStrangersPetThatTakesTheTag_IsAKillSteal_TowardItsOwner_Once()
+        => await KillStealScenarioAsync(995070, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            Creature pet = AddCreature(host, bot.Player!, 995071, 6f);
+            pet.SetOwnerGuid(stranger.Player!.Guid);
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out _));
+            // The stranger's pet holds the tap (the pet's own guid, as the tap of an active pet is): the player behind it is the stranger.
+            mob.LootTapPlayerGuid = pet.Guid;
+            Assert.True(bot.Player!.Combat.ThreatenedBy.Contains(mob));
+            Think(bot, brain);
+            Think(bot, brain);
+            Assert.True(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out PlayerbotRelation blamed), "the owner of the pet that tagged was not blamed");
+            Assert.Equal((short)new PlayerbotSocialMemoryOptions().AffinityPerKillSteal, blamed.Affinity);
+        });
+
+    [Fact]
+    public async Task AGroupmatesPetTap_ThatTheOwnerTakesOver_AndThatStaysAfterTheGroupChanges_IsNoKillSteal()
+        => await KillStealScenarioAsync(995072, (host, bot, stranger, mob, brain, recorder, botId) =>
+        {
+            GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+            groups.Invite(stranger.Player!, bot.Player!.Name);
+            groups.Accept(bot.Player!);
+            Creature pet = AddCreature(host, bot.Player!, 995073, 6f);
+            pet.SetOwnerGuid(stranger.Player!.Guid);
+            mob.Combat.Threat.AddThreat(bot.Player!, 1f);
+            mob.LootTapPlayerGuid = pet.Guid; // the groupmate's pet tags first
+            Think(bot, brain);
+            Assert.Same(mob, brain.InspectionTarget);
+
+            // The group changes under the unchanged pet tap: the owner is a stranger now, but it is the tapper the engagement stored.
+            groups.Leave(stranger.Player);
+            Assert.False(groups.AreInSameGroup(bot.Player!.Guid, stranger.Player.Guid));
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out _), "the owner of a pet tap held since before the group changed was blamed");
+
+            // The owner takes the pet's tap over with a hit of its own: the tap is the owner's own guid now, the same player.
+            mob.LootTapPlayerGuid = stranger.Player.Guid;
+            Think(bot, brain);
+            Assert.False(recorder.Memory.TryGet(botId, stranger.Player.Guid.Value, out _), "the owner taking over its pet's tap was blamed");
+        });
+
+    [Fact]
+    public async Task ATapThatPassesBetweenTwoStrangers_WithNoEngagement_IsNoKillSteal()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession bot = await CombatTestSessions.EnterAsync(host, "CONTBOT", "Contbot");
+        WorldSession first = await CombatTestSessions.EnterAsync(host, "CONTSTR", "Contstr");
+        WorldSession second = await CombatTestSessions.EnterAsync(host, "CONTSTT", "Contstt");
+        var brain = new PlayerbotBrain(bot, Options());
+        var recorder = new PlayerbotSocialRecorder(new PlayerbotSocialMemory(new PlayerbotSocialMemoryOptions(), () => 1_760_000_000_000), NullLogger.Instance);
+        brain.Social = recorder;
+        Guid botId = Guid.NewGuid();
+        try
+        {
+            Creature mob = null!;
+            await host.OnWorldAsync(() => mob = AddCreature(host, bot.Player!, 995074, 4f));
+            await host.WaitForWorldAsync(() => bot.Player!.VisibleObjects.Contains(mob.Guid), "mob");
+            await host.OnWorldAsync(() =>
+            {
+                recorder.Track(botId, (int)bot.Player!.Guid.Low);
+                bot.ManagedBudget = new ManagedActionBudget(1);
+                NoSpells(bot);
+                brain.Update(500);
+                Assert.Same(mob, brain.InspectionTarget);
+                // The first stranger tags the mob and the mob turns on the bot as well: the bot never had it first, so there is no engagement.
+                bot.Player.Map!.Combat.DealDamage(first.Player!, mob, 1);
+                mob.Combat.Threat.AddThreat(bot.Player, 1f);
+                Think(bot, brain);
+                // The tap passes to the second stranger.
+                mob.ClearLootRecipient();
+                bot.Player.Map!.Combat.DealDamage(second.Player!, mob, 1);
+                Assert.Equal(second.Player!.Guid, mob.LootTapper);
+                Think(bot, brain);
+                Think(bot, brain);
+                Assert.False(recorder.Memory.TryGet(botId, first.Player!.Guid.Value, out _));
+                Assert.False(recorder.Memory.TryGet(botId, second.Player.Guid.Value, out _), "a tap between two strangers was blamed");
+                return true;
+            });
+        }
+        finally
+        {
+            brain.Stop();
+            second.Kick(); await second.ManagedClosed;
+            first.Kick(); await first.ManagedClosed;
+            bot.Kick(); await bot.ManagedClosed;
+        }
+    }
 
     [Theory]
     [InlineData(false)]

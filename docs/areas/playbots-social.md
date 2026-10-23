@@ -152,7 +152,9 @@ brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.Player
   `KillSteal` (`AffinityPerKillSteal`, -6): the bot was engaged with a mob nobody outside its group had tagged (the bot on the mob's threat
   list, the mob untagged or tagged by the bot or a groupmate), and then a player outside the group took the tag while the bot was still on that
   threat list: the other side started second. Once per engagement. A tag taken while the bot was still walking up, on a mob that evaded or
-  respawned, or by a groupmate is never a steal. `AbandonedRun` (`AffinityPerAbandonedRun`, -10):
+  respawned, or by a groupmate is never a steal, and neither is a tag that stays with a former groupmate after the group changed under it (the
+  tapper is remembered). Tags and groups are sampled once per think, so a groupmate who tags and leaves the group within one think can still be
+  blamed. `AbandonedRun` (`AffinityPerAbandonedRun`, -10):
   a member left the server group while a coordinator run was in progress; not after the run finished, not when the leader kicked the member
   and not when the leader's group was disbanded. Each other bot member of the group records it.
 - *Reliability.* Every bot member of a coordinator group that finished successfully gains `TrustPerGroupSuccess` (+30 permille) toward every
@@ -173,7 +175,7 @@ brain's assist and heal-the-tagger paths for help; `PlayerbotKillObserver.Player
   normal layer effective at once; the war layer takes no events while it is off but is not frozen: its drift still follows the clock, so
   positive war affinity halves on its half-life while dormant and, with `NeverForget` off, so does negative war affinity (with it on, a
   war grudge keeps its value). It comes back as it has drifted when War Mode is switched on again, war-only rows included, unless
-  `ClearOnDisable` is set, in which case the first checkpoint after the switch wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
+  `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
   never force-flags anyone for PvP and a player's opt-out still applies (the rivalry that acts on this memory is a later phase).
 
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a

@@ -1747,6 +1747,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Volatile.Write(ref _stopping, true);
         coordinator?.BeginShutdown();
         await _checkpoint.ConfigureAwait(false);
+        try { await _warWipeTask.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); } // the war layer wipe (no new one starts once stopping)
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException) { logger.LogWarning("The playerbot war layer wipe did not finish before shutdown ({Type}); the next start finds the rows as they were", ex.GetType().Name); }
         await _operations.WaitAsync().ConfigureAwait(false);
         List<Exception> failures = [];
         try
@@ -2794,6 +2796,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task CheckpointAsync()
     {
         if (SplitBrainLatched) return; // another world process owns the rows: this one issues no playerbot writes
+        KickWarLayerWipe(); // with no bot running there is no bot save to kick it
         if (!await _operations.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
@@ -3186,32 +3189,88 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
     private int _warLayerLive = 1;
+    private int _warWipeRequested;
+    private int _warWipeRunning;
+    private Task _warWipeTask = Task.CompletedTask;
 
-    // War Mode on marks the war layer live; once it is off and ClearOnDisable is set, the next checkpoint wipes the layer (once).
-    // The wipe is memory-wide, so it also reaches the bots that are not running: every bot it changed is written once, here, through its gate (a running
-    // bot's saved version moves with it, so its own checkpoint does not write it again).
-    private async Task ClearWarLayerIfSwitchedOffAsync(BotSocial.PlayerbotSocialMemory memory)
+    // The bots whose war layer was wiped in memory and whose rows are not yet written: a bot leaves the set only after its write succeeded, so a failed write is
+    // tried again at the next kick.
+    private readonly ConcurrentDictionary<Guid, byte> _warWipePending = new();
+
+    // Deleted bots whose rows are gone from the store and whose gate was retired: nothing is written for them again (a write would only make a gate to put [] in).
+    private readonly ConcurrentDictionary<Guid, byte> _retiredBots = new();
+
+    // War Mode on marks the war layer live; once it is off and ClearOnDisable is set, the layer is wiped (once) by a background task of its own, started here
+    // and guarded so that only one runs at a time. A bot's save (a checkpoint, a stop, a pause) only kicks it and never waits for it or for another bot's write.
+    // The wipe is memory-wide, so it also reaches the bots that are not running; the checkpoint kicks it on every tick, so it does not depend on a running bot.
+    private void KickWarLayerWipe()
     {
         BotSocial.PlayerbotWarModeOptions war = _options.Social.WarMode;
-        if (war.Enabled) Volatile.Write(ref _warLayerLive, 1);
-        else if (war.ClearOnDisable && Interlocked.Exchange(ref _warLayerLive, 0) == 1)
+        if (war.Enabled) { Volatile.Write(ref _warLayerLive, 1); return; }
+        if (!war.ClearOnDisable || _stopping) return;
+        if (Interlocked.Exchange(ref _warLayerLive, 0) == 1) Volatile.Write(ref _warWipeRequested, 1);
+        if (Volatile.Read(ref _warWipeRequested) == 0 && _warWipePending.IsEmpty) return;
+        if (Interlocked.CompareExchange(ref _warWipeRunning, 1, 0) != 0) return;
+        _warWipeTask = Task.Run(RunWarLayerWipeAsync);
+    }
+
+    private async Task RunWarLayerWipeAsync()
+    {
+        try
         {
-            List<Guid> changed = [];
-            memory.ClearWarLayers(changed);
-            if (changed.Count == 0) return;
-            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store) return;
-            foreach (Guid botId in changed)
+            BotSocial.PlayerbotSocialMemory memory = Social.Memory;
+            do
             {
-                try { await WriteBotRelationsAsync(store, memory, botId).ConfigureAwait(false); }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
+                if (Interlocked.Exchange(ref _warWipeRequested, 0) == 1)
                 {
-                    FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
-                    logger.LogWarning(ex, "Playerbot {BotId} social memory could not be written after the war layer was cleared ({Type})", botId, ex.GetType().Name);
+                    List<Guid> changed = [];
+                    memory.ClearWarLayers(changed);
+                    foreach (Guid botId in changed) _warWipePending[botId] = 0;
+                }
+
+                if (_warWipePending.IsEmpty) continue;
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store)
+                {
+                    _warWipePending.Clear();
+                    continue;
+                }
+
+                foreach (Guid botId in _warWipePending.Keys)
+                {
+                    if (_retiredBots.ContainsKey(botId)) { _warWipePending.TryRemove(botId, out _); continue; }
+                    try
+                    {
+                        await WriteBotRelationsAsync(store, memory, botId).ConfigureAwait(false);
+                        _warWipePending.TryRemove(botId, out _); // only a written bot is done; a failed one stays for the next kick
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+                        logger.LogWarning(ex, "Playerbot {BotId} social memory could not be written after the war layer was cleared ({Type}); it is tried again", botId, ex.GetType().Name);
+                    }
                 }
             }
+            while (Volatile.Read(ref _warWipeRequested) != 0);
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+            logger.LogWarning(ex, "Playerbot war layer wipe failed ({Type})", ex.GetType().Name);
+        }
+        finally
+        {
+            Volatile.Write(ref _warWipeRunning, 0);
+        }
+
+        if (Volatile.Read(ref _warWipeRequested) != 0) KickWarLayerWipe(); // a switch-off that arrived as the task ended
     }
+
+    /// <summary>The bots whose cleared war layer still waits for a successful write (tests).</summary>
+    internal int WarWipePendingCount => _warWipePending.Count;
+
+    /// <summary>Completes when the war layer wipe task that is running now (if any) has ended (tests).</summary>
+    internal Task WarWipeIdle => _warWipeTask;
 
     // One bot's rows written through its gate; a running bot's saved version is recorded with the write (taken before the snapshot, so it never runs ahead of the rows).
     private Task WriteBotRelationsAsync(IPlayerbotRelationStore store, BotSocial.PlayerbotSocialMemory memory, Guid botId)
@@ -3246,16 +3305,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             SemaphoreSlim gate = _relationGates.GetOrAdd(botId, static _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync().ConfigureAwait(false);
+            bool attempted = false;
             try
             {
                 if (!_relationGates.TryGetValue(botId, out SemaphoreSlim? current) || !ReferenceEquals(current, gate)) continue; // retired while this write waited
+                attempted = true;
                 IReadOnlyList<PlayerbotRelation> snapshot = rows();
                 await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, snapshot), CancellationToken.None).ConfigureAwait(false);
                 written?.Invoke();
-                if (retire) _relationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(botId, gate));
                 return;
             }
-            finally { gate.Release(); }
+            finally
+            {
+                // Retired whether or not the write succeeded: the bot is deleted either way, and a failed write must not leave its gate in the map.
+                if (retire && attempted) _relationGates.TryRemove(new KeyValuePair<Guid, SemaphoreSlim>(botId, gate));
+                gate.Release();
+            }
         }
     }
 
@@ -3283,7 +3348,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
             if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
             foreach ((Guid botId, _) in removed)
+            {
+                if (_retiredBots.ContainsKey(botId)) continue; // already deleted from the store and its gate retired: nothing to write, no gate to make
                 await WriteRelationsAsync(store, botId, static () => [], retire: true).ConfigureAwait(false);
+                _retiredBots[botId] = 0; // only after the write went through: a failed delete is tried again by the next forget
+            }
+
             foreach (Guid other in survivors)
                 await WriteBotRelationsAsync(store, memory, other).ConfigureAwait(false); // and its saved version moves, so the next checkpoint does not write it again
         }
@@ -3305,7 +3375,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
-            await ClearWarLayerIfSwitchedOffAsync(memory).ConfigureAwait(false);
+            KickWarLayerWipe();
             if (Volatile.Read(ref active.SavedRelationVersion) == memory.Version(botId)) return;
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is { } store)

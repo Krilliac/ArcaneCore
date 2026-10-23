@@ -2517,6 +2517,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>
     /// The kill-steal rule (spec 12.3: only when the other side started second). Tracks the mob the bot is engaged with (on its threat list while nobody
     /// outside the bot's group holds its tap) in <see cref="_engagedMob"/>, and records the steal when an outsider takes the tag while the bot is still on the list.
+    /// Tag and group are sampled once per think: a groupmate who tags and leaves the group (or is kicked) within one think is seen first as a stranger holding the tag,
+    /// which differs from the stored tapper (none yet), and so can be blamed for a steal.
     /// </summary>
     private void NoteEngagement(Player player, Creature held, bool onThreatList, GroupManager? groups)
     {
