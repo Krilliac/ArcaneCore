@@ -130,13 +130,25 @@ public sealed class FriendsService(SocialContext context)
         // before the load were absolute flags of the empty list, so every touched target is written again with the merged flags.
         if (_socials.TryGetValue(player.Guid, out PlayerSocial? early) && early.Pending is { } pending)
         {
-            foreach (uint other in pending.Keys.Order())
+            SocialFlags[] kinds = [SocialFlags.Friend, SocialFlags.Ignored];
+            uint[] targets = [.. pending.Keys.Order()];
+
+            // Clears first, so a removal that frees a slot runs before the addition that needs it.
+            foreach (uint other in targets)
             {
-                (SocialFlags set, SocialFlags cleared) = pending[other];
-                foreach (SocialFlags flag in new[] { SocialFlags.Friend, SocialFlags.Ignored })
+                foreach (SocialFlags flag in kinds)
                 {
-                    if ((cleared & flag) != 0) social.Set(other, flag, false);
+                    if ((pending[other].Cleared & flag) != 0) social.Set(other, flag, false);
+                }
+            }
+
+            foreach (uint other in targets)
+            {
+                SocialFlags set = pending[other].Set;
+                foreach (SocialFlags flag in kinds)
+                {
                     if ((set & flag) == 0 || social.Has(other, flag)) continue;
+                    if (context.Characters.Find(other) is null) continue; // a deleted character takes no slot
                     int limit = flag == SocialFlags.Friend ? PlayerSocial.FriendLimit : PlayerSocial.IgnoreLimit;
                     if (social.Count(flag) >= limit)
                     {
@@ -147,7 +159,10 @@ public sealed class FriendsService(SocialContext context)
 
                     social.Set(other, flag, true);
                 }
+            }
 
+            foreach (uint other in targets)
+            {
                 Persist(player, other, social.Entries.GetValueOrDefault(other));
             }
         }

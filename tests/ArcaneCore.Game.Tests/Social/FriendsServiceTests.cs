@@ -280,7 +280,11 @@ public sealed class FriendsServiceTests
         Player a = f.AddPlayer(1);
         f.Context.Friends.Unload(a);
         PlayerSocial early = f.Context.Friends.Get(a);
-        for (uint other = 100; other < 100 + PlayerSocial.IgnoreLimit + 1; other++) early.Set(other, SocialFlags.Ignored, true);
+        for (uint other = 100; other < 100 + PlayerSocial.IgnoreLimit + 1; other++)
+        {
+            f.AddOffline(other);
+            early.Set(other, SocialFlags.Ignored, true);
+        }
         f.Persistence.Social.Clear();
 
         f.Context.Friends.Load(a, []);
@@ -290,6 +294,44 @@ public sealed class FriendsServiceTests
         Assert.False(loaded.Has(100 + PlayerSocial.IgnoreLimit, SocialFlags.Ignored)); // the 26th, in order, is the one dropped
         Assert.Equal(SocialFlags.None, StoredFlags(f, 1, 100 + (int)PlayerSocial.IgnoreLimit));
         Assert.Equal(SocialFlags.Ignored, StoredFlags(f, 1, 100));
+    }
+
+    [Fact]
+    public void APendingRemoval_ThatFreesASlot_IsAppliedBeforeAPendingAdditionThatNeedsIt()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.Context.Friends.Unload(a);
+        PlayerSocial early = f.Context.Friends.Get(a);
+        early.Set(200, SocialFlags.Friend, false); // Y: removed before the load, stored among the 50
+        early.Set(100, SocialFlags.Friend, true);  // X (lower id): added before the load
+        for (uint i = 200; i < 250; i++) f.AddOffline(i);
+        f.AddOffline(100);
+        f.Persistence.Social.Clear();
+
+        f.Context.Friends.Load(a, [.. Enumerable.Range(200, 50).Select(i => new SocialEntry(i, SocialFlags.Friend))]);
+
+        PlayerSocial loaded = f.Context.Friends.Get(a);
+        Assert.True(loaded.Has(100, SocialFlags.Friend));
+        Assert.False(loaded.Has(200, SocialFlags.Friend));
+        Assert.Equal(PlayerSocial.FriendLimit, loaded.Count(SocialFlags.Friend));
+        Assert.Contains(f.Persistence.Social, w => w.CharacterId == 1 && w.OtherId == 100 && w.Flags == SocialFlags.Friend);
+        Assert.Contains(f.Persistence.Social, w => w.CharacterId == 1 && w.OtherId == 200 && w.Flags == SocialFlags.None);
+    }
+
+    [Fact]
+    public void APendingAddition_OfADeletedCharacter_TakesNoSlotAndIsNotPersisted()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.Context.Friends.Unload(a);
+        f.Context.Friends.Get(a).Set(777, SocialFlags.Friend, true); // no character 777
+        f.Persistence.Social.Clear();
+
+        f.Context.Friends.Load(a, []);
+
+        Assert.False(f.Context.Friends.Get(a).Has(777, SocialFlags.Friend));
+        Assert.DoesNotContain(f.Persistence.Social, w => w.OtherId == 777 && w.Flags != SocialFlags.None);
     }
 
     [Fact]
