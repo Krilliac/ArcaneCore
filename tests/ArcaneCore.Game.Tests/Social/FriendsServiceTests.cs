@@ -219,9 +219,12 @@ public sealed class FriendsServiceTests
         Assert.Empty(f.Sent(a, WorldOpcode.SmsgFriendStatus));
     }
 
-    /// <summary>The rows of a player arrive after it is in the world: a change made on its list before they do (an ignore added, a friend dropped) is kept, not replaced by the stored rows.</summary>
+    private static SocialFlags StoredFlags(SocialFixture f, int character, int other)
+        => f.Persistence.Social.LastOrDefault(w => w.CharacterId == character && w.OtherId == other).Flags;
+
+    /// <summary>The rows of a player arrive after it is in the world: a change made on its list before they do is a delta over the stored row, in memory and in the store.</summary>
     [Fact]
-    public void Load_KeepsTheChangesMadeBeforeTheRowsArrived()
+    public void Load_AppliesTheChangesMadeBeforeTheRowsArrived_OverTheStoredRows_AndPersistsTheMerge()
     {
         using var f = new SocialFixture();
         Player a = f.AddPlayer(1);
@@ -230,20 +233,63 @@ public sealed class FriendsServiceTests
         f.AddPlayer(4);
         f.Context.Friends.Unload(a);
         PlayerSocial early = f.Context.Friends.Get(a); // not loaded yet
-        early.Set(2, SocialFlags.Ignored, true);       // added before the load
+        Assert.False(f.Context.Friends.IsLoaded(a));
+        early.Set(2, SocialFlags.Ignored, true);       // added before the load (the store was written the absolute flag Ignored)
         early.Set(3, SocialFlags.Friend, false);       // dropped before the load (stored as a friend)
+        early.Set(4, SocialFlags.Ignored, true);       // an ignore on top of a stored friend
+        f.Persistence.Social.Clear();
 
         f.Context.Friends.Load(a, [new SocialEntry(3, SocialFlags.Friend), new SocialEntry(4, SocialFlags.Friend)]);
 
+        Assert.True(f.Context.Friends.IsLoaded(a));
         PlayerSocial loaded = f.Context.Friends.Get(a);
         Assert.True(loaded.Has(2, SocialFlags.Ignored));
         Assert.False(loaded.Has(3, SocialFlags.Friend));
         Assert.True(loaded.Has(4, SocialFlags.Friend));
+        Assert.True(loaded.Has(4, SocialFlags.Ignored)); // Friend|Ignored: the stored friend stays
         Assert.True(f.Context.Friends.HasIgnore(a, ObjectGuid.Player(2)));
+        Assert.Equal(SocialFlags.Ignored, StoredFlags(f, 1, 2));
+        Assert.Equal(SocialFlags.None, StoredFlags(f, 1, 3));
+        Assert.Equal(SocialFlags.Friend | SocialFlags.Ignored, StoredFlags(f, 1, 4));
+    }
 
-        // Changes after the load are plain changes: a later load does not resurrect them.
-        loaded.Set(4, SocialFlags.Friend, false);
-        Assert.False(f.Context.Friends.Get(a).Has(4, SocialFlags.Friend));
+    [Fact]
+    public void ASecondLoad_DoesNotBringBackAnEntryRemovedAfterTheFirst_OnceTheStoreHoldsTheRemoval()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.AddPlayer(3);
+        f.AddPlayer(4);
+        f.Context.Friends.Unload(a);
+        f.Context.Friends.Get(a).Set(3, SocialFlags.Friend, false); // removed before the first load
+        f.Persistence.Social.Clear();
+        f.Context.Friends.Load(a, [new SocialEntry(3, SocialFlags.Friend), new SocialEntry(4, SocialFlags.Friend)]);
+        Assert.False(f.Context.Friends.Get(a).Has(3, SocialFlags.Friend));
+
+        // The second load reads what the store now holds: the removal was written by the first.
+        SocialEntry[] rows = [.. new[] { 3, 4 }.Select(other => new SocialEntry(other, StoredFlags(f, 1, other) == SocialFlags.None && other == 3 ? SocialFlags.None : SocialFlags.Friend))];
+        f.Context.Friends.Load(a, rows);
+        Assert.False(f.Context.Friends.Get(a).Has(3, SocialFlags.Friend));
+        Assert.True(f.Context.Friends.Get(a).Has(4, SocialFlags.Friend));
+    }
+
+    [Fact]
+    public void TheListLimits_HoldAcrossTheMerge_AndADroppedAdditionIsNotPersisted()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.Context.Friends.Unload(a);
+        PlayerSocial early = f.Context.Friends.Get(a);
+        for (uint other = 100; other < 100 + PlayerSocial.IgnoreLimit + 1; other++) early.Set(other, SocialFlags.Ignored, true);
+        f.Persistence.Social.Clear();
+
+        f.Context.Friends.Load(a, []);
+
+        PlayerSocial loaded = f.Context.Friends.Get(a);
+        Assert.Equal(PlayerSocial.IgnoreLimit, loaded.Count(SocialFlags.Ignored));
+        Assert.False(loaded.Has(100 + PlayerSocial.IgnoreLimit, SocialFlags.Ignored)); // the 26th, in order, is the one dropped
+        Assert.Equal(SocialFlags.None, StoredFlags(f, 1, 100 + (int)PlayerSocial.IgnoreLimit));
+        Assert.Equal(SocialFlags.Ignored, StoredFlags(f, 1, 100));
     }
 
     [Fact]
