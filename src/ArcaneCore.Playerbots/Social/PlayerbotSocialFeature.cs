@@ -449,31 +449,78 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         };
     }
 
-    private void RunPass(long elapsed)
+    internal void RunPass(long elapsed)
     {
         if (ResolveManagedBots() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return;
         EnsureSubscribed(pass.Social);
         MaintainRegistry(pass);
         Intake(pass);
-        _membership.AnswerInvites(pass);
-        _founding.Run(pass, _membership);
-        _founding.SetMotds(pass);
-        _membership.Recruit(pass, _founding);
-        _membership.InviteByAffinity(pass);
-        _membership.Promote(pass);
-        _lists.Run(pass);
-        _help.Run(pass);
-        _mood.Run(pass);
-        _gratitude.Run(pass, _help);
-        _initiative.Run(pass);
-        _chat.Speak(pass);
-        _emotes.Run(pass);
-        RunChannels(pass);
-        _conversations.Run(pass);
-        _worldChatter.Run(pass);
-        _voice.Run(pass);
-        _membership.Prune(pass);
+        for (int lane = 0; lane < LaneNames.Length; lane++) RunLane(lane, pass);
+        for (int i = 0; i < InjectedLanes.Count; i++) RunInjected(InjectedLanes[i], pass);
         Passes++;
+    }
+
+    private static readonly string[] LaneNames =
+    [
+        "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "prune",
+    ];
+
+    /// <summary>Extra lanes run after the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
+    internal List<(string Name, Action<PlayerbotSocialPass> Run)> InjectedLanes { get; } = [];
+
+    /// <summary>
+    /// One lane of the pass, isolated: a lane that throws is recorded under <c>playerbot.social</c> with its name and the lanes after it still run.
+    /// </summary>
+    private void RunLane(int lane, PlayerbotSocialPass pass)
+    {
+        try
+        {
+            switch (lane)
+            {
+                case 0: _membership.AnswerInvites(pass); break;
+                case 1: _founding.Run(pass, _membership); break;
+                case 2: _founding.SetMotds(pass); break;
+                case 3: _membership.Recruit(pass, _founding); break;
+                case 4: _membership.InviteByAffinity(pass); break;
+                case 5: _membership.Promote(pass); break;
+                case 6: _lists.Run(pass); break;
+                case 7: _help.Run(pass); break;
+                case 8: _mood.Run(pass); break;
+                case 9: _gratitude.Run(pass, _help); break;
+                case 10: _initiative.Run(pass); break;
+                case 11: _chat.Speak(pass); break;
+                case 12: _emotes.Run(pass); break;
+                case 13: RunChannels(pass); break;
+                case 14: _conversations.Run(pass); break;
+                case 15: _worldChatter.Run(pass); break;
+                case 16: _voice.Run(pass); break;
+                default: _membership.Prune(pass); break;
+            }
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LaneFaulted(LaneNames[lane], error);
+        }
+    }
+
+    private void RunInjected((string Name, Action<PlayerbotSocialPass> Run) lane, PlayerbotSocialPass pass)
+    {
+        try
+        {
+            lane.Run(pass);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LaneFaulted(lane.Name, error);
+        }
+    }
+
+    private void LaneFaulted(string lane, Exception error)
+    {
+        FaultLedger.Shared.Record("playerbot.social", error);
+        AnomalyLedger.Shared.Report("bot-social", "lane-fault", lane, $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
+        if (_faults++ < 5) logger.LogWarning(error, "Playerbot social lane {Lane} failed ({Type}: {Message})", lane, error.GetType().Name, error.Message);
     }
 
     private readonly List<PlayerbotChannelBot> _channelBotsScratch = [];
