@@ -492,6 +492,23 @@ public sealed class PerfLogAggregatorTests
         Assert.Contains("verdicts: host-starved 0, quiet 0, gc 0, process-busy 1, process-stalled 1, unknown (no host sampler or no verdict) 1", line);
     }
 
+    [Fact]
+    public void GcPaging_IsCountedAsGc()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now, _ => HostLoadVerdict.GcPaging);
+
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(2);
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(60);
+        aggregator.FlushIfDue();
+
+        string line = Assert.Single(log.Messages);
+        Assert.Contains("verdicts: host-starved 0, quiet 0, gc 2;", line, StringComparison.Ordinal);
+    }
+
     private static IMapUpdater[] DistinctUpdaters(int count)
     {
         AssemblyBuilder assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("PerfLogTestUpdaters" + Guid.NewGuid().ToString("N")), AssemblyBuilderAccess.Run);

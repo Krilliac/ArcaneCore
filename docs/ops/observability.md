@@ -88,7 +88,9 @@ line differences a fresh reading against the newest stored one at least as old a
 host: process cpu 4% / machine cpu 100% (other processes 96%) over 3.1 s on 24 cpus; gc +0/+0/+0 (gen0/1/2) pause 0 ms; threadpool 24 threads, 0 pending; verdict host-starved (other processes are using the machine)
 ```
 
-Verdicts: `gc-pauses` (pauses cover 30% or more of the window), `process-stalled` (the watchdog thread itself did not run for 1 s or more
+Verdicts: `gc-pauses` (pauses cover 30% or more of the window), `gc-paging` (a `gc-pauses` window where the pause covers half or more of it, this process
+used half a core or less of cpu over the window, and the machine memory load, from the GC's last collection, is at or above its high-memory threshold, or 90% when the runtime reports none:
+the collector was compacting paged-out heap, so free host memory; the line adds `machine memory N% (gc high-memory threshold M%)`; the fatal hang action and bot QA skip it like `gc-pauses`), `process-stalled` (the watchdog thread itself did not run for 1 s or more
 beyond its check interval and beyond the GC pauses, covering 30% or more of the window: the whole process was stopped by paging on a
 machine short of memory, a native debugger holding a debug event or a suspension, not the code; the line adds `watchdog stalled N ms`;
 a starved machine makes the watchdog late too, so `host-starved` wins over it; the tick-hang fatal action and bot QA skip it like `gc-pauses`), `host-starved` (machine at 85% or more with other processes at

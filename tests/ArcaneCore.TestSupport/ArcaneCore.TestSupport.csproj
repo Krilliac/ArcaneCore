@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- AllocationProbeTests drive the probe with stand-in runtime caches (an internal overload). -->
+    <InternalsVisibleTo Include="ArcaneCore.Game.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ArcaneCore.Game\ArcaneCore.Game.csproj" />
     <!-- Microsoft.Data.Sqlite (CodexLineDatabase, TempDirectory.ClearAllPools) arrives through Data with its SQLitePCLRaw pin. -->
     <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />

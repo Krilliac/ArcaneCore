@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Xunit;
 
 namespace ArcaneCore.TestSupport;
@@ -12,6 +14,19 @@ namespace ArcaneCore.TestSupport;
 /// still fails. Every window that ran GC-free is asserted against the threshold, so an allocation that is intermittent or grows per call
 /// fails instead of being averaged or minimised away. Each window runs inside a no-GC region when one can be entered (2026-10-13: CI runners
 /// discarded 18 of 20 windows), so cross-thread collections no longer starve the probe of clean windows. One unmeasured call first keeps one-off runtime work (JIT of the delegate) out of it.
+/// <para>
+/// A window during which the runtime replaced one of its process-wide managed caches (<see cref="RuntimeCaches"/>) is discarded and retried
+/// in the same way, up to twice the new table's size plus <see cref="DirtyWindowSlack"/> over the limit. Those caches grow on whichever
+/// thread's lookup misses while they are full, so the thread under test can pay for other threads' casts. CI 2026-10-23 (run 39992634375):
+/// HasQuestCandidate's GC-free window 3 allocated 98352 bytes, exactly the int[24582] the cast cache allocates when it grows from 2048 to
+/// 4096 entries (one <c>is</c> cast allocates that much on its own thread once other threads have filled the cache; the scan's
+/// <c>Map.FindUpdater&lt;T&gt;</c> casts through it with <c>is T</c>). This recurs for the whole run, not only while the cache first
+/// fills: unloading a collectible load context flushes both caches (loaderallocator.cpp calls CastCache::FlushCurrentCache and
+/// FlushVirtualFunctionPointerCaches), the flush swaps in a placeholder table, and the next lookup that misses, on any thread, allocates
+/// the table again at its last size (98352 bytes for a full cast cache). The tests unload such contexts (ModuleRollbackTests,
+/// ModuleHostTests, FeatureLifecycleTests, SpellScriptHotSwapTests). The probe compares the tables' identity, so a flush and its
+/// re-allocation count as a replacement too.
+/// </para>
 /// </summary>
 public static class AllocationProbe
 {
@@ -26,6 +41,13 @@ public static class AllocationProbe
     /// were obtained within 40 attempts. The delegate must be created before the call and must not itself allocate.
     /// </summary>
     public static void AssertEveryCleanWindowAtMost(Action window, long maxBytes, string what, int cleanWindows = 5)
+        => AssertEveryCleanWindowAtMost(window, maxBytes, what, cleanWindows, RuntimeCaches.Readers);
+
+    /// <summary>
+    /// <see cref="AssertEveryCleanWindowAtMost(Action, long, string, int)"/> watching <paramref name="caches"/> instead of the runtime's
+    /// caches: each reader returns its cache's current table, and a different table after a window means the cache was replaced in it.
+    /// </summary>
+    internal static void AssertEveryCleanWindowAtMost(Action window, long maxBytes, string what, int cleanWindows, IReadOnlyList<Func<object?>> caches)
     {
         int clean = 0;
         int discarded = 0;
@@ -37,10 +59,10 @@ public static class AllocationProbe
         // other's windows until a probe saw too few clean ones.
         lock (Gate)
         {
-            MeasureWindows(window, maxBytes, what, cleanWindows, ref clean, ref discarded, ref refused, ref broken);
+            MeasureWindows(window, maxBytes, what, cleanWindows, caches, ref clean, ref discarded, ref refused, ref broken);
         }
 
-        Assert.True(clean >= cleanWindows, $"{what}: only {clean} of {cleanWindows} GC-free windows in {MaxAttempts} attempts ({discarded} discarded because a collection ran; no-GC region refused {refused}x, ended early {broken}x)");
+        Assert.True(clean >= cleanWindows, $"{what}: only {clean} of {cleanWindows} GC-free windows in {MaxAttempts} attempts ({discarded} discarded because a collection ran or a runtime cache was replaced; no-GC region refused {refused}x, ended early {broken}x)");
     }
 
     private static readonly object Gate = new();
@@ -62,9 +84,11 @@ public static class AllocationProbe
         }
     }
 
-    private static void MeasureWindows(Action window, long maxBytes, string what, int cleanWindows, ref int clean, ref int discarded, ref int refused, ref int broken)
+    private static void MeasureWindows(Action window, long maxBytes, string what, int cleanWindows, IReadOnlyList<Func<object?>> caches,
+        ref int clean, ref int discarded, ref int refused, ref int broken)
     {
         long budget = NoGcBudget;
+        var tables = new object?[caches.Count];
         for (int attempt = 0; attempt < MaxAttempts && clean < cleanWindows; attempt++)
         {
             // A no-GC region keeps collections (triggered by any thread) out of the window, so on a busy runner the window is GC-free instead
@@ -73,10 +97,17 @@ public static class AllocationProbe
             bool noGc = TryStartNoGcRegion(budget);
             refused += noGc ? 0 : 1;
             int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
+            for (int i = 0; i < tables.Length; i++) tables[i] = caches[i](); // outside the measured span: a reader may allocate
             long before = GC.GetAllocatedBytesForCurrentThread();
             window();
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             bool collected = g0 != GC.CollectionCount(0) || g1 != GC.CollectionCount(1) || g2 != GC.CollectionCount(2);
+            long replacedBytes = 0;
+            for (int i = 0; i < tables.Length; i++)
+            {
+                object? now = caches[i]();
+                if (!ReferenceEquals(now, tables[i])) replacedBytes += RuntimeCaches.SizeOf(now);
+            }
             if (noGc)
             {
                 bool ended = EndNoGcRegion();
@@ -85,16 +116,68 @@ public static class AllocationProbe
                 collected |= !ended;
             }
 
-            if (collected)
+            if (collected || replacedBytes != 0)
             {
-                Assert.True(allocated <= maxBytes + DirtyWindowSlack,
-                    $"{what}: window allocated {allocated} bytes with a collection in it (limit {maxBytes}, retried only up to +{DirtyWindowSlack})");
+                // A runtime cache replaced in the window may have put its new table on this thread. Growth doubles a table, so a chain of
+                // growths in one window sums to less than twice the last one; anything beyond that and the slack is the code's own.
+                Assert.True(allocated <= maxBytes + DirtyWindowSlack + 2 * replacedBytes,
+                    $"{what}: window allocated {allocated} bytes with {(collected ? "a collection" : "a runtime cache replaced")} in it (limit {maxBytes}, retried only up to +{DirtyWindowSlack}{(replacedBytes == 0 ? "" : $" + 2 x {replacedBytes} for the replaced runtime cache")})");
                 discarded++;
                 continue;
             }
 
             Assert.True(allocated <= maxBytes, $"{what}: GC-free window {clean + 1} allocated {allocated} bytes (limit {maxBytes})");
             clean++;
+        }
+    }
+
+    /// <summary>
+    /// The runtime's process-wide managed caches whose table is replaced by the thread whose lookup missed (when the table is full, or
+    /// after a collectible load context's unload flushed it): the cast cache (<c>CastHelpers.s_table</c>, used by casts to interfaces,
+    /// variant types and shared-generic type parameters) and the generic virtual method cache
+    /// (<c>VirtualDispatchHelpers.s_virtualFunctionPointerCache</c>). Found by private reflection: a runtime that renames them leaves
+    /// fewer <see cref="Readers"/>, the probe then fails such windows as it did before, and AllocationProbeTests fails on the missing cache.
+    /// <para>
+    /// The allowance for a window with a replaced table is twice the table plus <see cref="DirtyWindowSlack"/>. Measured on .NET 11
+    /// (64-bit, <c>SizeOf(Readers[1]())</c> per entry): the cast cache tops out at 4096 entries, int[24582] = 98352 bytes, allowance
+    /// 213088 bytes; the GVM cache tops out at 8192 entries of 48 bytes, 8193 with its header entry = 393288 bytes, allowance 802960
+    /// bytes (both replaced in one window: 999664). Only a window in which a table was replaced gets it; every clean window is held to
+    /// the exact limit.
+    /// </para>
+    /// </summary>
+    internal static class RuntimeCaches
+    {
+        private static readonly (string Name, Func<object?> Reader)[] Found = Find();
+
+        /// <summary>Each cache's current table.</summary>
+        internal static readonly IReadOnlyList<Func<object?>> Readers = Array.ConvertAll(Found, cache => cache.Reader);
+
+        /// <summary>The caches <see cref="Readers"/> watch.</summary>
+        internal static readonly IReadOnlyList<string> Names = Array.ConvertAll(Found, cache => cache.Name);
+
+        /// <summary>The heap size of a cache table (an array: header and elements), 0 for anything else.</summary>
+        internal static long SizeOf(object? table)
+            => table is Array array
+                ? 3L * IntPtr.Size + (long)array.Length * RuntimeHelpers.SizeOf(array.GetType().GetElementType()!.TypeHandle)
+                : 0;
+
+        private static (string, Func<object?>)[] Find()
+        {
+            const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+            Assembly coreLib = typeof(object).Assembly;
+            var found = new List<(string, Func<object?>)>();
+            if (coreLib.GetType("System.Runtime.CompilerServices.CastHelpers")?.GetField("s_table", Static) is { } castTable)
+            {
+                found.Add(("CastHelpers.s_table", () => castTable.GetValue(null)));
+            }
+
+            if (coreLib.GetType("System.Runtime.CompilerServices.VirtualDispatchHelpers")?.GetField("s_virtualFunctionPointerCache", Static) is { } dispatch
+                && dispatch.FieldType.GetField("_table", BindingFlags.Instance | BindingFlags.NonPublic) is { } dispatchTable)
+            {
+                found.Add(("VirtualDispatchHelpers.s_virtualFunctionPointerCache", () => dispatchTable.GetValue(dispatch.GetValue(null))));
+            }
+
+            return [.. found];
         }
     }
 

@@ -21,7 +21,10 @@ public readonly record struct HostLoadReading(
     long GcPauseTicks,
     int PoolThreads,
     long PoolPending,
-    int Cpus);
+    int Cpus,
+    long MemoryLoadBytes = 0,
+    long HighMemoryLoadThresholdBytes = 0,
+    long TotalAvailableMemoryBytes = 0);
 
 /// <summary>Where <see cref="HostLoadSampler"/> reads the host (tests substitute their own).</summary>
 public interface IHostLoadProbe
@@ -50,6 +53,7 @@ public sealed class SystemHostLoadProbe : IHostLoadProbe
             machineKnown = TryReadLinux(out busy, out total);
         }
 
+        GCMemoryInfo memory = GC.GetGCMemoryInfo();
         return new HostLoadReading(
             Environment.CpuUsage.TotalTime.Ticks,
             machineKnown,
@@ -61,7 +65,10 @@ public sealed class SystemHostLoadProbe : IHostLoadProbe
             GC.GetTotalPauseDuration().Ticks,
             ThreadPool.ThreadCount,
             ThreadPool.PendingWorkItemCount,
-            Environment.ProcessorCount);
+            Environment.ProcessorCount,
+            memory.MemoryLoadBytes,
+            memory.HighMemoryLoadThresholdBytes,
+            memory.TotalAvailableMemoryBytes);
     }
 
     private static bool TryReadWindows(out long busy, out long total)
@@ -151,7 +158,9 @@ public readonly record struct HostLoadReport(
     long PoolPending,
     int Cpus,
     HostLoadVerdict Verdict,
-    long StallMicros = 0)
+    long StallMicros = 0,
+    double MemoryLoadPercent = 0,
+    double MemoryThresholdPercent = 0)
 {
     /// <summary>CPU the other processes used, as a percentage of the whole machine; 0 when the machine reading is unknown.</summary>
     public double OtherCpuPercent => MachineKnown ? Math.Max(0, MachineCpuPercent - ProcessCpuPercent) : 0;
@@ -172,6 +181,11 @@ public readonly record struct HostLoadReport(
 
         sb.Append(" over ").Append((WindowMicros / 1_000_000.0).ToString("F1", CultureInfo.InvariantCulture)).Append(" s on ").Append(Cpus).Append(" cpus");
         sb.Append("; gc +").Append(Gen0).Append("/+").Append(Gen1).Append("/+").Append(Gen2).Append(" (gen0/1/2) pause ").Append(GcPauseMicros / 1000).Append(" ms");
+        if (MemoryThresholdPercent > 0)
+        {
+            sb.Append("; machine memory ").Append(Percent(MemoryLoadPercent)).Append(" (gc high-memory threshold ").Append(Percent(MemoryThresholdPercent)).Append(')');
+        }
+
         sb.Append("; threadpool ").Append(PoolThreads).Append(" threads, ").Append(PoolPending).Append(" pending");
         if (StallMicros >= 1000)
         {
@@ -183,6 +197,7 @@ public readonly record struct HostLoadReport(
             HostLoadVerdict.ProcessStalled => "process-stalled (the whole process stopped, the watchdog thread too: paging on a machine short of memory, a native debugger or a suspended process, not the code)",
             HostLoadVerdict.HostStarved => "host-starved (other processes are using the machine)",
             HostLoadVerdict.GcPauses => "gc-pauses",
+            HostLoadVerdict.GcPaging => "gc-paging (the GC pause covers most of the stall while this process used almost no cpu and the machine is short of memory: free host memory; the GC is compacting paged-out heap)",
             HostLoadVerdict.ProcessBusy => "process-busy (this process is using the cpu)",
             HostLoadVerdict.Quiet => "host-quiet (the time went in the code, not the machine)",
             _ => "unknown",
@@ -216,6 +231,12 @@ public enum HostLoadVerdict
     /// short of memory, a native debugger holding a debug event, a suspended process), so the slow tick is not the code's.
     /// </summary>
     ProcessStalled = 5,
+
+    /// <summary>
+    /// A garbage-collection pause covered most of the window while this process used almost no cpu and the machine's memory load was at or above
+    /// the collector's high-memory threshold: the collector was waiting on paged-out heap, so the cure is free host memory, not code.
+    /// </summary>
+    GcPaging = 6,
 }
 
 /// <summary>
@@ -229,6 +250,18 @@ public sealed class HostLoadSampler : IWatchdogMonitor
 {
     /// <summary>A pause share of the window at or above this is a GC verdict.</summary>
     public const double GcShareThreshold = 0.30;
+
+    /// <summary>A GC pause share of the window at or above this ("most of the stall"), with an idle process and a short machine, is the paging verdict.</summary>
+    public const double GcPagingShareThreshold = 0.50;
+
+    /// <summary>
+    /// The process may use at most this many cores' worth of cpu over the window for the paging verdict ("almost no cpu"). Counted in cores, not as a share of the
+    /// machine, so one busy core (a cpu-bound compaction) is not mistaken for waiting on paged-out memory however many cpus the host has.
+    /// </summary>
+    public const double IdleProcessCores = 0.5;
+
+    /// <summary>The machine memory load (percent of available memory) that counts as short of memory when the runtime reports no high-memory threshold.</summary>
+    public const double DefaultMemoryLoadThreshold = 90;
 
     /// <summary>Machine CPU at or above this, with other processes at or above <see cref="OtherShareThreshold"/>, is a starved verdict.</summary>
     public const double MachineBusyThreshold = 85;
@@ -378,6 +411,16 @@ public sealed class HostLoadSampler : IWatchdogMonitor
             machine = Math.Clamp((double)(end.MachineBusyTicks - start.MachineBusyTicks) / (end.MachineTotalTicks - start.MachineTotalTicks) * 100.0, 0, 100);
         }
 
+        double memoryLoad = 0;
+        double memoryThreshold = 0;
+        if (end.TotalAvailableMemoryBytes > 0 && end.MemoryLoadBytes > 0)
+        {
+            memoryLoad = Math.Clamp((double)end.MemoryLoadBytes / end.TotalAvailableMemoryBytes * 100.0, 0, 100);
+            memoryThreshold = end.HighMemoryLoadThresholdBytes > 0
+                ? Math.Clamp((double)end.HighMemoryLoadThresholdBytes / end.TotalAvailableMemoryBytes * 100.0, 0, 100)
+                : DefaultMemoryLoadThreshold;
+        }
+
         long pauseMicros = Math.Max(0, (end.GcPauseTicks - start.GcPauseTicks) / 10);
         HostLoadVerdict verdict;
         if (window < 100_000)
@@ -386,7 +429,10 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         }
         else if (pauseMicros >= window * GcShareThreshold)
         {
-            verdict = HostLoadVerdict.GcPauses;
+            // Paging: the pause is most of the stall, the process burned no cpu during it and the machine is short of memory.
+            verdict = memoryThreshold > 0 && memoryLoad >= memoryThreshold && process * cpus / 100.0 <= IdleProcessCores && pauseMicros >= window * GcPagingShareThreshold
+                ? HostLoadVerdict.GcPaging
+                : HostLoadVerdict.GcPauses;
         }
         else if (machineKnown && machine >= MachineBusyThreshold && machine - process >= OtherShareThreshold)
         {
@@ -410,6 +456,6 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         return new HostLoadReport(
             window, process, machineKnown, machine,
             end.Gen0 - start.Gen0, end.Gen1 - start.Gen1, end.Gen2 - start.Gen2,
-            pauseMicros, end.PoolThreads, end.PoolPending, cpus, verdict, Math.Max(0, stallMicros));
+            pauseMicros, end.PoolThreads, end.PoolPending, cpus, verdict, Math.Max(0, stallMicros), memoryLoad, memoryThreshold);
     }
 }
