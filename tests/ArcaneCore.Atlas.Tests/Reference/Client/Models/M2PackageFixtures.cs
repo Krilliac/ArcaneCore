@@ -18,7 +18,7 @@ internal readonly record struct PackageTexture(uint Type, string Name);
 /// <summary>
 /// Builds a 1.12.1 M2 (version 256) with the tables the package builder reads. Header offsets are the vanilla layout the existing
 /// reader already uses for vertices (0x44) and views (0x4C), extended with the wowdev vanilla positions: textures 0x5C, render flags
-/// 0x7C, texture lookup 0x8C. Per-record layouts: texture 16 bytes (type, flags, name length, name offset), render flags 4 bytes
+/// 0x84, texture lookup 0x94 (the replaceable-texture lookup sits at 0x7C and the bone lookup at 0x8C). Per-record layouts: texture 16 bytes (type, flags, name length, name offset), render flags 4 bytes
 /// (flags u16, blend u16), vertex 48 bytes (uv0 at +32), view 44 bytes (submeshes at +24, texture units at +32), submesh 32 bytes,
 /// texture unit 24 bytes. A real file's own header proves the offsets in the env-gated tests; nothing here is a client file.
 /// </summary>
@@ -137,10 +137,10 @@ internal static class M2PackageFixtures
         Put(0x50, viewAt);
         Put(0x5C, textures.Count);
         Put(0x60, textureAt);
-        Put(0x7C, renderFlags.Count);
-        Put(0x80, flagsAt);
-        Put(0x8C, textureLookup.Count);
-        Put(0x90, textureLookupAt);
+        Put(0x84, renderFlags.Count);
+        Put(0x88, flagsAt);
+        Put(0x94, textureLookup.Count);
+        Put(0x98, textureLookupAt);
         return file2;
     }
 

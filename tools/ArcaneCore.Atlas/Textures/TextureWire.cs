@@ -61,6 +61,12 @@ public static class TextureWire
     public const int MaxLevels = 16;
     private const int MaxLayers = 4096;
 
+    /// <summary>
+    /// Metadata is JSON read only by <c>JSON.parse</c> and <see cref="JsonNode"/>, never put into HTML, so non-ASCII text is written as
+    /// UTF-8 like <c>JSON.stringify</c> does (the browser's test writer is held byte-identical to this one).
+    /// </summary>
+    private static readonly JsonSerializerOptions MetaOptions = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     /// <summary>Bytes of one level of the given texture size, all layers included.</summary>
     public static long LevelBytes(AtxFormat format, int width, int height, int layers, int level)
     {
@@ -81,7 +87,7 @@ public static class TextureWire
     {
         ArgumentNullException.ThrowIfNull(texture);
         Validate(texture);
-        byte[] json = JsonSerializer.SerializeToUtf8Bytes(texture.Meta);
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(texture.Meta, MetaOptions);
         long size = HeaderBytes + json.Length;
         foreach (byte[] level in texture.Levels)
         {

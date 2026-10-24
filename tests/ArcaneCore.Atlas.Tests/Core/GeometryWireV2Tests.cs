@@ -116,7 +116,7 @@ public sealed class GeometryWireV2Tests
         Assert.Equal(1f, F(wire, 120));
         Assert.Equal(0f, F(wire, 160)); // uv0 of vertex 0
         Assert.Equal(1f, F(wire, 168)); // uv0 u of vertex 1
-        Assert.Equal(1f, F(wire, 172));
+        Assert.Equal(0f, F(wire, 172)); // uv0 v of vertex 1
         Assert.Equal(new byte[] { 0xFF, 0x00, 0x00, 0xFF }, wire[192..196]); // red opaque
         Assert.Equal(new byte[] { 0x00, 0xFF, 0x00, 0xFF }, wire[196..200]);
         Assert.Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0x80 }, wire[204..208]); // white, alpha 128

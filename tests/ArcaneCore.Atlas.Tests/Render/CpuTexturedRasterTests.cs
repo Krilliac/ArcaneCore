@@ -100,7 +100,7 @@ public sealed class CpuTexturedRasterTests
     {
         var rig = new RenderRig(new FakeSource().Add(LayerIds.RefM2Tex, Views.TileOf(Camera), Quad(MaterialFlags.Unlit, BlendMode.Opaque)));
 
-        RenderedFrame frame = rig.Frame(Views.Of(Camera, (LayerIds.RefM2Tex, Views.Style())), Size, Size);
+        RenderedFrame frame = rig.Frame(ReferenceView(), Size, Size);
 
         Assert.NotEqual(Rgb.Background, At(frame, 0, 0));
         Assert.NotEqual(Red, At(frame, -7.5, 7.5));
@@ -183,7 +183,11 @@ public sealed class CpuTexturedRasterTests
     }
 
     private static RenderedFrame Draw(CpuRenderer renderer)
-        => renderer.Rasterize(Views.Of(Camera, (LayerIds.RefM2Tex, Views.Style())), Size, Size, CancellationToken.None);
+        => renderer.Rasterize(ReferenceView(), Size, Size, CancellationToken.None);
+
+    /// <summary>The textured layers are Reference-view layers, so the view shows the reference side only.</summary>
+    private static ViewState ReferenceView()
+        => Views.Of(Camera, (LayerIds.RefM2Tex, Views.Style())) with { Compare = CompareMode.Reference };
 
     private static RenderedFrame Render(MaterialFlags flags, BlendMode blend, byte[]? alpha, double alphaRef = 0, MemoryClientFiles? files = null)
     {

@@ -19,7 +19,7 @@ internal sealed record M2ViewData(ushort[] Lookup, ushort[] Triangles, M2Submesh
 /// <summary>
 /// The tables of a 1.12.1 M2 that a model package needs: render vertices with normals and the first uv set, textures, render flags,
 /// the texture lookup and every embedded view. Offsets are the vanilla header positions (vertices 0x44, views 0x4C, textures 0x5C,
-/// render flags 0x7C, texture lookup 0x8C); per-record layouts: vertex 48 bytes (normal +20, uv0 +32), view 44 bytes (lookup
+/// render flags 0x84, texture lookup 0x94); per-record layouts: vertex 48 bytes (normal +20, uv0 +32), view 44 bytes (lookup
 /// +0, triangles +8, submeshes +24, texture units +32), submesh 32 bytes, texture unit 24 bytes, texture 16 bytes, render flags
 /// 4 bytes. Immutable after <see cref="Parse"/>; safe to share between threads. The real-data tests check the offsets against the
 /// client's own files.
@@ -30,9 +30,9 @@ internal sealed class M2PackageModel
     private const int OffsetVertices = 0x44;
     private const int OffsetViews = 0x4C;
     private const int OffsetTextures = 0x5C;
-    private const int OffsetRenderFlags = 0x7C;
-    private const int OffsetTextureLookup = 0x8C;
-    private const int MinimumHeaderBytes = 0x94;
+    private const int OffsetRenderFlags = 0x84;
+    private const int OffsetTextureLookup = 0x94;
+    private const int MinimumHeaderBytes = 0x9C;
     private const int VertexSize = 48;
     private const int ViewSize = 44;
     private const int SubmeshSize = 32;

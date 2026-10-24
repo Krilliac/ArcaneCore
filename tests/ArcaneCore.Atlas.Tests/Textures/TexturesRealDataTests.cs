@@ -165,7 +165,9 @@ public sealed class TexturesRealDataTests(ITestOutputHelper output)
             {
                 if (mean[c] >= 0)
                 {
-                    Assert.True(Math.Abs((actual[c] / pixels) - mean[c]) <= 1.0, $"{path}: mean of channel {c} is {actual[c] / pixels:F3}, an independent decoder says {mean[c]}");
+                    // The oracle (Pillow) widens RGB565 endpoints by a plain shift, the hardware (and BlpDecoder) by bit replication, so
+                    // a bright DXT1 image differs by up to 7/255 per red or blue texel: INV_Axe_05 differs by 1.8 on its mean red.
+                    Assert.True(Math.Abs((actual[c] / pixels) - mean[c]) <= 3.0, $"{path}: mean of channel {c} is {actual[c] / pixels:F3}, an independent decoder says {mean[c]}");
                 }
             }
 
@@ -199,7 +201,9 @@ public sealed class TexturesRealDataTests(ITestOutputHelper output)
         {
             if (expected[c] >= 0)
             {
-                Assert.True(Math.Abs(got[c] - expected[c]) <= 1, $"{what} channel {c}: expected {expected[c]} +-1, got {got[c]}");
+                // Colour: the oracle's RGB565 widening is a plain shift (up to 7 below the hardware's bit replication); alpha is exact.
+                int tolerance = c < 3 ? 7 : 1;
+                Assert.True(Math.Abs(got[c] - expected[c]) <= tolerance, $"{what} channel {c}: expected {expected[c]} +-{tolerance}, got {got[c]}");
             }
         }
     }
