@@ -9,8 +9,8 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Atg1Error, decodeChunk } from '../../../tools/ArcaneCore.Atlas/Web/js/atg1.js';
 import { Atx1Error, FORMAT, decodeTexture } from '../../../tools/ArcaneCore.Atlas/Web/js/atx1.js';
-import { MaterialRegistry, createMaterialRegistry } from '../../../tools/ArcaneCore.Atlas/Web/js/materials.js';
-import { TextureStore } from '../../../tools/ArcaneCore.Atlas/Web/js/textures.js';
+import { MaterialRegistry, createMaterialRegistry, materialKind, registerMaterialKind } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/index.js';
+import { TextureStore } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/textures.js';
 import { encodeChunkV2, trailerOffset } from './support/atg2-writer.mjs';
 import { encodeTexture, probeTexture } from './support/atx1-writer.mjs';
 import { FakeGl } from './support/fakegl.mjs';
@@ -553,17 +553,46 @@ test('TextureStore setBudget evicts down to a smaller budget at the next frame e
 // ---------------------------------------------------------------------------------------------------------------------------
 // Materials
 
-test('the material registry has a real generic material and stubs for the later lanes', () => {
+test('the shared material registry has a real generic material and the lane files fill their kinds without touching the index', () => {
     const registry = createMaterialRegistry();
+    const generic = registry.get('generic');
 
-    assert.equal(registry.get('generic').stub, false);
-    for (const kind of ['terrain', 'wmo', 'm2', 'skinned', 'character']) {
-        assert.equal(registry.get(kind).stub, true, `${kind} is a stub until its lane lands`);
-        assert.equal(registry.resolve(kind), registry.get('generic'), `${kind} draws as generic meanwhile`);
+    assert.equal(generic.stub, false);
+    for (const member of ['programs', 'layout', 'bind', 'pass']) {
+        assert.equal(typeof generic[member], 'function', `generic.${member} is part of the impl interface`);
     }
-    assert.equal(registry.get('nonsense'), undefined);
-    assert.equal(registry.resolve('nonsense'), registry.get('generic'));
-    assert.deepEqual([...registry.kinds()].sort(), ['character', 'generic', 'm2', 'skinned', 'terrain', 'wmo']);
+    assert.equal(generic.pass({ blend: 0 }), 'opaque');
+    assert.equal(generic.pass({ blend: 1 }), 'alphakey');
+    assert.equal(generic.pass({ blend: 2 }), 'blend');
+    assert.equal(generic.pass({ blend: 6 }), 'blend');
+    assert.deepEqual(generic.layout().map((a) => a.stream), ['position', 'uv0', 'color0']);
+    for (const kind of ['terrain', 'wmo', 'm2', 'skinned', 'character', 'nonsense']) {
+        assert.equal(materialKind(kind), generic, `${kind} draws as generic until a lane registers it`);
+    }
+    assert.deepEqual([...registry.kinds()], ['generic']);
+
+    const WEB_JS = path.join(WEB, 'js', 'materials');
+    for (const file of ['terrain', 'model', 'skinned', 'character']) {
+        const text = fs.readFileSync(path.join(WEB_JS, `${file}.js`), 'utf8');
+        assert.match(text, /export function register\(\) \{\}/, `${file}.js is an empty register() stub`);
+    }
+    const index = fs.readFileSync(path.join(WEB_JS, 'index.js'), 'utf8');
+    for (const file of ['terrain', 'model', 'skinned', 'character']) {
+        assert.ok(index.includes(`'./${file}.js'`), `index.js imports ${file}.js`);
+    }
+
+    const impl = { kind: 'seam-test', stub: false, programs() {}, layout() {}, bind() {}, pass() {} };
+    registerMaterialKind(impl);
+    assert.equal(materialKind('seam-test'), impl);
+    assert.throws(() => registerMaterialKind({ kind: 'seam-test', stub: false }), Error);
+});
+
+test('the legacy material registry class (stubs and replace) still behaves', () => {
+    const registry = new MaterialRegistry();
+    registry.register({ kind: 'generic', stub: false });
+    registry.register({ kind: 'terrain', stub: true });
+    assert.equal(registry.resolve('terrain'), registry.get('generic'));
+    assert.deepEqual([...registry.kinds()].sort(), ['generic', 'terrain']);
 });
 
 test('the material registry refuses duplicates and replaces a stub only by registering over it explicitly', () => {
@@ -607,4 +636,120 @@ test('the web assets stay self-contained: same CSP, no external URLs, no workers
         assert.ok(!/\bnew\s+(Shared)?Worker\b|\bimportScripts\b/.test(text), `${relative} starts a worker`);
         assert.ok(!/\bindexedDB\b|\blocalStorage\b|\bcaches\.(open|match)\b/.test(text), `${relative} uses persistent storage`);
     }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// TextureStore: arrays and the over-budget step-down
+
+test('TextureStore uploads a multi-layer texture from the host as a TEXTURE_2D_ARRAY, layer by layer', async () => {
+    const gl = new FakeGl();
+    const layers = 3;
+    const levels = [new Uint8Array(4 * 4 * 4 * layers), new Uint8Array(2 * 2 * 4 * layers), new Uint8Array(4 * layers)];
+    const bytes = encodeTexture({ format: FORMAT.RGBA8, width: 4, height: 4, layers, levels, meta: {} });
+    const store = new TextureStore({ gl, budgetBytes: 1 << 20, fetchTexture: async () => bytes });
+
+    store.beginFrame();
+    store.get('client:array');
+    await store.whenIdle();
+    store.beginFrame();
+    const entry = store.get('client:array');
+
+    assert.equal(entry.ready, true);
+    assert.equal(entry.target, gl.TEXTURE_2D_ARRAY);
+    assert.equal(entry.layers, 3);
+    assert.deepEqual(gl.storage3D.map((a) => [a.levels, a.width, a.height, a.depth]), [[3, 4, 4, 3]]);
+    assert.equal(gl.layerUploads.length, 9, 'three levels x three layers');
+    assert.equal(gl.layerUploads[0].bytes, 64);
+    assert.equal(store.stats().bytes, levels.reduce((n, l) => n + l.length, 0));
+    store.dispose();
+});
+
+test('TextureStore generated arrays are budgeted, grow in steps of 64 layers by copying on the GPU, and release their bytes', () => {
+    const gl = new FakeGl();
+    const MB = 1024 * 1024;
+    const store = new TextureStore({ gl, budgetBytes: 64 * MB, fetchTexture: async () => rgba(4, 4) });
+    store.beginFrame();
+
+    const array = store.acquireArray('gen:terrain-array:t1', { width: 16, height: 16, layers: 2 });
+    assert.ok(array, 'an array that fits is granted');
+    assert.equal(array.capacity, 64);
+    assert.equal(array.target, gl.TEXTURE_2D_ARRAY);
+    const perLevel = (w, h) => w * h * 4 * 64;
+    const bytes64 = perLevel(16, 16) + perLevel(8, 8) + perLevel(4, 4) + perLevel(2, 2) + perLevel(1, 1);
+    assert.equal(store.stats().bytes, bytes64);
+    assert.equal(store.stats().arrayReallocs, 0);
+
+    assert.equal(store.uploadLayer('gen:terrain-array:t1', 0, new Uint8Array(16 * 16 * 4)), true);
+    assert.equal(store.uploadLayer('gen:terrain-array:t1', 1, new Uint8Array(16 * 16 * 4)), true);
+    assert.throws(() => store.uploadLayer('gen:terrain-array:t1', 0, new Uint8Array(3)), RangeError);
+    assert.equal(store.uploadLayer('gen:terrain-array:t1', 64, new Uint8Array(16 * 16 * 4)), false, 'past the capacity');
+    assert.equal(store.growArray('gen:terrain-array:t1', 10), true, 'room already');
+    assert.equal(store.stats().arrayReallocs, 0);
+
+    const before = array.texture;
+    assert.equal(store.growArray('gen:terrain-array:t1', 65), true);
+    assert.equal(store.stats().arrayReallocs, 1);
+    assert.equal(array.capacity, 128);
+    assert.notEqual(array.texture, before);
+    assert.equal(gl.layerCopies.length, 2, 'the two used layers were copied');
+    assert.equal(gl.framebuffersCreated, gl.framebuffersDeleted);
+    assert.equal(store.stats().bytes, bytes64 * 2);
+
+    assert.equal(store.release('gen:terrain-array:t1'), true);
+    assert.equal(store.stats().bytes, 0);
+    store.dispose();
+});
+
+test('TextureStore refuses an array that does not fit the budget and a growth that would need old + new at once', () => {
+    const gl = new FakeGl();
+    const store = new TextureStore({ gl, budgetBytes: 900 * 1024, fetchTexture: async () => rgba(4, 4) });
+    store.beginFrame();
+
+    assert.equal(store.acquireArray('gen:big', { width: 256, height: 256, layers: 1 }), null, '64 layers of 256 x 256 is far over the budget');
+    const small = store.acquireArray('gen:small', { width: 32, height: 32, layers: 1 }); // 64 x 32 x 32 x 4 x 4/3 = ~350 KiB
+    assert.ok(small);
+    assert.equal(store.growArray('gen:small', 65), false, 'old (350 KiB) + new (700 KiB) is over 900 KiB');
+    assert.equal(small.capacity, 64, 'a refused growth changes nothing');
+    assert.equal(store.stats().arrayReallocs, 0);
+    store.dispose();
+});
+
+test('TextureStore asks the host for textures one maxSize step smaller once the textures in use exceed the budget, and takes the step back after 120 calm frames', async () => {
+    const MB = 1024 * 1024;
+    const gl = new FakeGl();
+    const sizes = [];
+    const store = new TextureStore({
+        gl,
+        budgetBytes: 2 * MB,
+        maxSize: 512,
+        fetchTexture: async (key, options) => {
+            sizes.push(options.maxSize);
+            return rgba(512, 512); // 1 MiB each: three do not fit
+        },
+    });
+    for (let frame = 0; frame < 6; frame++) {
+        store.beginFrame();
+        for (let i = 0; i < 3; i++) {
+            store.get(`client:p${i}`);
+        }
+        store.endFrame();
+        await tick();
+        await tick();
+    }
+    assert.equal(store.stats().steppedDown, true);
+    assert.equal(store.stats().effectiveMaxSize, 256);
+    assert.equal(sizes[0], 512, 'the first requests use the configured cap');
+    assert.ok(sizes.includes(256), 'later requests are one step smaller');
+    assert.equal(store.stats().overBudget, true);
+
+    // The working set shrinks to one texture: after 120 frames under 80 % of the budget the cap returns.
+    for (let frame = 0; frame < 125; frame++) {
+        store.beginFrame();
+        store.get('client:p0');
+        store.endFrame();
+        await tick();
+    }
+    assert.equal(store.stats().steppedDown, false);
+    assert.equal(store.stats().effectiveMaxSize, 512);
+    store.dispose();
 });

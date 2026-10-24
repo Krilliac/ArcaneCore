@@ -22,7 +22,7 @@ import { eye as cameraEye, projectionMatrix, viewMatrix } from './camera.js';
 import { LINE_STRIDE, LINE_WORDS, MARKER_STRIDE } from './geom.js';
 import * as S from './shaders.js';
 import { writesDepth } from './layerstate.js';
-import { BLEND, FLAGS, applyState, createMaterialRegistry, primaryTexture } from './materials.js';
+import { createMaterialRegistry } from './materials/index.js';
 
 export class RendererUnavailable extends Error {
     constructor(message) {
@@ -35,6 +35,8 @@ const TRI_STRIDE = 16;
 const POINT_STRIDE = 16;
 // Textured triangles: x, y, z relative to the chunk origin, u, v, colour0 as RGBA8.
 const TEX_STRIDE = 24;
+// Byte offsets of the streams in the expanded batch vertex (position, uv0, colour0), what a material's layout() names.
+const TEX_STREAM_OFFSETS = { position: 0, uv0: 12, color0: 20 };
 const LIGHT_WORLD = normalize3([0.35, 0.25, 0.9]);
 const LINE_BIAS = [1e-4, 0.01];
 const MARKER_BIAS = [1e-3, 0.6];
@@ -204,8 +206,10 @@ export class Renderer {
             pick: this._program(S.PICK),
             line: this._program(S.LINE),
             marker: this._program(S.MARKER),
-            material: this._program(S.MATERIAL),
+            material: null,
         };
+        // The programs of the generic material come from its implementation, compiled through the same shader library.
+        this.programs.material = this.materials.get('generic').programs(gl, { sources: S, compile: (source) => this._program(source) }).main;
         this.emptyLut = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.emptyLut);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(256 * 4));
@@ -383,12 +387,13 @@ export class Renderer {
             chunk.texVbo = this._buffer(buffer);
             chunk.texVao = this._vao(() => {
                 gl.bindBuffer(gl.ARRAY_BUFFER, chunk.texVbo);
-                gl.enableVertexAttribArray(0);
-                gl.vertexAttribPointer(0, 3, gl.FLOAT, false, TEX_STRIDE, 0);
-                gl.enableVertexAttribArray(1);
-                gl.vertexAttribPointer(1, 2, gl.FLOAT, false, TEX_STRIDE, 12);
-                gl.enableVertexAttribArray(2);
-                gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, TEX_STRIDE, 20);
+                for (const a of this.materials.get('generic').layout()) {
+                    gl.enableVertexAttribArray(a.location);
+                    gl.vertexAttribPointer(a.location, a.size, gl[a.type], a.normalized, TEX_STRIDE, TEX_STREAM_OFFSETS[a.stream]);
+                    if (a.divisor !== 0) {
+                        gl.vertexAttribDivisor(a.location, a.divisor);
+                    }
+                }
             });
             chunk.bytes += buffer.byteLength;
             chunk.materials = decoded.materials;
@@ -601,6 +606,7 @@ export class Renderer {
         this.stats.texturesMissing = t.missing;
         this.stats.texturesEvicted = t.evictions;
         this.stats.textureOverBudget = t.overBudget ? 1 : 0;
+        this.stats.arrayReallocs = t.arrayReallocs;
     }
 
     /** True when the chunk's batches are drawn through the material pass (it has batches and a texture store exists). */
@@ -760,8 +766,8 @@ export class Renderer {
                 }
                 for (const batch of chunk.batches) {
                     const material = chunk.materials[batch.material];
-                    const blend = material.blend ?? BLEND.OPAQUE;
-                    const group = faint || blend >= BLEND.ALPHA ? groups.blended : blend === BLEND.ALPHA_KEY ? groups.alphaKey : groups.opaque;
+                    const pass = this.materials.resolve(material.kind).pass(material);
+                    const group = faint || pass === 'blend' ? groups.blended : pass === 'alphakey' ? groups.alphaKey : groups.opaque;
                     group.push({ layer, chunk, batch, material, faint });
                 }
             }
@@ -793,29 +799,9 @@ export class Renderer {
     _drawBatch(p, ctx, store, { layer, chunk, batch, material, faint }) {
         const gl = this.gl;
         const impl = this.materials.resolve(material.kind);
-        const reference = primaryTexture(material);
-        const entry = reference ? store.get(reference.key) : null;
-        const u = impl.uniforms(material, entry);
-        applyState(gl, material);
-        if (faint) {
-            gl.enable(gl.BLEND);
-            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            gl.depthMask(false);
-        }
-        const rgb = styleRgbF(layer.color);
-        gl.uniform3f(p.u.uFlat, rgb[0], rgb[1], rgb[2]);
-        gl.uniform1f(p.u.uAlpha, faint ? layer.opacity : 1);
-        gl.uniform1f(p.u.uAlphaRef, u.alphaRef);
-        gl.uniform1i(p.u.uTextured, u.textured ? 1 : 0);
-        gl.uniform1i(p.u.uUnlit, u.unlit ? 1 : 0);
-        gl.uniform1i(p.u.uAlphaKey, u.alphaKey ? 1 : 0);
-        gl.uniform1i(p.u.uIgnoreAlpha, u.ignoreAlpha ? 1 : 0);
-        gl.uniform1i(p.u.uUseColor0, ((material.flags ?? 0) & FLAGS.USE_COLOR0) !== 0 ? 1 : 0);
-        gl.uniform1i(p.u.uFogOn, this.shading.fog && !u.unfogged ? 1 : 0);
-        gl.bindTexture(gl.TEXTURE_2D, entry ? entry.texture : store.placeholder);
-        if (entry?.ready) {
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, u.clampS ? gl.CLAMP_TO_EDGE : gl.REPEAT);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, u.clampT ? gl.CLAMP_TO_EDGE : gl.REPEAT);
+        const frame = { flat: styleRgbF(layer.color), alpha: layer.opacity, fog: this.shading.fog, faint };
+        if (!impl.bind(gl, p, material, frame, store)) {
+            return;
         }
         gl.uniform3fv(p.u.uRel, this._rel(ctx, chunk.origin));
         gl.bindVertexArray(chunk.texVao);

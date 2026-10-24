@@ -8,7 +8,7 @@ import { describeSurface, normalizePick } from './normalize.js';
 import { computeNotices } from './notices.js';
 import { Renderer, RendererUnavailable } from './renderer.js';
 import { Scene } from './scene.js';
-import { TextureStore } from './textures.js';
+import { TextureStore } from './materials/textures.js';
 import { wantedTileLayers } from './layerstate.js';
 import { Navigator } from './nav.js';
 import { tileOf } from './tiles.js';
