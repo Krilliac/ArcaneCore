@@ -1664,12 +1664,13 @@ public sealed class CharacterSaveQueueTests
         public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null, TimeSpan? busyPause = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
-            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(),
-                logger ?? NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()), announcer)
-            {
-                // A pause too long to end during a test makes the ordering asserts independent of wall-clock stalls.
-                BusyBackoff = busyPause is { } pause ? [pause] : [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)],
-            };
+            IServiceScopeFactory scopes = _services.GetRequiredService<IServiceScopeFactory>();
+            ILogger<CharacterSaveQueue> log = logger ?? NullLogger<CharacterSaveQueue>.Instance;
+            IOptions<WorldRuntimeOptions> opts = Options.Create(options ?? new WorldRuntimeOptions());
+            // A pause too long to end during a test makes the ordering asserts independent of wall-clock stalls; without one the production default stands.
+            Queue = busyPause is { } pause
+                ? new CharacterSaveQueue(scopes, log, opts, announcer) { BusyBackoff = [pause] }
+                : new CharacterSaveQueue(scopes, log, opts, announcer);
         }
 
         public RecordingStore Store { get; } = new();
