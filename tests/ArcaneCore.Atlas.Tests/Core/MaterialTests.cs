@@ -124,6 +124,15 @@ public sealed class MaterialTests
         Assert.Equal(2, batch.Priority);
     }
 
+    [Fact]
+    public void Batch_PriorityIsSigned_SoANegativeM2PriorityReadsBackNegative()
+    {
+        var batch = new GeometryBatch(0, 1, 0, 0xFFFE_0009u);
+
+        Assert.Equal(-2, batch.Priority);
+        Assert.Equal(9, batch.Geoset);
+    }
+
     private static JsonObject Edit(JsonObject json, Action<JsonObject> edit)
     {
         edit(json);

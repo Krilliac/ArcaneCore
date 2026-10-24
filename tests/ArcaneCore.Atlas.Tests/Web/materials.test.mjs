@@ -367,6 +367,36 @@ test('TextureStore evicts the least recently used texture first', async () => {
     store.dispose();
 });
 
+test('TextureStore keeps a texture used one frame ago over one unused for two frames or more', async () => {
+    const gl = new FakeGl();
+    const MB = 1024 * 1024;
+    const store = new TextureStore({ gl, fetchTexture: async () => rgba(512, 512), budgetBytes: 3 * MB });
+    for (const key of ['client:a', 'client:b', 'client:c']) {
+        store.beginFrame();
+        store.get(key);
+        store.endFrame();
+        await store.whenIdle();
+    }
+    store.beginFrame();
+    store.get('client:b'); // b was used one frame before the eviction, c two, a four
+    store.endFrame();
+    store.beginFrame();
+    store.get('client:d');
+    store.endFrame();
+    await store.whenIdle();
+    store.beginFrame(); // d has arrived: 4 MiB against 3 MiB, exactly one texture goes and it is a, the one idle longest
+    store.endFrame();
+
+    const stats = store.stats();
+    assert.equal(stats.resident, 3);
+    assert.equal(stats.evictions, 1);
+    store.beginFrame();
+    const ready = ['a', 'b', 'c', 'd'].map((k) => store.get(`client:${k}`).ready);
+    store.endFrame();
+    assert.deepEqual(ready, [false, true, true, true]);
+    store.dispose();
+});
+
 test('TextureStore fetches each texture at most twice over 100 static frames', async () => {
     const MB = 1024 * 1024;
     const counts = new Map();
@@ -621,7 +651,7 @@ test('the material registry refuses duplicates and replaces a stub only by regis
     assert.throws(() => registry.replace({ kind: 'unregistered', stub: false }), Error);
 });
 
-test('the web assets stay self-contained: same CSP, no external URLs, no workers, no persistent storage', () => {
+test('the web assets stay self-contained: same CSP, no external URLs, no workers, no persistent storage (outside js/clientfs)', () => {
     const html = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
     const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(html);
     assert.ok(csp, 'the CSP meta tag is gone');
@@ -645,6 +675,10 @@ test('the web assets stay self-contained: same CSP, no external URLs, no workers
         const relative = path.relative(WEB, file);
         const withoutCspMeta = text.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
         assert.ok(!/\bhttps?:\/\//.test(withoutCspMeta), `${relative} names an external URL`);
+        // js/clientfs is the browser-side client-file reader: its Workers and cache are its own, covered by clientfs.test.mjs.
+        if (relative.split(path.sep).slice(0, 2).join('/') === 'js/clientfs') {
+            continue;
+        }
         assert.ok(!/\bnew\s+(Shared)?Worker\b|\bimportScripts\b/.test(text), `${relative} starts a worker`);
         assert.ok(!/\bindexedDB\b|\blocalStorage\b|\bcaches\.(open|match)\b/.test(text), `${relative} uses persistent storage`);
     }

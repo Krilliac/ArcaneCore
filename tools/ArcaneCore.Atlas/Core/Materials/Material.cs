@@ -47,12 +47,12 @@ public readonly record struct TextureRef(string Key, int Slot = 0, int WrapS = 0
 /// <param name="FirstTriangle">Index of the first triangle of the run.</param>
 /// <param name="TriangleCount">Number of triangles (at least 1 in a valid chunk).</param>
 /// <param name="Material">Index into the chunk's material table.</param>
-/// <param name="Tag">Low 16 bits geoset or submesh id, high 16 bits batch priority.</param>
+/// <param name="Tag">Low 16 bits geoset or submesh id, high 16 bits batch priority (a signed 16-bit value, so a negative M2 priority reads back negative).</param>
 public readonly record struct GeometryBatch(uint FirstTriangle, uint TriangleCount, uint Material, uint Tag)
 {
     public int Geoset => (int)(Tag & 0xFFFF);
 
-    public int Priority => (int)(Tag >> 16);
+    public int Priority => (short)(Tag >> 16);
 }
 
 /// <summary>
