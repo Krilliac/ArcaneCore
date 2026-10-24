@@ -131,9 +131,9 @@ public sealed class TextureCache : ICacheParticipant
                     _ => BuildClient(parsed, delivery, maxSize, cancellationToken),
                 };
                 Interlocked.Increment(ref _encodes);
-                // An RGBA client texture's levels are the very arrays the decoded cache holds (and counts), so only the wire copy is new.
-                bool sharesDecodedLevels = parsed.Kind == KeyKind.Client && reply.Texture.Format == AtxFormat.Rgba8;
-                return (reply, reply.Wire.Length + (sharesDecodedLevels ? 0 : reply.Texture.Levels.Sum(l => (long)l.Length)));
+                // An RGBA client texture's levels are the arrays the decoded cache holds, but once that entry is evicted this one still pins them,
+                // so the wire entry is charged its levels as well: the figure over-counts while both caches hold them and never under-counts.
+                return (reply, reply.Wire.Length + reply.Texture.Levels.Sum(l => (long)l.Length));
             },
             cancellationToken: cancellationToken);
     }

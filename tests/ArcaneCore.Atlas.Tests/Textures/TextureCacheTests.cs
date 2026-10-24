@@ -208,6 +208,19 @@ public sealed class TextureCacheTests
     }
 
     [Fact]
+    public void AnRgbaClientWireEntry_IsChargedItsLevelsToo_BecauseItPinsThemAfterTheDecodedEntryGoes()
+    {
+        var files = new MemoryClientFiles();
+        files.Add(FourColoursPath, FourColours());
+        TextureCache cache = Cache(files);
+
+        TextureReply reply = cache.Get("client:Textures\\Test\\FourColours.blp", TextureDelivery.Rgba, 0, CancellationToken.None);
+
+        long levels = reply.Texture.Levels.Sum(l => (long)l.Length);
+        Assert.True(cache.Bytes >= (2 * levels) + reply.Wire.Length, $"{cache.Bytes} bytes counted for {levels} level bytes and {reply.Wire.Length} wire bytes");
+    }
+
+    [Fact]
     public void ADifferentFormatOrMaxSize_IsADifferentWireEntry_ButDecodesOnce()
     {
         var files = new MemoryClientFiles();
