@@ -257,6 +257,16 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         }
     }
 
+    /// <summary>A stripped developer opcode the session dropped unread (never a staff session: those are audited instead).</summary>
+    internal void DevOpcode(WorldSession session, WorldOpcode opcode, int length)
+    {
+        if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession state, out PacketTraffic traffic) && settings.CheckOn(PacketCheck.DevOpcode))
+        {
+            Report(session, settings, state, traffic, PacketCheck.DevOpcode, opcode, AnomalySeverity.Warning, length,
+                static length => string.Create(CultureInfo.InvariantCulture, $"stripped developer opcode, {length} bytes, dropped"));
+        }
+    }
+
     /// <summary>A payload a handler rejected as malformed (before the session disconnects), or a bad frame header (<paramref name="opcode"/> then is whatever the header named).</summary>
     internal void Malformed(WorldSession session, WorldOpcode opcode, int length, string reason)
     {

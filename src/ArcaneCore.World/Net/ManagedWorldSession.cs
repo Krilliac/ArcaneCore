@@ -143,7 +143,7 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck))
         {
-            NoteManagedRejected(opcode, payload.Length); // report only: the refusal is unchanged
+            NoteManagedRejected(opcode, payload.Length); // report only: the refusal is unchanged (a stripped dev opcode is dropped and flagged there)
             return false;
         }
 

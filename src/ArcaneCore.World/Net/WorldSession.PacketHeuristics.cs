@@ -150,6 +150,13 @@ public sealed partial class WorldSession
     /// </summary>
     private void NoteManagedRejected(WorldOpcode opcode, int length)
     {
+        if (_managed && World.IsWorldThread && !_kick.IsCancellationRequested && IsCurrentSession && _state != SessionState.Closed
+            && _opcodes.TryGet(opcode, out OpcodeHandler? stripped) && stripped.Stripped)
+        {
+            DropDevOpcode(opcode, length); // counted and flagged even with the heuristics off; the bot's action is still refused
+            return;
+        }
+
         if (_heuristics is not { Active: true } heuristics || !_managed || !World.IsWorldThread || _kick.IsCancellationRequested || !IsCurrentSession
             || _state == SessionState.Closed)
         {

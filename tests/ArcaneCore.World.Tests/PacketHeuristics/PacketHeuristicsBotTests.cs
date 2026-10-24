@@ -39,7 +39,7 @@ public sealed class PacketHeuristicsBotTests
             {
                 for (int i = 0; i < 30; i++)
                 {
-                    Assert.False(bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
+                    Assert.False(bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []));
                     bot.TryManagedAction(WorldOpcode.CmsgStandstatechange, [0, 0, 0, 0, 9]);
                     bot.TryManagedAction(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(3));
                 }
@@ -78,7 +78,7 @@ public sealed class PacketHeuristicsBotTests
             {
                 for (int i = 0; i < 30; i++)
                 {
-                    bot.TryManagedAction(WorldOpcode.CmsgBootme, []);
+                    bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []);
                 }
 
                 return true;
@@ -110,7 +110,7 @@ public sealed class PacketHeuristicsBotTests
             await OnWorld(host, () =>
             {
                 // unknown-opcode: no handler; the action is refused as it always was.
-                Assert.False(bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
+                Assert.False(bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []));
 
                 // wrong-state: a session opcode sent as a world action.
                 Assert.False(bot.TryManagedAction(WorldOpcode.CmsgPlayerLogin, new byte[8]));
@@ -149,7 +149,7 @@ public sealed class PacketHeuristicsBotTests
 
             AnomalyNotice unknown = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.UnknownOpcode));
             Assert.Equal(AnomalySeverity.Info, unknown.Severity);
-            Assert.Contains("CMSG_BOOTME", unknown.Detail, StringComparison.Ordinal);
+            Assert.Contains("CMSG_NEW_SPELL_SLOT", unknown.Detail, StringComparison.Ordinal);
             Assert.Equal("botname Phbotaone", unknown.Subject);
 
             AnomalyNotice wrongState = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
@@ -208,7 +208,7 @@ public sealed class PacketHeuristicsBotTests
             await OnWorld(host, () =>
             {
                 bot.IsInChaosProbe = true;
-                bot.TryManagedAction(WorldOpcode.CmsgBootme, []);
+                bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []);
                 bot.TryManagedAction(WorldOpcode.CmsgStandstatechange, [0, 0, 0, 0, 9]);
                 bot.IsInChaosProbe = false;
                 return true;
@@ -238,7 +238,7 @@ public sealed class PacketHeuristicsBotTests
             {
                 for (int i = 0; i < 100; i++)
                 {
-                    bot.TryManagedAction(WorldOpcode.CmsgBootme, []);
+                    bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []);
                     Interlocked.Add(ref clock, 50); // 5 s in all: inside the 10 s interval
                 }
 
@@ -251,9 +251,9 @@ public sealed class PacketHeuristicsBotTests
             // Another opcode is its own throttle key and reports at once; the same opcode after the interval reports again, carrying the held-back count.
             await OnWorld(host, () =>
             {
-                bot.TryManagedAction(WorldOpcode.CmsgDblookup, []);
+                bot.TryManagedAction(WorldOpcode.CmsgEmblazonTabardObsolete, []);
                 Interlocked.Add(ref clock, 10_000);
-                bot.TryManagedAction(WorldOpcode.CmsgBootme, []);
+                bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []);
                 return true;
             });
 
@@ -277,14 +277,14 @@ public sealed class PacketHeuristicsBotTests
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => Interlocked.Read(ref clock));
             using AnomalyCapture capture = ledger.Capture();
-            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
-            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
+            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []));
+            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []));
             Assert.Equal(1, capture.Count(Key(PacketCheck.UnknownOpcode)));
             Assert.Equal(2, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Bot));
 
             feature.Reset();
             Assert.Equal(0, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Bot));
-            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgBootme, []));
+            await OnWorld(host, () => bot.TryManagedAction(WorldOpcode.CmsgNewSpellSlot, []));
 
             Assert.Equal(2, capture.Count(Key(PacketCheck.UnknownOpcode))); // no clock advance: only the reset let it through
             Assert.Equal(1, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Bot));
