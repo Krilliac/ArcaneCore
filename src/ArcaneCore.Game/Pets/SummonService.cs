@@ -369,6 +369,7 @@ public sealed partial class SummonService : ISpellSummonSink
                         && float.IsFinite(floor)
                         && collision.ClassifyUnderMap(x, y, floor, 8f).Kind != Maps.Collision.UnderMapKind.UnderMap)
                     {
+                        // The raw mesh floor, without GroundHeight.StandOffset: the creature's own ground snap settles the offset.
                         return (x, y, floor);
                     }
                 }

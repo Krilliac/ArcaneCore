@@ -316,6 +316,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         pet.Motion.MoveFollow(owner, 2f, MathF.PI * 0.75f);
 
         float worst = 0f;
+        int samples = 0;
         float ownerX = fromX;
         for (int i = 0; i < 400; i++)
         {
@@ -330,10 +331,14 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
             if (float.IsFinite(floor))
             {
                 worst = MathF.Max(worst, MathF.Abs(pet.Z - floor));
+                samples++;
             }
         }
 
         output.WriteLine($"owner {fromX}->{toX} step {ownerStep} tick {tickMs} pathJobs {pathJobs}: pet ended ({pet.X:F1}, {pet.Y:F1}, {pet.Z:F2}), worst |z - tunnel floor| {worst:F2}");
+        Assert.True(samples > 0, "the pet was sampled over the tunnel floor at least once");
+        float toOwner = MathF.Sqrt(((pet.X - owner.X) * (pet.X - owner.X)) + ((pet.Y - owner.Y) * (pet.Y - owner.Y)));
+        Assert.True(toOwner <= 6f, $"the pet followed its owner to the end of the ramp (ended {toOwner:F1} yd away)");
         Assert.InRange(worst, 0f, 1.25f);
         Assert.Empty(capture.Notices);
     }

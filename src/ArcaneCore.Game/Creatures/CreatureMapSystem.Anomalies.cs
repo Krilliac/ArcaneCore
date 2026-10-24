@@ -309,8 +309,8 @@ public sealed partial class CreatureMapSystem
     /// it is put on that floor (when it is more than a yard below it). Reported once per episode: the episode stays open until a later sample
     /// finds the creature on the floor, so a mover that keeps putting it back under is lifted again without a new report.
     /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a
-    /// stranded creature; it does not prevent whatever put it there. The cause is NOT established: live logs show warlock imps (entry 416) 16-36 yd under the floor on several
-    /// maps with no placement context, and the summon placement and ramp-follow tests here do not reproduce it, so this stays a heal until a reproducing placement is captured.
+    /// stranded creature; it does not prevent whatever put it there. The cause is NOT established: live logs show warlock imps (entry 416) 15-36 yd under the terrain surface on several
+    /// maps (6.6 yd under the tunnel floor in WSG) with no placement context, and the summon placement and ramp-follow tests here do not reproduce it, so this stays a heal until a reproducing placement is captured.
     /// </summary>
     private bool TryLiftOntoFloorAbove(Creature creature)
     {
@@ -329,8 +329,8 @@ public sealed partial class CreatureMapSystem
             creature,
             floor,
             $"Creature {creature.Guid} was {floor - creature.Z:F1} yd under a navmesh floor (z={creature.Z:F1}, floor={floor:F1}) at ({creature.X:F1}, {creature.Y:F1}) on map {Map.MapId}: lifted onto it");
-        // As in TryRecoverClippedUnderTerrain: the stop packet carries the old (under-floor) position and Relocate sends none,
-        // so clients see the corrected z once the movement generator launches its next spline.
+        // The stop packet carries the old (under-floor) position and Relocate sends none, so clients see the corrected z once the
+        // movement generator launches its next spline; an idle creature is not re-sent until it next moves, so clients keep seeing it under the floor until then.
         StopMoving(creature);
         if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
         {
