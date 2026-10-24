@@ -110,7 +110,13 @@ public sealed class InspectSectionRegistryTests
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("INSPFAIL", "Inspfail", AccountSecurity.GameMaster);
         await gm.CollectAsync();
-        using IDisposable boom = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "boom", (context, _) => context.InvokerName == "Inspfail" ? throw new InvalidOperationException("secret detail") : null, Order: 1));
+        InvalidOperationException? thrown = null;
+        using IDisposable boom = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "boom", (context, _) =>
+        {
+            if (context.InvokerName != "Inspfail") return null;
+            thrown = new InvalidOperationException("secret detail");
+            throw thrown;
+        }, Order: 1));
         using IDisposable empty = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "empty", (_, _) => [], Order: 2));
         using IDisposable fine = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "fine", (context, subject) => context.InvokerName == "Inspfail" ? [$"for {subject.Unit?.GetType().Name}"] : null, Order: 3));
 
@@ -121,6 +127,7 @@ public sealed class InspectSectionRegistryTests
         Assert.Equal("for Player", lines[^1]);
         Assert.DoesNotContain(lines, l => l.Contains("empty", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("secret detail", StringComparison.Ordinal));
+        Assert.True(ArcaneCore.Kernel.Diagnostics.FaultLedger.WasRecorded(thrown), "the section exception must reach the fault ledger");
     }
 
     private sealed class DiscoveredProbe : IInspectSection

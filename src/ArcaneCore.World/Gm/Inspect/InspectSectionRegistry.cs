@@ -83,6 +83,8 @@ public static class InspectSectionRegistry
             }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
+                // The chat line stays terse; the exception goes to the log and the fault ledger.
+                CommandFaultLogging.Log(context, "gm.inspect-section", error, $"inspect {LeafName(leaf)} [{section.Name}]");
                 context.Reply($"[{section.Name}] failed: {error.GetType().Name}");
                 continue;
             }
