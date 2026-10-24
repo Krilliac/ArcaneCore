@@ -362,6 +362,18 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
         }
     }
 
+    /// <inheritdoc />
+    public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_sync)
+        {
+            return Task.FromResult(_decisions.Values.Count(d =>
+                d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed));
+        }
+    }
+
     private TransferDecisionRecord GetRequiredLocked(Guid transferId)
     {
         if (!_decisions.TryGetValue(transferId, out TransferDecisionRecord? record))

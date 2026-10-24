@@ -246,17 +246,27 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
     }
 
-    private async Task MonitorLoopAsync(CancellationToken ct)
+    /// <summary>
+    /// The manifest this world presents to the nodes it monitors. The characters and world schema versions are this build's (the
+    /// versions the database contexts are composed at), not literals that go stale each time a schema module is added.
+    /// </summary>
+    internal static ClusterNodeManifest BuildWorldManifest(Guid nodeIncarnation)
     {
-        var worldManifest = new ClusterNodeManifest(
+        ClusterCommands.DiagSchemaVersions schema = ClusterCommands.DiagSchemaVersions.Current;
+        return new(
             RealmId: 1,
             NodeId: "world-1",
-            NodeIncarnation: _world?.CharacterOwnership?.Incarnation ?? Guid.NewGuid(),
+            NodeIncarnation: nodeIncarnation,
             Role: ClusterRole.Gateway,
             ContractVersion: ClusterNodeManifest.CurrentContractVersion,
-            CharactersSchemaVersion: 61,
-            WorldSchemaVersion: 19,
+            CharactersSchemaVersion: schema.Characters,
+            WorldSchemaVersion: schema.World,
             ContentRevision: "dbc-1.12.1-5875-w44");
+    }
+
+    private async Task MonitorLoopAsync(CancellationToken ct)
+    {
+        ClusterNodeManifest worldManifest = BuildWorldManifest(_world?.CharacterOwnership?.Incarnation ?? Guid.NewGuid());
 
         // Wait briefly for WorldHost to finish initial startup before logging node connections.
         try

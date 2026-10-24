@@ -100,4 +100,7 @@ public interface ITransferDecisionStore
     Task<IReadOnlyList<TransferDecisionRecord>> GetUnresolvedForCharacterAsync(
         ulong characterGuid,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Counts every transfer, across all characters, in <see cref="PlayerTransferDecisionState.PreCommit"/> or <see cref="PlayerTransferDecisionState.Committed"/>.</summary>
+    Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default);
 }

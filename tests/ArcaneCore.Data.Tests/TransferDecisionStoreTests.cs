@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Characters.Transfers;
+using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
@@ -44,6 +45,60 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         EfTransferDecisionStore store = services.GetRequiredService<EfTransferDecisionStore>();
         Assert.Same(store, services.GetRequiredService<ITransferDecisionStore>());
         Assert.Same(store, services.GetRequiredService<IWorldHandoffStore>());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheDecisionTable_IndexesState_SoTheAggregateCountDoesNotScan(DatabaseProvider provider)
+    {
+        (ServiceProvider services, _) = await OpenAsync(await _databases.CreateAsync(provider));
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        var entity = db.Model.FindEntityType(typeof(ClusterTransferDecisionRow));
+        Assert.NotNull(entity);
+        Assert.Contains(entity!.GetIndexes(), i => i.Properties.Count == 1 && i.Properties[0].Name == nameof(ClusterTransferDecisionRow.State));
+        Assert.Contains(ClusterTransferStateIndexDataModule.Version, DataModules.For(DatabaseComponent.Characters).Select(m => m.SchemaVersion));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task CountUnresolvedAsync_CountsPreCommitAndCommittedAcrossAllCharacters_AndNothingElse(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        (_, EfTransferDecisionStore store) = await OpenAsync(connection);
+        Assert.Equal(0, await store.CountUnresolvedAsync());
+
+        Guid preCommit = Guid.NewGuid(), committed = Guid.NewGuid(), completed = Guid.NewGuid(), aborted = Guid.NewGuid();
+        var tokens = new Dictionary<Guid, (ulong Guid, CharacterOwnershipToken Token)>();
+        foreach ((Guid id, ulong guid) in new[] { (preCommit, 21UL), (committed, 22UL), (completed, 23UL), (aborted, 24UL) })
+        {
+            var token = new CharacterOwnershipToken($"char:{guid}", 1, Guid.NewGuid());
+            tokens[id] = (guid, token);
+            await store.CreateReservationAsync(id, guid, 11, 5, A, B, 0, 0, 1, 0, token);
+        }
+
+        Assert.Equal(4, await store.CountUnresolvedAsync());
+
+        await store.AbortPreCommitAsync(aborted, "test");
+        Assert.Equal(3, await store.CountUnresolvedAsync());
+
+        foreach (Guid id in new[] { committed, completed })
+        {
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture, Bundle(id, tokens[id].Guid, tokens[id].Token));
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.InstallPassive);
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.StageWorldPort);
+            await store.CommitDecisionAsync(id, Guid.NewGuid());
+        }
+
+        Assert.Equal(3, await store.CountUnresolvedAsync()); // a committed transfer is still unresolved
+
+        await store.MarkCompletedAsync(completed);
+        Assert.Equal(2, await store.CountUnresolvedAsync());
+
+        // The count is read from storage, so a new process agrees with the old one.
+        (_, EfTransferDecisionStore restarted) = await OpenAsync(connection);
+        Assert.Equal(2, await restarted.CountUnresolvedAsync());
+        Assert.Single(await restarted.GetUnresolvedForCharacterAsync(21));
     }
 
     [Theory]
