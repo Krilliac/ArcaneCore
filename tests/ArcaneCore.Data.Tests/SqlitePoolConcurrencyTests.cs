@@ -55,11 +55,21 @@ public sealed class SqlitePoolConcurrencyTests
                     {
                         SqliteConnection? connection = null;
                         bool registered = false;
+                        bool startSignaled = false;
                         nint handle = 0;
                         try
                         {
-                            connection = new SqliteConnection(cs);
-                            start.SignalAndWait();
+                            try
+                            {
+                                connection = new SqliteConnection(cs);
+                            }
+                            finally
+                            {
+                                // Always release the start barrier exactly once, even if construction failed.
+                                startSignaled = true;
+                                start.SignalAndWait();
+                            }
+
                             connection.Open();
                             handle = connection.Handle!.DangerousGetHandle();
                             registered = owners.TryAdd(handle, id);
@@ -68,20 +78,43 @@ public sealed class SqlitePoolConcurrencyTests
                                 failures.Enqueue($"round {round}: handle shared by threads {owners[handle]} and {id}");
                             }
                         }
-                        catch (SqliteException ex)
+                        catch (Exception ex)
                         {
-                            failures.Enqueue($"round {round}: open failed: {ex.Message}");
+                            // Nothing may escape a raw Thread: it would crash the test host.
+                            failures.Enqueue($"round {round}: thread {id} failed: {ex.GetType().Name}: {ex.Message}");
                         }
                         finally
                         {
-                            // Hold every connection open until all threads have opened (or failed), then release.
-                            allOpen.SignalAndWait();
+                            try
+                            {
+                                if (!startSignaled)
+                                {
+                                    startSignaled = true;
+                                    start.SignalAndWait();
+                                }
+
+                                // Hold every connection open until all threads have opened (or failed), then release.
+                                allOpen.SignalAndWait();
+                            }
+                            catch (Exception ex)
+                            {
+                                failures.Enqueue($"round {round}: thread {id} barrier failed: {ex.GetType().Name}: {ex.Message}");
+                            }
+
                             if (registered)
                             {
                                 owners.TryRemove(handle, out _);
                             }
 
-                            connection?.Dispose();
+                            try
+                            {
+                                connection?.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                failures.Enqueue($"round {round}: thread {id} dispose failed: {ex.GetType().Name}: {ex.Message}");
+                            }
+
                         }
                     }) { IsBackground = true };
                     threads[t].Start();
