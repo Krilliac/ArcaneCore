@@ -37,6 +37,8 @@ the budget and the share of ticks that ended on the time or action budget (the s
 - *Motion lease.* A route is walked for `max(4 s, 8 x ThinkIntervalMs, 3 x the bot's smoothed think gap)`, the gap term capped at `PlayerbotMotion.LeaseCapMs(pass) = clamp(1.5 x pass, 15 s, 120 s)`. A bot with no gap of its own yet (fresh login or re-add: its first think skips the gap measure) is taken to wait one full pass, so its gap term is `min(3 x pass, cap)`: the cap itself once the pass is over 5 s (a 15 s lease at an 8 s pass, 30 s at 20 s). Before this the cap was a fixed 15 s, under the real gap, and bots stopped mid-road (`bot-motion/lease-expired-midroute`).
 - *think-starved.* A bot silent for longer than `max(ThinkStarvedGapMs, 1.5 x pass)` (`PlayerbotThinkStarvation.ReportBoundMs`; 3 x `ThinkStarvedGapMs` until a pass is measured; 10 s default, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly, so it flags a bot that fell behind the rotation, not a rotation that is slow for every bot. The budget floor and the combat lane's yield (`PriorityScale`) keep the unraised bound.
 
+A world stall longer than 120 s (a pause, a long GC, a debugger stop) is not one sample: every bot's first think after the stall measures the stall, so the whole first pass afterwards feeds capped 120 s samples (the cap above, one per bot) and the estimate rises quickly toward 120 s (`RiseWindow` 8). That is why it holds near 120 s for about one pass: leases run at the 120 s cap and the think-starved bound sits near 180 s. Once that pass is over, normal gaps pull it down at the slow rate (`Window` 64, `PlayerbotThinkBudget`), which halves the excess in about 44 samples. How fast it recovers afterwards depends on the population: well under one pass at 1000 bots, several passes below about 64 bots. It is the smoothing at work, not a pass that really took two minutes.
+
 The rotation cursors follow bot ids, not list indexes: the list is sorted by id and rebuilt when a bot joins or leaves, and the cursor resumes at the first id after the last one visited (`PlayerbotThinkRotation.Track`), so a change before the cursor skips nobody.
 
 **Caps.** `MaxBots` (0..5000, `PlayerbotOptions.MaxBotsCeiling`) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
@@ -1340,7 +1342,7 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 | `instance` | Instance target, bot neither grouped with the target nor inside it. |
 | `other-instance` | Same map id, a different instance than the target's. |
 | `map-not-allowed` | The destination map is not in `AllowedMaps`. |
-| `security` | The bot's account outranks the invoker (never from the console). |
+| `security` | The bot's account outranks the invoker (never from the true console; a remote-administration invoker is checked like any other). |
 | `not-running` | The registered bot has no live in-world session. |
 | `not-managed` | The session is not a managed bot. |
 | `no-free-spot` | No ring slot with ground and line of sight was left for it. |

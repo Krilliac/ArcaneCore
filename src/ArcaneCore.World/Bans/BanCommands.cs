@@ -145,7 +145,7 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
-            if (options.ProtectHigherSecurity && !context.IsConsole && owner.Value.AccountId != authorAccount && owner.Value.Security >= context.Security)
+            if (options.ProtectHigherSecurity && !context.IsTrueConsole() && owner.Value.AccountId != authorAccount && owner.Value.Security >= context.Security)
             {
                 context.Reply(BanCommandText.TargetSecurityTooHigh);
                 return;
@@ -188,7 +188,7 @@ public sealed class BanCommands : ICommandGroup
         AccountSecurity invokerSecurity = context.Security;
         int invokerAccount = context.Session.AccountId;
         string author = context.InvokerName;
-        bool isConsole = context.IsConsole; // vmangos SEC_CONSOLE outranks every account
+        bool isConsole = context.IsTrueConsole(); // only the true console outranks every account (vmangos SEC_CONSOLE)
 
         // Live levels are read here, on the world thread; the store work runs off it.
         var onlineLevels = new Dictionary<int, int>();

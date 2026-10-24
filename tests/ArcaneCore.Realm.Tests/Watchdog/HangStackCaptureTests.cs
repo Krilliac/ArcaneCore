@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using Xunit;
@@ -110,5 +111,34 @@ public sealed class HangStackCaptureTests : IDisposable
         {
             Environment.SetEnvironmentVariable(name, null);
         }
+    }
+
+    [Fact]
+    public void TheStackTool_DoesNotInheritTheCrashDumpVariables_ButKeepsTheRest()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["DOTNET_DbgEnableMiniDump"] = "1", ["DOTNET_DbgMiniDumpType"] = "4", ["DOTNET_DbgMiniDumpName"] = "x.dmp",
+            ["DOTNET_CreateDumpDiagnostics"] = "1", ["DOTNET_CreateDumpVerboseDiagnostics"] = "1", ["DOTNET_CreateDumpLogToFile"] = "x.log",
+            ["COMPlus_DbgEnableMiniDump"] = "1", ["COMPlus_DbgMiniDumpType"] = "4", ["COMPlus_CreateDumpDiagnostics"] = "1",
+            ["dotnet_dbgminidumpname"] = "lower.dmp",
+            ["DOTNET_gcServer"] = "0", ["DOTNET_ROOT"] = "D:/dotnet", ["PATH"] = "p",
+        };
+
+        ProcessHangStackRunner.RemoveDumpVariables(environment);
+
+        Assert.Equal(["DOTNET_ROOT", "DOTNET_gcServer", "PATH"], environment.Keys.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void TheStackToolStartInfo_HasNoDumpVariables_AndRedirectsWithoutAWindow()
+    {
+        ProcessStartInfo start = ProcessHangStackRunner.CreateStartInfo("C:/tools/dotnet-stack.exe", ["report", "-p", "42"]);
+
+        Assert.DoesNotContain(start.Environment.Keys, k => k.StartsWith("DOTNET_DbgEnableMiniDump", StringComparison.OrdinalIgnoreCase)
+            || k.StartsWith("DOTNET_DbgMiniDump", StringComparison.OrdinalIgnoreCase) || k.StartsWith("DOTNET_CreateDump", StringComparison.OrdinalIgnoreCase)
+            || k.StartsWith("COMPlus_DbgMiniDump", StringComparison.OrdinalIgnoreCase) || k.StartsWith("COMPlus_CreateDump", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["report", "-p", "42"], start.ArgumentList.ToArray());
+        Assert.True(start.RedirectStandardOutput && start.RedirectStandardError && start.CreateNoWindow && !start.UseShellExecute);
     }
 }

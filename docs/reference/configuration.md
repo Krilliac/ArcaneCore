@@ -1372,6 +1372,7 @@ How to read the tables:
 | `World:PacketHeuristics:CadenceLimits:PingMinIntervalMs` | `int` | `5000` | - | A CMSG_PING that follows the previous one by less than this many milliseconds is reported (a 1.12.1 client pings every 30 seconds). 0 switches it off. 0-60000, default 5000. |
 | `World:PacketHeuristics:CadenceLimits:QueryPerSecond` | `int` | `50` | - | Query opcodes (names containing QUERY) per second. A client entering a crowded city can burst; raise it if that is all you see. 0-1000, default 50. |
 | `World:PacketHeuristics:CadenceLimits:UsePerSecond` | `int` | `10` | - | CMSG_USE_ITEM, CMSG_GAMEOBJ_USE and CMSG_LOOT per second. 0-1000, default 10. |
+| `World:PacketHeuristics:DevOpcode` | `bool` | `true` | - | Report a stripped developer, GM, cheat or debug opcode that the release client never sends (`dev-opcode`); the packet is dropped unread either way. Default true. |
 | `World:PacketHeuristics:Enabled` | `bool` | `false` | - | Run the checks at all. Default false: with it off a packet costs one volatile read and no per-session state exists. |
 | `World:PacketHeuristics:ExemptBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked. Default true; with false their traffic is checked and counted as bot traffic. |
 | `World:PacketHeuristics:ExemptStaff` | `bool` | `true` | - | Staff (Moderator and above, or a player in GM mode) are not checked. Default true; with false their traffic is checked and counted as staff traffic. |
