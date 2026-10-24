@@ -33,6 +33,7 @@ public sealed class PlayerbotTraceRaceTests
         const int AdvanceMs = 240_000;
         bool attacking = false;
         int toggles = 0, built = 0, interleaved = 0, lastSeen = -1, restarts = 0;
+        using SemaphoreSlim flipped = new(0);
         Func<bool> flip = () =>
         {
             Player victim = world.Player(tank.Id);
@@ -43,7 +44,8 @@ public sealed class PlayerbotTraceRaceTests
             }
 
             attacking = !attacking;
-            toggles++;
+            Volatile.Write(ref toggles, toggles + 1);
+            flipped.Release(); // lockstep: the test thread requests its next trace only after a flip
             return Volatile.Read(ref built) >= Target;
         };
         Task<bool> running = world.RunUntilAsync(AdvanceMs, flip);
@@ -57,20 +59,25 @@ public sealed class PlayerbotTraceRaceTests
                 running = world.RunUntilAsync(AdvanceMs, flip);
             }
 
+            // Lockstep: a trace is requested only once the world has flipped the attacker set since the previous request, so every trace
+            // is built in a different tick from the last, with a flip between them, whatever the relative speed of the two threads.
+            int before = Volatile.Read(ref toggles);
+            if (before == lastSeen)
+            {
+                await flipped.WaitAsync(TimeSpan.FromMilliseconds(250)); // bounded; the loop re-checks the advance and the real-time cap
+                continue;
+            }
+
             string trace = await world.TraceAsync();
-            int seen = Volatile.Read(ref toggles);
             Assert.False(string.IsNullOrEmpty(trace));
-            if (seen != lastSeen) interleaved++;
-            lastSeen = seen;
+            interleaved++;
+            lastSeen = before;
             Interlocked.Increment(ref built);
         }
 
         // Fails only if the real-time cap was hit, i.e. the world is stuck.
         Assert.Equal(Target, built);
-        // A tick drains the whole command queue, so a trace posted while the previous tick is still draining can share its tick; the
-        // property that matters is that traces were mostly built in different ticks, between flips of the attacker set. That holds on
-        // any machine speed (the old count only stood in for it through wall-clock speed); with no advance running it would be 0.
-        Assert.True(interleaved >= Target / 4, $"only {interleaved} of {built} traces saw the attacker set change ({toggles} flips, {restarts} advance restarts)");
+        Assert.True(interleaved == built, $"only {interleaved} of {built} traces saw the attacker set change ({toggles} flips, {restarts} advance restarts)");
         await running;
     }
 }
