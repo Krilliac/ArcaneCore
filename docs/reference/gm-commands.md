@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 372 |
-| `Administrator` | 6 | 562 |
+| `GameMaster` | 3 | 374 |
+| `Administrator` | 6 | 570 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -78,6 +78,13 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug scheduler` | 3 | GameMaster | declared retail level | Syntax: .debug scheduler [#count] Show the world tick scheduler (interval, late tolerance, late and skipped ticks, next due) and the deferred work queues: posted world commands, pending teleports, and the maps with the most queued work (delayed unit actions, charm links, AI relocation notices, assist calls, relay and db script steps, arrival relays, script despawns; default 15 maps). |
 | `.debug opcodes` | 3 | GameMaster | declared retail level | Syntax: .debug opcodes [on\|off\|reset\|in\|out\|bytes] [#count] Per-opcode traffic since the last reset: packets and bytes in and out by protocol and opcode, busiest first (by packets in+out, 'in', 'out' or 'bytes'; default 15 rows). Counting runs while a metrics listener is attached or after '.debug opcodes on' (off again with 'off'); 'reset' starts a new window. |
 | `.debug botthink` | 3 | GameMaster | declared retail level | Syntax: .debug botthink [#count] Show playerbot think diagnostics: logged-in and running counts, split-brain latch, playerbot feature tick time, slow-think anomaly count and recent slowest phases, active goal distribution, and up to #count bots (default 10, max 60). |
+| `.debug lift` ... | 3 | GameMaster | declared retail level | Syntax: .debug lift [#guid] Show an elevator (the nearest within 100 yards without #guid): cycle length, progress, the stops (stationary runs, numbered by start), time to the next stop, speed, frozen, and the players who have it in view. Change it with: .debug lift phase\|stop\|freeze\|resume\|speed\|reset. |
+| `.debug lift phase` | 6 | Administrator | stored level through the map | Syntax: .debug lift phase #ms [#guid] Jump the elevator to #ms into its cycle (taken modulo the cycle) and resend it to the players who have it. Not saved; ends when its grid unloads. |
+| `.debug lift stop` | 6 | Administrator | stored level through the map | Syntax: .debug lift stop #n [#guid] Jump the elevator to the start of its Nth stationary run (see .debug lift) and resend it to the players who have it. |
+| `.debug lift freeze` | 6 | Administrator | stored level through the map | Syntax: .debug lift freeze [#guid] Hold the elevator where it is on the server (bots, anti-cheat). Players who have it keep the normal animation on their clients and see it out of sync until .debug lift reset. |
+| `.debug lift resume` | 6 | Administrator | stored level through the map | Syntax: .debug lift resume [#guid] Continue a frozen elevator from where it stands at its previous speed and resend it to the players who have it. |
+| `.debug lift speed` | 6 | Administrator | stored level through the map | Syntax: .debug lift speed #factor [#guid] Run the elevator at #factor times its speed (0.1 to 10) on the server and resend it. Players who have it keep the normal speed on their clients (they see it out of sync) until .debug lift reset. |
+| `.debug lift reset` | 6 | Administrator | stored level through the map | Syntax: .debug lift reset [#guid] Put the elevator back on its normal schedule (the time since it was created) and resend it to the players who have it. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug gccollect` | 6 | Administrator | declared retail level | Syntax: .debug gccollect Force a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
@@ -586,6 +593,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot party add` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party add $id\|$name Invite a running bot into your party. |
 | `.playerbot party remove` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party remove $name Remove a bot from your party. |
 | `.playerbot party list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot party list List the bots currently in your party. |
+| `.playerbot lift` | 3 | GameMaster | stored level through the map | Syntax: .playerbot lift [$name] List the bots riding an elevator now: stage (ToStop, Waiting, Aboard, Falling), the lift and chosen car, the time in the stage, and whether a walking route is held. With $name, that bot's ride in detail. For the lift itself see .debug lift. |
 | `.playerbot eventscenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario list .playerbot eventscenario status [#event] Bot scenarios that start and stop with a game event (game_event_playerbot_* tables): which events have one, and for a running one how far each bot group is (claimed, online, at level, placed, posts or siege). |
 | `.playerbot eventscenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario list The game events that have a bot scenario, and whether each is running. |
 | `.playerbot eventscenario status` | 6 | Administrator | stored level through the map | Syntax: .playerbot eventscenario status [#event] Per bot group of the event (or of every scenario event): bots claimed of wanted, online, at level, placed, posts set or the siege's state or last refusal, and bots short for lack of room. |
