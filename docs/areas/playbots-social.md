@@ -213,6 +213,124 @@ relation exists. The built-in greeting says "welcome back" at familiarity 3 or m
 
 **GM command**: `.playerbot social $bot` (Administrator, read-only) shows the traits and the ten best-known relations.
 
+## Helping (`World:Playerbots:Social:Helping`, live)
+
+Design: `docs/design/playerbot-social.md` 4.4 and 4.9 (phase P2). Everything here goes through the bot's own session and the existing
+handlers (`CMSG_ATTACKSWING`, `CMSG_CAST_SPELL`); the lane that decides is `PlayerbotHelpLane` (social pass, world thread) and the lane that
+acts is the bot's own think (`PlayerbotBrain.Help.cs`), so a helping bot walks, fights and heals through the code every other bot uses.
+
+**Answering a call for help** (`AnswerHelp`, on by default). A bot that is asked decides with `PlayerbotCallForHelp.Answers`: its
+helpfulness (a stable trait of its guid) scaled by how it feels about the asker (`1 + affinity / 100`, through `EffectiveAffinity`), one hash
+roll per bot, asker and 15-second bucket. It is asked in two ways: a text emote `/helpme` aimed at it (the party intake sees
+`SMSG_TEXT_EMOTE`), or a help yell or say (the whole word "help") that the bot hears, from a same-faction player or bot within
+`World:Playerbots:Social:Memory:BystanderRadiusYards`. Only a *free* bot answers: its own brain drives it (not a party, not a coordinator group, so never a dungeon run),
+it is alive, out of combat, above 70% health, not in a duel, and on a low-priority goal (explore, quest, grind, vendor, train, home, mount;
+never combat, rest, recover, retreat, battleground). The asker must be alive, in a fight, and neither disliked (affinity below 0) nor a rival.
+On yes the bot takes the asker's nearest attacker through the assist lane that `DropIfSomeoneElses` uses (`PlayerbotContention.BeginAssist`): the
+attack is a normal attack, and a priest, paladin, druid or shaman heals the asker first (`TryHealTagger`). The help is recorded once as
+`HelpedThem` / `HelpedBy` (`PlayerbotSocialRecorder.NoteHelp` counts a pair once per fight). On no it stays and, about one time in six and never
+to someone it dislikes, says "Sorry, can't" through the announcement path. A bot decides about one asker once a minute.
+
+**The trouble scan** (`World:Playerbots:Social:Helping:Enabled`, `TroubleRadiusYards`). Each pass looks at up to 24 free bots, round robin, each at most once per 5 seconds, and
+at the same-faction players it sees within `TroubleRadiusYards` (default 30; the sight list is capped). A player is *in trouble* when it is
+alive, in a fight (not a duel) and below 40% health, or a caster below 20% mana that is moving (running). The first sighting starts an episode
+(it ends after 20 seconds without trouble); the bot's yes or no is one hash roll of the bot, the victim and the episode start, scaled by
+helpfulness and by `1 + affinity / 100`, so the answer is the same on every pass of one fight and a rival is never helped. The bot must be free
+(see above) and take the victim's attacker under the flag rule below; the help is the same assist lane as answering a call.
+
+**Resurrecting** (`ResurrectStrangers`). A priest, paladin, druid or shaman that is free and sees a same-faction player dead within reach (25 yards,
+unit or, once released, the corpse) rolls once per corpse and casts its resurrection spell (the group AI's `FindResurrectionSpell`: highest
+rank, reagents carried). A dead player the bot owes a favour (gratitude, below) bypasses the roll. A flagged corpse is not raised by an unflagged
+bot. A bot that is raised by a same-faction player it does not hold as a rival accepts (`OnResurrectRequest`; a group member is accepted as before).
+
+**Buffing** (`BuffStrangers`, `BuffCooldownMinutes`). A free priest (Power Word: Fortitude), druid (Mark of the Wild), mage (Arcane Intellect) or
+paladin (Blessing of Might) that passes a same-faction player out of combat within 25 yards offers the buff with a small hash chance, once per
+bot and stranger per `BuffCooldownMinutes` (default 30), never to a player who carries it already or to a flagged one when the bot is not flagged.
+
+**Never against a fight that would flag the bot.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP:
+the bot takes such a fight only when it is flagged already or `World:Playerbots:Social:WarMode:Enabled` is on, and the brain's targets are
+creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
+healer).
+
+## Gratitude (`World:Playerbots:Social:Gratitude`, live)
+
+A bot thanks whoever helped it: a rescue in a fight (`PlayerbotSocialRecorder.NoteHelp` records `HelpedBy` and queues the thanks), a resurrection
+from a player outside its group (`PlayerbotPartyAI.OnResurrectRequest`) or a positive aura from a same-faction player outside its group
+(`SpellSystem.HolderAdded`, seen by `ManagedPlayerbotFeature`). `PlayerbotGratitudeLane` (social pass) takes up to 16 per pass, **once per helper
+per fight** (the same 60-second pair window as the help record):
+
+- a `thank` text emote (97) at the helper within 30 yards, **always**, across factions too (`CMSG_TEXT_EMOTE`);
+- for a same-faction real player, a short line (`social.thanks` templates, or the model) with the bot's Chattiness as the chance, through
+  `TryAnnounce` (limiter, safety screen, disclosure; the opt-in decides only whether a model may phrase the line, never who is spoken to);
+- with the Generosity trait at 0.6 or more and affinity 30 or more (never a rival), one favour, chosen by a hash: with the chance
+  `TipChance` x Generosity a tip, else a buff (the bot's class buff, through the help request) or a debt of resurrection (the help lane raises the helper without
+  a roll if they die within 30 minutes).
+
+The **tip** is a real trade over the existing handlers: `CMSG_INITIATE_TRADE` to the helper (a real player within 8 yards), `CMSG_SET_TRADE_GOLD`
+once the helper opened the window, `CMSG_ACCEPT_TRADE`; it ends when the gold moved, the trade closed, the helper went away, the bot fought, or after 45 seconds. Its size is at most 1% of the bot's gold and
+at most `MaxTipCopper` (10000, one gold) at level 60, scaled down in proportion at lower levels. `MaxTipCopper` 0 turns tips off.
+
+## Mood (`World:Playerbots:Social:Mood`, live)
+
+Each bot has a short-term mood, -1 to +1, in memory only (`PlayerbotMood`, kept by the social recorder; a restart resets it to 0). It is nudged by
+events and decays toward 0 with a half-life of `HalfLifeMinutes` (default 30):
+
+- up: a level (+0.30), a better equipped item (+0.15, read from the equipped item levels every 10 seconds), a group success (+0.06 per member remembered),
+  help received (+0.20, `HelpedBy`);
+- down: a death (-0.25), a wipe (-0.10 per member remembered), a kick (-0.40), a rude emote (-0.15), a chat strike (-0.30); a PvP death counts as the death (-0.25) only.
+
+The social-memory events move the mood where they are recorded (`PlayerbotSocialRecorder.Note` and `NoteById`); the bot's own level, death and gear are read on the pass
+(`PlayerbotMoodLane`). The mood multiplies the chance of the bot's own talk by 0.5 at -1 to 1.5 at +1 (`PlayerbotMood.ChanceMultiplier`; the thanks line uses it today and the
+initiative chances below use it too). At +0.3 or more the tone is cheerful, at -0.3 or less grumpy: a template key with `.mood.cheerful` or `.mood.grumpy` lines
+(`social.thanks`, `social.greet`, `help.sorry`) uses them instead of the plain lines, and the model prompt gets one mood sentence (`BotChatPersona.Mood`). The GM command
+`.playerbot social <bot>` shows the mood, its tone and the chance multiplier. `Enabled` false makes every mood 0.
+
+## Initiative (`World:Playerbots:Social:Initiative`, live)
+
+`PlayerbotInitiativeLane` (`Social/PlayerbotSocialInitiative.cs`, social pass, world thread) lets a bot start a conversation. At most
+`MaxOpeningsPerPass` (4) openings happen server-wide per pass; every one goes through `PlayerbotChat.TryAnnounce`, so the limiter, the safety screen and the AI disclosure apply (TryAnnounce itself does not refuse a whisper to a player who never opted in: the opt-in only decides whether a model may phrase it; who is whispered to is decided by the lane, below),
+and a model may phrase it where the player opted in (otherwise the `social.*` templates). A round of 24 free bots (their own brain
+drives them, alive, out of combat, healthy, on a low-priority goal) looks at the same-faction characters within 20 yards, one bot at most every 20 seconds. An opening needs a reason:
+
+- **Shared objective**: the bot is on a quest and the other holds the same quest unfinished (`PlayerbotGroupCoordinator.SharesGoal`): "You on the <quest> too? Want to team up?"
+  The reply is the player's **next say** within hearing of the bot (they need not name it; `PlayerbotSocialRecorder.NoteHeardSay`). For this offer only a clear yes ("sure", "yes", "ok") counts;
+  negations ("not sure", "no", "can't") do not. A yes raises a group signal (source `contention`, the bot's objective creature and quest) and the lane then calls the coordinator's
+  `Volunteer(bot, player)` (retried each pass until the bot waits, two minutes at most), which matches that very player; with `World:Playerbots:Groups:InvitePlayers` the leader sends the ordinary
+  invitation and, once accepted, the player and the bot are in one group. Between two bots, the answering bot rolls its own yes and the lane follows it through with `OfferLfg`, so the answerer pledges to the asker's waiting group.
+- **Follow-up**: familiarity 3 or more, affinity 0 or more and a last topic set: "How did <topic> go?" (once per pair per 6 hours).
+- **Greeting**: familiarity 2 or more, affinity 0 or more and the other was not in sight for 10 minutes: "Welcome back" (once per pair per 6 hours).
+- **Bot to bot**: the same openings between two bots only where a real same-faction player stands within `World:Playerbots:Social:Memory:BystanderRadiusYards`.
+
+Each has a base chance (0.5, 0.3, 0.25) times 0.5 + the bot's Sociability, times the mood multiplier (0.5..1.5), rolled as a hash of the bot, the other and the minute.
+A bot never opens with a rival or someone it dislikes, nor with a player who ignores it. **Unprompted whispers and greetings** only go to a real player the bot has really interacted with
+(`PlayerbotRelationFlags.Interacted`, set by a chat exchange, a completed trade, help received, a friendly emote, an apology or a group, and persisted) or who opted in; help the bot
+gave on its own does not count. Everyone else gets a public /say. A real player is opened with at most once per `OpeningCooldownMinutes` (30) by any bot. If they do not answer within 120 seconds the bot
+loses 1 affinity (`OpeningIgnored`, no familiarity) and the cooldown for that player doubles (up to 16x). A **decline** ("no", "not now", "can't") backs off the same way, with no affinity
+penalty; only a positive reply clears the back-off.
+
+**Surroundings comments** (`CommentsEnabled`): a free bot with a real same-faction listener within earshot rarely says (template, or the model) one of: a rare creature (rank rare or rare elite)
+within 60 yards, a game event that started since the last pass, four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
+simplified and in memory only: a player of level 40 or more seen on foot and later seen mounted (nothing is persisted, and there is no spellbook or skill check, so a restart forgets who was seen on foot).
+Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one per bot per `CommentBotGapMinutes` (10) and one per zone per `CommentZoneGapSeconds` (60).
+
+## Review round 1 (P2)
+
+- **PvP flags.** A player-flagged creature or player is a flagging fight (`PlayerbotHelpRules.WouldFlag`).
+- **Winnable fights only.** A helper takes an attacker only within 3 levels above it; an elite needs a group of 3 or more; a healer needs 30% mana (`HelperFit`).
+- **Calls are capped.** One call draws at most `World:Playerbots:Social:Helping:MaxAnswersPerCall` (default 2) answers.
+- **Once per death.** A dead player is offered one resurrection per death, however long the body lies; corpses older than `World:Playerbots:Social:Helping:ResurrectMaxCorpseMinutes` (default 10) are left.
+- **Assist credit.** The help is recorded only once the bot is on the attacker's threat list; a bot-given resurrection by a stranger is thanked once (the gratitude lane; the voice "ty" is for group members).
+- **Lane isolation.** Each social lane runs in its own try/catch; a lane that throws is reported (anomaly `feature-fault`, subject `social`, lane in the message) and the others still run.
+- **Tips.** A tip trade is cancelled (`CMSG_CANCEL_TRADE`) when gratitude is disabled live or the feature stops, and `TipsPaid` counts completed trades (`SMSG_TRADE_STATUS` complete), not requests. A dead bot owes its thanks for up to 2 minutes.
+- **Mood.** A PvP death moves the mood once (the death), not also as `KilledBy`.
+- **The wait for an answer starts when the opening is said.** The speech path calls the opening's `Sent` callback once the line was really said; only then does the lane wait for the player's next say and start the player's opening cooldown (`OpeningCooldownMinutes`, for a player still online). An opening the limiter or the place refused costs the player nothing: no wait, no penalty, no back-off, and no hold for long: from the moment the opening is queued the player is held against a second bot until the line is said (the cooldown then runs) or dropped (the hold is given back at the next world-thread drain, not at once; `BotSpeech.Dropped` fires for a refusal, a provider chain that gave nothing, or a bot that stopped). A chat-service shutdown or detach, and a delivery fault, never fire it: those fall back to the 10 minute hold (`UnsaidHoldMs`). A say that names a character standing within earshot of the bot (same map, `BystanderRadiusYards`, and not a reply word such as "sure") is for them, not the answer; the wait goes on. The **first** line of an awaited player is always kept, whatever the shared 256-line reply queue holds; its later lines, until the lane reads the first, follow the shared cap.
+- **A waiting bot opens on its goal.** A bot that waits for a group has no quest id of its own; the quest and creature of the goal it waits for are used for its team-up line. The answering bot's yes (a bot-to-bot opening) raises the asker's group signal and the lane then offers it to the coordinator (`OfferLfg`), retried each pass until the asker waits (two minutes).
+- **Relations stored before this change have no `Interacted` bit,** so a bot greets or whispers such a player only after their next exchange, trade, help or group.
+- **Lane faults** are reported (fault ledger and anomaly `bot-social/feature-fault`, the lane in the message) once per lane per minute; every fault is counted (`LaneFaultCount`). A ghost is judged by where its corpse lies, and a corpse in sight counts as a dead player in reach. Trade-completed notes (tip payments) live five minutes and are capped at 256; the unmounted sightings behind the first-mount comment drop the oldest first.
+- **`{objective}` in announcements.** The template placeholder `{objective}` may now be filled from the bot's own facts (it was topic-only for a moment, which broke `doing.objective`). It is always the bot's own quest progress, or the shared quest title the initiative lane puts in the topic; no template can show another player's objective, because no fact of another player's is ever put into a bot's persona.
+- **Verified.** `TryAnnounce` does not refuse whispers to non-opted players (the opt-in only gates model use), so the Interacted gate in the lane is the guard. `SpellSystem.HolderAdded` is raised on the world thread. The thank emote id 97 is the repo's `PlayerbotSocialEmotes.TextEmotes.Thank`.
+
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
@@ -227,4 +345,6 @@ state is in memory or read back from it.
 `tests/ArcaneCore.World.Tests/Playerbots/Social/`: `PlayerbotGuildFoundingWorldTests`, `PlayerbotGuildInviteWorldTests`,
 `PlayerbotGuildChatWorldTests`, `PlayerbotGuildRulesTests`, `PlayerbotGuildNamesTests`, `PlayerbotSocialRateLimiterTests`,
 `PlayerbotAnnounceTests`, `PlayerbotSocialListsWorldTests` (the list thresholds and spacing, never ignoring a game master, guild invitations
-by affinity and their weekly limit).
+by affinity and their weekly limit), `PlayerbotHelpRulesTests` (trouble, rolls, classes, help-call text), `PlayerbotHelpAnswerWorldTests`
+(a `/helpme` through the real packets to a bot that fights), `PlayerbotTroubleWorldTests` (the scan, the flag rule, rivals, switches),
+`PlayerbotHelpCastWorldTests` (the real resurrection once per corpse, a buff and its cooldown), `PlayerbotInitiativeTests` (the rules; greeting by say then whisper; the player cooldown and the per-pass cap; rivals and the switch; ignored openings; a yes raising a group signal; a rare-creature comment and its gap), `PlayerbotMoodTests` (events, half-life, multiplier, tone templates, prompt fact, GM line, the level-up lane), `PlayerbotGratitudeWorldTests` (the tip cap and favour rules, the thank emote across factions once per fight, a tip by a real trade).

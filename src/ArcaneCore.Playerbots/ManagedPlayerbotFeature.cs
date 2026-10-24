@@ -5,6 +5,8 @@ using System.Diagnostics;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Game.Teleport;
@@ -377,6 +379,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Whether the feature is being detached, or is detached: no update runs and every operation refuses (<see cref="PlayerbotsDetaching"/>). Any thread.</summary>
     internal bool IsDetaching => _detaching;
 
+    // World thread (the spell system raises it). A positive aura on a managed bot from another player of its team who is not in its group is
+    // help the bot thanks; the recorder counts a pair once per fight, so a buff that comes with a rescue is not thanked twice.
+    private void OnAuraAdded(WorldRuntime world, SpellAuraHolder holder)
+    {
+        if (!holder.CasterGuid.IsPlayer || holder.IsRemoved || holder.Spell.IsPassive || !holder.Spell.IsPositive) return;
+        if (holder.Target is not Player target || target.Guid == holder.CasterGuid || !Social.IsManaged(target.Guid)) return;
+        if (world.FindOnlinePlayer(holder.CasterGuid) is not { } caster || caster.Team != target.Team) return;
+        if (services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.AreInSameGroup(target.Guid, caster.Guid) == true) return;
+        Social.NoteHelp(caster, target, BotSocial.PlayerbotThanksKind.Buff);
+    }
+
     public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(ManagedPlayerbotFeature)));
 
     public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
@@ -409,6 +422,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _chat.LineHeard += line =>
             {
                 if (line.AddressesBot && line.SenderGuid != line.BotGuid) recorder.NoteChatLine(line.BotId, line.BotGuid, line.SenderGuid, line.Text);
+                // A say within earshot from the player a bot has just opened with is its answer, named or not (BotSocial.PlayerbotInitiativeLane).
+                else if (line.Type == ChatType.Say && !line.SenderIsBot && line.SenderGuid != line.BotGuid) recorder.NoteHeardSay(line.BotId, line.SenderGuid, line.Text);
+                // A yell or a say that calls for help is a call every bot in earshot may answer (BotSocial.PlayerbotHelpLane decides who).
+                if (line.SenderGuid != line.BotGuid && line.Type is ChatType.Yell or ChatType.Say && BotSocial.PlayerbotHelpRules.LooksLikeHelpCall(line.Text))
+                    recorder.NoteHelpCall(line.BotGuid, line.SenderGuid);
             };
         }
 
@@ -425,6 +443,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         BotSocial.PlayerbotSocialRecorder pvpRecorder = Social;
         _pvpKills = new BotSocial.PlayerbotPvpKillFeed(world, pvpRecorder.NotePvpKill);
         subscriptions.Add(_pvpKills);
+        // A buff on a managed bot from a same-faction player outside its group is help it will thank (BotSocial.PlayerbotGratitudeLane).
+        if (services.GetService<SpellFeature>() is { } spellFeature)
+            subscriptions.Subscribe<Action<SpellAuraHolder>>(
+                holder => OnAuraAdded(world, holder),
+                h => spellFeature.System.HolderAdded += h, h => spellFeature.System.HolderAdded -= h);
         if (_navigationExecutor is null && _options.AsyncNavigationEnabled && WorldCollision.Of(world).Pathfinder is NavMeshPathfinder)
         {
             ILogger ownerLogger = logger;
@@ -830,7 +853,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (active.Paused || active.Controller is not null || active.Record.State != ManagedPlayerbotState.Running) continue;
             if (active.Session is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
             destination.Add(new BotSocial.PlayerbotSocialBot(active.Record.BotId, session, player, active.Party, active.PartyDriven,
-                groups?.Drives(active.Record.BotId) == true));
+                groups?.Drives(active.Record.BotId) == true, active.Brain));
         }
     }
 
@@ -2842,7 +2865,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         foreach (Chat.BotChatReply reply in chat.DrainReplies())
         {
             if (!_active.TryGetValue(reply.BotId, out ActiveBot? active) || active.Paused || active.Controller is not null
-                || active.Session.State != SessionState.InWorld || active.Session.Player is not { } speaker) continue;
+                || active.Session.State != SessionState.InWorld || active.Session.Player is not { } speaker)
+            {
+                chat.Lost(reply.Speech); // the bot is gone: the line will never be said
+                continue;
+            }
+
             try { active.Party.DeliverChat(speaker, reply); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

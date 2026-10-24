@@ -64,6 +64,15 @@ internal sealed record BotSpeech(BotSpeechChannel Channel, string Text, string T
     /// <summary>Whisper, emote and reply: the recipient (the per-target limit and the emote's aim).</summary>
     public ObjectGuid TargetGuid { get; init; }
 
+    /// <summary>Called on the world thread once the line was really said (the session sent it); never for a line the limiter or the place refused. Initiative uses it to start waiting for the answer.</summary>
+    public Action? Sent { get; init; }
+
+    /// <summary>
+    /// Called on the world thread when the line was found never to be said: refused by the limiter or the place, a provider chain that gave nothing, a bot that
+    /// stopped before the reply arrived. Never after <see cref="Sent"/>. Initiative uses it to let the next bot open to the same player.
+    /// </summary>
+    public Action? Dropped { get; init; }
+
     /// <summary>World: the channel's full name as the client knows it ("General - Elwynn Forest", "Trade - City", "LookingForGroup").</summary>
     public string? ChannelName { get; init; }
 

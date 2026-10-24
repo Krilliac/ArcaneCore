@@ -28,7 +28,7 @@ using ArcaneCore.World.Bots;
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
 /// <summary>One running, non-scripted managed bot as the social features see it for one pass (world thread).</summary>
-internal sealed record PlayerbotSocialBot(Guid Id, WorldSession Session, Player Player, PlayerbotPartyAI Party, bool PartyDriven, bool GroupDriven);
+internal sealed record PlayerbotSocialBot(Guid Id, WorldSession Session, Player Player, PlayerbotPartyAI Party, bool PartyDriven, bool GroupDriven, PlayerbotBrain? Brain = null);
 
 /// <summary>
 /// Every interval the social feature uses, in milliseconds of world time. The defaults are the documented ones (docs/areas/playbots-social.md);
@@ -106,6 +106,8 @@ internal sealed class PlayerbotSocialPass(
     internal SocialContext Social => social;
 
     internal WorldRuntime World => world;
+
+    internal IServiceProvider Services => services;
 
     internal PlayerbotChat? Chat => chat;
 
@@ -226,6 +228,10 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
+    private readonly PlayerbotHelpLane _help = new();
+    private readonly PlayerbotGratitudeLane _gratitude = new();
+    private readonly PlayerbotMoodLane _mood = new();
+    private readonly PlayerbotInitiativeLane _initiative = new();
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -271,6 +277,18 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal PlayerbotGuildChat GuildChat => _chat;
 
     internal PlayerbotSocialEmotes Emotes => _emotes;
+
+    /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
+    internal PlayerbotHelpLane Help => _help;
+
+    /// <summary>The gratitude lane (tests and status).</summary>
+    internal PlayerbotGratitudeLane Gratitude => _gratitude;
+
+    /// <summary>The mood lane (tests).</summary>
+    internal PlayerbotMoodLane MoodLane => _mood;
+
+    /// <summary>The initiative lane (tests and status).</summary>
+    internal PlayerbotInitiativeLane Initiative => _initiative;
 
     /// <summary>The bots' world channel membership (General, Trade, LocalDefense, LookingForGroup).</summary>
     internal PlayerbotChannelMembership Channels => _channels;
@@ -345,9 +363,29 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         return Task.CompletedTask;
     }
 
+    // A tip in flight leaves its trade window open for the helper: close it, on the world thread (the cancel is a session action).
+    private void CancelTips()
+    {
+        if (_world is not { IsStopped: false } world) return;
+        try
+        {
+            if (world.IsWorldThread) _gratitude.CancelAllTips();
+            else _ = world.InvokeAsync(() =>
+            {
+                _gratitude.CancelAllTips();
+                return true;
+            });
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.social", error);
+        }
+    }
+
     /// <summary>End what is in flight and forget the world (the bag removes the subscriptions).</summary>
     private void Release()
     {
+        CancelTips();
         UnsubscribeMaps();
         _conversations.Stop();
         _worldChatter.Stop();
@@ -431,27 +469,91 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         };
     }
 
-    private void RunPass(long elapsed)
+    internal void RunPass(long elapsed)
     {
         if (ResolveManagedBots() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return;
         EnsureSubscribed(pass.Social);
         MaintainRegistry(pass);
         Intake(pass);
-        _membership.AnswerInvites(pass);
-        _founding.Run(pass, _membership);
-        _founding.SetMotds(pass);
-        _membership.Recruit(pass, _founding);
-        _membership.InviteByAffinity(pass);
-        _membership.Promote(pass);
-        _lists.Run(pass);
-        _chat.Speak(pass);
-        _emotes.Run(pass);
-        RunChannels(pass);
-        _conversations.Run(pass);
-        _worldChatter.Run(pass);
-        _voice.Run(pass);
-        _membership.Prune(pass);
+        for (int i = 0; i < InjectedLanes.Count; i++) RunInjected(InjectedLanes[i], pass);
+        for (int lane = 0; lane < LaneNames.Length; lane++) RunLane(lane, pass);
         Passes++;
+    }
+
+    private static readonly string[] LaneNames =
+    [
+        "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "prune",
+    ];
+
+    /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
+    internal List<(string Name, Action<PlayerbotSocialPass> Run)> InjectedLanes { get; } = [];
+
+    /// <summary>
+    /// One lane of the pass, isolated: a lane that throws is recorded under <c>playerbot.social</c> with its name and the lanes after it still run.
+    /// </summary>
+    private void RunLane(int lane, PlayerbotSocialPass pass)
+    {
+        try
+        {
+            switch (lane)
+            {
+                case 0: _membership.AnswerInvites(pass); break;
+                case 1: _founding.Run(pass, _membership); break;
+                case 2: _founding.SetMotds(pass); break;
+                case 3: _membership.Recruit(pass, _founding); break;
+                case 4: _membership.InviteByAffinity(pass); break;
+                case 5: _membership.Promote(pass); break;
+                case 6: _lists.Run(pass); break;
+                case 7: _help.Run(pass); break;
+                case 8: _mood.Run(pass); break;
+                case 9: _gratitude.Run(pass, _help); break;
+                case 10: _initiative.Run(pass); break;
+                case 11: _chat.Speak(pass); break;
+                case 12: _emotes.Run(pass); break;
+                case 13: RunChannels(pass); break;
+                case 14: _conversations.Run(pass); break;
+                case 15: _worldChatter.Run(pass); break;
+                case 16: _voice.Run(pass); break;
+                default: _membership.Prune(pass); break;
+            }
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LaneFaulted(LaneNames[lane], error);
+        }
+    }
+
+    private void RunInjected((string Name, Action<PlayerbotSocialPass> Run) lane, PlayerbotSocialPass pass)
+    {
+        try
+        {
+            lane.Run(pass);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LaneFaulted(lane.Name, error);
+        }
+    }
+
+    /// <summary>Every lane fault so far, reported or not (a lane that fails every pass is reported once a minute, see <see cref="LaneFaulted"/>).</summary>
+    internal long LaneFaultCount { get; private set; }
+
+    private readonly Dictionary<string, long> _laneReportedAt = [];
+
+    private const long LaneReportGapMs = 60_000;
+
+    private void LaneFaulted(string lane, Exception error)
+    {
+        LaneFaultCount++;
+        // A lane that throws on every pass would flood the ledgers and the log: one report per lane per minute; the count above keeps the rest.
+        long now = Environment.TickCount64;
+        if (_laneReportedAt.TryGetValue(lane, out long last) && now - last < LaneReportGapMs) return;
+        _laneReportedAt[lane] = now;
+        error.Data["playerbot.social.lane"] = lane;
+        FaultLedger.Shared.Record("playerbot.social", error);
+        AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"lane {lane}: {error.GetType().Name}: {error.Message}", origin: _world?.Identity);
+        if (_faults++ < 5) logger.LogWarning(error, "Playerbot social lane {Lane} failed ({Type}: {Message})", lane, error.GetType().Name, error.Message);
     }
 
     private readonly List<PlayerbotChannelBot> _channelBotsScratch = [];

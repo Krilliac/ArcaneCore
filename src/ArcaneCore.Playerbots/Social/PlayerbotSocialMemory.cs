@@ -24,6 +24,9 @@ internal enum PlayerbotSocialEvent
     KillSteal,
     AbandonedRun,
     DiedFirstInWipe,
+
+    /// <summary>A bot's unprompted opening got no answer: affinity -1 and no familiarity (<c>PlayerbotInitiativeLane</c>).</summary>
+    OpeningIgnored,
 }
 
 /// <summary>
@@ -113,7 +116,7 @@ internal sealed class PlayerbotSocialMemory
             bool cooled = !shared || entry.LastExchange == long.MinValue || now - entry.LastExchange >= _options.ChatFamiliarityCooldownMinutes * 60_000L;
             if (cooled && shared) entry.LastExchange = now;
 
-            if (cooled) entry.Familiarity = Math.Min(entry.Familiarity + 1, int.MaxValue - 1);
+            if (cooled && e != PlayerbotSocialEvent.OpeningIgnored) entry.Familiarity = Math.Min(entry.Familiarity + 1, int.MaxValue - 1);
             int delta = e switch
             {
                 PlayerbotSocialEvent.ChatExchange => cooled ? _options.AffinityPerChat : 0,
@@ -134,6 +137,7 @@ internal sealed class PlayerbotSocialMemory
                 PlayerbotSocialEvent.NinjaLoot => _options.AffinityPerNinjaLoot,
                 PlayerbotSocialEvent.KillSteal => _options.AffinityPerKillSteal,
                 PlayerbotSocialEvent.AbandonedRun => _options.AffinityPerAbandonedRun,
+                PlayerbotSocialEvent.OpeningIgnored => -1,
                 _ => 0,
             };
             double before = entry.Affinity;
@@ -154,6 +158,10 @@ internal sealed class PlayerbotSocialMemory
             entry.LastSeen = now;
             if (e is PlayerbotSocialEvent.Grouped or PlayerbotSocialEvent.GroupSucceeded or PlayerbotSocialEvent.GroupWiped)
                 entry.Flags |= PlayerbotRelationFlags.Grouped;
+            // Something the other side did toward the bot (the bot's own HelpedThem or a rude word is not an overture).
+            if (e is PlayerbotSocialEvent.ChatExchange or PlayerbotSocialEvent.TradeCompleted or PlayerbotSocialEvent.HelpedBy or PlayerbotSocialEvent.FriendlyEmote
+                or PlayerbotSocialEvent.Apologized or PlayerbotSocialEvent.Grouped or PlayerbotSocialEvent.GroupSucceeded or PlayerbotSocialEvent.GroupWiped)
+                entry.Flags |= PlayerbotRelationFlags.Interacted;
             if (otherFaction) entry.Flags |= PlayerbotRelationFlags.OtherFaction;
             ApplyRival(entry);
             Evict(bot, entry, now);
@@ -175,7 +183,7 @@ internal sealed class PlayerbotSocialMemory
     public void SetFlags(Guid botId, ulong other, PlayerbotRelationFlags flags)
     {
         if (!_options.Enabled) return;
-        const PlayerbotRelationFlags managed = PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival;
+        const PlayerbotRelationFlags managed = PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.OtherFaction | PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.Interacted;
         lock (_gate)
         {
             if (!_bots.TryGetValue(botId, out BotMemory? bot) || !bot.Relations.TryGetValue(other, out Entry? entry) || !Visible(entry)) return;

@@ -74,6 +74,23 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     private readonly Dictionary<Guid, List<InFlight>> _inFlight = [];
     private readonly Dictionary<(Guid Bot, ulong Player), Conversation> _conversations = [];
     private readonly ConcurrentQueue<BotChatReply> _replies = new();
+
+    private readonly ConcurrentQueue<BotSpeech> _lostSpeech = new();
+
+    /// <summary>World thread: tell a line's owner that it will never be said (<see cref="BotSpeech.Dropped"/>); a fault in the callback is recorded, not thrown.</summary>
+    internal void Lost(BotSpeech? speech)
+    {
+        if (speech?.Dropped is not { } dropped) return;
+        try
+        {
+            dropped();
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.chat", error);
+            _logger.LogWarning(error, "Bot chat: a speech-dropped handler failed");
+        }
+    }
     private readonly Random _random = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly PlayerbotChatSafety _safety;
@@ -229,6 +246,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         Interlocked.Increment(ref _speechDropped);
         PlayerbotChatMeters.CountDropped(speech.Channel, why);
+        Lost(speech);
         Settle(speech, why);
     }
 
@@ -413,6 +431,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     /// <summary>World thread: the replies ready to be said (at most <see cref="MaxRepliesPerDrain"/> per call).</summary>
     internal IReadOnlyList<BotChatReply> DrainReplies()
     {
+        while (_lostSpeech.TryDequeue(out BotSpeech? lost)) Lost(lost); // the lines the workers gave up on, told on the world thread
         if (_replies.IsEmpty) return [];
         var ready = new List<BotChatReply>();
         while (ready.Count < MaxRepliesPerDrain && _replies.TryDequeue(out BotChatReply? reply))
@@ -597,12 +616,14 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                         else
                         {
                             Interlocked.Increment(ref _dropped);
+                            if (ask.Speech is { } lost) _lostSpeech.Enqueue(lost);
                         }
                     }
                     catch (Exception error) when (error is not OutOfMemoryException and not OperationCanceledException)
                     {
                         // Never the key: the request carries it, the exception text does not.
                         Interlocked.Increment(ref _dropped);
+                        if (ask.Speech is { } lost) _lostSpeech.Enqueue(lost);
                         FaultLedger.Shared.Record("playerbot.chat", error);
                         _logger.LogWarning("Bot chat: a reply failed ({Error})", error.GetType().Name); // type only, by design: the exception text may carry the request URL or key
                     }

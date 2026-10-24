@@ -22,6 +22,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
 
     public PlayerbotSocialMemory Memory { get; } = memory;
 
+    /// <summary>The bots' short-term moods; every social event that moves one is applied by <see cref="Note"/> and <see cref="NoteById"/>.</summary>
+    public PlayerbotMood Mood { get; } = new();
+
     public bool Enabled => Memory.Enabled;
 
     /// <summary>A managed bot logged in (or was adopted by this feature): its events are now recorded against its id.</summary>
@@ -56,14 +59,22 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     public void Note(ObjectGuid bot, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!Enabled || !other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
-        Guarded(() => Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction));
+        Guarded(() =>
+        {
+            Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction);
+            Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
+        });
     }
 
     /// <summary>Record <paramref name="e"/> for a bot whose id is already known (chat, the party AI).</summary>
     public void NoteById(Guid botId, ObjectGuid botGuid, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!Enabled || !other.IsPlayer || other == botGuid) return;
-        Guarded(() => Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction));
+        Guarded(() =>
+        {
+            Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction);
+            Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
+        });
     }
 
     /// <summary>Record <paramref name="e"/> both ways between two characters (each side that is a managed bot remembers the other).</summary>
@@ -89,9 +100,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <paramref name="helper"/> helped <paramref name="victim"/> in the current fight (an assist on a tagged mob, a heal, a hit on the mob that fights
     /// the victim): the victim, if a managed bot, records HelpedBy and the helper, if a managed bot, records HelpedThem. Once per pair of
     /// characters per fight, whichever source reports it first and in whichever direction, so a single assist is never counted twice (an assist
-    /// the helper bot reports and the same bot's own fight read of the tagger are one help).
+    /// the helper bot reports and the same bot's own fight read of the tagger are one help). <paramref name="kind"/> says how it helped, for the thanks.
     /// </summary>
-    public void NoteHelp(Unit helper, Unit victim)
+    public void NoteHelp(Unit helper, Unit victim, PlayerbotThanksKind kind = PlayerbotThanksKind.Help)
     {
         if (!Enabled || helper.Guid == victim.Guid || !helper.Guid.IsPlayer || !victim.Guid.IsPlayer) return;
         if (!IsManaged(helper.Guid) && !IsManaged(victim.Guid)) return;
@@ -111,7 +122,28 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
             bool crossFaction = helper is Player a && victim is Player b && a.Team != b.Team;
             Note(helper.Guid, victim.Guid, PlayerbotSocialEvent.HelpedThem, crossFaction);
             Note(victim.Guid, helper.Guid, PlayerbotSocialEvent.HelpedBy, crossFaction);
+            // A managed bot that was helped owes thanks (PlayerbotGratitudeLane); the pair window above makes it one per helper per fight.
+            if (IsManaged(victim.Guid) && _thanks.Count < 256) _thanks.Enqueue((victim.Guid, helper.Guid, kind));
         });
+    }
+
+    private readonly ConcurrentQueue<(ObjectGuid Bot, ObjectGuid Helper, PlayerbotThanksKind Kind)> _thanks = new();
+
+    /// <summary>Thanks waiting for the social pass (tests).</summary>
+    internal int PendingThanks => _thanks.Count;
+
+    /// <summary>Take the oldest thanks a bot owes: who was helped, who helped and how.</summary>
+    internal bool TryTakeThanks(out ObjectGuid bot, out ObjectGuid helper, out PlayerbotThanksKind kind)
+    {
+        if (_thanks.TryDequeue(out (ObjectGuid Bot, ObjectGuid Helper, PlayerbotThanksKind Kind) owed))
+        {
+            (bot, helper, kind) = owed;
+            return true;
+        }
+
+        bot = helper = default;
+        kind = PlayerbotThanksKind.Help;
+        return false;
     }
 
     /// <summary>
@@ -148,6 +180,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// </summary>
     public void NoteChatLine(Guid botId, ObjectGuid botGuid, ObjectGuid sender, string? text)
     {
+        if (sender.IsPlayer && (TakeExpected(botId, sender) || _replies.Count < 256)) EnqueueReply(botId, sender, text);
         if (PlayerbotApology.IsApology(text)) NoteById(botId, botGuid, sender, PlayerbotSocialEvent.Apologized);
         NoteById(botId, botGuid, sender, PlayerbotSocialEvent.ChatExchange);
     }
@@ -164,6 +197,123 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     {
         if (!Enabled || !other.IsPlayer) return;
         Guarded(() => Memory.SetTopic(botId, other.Value, topicKey, summary));
+    }
+
+    private readonly ConcurrentQueue<(Guid BotId, ObjectGuid Sender, string? Text)> _replies = new();
+
+    private int _repliesHeard;
+
+    /// <summary>Replies enqueued for the initiative lane so far (tests wait on it instead of a delay).</summary>
+    internal int RepliesHeard => Volatile.Read(ref _repliesHeard);
+
+    private void EnqueueReply(Guid botId, ObjectGuid sender, string? text)
+    {
+        _replies.Enqueue((botId, sender, text));
+        Interlocked.Increment(ref _repliesHeard);
+    }
+
+    private readonly ConcurrentDictionary<(Guid Bot, ulong Player), byte> _expected = new();
+
+    /// <summary>The initiative lane opened with <paramref name="player"/> and waits for the answer: their next say within the bot's hearing is it, named or not.</summary>
+    internal bool Expect(Guid botId, ObjectGuid player)
+    {
+        if (_expected.Count >= MaxExpected && !_expected.ContainsKey((botId, player.Value))) return false;
+        _expected[(botId, player.Value)] = 1;
+        return true;
+    }
+
+    /// <summary>How many openings may be awaited at once.</summary>
+    internal const int MaxExpected = 1024;
+
+    /// <summary>Whether <paramref name="player"/> is awaited by the bot and has not answered yet; the answer is then taken (a pending opening's reply is never dropped for a full queue).</summary>
+    private bool TakeExpected(Guid botId, ObjectGuid player) => _expected.TryUpdate((botId, player.Value), 2, 1);
+
+    /// <summary>The answer came (or the wait is over): the bot no longer listens for it.</summary>
+    internal void Unexpect(Guid botId, ObjectGuid player) => _expected.TryRemove((botId, player.Value), out _);
+
+    /// <summary>Forget every awaited answer (the lane is switched off).</summary>
+    internal void ClearExpected() => _expected.Clear();
+
+    /// <summary>
+    /// A say the bot heard that is not addressed to it: when the sender is the player it is waiting on, it is the answer to its opening. Called from the chat
+    /// service's line hook (world thread); anything else is ignored.
+    /// </summary>
+    public void NoteHeardSay(Guid botId, ObjectGuid sender, string? text)
+    {
+        if (!sender.IsPlayer) return;
+        // The first line of an awaited player is always kept; a later one (before the lane has read the first) follows the shared cap.
+        if (TakeExpected(botId, sender) || (_expected.ContainsKey((botId, sender.Value)) && _replies.Count < 256)) EnqueueReply(botId, sender, text);
+    }
+
+    /// <summary>Take the oldest line a character addressed to a bot (the answer to an opening, <see cref="PlayerbotInitiativeLane"/>).</summary>
+    internal bool TryTakeReply(out Guid botId, out ObjectGuid sender, out string? text)
+    {
+        if (_replies.TryDequeue(out (Guid BotId, ObjectGuid Sender, string? Text) reply))
+        {
+            (botId, sender, text) = reply;
+            return true;
+        }
+
+        botId = Guid.Empty;
+        sender = default;
+        text = null;
+        return false;
+    }
+
+    private readonly ConcurrentDictionary<Guid, long> _tradesDone = new();
+
+    private const long TradeDoneLifeMs = 5 * 60_000;
+
+    private const int MaxTradesDone = 256;
+
+    /// <summary>A trade the bot was in completed (its own trade status 8): the gratitude lane counts a tip as paid from it. A note stays 5 minutes and at most 256 are kept.</summary>
+    public void NoteTradeDone(Guid botId)
+    {
+        long now = Environment.TickCount64;
+        if (_tradesDone.Count >= MaxTradesDone)
+        {
+            foreach (KeyValuePair<Guid, long> entry in _tradesDone)
+                if (now - entry.Value > TradeDoneLifeMs) _tradesDone.TryRemove(entry.Key, out _);
+            if (_tradesDone.Count >= MaxTradesDone && !_tradesDone.ContainsKey(botId))
+            {
+                // Still full of live notes: the oldest makes room.
+                Guid oldest = _tradesDone.MinBy(entry => entry.Value).Key;
+                _tradesDone.TryRemove(oldest, out _);
+            }
+        }
+
+        _tradesDone[botId] = now;
+    }
+
+    /// <summary>Take the note that the bot's trade completed; false when none has since the last take, or when it is older than 5 minutes.</summary>
+    internal bool TryTakeTradeDone(Guid botId) => _tradesDone.TryRemove(botId, out long at) && Environment.TickCount64 - at <= TradeDoneLifeMs;
+
+    private readonly ConcurrentQueue<(ObjectGuid Bot, ObjectGuid Asker)> _helpCalls = new();
+
+    /// <summary>
+    /// <paramref name="asker"/> called for help within earshot of the managed bot with the character <paramref name="bot"/> (a help emote aimed at it, or a help yell
+    /// or say it heard). The social pass answers the queue (<see cref="PlayerbotHelpLane"/>); at most 256 calls wait.
+    /// </summary>
+    public void NoteHelpCall(ObjectGuid bot, ObjectGuid asker)
+    {
+        if (_helpCalls.Count < 256) _helpCalls.Enqueue((bot, asker));
+    }
+
+    /// <summary>Calls for help waiting for the social pass (tests).</summary>
+    internal int PendingHelpCalls => _helpCalls.Count;
+
+    /// <summary>Take the oldest call for help that has not been answered.</summary>
+    internal bool TryTakeHelpCall(out ObjectGuid bot, out ObjectGuid asker)
+    {
+        if (_helpCalls.TryDequeue(out (ObjectGuid Bot, ObjectGuid Asker) call))
+        {
+            (bot, asker) = call;
+            return true;
+        }
+
+        bot = default;
+        asker = default;
+        return false;
     }
 
     /// <summary>Run a recording step so that it can never throw into game logic.</summary>

@@ -57,5 +57,9 @@ internal static class PlayerbotCallForHelp
     internal static bool Answers(ulong botGuid, ulong askerGuid, uint askedAtMs, float helpfulness, int affinity)
         => Roll(PlayerbotContention.Mix(botGuid, askerGuid), 0xA45E12C0UL ^ askedAtMs) < AnswerProbability(helpfulness, affinity);
 
+    /// <summary>Whether a bot that stays out of an asker's fight says sorry (about one in six; a hash of the bot, the asker and the call). Deterministic.</summary>
+    internal static bool SaysSorry(ulong botGuid, ulong askerGuid, uint askedAtMs)
+        => Roll(PlayerbotContention.Mix(botGuid, askerGuid), 0x50221EUL ^ askedAtMs) < 1.0 / 6.0;
+
     private static double Roll(ulong a, ulong b) => (PlayerbotContention.Mix(a, b) >> 11) * (1.0 / 9007199254740992.0);
 }

@@ -44,7 +44,7 @@ public sealed class PlayerbotRelationProviderRoundTripTests : IAsyncLifetime
                 double value = Awkward[i];
                 short whole = (short)Math.Floor(value);
                 rows.Add(new PlayerbotRelation(bot, characterId, (ulong)(i + 1), i % 2 == 0, whole, (int)Math.Floor(Math.Abs(value)), 500,
-                    PlayerbotRelationFlags.Grouped, 1_760_000_000_000 + i, "greeting", "", whole, PlayerbotRelationFlags.WarSeeded,
+                    i % 2 == 0 ? PlayerbotRelationFlags.Grouped : PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted, 1_760_000_000_000 + i, "greeting", "", whole, PlayerbotRelationFlags.WarSeeded,
                     FamiliarityExact: Math.Abs(value), AffinityExact: value, WarAffinityExact: value,
                     DecayAnchorUnixMs: 1_759_990_000_001 + i, WarDecayAnchorUnixMs: 1_759_980_000_002 + i));
             }

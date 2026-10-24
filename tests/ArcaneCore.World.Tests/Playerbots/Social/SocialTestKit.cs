@@ -95,12 +95,12 @@ internal static class SocialTestKit
 
     public static PlayerbotSocialFeature Feature(WorldTestHost host) => host.WorldServices.GetRequiredService<PlayerbotSocialFeature>();
 
-    /// <summary>Create and start an autonomous bot of <paramref name="race"/> (warrior) and wait until it is in the world.</summary>
-    public static async Task<Guid> StartBotAsync(WorldTestHost host, string name, byte race = Human)
+    /// <summary>Create and start an autonomous bot of <paramref name="race"/> (a warrior unless <paramref name="characterClass"/> says otherwise) and wait until it is in the world.</summary>
+    public static async Task<Guid> StartBotAsync(WorldTestHost host, string name, byte race = Human, byte characterClass = 1)
     {
         ManagedPlayerbotFeature bots = PartyTestHost.Feature(host);
         await bots.StartupAsync(default);
-        PlayerbotOperationResult created = await bots.CreateAsync(name, race, 1);
+        PlayerbotOperationResult created = await bots.CreateAsync(name, race, characterClass);
         if (!created.Success || created.BotId is not { } id) throw new InvalidOperationException("create: " + created.Code);
         PlayerbotOperationResult started = await bots.StartAsync(id.ToString());
         if (!started.Success) throw new InvalidOperationException("start: " + started.Code);
@@ -170,7 +170,7 @@ internal static class SocialTestKit
             if (status.State != ManagedPlayerbotState.Running || bots.IsScripted(status.BotId)) continue;
             if (bots.FindSession(status.BotId) is not { State: SessionState.InWorld, Player: { IsInWorld: true, Map: not null } player } session) continue;
             if (bots.FindPartyAI(status.BotId) is not { } party) continue;
-            list.Add(new PlayerbotSocialBot(status.BotId, session, player, party, partyDriven || bots.IsPartyDriven(status.BotId), GroupDriven: false));
+            list.Add(new PlayerbotSocialBot(status.BotId, session, player, party, partyDriven || bots.IsPartyDriven(status.BotId), GroupDriven: false, bots.FindBrain(status.BotId)));
         }
 
         return list;
@@ -189,6 +189,7 @@ internal static class SocialTestKit
             PartyTestHost.Feature(host).Chat, registered, registryLoaded: true, timings ?? new PlayerbotSocialTimings(), new Random(seed), nowMs, elapsedMs, () => bots)
         {
             Recorder = PartyTestHost.Feature(host).Social,
+            Coordinator = host.WorldServices.GetService<ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator>(),
         };
     }
 
@@ -242,9 +243,9 @@ internal sealed class SocialWorld : IAsyncDisposable
     }
 
     /// <summary>Start a bot, record what it dispatches from now on and give it <paramref name="money"/> copper.</summary>
-    public async Task<Guid> AddBotAsync(string name, uint money = 0, byte race = SocialTestKit.Human)
+    public async Task<Guid> AddBotAsync(string name, uint money = 0, byte race = SocialTestKit.Human, byte characterClass = 1)
     {
-        Guid id = await SocialTestKit.StartBotAsync(Host, name, race);
+        Guid id = await SocialTestKit.StartBotAsync(Host, name, race, characterClass);
         Bots[name] = id;
         await Host.OnWorldAsync(() =>
         {

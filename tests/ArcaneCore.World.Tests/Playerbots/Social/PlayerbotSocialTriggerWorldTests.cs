@@ -318,8 +318,8 @@ public sealed class PlayerbotSocialTriggerWorldTests
         CultureInfo c = CultureInfo.InvariantCulture;
         Assert.Equal(string.Create(c, $"Socialcmdbot: sociability {traits.Sociability:F2}, chattiness {traits.Chattiness:F2}, generosity {traits.Generosity:F2}, curiosity {traits.Curiosity:F2}, helpfulness {traits.Helpfulness:F2}."), reply[0]);
         // Best known first: the stranger (2 events, affinity 6, grouped) before the player (1 wave, affinity 2).
-        Assert.Equal("guid 1A2B3C (player): affinity 6, familiarity 2, trust 500, flags Grouped, topic -, seen 0m ago", reply[1]);
-        Assert.Equal("Quillfoot (player): affinity 2, familiarity 1, trust 500, flags None, topic -, seen 0m ago", reply[2]);
+        Assert.Equal("guid 1A2B3C (player): affinity 6, familiarity 2, trust 500, flags Grouped, Interacted, topic -, seen 0m ago", reply[1]);
+        Assert.Equal("Quillfoot (player): affinity 2, familiarity 1, trust 500, flags Interacted, topic -, seen 0m ago", reply[2]);
     }
 
     [Fact]
@@ -329,7 +329,7 @@ public sealed class PlayerbotSocialTriggerWorldTests
         await world.AddBotAsync("Socialempty");
         await using WorldTestClient admin = await world.Host.EnterWorldAsync("QUILLADMINB", "Quillbranch", AccountSecurity.Administrator);
 
-        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 2);
+        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 3);
         Assert.StartsWith("Socialempty: sociability ", reply[0]);
         Assert.Equal("No relations yet.", reply[1]);
 

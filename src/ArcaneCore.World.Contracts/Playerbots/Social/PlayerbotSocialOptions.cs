@@ -40,6 +40,18 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Friend and ignore lists driven by affinity (<c>World:Playerbots:Social:Lists</c>).</summary>
     public PlayerbotSocialListsOptions Lists { get; set; } = new();
 
+    /// <summary>Answering calls for help and lending a hand to strangers (<c>World:Playerbots:Social:Helping</c>).</summary>
+    public PlayerbotSocialHelpingOptions Helping { get; set; } = new();
+
+    /// <summary>Thanking whoever helped a bot: an emote, a line, a favour, a tip (<c>World:Playerbots:Social:Gratitude</c>).</summary>
+    public PlayerbotSocialGratitudeOptions Gratitude { get; set; } = new();
+
+    /// <summary>The short-term mood of each bot (<c>World:Playerbots:Social:Mood</c>).</summary>
+    public PlayerbotSocialMoodOptions Mood { get; set; } = new();
+
+    /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
+    public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
@@ -49,6 +61,14 @@ public sealed class PlayerbotSocialOptions
         if (Memory is null) throw new InvalidOperationException($"{section}:Memory is missing.");
         if (WarMode is null) throw new InvalidOperationException($"{section}:WarMode is missing.");
         if (Lists is null) throw new InvalidOperationException($"{section}:Lists is missing.");
+        if (Helping is null) throw new InvalidOperationException($"{section}:Helping is missing.");
+        if (Gratitude is null) throw new InvalidOperationException($"{section}:Gratitude is missing.");
+        Helping.Validate();
+        Gratitude.Validate();
+        if (Mood is null) throw new InvalidOperationException($"{section}:Mood is missing.");
+        Mood.Validate();
+        if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
+        Initiative.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

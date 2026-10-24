@@ -263,14 +263,14 @@ public sealed class PlayerbotSocialForgivenessTests
         memory.Note(Bot, 1, Other, false, PlayerbotSocialEvent.Grouped);
         memory.SetFlags(Bot, Other, PlayerbotRelationFlags.WantsInvites);
         memory.SetRole(Bot, Other, PlayerbotRelationFlags.PrefersTank);
-        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersTank, Get(memory).Flags);
+        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersTank, Get(memory).Flags);
         long version = memory.Version(Bot);
         memory.SetRole(Bot, Other, PlayerbotRelationFlags.PrefersTank);
         Assert.Equal(version, memory.Version(Bot));
         memory.SetRole(Bot, Other, PlayerbotRelationFlags.PrefersHealer);
-        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersHealer, Get(memory).Flags);
+        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersHealer, Get(memory).Flags);
         memory.SetRole(Bot, Other, PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.PrefersDamage); // only the role bits count
-        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersDamage, Get(memory).Flags);
+        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted | PlayerbotRelationFlags.WantsInvites | PlayerbotRelationFlags.PrefersDamage, Get(memory).Flags);
     }
 
     // ---- 12.5 / 13 War Mode: a separate layer ----

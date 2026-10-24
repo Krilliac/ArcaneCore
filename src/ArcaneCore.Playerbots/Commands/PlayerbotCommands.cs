@@ -183,8 +183,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
         foreach (string line in SocialLines(botName, BotSocial.PlayerbotTraits.For(bot.Guid.Value), memory.Enabled, memory.Top(botId, 10),
                      guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, memory.NowMs))
             context.Reply(line);
+        if (feature.Social.Mood.Enabled) context.Reply(MoodLine(feature.Social.Mood.Get(botId)));
         return true;
     }
+
+    /// <summary>The last line of <c>.playerbot social</c>: the bot's mood, its tone and the factor on the chance of its own initiative.</summary>
+    internal static string MoodLine(float mood)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"Mood {mood:+0.00;-0.00;0.00} ({BotSocial.PlayerbotMood.ToneOf(mood).ToString().ToLowerInvariant()}); the chance of its own initiative is x{BotSocial.PlayerbotMood.ChanceMultiplier(mood):F2}.");
 
     /// <summary>The reply lines of <c>.playerbot social</c> (a name for a guid is looked up with <paramref name="nameOf"/>; unknown ones show the guid).</summary>
     internal static IEnumerable<string> SocialLines(string botName, BotSocial.PlayerbotTraits traits, bool enabled,

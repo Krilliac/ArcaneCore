@@ -199,6 +199,7 @@ public sealed class PlayerbotPartyWorldTests
         {
             options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
             options.Party.AutoRevive = false;
+            options.Social.Helping.ResurrectStrangers = false; // a same-faction stranger's offer is otherwise accepted (P2 section 2)
         });
         Guid bot = await PartyTestHost.StartBotAsync(host, "Partydead");
         await using WorldTestClient master = await host.EnterWorldAsync("PARTYDEADM", "Partydeadm");
@@ -224,6 +225,25 @@ public sealed class PlayerbotPartyWorldTests
             Assert.True(service.Request(dead, host.World.FindOnlinePlayer("Partydeadm")!, "Partydeadm", 50, 0, sickness: false, noResTimer: true));
         });
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Partydead") is { IsAlive: true }, "the member's resurrection brings the bot back");
+    }
+
+    /// <summary>P2 section 2: with helping on, a dead bot accepts a same-faction stranger's resurrection (not a rival's: the pure rule is in the help tests).</summary>
+    [Fact]
+    public async Task ADeadBot_AcceptsAFactionStrangersResurrection_WhenHelpingIsOn()
+    {
+        await using WorldTestHost host = PartyTestHost.Start(options => options.Party.AutoRevive = false);
+        Guid bot = await PartyTestHost.StartBotAsync(host, "Partyrez");
+        await using WorldTestClient stranger = await host.EnterWorldAsync("PARTYREZS", "Partyrezs");
+        global::ArcaneCore.Game.Death.Resurrection.ResurrectionService service = host.WorldServices.GetRequiredService<global::ArcaneCore.World.Death.ResurrectionFeature>().Service!;
+
+        await host.OnWorldAsync(() =>
+        {
+            Player dead = host.World.FindOnlinePlayer("Partyrez")!;
+            dead.Health = 0;
+            dead.Map!.Combat.KillPlayer(dead);
+            Assert.True(service.Request(dead, host.World.FindOnlinePlayer("Partyrezs")!, "Partyrezs", 50, 0, sickness: false, noResTimer: true));
+        });
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Partyrez") is { IsAlive: true }, "the stranger's resurrection brings the bot back");
     }
 
     private static Game.Groups.GroupManager Groups(WorldTestHost host) => Social(host).Groups;

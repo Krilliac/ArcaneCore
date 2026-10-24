@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       709 keys
+#   WORLD                       728 keys
 #
 ###############################################################################
 
@@ -15461,6 +15461,43 @@ World.Playerbots.SlowThinkLogMs = 50
 World.Playerbots.Social.Emotes.Enabled = true
 
 #
+#    World.Playerbots.Social.Gratitude.Enabled
+#        Description: Let bots thank whoever helped them (on by default). Off: no emote, no line, no
+#                     favour.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.Enabled = true
+
+#
+#    World.Playerbots.Social.Gratitude.MaxTipCopper
+#        Description: The most copper a tip may be for a level 60 bot (a lower level tips
+#                     proportionally less; never more than 1% of the bot's gold). 0 turns tips off
+#                     (default 10000, one gold).
+#        Type: int
+#        Default: 10000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.MaxTipCopper = 10000
+
+#
+#    World.Playerbots.Social.Gratitude.TipChance
+#        Description: The chance (0..1), before the bot's Generosity trait scales it, that a thanks
+#                     to a well-liked human helper is a gold tip by trade (default 0.05).
+#        Type: float
+#        Default: 0.05
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Gratitude.TipChance = 0.05
+
+#
 #    World.Playerbots.Social.GuildChat.Enabled
 #        Description: Let bots say a short line in guild chat (on by default): a welcome,
 #                     congratulations on a level, a note on a boss or a battleground won, and some
@@ -15613,6 +15650,171 @@ World.Playerbots.Social.Guilds.MaxBotGuilds = 4
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Guilds.TargetSize = 25
+
+#
+#    World.Playerbots.Social.Helping.AnswerHelp
+#        Description: Let a bot that is asked for help (a targeted help emote, or a help yell or say
+#                     from someone close) decide whether to answer it (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.AnswerHelp = true
+
+#
+#    World.Playerbots.Social.Helping.BuffCooldownMinutes
+#        Description: The least minutes between two buffs a bot gives the same stranger (0..1440).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.BuffCooldownMinutes = 30
+
+#
+#    World.Playerbots.Social.Helping.BuffStrangers
+#        Description: Let a bot occasionally cast one of its class buffs (the ones it casts on
+#                     groupmates) on a same-faction stranger (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.BuffStrangers = true
+
+#
+#    World.Playerbots.Social.Helping.Enabled
+#        Description: Let bots look for strangers in trouble and help them (on by default). Off: no
+#                     scan, and no call for help is answered either.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.Enabled = true
+
+#
+#    World.Playerbots.Social.Helping.MaxAnswersPerCall
+#        Description: The most bots that answer one call for help (1..16, 2 by default): a call is
+#                     heard by every free bot in earshot, but a crowd is not what the asker needs.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.MaxAnswersPerCall = 2
+
+#
+#    World.Playerbots.Social.Helping.ResurrectMaxCorpseMinutes
+#        Description: The longest (minutes) a body may have lain dead for a stranger's resurrection
+#                     to be offered (1..60, 10 by default), counted from the death when the server
+#                     knows it, else from the scan's first sight of it.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.ResurrectMaxCorpseMinutes = 10
+
+#
+#    World.Playerbots.Social.Helping.ResurrectStrangers
+#        Description: Let a bot whose class can resurrect resurrect a dead same-faction stranger
+#                     with a recent corpse, once per corpse (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.ResurrectStrangers = true
+
+#
+#    World.Playerbots.Social.Helping.TroubleRadiusYards
+#        Description: How far (yards) from an idle bot a unit in trouble may be and still be noticed
+#                     (1..100).
+#        Type: float
+#        Default: 30
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Helping.TroubleRadiusYards = 30
+
+#
+#    World.Playerbots.Social.Initiative.CommentBotGapMinutes
+#        Description: The minutes between two comments of the same bot (1..1440, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentBotGapMinutes = 10
+
+#
+#    World.Playerbots.Social.Initiative.CommentZoneGapSeconds
+#        Description: The seconds between two comments in the same zone, whichever bot (1..86400,
+#                     default 60).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentZoneGapSeconds = 60
+
+#
+#    World.Playerbots.Social.Initiative.CommentsEnabled
+#        Description: Let bots comment on their surroundings (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.CommentsEnabled = true
+
+#
+#    World.Playerbots.Social.Initiative.Enabled
+#        Description: Let bots open conversations and comment on their surroundings (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.Enabled = true
+
+#
+#    World.Playerbots.Social.Initiative.MaxOpeningsPerPass
+#        Description: The most openings (all bots together) in one pass of the social feature
+#                     (1..64, default 4).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.MaxOpeningsPerPass = 4
+
+#
+#    World.Playerbots.Social.Initiative.OpeningCooldownMinutes
+#        Description: The minutes before any bot opens with the same real player again (1..1440,
+#                     default 30); an opening they ignored doubles it each time.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Initiative.OpeningCooldownMinutes = 30
 
 #
 #    World.Playerbots.Social.Lists.ChangeSpacingSeconds
@@ -16086,6 +16288,29 @@ World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe = -30
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
+
+#
+#    World.Playerbots.Social.Mood.Enabled
+#        Description: Let bots have a mood (on by default). Off: every mood reads 0 and events
+#                     change nothing.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Mood.Enabled = true
+
+#
+#    World.Playerbots.Social.Mood.HalfLifeMinutes
+#        Description: The minutes in which a mood decays to half of itself (1..1440, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Mood.HalfLifeMinutes = 30
 
 #
 #    World.Playerbots.Social.WarMode.ClearOnDisable

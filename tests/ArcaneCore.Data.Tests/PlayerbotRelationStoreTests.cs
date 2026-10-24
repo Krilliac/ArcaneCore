@@ -96,11 +96,13 @@ public sealed class PlayerbotRelationStoreTests
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { DecayAnchorUnixMs = -1 }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { LastTopic = new string('x', 33) }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1), Row(bot, characterId, 1)]));
-        // Unknown bits, WarSeeded in the normal flags and a normal-only bit in the war flags.
-        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { Flags = (PlayerbotRelationFlags)2048 }]));
+        // Unknown bits (the lowest above Interacted, and everything outside KnownFlags), WarSeeded in the normal flags and a normal-only bit in the war flags.
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { Flags = (PlayerbotRelationFlags)4096 }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { Flags = PlayerbotRelationFlags.WarSeeded }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { WarFlags = (PlayerbotRelationFlags)(-1) }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { WarFlags = PlayerbotRelationFlags.Grouped }]));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { WarFlags = PlayerbotRelationFlags.Interacted }]));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { Flags = PlayerbotRelationFlags.Interacted | (PlayerbotRelationFlags)(-1 << 12) }]));
         // An exact value that differs from the whole one, with no anchor to say when it was true.
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { DecayAnchorUnixMs = 0 }]));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ReplaceAsync(bot, [Row(bot, characterId, 1) with { WarDecayAnchorUnixMs = 0 }]));
@@ -124,5 +126,18 @@ public sealed class PlayerbotRelationStoreTests
             FamiliarityExact: 3, AffinityExact: 12, WarAffinityExact: 0);
         await store.ReplaceAsync(bot, [warOnly, noAnchor]);
         Assert.Equal(PlayerbotRelationFlags.WarOnly, (await store.LoadAllAsync()).Single(r => r.OtherGuid == 3).Flags);
+    }
+
+    [Fact]
+    public async Task TheInteractedBit_RoundTrips_WithTheOtherFlags()
+    {
+        var (connection, db, characterId) = await OpenAsync("Interbot");
+        await using var _ = connection;
+        await using var __ = db;
+        var store = new EfPlayerbotRelationStore(db);
+        Guid bot = Guid.NewGuid();
+        PlayerbotRelation row = Row(bot, characterId, 6) with { Flags = PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted };
+        await store.ReplaceAsync(bot, [row]);
+        Assert.Equal(PlayerbotRelationFlags.Grouped | PlayerbotRelationFlags.Interacted, (await store.LoadAllAsync()).Single().Flags);
     }
 }

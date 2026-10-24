@@ -549,7 +549,14 @@ internal sealed class PlayerbotPartyAI
         if (Social is not { Enabled: true } social) return;
         if (!string.Equals(emote.TargetName, player.Name, StringComparison.OrdinalIgnoreCase)) return;
         BotSocial.PlayerbotEmoteMood mood = BotSocial.PlayerbotEmoteMoods.Classify(emote.TextEmote);
-        if (mood is BotSocial.PlayerbotEmoteMood.Neutral or BotSocial.PlayerbotEmoteMood.Help) return;
+        if (mood == BotSocial.PlayerbotEmoteMood.Help)
+        {
+            // A call for help aimed at this bot: the social pass decides whether it answers (BotSocial.PlayerbotHelpLane).
+            social.NoteHelpCall(player.Guid, emote.Emoter);
+            return;
+        }
+
+        if (mood == BotSocial.PlayerbotEmoteMood.Neutral) return;
         BotSocial.PlayerbotSocialEvent noted = mood switch
         {
             BotSocial.PlayerbotEmoteMood.Friendly => BotSocial.PlayerbotSocialEvent.FriendlyEmote,
@@ -593,7 +600,8 @@ internal sealed class PlayerbotPartyAI
                 SpeakerInGroup = Services.Social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true,
             };
         return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
-            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts, Relation: RelationWith(player, speaker));
+            masterName, inGroup, _chatEvents.Recent(Now), DebugSummary: debugSummary, Facts: facts, Relation: RelationWith(player, speaker),
+            Mood: Social?.Mood.Get(_botId) ?? 0f);
     }
 
     /// <summary>
@@ -740,6 +748,7 @@ internal sealed class PlayerbotPartyAI
     {
         if (_chat is { } chat && SpeechOf(reply) is { } speech)
             Chat.PlayerbotSpeechDelivery.Deliver(chat, _botId, _session, player, speech);
+        else _chat?.Lost(reply.Speech); // nothing to say (the provider chain chose silence): a line waiting to be said is let go
         if (reply.Action != Chat.BotChatAction.None) PerformAction(player, reply);
 
         if (reply.Command is { } command)
@@ -808,17 +817,33 @@ internal sealed class PlayerbotPartyAI
         });
     }
 
-    /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>
+    /// <summary>
+    /// mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted. With helping on
+    /// (<see cref="BotSocial.PlayerbotSocialHelpingOptions.Enabled"/>) a same-faction player the bot does not hold as a rival is accepted too (a stranger who
+    /// raises a dead bot); any other offer is declined.
+    /// </summary>
     private void OnResurrectRequest(Player player, byte[] payload)
     {
         if (payload.Length < 8) return;
         var caster = new ObjectGuid(BitConverter.ToUInt64(payload, 0));
-        bool member = caster != player.Guid && Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true;
+        bool groupMember = caster != player.Guid && Services.Social?.Groups.AreInSameGroup(player.Guid, caster) == true;
+        bool stranger = !groupMember && AcceptsStrangersRez(player, caster);
+        bool member = groupMember || stranger;
         var response = new PacketWriter(9);
         response.WriteUInt64(caster.Value);
         response.WriteByte(member ? (byte)1 : (byte)0);
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
-        if (member) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks the caster once alive ("ty")
+        if (groupMember) _chat?.Voice.NoteResurrection(_botId, caster, _chat.NowMs); // the bot voice thanks a group member once alive ("ty"); a stranger is thanked by the gratitude lane instead
+        // A stranger's resurrection is help: remembered, and thanked by the social pass (BotSocial.PlayerbotGratitudeLane).
+        if (stranger && _session.World.FindOnlinePlayer(caster) is { } raiser) Social?.NoteHelp(raiser, player, BotSocial.PlayerbotThanksKind.Resurrect);
+    }
+
+    private bool AcceptsStrangersRez(Player player, ObjectGuid caster)
+    {
+        if (caster == player.Guid || !_options.Social.Helping.Enabled || !_options.Social.Helping.ResurrectStrangers) return false;
+        if (_session.World.FindOnlinePlayer(caster) is not { } other || other.Team != player.Team) return false;
+        if (Social is not { Enabled: true } social) return true;
+        return !social.Memory.TryGet(_botId, caster.Value, out ArcaneCore.Kernel.Characters.PlayerbotRelation relation) || !social.Memory.IsRival(relation);
     }
 
     /// <summary>
@@ -848,6 +873,7 @@ internal sealed class PlayerbotPartyAI
                 break;
             case 8:
                 UpdateEquipment(player);
+                Social?.NoteTradeDone(_botId);
                 if (!_tradePartner.IsEmpty) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
