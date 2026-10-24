@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -15,7 +16,6 @@ public sealed class PlayerbotTraceRaceTests
     private const byte Human = 1;
     private const byte Warrior = 1, Priest = 5, Mage = 8;
     private const uint LesserHeal = 2050, Fireball = 133, Smite = 585;
-    private const int Iterations = 3000;
 
     [Fact]
     public async Task TraceBuiltWhileTheWorldRuns_NeverThrows_OverManyIterations()
@@ -27,9 +27,13 @@ public sealed class PlayerbotTraceRaceTests
         Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), await world.TraceAsync());
 
         // The fight goes on (the coordinator notes events) and, on every tick, the tank's attacker set changes through the real combat API,
-        // while the test thread builds traces.
+        // while the test thread builds traces. The trace count, not the game-time budget, ends the loop: a fixed budget runs as fast as the
+        // CPU allows, so how many round trips fit in it depends on machine speed. Whenever an advance ends, a fresh one is started.
+        const int Target = 300;
+        const int AdvanceMs = 240_000;
         bool attacking = false;
-        Task<bool> running = world.RunUntilAsync(240_000, () =>
+        int toggles = 0, built = 0, interleaved = 0, lastSeen = -1, restarts = 0;
+        Func<bool> flip = () =>
         {
             Player victim = world.Player(tank.Id);
             foreach (Player attacker in new[] { world.Player(healer.Id), world.Player(mage.Id) })
@@ -39,16 +43,34 @@ public sealed class PlayerbotTraceRaceTests
             }
 
             attacking = !attacking;
-            return false;
-        });
-        int built = 0;
-        while (built < Iterations && !running.IsCompleted)
+            toggles++;
+            return Volatile.Read(ref built) >= Target;
+        };
+        Task<bool> running = world.RunUntilAsync(AdvanceMs, flip);
+        Stopwatch wall = Stopwatch.StartNew();
+        while (Volatile.Read(ref built) < Target && wall.Elapsed < TimeSpan.FromSeconds(60))
         {
+            if (running.IsCompleted)
+            {
+                await running; // surfaces a fault
+                restarts++;
+                running = world.RunUntilAsync(AdvanceMs, flip);
+            }
+
             string trace = await world.TraceAsync();
+            int seen = Volatile.Read(ref toggles);
             Assert.False(string.IsNullOrEmpty(trace));
-            built++;
+            if (seen != lastSeen) interleaved++;
+            lastSeen = seen;
+            Interlocked.Increment(ref built);
         }
 
-        Assert.True(built >= 100, $"only {built} traces were built before the advance ended");
+        // Fails only if the real-time cap was hit, i.e. the world is stuck.
+        Assert.Equal(Target, built);
+        // A tick drains the whole command queue, so a trace posted while the previous tick is still draining can share its tick; the
+        // property that matters is that traces were mostly built in different ticks, between flips of the attacker set. That holds on
+        // any machine speed (the old count only stood in for it through wall-clock speed); with no advance running it would be 0.
+        Assert.True(interleaved >= Target / 4, $"only {interleaved} of {built} traces saw the attacker set change ({toggles} flips, {restarts} advance restarts)");
+        await running;
     }
 }

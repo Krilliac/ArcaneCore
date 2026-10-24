@@ -787,10 +787,12 @@ public sealed partial class MapCombat
     /// spell damage uses <paramref name="direct"/> = false for DoTs, and
     /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
-    /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
+    /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE. <paramref name="caller"/> is filled in by the compiler with
+    /// the member that called this (a constant string, no allocation); it is the name the combat reports show as the member that flagged combat, so a
+    /// caller that is itself a shared funnel passes its own constant (MapCombatDamageSink does, for spells and DoTs).
     /// </summary>
     public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true,
-        SpellInfo? threatSpell = null, bool critical = false, bool durabilityLoss = true, bool reflected = false)
+        SpellInfo? threatSpell = null, bool critical = false, bool durabilityLoss = true, bool reflected = false, [CallerMemberName] string caller = "")
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -815,7 +817,7 @@ public sealed partial class MapCombat
                 RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, CombatEnvironment.For(_world));
             }
 
-            LinkHostileHit(attacker, victim, combatLink, direct, threatSpell);
+            LinkHostileHit(attacker, victim, combatLink, direct, threatSpell, caller);
 
             if (enterCombat && !suppressedSpellThreat)
             {
@@ -851,7 +853,7 @@ public sealed partial class MapCombat
             DamageTaken?.Invoke(attacker, victim, damage);
         }
 
-        LinkHostileHit(attacker, victim, combatLink, direct, threatSpell);
+        LinkHostileHit(attacker, victim, combatLink, direct, threatSpell, caller);
 
         if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
@@ -1096,7 +1098,7 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// vmangos Unit::SetInCombatState: UNIT_FLAG_IN_COMBAT plus the PvP linger timer (rounded up to the 1.2 s check). <paramref name="caller"/>
-    /// is kept for the combat/combat-never-left and creature/evade-loop reports (<see cref="UnitCombat.LastCombatSetBy"/>); <paramref name="via"/> is
+    /// (DealDamage's caller for a damage hit) is kept for the combat/combat-never-left and creature/evade-loop reports (<see cref="UnitCombat.LastCombatSetBy"/>); <paramref name="via"/> is
     /// the helper it went through (a compile-time constant, <see cref="UnitCombat.LastCombatSetVia"/>). Both are string references copied
     /// from call sites: no allocation on the combat path.
     /// </summary>
@@ -1130,7 +1132,7 @@ public sealed partial class MapCombat
     /// (<paramref name="direct"/> false: a DoT tick, SpellAuras.cpp:5921, or the split part of a damage split, Unit.cpp:2140, 2179): that
     /// refresh is the spell hit's (Spell.cpp:1260, 1684, 1692), and Unit::DealDamage itself never calls SetOutOfCombatWithVictim.
     /// </summary>
-    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, bool direct, SpellInfo? threatSpell, [CallerMemberName] string caller = "")
+    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, bool direct, SpellInfo? threatSpell, string caller)
     {
         if (combatLink)
         {

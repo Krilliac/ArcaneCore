@@ -4,11 +4,14 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
+using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 
@@ -31,6 +34,12 @@ public sealed class CreatureFlowAnomalyTests
     private const uint VictimEvadeEntry = 950011;
     private const uint LongEvadeEntry = 950012;
     private const uint ClearedGuidEvadeEntry = 950013;
+    private const uint MeleeFlagEntry = 950014;
+    private const uint SpellFlagEntry = 950015;
+    private const uint DotFlagEntry = 950016;
+    private const uint DistinctMeleeEntry = 950017;
+    private const uint DistinctSpellEntry = 950018;
+    private const uint DistinctDotEntry = 950019;
 
     private sealed record Fight(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player, Creature Wolf) : IDisposable
     {
@@ -144,7 +153,7 @@ public sealed class CreatureFlowAnomalyTests
         uint sets = 0;
         for (int i = 0; i < 3; i++)
         {
-            f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
+            new MapCombatDamageSink().DealSpellDamage(f.Player, f.Wolf, FlagSpell, 1, periodic: true); // a DoT tick, as the live loops
             f.Map.Combat.AttackStop(f.Wolf); // an evade without a victim, as the live loops
             setBy = f.Wolf.Combat.LastCombatSetBy ?? "";
             setVia = f.Wolf.Combat.LastCombatSetVia ?? "";
@@ -153,11 +162,75 @@ public sealed class CreatureFlowAnomalyTests
         }
 
         // The subsystem that flagged combat, not the helper it went through (which is named separately).
-        Assert.Equal("DealDamage", setBy);
+        Assert.Equal("PeriodicDamage", setBy);
         Assert.Equal("SetInCombatWithAggressor", setVia);
         Assert.True(sets >= 1, $"sets={sets}");
         string detail = Assert.Single(capture.Notices).Detail;
         Assert.Contains($", by {setBy}/{setVia} x{sets}", detail);
+    }
+
+    private static readonly SpellInfo FlagSpell = Spell(947201, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Nature };
+
+    /// <summary>Three evades without a victim after <paramref name="flag"/> put the wolf in combat: its recorded flagging member and the evade-loop report text.</summary>
+    private static (string SetBy, string Detail) FlaggedBy(uint entry, Action<Fight> flag)
+    {
+        using AnomalyCapture capture = Capture("creature/evade-loop", entry);
+        using Fight f = Start(entry);
+
+        string setBy = "";
+        for (int i = 0; i < 3; i++)
+        {
+            flag(f);
+            f.Map.Combat.AttackStop(f.Wolf);
+            setBy = f.Wolf.Combat.LastCombatSetBy ?? "";
+            EvadeOnce(f);
+        }
+
+        return (setBy, Assert.Single(capture.Notices).Detail);
+    }
+
+    private static void FlagByMelee(Fight f) => f.Map.Combat.AttackerStateUpdate(f.Player, f.Wolf, WeaponAttackType.BaseAttack);
+
+    private static void FlagBySpell(Fight f) => new MapCombatDamageSink().DealSpellDamage(f.Player, f.Wolf, FlagSpell, 1, periodic: false);
+
+    private static void FlagByDot(Fight f) => new MapCombatDamageSink().DealSpellDamage(f.Player, f.Wolf, FlagSpell, 1, periodic: true);
+
+    /// <summary>The flagging member names the damage path (melee swing, direct spell, DoT tick), not DealDamage that all of them share.</summary>
+    [Fact]
+    public void AMeleeSwing_IsNamedDealMeleeDamage_AsTheFlaggingMember()
+    {
+        (string setBy, string detail) = FlaggedBy(MeleeFlagEntry, FlagByMelee);
+
+        Assert.Equal("DealMeleeDamage", setBy);
+        Assert.Contains(", by DealMeleeDamage/SetInCombatWithAggressor x", detail);
+    }
+
+    [Fact]
+    public void ADirectSpell_IsNamedDealSpellDamage_AsTheFlaggingMember()
+    {
+        (string setBy, string detail) = FlaggedBy(SpellFlagEntry, FlagBySpell);
+
+        Assert.Equal("DealSpellDamage", setBy);
+        Assert.Contains(", by DealSpellDamage/SetInCombatWithAggressor x", detail);
+    }
+
+    [Fact]
+    public void ADotTick_IsNamedPeriodicDamage_AsTheFlaggingMember()
+    {
+        (string setBy, string detail) = FlaggedBy(DotFlagEntry, FlagByDot);
+
+        Assert.Equal("PeriodicDamage", setBy);
+        Assert.Contains(", by PeriodicDamage/SetInCombatWithAggressor x", detail);
+    }
+
+    [Fact]
+    public void MeleeDirectSpellAndDot_FlagCombatUnderThreeDistinctNames()
+    {
+        string melee = FlaggedBy(DistinctMeleeEntry, FlagByMelee).SetBy;
+        string spell = FlaggedBy(DistinctSpellEntry, FlagBySpell).SetBy;
+        string dot = FlaggedBy(DistinctDotEntry, FlagByDot).SetBy;
+
+        Assert.Equal(3, new[] { melee, spell, dot }.Distinct().Count());
     }
 
     /// <summary>
@@ -310,7 +383,7 @@ public sealed class CreatureFlowAnomalyTests
 
         foreach (string reason in new[] { "AlphaSelectHostileTargetReason", "BetaSelectHostileTargetReason", "GammaSelectHostileTargetReason" })
         {
-            f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, direct: false);
+            new MapCombatDamageSink().DealSpellDamage(f.Player, f.Wolf, FlagSpell, 1, periodic: true);
             f.Map.Combat.AttackStop(f.Wolf);
             f.Wolf.Relocate(25, 0, 83.5f, 0, 0);
             f.System.EnterEvadeMode(f.Wolf, reason);
@@ -319,7 +392,7 @@ public sealed class CreatureFlowAnomalyTests
 
         string detail = Assert.Single(capture.Notices).Detail;
         Assert.EndsWith("...", detail); // the text was cut
-        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(detail, @"GammaSelectHostileTargetReason\(no victim, 0 att, threat \d+, \w+, last player alive \d+yd, by DealDamage/SetInCombatWithAggressor x\d+\)"), detail);
+        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(detail, @"GammaSelectHostileTargetReason\(no victim, 0 att, threat \d+, \w+, last player alive \d+yd, by PeriodicDamage/SetInCombatWithAggressor x\d+\)"), detail);
     }
 
     /// <summary>A guard (EventAI: ACTION_T_EVADE 100 ms into every fight) at x=5 and a dummy at x=8.</summary>
