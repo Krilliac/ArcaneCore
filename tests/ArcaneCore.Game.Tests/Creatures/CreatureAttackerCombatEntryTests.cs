@@ -1,9 +1,9 @@
 using ArcaneCore.Game.Combat;
-using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
@@ -16,8 +16,10 @@ namespace ArcaneCore.Game.Tests.Creatures;
 /// <summary>
 /// vmangos parity: Unit::SetInCombatState calls Creature::OnEnterCombat -> AttackedBy for a creature entering combat (Unit.cpp:5942-5946,
 /// Creature.cpp:3652-3653), so a creature whose own hit puts it in combat attacks the unit it hit instead of sitting in combat with no victim
-/// and evading. The scenarios use a synthetic direct school-damage spell, not a periodic aura. Live 2026-10-22 Firemane mobs (4328/4329/4331)
-/// showed this evade loop, but the link is a hypothesis: the logs carry no flagged-by text and the auras those entries carry are unconfirmed.
+/// and evading. The scenarios use a synthetic direct school-damage spell, not a periodic aura. Live Firemane mobs (4328/4329/4331) showed this
+/// evade loop in the world log from 2026-10-23 to 2026-10-24: from 01:43 on, the creature/evade-loop reports for 4329 and 4331 read
+/// "SelectHostileTarget(no victim, 0 att, Waypoint, by DealSpellDamage/SetInCombatWithVictim x1)", i.e. the creature was put in combat as the
+/// attacker by its own spell damage and had no victim and no attackers, which is the state these scenarios reproduce.
 /// Each scenario owns an entry (the anomaly ledger is process-wide).
 /// </summary>
 public sealed class CreatureAttackerCombatEntryTests
@@ -27,6 +29,9 @@ public sealed class CreatureAttackerCombatEntryTests
     private const uint BusyEntry = 950022;
     private const uint EvadingEntry = 950023;
     private const uint NoCombatEntry = 950024;
+    private const uint FleeingEntry = 950025;
+    private const uint ConfusedEntry = 950026;
+    private const uint ThreatOnlyEntry = 950027;
 
     private static readonly SpellInfo PulseSpell = Spell(947202, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.UnitEnemy)) with { School = SpellSchool.Fire };
 
@@ -123,5 +128,32 @@ public sealed class CreatureAttackerCombatEntryTests
         Assert.False(s.Mob.Combat.IsInCombat);
         Assert.Null(s.Mob.Combat.Victim);
         Assert.False(s.Mob.Combat.Threat.Contains(s.Player));
+    }
+
+    [Theory]
+    [InlineData(FleeingEntry, UnitFlags.Fleeing)]
+    [InlineData(ConfusedEntry, UnitFlags.Confused)]
+    public void AFeared_OrConfusedCreature_WhoseSpellHitsAPlayer_DoesNotAttackIt(uint entry, UnitFlags cc)
+    {
+        using Scene s = Start(entry);
+        s.Mob.UnitFlags |= cc;
+
+        Pulse(s, s.Player);
+
+        Assert.True(s.Mob.Combat.IsInCombat);
+        Assert.Null(s.Mob.Combat.Victim);
+    }
+
+    [Fact]
+    public void ACreatureAlreadyInCombatWithNoVictim_IsNotMadeToAttack_ByItsSpellHit()
+    {
+        using Scene s = Start(ThreatOnlyEntry);
+        s.Map.Combat.SetInCombatState(s.Mob, 0);
+        Assert.True(s.Mob.Combat.IsInCombat);
+        Assert.Null(s.Mob.Combat.Victim);
+
+        Pulse(s, s.Player);
+
+        Assert.Null(s.Mob.Combat.Victim);
     }
 }
