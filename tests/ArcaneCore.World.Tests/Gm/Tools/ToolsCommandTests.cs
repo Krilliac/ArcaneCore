@@ -135,6 +135,8 @@ public sealed class ToolsCommandTests
         await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSBT", "Toolsbt", AccountSecurity.Administrator);
         await gm.CollectAsync();
         // More distinct bots than the ledger tracks: its count stops at MaxTrackedSubjects, so "across 256 bot(s)" would read as exact.
+        // The command reads the process-wide ledger and takes no key or ledger, so this pollution of bot-brain/think-slow is intended
+        // (other think-slow tests filter by subject through Capture).
         for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects + 20; i++)
             AnomalyLedger.Shared.Report("bot-brain", "think-slow", $"bot Saturated{i} (ToolsCommandTests)", "slow think");
 

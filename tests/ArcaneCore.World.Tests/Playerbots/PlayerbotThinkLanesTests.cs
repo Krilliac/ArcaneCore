@@ -750,6 +750,7 @@ public sealed class PlayerbotThinkLanesTests
         }
     }
 
+    // Guards only against a future default seed in a fresh feature: it still passes if the restore is removed (ADetachedPass_... pins the restore).
     [Fact]
     public async Task AnUnsetPass_ArrivesInAFreshFeatureAsZero()
     {
