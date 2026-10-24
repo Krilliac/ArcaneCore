@@ -104,7 +104,10 @@ $lootImported = [long]$import.imported.loot_template_rows
 $lootStatus = if ($lootSource -eq $lootImported) { 'ok' } else { $failures++; 'MISMATCH' }
 '{0,-30} source {1,9}  imported {2,9}  {3}' -f 'loot templates (5 tables)', $lootSource, $lootImported, $lootStatus
 
-Invoke-Importer @('verify', '--database', $database)
+# This script imports the dump only, so verify (exit 6) rightly reports the DBC-fed tables (map_template, area_template,
+# areatrigger_template, taxi_nodes, taxi_path) as empty; its problem lines are printed, and only other exit codes fail here.
+& $Importer verify --database $database
+if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 6) { throw "arcane-content-importer verify exited $LASTEXITCODE" }
 
 if ($failures -gt 0) { throw "$failures table(s) did not import every source row" }
 'verify-classic-db: every source row of the imported tables arrived'
