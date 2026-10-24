@@ -165,7 +165,7 @@ public sealed class CreatureDespawnTempCommand : ICommandExtension
 
 /// <summary>
 /// <c>.inspect loot</c> (the selected creature's loot: owner, permission, gold and every item with its state) and
-/// <c>.debug sessions [#count]</c> (connected sessions: players and bots, client latency and the sessions with the most queued outbound
+/// <c>.debug sessions [#count]</c> (connected sessions: players and bots, client latency and the sessions with the most queued inbound
 /// world packets). Read-only, no vmangos equivalent.
 /// </summary>
 public sealed class ExtraLootSessionCommands : ICommandExtension
@@ -214,7 +214,7 @@ public sealed class ExtraSessionDebugCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new("sessions", AccountSecurity.GameMaster,
-            "Syntax: .debug sessions [#count]\nShow the in-world sessions: players and bots, client latency (median, p90, max over the players) and the sessions with the most queued outbound world packets (default 10 rows, at most 60).",
+            "Syntax: .debug sessions [#count]\nShow the in-world sessions: players and bots, client latency (median, p90, max over the players) and the sessions with the most queued inbound world packets (client packets waiting for the world thread; default 10 rows, at most 60).",
             Sessions, RetailLevel: 3),
     ];
 
@@ -234,11 +234,11 @@ public sealed class ExtraSessionDebugCommands : ICommandExtension
         long queuedBytes = sessions.Sum(t => t.Session!.QueuedWorldBytes);
         int queuedPackets = sessions.Sum(t => t.Session!.QueuedWorldPackets);
         context.Reply(string.Create(C,
-            $"{players.Count} in world: {players.Count - bots} players, {bots} bots; latency {lat}; queued outbound {queuedPackets} packets / {queuedBytes / 1024.0:F1} KiB"));
+            $"{players.Count} in world: {players.Count - bots} players, {bots} bots; latency {lat}; queued inbound {queuedPackets} packets / {queuedBytes / 1024.0:F1} KiB"));
         foreach ((Player player, WorldSession? session) in sessions.OrderByDescending(t => t.Session!.QueuedWorldBytes).ThenByDescending(t => t.Session!.LatencyMs).Take((int)count))
         {
             context.Reply(string.Create(C,
-                $"  {player.Name}{(player.Session.IsPlayerbot ? " (bot)" : string.Empty)} map {player.MapId}: latency {session!.LatencyMs} ms, queued {session.QueuedWorldPackets} packets / {session.QueuedWorldBytes / 1024.0:F1} KiB"));
+                $"  {player.Name}{(player.Session.IsPlayerbot ? " (bot)" : string.Empty)} map {player.MapId}: latency {session!.LatencyMs} ms, queued inbound {session.QueuedWorldPackets} packets / {session.QueuedWorldBytes / 1024.0:F1} KiB"));
         }
 
         return true;

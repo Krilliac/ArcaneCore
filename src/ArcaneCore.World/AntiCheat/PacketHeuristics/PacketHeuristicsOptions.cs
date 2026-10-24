@@ -35,6 +35,9 @@ public sealed class PacketHeuristicsOptions
     /// <summary>Report an opcode with no handler or outside the opcode table (<c>unknown-opcode</c>). Default true.</summary>
     public bool UnknownOpcode { get; set; } = true;
 
+    /// <summary>Report a stripped developer, GM, cheat or debug opcode that the release client never sends (<c>dev-opcode</c>); the packet is dropped unread either way. Default true.</summary>
+    public bool DevOpcode { get; set; } = true;
+
     /// <summary>Report a payload a handler rejected as malformed, or a bad frame header (<c>malformed</c>). Default true.</summary>
     public bool Malformed { get; set; } = true;
 
