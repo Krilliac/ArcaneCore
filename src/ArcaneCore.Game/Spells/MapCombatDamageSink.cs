@@ -31,7 +31,7 @@ public class MapCombatDamageSink : IDamageSink
         // The spell and the crit flag give the threat formula its school, spell_threat multiplier and MOD_CRITICAL_THREAT (MapCombat.AddDamageThreat);
         // the spell also carries the death durability exemption, and durabilityLoss is DealDamage's own flag (instant kill, split damage).
         map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false, startsCombat: startsCombat, threatSpell: spell, critical: critical,
-            durabilityLoss: durabilityLoss, reflected: reflected);
+            durabilityLoss: durabilityLoss, reflected: reflected, caller: periodic ? "PeriodicDamage" : nameof(DealSpellDamage));
         return health - Math.Min(health, victim.Health);
     }
 
