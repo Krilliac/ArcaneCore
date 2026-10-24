@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// (a player guid carries the character id, so the map is keyed by it), keeps the <see cref="PlayerbotSocialMemory"/>, and never throws
 /// into game logic: a failure is recorded at the fault site <c>playerbot.social-memory</c> and logged. Any thread.
 /// </summary>
-internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILogger logger)
+internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILogger logger, PlayerbotTradeLedger? ledger = null)
 {
     public const string FaultSite = "playerbot.social-memory";
 
@@ -21,6 +21,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     private int _faultsLogged;
 
     public PlayerbotSocialMemory Memory { get; } = memory;
+
+    /// <summary>The bots' trade ledgers (P4 S3); events that belong in them are fed from <see cref="Note"/> and <see cref="NoteById"/>.</summary>
+    public PlayerbotTradeLedger? Ledger { get; } = ledger;
 
     /// <summary>The bots' short-term moods; every social event that moves one is applied by <see cref="Note"/> and <see cref="NoteById"/>.</summary>
     public PlayerbotMood Mood { get; } = new();

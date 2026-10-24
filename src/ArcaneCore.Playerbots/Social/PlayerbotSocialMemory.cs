@@ -27,6 +27,18 @@ internal enum PlayerbotSocialEvent
 
     /// <summary>A bot's unprompted opening got no answer: affinity -1 and no familiarity (<c>PlayerbotInitiativeLane</c>).</summary>
     OpeningIgnored,
+
+    /// <summary>A trade deal completed at the agreed terms (P4).</summary>
+    FairDeal,
+
+    /// <summary>The partner changed a deal's value after matching it (P4).</summary>
+    TradeScam,
+
+    /// <summary>A gift worth at least the trading gift minimum was received (P4).</summary>
+    GiftReceived,
+
+    /// <summary>A deal was agreed and then never completed (P4).</summary>
+    DealFlaked,
 }
 
 /// <summary>
@@ -196,6 +208,9 @@ internal sealed class PlayerbotSocialMemory
 
     /// <summary>The affinity every decision reads: the war layer while War Mode is on, the normal layer otherwise.</summary>
     public int EffectiveAffinity(PlayerbotRelation relation) => _war.Enabled ? relation.WarAffinity : relation.Affinity;
+
+    /// <summary>TEST-AUTHOR STUB (P4 S4): the affinity every giving decision reads; the design is min(normal, effective).</summary>
+    public int GivingAffinity(PlayerbotRelation relation) => EffectiveAffinity(relation);
 
     /// <summary>Whether every decision treats the other as a rival: the war layer's flag while War Mode is on, the normal flag otherwise.</summary>
     public bool IsRival(PlayerbotRelation relation)

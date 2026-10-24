@@ -234,7 +234,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private BotSocial.PlayerbotSocialRecorder CreateSocial()
     {
         var created = new BotSocial.PlayerbotSocialRecorder(
-            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger);
+            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger,
+            new BotSocial.PlayerbotTradeLedger(_options.Social.Trading, _options.Social.WarMode, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()));
         return Interlocked.CompareExchange(ref _social, created, null) ?? created;
     }
 

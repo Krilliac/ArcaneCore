@@ -52,6 +52,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
     public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
 
+    /// <summary>Answering trade windows, deals, group gifts and the outflow limits (<c>World:Playerbots:Social:Trading</c>).</summary>
+    public PlayerbotSocialTradingOptions Trading { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";

@@ -109,6 +109,24 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>Trust (permille) change toward the member who died first in a wipe (-500..500).</summary>
     public int TrustPerFirstDeathInWipe { get; set; } = -30;
 
+    /// <summary>Affinity gained when a trade deal completes at the agreed terms (stub bounds).</summary>
+    public int AffinityPerFairDeal { get; set; } = 3;
+
+    /// <summary>Trust (permille) gained toward a partner whose deal completed at the agreed terms.</summary>
+    public int TrustPerFairDeal { get; set; } = 20;
+
+    /// <summary>Affinity change toward a partner who changed a deal's value after matching it.</summary>
+    public int AffinityPerTradeScam { get; set; } = -15;
+
+    /// <summary>Trust (permille) change toward that partner.</summary>
+    public int TrustPerTradeScam { get; set; } = -200;
+
+    /// <summary>Affinity gained for a gift worth at least the trading gift minimum.</summary>
+    public int AffinityPerGiftReceived { get; set; } = 4;
+
+    /// <summary>Affinity change toward a partner who agreed a deal and never completed it.</summary>
+    public int AffinityPerDealFlaked { get; set; } = -1;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social:Memory";
