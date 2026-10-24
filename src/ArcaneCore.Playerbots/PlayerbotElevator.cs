@@ -358,7 +358,29 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public ElevatorStage Stage { get; set; } = ElevatorStage.ToStop;
     public uint StageMs { get; set; } = nowMs;
     public string? Failure { get; set; }
-    public PlayerbotRoute? Route { get; set; }
+    private PlayerbotRoute? _route;
+
+    /// <summary>The route the trip walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    public PlayerbotRoute? Route
+    {
+        get => _route;
+        set
+        {
+            if (ReferenceEquals(_route, value)) return;
+            if (_route is { } old) old.Released = true;
+            _route = value;
+        }
+    }
+
+    /// <summary>Puts back a route that <see cref="Route"/> was cleared of for a moment (ChooseCar clears it, which marks it released): the
+    /// route is held again, so it is no longer released. A method rather than the setter alone because the setter marks the route it
+    /// drops released, and putting the same route back would leave that mark on it (a keep-think would then stop the bot).</summary>
+    public void RestoreRoute(PlayerbotRoute? route)
+    {
+        Route = route;
+        if (route is not null) route.Released = false;
+    }
     public float Best { get; set; } = float.PositiveInfinity;
     public float LegBest { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;
@@ -559,6 +581,22 @@ internal static partial class PlayerbotElevator
     /// <summary>The bot's trip, done or not (inspection and tests).</summary>
     internal static ElevatorTrip? TripOf(Player player) => Trips.TryGetValue(player, out ElevatorTrip? trip) ? trip : null;
 
+    /// <summary>
+    /// The trips under way (not done, not failed) of the players on <paramref name="map"/> (inspection: <c>.playerbot lift</c>). Only that
+    /// map's own players are read: a trip is written by the thread updating its bot's map, so the caller must be on <paramref name="map"/>'s
+    /// thread (the world thread outside the parallel maps phase); another map's trips are never touched.
+    /// </summary>
+    internal static IEnumerable<(Player Player, ElevatorTrip Trip)> ActiveTrips(Map map)
+    {
+        foreach (Player player in map.Players)
+        {
+            if (player.IsInWorld && Trips.TryGetValue(player, out ElevatorTrip? trip) && trip.Stage is not (ElevatorStage.Done or ElevatorStage.Failed))
+            {
+                yield return (player, trip);
+            }
+        }
+    }
+
     /// <summary>Whether a trip is under way (not done, not failed).</summary>
     internal static bool IsTraveling(Player player)
         => Trips.TryGetValue(player, out ElevatorTrip? trip) && trip.Stage is not (ElevatorStage.Done or ElevatorStage.Failed);
@@ -691,6 +729,7 @@ internal static partial class PlayerbotElevator
             NextPlanMs = session.World.NowMs,
             StartPosition = new Vector3(player.X, player.Y, player.Z),
         };
+        if (Trips.TryGetValue(player, out ElevatorTrip? replaced)) replaced.Route = null;
         Trips.AddOrUpdate(player, trip);
         PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return trip;
@@ -708,6 +747,7 @@ internal static partial class PlayerbotElevator
         if (!Trips.TryGetValue(player, out ElevatorTrip? trip)) return;
         if (!player.IsAlive)
         {
+            trip.Route = null;
             Trips.Remove(player);
             if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? deadState)) deadState.ElevatorTrip = null;
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0 && player.Session is WorldSession session) ClearTransport(session, player);
@@ -728,6 +768,7 @@ internal static partial class PlayerbotElevator
             case ElevatorStage.Falling:
                 return;
             default:
+                trip.Route = null;
                 Trips.Remove(player);
                 if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? cancelState)) cancelState.ElevatorTrip = null;
                 return;
@@ -784,8 +825,9 @@ internal static partial class PlayerbotElevator
                     float best = trip.Best;
                     uint bestMs = trip.BestMs;
                     PlayerbotRoute? route = trip.Route;
-                    if (!ChooseCar(player, map, trip, opt, now, out _)) { trip.Route = route; return; }
-                    (trip.Best, trip.BestMs, trip.Route) = (best, bestMs, route);
+                    if (!ChooseCar(player, map, trip, opt, now, out _)) { trip.RestoreRoute(route); return; }
+                    (trip.Best, trip.BestMs) = (best, bestMs);
+                    trip.RestoreRoute(route);
                 }
 
                 GuardPlatformShaft(session, player, map, trip);
@@ -999,6 +1041,7 @@ internal static partial class PlayerbotElevator
             LastBeatMs = now,
             StartPosition = at,
         };
+        if (Trips.TryGetValue(player, out ElevatorTrip? replaced)) replaced.Route = null;
         Trips.AddOrUpdate(player, trip);
         PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return true;
@@ -1846,6 +1889,7 @@ internal static partial class PlayerbotElevator
     private static ElevatorStep Fail(ElevatorTrip trip, string why)
     {
         trip.Failure ??= why;
+        trip.Route = null;
         return ElevatorStep.Failed;
     }
 
@@ -2044,6 +2088,7 @@ internal static partial class PlayerbotElevator
     /// </summary>
     private static void AbandonRelocated(WorldSession session, Player player, ElevatorTrip trip)
     {
+        trip.Route = null;
         Trips.Remove(player);
         if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? state)) state.ElevatorTrip = null;
         session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogDebug(

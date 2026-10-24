@@ -9,6 +9,25 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Graveyards;
 
+/// <summary>Where a chosen graveyard came from.</summary>
+public enum GraveyardSource
+{
+    /// <summary>A <c>game_graveyard_zone</c> link of the spirit's area or zone.</summary>
+    Link,
+
+    /// <summary>The battleground's own choice (<see cref="IGraveyardOverride"/>).</summary>
+    Battleground,
+
+    /// <summary>The default graveyard of the team (<c>World:Death:GraveyardFallbackToDefaults</c>), no link existed.</summary>
+    Default,
+
+    /// <summary>A run-time link (<see cref="IGraveyardLinkSource"/>, e.g. an outdoor PvP tower) closer than the table's choice.</summary>
+    RunTimeLink,
+}
+
+/// <summary>A graveyard and where it came from.</summary>
+public sealed record GraveyardChoice(WorldSafeLoc Location, GraveyardSource Source);
+
 /// <summary>
 /// Sends a released spirit to its graveyard (vmangos <c>Player::RepopAtGraveyard</c>, Player.cpp:4988-5025): the closest
 /// linked graveyard (<see cref="GraveyardSelector"/>), a spirit on a transport comes back alive at once, the facing is the
@@ -120,6 +139,21 @@ public sealed partial class GraveyardRepopService(WorldRuntime world, Func<Telep
     /// <summary>The safe location for <paramref name="player"/> at its position, or null.</summary>
     internal WorldSafeLoc? Choose(Player player, Map map) => ChooseAt(player, map, player.X, player.Y, player.Z);
 
+    /// <summary>
+    /// The graveyard a spirit at <paramref name="player"/>'s position would be sent to, as a GM query (<c>.neargrave</c>), with where
+    /// it came from. It is the real repop's selection (battleground overrides, zone and area links, the default fallback, run-time
+    /// links). <paramref name="team"/> (469 Alliance, 67 Horde, 0 any) replaces the player's own for the zone and area links and the
+    /// default fallback only: <see cref="IGraveyardOverride"/> (the player's match and team) and <see cref="IGraveyardLinkSource"/>
+    /// (the player's team) take the player, so on a battleground map and for run-time links the player's own team still applies.
+    /// </summary>
+    public GraveyardChoice? ChooseNearest(Player player, Map map, uint team)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+        return ChooseCore(player, map.MapId, player.X, player.Y, player.Z, zoneId, areaId, team);
+    }
+
     private WorldSafeLoc? ChooseAt(Player player, Map map, float x, float y, float z)
     {
         (uint zoneId, uint areaId) = map.GetZoneAndAreaId(x, y, z);
@@ -127,6 +161,9 @@ public sealed partial class GraveyardRepopService(WorldRuntime world, Func<Telep
     }
 
     private WorldSafeLoc? ChooseAt(Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId)
+        => ChooseCore(player, mapId, x, y, z, zoneId, areaId, teamOverride: null)?.Location;
+
+    private GraveyardChoice? ChooseCore(Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId, uint? teamOverride)
     {
         WorldMaps maps = WorldMaps.Of(world);
         if (maps.Registry.Find(mapId) is { IsBattleground: true })
@@ -135,7 +172,7 @@ public sealed partial class GraveyardRepopService(WorldRuntime world, Func<Telep
             {
                 if (graveyardOverride.TryChoose(player, out WorldSafeLoc? chosen))
                 {
-                    return chosen;
+                    return chosen is null ? null : new GraveyardChoice(chosen, GraveyardSource.Battleground);
                 }
             }
 
@@ -148,11 +185,24 @@ public sealed partial class GraveyardRepopService(WorldRuntime world, Func<Telep
             return null;
         }
 
-        uint team = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
-        WorldSafeLoc? picked = DeathHooks.For(world).Options.GraveyardFallbackToDefaults
-            ? GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team)
-            : GraveyardSelector.FindClosest(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team);
-        return _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, mapId, x, y, z, zoneId, areaId);
+        uint ownTeam = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
+        uint team = teamOverride ?? ownTeam;
+        WorldSafeLoc? picked = GraveyardSelector.FindClosest(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team);
+        GraveyardSource source = GraveyardSource.Link;
+        if (picked is null && DeathHooks.For(world).Options.GraveyardFallbackToDefaults)
+        {
+            // The default graveyards are per team; "any team" (a GM query only) falls back to the player's own.
+            picked = GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team == 0 ? ownTeam : team);
+            source = GraveyardSource.Default;
+        }
+
+        WorldSafeLoc? final = _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, mapId, x, y, z, zoneId, areaId);
+        if (final is null)
+        {
+            return null;
+        }
+
+        return new GraveyardChoice(final, ReferenceEquals(final, picked) ? source : GraveyardSource.RunTimeLink);
     }
 
     /// <summary>The closest of the chosen graveyard and the run-time links on the spirit's map (vmangos GetClosestGraveYard's distance pick).</summary>

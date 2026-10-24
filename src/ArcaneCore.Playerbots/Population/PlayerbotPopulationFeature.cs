@@ -309,7 +309,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _world = null;
     }
 
-    /// <summary>World thread: stop the terrain lookup in flight (its late result is ignored); the task to wait for.</summary>
+    /// <summary>World thread: stop the terrain lookup and the placement data build in flight (their late results are ignored); the task to wait for.</summary>
     private Task CancelLocating()
     {
         _locating = null;
@@ -317,7 +317,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _locateCts?.Cancel();
         _locateCts?.Dispose();
         _locateCts = null;
-        return _locateTask;
+        return Task.WhenAll(_locateTask, _provisioner.CancelWarm());
     }
 
     public async Task StopAsync()
@@ -429,12 +429,32 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (batch > 0) StartPass(batch);
     }
 
-    /// <summary>Run one pass now and wait for it (tests; the world's own timer starts passes the same way). A pass already running is awaited instead.</summary>
+    /// <summary>
+    /// Run one pass now and wait for it (tests; the world's own timer starts passes the same way). A pass already running is awaited instead.
+    /// Unlike the timer's passes it first waits for the placement safety data of the atlas in force to be in (so a test sees the behaviour
+    /// of a warm world), unless the test holds the build open through <see cref="PopulationProvisioner.WarmGate"/> to watch the deferral.
+    /// </summary>
     internal async Task RunPassNowAsync(bool shedOnly = false)
     {
         WorldRuntime world = _world ?? throw new InvalidOperationException("the population feature is not attached");
+        if (_provisioner.WarmGate is null) await WarmNowAsync().ConfigureAwait(false);
+
         Task pass = await world.InvokeAsync(() => _pass.IsCompleted ? StartPass(shedOnly: shedOnly) : _pass).ConfigureAwait(false);
         await pass.ConfigureAwait(false);
+    }
+
+    /// <summary>Tests: build the placement safety data for the atlas in force now and wait until the world thread has it (a pass never waits for it).</summary>
+    internal async Task WarmNowAsync()
+    {
+        WorldRuntime world = _world ?? throw new InvalidOperationException("the population feature is not attached");
+        Task build = await world.InvokeAsync(() =>
+        {
+            if (_options.Population.FreshLaunch) return Task.CompletedTask;
+            _ = _provisioner.Warm(world, AtlasFor(world, _options.Population), _stop.Token);
+            return _provisioner.WarmTask;
+        }).ConfigureAwait(false);
+        await build.ConfigureAwait(false);
+        await world.InvokeAsync(() => true).ConfigureAwait(false); // the finished build is posted to the world thread; this runs after it (Post and InvokeAsync share one FIFO queue)
     }
 
     /// <summary>World thread: capture the facts and start the pass task.</summary>
@@ -496,10 +516,11 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         string BoostMissing,
         long ClockMs,
         ManagedPlayerbotFeature Managed,
-        string? TerrainHold,
+        string? TerrainHold, // why no bot is created or moved this pass: the graveyard lookup or the placement safety data is not in
         bool TeleportAvailable,
         int RushCount = 0,
-        bool ShedOnly = false);
+        bool ShedOnly = false,
+        PopulationPlacementFacts? Facts = null); // non-null whenever TerrainHold is null and the launch is not fresh: one snapshot for the whole pass
 
     private PassInput? Capture(int rushCount = 0, bool shedOnly = false)
     {
@@ -515,6 +536,17 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // Fresh launch places nobody (the character-create handler puts a bot at its race start): no atlas, no terrain lookup, no hold.
         PopulationZoneAtlas atlas = pop.FreshLaunch ? _atlas : AtlasFor(world, pop);
         string? terrainHold = pop.FreshLaunch ? null : TerrainHold();
+        // The placement safety data is built in the background for the atlas in force. While the unlocated fallback atlas is held back the
+        // terrain hold covers it; once the hold gives up after MaxTerrainHoldPasses the facts are built for the fallback too, and rebuilt when
+        // the located atlas arrives. Until they are ready the same hold applies, with no pass limit: going ahead without them would build
+        // them on the world thread.
+        PopulationPlacementFacts? facts = null;
+        if (!pop.FreshLaunch && terrainHold is null)
+        {
+            terrainHold = _provisioner.Warm(world, atlas, _stop.Token);
+            if (terrainHold is null) facts = _provisioner.Facts;
+        }
+
         var realZones = new HashSet<uint>();
         foreach (Player online in world.OnlinePlayers)
             if (online.Session is not WorldSession { IsManaged: true }) realZones.Add(online.ZoneId);
@@ -546,7 +578,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.FreshLaunch ? FreshBands : pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly);
+            ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly, facts);
     }
 
     /// <summary>
@@ -1192,9 +1224,10 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
             else
             {
+                PopulationPlacementFacts facts = ctx.Input.Facts!; // a non-fresh pass without a hold has it
                 plan = await world.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
                     ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
-                    (location, level, faction) => _provisioner.IsSafe(world, location, level, faction)), ct).ConfigureAwait(false);
+                    (location, level, faction) => _provisioner.IsSafe(facts, location, level, faction)), ct).ConfigureAwait(false);
                 if (plan is null)
                     return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
                 (planTeam, planRace, planClass, planBand) = (plan.Team, plan.Race, plan.Class, plan.Band);
@@ -1247,7 +1280,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
             // Fresh launch: no boost and no teleport; the bot stands where CMSG_CHAR_CREATE put it. Its zone is recorded as it is.
             string? refusal = plan is not { } activePlan ? null
-                : await world.InvokeAsync(() => _provisioner.Provision(botId, activePlan.Level, activePlan.Placement.Location), ct).ConfigureAwait(false);
+                : await world.InvokeAsync(() => _provisioner.Provision(botId, activePlan.Level, activePlan.Placement.Location, ctx.Input.Facts!), ct).ConfigureAwait(false);
             if (refusal is not null)
             {
                 // The plan was safe when it was made (a content reload can change that before the teleport). A level-1 bot that
@@ -1255,7 +1288,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 // count towards a band; the next pass plans again.
                 Fail($"placement of {made.Name} refused: {refusal}");
                 string? paused = null;
-                if (++_placementRefusals >= MaxPlacementRefusals)
+                // A stale refusal (the content was reloaded since the plan) says nothing about the placements: it does not count to the pause.
+                if (refusal != PopulationProvisioner.StaleCode && ++_placementRefusals >= MaxPlacementRefusals)
                 {
                     _pausedAtPass = Volatile.Read(ref _passes);
                     paused = $"creation paused: {MaxPlacementRefusals} placements refused in a row";
@@ -2010,7 +2044,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
                 if (player is null || PopulationProvisioner.IsInTransit(player)) return (null, true);
                 return (atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
-                    (location, level) => _provisioner.IsSafe(world, location, checked((byte)level), player.FactionTemplate)), false);
+                    (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate)), false);
             }, ct).ConfigureAwait(false);
             if (inTransit) continue;
             if (selected is null)
@@ -2021,8 +2055,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
 
             PopulationPlacement placement = selected.Placement;
-            string? refusal = await world.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location), ct).ConfigureAwait(false);
-            if (refusal == "bot-in-transit") continue;
+            string? refusal = await world.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location, ctx.Input.Facts!), ct).ConfigureAwait(false);
+            if (refusal is "bot-in-transit" or PopulationProvisioner.StaleCode) continue; // stale: the next pass plans again on new data
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };

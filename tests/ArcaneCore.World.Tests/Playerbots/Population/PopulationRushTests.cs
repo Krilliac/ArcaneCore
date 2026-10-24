@@ -62,8 +62,9 @@ public sealed class PopulationRushTests
         Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
     }
 
-    private static Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
-        => PopulationTestHost.StartAsync(o =>
+    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
+    {
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
         {
             o.MaxBots = 6;
             o.Population.Enabled = false;      // the rush needs no running population
@@ -74,6 +75,51 @@ public sealed class PopulationRushTests
             o.Population.RushBrakeWindowSeconds = 1;
             configure?.Invoke(o);
         }, dataStore: store);
+        return world;
+    }
+
+    [Fact]
+    public async Task Rush_StartedOnAColdWorld_WaitsForThePlacementSafetyData_InsteadOfHalting_AndThenCompletes()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        world.Feature.Provisioner.WarmGate = ct => gate.Task.WaitAsync(ct); // the facts build is held open: the world is cold
+
+        Assert.Null(world.Feature.StartRush(2, 50));
+        PopulationRushStatus held = await WaitRushAsync(world, _ => world.Feature.PassesStarted >= 3, "passes to run against the cold world");
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(20);
+            held = world.Feature.RushStatus;
+            Assert.NotEqual("halted", held.State);
+        }
+
+        Assert.Equal("running", held.State);
+        Assert.Equal(0, held.Created);
+        Assert.Empty(world.Members.Snapshot);
+
+        gate.SetResult();
+        PopulationRushStatus done = await WaitRushAsync(world, r => r.State != "running", "the rush to finish once the data is ready");
+        Assert.Equal(("done", 2), (done.State, done.Created));
+        await world.WaitForSettledAsync(2);
+    }
+
+    [Fact]
+    public void Rush_HaltsOnAFailedPlacementDataBuild_ButHoldsWhileTheBuildRuns()
+    {
+        var rush = new PopulationRush();
+        rush.Begin(5, 10, 0);
+
+        // The build is running: a hold, however many passes it takes.
+        for (int i = 0; i < 10; i++) Assert.False(rush.Report(5, 0, PopulationProvisioner.WaitingReason, null, i));
+        Assert.Equal("running", rush.Snapshot(100).State);
+
+        // The build failed and waits for its retry: the rush ends instead of waiting for good.
+        Assert.True(rush.Report(5, 0, PopulationProvisioner.WaitingReason + PopulationProvisioner.BuildFailedSuffix, null, 200));
+        PopulationRushStatus status = rush.Snapshot(200);
+        Assert.Equal("halted", status.State);
+        Assert.Contains("the last build failed", status.Reason);
+    }
 
     private static async Task<PopulationRushStatus> WaitRushAsync(PopulationTestHost world, Func<PopulationRushStatus, bool> done, string what, int seconds = 20)
     {

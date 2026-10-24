@@ -36,7 +36,7 @@ public sealed class DebugToolsCommands : ICommandExtension
             "Syntax: .debug tick\nShow the world tick: target interval, body p50/p99/max over the last minute, each phase (commands, world-tick handlers, features, maps, autosave) over the last minute, late and skipped starts, and what the world thread is doing right now.",
             Tick, RetailLevel: 3),
         new("slowticks", AccountSecurity.GameMaster,
-            "Syntax: .debug slowticks [#seconds]\nList the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600): duration, phase split, GC and the slowest features of each.",
+            "Syntax: .debug slowticks [#seconds]\nList the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600). The ring holds only 8 ticks: when it is full a new slow tick replaces an entry older than 60 s first, else the fastest one, and the hang log itself uses only the last 60 s; an older entry stays listed until it is replaced, and faster ticks may be missing when the ring is full. Shows duration, phase split, GC and the slowest features of each.",
             SlowTicks, RetailLevel: 3),
         new("features", AccountSecurity.GameMaster,
             "Syntax: .debug features [#count]\nList the world features by their smoothed per-tick time (about the last 50 ticks) with their allocation per tick, slowest first (default 15 rows). The playerbot think pass is one of them.",
@@ -133,17 +133,25 @@ public sealed class DebugToolsCommands : ICommandExtension
             return false;
         }
 
-        IReadOnlyList<SlowTickInfo> slow = context.World.Stats.SlowTicks(TimeSpan.FromSeconds(seconds));
+        // The ring keeps SlowTickCapacity ticks and never evicts by age: an entry older than SlowTickRetention is only the first
+        // to be replaced when the ring is full, so a longer window can still show it. The reply says what the list can miss.
+        TickStats stats = context.World.Stats;
+        IReadOnlyList<SlowTickInfo> slow = stats.SlowTicks(TimeSpan.FromSeconds(seconds));
+        double retention = TickStats.SlowTickRetention.TotalSeconds;
+        string window = seconds > retention
+            ? $" (the ring keeps {TickStats.SlowTickCapacity} ticks; entries older than {retention:0} s are replaced first and the hang log uses only the last {retention:0} s)"
+            : string.Empty;
         if (slow.Count == 0)
         {
-            context.Reply(string.Create(C, $"No slow ticks kept within the last {seconds} s."));
+            context.Reply(string.Create(C, $"No slow ticks kept within the last {seconds} s{window}."));
             return true;
         }
 
-        context.Reply(string.Create(C, $"{slow.Count} slow tick(s) within the last {seconds} s, slowest first:"));
+        string full = slow.Count >= TickStats.SlowTickCapacity ? $"; the ring is full ({TickStats.SlowTickCapacity}), so faster slow ticks may have been dropped" : string.Empty;
+        context.Reply(string.Create(C, $"{slow.Count} slow tick(s) within the last {seconds} s{window}{full}, slowest first:"));
         foreach (SlowTickInfo tick in slow.OrderByDescending(t => t.DurationMicros))
         {
-            double ago = Stopwatch.GetElapsedTime(tick.Timestamp).TotalSeconds;
+            double ago = stats.AgeSeconds(tick.Timestamp);
             string top = string.Join(", ", tick.TopFeatures.Select(f => string.Create(C, $"{f.Name} {Ms(f.Micros)}")));
             context.Reply(string.Create(C, $"#{tick.Sequence} {Ms(tick.DurationMicros)}, {ago:F0} s ago: {tick.Phases.Format()}"));
             if (top.Length != 0)

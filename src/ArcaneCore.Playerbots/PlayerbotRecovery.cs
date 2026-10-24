@@ -365,7 +365,20 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     /// <summary>The fault of a ghost that could reach neither its body nor a spirit healer.</summary>
     internal const string SpiritHealerFailed = "playerbot-recovery-spirit-healer-failed";
 
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
+
+    /// <summary>The route this recovery walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
     private object? _goal;
     private long _areaQueueSentMs = -1;
     private long _areaWaitSinceMs = -1;
@@ -1573,7 +1586,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         if (_route is null || _route.Complete)
         {
             PlayerbotThinkProbe.Phase("recovery walk plan");
-            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, goal, options, ref _walkWait, session.World.NowMs, out _route);
+            PlanOutcome planned = PlayerbotNavigation.PlanToward(player, goal, options, ref _walkWait, session.World.NowMs, out PlayerbotRoute? walkRoute);
+            _route = walkRoute;
             if (planned != PlanOutcome.Route)
             {
                 _route = null;
