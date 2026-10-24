@@ -192,17 +192,35 @@ public sealed class ClientFsFixtureTests(ITestOutputHelper output)
             Assert.Contains(ClientFsFixtures.CanaryConfig, File.ReadAllText(Path.Combine(dir, "wtf", "Config.wtf")), StringComparison.Ordinal);
             Assert.Equal(6, manifest["canaries"]!.AsArray().Count);
 
-            // The version resources, read back by the operating system's own parser rather than by the writer.
+            // The version resources, read back independently of the writer: by the operating system's parser on Windows (.NET's
+            // FileVersionInfo does not parse native PE resources elsewhere), by a byte-level VS_FIXEDFILEINFO scan everywhere.
             foreach ((string text, int major, int minor, int build, int priv) in new[] { ("1.12.1.5875", 1, 12, 1, 5875), ("1.12.2.6005", 1, 12, 2, 6005), ("2.4.3.8606", 2, 4, 3, 8606) })
             {
-                FileVersionInfo info = FileVersionInfo.GetVersionInfo(Path.Combine(dir, "exe", $"WoW-{text}.exe"));
-                Assert.Equal((major, minor, build, priv), (info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart));
+                string exe = Path.Combine(dir, "exe", $"WoW-{text}.exe");
+                Assert.Equal((major, minor, build, priv), ReadFixedFileVersion(File.ReadAllBytes(exe)));
+                if (OperatingSystem.IsWindows())
+                {
+                    FileVersionInfo info = FileVersionInfo.GetVersionInfo(exe);
+                    Assert.Equal((major, minor, build, priv), (info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart));
+                }
             }
         }
         finally
         {
             Cleanup(dir);
         }
+    }
+
+    /// <summary>Finds the VS_FIXEDFILEINFO block (signature 0xFEEF04BD) and returns its file version; fails when absent or not unique.</summary>
+    private static (int Major, int Minor, int Build, int Private) ReadFixedFileVersion(byte[] image)
+    {
+        ReadOnlySpan<byte> signature = [0xBD, 0x04, 0xEF, 0xFE];
+        int at = image.AsSpan().IndexOf(signature);
+        Assert.True(at >= 0 && at + 16 <= image.Length, "no VS_FIXEDFILEINFO block");
+        Assert.True(image.AsSpan(at + 1).IndexOf(signature) < 0, "more than one VS_FIXEDFILEINFO signature");
+        uint ms = BitConverter.ToUInt32(image, at + 8);
+        uint ls = BitConverter.ToUInt32(image, at + 12);
+        return ((int)(ms >> 16), (int)(ms & 0xFFFF), (int)(ls >> 16), (int)(ls & 0xFFFF));
     }
 
     [NodeFact]

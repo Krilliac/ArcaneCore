@@ -350,9 +350,13 @@ export async function openClientFilesSettings() {
                 model.error = `Could not forget the folder: ${error?.message ?? error}`;
             });
         },
-        onBudget: (bytes, budgetLabel) => {
-            model.budget = Math.max(0, Math.min(bytes, model.quota ?? bytes));
-            budgetLabel.textContent = label(model.budget);
+        onBudget: (bytes, budgetLabel, commit) => {
+            const budget = Math.max(0, Math.min(bytes, model.quota ?? bytes));
+            budgetLabel.textContent = label(budget);
+            if (!commit) {
+                return;
+            }
+            model.budget = budget;
             dbPut('meta', BUDGET_KEY, model.budget).then(() => opfs.enforce(model.budget)).catch(() => {});
         },
         onClose: () => {
@@ -409,8 +413,15 @@ function encodeResult(result) {
     return out;
 }
 
+/** @returns the decoded result, or null when the stored bytes are truncated or damaged (treated as a cache miss). */
 function decodeResult(bytes) {
+    if (bytes.length < 5 || bytes[0] >= STATES.length) {
+        return null;
+    }
     const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(1, true);
+    if (length > bytes.length - 5) {
+        return null;
+    }
     const detail = new TextDecoder().decode(bytes.subarray(5, 5 + length));
     const body = bytes.slice(5 + length).buffer;
     return { state: STATES[bytes[0]] ?? 'Rejected', detail, body };
@@ -446,11 +457,11 @@ async function buildOrLoad(layer, map, x, y) {
     if (forgotten()) {
         return emptyResult('NotApplicable', 'The client folder was forgotten.');
     }
-    if (stored !== null) {
-        const result = decodeResult(stored);
-        lru.set(key, result, result.body.byteLength);
+    const restored = stored === null ? null : decodeResult(stored);
+    if (restored !== null) {
+        lru.set(key, restored, restored.body.byteLength);
         model.cacheHits++;
-        return result;
+        return restored;
     }
 
     if (!await waitForFiles()) {
@@ -512,7 +523,12 @@ export function localTileProvider() {
             const id = `${layer}/${map}/${x}/${y}`;
             let job = inflight.get(id);
             if (job === undefined) {
-                job = buildOrLoad(layer, map, x, y).finally(() => inflight.delete(id));
+                const started = buildOrLoad(layer, map, x, y).finally(() => {
+                    if (inflight.get(id) === started) {
+                        inflight.delete(id);
+                    }
+                });
+                job = started;
                 inflight.set(id, job);
             }
             const result = await raceAbort(job, signal);

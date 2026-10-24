@@ -191,8 +191,13 @@ export class OpfsCache {
             const name = `${await digestName(key)}.bin`;
             const handle = await directory.getFileHandle(name, { create: true });
             const writable = await handle.createWritable();
-            await writable.write(bytes);
-            await writable.close();
+            try {
+                await writable.write(bytes);
+                await writable.close();
+            } catch (error) {
+                await writable.abort().catch(() => {});
+                throw error;
+            }
             this.#bytes += bytes.byteLength - (this.#index.get(name) ?? 0);
             this.#index.delete(name); // re-inserted last: the index stays ordered by write time
             this.#index.set(name, bytes.byteLength);

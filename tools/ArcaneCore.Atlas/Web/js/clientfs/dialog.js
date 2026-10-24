@@ -152,17 +152,18 @@ export function createReallowBanner({ onReallow, onLater }) {
 
 /**
  * The settings panel. `values` is {folderName, build, version, cacheText, budget: {min, max, value, step}, budgetText};
- * `handlers` is {onChange(), onForget(), onBudget(bytes), onClose()}.
+ * `handlers` is {onChange(), onForget(), onBudget(bytes, label, commit), onClose()}.
  */
 export function createSettingsPanel(values, { onChange, onForget, onBudget, onClose }) {
     const line = (label, value) => h('p', {}, h('span', { class: 'muted', text: `${label}: ` }), h('span', { text: value }));
     const budgetLabel = h('span', { text: values.budgetText });
     const slider = h('input', { attrs: { type: 'range', 'data-clientfs': 'budget', min: String(values.budget.min), max: String(values.budget.max), step: String(values.budget.step), value: String(values.budget.value), 'aria-label': 'Cache size limit' } });
+    // `input` only updates the label while dragging; `change` (release) persists the budget and evicts.
     slider.addEventListener('input', () => {
-        onBudget(Number(slider.value), budgetLabel);
+        onBudget(Number(slider.value), budgetLabel, false);
     });
     slider.addEventListener('change', () => {
-        onBudget(Number(slider.value), budgetLabel);
+        onBudget(Number(slider.value), budgetLabel, true);
     });
     const cacheLine = line('Cache in use', values.cacheText);
     const panel = createPanel('settings', 'Game files',
