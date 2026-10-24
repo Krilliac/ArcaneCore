@@ -111,7 +111,7 @@ public sealed class AuraLedger
 /// reached with <c>unit.Locomotion</c>. Nothing here is persisted: speeds, falls and pending acks are rebuilt at
 /// login, as vmangos does (it saves none of them).
 /// </summary>
-public sealed class LocomotionState
+public sealed partial class LocomotionState
 {
     /// <summary>Server-ordered changes waiting for the client's ack.</summary>
     public PendingMovementChanges Pending { get; } = new();

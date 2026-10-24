@@ -15,7 +15,7 @@ namespace ArcaneCore.Game.Maps.Grid;
 /// </para>
 /// <para>Thread affinity: world thread (owned by its map).</para>
 /// </summary>
-public sealed class GridContainer
+public sealed partial class GridContainer
 {
     /// <summary>Above this many cells a query walks the object list instead (radius ≳ 1700 yards).</summary>
     private const int MaxCellsPerQuery = 100 * 100;
