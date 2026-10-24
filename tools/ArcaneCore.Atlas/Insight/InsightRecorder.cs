@@ -36,7 +36,7 @@ internal sealed class InsightRecorder
     private const int MaxMotions = 254;
 
     private readonly Lock _gate = new();
-    private readonly List<Stored> _frames = [];
+    private readonly FrameList _frames = new();
     private readonly Dictionary<string, int> _motionIds = new(StringComparer.Ordinal);
     private readonly List<string> _motions = [];
     private long _bytes;
@@ -185,7 +185,7 @@ internal sealed class InsightRecorder
             while (_frames.Count > 0 && (_bytes > MaxBytes || _frames[0].ClockMs < oldestAllowed))
             {
                 _bytes -= _frames[0].Bytes;
-                _frames.RemoveAt(0);
+                _frames.RemoveFirst();
                 _evicted++;
             }
         }
@@ -588,6 +588,53 @@ internal sealed class InsightRecorder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The frames oldest first. Evicting the oldest advances a head index instead of shifting the list, and the dead prefix is dropped once it
+    /// is both large and at least half the storage, so eviction is amortised O(1). Guarded by the recorder's gate like the rest of its state.
+    /// </summary>
+    private sealed class FrameList
+    {
+        private const int CompactAt = 1024;
+
+        private readonly List<Stored?> _items = [];
+        private int _head;
+
+        public int Count => _items.Count - _head;
+
+        public Stored this[int index] => _items[_head + index]!;
+
+        public void Add(Stored frame) => _items.Add(frame);
+
+        public void Clear()
+        {
+            _items.Clear();
+            _head = 0;
+        }
+
+        public void RemoveFirst()
+        {
+            _items[_head] = null;
+            _head++;
+            if (_head == _items.Count)
+            {
+                Clear();
+            }
+            else if (_head >= CompactAt && _head * 2 >= _items.Count)
+            {
+                _items.RemoveRange(0, _head);
+                _head = 0;
+            }
+        }
+
+        public IEnumerator<Stored> GetEnumerator()
+        {
+            for (int i = _head; i < _items.Count; i++)
+            {
+                yield return _items[i]!;
+            }
+        }
     }
 
     private sealed record Stored(
