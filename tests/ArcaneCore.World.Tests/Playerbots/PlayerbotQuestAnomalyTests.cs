@@ -9,6 +9,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Diagnostics;
@@ -496,6 +497,33 @@ public sealed class PlayerbotQuestAnomalyTests
             return true;
         });
         Assert.False(AnyQuestAnomaly(capture), capture.Describe());
+    }
+
+    // The diagnosis names a giver that does not offer the quest, ahead of any drained server failure code (which it replaces).
+    [Fact]
+    public async Task AnAcceptTimedOutOnAGiverThatDoesNotOfferTheQuest_IsDiagnosedAsGiverDoesNotOffer()
+    {
+        await using QuestHost quest = await StartWithObjectGiverAsync(objectStartsQuest: false);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            QuestNpcServices services = quest.Feature.Services;
+            ObjectGuid objectGuid = ObjectGuid.WithEntry(HighGuid.GameObject, QuestInteractionFixture.Entry, ObjectSpawnGuid);
+
+            (string code, string reason) = goals.DiagnoseAcceptRefusal(player, services, services.StateOf(player)!, objectGuid,
+                QuestInteractionFixture.QuestId, "StageTimeout", "stage timed out");
+
+            Assert.Equal("GiverDoesNotOffer", code);
+            Assert.Contains(QuestInteractionFixture.QuestId.ToString(), reason, StringComparison.Ordinal);
+
+            // The creature that does start the quest keeps the caller's fallback.
+            (string creatureCode, _) = goals.DiagnoseAcceptRefusal(player, services, services.StateOf(player)!, QuestInteractionFixture.Guid,
+                QuestInteractionFixture.QuestId, "StageTimeout", "stage timed out");
+            Assert.Equal("StageTimeout", creatureCode);
+            return true;
+        });
     }
 
     // GitHub #786: with the bags already full the giver of a source-item quest is not asked at all (no query, no 15 s stage, no report).
