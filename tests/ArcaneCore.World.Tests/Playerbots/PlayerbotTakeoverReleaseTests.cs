@@ -57,10 +57,9 @@ public sealed class PlayerbotTakeoverReleaseTests
 
             // The bot's first group-driven think, a gate-only one or a decided one: the think length is the time since its last update.
             object active = ((IDictionary)typeof(ManagedPlayerbotFeature).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(world.Bots)!).Values.Cast<object>().Single();
+                .GetValue(world.Bots)!)[bot.Id]!;
             uint ms = decided ? (uint)world.Options.ThinkIntervalMs + 400u : Math.Max(1u, (uint)world.Options.ThinkIntervalMs / 12u);
             active.GetType().GetField("LastUpdateMs")!.SetValue(active, unchecked(world.World.Host.World.NowMs - ms));
-            session.ManagedBudget = new ManagedActionBudget(8);
             var thinkCore = typeof(ManagedPlayerbotFeature).GetMethod("ThinkCore", BindingFlags.Instance | BindingFlags.NonPublic)!;
             Assert.Equal("group", (string)thinkCore.Invoke(world.Bots, [active, new ManagedActionBudget(8), 0])!);
             Assert.True((bool)active.GetType().GetField("GroupDriven")!.GetValue(active)!, "the think was not a group-driven takeover");

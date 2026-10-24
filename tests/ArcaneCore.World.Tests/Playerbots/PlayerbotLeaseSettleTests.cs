@@ -484,7 +484,7 @@ public sealed class PlayerbotLeaseSettleTests
 
     /// <summary>
     /// Test 5. A route that nobody follows and nobody releases (an owner whose slot never lets go) is renewed by the settle only while less
-    /// than <see cref="PlayerbotMotion.SettleBoundMs"/> (its lease plus two think gaps) has passed since its last Follow, then left to die. A
+    /// than <see cref="PlayerbotMotion.SettleBoundMs"/> (the larger of its lease and three think gaps) has passed since its last Follow, then left to die. A
     /// gate-only settle half the bound after the Follow is renewed; one more than half the bound later is not, and the walk has run out of
     /// lease by the time it is checked. Fails with the bound removed (the second settle renews and the bot walks on).
     /// </summary>
@@ -560,9 +560,10 @@ public sealed class PlayerbotLeaseSettleTests
     }));
 
     /// <summary>
-    /// Test 5c. Under a heavy rotation (think gap 8 s) the bound is the lease plus two gaps: two unfollowed keep-thinks in a row (two instant
-    /// buffs, one gap and a half apart each) both renew, and a third past the bound does not. Fails with the bound at one lease (the second
-    /// settle, about 21 s after the Follow, is refused) and with no bound (the third renews).
+    /// Test 5c. Under a heavy rotation (think gap 8 s, so the lease is held to the 15 s cap, under two gaps) the bound is three gaps (two
+    /// plus a margin of one), 24 s: two unfollowed keep-thinks in a row (two instant buffs, one gap apart each) both renew, and a third
+    /// past the bound does not. The expected values come from the gap, not from the bound under test. Fails with the bound at the lease
+    /// alone (the second settle, 16 s after the Follow, is past the 15 s lease and is refused) and with no bound (the third renews).
     /// </summary>
     [Fact]
     public Task WithALargeThinkGap_TwoUnfollowedSettlesInARowRenew_AndAThirdPastTheBoundDoesNot() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
@@ -570,11 +571,12 @@ public sealed class PlayerbotLeaseSettleTests
         Player bot = rig.BotPlayer;
         PlayerbotRoute route = StartFollowWalk(rig, 90f);
         PlayerbotMotion.NoteThinkGap(bot, 8000);
+        const uint gap = 8000;
         uint lease = PlayerbotMotion.LeaseMsOf(bot);
+        Assert.True(lease < 2 * gap, $"the lease ({lease} ms) is not held under two gaps: this test needs the cap to bite");
         uint bound = BoundOf(bot);
-        Assert.Equal(lease + 16_000u, bound);
         uint gate = Gate(rig.Options);
-        uint step = (bound / 3) + 1; // 3 steps: age step and 2 x step are inside the bound, 3 x step is not
+        uint step = gap + 1; // 3 steps: age step and 2 x step (16 s) are inside the 3-gap bound (24 s), 3 x step is not
 
         for (int i = 1; i <= 3; i++)
         {

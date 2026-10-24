@@ -134,7 +134,7 @@ internal static class PlayerbotMotion
     /// <summary>After a driver's think (battleground, bot-led group, party AI). The driver and its helpers hand their routes to Follow
     /// every decided think; a think that did not (a gate-only tick, an instant cast or buff on the way) kept the route unless its owner
     /// let go of it (PlayerbotRoute.Released, set by the owner's route slot): a released route is stopped now, a kept one is renewed.
-    /// A kept route is renewed only while less than SettleBoundMs (its lease plus two of the bot's smoothed think gaps) has passed since
+    /// A kept route is renewed only while less than SettleBoundMs (the larger of its lease and three of the bot's smoothed think gaps) has passed since
     /// its last Follow (MotionState.FollowedMs): two keep-thinks in a row (two instant buffs) under a heavy rotation still renew, while a
     /// route nobody re-asserts, e.g. one of an owner without a releasing slot, lives a bounded time. renewalsBefore is
     /// RenewalsOf before the think. True when it stopped the bot.</summary>
@@ -147,11 +147,21 @@ internal static class PlayerbotMotion
         return SettleAfterThink(session, player, gaveUp: false, renewalsBefore, sinceLast);
     }
 
-    /// <summary>How long after its last Follow an unreleased route may still be renewed by <see cref="SettleAfterDriver"/>: the lease plus two
-    /// of the bot's smoothed think gaps (the scheduler's pass while none is measured, as <see cref="Lease"/> takes it), so a long rotation
-    /// gap does not stop the bot after a single keep-think.</summary>
+    /// <summary>How long after its last Follow an unreleased route may still be renewed by <see cref="SettleAfterDriver"/>:
+    /// <c>max(lease, 2 gaps + 1 gap)</c> of the bot's smoothed think gap (the scheduler's pass while none is measured, as <see cref="Lease"/>
+    /// takes it). The lease alone is not enough: <see cref="LeaseCapMs"/> can hold it under two gaps, and then a single keep-think would
+    /// be the last. Two gaps are the two keep-thinks in a row (two instant buffs) that must both renew, and the margin of one more gap is
+    /// the jitter of a rotation whose real gap runs over its smoothed average. Uncapped the lease is already 3 gaps, so the bound equals it
+    /// and is not stretched. Worst-case lifetime of a route nobody follows: a settle just inside the bound renews it, and it then walks
+    /// one lease from that renewal, so bound + lease after its last Follow. At a 30 s gap that is 105 s (cap at its 15 s floor: bound 90 s,
+    /// lease 15 s) to 180 s (uncapped: bound 90 s, lease 90 s). At saturation (the gap and lease at <see cref="HardMaxGapLeaseMs"/>, 120 s)
+    /// it is 480 s (bound 360 s, lease 120 s).</summary>
     internal static long SettleBoundMs(MotionState state)
-        => state.LeaseMs + 2L * (state.GapMs != 0 ? state.GapMs : state.PassMs);
+    {
+        long gap = state.GapMs != 0 ? state.GapMs : state.PassMs;
+        long margin = gap;
+        return Math.Max(state.LeaseMs, (2L * gap) + margin);
+    }
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;

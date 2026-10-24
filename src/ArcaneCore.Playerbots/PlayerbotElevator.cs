@@ -372,6 +372,15 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
             _route = value;
         }
     }
+
+    /// <summary>Puts back a route that <see cref="Route"/> was cleared of for a moment (ChooseCar clears it, which marks it released): the
+    /// route is held again, so it is no longer released. A method rather than the setter alone because the setter marks the route it
+    /// drops released, and putting the same route back would leave that mark on it (a keep-think would then stop the bot).</summary>
+    public void RestoreRoute(PlayerbotRoute? route)
+    {
+        Route = route;
+        if (route is not null) route.Released = false;
+    }
     public float Best { get; set; } = float.PositiveInfinity;
     public float LegBest { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;
@@ -800,8 +809,9 @@ internal static class PlayerbotElevator
                     float best = trip.Best;
                     uint bestMs = trip.BestMs;
                     PlayerbotRoute? route = trip.Route;
-                    if (!ChooseCar(player, map, trip, opt, now, out _)) { trip.Route = route; return; }
-                    (trip.Best, trip.BestMs, trip.Route) = (best, bestMs, route);
+                    if (!ChooseCar(player, map, trip, opt, now, out _)) { trip.RestoreRoute(route); return; }
+                    (trip.Best, trip.BestMs) = (best, bestMs);
+                    trip.RestoreRoute(route);
                 }
 
                 GuardPlatformShaft(session, player, map, trip);
