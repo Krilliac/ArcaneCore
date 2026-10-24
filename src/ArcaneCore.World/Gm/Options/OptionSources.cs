@@ -113,7 +113,23 @@ internal static class OptionSources
         }
 
         WorldConfigView view = ViewOf(scope);
+        object? previous = key.Read(view);
         key.Apply!(view, native);
+        if (view.Playerbots is { } playerbots && key.Path.StartsWith(PlayerbotOptions.SectionName + ":", StringComparison.Ordinal))
+        {
+            // The rules that tie two values together (UnfriendAffinity not above FriendAffinity...) are checked on the whole section, as
+            // .reload config does (ConfigCandidate.Validate); the change is taken back when the section no longer holds together.
+            try
+            {
+                playerbots.Social.Lists.Validate();
+            }
+            catch (InvalidOperationException ex)
+            {
+                key.Apply(view, previous);
+                return ex.Message;
+            }
+        }
+
         if (WorldConfigKeys.IsSpeedRate(key) && view.Locomotion is { } locomotion)
         {
             SpeedRates.ApplyToAll(scope.World, locomotion); // the players' copies are re-sent, as .movement set does
@@ -270,7 +286,8 @@ internal static class OptionSources
         AntiCheatKey(keys, "TeleportDistance", "teleport", "jump distance (yards) counted as a teleport hack", OptionType.Number, o => Num(o.TeleportDistance), (o, v) => o.TeleportDistance = (float)(double)v);
         AntiCheatKey(keys, "TerrainChecks", "terrain", "check movement against the terrain", OptionType.Bool, o => o.TerrainChecks, (o, v) => o.TerrainChecks = (bool)v);
         AntiCheatKey(keys, "Log:Persist", "persist", "store the violation log in the database", OptionType.Bool, o => o.Log.Persist, (o, v) => o.Log.Persist = (bool)v);
-        AntiCheatKey(keys, "Autoban:Enabled", "autoban", "ban players whose kick points pass the threshold", OptionType.Bool, o => o.Autoban.Enabled, (o, v) => o.Autoban.Enabled = (bool)v);    }
+        AntiCheatKey(keys, "Autoban:Enabled", "autoban", "ban players whose kick points pass the threshold", OptionType.Bool, o => o.Autoban.Enabled, (o, v) => o.Autoban.Enabled = (bool)v);
+    }
 
     private static object Num(float value) => double.Parse(value.ToString("R", CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
 

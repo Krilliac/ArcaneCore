@@ -188,6 +188,35 @@ public sealed class OptionCatalogTests
     }
 
     [Fact]
+    public async Task AReloadKey_IsCrossCheckedAgainstItsSection_AsTheReloadDoes()
+    {
+        var playerbots = new PlayerbotOptions();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IOptions<PlayerbotOptions>>(Microsoft.Extensions.Options.Options.Create(playerbots)));
+        (OptionSetResult refused, string error, int original, int unchanged, int overrides, OptionSetResult fine, int friend, int lowered) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey unfriend = catalog.Find("World:Playerbots:Social:Lists:UnfriendAffinity")!;
+            int originalValue = playerbots.Social.Lists.UnfriendAffinity;
+            int friendAffinity = playerbots.Social.Lists.FriendAffinity;
+            Assert.True(friendAffinity < 90, "the test needs FriendAffinity below the value it sets");
+            // 90 passes the key's own -100..100 check but ends above FriendAffinity, which startup and .reload config both refuse.
+            OptionSetResult result = catalog.TrySet(scope, unfriend, "90", Tester, out string message, out _, out _);
+            int after = playerbots.Social.Lists.UnfriendAffinity;
+            int count = OptionOverrides.For(host.World).Count;
+            OptionSetResult ok = catalog.TrySet(scope, unfriend, (friendAffinity - 1).ToString(), Tester, out _, out _, out _);
+            return (result, message, originalValue, after, count, ok, friendAffinity, playerbots.Social.Lists.UnfriendAffinity);
+        });
+
+        Assert.Equal(OptionSetResult.Invalid, refused);
+        Assert.Contains("UnfriendAffinity must not exceed FriendAffinity", error, StringComparison.Ordinal);
+        Assert.Equal(original, unchanged);
+        Assert.Equal(0, overrides);
+        Assert.Equal(OptionSetResult.Ok, fine);
+        Assert.Equal(friend - 1, lowered);
+    }
+
+    [Fact]
     public async Task AValueAReloadPutBack_IsNoLongerReportedAsOverridden()
     {
         await using var host = WorldTestHost.Start();
