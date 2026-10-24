@@ -40,7 +40,7 @@ internal sealed class TotemTestKit : IDisposable
     public const uint ActiveEntry = 940009;
     public const uint SentryEntry = 3968;
 
-    public TotemTestKit(TotemOptions? options = null, int summonDurationMs = 60_000)
+    public TotemTestKit(TotemOptions? options = null, int summonDurationMs = 60_000, string? terrainDirectory = null)
     {
         CreatureContent content = Content(
         [
@@ -57,7 +57,7 @@ internal sealed class TotemTestKit : IDisposable
             Template(WolfEntry),
         ], []);
         Content = content;
-        (World, Map, Creatures) = CreateSystem(content);
+        (World, Map, Creatures) = CreateSystem(content, terrainDirectory: terrainDirectory);
         Store = new SpellStore(
             [
                 Summon(EarthTotemSummon, SpellEffectName.SummonTotemSlot2, 41, EarthEntry, summonDurationMs),

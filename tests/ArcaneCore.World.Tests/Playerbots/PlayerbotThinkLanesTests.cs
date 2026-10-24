@@ -1,5 +1,7 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Commands;
@@ -910,6 +912,95 @@ public sealed class PlayerbotThinkLanesTests
             capture.Dispose();
             await feature.ShutdownBeforeWorldStopAsync();
             await host.DisposeAsync();
+        }
+    }
+
+    /// <summary>A scripted controller whose detach (the drop path, off the world thread) parks until released.</summary>
+    private sealed class ParkOnDetach : IPlayerbotController
+    {
+        public readonly TaskCompletionSource Parked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly ManualResetEventSlim Release = new(false);
+
+        public void Tick(PlayerbotControllerContext context, uint elapsedMs) { }
+
+        public void Detached(Guid botId)
+        {
+            Parked.TrySetResult();
+            Release.Wait(TimeSpan.FromSeconds(30));
+        }
+    }
+
+    /// <summary>
+    /// A bot dropped and another started after a tick captured the active set, with a world-thread Snapshot() inside that tick (a think
+    /// observer here). The tick's publish must compare against the version it captured the set at, not the shared cache mark the inner
+    /// Snapshot() just moved: with the equal counts the stale set took the in-place path and wrote the dropped bot's row over the new
+    /// bot's (a ghost row for the dropped one, no running row for the new one).
+    /// </summary>
+    [Fact]
+    public async Task ASnapshotInsideATick_AfterAStartAndADrop_DoesNotLetTheTicksStaleSetOverwriteIt()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        feature.ThinkBudgetMs = double.PositiveInfinity;
+        await feature.StartupAsync(default);
+        try
+        {
+            Guid droppedId = Assert.IsType<Guid>((await feature.CreateAsync("Stalea", 1, 1)).BotId);
+            Guid keptId = Assert.IsType<Guid>((await feature.CreateAsync("Staleb", 1, 1)).BotId);
+            Guid newId = Assert.IsType<Guid>((await feature.CreateAsync("Stalec", 1, 1)).BotId);
+            var parkedDrop = new ParkOnDetach();
+            Assert.True((await feature.StartScriptedAsync(droppedId.ToString(), parkedDrop)).Success);
+            Assert.True((await feature.StartScriptedAsync(keptId.ToString(), new Burn(0))).Success);
+
+            // The new bot's start parks at the write that marks it Running: past the world-thread login step, so only the add to the active set is left.
+            var startParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var startRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            owners.BeforeUpdate = async (bot, _) =>
+            {
+                if (bot.BotId != newId || bot.State != ManagedPlayerbotState.Running) return;
+                startParked.TrySetResult();
+                await startRelease.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            };
+            Task<PlayerbotOperationResult> start = feature.StartScriptedAsync(newId.ToString(), new Burn(0));
+            await startParked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Task drop = feature.DropFromActiveForTestsAsync(droppedId);
+            await parkedDrop.Parked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int fired = 0;
+            feature.ThinkObserver = (_, _) =>
+            {
+                // World thread, inside the tick, after it captured the active set (the dropped bot in it, the new one not).
+                if (Interlocked.Exchange(ref fired, 1) != 0) return;
+                try
+                {
+                    startRelease.TrySetResult();
+                    Assert.True(start.Wait(TimeSpan.FromSeconds(20)), "the start did not complete");
+                    parkedDrop.Release.Set();
+                    Assert.True(drop.Wait(TimeSpan.FromSeconds(20)), "the drop did not complete");
+                    Assert.Equal(2, feature.Snapshot().Count(s => s.State == ManagedPlayerbotState.Running)); // the republish a command handler would trigger
+                    done.TrySetResult(true);
+                }
+                catch (Exception ex) { done.TrySetException(ex); }
+            };
+            await done.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.True((await start).Success);
+            await host.World.InvokeAsync(() => true); // the tick that ran the observer has published by now
+
+            IReadOnlyList<PlayerbotStatus> rows = feature.Snapshot(); // off the world thread: the copy the tick published
+            Assert.Equal(3, rows.Count);
+            Assert.Equal(rows.Count, rows.Select(r => r.BotId).Distinct().Count());
+            Assert.Equal(ManagedPlayerbotState.Running, rows.Single(r => r.BotId == newId).State);
+            Assert.Equal(ManagedPlayerbotState.Running, rows.Single(r => r.BotId == keptId).State);
+            Assert.NotEqual(ManagedPlayerbotState.Running, rows.Single(r => r.BotId == droppedId).State);
+        }
+        finally
+        {
+            feature.ThinkObserver = null;
+            await feature.ShutdownBeforeWorldStopAsync();
         }
     }
 }
