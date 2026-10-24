@@ -375,4 +375,73 @@ public sealed class GmStreamTests
 
         Assert.Empty(stream.Subscriptions(guid));
     }
+    private sealed class TickClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    [Fact]
+    public void TokenBucket_NeverLetsMoreThanTheLimitThroughInAnyOneSecond_AcrossAWindowBoundary()
+    {
+        var clock = new TickClock(DateTimeOffset.FromUnixTimeSeconds(1_000_000));
+        var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 4 }, clock);
+        stream.Subscribe(GmA, "moves");
+
+        int first = Enumerable.Range(0, 10).Sum(i => stream.Publish("moves", "a" + i)); // the bucket starts full
+        clock.Advance(TimeSpan.FromMilliseconds(900));
+        int second = Enumerable.Range(0, 10).Sum(i => stream.Publish("moves", "b" + i)); // 3.6 tokens came back
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        int third = Enumerable.Range(0, 10).Sum(i => stream.Publish("moves", "c" + i)); // 0.8 more: one line
+
+        Assert.Equal(4, first);
+        Assert.Equal(3, second);
+        Assert.Equal(1, third);
+    }
+
+    [Fact]
+    public void TheSuppressedNotice_IsSentBySweep_WhenPublishingStops()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 1 }, clock);
+        stream.Subscribe(GmA, "moves");
+        stream.Publish("moves", "a");
+        stream.Publish("moves", "b");
+        stream.Publish("moves", "c");
+        Drain(stream);
+
+        stream.Sweep(); // the bucket is still empty: nothing to say yet
+        Assert.Empty(Drain(stream));
+
+        clock.Advance(1);
+        stream.Sweep(); // nobody publishes any more, the notice still goes out
+        Assert.Equal([new GmStreamLine(GmA, "[stream] 2 lines suppressed (limit 1/s)")], Drain(stream));
+
+        clock.Advance(1);
+        stream.Sweep();
+        Assert.Empty(Drain(stream)); // once only
+    }
+
+    [Fact]
+    public void ATimeoutNotice_SurvivesAFullOutbox_AndTheDroppedLinesAreCounted()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 10_000, AutoOffAfter = TimeSpan.FromMinutes(1) }, clock);
+        stream.Subscribe(GmA, "moves");
+        for (int i = 0; i < 1100; i++)
+        {
+            stream.Publish("moves", "m" + i);
+        }
+
+        clock.Advance(120);
+        stream.Sweep();
+
+        List<GmStreamLine> lines = Drain(stream);
+        Assert.Equal(new GmStreamLine(GmA, "[stream] moves turned off (timed out after 1 min)"), lines[0]);
+        Assert.Equal(1024, lines.Count - 1);
+        Assert.Equal(1100 - 1024, stream.OutboxDropped);
+    }
 }

@@ -6,7 +6,7 @@ namespace ArcaneCore.World.Gm.Diagnostics;
 /// <summary>Limits of the GM stream.</summary>
 public sealed class GmStreamOptions
 {
-    /// <summary>Lines one GM can receive per second across all channels; the rest are dropped and counted (one notice follows).</summary>
+    /// <summary>Lines one GM can receive per second across all channels (a token bucket that holds one second's worth, so a burst never exceeds this); the rest are dropped and counted (one notice follows).</summary>
     public int MaxLinesPerSecond { get; init; } = 5;
 
     /// <summary>A subscription turns itself off this long after it was last (re)subscribed.</summary>
@@ -23,7 +23,7 @@ public readonly record struct GmStreamLine(ObjectGuid Gm, string Text);
 /// Opt-in live feed of debug events to GMs (damage log, proc trace, spell trace, moves, anticheat findings): a GM turns a named
 /// channel <c>on</c> or <c>off</c>, producers <see cref="Publish"/> to the channel, and every subscribed GM gets the lines in chat.
 /// <list type="bullet">
-/// <item>Rate limited per GM (<see cref="GmStreamOptions.MaxLinesPerSecond"/>): excess lines are dropped, never queued without bound, and the next delivered batch is preceded by one "N lines suppressed" notice.</item>
+/// <item>Rate limited per GM with a token bucket (<see cref="GmStreamOptions.MaxLinesPerSecond"/>): excess lines are dropped, never queued without bound, and one "N lines suppressed" notice follows once the bucket has refilled (sent by <see cref="Sweep"/> when publishing has stopped, or by the next <see cref="Publish"/>). Notices are kept apart from lines, so a full outbox never drops one.</item>
 /// <item>A subscription ends after <see cref="GmStreamOptions.AutoOffAfter"/> (<see cref="Sweep"/>) or when the GM logs out (<see cref="UnsubscribeAll"/>); the GM is told when it times out.</item>
 /// <item>Zero cost when nobody listens: <see cref="IsActive"/> is one volatile read, so a producer guards the formatting with it.</item>
 /// </list>
@@ -38,9 +38,8 @@ public sealed class GmStream
     private sealed class Subscriber
     {
         public readonly Dictionary<string, DateTimeOffset> Channels = new(StringComparer.OrdinalIgnoreCase);
-        public long WindowStartTicks;
-        public bool WindowOpen;
-        public int InWindow;
+        public double Tokens;
+        public long RefilledAtTicks;
         public int Suppressed;
     }
 
@@ -48,6 +47,8 @@ public sealed class GmStream
     private readonly Dictionary<ObjectGuid, Subscriber> _subscribers = [];
     private const int MaxOutbox = 1024;
     private readonly Queue<GmStreamLine> _outbox = new();
+    private readonly Queue<GmStreamLine> _notices = new(); // timeout and suppression notices: bounded by the subscriptions, never dropped
+    private long _outboxDropped;
     private readonly TimeProvider _clock;
     private int _subscriptionCount;
 
@@ -61,6 +62,9 @@ public sealed class GmStream
     }
 
     public GmStreamOptions Options { get; }
+
+    /// <summary>Lines dropped because the outbox was full (nobody was draining it).</summary>
+    public long OutboxDropped => Interlocked.Read(ref _outboxDropped);
 
     /// <summary>True while any GM follows any channel: the cheap guard before formatting a line.</summary>
     public bool IsActive => Volatile.Read(ref _subscriptionCount) != 0;
@@ -99,7 +103,7 @@ public sealed class GmStream
         {
             if (!_subscribers.TryGetValue(gm, out Subscriber? subscriber))
             {
-                subscriber = new Subscriber();
+                subscriber = new Subscriber { Tokens = Options.MaxLinesPerSecond, RefilledAtTicks = _clock.GetUtcNow().UtcTicks };
                 _subscribers[gm] = subscriber;
             }
 
@@ -175,7 +179,6 @@ public sealed class GmStream
         }
 
         long now = _clock.GetUtcNow().UtcTicks;
-        const long second = TimeSpan.TicksPerSecond;
         string tagged = "[" + channel + "] " + line;
         int queued = 0;
         lock (_gate)
@@ -187,25 +190,15 @@ public sealed class GmStream
                     continue;
                 }
 
-                if (!subscriber.WindowOpen || now - subscriber.WindowStartTicks >= second)
-                {
-                    subscriber.WindowStartTicks = now;
-                    subscriber.WindowOpen = true;
-                    subscriber.InWindow = 0;
-                    if (subscriber.Suppressed > 0)
-                    {
-                        Enqueue(new GmStreamLine(gm, string.Create(CultureInfo.InvariantCulture, $"[stream] {subscriber.Suppressed} lines suppressed (limit {Options.MaxLinesPerSecond}/s)")));
-                        subscriber.Suppressed = 0;
-                    }
-                }
-
-                if (subscriber.InWindow >= Options.MaxLinesPerSecond)
+                Refill(subscriber, now);
+                if (subscriber.Tokens < 1)
                 {
                     subscriber.Suppressed++;
                     continue;
                 }
 
-                subscriber.InWindow++;
+                subscriber.Tokens -= 1;
+                NoticeSuppressed(gm, subscriber);
                 Enqueue(new GmStreamLine(gm, tagged));
                 queued++;
             }
@@ -214,7 +207,7 @@ public sealed class GmStream
         return queued;
     }
 
-    /// <summary>End every subscription past its timeout and queue a notice for the GM. Returns how many ended.</summary>
+    /// <summary>End every subscription past its timeout and queue a notice for the GM; also tells a GM how many lines were suppressed once the bucket has refilled. Returns how many subscriptions ended.</summary>
     public int Sweep()
     {
         DateTimeOffset now = _clock.GetUtcNow();
@@ -228,13 +221,23 @@ public sealed class GmStream
                 {
                     subscriber.Channels.Remove(channel);
                     Interlocked.Decrement(ref _subscriptionCount);
-                    Enqueue(new GmStreamLine(gm, $"[stream] {channel} turned off (timed out after {Options.AutoOffAfter.TotalMinutes.ToString("0.##", CultureInfo.InvariantCulture)} min)"));
+                    _notices.Enqueue(new GmStreamLine(gm, $"[stream] {channel} turned off (timed out after {Options.AutoOffAfter.TotalMinutes.ToString("0.##", CultureInfo.InvariantCulture)} min)"));
                     ended++;
                 }
 
                 if (subscriber.Channels.Count == 0)
                 {
                     (empty ??= []).Add(gm);
+                    continue;
+                }
+
+                if (subscriber.Suppressed > 0)
+                {
+                    Refill(subscriber, now.UtcTicks);
+                    if (subscriber.Tokens >= 1)
+                    {
+                        NoticeSuppressed(gm, subscriber); // publishing stopped: say so now instead of waiting for a next line
+                    }
                 }
             }
 
@@ -257,12 +260,13 @@ public sealed class GmStream
         GmStreamLine[] lines;
         lock (_gate)
         {
-            if (_outbox.Count == 0)
+            if (_outbox.Count == 0 && _notices.Count == 0)
             {
                 return 0;
             }
 
-            lines = [.. _outbox];
+            lines = [.. _notices, .. _outbox];
+            _notices.Clear();
             _outbox.Clear();
         }
 
@@ -279,9 +283,30 @@ public sealed class GmStream
         if (_outbox.Count >= MaxOutbox)
         {
             _outbox.Dequeue(); // nobody is draining: keep the newest
+            Interlocked.Increment(ref _outboxDropped);
         }
 
         _outbox.Enqueue(line);
+    }
+
+    private void Refill(Subscriber subscriber, long nowTicks)
+    {
+        long elapsed = nowTicks - subscriber.RefilledAtTicks;
+        if (elapsed > 0)
+        {
+            subscriber.Tokens = Math.Min(Options.MaxLinesPerSecond, subscriber.Tokens + (double)elapsed / TimeSpan.TicksPerSecond * Options.MaxLinesPerSecond);
+        }
+
+        subscriber.RefilledAtTicks = nowTicks;
+    }
+
+    private void NoticeSuppressed(ObjectGuid gm, Subscriber subscriber)
+    {
+        if (subscriber.Suppressed > 0)
+        {
+            _notices.Enqueue(new GmStreamLine(gm, string.Create(CultureInfo.InvariantCulture, $"[stream] {subscriber.Suppressed} lines suppressed (limit {Options.MaxLinesPerSecond}/s)")));
+            subscriber.Suppressed = 0;
+        }
     }
 
     private void DropIfEmpty(ObjectGuid gm, Subscriber subscriber)
