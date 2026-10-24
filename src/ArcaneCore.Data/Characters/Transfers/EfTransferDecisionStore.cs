@@ -329,6 +329,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
+    /// <remarks>One COUNT query. State is not indexed and decision rows are never deleted, so the cost is linear in the table size.</remarks>
     public async Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

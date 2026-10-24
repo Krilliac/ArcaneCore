@@ -82,7 +82,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "diag",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0.",
+                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered.",
                     Diag),
             ]),
     ];
@@ -542,7 +542,16 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
-        int pendingTransfers = CountUnresolvedTransfers(services);
+        int pendingTransfers;
+        try
+        {
+            pendingTransfers = CountUnresolvedTransfers(services);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the characters database.");
+            return true;
+        }
 
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
@@ -734,7 +743,7 @@ public sealed class ClusterCommands : ICommandGroup
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered.</summary>
+    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command); a store failure propagates to the caller.</summary>
     private static int CountUnresolvedTransfers(IServiceProvider services)
         => services.GetService<ITransferDecisionStore>() is { } store
             ? store.CountUnresolvedAsync().GetAwaiter().GetResult()

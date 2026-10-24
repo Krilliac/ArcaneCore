@@ -357,7 +357,7 @@ public sealed class AuditCommandTests
     }
 
     [Fact]
-    public async Task Unmute_ClearsAllThreeMutes_OfAnOfflineCharacter_AndLeavesOtherAccountsMuted()
+    public async Task Unmute_ClearsTheAuditAndRestrictionMutes_OfAnOfflineCharacter_AndLeavesOtherAccountsMuted()
     {
         var clock = new Clock();
         await using WorldTestHost host = Start(clock);
