@@ -90,6 +90,9 @@ internal sealed class PlayerbotGroupAI
     private readonly float _followAngle;
     private readonly float _followDistance;
     private bool _retreatStarted;
+    /// <summary>Consecutive thinks the wipe exit walk found no path; past <see cref="WipeExitGiveUp"/> the bot falls back to the retreat.</summary>
+    private int _wipeExitFails;
+    private const int WipeExitGiveUp = 5;
     private long _resurrectAtMs;
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
@@ -314,14 +317,17 @@ internal sealed class PlayerbotGroupAI
         // straight line happens to cross the exit trigger. Checked every think, so a member revived at the landing and pulled again leaves too.
         if (group.State == PlayerbotGroupState.Wiped && player.Combat.IsInCombat && player.MapId == group.Goal.MapId
             && WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
+            && _wipeExitFails < WipeExitGiveUp
             && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } wipeExit)
         {
-            StopAttacking(player);
+            if (_attacking || player.Combat.Victim is not null) StopAttacking(player);
             _risk.Retreat.Stop("instance-exit");
             _target = null;
             _attacking = false;
             Goal = PlayerbotGoalKind.Retreat;
-            Step = WalkTo(player, new Vector3(wipeExit.X, wipeExit.Y, wipeExit.Z), interval, toward: true) ? "wipe:run-exit" : "wipe:no-path-exit";
+            bool walking = WalkTo(player, new Vector3(wipeExit.X, wipeExit.Y, wipeExit.Z), interval, toward: true);
+            _wipeExitFails = walking ? 0 : _wipeExitFails + 1;
+            Step = walking ? "wipe:run-exit" : "wipe:no-path-exit";
             return;
         }
 
@@ -346,7 +352,11 @@ internal sealed class PlayerbotGroupAI
                 return;
             }
         }
-        else _retreatStarted = false;
+        else
+        {
+            _retreatStarted = false;
+            _wipeExitFails = 0;
+        }
 
         Player? leader = group.LeaderPlayer(_session.World);
         bool isLeader = leader is not null && leader.Guid == player.Guid;

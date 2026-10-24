@@ -57,7 +57,8 @@ public sealed class PlayerbotTraceRaceTests
                 running = world.RunUntilAsync(AdvanceMs, flip);
             }
 
-            var (trace, seen) = await world.OnWorldAsync(() => (world.Trace(), toggles));
+            string trace = await world.TraceAsync();
+            int seen = Volatile.Read(ref toggles);
             Assert.False(string.IsNullOrEmpty(trace));
             if (seen != lastSeen) interleaved++;
             lastSeen = seen;

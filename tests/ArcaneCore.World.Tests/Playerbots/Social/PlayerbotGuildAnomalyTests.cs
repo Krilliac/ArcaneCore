@@ -95,6 +95,7 @@ public sealed class PlayerbotGuildAnomalyTests
         // Then both counts are read on the world thread, where no pass can sit between the packet being logged and the anomaly being reported.
         await SwitchAsync(world, false);
         await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 1);
+        await SocialTestKit.WaitPassesAsync(world.Host, 5); // a promotion chosen before the reset has been logged by now
         int settled = await world.Host.OnWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildPromote));
         await SocialTestKit.WaitPassesAsync(world.Host, 5);
         (int promotes, int reported) = await world.Host.OnWorldAsync(() => (world.Log.Count(WorldOpcode.CmsgGuildPromote), capture.Count(GuildFailed)));
