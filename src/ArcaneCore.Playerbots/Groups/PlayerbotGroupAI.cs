@@ -1542,7 +1542,7 @@ internal sealed class PlayerbotGroupAI
             PlanOutcome planned = direct is not null ? PlanOutcome.Route
                 : toward
                     ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct)
-                    : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct, chase: chase);
+                    : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct);
             _route = direct;
             if (planned != PlanOutcome.Route || _route is null)
             {
@@ -1552,6 +1552,8 @@ internal sealed class PlayerbotGroupAI
                 return planned == PlanOutcome.Pending;
             }
 
+            // Only the flag: a chase planned as the brain plans one (nearest mesh end, no fallbacks) would drop the far-end refusal that Fight reports as no-path.
+            _route.Chase = chase;
             _routeGoal = goal;
         }
 
