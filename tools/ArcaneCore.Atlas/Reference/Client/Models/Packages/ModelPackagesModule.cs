@@ -138,6 +138,7 @@ public sealed class ModelPackagesModule : IAtlasModule
                                 ["firstTriangle"] = batch.FirstTriangle,
                                 ["triangleCount"] = batch.TriangleCount,
                                 ["geoset"] = batch.Geoset,
+                                ["priority"] = batch.Priority,
                                 ["material"] = batch.Material.ToJson(),
                             });
                         }

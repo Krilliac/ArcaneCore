@@ -10,7 +10,7 @@ internal readonly record struct PackageVertex(float X, float Y, float Z, float U
 internal readonly record struct PackageSubmesh(ushort Id, ushort StartIndex, ushort IndexCount);
 
 /// <summary>One texture unit (a batch): which submesh, which render-flags row, which texture-lookup row.</summary>
-internal readonly record struct PackageUnit(ushort Submesh, ushort RenderFlags, ushort TextureLookup);
+internal readonly record struct PackageUnit(ushort Submesh, ushort RenderFlags, ushort TextureLookup, sbyte Priority = 0, ushort ShaderId = 0);
 
 /// <summary>One texture entry: type 0 is a file named <see cref="Name"/>, any other type is a replaceable texture (11 = creature skin 1).</summary>
 internal readonly record struct PackageTexture(uint Type, string Name);
@@ -80,6 +80,8 @@ internal static class M2PackageFixtures
         for (int i = 0; i < units.Count; i++)
         {
             Span<byte> u = unitBytes.AsSpan(24 * i);
+            u[1] = (byte)units[i].Priority;
+            BinaryPrimitives.WriteUInt16LittleEndian(u[2..], units[i].ShaderId);
             BinaryPrimitives.WriteUInt16LittleEndian(u[4..], units[i].Submesh);
             BinaryPrimitives.WriteUInt16LittleEndian(u[10..], units[i].RenderFlags);
             BinaryPrimitives.WriteUInt16LittleEndian(u[16..], units[i].TextureLookup);

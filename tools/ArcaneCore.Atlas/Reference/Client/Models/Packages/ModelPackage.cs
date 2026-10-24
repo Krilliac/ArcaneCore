@@ -21,7 +21,7 @@ public sealed class ModelPackageException(string code, string message, Exception
 }
 
 /// <summary>One draw batch of a package, for the summaries the commands return.</summary>
-public sealed record ModelBatchInfo(int FirstTriangle, int TriangleCount, Material Material, int Geoset);
+public sealed record ModelBatchInfo(int FirstTriangle, int TriangleCount, Material Material, int Geoset, int Priority);
 
 /// <summary>
 /// A built model package: the ATG1 v2 bytes plus the facts the commands report. Immutable; the shared <see cref="Wire"/> array must
@@ -309,7 +309,7 @@ public sealed class M2PackageSource : IModelPackageSource
 
                 M2SubmeshEntry submesh = view.Submeshes[unit.Submesh];
                 Material material = MaterialFor(model, unit, Problem);
-                builder.BeginBatch(material, submesh.Id | ((uint)(ushort)unit.Priority << 16));
+                builder.BeginBatch(material, submesh.Id | ((uint)(ushort)(short)unit.Priority << 16));
                 AddTriangles(builder, model, view, submesh.StartIndex, submesh.IndexCount, Problem);
                 builder.EndBatch();
             }
@@ -357,7 +357,7 @@ public sealed class M2PackageSource : IModelPackageSource
         var batches = new List<ModelBatchInfo>(chunk.Batches.Length);
         foreach (GeometryBatch batch in chunk.Batches)
         {
-            batches.Add(new ModelBatchInfo((int)batch.FirstTriangle, (int)batch.TriangleCount, chunk.Materials[batch.Material], batch.Geoset));
+            batches.Add(new ModelBatchInfo((int)batch.FirstTriangle, (int)batch.TriangleCount, chunk.Materials[batch.Material], batch.Geoset, (short)(batch.Tag >> 16)));
         }
 
         byte[] wire = GeometryWire.Write(chunk);

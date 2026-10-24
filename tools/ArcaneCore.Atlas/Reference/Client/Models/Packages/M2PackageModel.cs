@@ -10,8 +10,11 @@ internal readonly record struct M2TextureEntry(uint Type, uint Flags, string Nam
 /// <summary>One submesh: a range of its view's triangle-index array.</summary>
 internal readonly record struct M2SubmeshEntry(ushort Id, ushort StartIndex, ushort IndexCount);
 
-/// <summary>One texture unit (a batch): the submesh it draws, its priority plane, render-flags row and texture-lookup row.</summary>
-internal readonly record struct M2UnitEntry(ushort Submesh, short Priority, ushort RenderFlags, ushort TextureLookup);
+/// <summary>
+/// One texture unit (a batch): the submesh it draws, its priority plane (the signed byte at +0x01; +0x02 is the shader id, which this
+/// reader does not use), render-flags row and texture-lookup row.
+/// </summary>
+internal readonly record struct M2UnitEntry(ushort Submesh, sbyte Priority, ushort RenderFlags, ushort TextureLookup);
 
 /// <summary>One embedded view: vertex lookup, triangle indices (into the lookup), submeshes and texture units.</summary>
 internal sealed record M2ViewData(ushort[] Lookup, ushort[] Triangles, M2SubmeshEntry[] Submeshes, M2UnitEntry[] Units);
@@ -159,7 +162,7 @@ internal sealed class M2PackageModel
             ReadOnlySpan<byte> u = data[(unitAt + (i * UnitSize))..];
             units[i] = new M2UnitEntry(
                 BinaryPrimitives.ReadUInt16LittleEndian(u[4..]),
-                BinaryPrimitives.ReadInt16LittleEndian(u[2..]),
+                (sbyte)u[1],
                 BinaryPrimitives.ReadUInt16LittleEndian(u[10..]),
                 BinaryPrimitives.ReadUInt16LittleEndian(u[16..]));
         }

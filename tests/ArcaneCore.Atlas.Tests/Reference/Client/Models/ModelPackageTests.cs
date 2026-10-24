@@ -91,6 +91,34 @@ public sealed class ModelPackageTests
         Assert.Equal(LayerIds.RefM2Tex, chunk.LayerId);
     }
 
+    [Fact]
+    public async Task TheBatchTag_CarriesThePriorityPlane_NotTheShaderId()
+    {
+        // Priority plane (+0x01, signed) and shader id (+0x02) are set to different values: the tag's high 16 bits must hold the plane.
+        byte[] m2 = M2PackageFixtures.Build(
+            [new(0, 0, 0, 0.25f, 0.75f), new(1, 0, 0, 1, 1), new(1, 1, 0, 1, 0), new(0, 1, 0, 0, 0)],
+            [0, 1, 2, 0, 2, 3],
+            [new(0, 0, 3), new(1, 3, 3)],
+            [new(0, 0, 0, Priority: 3, ShaderId: 0x0105), new(1, 0, 0, Priority: -2, ShaderId: 0x0007)],
+            [new(0, "Creature\\Test\\Skin.blp")],
+            [(0, 0)],
+            [0]);
+        await using HostRig rig = await HostRig.StartAsync(register: Register(Files(m2)));
+
+        using HttpResponseMessage response = await rig.Http.GetAsync("api/bin/model?path=Creature%5CTest%5CThing.m2");
+
+        GeometryChunk chunk = GeometryWire.Read(await response.Content.ReadAsByteArrayAsync());
+        Assert.Equal(2, chunk.Batches.Length);
+        Assert.Equal(0, chunk.Batches[0].Geoset);
+        Assert.Equal(3, (short)(chunk.Batches[0].Tag >> 16));
+        Assert.Equal(1, chunk.Batches[1].Geoset);
+        Assert.Equal(-2, (short)(chunk.Batches[1].Tag >> 16));
+
+        JsonNode data = await rig.DataAsync("model.package", new JsonObject { ["path"] = Path });
+        Assert.Equal(3, data["batches"]![0]!.Num("priority"));
+        Assert.Equal(-2, data["batches"]![1]!.Num("priority"));
+    }
+
     [Theory]
     [InlineData("", HttpStatusCode.BadRequest, "bad-args")]
     [InlineData("?path=Creature%5CTest%5CNothing.m2", HttpStatusCode.NotFound, "not-found")]
