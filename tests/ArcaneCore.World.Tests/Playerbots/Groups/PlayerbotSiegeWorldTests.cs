@@ -966,7 +966,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 refusedAt = Now(world);
                 Player dragged = Leader(world, raid);
                 dragged.Relocate(point.X + 25f, point.Y, point.Z, 0, Now(world)); // pursuit keeps the leader off the point
-                typeof(PlayerbotGroupAI).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(raid.Group!.Find(raid.Group.LeaderBotId)!.AI, null);
+                typeof(PlayerbotGroupAI).GetProperty("_route", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(raid.Group!.Find(raid.Group.LeaderBotId)!.AI, null);
                 wasFlagged = false;
                 flaps++;
             }

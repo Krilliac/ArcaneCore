@@ -114,6 +114,9 @@ public sealed class WarsongGulch : Battleground
     private readonly int[] _teamScores = new int[2];
     private readonly int _reputationCapture;
 
+    /// <summary>The reputation a flag capture gives each side, fixed when the match was created (35, or 45 on a battleground weekend).</summary>
+    internal int CaptureReputation => _reputationCapture;
+
     public WarsongGulch(BattlegroundTemplate template, int bracket, uint instanceId, uint clientInstanceId, BattlegroundOptions options, BattlegroundPorts ports)
         : base(template, bracket, instanceId, clientInstanceId, options, ports)
     {

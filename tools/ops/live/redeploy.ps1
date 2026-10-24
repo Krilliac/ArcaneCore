@@ -10,7 +10,7 @@
 # A hot path that turns out to be unavailable (no pipe, command missing, busy, no answer) falls back to the restart; a change the World
 # rejects (validation, a module refused) stops with exit 3 and the World keeps running what it ran.
 #   pwsh -NoProfile -File tools/ops/live/redeploy.ps1 [-Src <worktree>] [-Plan|-WhatIf] [-Json] [-ForceRestart] [-ContentTables <names>]
-#        [-WorldDbSwap <world.db> [-WorldDb <target>]] [-LiveHome <dir>] [-Profile <dir>]
+#        [-WorldDbSwap <world.db> [-WorldDb <target>]] [-LiveHome <dir>] [-Profile <dir>] [-Diagnostics Standard|Max]
 # **Touches the live server** (not with -Plan/-WhatIf). -Src defaults to the worktree this script is in; build it first (dotnet build
 # ArcaneCore.slnx, Debug: live stays a Debug build). Uses ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE when the parameters are omitted.
 [CmdletBinding(SupportsShouldProcess)]
@@ -35,7 +35,9 @@ param(
     # The reason announced with each hot step.
     [string]$Reason = 'redeploy',
     [int]$WorldStopTimeoutSec = 180,
-    [int]$RealmStopTimeoutSec = 60
+    [int]$RealmStopTimeoutSec = 60,
+    # The diagnostics level of the restarted daemons (launch-daemon.ps1, docs/ops/live-diagnostics.md).
+    [ValidateSet('Standard', 'Max')][string]$Diagnostics = 'Max'
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
@@ -223,7 +225,7 @@ foreach ($name in $thePlan.Modules) {
 
 $startedUtc = [DateTime]::UtcNow
 foreach ($role in 'Realm', 'World') {
-    Start-Process pwsh -ArgumentList '-NoExit', '-NoProfile', '-File', $launcher, '-Role', $role, '-LiveHome', $LiveHome, '-Profile', $LiveProfile | Out-Null
+    Start-Process pwsh -ArgumentList '-NoExit', '-NoProfile', '-File', $launcher, '-Role', $role, '-LiveHome', $LiveHome, '-Profile', $LiveProfile, '-Diagnostics', $Diagnostics | Out-Null
     Start-Sleep -Seconds 5
 }
 Start-Sleep -Seconds 10

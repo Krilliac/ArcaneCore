@@ -82,7 +82,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "diag",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm.",
+                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0.",
                     Diag),
             ]),
     ];
@@ -543,6 +543,7 @@ public sealed class ClusterCommands : ICommandGroup
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
 
+        DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
         {
             new(
@@ -551,11 +552,11 @@ public sealed class ClusterCommands : ICommandGroup
                 NodeIncarnation: incarnation == Guid.Empty ? Guid.NewGuid() : incarnation,
                 State: ClusterNodeLifecycleState.Active,
                 ContractVersion: ClusterNodeManifest.CurrentContractVersion,
-                AuthSchemaVersion: 11,
-                CharactersSchemaVersion: 61,
-                WorldSchemaVersion: 19,
+                AuthSchemaVersion: schema.Auth,
+                CharactersSchemaVersion: schema.Characters,
+                WorldSchemaVersion: schema.World,
                 ContentRevision: contentRev,
-                IsFencedWriter: true),
+                IsFencedWriter: fencing.Enabled),
         };
 
         if (ResolvePlacementTable(services, context.World) is { } table)
@@ -568,9 +569,9 @@ public sealed class ClusterCommands : ICommandGroup
                     NodeIncarnation: w.Incarnation == Guid.Empty ? Guid.NewGuid() : w.Incarnation,
                     State: w.IsDraining ? ClusterNodeLifecycleState.Draining : (w.IsReady ? ClusterNodeLifecycleState.Active : ClusterNodeLifecycleState.Starting),
                     ContractVersion: ClusterNodeManifest.CurrentContractVersion,
-                    AuthSchemaVersion: 11,
-                    CharactersSchemaVersion: 61,
-                    WorldSchemaVersion: 19,
+                    AuthSchemaVersion: schema.Auth,
+                    CharactersSchemaVersion: schema.Characters,
+                    WorldSchemaVersion: schema.World,
                     ContentRevision: contentRev,
                     IsFencedWriter: true));
             }
@@ -578,11 +579,11 @@ public sealed class ClusterCommands : ICommandGroup
 
         var policy = new ContentRevisionCompatibilityPolicy(
             supportedContractVersion: ClusterNodeManifest.CurrentContractVersion,
-            expectedAuthSchemaVersion: 11,
-            currentCharactersSchemaVersion: 61,
-            expectedWorldSchemaVersion: 19,
+            expectedAuthSchemaVersion: schema.Auth,
+            currentCharactersSchemaVersion: schema.Characters,
+            expectedWorldSchemaVersion: schema.World,
             expectedContentRevision: contentRev,
-            minimumCompatibleCharactersSchemaVersion: 59);
+            minimumCompatibleCharactersSchemaVersion: schema.MinimumLocalCharacters);
 
         var collector = new ClusterDiagnosticsCollector(policy, new ClusterRollbackCoordinator());
         var correlation = new ClusterCorrelationContext(
@@ -593,21 +594,7 @@ public sealed class ClusterCommands : ICommandGroup
             OwnershipEpoch: worldToken?.Epoch ?? 0,
             OperationId: "gm-cluster-diag");
 
-        var snapshot = new ClusterRollbackSnapshot(
-            RealmId: realmId,
-            ClusterNodes: nodes,
-            PendingTransfers: 0,
-            PendingCharacterWrites: pendingWrites,
-            RetainedWriteFailures: retainedFailures,
-            ActiveUnfencedWriters: fencing.Enabled ? 0 : 1,
-            ActiveClusterOwnershipLeases: worldToken is not null ? 1 : 0,
-            AuthSchemaVersion: 11,
-            CharactersSchemaVersion: 61,
-            WorldSchemaVersion: 19,
-            ExpectedAuthSchemaVersion: 11,
-            MinimumLocalCharactersSchemaVersion: 59,
-            MaximumLocalCharactersSchemaVersion: 61,
-            ExpectedWorldSchemaVersion: 19);
+        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
 
         ClusterDiagnosticsReport report = collector.Collect(
             correlation,
@@ -620,6 +607,52 @@ public sealed class ClusterCommands : ICommandGroup
 
         context.Reply(report.FormatDeterministicSummary());
         return true;
+    }
+
+    /// <summary>
+    /// The rollback-readiness input of <c>.cluster diag</c>: the schema versions are this build's (the versions its databases are
+    /// composed at, <see cref="DiagSchemaVersions.Current"/>), not literals that go stale when a schema module is added and not the
+    /// version rows of the live databases, which the command cannot read cheaply.
+    /// </summary>
+    internal static ClusterRollbackSnapshot BuildRollbackSnapshot(
+        int realmId,
+        IReadOnlyList<ClusterNodeDescriptor> nodes,
+        int pendingWrites,
+        int retainedFailures,
+        bool fencingEnabled,
+        bool hasOwnershipToken,
+        DiagSchemaVersions schema)
+        => new(
+            RealmId: realmId,
+            ClusterNodes: nodes,
+            PendingTransfers: 0,
+            PendingCharacterWrites: pendingWrites,
+            RetainedWriteFailures: retainedFailures,
+            ActiveUnfencedWriters: fencingEnabled ? 0 : 1,
+            ActiveClusterOwnershipLeases: hasOwnershipToken ? 1 : 0,
+            AuthSchemaVersion: schema.Auth,
+            CharactersSchemaVersion: schema.Characters,
+            WorldSchemaVersion: schema.World,
+            ExpectedAuthSchemaVersion: schema.Auth,
+            MinimumLocalCharactersSchemaVersion: schema.MinimumLocalCharacters,
+            MaximumLocalCharactersSchemaVersion: schema.Characters,
+            ExpectedWorldSchemaVersion: schema.World);
+
+    /// <summary>This build's schema versions of the auth, characters and world databases (what it requires, not what the databases record).</summary>
+    internal readonly record struct DiagSchemaVersions(int Auth, int Characters, int World)
+    {
+        /// <summary>
+        /// Oldest characters schema a local combined-mode takeover accepts: the additive-compatibility floor, a policy value
+        /// (the newer steps only add tables and columns), not a measurement. Never above the current version.
+        /// </summary>
+        private const int LocalCharactersFloor = 59;
+
+        public int MinimumLocalCharacters => Math.Min(LocalCharactersFloor, Characters);
+
+        public static DiagSchemaVersions Current => new(
+            ArcaneCore.Data.Auth.AuthDbContext.Schema.CurrentVersion,
+            ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion,
+            ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
     }
 
     private static CharacterFencingOptions GetFencingOptions(IServiceProvider services)

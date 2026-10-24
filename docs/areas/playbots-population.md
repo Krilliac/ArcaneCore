@@ -238,6 +238,22 @@ wait at once. The wait also applies **without terrain data** when the creature s
 loaded, `CreatureSurveyRadius` above 0): the background job then only surveys, and the first pass after a start or a reload holds
 creation and relocation until it is in (usually the next pass).
 
+**Creation and relocation wait for the placement safety data.** The spawn index (creatures near a site) and the terrain facts
+(liquid status and area level of every safe location) are built on a background task, never on the world thread, and published as
+one immutable snapshot (`PopulationPlacementFacts`). Until the snapshot for the creature content, area table and atlas in force is
+in, a pass creates and relocates nobody and says `held back: waiting for the placement safety data`. It is rebuilt after a content,
+area or atlas reload. Unlike the terrain lookup hold this one has **no pass limit** (placing without the data would put the index
+build and the tile reads back inside a tick). A build that throws is logged, recorded in the fault ledger, and retried every 10
+passes; meanwhile the status says `waiting for the placement safety data (the last build failed; retrying)`. A population rush holds
+on the plain wait but **halts** on the failed-build wait, so a build that keeps failing cannot leave a rush running with nothing
+created. A site checked against a snapshot built from a replaced content or area table is refused with the code
+`placement-data-stale`; that refusal does not count toward the three-refusals pause below, and a relocation that meets it skips the
+bot silently (the next pass checks again against the fresh snapshot).
+
+Known difference from the old on-thread lookup: the area level of a site comes from the terrain tile's area cell only. The live
+path (`TerrainInfo.GetAreaFlag`) prefers the WMO group area when model data is loaded, so a site inside a building can get a
+different sub-area level than before. Liquid status and everything else agree with the live lookups.
+
 **The detached reader and a missing tile.** `ReadZoneAndAreaIdDetached` returns (0, 0) for a position whose tile file is missing,
 unreadable or outside the map, so that graveyard's link is kept with no sub-area level. The cached path
 (`TerrainInfo.GetZoneAndAreaId`) instead reads a missing tile as area flag 0, which `AreaTable` resolves to the map's
@@ -590,7 +606,8 @@ and is not counted in any band.
 
 **Creation pauses after three refusals in a row.** Three placements refused one pass after another (counted from the refusal, reset
 by any successful placement) pause creation: passes 4 to 13 report "creation paused: 3 placements refused in a row" and create
-nothing, and pass 14 plans again. Restarting parked members and parking are not affected.
+nothing, and pass 14 plans again. Restarting parked members and parking are not affected. A `placement-data-stale` refusal is not
+counted: it means the snapshot is being rebuilt, not that the placements are bad.
 
 ## Tests
 

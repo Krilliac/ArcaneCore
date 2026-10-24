@@ -27,6 +27,11 @@
     <ProjectReference Include="..\ArcaneCore.TestSupport\ArcaneCore.TestSupport.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Writes synthetic .map tiles for the population placement facts tests. -->
+    <Compile Include="..\ArcaneCore.Game.Tests\GridTerrain\MapFileBuilder.cs" Link="Playerbots\Population\MapFileBuilder.cs" />
+  </ItemGroup>
+
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
   <ItemGroup>
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />

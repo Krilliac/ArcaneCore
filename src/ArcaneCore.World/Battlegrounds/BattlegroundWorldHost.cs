@@ -14,6 +14,7 @@ using ArcaneCore.World.Packets;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -39,6 +40,7 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
         Honor = this,
         Ranks = this,
         Reputation = this,
+        Calendar = new GameEventBattlegroundCalendar(() => feature.Services.GetService<GameEventFeature>()),
         Scripts = World.Scripts,
     };
 
