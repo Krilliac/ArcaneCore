@@ -425,7 +425,7 @@ public sealed class LiveFeed : IDisposable
         => new(CommandException.Unavailable, $"the connected world daemon does not support the {kind} query (it predates live insight); update and restart it.");
 
     /// <summary>The connected feed's revision (hello <c>rev</c>, 1 when absent); 1 when not connected.</summary>
-    public int FeedRevision => _session?.Hello?.Rev ?? 1;
+    public int FeedRevision => _session?.FeedRevision ?? 1;
 
     /// <summary>
     /// Sends one packet-tools request (docs/areas/map-feed.md, "Packet tools") and returns its result fields. Unavailable when not connected

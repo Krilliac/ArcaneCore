@@ -23,7 +23,7 @@ internal sealed record ParsedFrame(LiveFrame Frame, JsonObject Json, int Rejecte
 /// <param name="MapsRejected">Entries of <c>maps</c> that were malformed and dropped.</param>
 /// <param name="FirstMapProblem">Why the first of them was dropped.</param>
 /// <param name="Tools">The daemon offers the packet tools (its hello says <c>"tools":true</c>; docs/areas/map-feed.md, "Packet tools").</param>
-internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps, int MapsRejected = 0, string? FirstMapProblem = null, bool Tools = false, int Rev = 1);
+internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyList<ServerMap> Maps, int MapsRejected = 0, string? FirstMapProblem = null, bool Tools = false);
 
 /// <summary>
 /// Validates map-feed messages (design section 9). A message whose structure is wrong is refused whole; inside an accepted frame, an
@@ -133,9 +133,7 @@ internal static class FrameParser
             }
         }
 
-        // rev: the map-feed revision of the world (2 adds the combat counters and insight queries); absent or malformed means rev 1.
-        int rev = TryInteger(root["rev"], 1, 1000, out long revValue) ? (int)revValue : 1;
-        hello = new HelloInfo((int)protocol, sha, pid, maps, mapsRejected, firstMapProblem, tools, rev);
+        hello = new HelloInfo((int)protocol, sha, pid, maps, mapsRejected, firstMapProblem, tools);
         problem = null;
         return true;
     }
