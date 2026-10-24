@@ -306,14 +306,16 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// A creature already convicted of being under the map that has a navmesh floor straight above within 10 yd and none below within
     /// 60 yd (a tunnel or cellar ceiling sits between it and the terrain, which <see cref="TryRecoverClippedUnderTerrain"/> declines):
-    /// it is put on that floor. Reported once.
+    /// it is put on that floor (when it is more than a yard below it). Reported once. This heals a stranded creature; it does not prevent
+    /// whatever put it there, so the report recurs per episode.
     /// </summary>
     private bool TryLiftOntoFloorAbove(Creature creature)
     {
         const float LiftYards = 10f;
+        const float MinLiftYards = 1f;
         if (!Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 0f, LiftYards, out float floor)
             || !float.IsFinite(floor)
-            || floor <= creature.Z
+            || floor - creature.Z <= MinLiftYards
             || Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 60f, 0f, out _))
         {
             return false;

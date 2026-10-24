@@ -152,7 +152,8 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
     [RealTerrainFact]
     public void SafeClosePoint_ForAnOwnerBesideTheSearingTotemHole_NeverReturnsAPointInTheHole()
     {
-        // Entry 7402's spawn (-4057.6, -2397.5, 126.2) sits in a 6x8 yd hole of the Bael'dun Keep floor; the owner stands on the floor 5 yd west of it.
+        // Regression guard (not a reproduction: the owner's point was already the fallback before): entry 7402's spawn (-4057.6, -2397.5, 126.2)
+        // sits in a 6x8 yd hole of the Bael'dun Keep floor; the owner stands on the floor 5 yd west of it.
         const float HoleX = -4057.6f;
         const float HoleY = -2397.5f;
         const uint Kalimdor = 1u;
@@ -186,6 +187,33 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         for (int octant = 0; octant < 8; octant++)
         {
             (float x, float y, float z) = SummonService.SafeClosePoint(owner, creatures, 0.5f, 2f, octant * (MathF.PI / 4f));
+            Assert.False(IsUnderMap(collision, x, y, z), $"octant {octant}: ({x:F2}, {y:F2}, {z:F2}) is in the hole");
+        }
+    }
+
+    [RealTerrainFact]
+    public void SafeClosePoint_ForAnOwnerStandingInTheSearingTotemHole_NeverReturnsAPointInTheHole()
+    {
+        // Reproduces entry 7402: the caster itself is in the hole, so the owner-point fallback used to put the totem at z=126.2.
+        const float HoleX = -4057.6f;
+        const float HoleY = -2397.5f;
+        const uint Kalimdor = 1u;
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        InstallRealCollision(world, Kalimdor, HoleX, HoleY);
+        Map map = world.GetMap(Kalimdor);
+        MapCollision collision = map.Collision;
+        Assert.True(IsUnderMap(collision, HoleX, HoleY, 126.2f), "the owner's point is under the map (precondition)");
+
+        Player owner = TestWorld.CreatePlayer(2, HoleX, HoleY, new FakeSession(2), Kalimdor);
+        world.AddPlayer(owner);
+        world.RunTick(0);
+        owner.Relocate(HoleX, HoleY, 126.2f, 0f, 0);
+        var creatures = new CreatureMapSystem(map, Content([Template(949201)], []), random: new Random(1));
+
+        for (int octant = 0; octant < 8; octant++)
+        {
+            (float x, float y, float z) = SummonService.SafeClosePoint(owner, creatures, 0.5f, 2f, octant * (MathF.PI / 4f));
+            output.WriteLine($"octant {octant}: ({x:F2}, {y:F2}, {z:F2})");
             Assert.False(IsUnderMap(collision, x, y, z), $"octant {octant}: ({x:F2}, {y:F2}, {z:F2}) is in the hole");
         }
     }

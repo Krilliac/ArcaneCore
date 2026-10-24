@@ -323,7 +323,8 @@ public sealed partial class SummonService : ISpellSummonSink
 
     /// <summary>
     /// <see cref="ClosePoint"/> kept on the ground: the ground height within 4 yd of the owner, in line of sight, and not under the map.
-    /// A rejected primary slot is retried at half the distance and at the neighbouring angles; if every slot fails the owner's own point
+    /// A primary slot rejected for being under the map (not one blocked by a wall) is retried at half the distance and at the neighbouring
+    /// angles; if every slot fails the owner's own point
     /// is used, unless that point itself classifies under the map (a caster standing just past the edge of a floor), in which case the
     /// nearest navmesh floor within 3 yd replaces it (no line of sight: the ray from a point past the floor's edge is blocked by that floor).
     /// </summary>
@@ -334,10 +335,8 @@ public sealed partial class SummonService : ISpellSummonSink
             return slot;
         }
 
-        if (owner.Map is not { } map)
-        {
-            return (owner.X, owner.Y, owner.Z);
-        }
+        // TryGroundedSlot only fails for an owner on a map, so Map is set from here on.
+        var collision = owner.Map!.Collision;
 
         // A wall between the owner and the slot keeps the owner's point; only a slot that is under the map is retried elsewhere.
         if (!blocked)
@@ -357,7 +356,7 @@ public sealed partial class SummonService : ISpellSummonSink
             }
         }
 
-        if (map.Collision.ClassifyUnderMap(owner.X, owner.Y, owner.Z, 8f).Kind == Maps.Collision.UnderMapKind.UnderMap)
+        if (collision.ClassifyUnderMap(owner.X, owner.Y, owner.Z, 8f).Kind == Maps.Collision.UnderMapKind.UnderMap)
         {
             for (int ring = 1; ring <= 3; ring++)
             {
@@ -366,9 +365,9 @@ public sealed partial class SummonService : ISpellSummonSink
                     float angle = i * (MathF.PI / 4f);
                     float x = owner.X + (ring * MathF.Cos(angle));
                     float y = owner.Y + (ring * MathF.Sin(angle));
-                    if (map.Collision.TryGetMeshFloor(x, y, owner.Z, 4f, 3f, out float floor)
+                    if (collision.TryGetMeshFloor(x, y, owner.Z, 4f, 3f, out float floor)
                         && float.IsFinite(floor)
-                        && map.Collision.ClassifyUnderMap(x, y, floor, 8f).Kind != Maps.Collision.UnderMapKind.UnderMap)
+                        && collision.ClassifyUnderMap(x, y, floor, 8f).Kind != Maps.Collision.UnderMapKind.UnderMap)
                     {
                         return (x, y, floor);
                     }
