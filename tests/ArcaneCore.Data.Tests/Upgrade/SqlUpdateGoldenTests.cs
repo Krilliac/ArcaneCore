@@ -208,16 +208,30 @@ public sealed class SqlUpdateGoldenTests
         string root = Path.Combine(Path.GetTempPath(), "arcane-sqlupdates-" + Guid.NewGuid().ToString("N"));
         try
         {
+            // Export onto a copy of the committed tree (a baseline stays at the version it was released at; later versions are step files).
+            string committed = Path.Combine(SqlUpdateTestKit.Root, "auth");
+            foreach (string source in Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories))
+            {
+                string target = Path.Combine(root, "auth", Path.GetRelativePath(committed, source));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target);
+            }
+
             var options = new DatabaseOptions();
             var output = new StringWriter();
             var error = new StringWriter();
             int code = await DbUpgradeCli.RunAsync(["export-updates", "--component", "auth", "--out", root], options, output, error, CancellationToken.None);
             Assert.True(code == 0, error.ToString());
-            string sqlite = Path.Combine(root, "auth", "sqlite", UpdateScriptWriter.BaselineFileName(UpdateComponent.For("auth").Definition.CurrentVersion));
-            Assert.True(File.Exists(sqlite));
-            Assert.Equal(
-                SqlUpdateTestKit.ReadNormalized(Path.Combine(SqlUpdateTestKit.Root, "auth", "sqlite", Path.GetFileName(sqlite))),
-                SqlUpdateTestKit.ReadNormalized(sqlite));
+            string[] sqliteFiles = Directory.GetFiles(Path.Combine(committed, "sqlite"), "*.sql");
+            Assert.NotEmpty(sqliteFiles);
+            foreach (string file in sqliteFiles)
+            {
+                string exported = Path.Combine(root, "auth", Path.GetRelativePath(committed, file));
+                Assert.True(File.Exists(exported), exported);
+                Assert.Equal(SqlUpdateTestKit.ReadNormalized(file), SqlUpdateTestKit.ReadNormalized(exported));
+            }
+
+            Assert.Equal(sqliteFiles.Length, Directory.GetFiles(Path.Combine(root, "auth", "sqlite"), "*.sql").Length);
 
             var err2 = new StringWriter();
             int usage = await DbUpgradeCli.RunAsync(["export-updates"], options, new StringWriter(), err2, CancellationToken.None);

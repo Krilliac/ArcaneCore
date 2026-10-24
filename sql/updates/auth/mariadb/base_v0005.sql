@@ -2,16 +2,16 @@
 -- component: auth
 -- provider: mariadb
 -- from: none (an empty database)
--- to: 6
--- owner: baseline: every module through schema version 6
--- body-sha256: a29b1a734e732bef6f65fd24363968871be405e4031ad47cb0c82916eaa00acd
+-- to: 5
+-- owner: baseline: every module through schema version 5
+-- body-sha256: f3b0f9df6426b889885ab5f1fc50d36292b363b979f9679248312caabc0d43bc
 -- apply: mysql <database> < this-file.sql   (the mysql/mariadb client; stops at the first error)
 
 -- guard: refuse any database that already holds a table of this component (nothing is changed)
 DELIMITER //
 BEGIN NOT ATOMIC
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('account', 'account_banned', 'auth_schema', 'ip_banned', 'managed_playerbot_provision', 'realmlist')) THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth baseline (schema version 6): the database already holds tables of this component';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'auth baseline (schema version 5): the database already holds tables of this component';
   END IF;
 END//
 DELIMITER ;
@@ -37,11 +37,6 @@ CREATE TABLE `account` (
     `LockFlags` tinyint unsigned NOT NULL,
     `SecurityInfo` varchar(128) CHARACTER SET utf8mb4 NOT NULL DEFAULT '',
     `LastIp` varchar(45) CHARACTER SET utf8mb4 NOT NULL DEFAULT '',
-    `LastLoginUtc` datetime(6) NULL,
-    `LastOs` varchar(4) CHARACTER SET utf8mb4 NOT NULL DEFAULT '',
-    `LastPlatform` varchar(4) CHARACTER SET utf8mb4 NOT NULL DEFAULT '',
-    `LastLocale` varchar(4) CHARACTER SET utf8mb4 NOT NULL DEFAULT '',
-    `LastBuild` int NOT NULL DEFAULT 0,
     CONSTRAINT `PK_account` PRIMARY KEY (`Id`)
 ) CHARACTER SET=utf8mb4;
 
@@ -94,4 +89,4 @@ CREATE TABLE `realmlist` (
 ) CHARACTER SET=utf8mb4;
 
 -- the version row is written last
-UPDATE `auth_schema` SET `Version` = 6 WHERE `Id` = 1 AND `Version` = 0;
+UPDATE `auth_schema` SET `Version` = 5 WHERE `Id` = 1 AND `Version` = 0;

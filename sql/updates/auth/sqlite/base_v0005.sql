@@ -2,9 +2,9 @@
 -- component: auth
 -- provider: sqlite
 -- from: none (an empty database)
--- to: 6
--- owner: baseline: every module through schema version 6
--- body-sha256: cc0a2c606fbd622b247d4b6dbb131f38ee98530fe654dca6cf24229351432fbb
+-- to: 5
+-- owner: baseline: every module through schema version 5
+-- body-sha256: 8834adec53ea1d27cea416bd9fe5d50704887ae5ad0941d97446a394ba1aa16d
 -- apply: sqlite3 -bail <database-file> < this-file.sql
 
 BEGIN;
@@ -31,12 +31,7 @@ CREATE TABLE "account" (
     "Security" INTEGER NOT NULL,
     "LockFlags" INTEGER NOT NULL,
     "SecurityInfo" TEXT NOT NULL DEFAULT '',
-    "LastIp" TEXT NOT NULL DEFAULT '',
-    "LastLoginUtc" TEXT NULL,
-    "LastOs" TEXT NOT NULL DEFAULT '',
-    "LastPlatform" TEXT NOT NULL DEFAULT '',
-    "LastLocale" TEXT NOT NULL DEFAULT '',
-    "LastBuild" INTEGER NOT NULL DEFAULT 0
+    "LastIp" TEXT NOT NULL DEFAULT ''
 );
 
 CREATE UNIQUE INDEX "IX_account_Username" ON "account" ("Username");
@@ -84,6 +79,6 @@ CREATE TABLE "realmlist" (
 );
 
 -- the version row is written last
-UPDATE "auth_schema" SET "Version" = 6 WHERE "Id" = 1 AND "Version" = 0;
+UPDATE "auth_schema" SET "Version" = 5 WHERE "Id" = 1 AND "Version" = 0;
 
 COMMIT;

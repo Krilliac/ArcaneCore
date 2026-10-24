@@ -2,9 +2,9 @@
 -- component: auth
 -- provider: postgresql
 -- from: none (an empty database)
--- to: 6
--- owner: baseline: every module through schema version 6
--- body-sha256: edaf4b4c8aece684412935e2684e019fe4d831898f9c4ec257cc9a81b6eeb5e9
+-- to: 5
+-- owner: baseline: every module through schema version 5
+-- body-sha256: c861e86fb539af0e4a26844db12466449e1d3a998710762fb2cfcac4df58f56f
 -- apply: psql -v ON_ERROR_STOP=1 -d <database> -f this-file.sql
 
 BEGIN;
@@ -13,7 +13,7 @@ BEGIN;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('account', 'account_banned', 'auth_schema', 'ip_banned', 'managed_playerbot_provision', 'realmlist')) THEN
-    RAISE EXCEPTION 'auth baseline (schema version 6): the database already holds tables of this component';
+    RAISE EXCEPTION 'auth baseline (schema version 5): the database already holds tables of this component';
   END IF;
 END
 $$;
@@ -37,11 +37,6 @@ CREATE TABLE account (
     "LockFlags" smallint NOT NULL,
     "SecurityInfo" character varying(128) NOT NULL DEFAULT '',
     "LastIp" character varying(45) NOT NULL DEFAULT '',
-    "LastLoginUtc" timestamp with time zone,
-    "LastOs" character varying(4) NOT NULL DEFAULT '',
-    "LastPlatform" character varying(4) NOT NULL DEFAULT '',
-    "LastLocale" character varying(4) NOT NULL DEFAULT '',
-    "LastBuild" integer NOT NULL DEFAULT 0,
     CONSTRAINT "PK_account" PRIMARY KEY ("Id")
 );
 
@@ -94,6 +89,6 @@ CREATE TABLE realmlist (
 );
 
 -- the version row is written last
-UPDATE auth_schema SET "Version" = 6 WHERE "Id" = 1 AND "Version" = 0;
+UPDATE auth_schema SET "Version" = 5 WHERE "Id" = 1 AND "Version" = 0;
 
 COMMIT;

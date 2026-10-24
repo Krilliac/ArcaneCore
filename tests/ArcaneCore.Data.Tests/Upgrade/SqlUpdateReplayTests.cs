@@ -131,7 +131,10 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
     {
         const string component = "auth";
         SchemaDefinition schema = SchemaProbe.SchemaOf(component);
-        string text = File.ReadAllText(SqlUpdateTestKit.OrderedFiles(component, provider)[0]);
+        // A baseline cut at the current version: the resume rebuilds the current model, so an older committed baseline (which
+        // later steps extend) is not the file under test; a fresh export with no snapshot is.
+        UpdateSet baseline = await UpdateScriptWriter.GenerateAsync(UpdateComponent.For(component), null);
+        string text = baseline.Files.Single(f => f.Path.Contains("/" + SqlUpdateTestKit.Folder(provider) + "/", StringComparison.Ordinal)).Content;
         string[] all = [.. MysqlClientSplitter.Split(text)];
         int first = Array.FindIndex(all, s => s.StartsWith("ALTER DATABASE", StringComparison.Ordinal) || s.StartsWith("CREATE TABLE", StringComparison.Ordinal));
         int last = Array.FindLastIndex(all, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
