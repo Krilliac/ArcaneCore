@@ -44,7 +44,7 @@ public sealed class MapFeedActionsTests
         };
 
     private static FeedWorldSetup WebWorld(
-        FakeFeedTickets tickets, Action<MapFeedActionsOptions>? options = null, TimeProvider? time = null, bool content = false, int extraCreatures = 0, bool realProbe = false)
+        FakeFeedTickets tickets, Action<MapFeedActionsOptions>? options = null, TimeProvider? time = null, bool content = false, int extraCreatures = 0)
         => new()
         {
             Terrain = true,
@@ -52,7 +52,6 @@ public sealed class MapFeedActionsTests
             ExtraCreatures = extraCreatures,
             Time = time,
             Tickets = tickets,
-            RealPredicateProbe = realProbe,
             Actions = o =>
             {
                 o.Enabled = true;
@@ -941,7 +940,7 @@ public sealed class MapFeedActionsTests
 
     // ---- remote bypasses (design 1.7), through the channel ---------------------------------------------------------------
 
-    [RemoteConsoleFixTheory]
+    [Theory]
     [InlineData("web")]
     [InlineData("local")]
     public async Task AGameMasterActor_CannotActOnAnOfflineAdministratorsCharacter(string tier)
@@ -973,7 +972,7 @@ public sealed class MapFeedActionsTests
         Assert.Equal(1, spies.OfflineRan);
     }
 
-    [RemoteConsoleFixTheory]
+    [Theory]
     [InlineData("web")]
     [InlineData("local")]
     public async Task AGameMasterActor_CannotBanAnAdministratorAccount_ButCanBanAPlayerAccount(string tier)
@@ -985,7 +984,7 @@ public sealed class MapFeedActionsTests
 
         FakeFeedTickets tickets = new FakeFeedTickets().Set("T-GM", 77, "WEBGM", AccountSecurity.GameMaster);
         await using FeedWorld world = await FeedWorld.StartAsync(tier == "web"
-            ? WebWorld(tickets)
+            ? WebWorld(tickets, o => o.PublicAllowModeration = true) // the public deny-list would refuse .ban before the command ran
             : LocalWorld(o => o.LocalSecurity = AccountSecurity.GameMaster));
         await world.Host.AddAccountAsync("BANADMIN", AccountSecurity.Administrator);
         await world.Host.AddAccountAsync("BANVICTIM", AccountSecurity.Player);
@@ -994,13 +993,34 @@ public sealed class MapFeedActionsTests
         FeedClient client = await world.ConnectAsync(tier);
         JsonObject actor = tier == "web" ? ActionWire.Web("T-GM") : ActionWire.Local();
 
-        JsonElement refused = await ActionWire.ActAsync(client, 1, actor, command: ".ban account banadmin 1h testing");
-        Assert.Contains(BanCommandText.TargetSecurityTooHigh, refused.Lines());
+        // The ban command answers from a background task after it returned, so its reply is a late actionLine, not part of the result.
+        var others = new List<JsonElement>();
+        JsonElement refused = await ActionWire.RequestAsync(client, ActionWire.Action(1, actor, command: ".ban account banadmin 1h testing"), 1, others);
+        Assert.True(refused.Ok(), refused.ToString());
+        Assert.Contains(BanCommandText.TargetSecurityTooHigh, await RepliesUntilAsync(client, refused, others, BanCommandText.TargetSecurityTooHigh));
         Assert.Null(await world.Host.Bans.GetActiveAccountBanAsync(adminId));
 
-        JsonElement allowed = await ActionWire.ActAsync(client, 2, actor, command: ".ban account banvictim 1h testing");
-        Assert.Contains("BANVICTIM is banned for 1h. Reason: testing.", allowed.Lines());
+        others.Clear();
+        JsonElement allowed = await ActionWire.RequestAsync(client, ActionWire.Action(2, actor, command: ".ban account banvictim 1h testing"), 2, others);
+        Assert.True(allowed.Ok(), allowed.ToString());
+        Assert.Contains("BANVICTIM is banned for 1h. Reason: testing.", await RepliesUntilAsync(client, allowed, others, "BANVICTIM is banned for 1h. Reason: testing."));
         Assert.NotNull(await world.Host.Bans.GetActiveAccountBanAsync(victimId));
+    }
+
+    /// <summary>The lines a command printed: those in the result, those that came before it, and (reading on) the late <c>actionLine</c>s until <paramref name="expected"/> arrives.</summary>
+    private static async Task<List<string>> RepliesUntilAsync(FeedClient client, JsonElement result, List<JsonElement> before, string expected)
+    {
+        List<string> lines = [.. result.Lines(), .. before.Where(l => l.Op() == "actionLine").Select(l => l.GetProperty("line").GetString()!)];
+        while (!lines.Contains(expected))
+        {
+            JsonElement next = await client.ReadAsync(); // bounded: a reply that never comes fails the test
+            if (next.Op() == "actionLine")
+            {
+                lines.Add(next.GetProperty("line").GetString()!);
+            }
+        }
+
+        return lines;
     }
 
     [Theory]
@@ -1015,42 +1035,43 @@ public sealed class MapFeedActionsTests
 
         // The registry the true-console fix adds (design 1.7, "Console-only"): resolved command paths the channel refuses before it executes.
         ArcaneCore.World.Commands.ConsoleOnlyCommands.Register("zconsole");
-        FakeFeedTickets tickets = new FakeFeedTickets().Set("T-ADMIN", 78, "WEBADMIN", AccountSecurity.Administrator);
-        await using FeedWorld world = await FeedWorld.StartAsync(tier == "web"
-            ? WebWorld(tickets, o => o.PublicMaxSecurity = AccountSecurity.Administrator)
-            : LocalWorld(o => o.LocalSecurity = AccountSecurity.Administrator));
-        ActionSpies spies = ActionSpies.Install(world.Host);
-        FeedClient client = await world.ConnectAsync(tier);
+        try
+        {
+            FakeFeedTickets tickets = new FakeFeedTickets().Set("T-ADMIN", 78, "WEBADMIN", AccountSecurity.Administrator);
+            await using FeedWorld world = await FeedWorld.StartAsync(tier == "web"
+                ? WebWorld(tickets, o => o.PublicMaxSecurity = AccountSecurity.Administrator)
+                : LocalWorld(o => o.LocalSecurity = AccountSecurity.Administrator));
+            ActionSpies spies = ActionSpies.Install(world.Host);
+            FeedClient client = await world.ConnectAsync(tier);
 
-        JsonElement result = await ActionWire.ActAsync(client, 1, tier == "web" ? ActionWire.Web("T-ADMIN") : ActionWire.Local(), command: ".zconsole");
+            JsonElement result = await ActionWire.ActAsync(client, 1, tier == "web" ? ActionWire.Web("T-ADMIN") : ActionWire.Local(), command: ".zconsole");
 
-        result.AssertRefused("console-only");
-        Assert.Equal(0, spies.Count("zconsole"));
+            result.AssertRefused("console-only");
+            Assert.Equal(0, spies.Count("zconsole"));
+        }
+        finally
+        {
+            ArcaneCore.World.Commands.ConsoleOnlyCommands.Unregister("zconsole"); // the registry is process-wide
+        }
     }
 
     // ---- web login needs the true-console fix -----------------------------------------------------------------------------
 
-    [WindowsFact]
-    public async Task WebLogin_IsOnlyOffered_WhenTheTrueConsolePredicateIsOnTheBase()
+    [Fact]
+    public void WebLogin_IsOnlyOffered_WhenTheTrueConsolePredicateIsOnTheBase()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        // This build carries the predicate the web gate probes for, so web login can be offered ...
+        Assert.True(ActionsGate.PredicatePresent);
+        var options = new MapFeedActionsOptions { Enabled = true, WebLogin = true };
+        var logs = new CapturingLoggerProvider();
+        using ILoggerFactory loggers = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(logs));
+        ILogger logger = loggers.CreateLogger("gate");
+        Assert.True(ActionsGate.Decide(options, liveServer: false, hasTickets: true, predicatePresent: true, logger).Login);
 
-        // The probe the channel itself uses (design acceptance): the IsTrueConsole type present in the world assembly.
-        bool predicatePresent = typeof(WorldMapFeed).Assembly.GetType("ArcaneCore.World.Commands.CommandContextConsole") is not null;
-        await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(new FakeFeedTickets(), realProbe: true));
-        FeedClient client = await world.ConnectAsync();
-
-        JsonElement caps = await ActionWire.RequestAsync(client, """{"op":"caps","id":1}""", 1);
-
-        Assert.Equal(predicatePresent, caps.GetProperty("login").GetBoolean());
-        if (!predicatePresent)
-        {
-            Assert.Contains(world.Logs.Entries, e => e.Level >= LogLevel.Warning && e.Message.Contains("WebLogin", StringComparison.Ordinal));
-            JsonElement refused = await ActionWire.ActAsync(client, 2, ActionWire.Web("T-ANY"), command: ".zplayer");
-            Assert.False(refused.Ok());
-        }
+        // ... and a build without it refuses web actors, saying why.
+        ActionsGate without = ActionsGate.Decide(options, liveServer: false, hasTickets: true, predicatePresent: false, logger);
+        Assert.False(without.Login);
+        Assert.True(without.On, "the local channel is unaffected");
+        Assert.Contains(logs.Entries, e => e.Level >= LogLevel.Warning && e.Message.Contains("WebLogin", StringComparison.Ordinal));
     }
 }

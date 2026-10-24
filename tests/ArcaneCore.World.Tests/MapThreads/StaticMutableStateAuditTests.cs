@@ -38,6 +38,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.Gm.Character.Boost.CharacterBoost._candidates"] = "reference to an immutable cache, replaced whole (a race only builds it twice)",
         ["ArcaneCore.World.Gm.Tools.DebugQueueCommands._baseline"] = "volatile reference to an immutable snapshot, replaced whole by .debug opcodes on/reset",
         ["ArcaneCore.World.HotCode.HotCodeMetadataHandler.s_active"] = "Volatile/Interlocked reference",
+        ["ArcaneCore.World.Ops.MapFeed.MapFeedConnection.s_lastConnectionId"] = "connection id counter, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafety.s_nextLogin"] = "login sequence, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.Control.BotController.s_sequence"] = "control event sequence, Interlocked.Increment and Interlocked.Read",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",

@@ -226,17 +226,24 @@ public sealed class RemoteConsoleBypassTests
             return true;
         });
         ConsoleOnlyCommands.Register("zbypassconsole");
-        await using var remote = new BypassRig(host, AccountSecurity.Administrator);
-        await using var console = new BypassRig(host, remoteSecurity: null);
+        try
+        {
+            await using var remote = new BypassRig(host, AccountSecurity.Administrator);
+            await using var console = new BypassRig(host, remoteSecurity: null);
 
-        CommandContext? refused = await remote.RunAsync(".zbypassconsole");
-        CommandContext? served = await console.RunAsync(".zbypassconsole");
+            CommandContext? refused = await remote.RunAsync(".zbypassconsole");
+            CommandContext? served = await console.RunAsync(".zbypassconsole");
 
-        Assert.Equal("console-only", refused!.Failure);
-        Assert.Equal([CommandContextConsole.ConsoleOnlyText], remote.Lines);
-        Assert.Equal(1, Volatile.Read(ref ran)); // only the console's run reached the handler
-        Assert.Null(served!.Failure);
-        Assert.Equal(["ran"], console.Lines);
+            Assert.Equal("console-only", refused!.Failure);
+            Assert.Equal([CommandContextConsole.ConsoleOnlyText], remote.Lines);
+            Assert.Equal(1, Volatile.Read(ref ran)); // only the console's run reached the handler
+            Assert.Null(served!.Failure);
+            Assert.Equal(["ran"], console.Lines);
+        }
+        finally
+        {
+            ConsoleOnlyCommands.Unregister("zbypassconsole"); // the registry is process-wide
+        }
     }
 
     [Fact]

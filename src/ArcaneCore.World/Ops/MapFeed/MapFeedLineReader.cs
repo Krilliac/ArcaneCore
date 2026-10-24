@@ -29,6 +29,18 @@ internal sealed class MapFeedLineReader(Stream stream, int maxBytes)
     private int _start;
     private int _end;
     private int _searched;
+    private readonly int _capacity = maxBytes;
+    private int _limit = maxBytes;
+
+    /// <summary>
+    /// The longest line accepted now. Starts at the constructor's <c>maxBytes</c> (which sized the buffer) and may only be lowered, for a connection
+    /// that learns it needs less (it bound the web role); it applies from the next line read. One reader, one caller: not thread-safe.
+    /// </summary>
+    public int MaxBytes
+    {
+        get => _limit;
+        set => _limit = Math.Clamp(value, 1, _capacity);
+    }
 
     public async ValueTask<LineRead> ReadLineAsync(CancellationToken token)
     {
@@ -59,7 +71,7 @@ internal sealed class MapFeedLineReader(Stream stream, int maxBytes)
                     length--;
                 }
 
-                if (length > maxBytes)
+                if (length > _limit)
                 {
                     return new LineRead(LineStatus.TooLong, default);
                 }
@@ -68,7 +80,7 @@ internal sealed class MapFeedLineReader(Stream stream, int maxBytes)
             }
 
             int pending = _end - _start;
-            if (pending > maxBytes + 1)
+            if (pending > _limit + 1)
             {
                 // One byte more than the limit may still be the '\r' of a line of exactly maxBytes.
                 return new LineRead(LineStatus.TooLong, default);

@@ -24,11 +24,13 @@ line gets `actions-off`. A hello and the frame stream are byte-identical whether
 | `PublicDeny` / `PublicAllowModeration` / `Deny` | account, server lifecycle, reload, hot code, raw bot, `ban`/`unban` | Command paths refused to web actors / to every actor, matched on the resolved path. |
 | `LocalAccountId` | none | The account the local actor counts as for "my own character" (`.atlas tele` at GameMaster level). |
 | `BulkConfirmAbove`, `SettleSeconds` | `1`, `30` | A template over more targets than this needs a confirm code; how long an action waits for its command to settle. |
-| `LocalPerSecond/Burst`, `WebPerSecond/Burst` | 10/20, 2/5 | Rate limits (token bucket; per web actor). |
+| `LocalPerSecond/Burst`, `WebPerSecond/Burst` | 10/20, 2/5 | Rate limits (token bucket; per actor, and per connection before the actor is resolved: a web connection gets twice the web burst). |
 | `AuditLocalDurable`, `WebAuditDays`, `AuditDirectory` | on, 90, `logs` | Durable JSONL audit (`atlas-web-audit.jsonl`). |
 
 `World:Control:MapFeed:Web:Enabled` + `ClientAccount` start a second pipe (`arcanecore-mapfeed-web-<pid>`) whose connections are the `web` role by
-construction; its ACL admits only that one Windows account.
+construction; its ACL admits only that one Windows account. `ClientAccount` must be one created account: Everyone, Authenticated Users, SYSTEM,
+LOCAL/NETWORK SERVICE, `BUILTIN\`, `NT AUTHORITY\` and `NT SERVICE\` names, `S-1-5-32-*`, any account SID with a RID below 1000 and the daemon's own
+account are refused (the configuration check fails for the names and SIDs it can judge as text, the pipe stays off with a Warning for the rest).
 
 ## Roles
 
@@ -62,7 +64,7 @@ The daemon formats the command; a tool never splices text into it. Arguments are
 
 `actions-off`, `live-server`, `role-mismatch`, `role-locked`, `web-login-off`, `no-ticket`, `expired`, `banned`, `ticket-unavailable`,
 `audit-unavailable`, `rate-limited`, `unknown-command`, `console-only`, `security`, `too-many-targets`, `target-gone`, `confirm-required`,
-`confirm-wrong`, `timeout`, `world-stopping`, `failed`, plus the feed's `bad-args`.
+`confirm-wrong`, `timeout`, `world-stopping`, `failed`, plus the feed's `bad-args`. `cancelled` and `unsettled` are audit results, not refusals: see Audit.
 
 ## Confirm tokens
 
@@ -76,6 +78,16 @@ commands the command table does not log. Web actions (and, by default, local one
 answer goes out, as do web login, logout, kick and revoke. An unwritable audit file refuses the action with `audit-unavailable` and runs nothing.
 Secrets in arguments are redacted and the ticket is never written.
 
+An action that ran is always recorded, whatever ended the wait. The `result` is `ok` or the failure code only when the command settled; `unsettled`
+when it was still open after `SettleSeconds` (the answer is `ok:true, settled:false`), and `cancelled` when the connection or the daemon ended during
+the wait or before the answer. A `timeout` or `world-stopping` refusal means the world thread had not begun the command; one that fires after it began
+waits for the command (at most `SettleSeconds`) and records what it did. The request's service scope is released when the command settles, or after
+five minutes, never earlier.
+
+Refusals before an actor is known (no ticket, wrong role, unknown ticket, a rate-limited connection) are merged on a web connection: the first of a run
+of the same code is recorded as an `action` record, the repeats are counted, and one `refusals` record (`targets` = the repeat count, `result` and `code`
+= the refused code) is written when the code changes, after 100 repeats, or when the connection ends. Repeats are logged at Debug.
+
 ## The `.atlas` commands
 
 `.atlas place creature|gobject`, `.atlas moveto`, `.atlas tele`, `.atlas debug`, `.atlas spawns` (see the [GM command reference](../reference/gm-commands.md))
@@ -86,5 +98,7 @@ when the invoker is a console-like action. The context survives a `World.Post` d
 
 Console-only commands answer `console-only` for every actor, local and web. Branches that skip a security check for a console invoker
 (`GmTargets.ActOnOffline`, `.ban` and the like) must use the true-console predicate (design 1.7, PR `claude/fix-remote-console-bypass`) so a
-GameMaster cannot act on an offline Administrator's character or ban an Administrator account through the channel. Web login stays refused until
-that PR is on the base.
+GameMaster cannot act on an offline Administrator's character or ban an Administrator account through the channel. A build without that predicate
+refuses web login. The registry is `ConsoleOnlyCommands` (registered with the command table); `WorldConsoleExecutor` also refuses a registered path for
+every remote context, so remote admin gets the same answer. A lane that adds a Console-only leaf registers its path there or tests `IsTrueConsole()`
+in the handler.

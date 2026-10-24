@@ -59,7 +59,7 @@ public sealed class AtlasCommands : ICommandGroup
 
     private static bool PlaceCreature(CommandContext context, string args)
     {
-        if (!TryPlace(args, out PlaceArgs place) || place.Position.Length != 4)
+        if (!TryPlace(args, out PlaceArgs place))
         {
             return false;
         }
@@ -85,7 +85,7 @@ public sealed class AtlasCommands : ICommandGroup
 
     private static bool PlaceGameObject(CommandContext context, string args)
     {
-        if (!TryPlace(args, out PlaceArgs place) || place.Position.Length != 4)
+        if (!TryPlace(args, out PlaceArgs place))
         {
             return false;
         }

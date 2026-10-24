@@ -10,7 +10,8 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.World.Ops.MapFeed;
 
 /// <summary>
-/// One line of the durable audit file. <paramref name="Event"/> is <c>action</c>, <c>login</c> or <c>revoke</c>. The ticket itself is never
+/// One line of the durable audit file. <paramref name="Event"/> is <c>action</c>, <c>refusals</c> (the channel: a run of identical pre-actor refusals, <paramref name="Targets"/> = how many repeats), or
+/// <c>login</c>, <c>logout</c>, <c>kick</c> and <c>revoke</c> (the ticket service, <see cref="IFeedActorTickets"/>). The ticket itself is never
 /// written: only <c>ticketRef</c>, the first four bytes of its SHA-256 in hex.
 /// </summary>
 /// <param name="Event">The kind of record.</param>

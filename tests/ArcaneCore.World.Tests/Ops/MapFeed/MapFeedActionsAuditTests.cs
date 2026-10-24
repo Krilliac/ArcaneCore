@@ -156,7 +156,7 @@ public sealed class MapFeedActionsAuditTests
     }
 
     [WindowsFact]
-    public async Task AFailedLogin_AndARevoke_EachAppendOneRecord_WithTheDocumentedFields()
+    public async Task TheWriter_AcceptsLoginAndRevokeRecords_WithTheDocumentedFields()
     {
         if (!OperatingSystem.IsWindows())
         {

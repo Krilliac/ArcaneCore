@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
@@ -54,6 +55,19 @@ internal sealed class ActionOutcome
     public int? RetryMs { get; init; }
 
     public (string Code, string Summary)? Confirm { get; init; }
+
+    /// <summary>The connection ended before the action was answered (the command may have run: see <see cref="Settled"/>).</summary>
+    public bool Cancelled { get; init; }
+
+    /// <summary>The <c>result</c> column of the log line and the audit records: never <c>ok</c> for an unsettled or cancelled action.</summary>
+    public string AuditResult => Cancelled ? ActionCodes.Cancelled : !Settled ? ActionCodes.Unsettled : Ok ? "ok" : Code ?? ActionCodes.Failed;
+
+    /// <summary>The <c>code</c> column of the durable record: the command's failure, else the refusal code, else null.</summary>
+    public string? AuditCode => Failure ?? (Ok ? null : Code);
+
+    /// <summary>The connection ended before anything ran.</summary>
+    public static ActionOutcome CancelledBeforeRun()
+        => new() { Ok = false, Code = ActionCodes.Cancelled, Message = "the connection ended before the action was answered", Cancelled = true };
 
     public static ActionOutcome Refused(string code, string message) => new() { Ok = false, Code = code, Message = message };
 
@@ -118,7 +132,7 @@ internal sealed class MapFeedActions : IFeedExtension
     /// <inheritdoc />
     public void FeedStarted(WorldMapFeed feed)
         => _gate = ActionsGate.Decide(_options, feed.IsLiveServer, _tickets is not null,
-            _services.GetService<TrueConsolePredicateProbe>()?.Present ?? ActionsGate.PredicatePresent, _loggers.CreateLogger(WorldMapFeed.LogCategory));
+            ActionsGate.PredicatePresent, _loggers.CreateLogger(WorldMapFeed.LogCategory));
 
     /// <inheritdoc />
     public Task<bool> HandleAsync(MapFeedConnection connection, string op, ReadOnlyMemory<byte> line)
@@ -180,13 +194,16 @@ internal sealed class MapFeedActions : IFeedExtension
         public ActionActor? Actor { get; set; }
 
         /// <summary>The command line as logged: redacted, no prefix. The first line for a per-target template.</summary>
-        public string Line { get; set; } = ConsoleCommandRedactor.Redact(request.Command ?? "template:" + request.Template);
+        public string Line { get; set; } = ConsoleCommandRedactor.Redact(request.Command ?? ("template:" + request.Template));
 
         /// <summary>The table logs this command itself when it runs (so the channel adds no duplicate in-memory audit entry).</summary>
         public bool TableLogs { get; set; }
 
-        /// <summary>The world thread ran at least one line.</summary>
-        public bool Ran { get; set; }
+        /// <summary>What the world thread did, written there and read here whatever ended the wait for its answer.</summary>
+        public RunBox Box { get; } = new();
+
+        /// <summary>The world thread ran at least one line (or was running it when the wait ended).</summary>
+        public bool Ran => Box.Ran;
     }
 
     private async Task<bool> ActionAsync(MapFeedConnection connection, ReadOnlyMemory<byte> line)
@@ -217,7 +234,12 @@ internal sealed class MapFeedActions : IFeedExtension
         {
             outcome = await ProcessAsync(attempt, gate).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+        catch (OperationCanceledException)
+        {
+            // The connection or the daemon ended before the world thread began (a started command is waited for in ExecuteAsync): nothing ran.
+            outcome = ActionOutcome.CancelledBeforeRun();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("ops.map-feed-actions", ex);
             _logger.LogError(ex, "atlas action {Id} failed inside the server", request.Id);
@@ -232,6 +254,14 @@ internal sealed class MapFeedActions : IFeedExtension
     {
         MapFeedConnection connection = attempt.Connection;
         ActionRequest request = attempt.Request;
+
+        // 1. the connection's own bucket, before anything else: a refusal costs a log line and (for the web) a durable write, so even a client
+        // that never gets as far as an actor is bounded. A web connection gets twice the actor's burst, because it may carry several actors.
+        (int connPerSecond, int connBurst) = connection.Role == FeedRole.Web ? (_options.WebPerSecond, _options.WebBurst * 2) : (_options.LocalPerSecond, _options.LocalBurst);
+        if (!_limits.TryTake("conn:" + connection.ConnectionId.ToString(CultureInfo.InvariantCulture), connPerSecond, connBurst, out int connRetryMs))
+        {
+            return new ActionOutcome { Ok = false, Code = ActionCodes.RateLimited, Message = "too many requests on this connection; slow down", RetryMs = connRetryMs };
+        }
 
         // 2. tier and actor
         if (!string.Equals(request.Tier, MapFeedRoles.Name(connection.Role), StringComparison.Ordinal))
@@ -438,12 +468,73 @@ internal sealed class MapFeedActions : IFeedExtension
     /// <summary>The result of the world-thread part: the runs that happened, or the first target that is not in the world.</summary>
     private sealed class ActionRun
     {
-        public ulong? Gone { get; init; }
+        private readonly List<StepRun> _steps = [];
 
-        public List<StepRun> Steps { get; } = [];
+        public ulong? Gone { get; set; }
+
+        /// <summary>The steps run so far (a copy: the world thread may still be adding).</summary>
+        public StepRun[] Steps
+        {
+            get
+            {
+                lock (_steps)
+                {
+                    return [.. _steps];
+                }
+            }
+        }
+
+        public void Add(StepRun step)
+        {
+            lock (_steps)
+            {
+                _steps.Add(step);
+            }
+        }
     }
 
     private sealed record StepRun(ulong? Target, CommandContext? Context, string[] Lines);
+
+    /// <summary>
+    /// What the world-thread delegate did, owned by the delegate and read by the reader task after the wait for it ended for any reason (a value,
+    /// the query timeout, the connection ending). The delegate, not the return value, is the truth about whether anything ran: the world runtime
+    /// still runs a delegate that began before its caller was cancelled, and drops its result.
+    /// </summary>
+    private sealed class RunBox
+    {
+        private const int Queued = 0;
+        private const int Started = 1;
+        private const int Abandoned = 2;
+
+        private int _state;
+        private Task? _settle;
+
+        /// <summary>The first line was handed to the executor: a command ran or is running.</summary>
+        public volatile bool Ran;
+
+        /// <summary>Filled progressively on the world thread (partial steps stay visible when the delegate faults).</summary>
+        public ActionRun Run { get; } = new();
+
+        /// <summary>Completes when the delegate returns (result) or throws (exception).</summary>
+        public TaskCompletionSource<ActionRun> Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The delegate was entered on the world thread.</summary>
+        public bool IsStarted => Volatile.Read(ref _state) == Started;
+
+        /// <summary>World thread: claim the work. False when the reader already gave up on it (it must then do nothing).</summary>
+        public bool TryStart() => Interlocked.CompareExchange(ref _state, Started, Queued) == Queued;
+
+        /// <summary>Reader: give up on work that has not begun. True means nothing ran and nothing will; false means the delegate has begun.</summary>
+        public bool TryAbandon() => Interlocked.CompareExchange(ref _state, Abandoned, Queued) is Queued or Abandoned;
+
+        /// <summary>Completes when the delegate returned and every context it opened has settled. Reader task only.</summary>
+        public Task GetSettleTask()
+            => _settle ??= Done.Task.IsCompleted
+                ? WhenContextsSettled()
+                : Done.Task.ContinueWith(_ => WhenContextsSettled(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
+
+        private Task WhenContextsSettled() => Task.WhenAll(Run.Steps.Select(s => s.Context?.WhenSettled ?? Task.CompletedTask));
+    }
 
     private async Task<ActionOutcome> ExecuteAsync(Attempt attempt, IReadOnlyList<ExpandedStep> steps, bool perTarget)
     {
@@ -451,9 +542,11 @@ internal sealed class MapFeedActions : IFeedExtension
         ActionRequest request = attempt.Request;
         ActionActor actor = attempt.Actor!;
         WorldRuntime world = connection.Feed.World;
+        RunBox box = attempt.Box;
+        TimeSpan settleWait = TimeSpan.FromSeconds(_options.SettleSeconds);
 
+        // The scope is released by "settled" or by the five-minute cap (DisposeWhenSettledAsync), never by control flow: see the finally block.
         AsyncServiceScope scope = _services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
-        bool handedOver = false;
         try
         {
             long id = request.Id;
@@ -470,10 +563,44 @@ internal sealed class MapFeedActions : IFeedExtension
                 actor.Name,
                 connection.Lifetime);
 
-            (ActionRun? run, FeedError? failure) = await connection.InvokeWorldAsync(() => RunSteps(executor, world, _services, actor, request, steps, sink)).ConfigureAwait(false);
+            ActionRun? run = null;
+            FeedError? failure = null;
+            try
+            {
+                (run, failure) = await connection.InvokeWorldAsync(() => RunOnWorld(box, executor, world, _services, actor, request, steps, sink)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (box.TryAbandon())
+                {
+                    throw; // the world thread never began: nothing ran (ActionAsync records "cancelled")
+                }
+
+                // The connection ended after the world thread began: the command runs on, so what it does is recorded below.
+            }
+
             if (run is null)
             {
-                return ActionOutcome.Refused(failure!.Value);
+                if (box.TryAbandon())
+                {
+                    return ActionOutcome.Refused(failure!.Value); // timeout or world-stopping before the world thread began: nothing ran
+                }
+
+                // The delegate began, then the timeout, the connection or a fault took the answer away. Refusing now would deny a command that ran
+                // (or is running), so wait for the delegate itself, bounded like the settle wait, and no longer cancellable: it is committed.
+                try
+                {
+                    run = await box.Done.Task.WaitAsync(settleWait, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return Outcome(request, box.Run, sink.Finish(), settled: false, cancelled: connection.Lifetime.IsCancellationRequested, perTarget);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogError(ex, "atlas action {Id} failed inside the server", request.Id);
+                    return ActionOutcome.Refused(ActionCodes.Failed, "the action failed inside the server; see the server log");
+                }
             }
 
             if (run.Gone is { } gone)
@@ -481,56 +608,86 @@ internal sealed class MapFeedActions : IFeedExtension
                 return ActionOutcome.Refused(ActionCodes.TargetGone, $"target {MapFeedActionCatalog.Guid(gone)} is not in the world");
             }
 
-            attempt.Ran = true;
-            Task all = Task.WhenAll(run.Steps.Select(s => s.Context?.WhenSettled ?? Task.CompletedTask));
+            Task all = box.GetSettleTask();
             bool settled = true;
+            bool cancelled = false;
             if (!all.IsCompleted)
             {
                 try
                 {
-                    await all.WaitAsync(TimeSpan.FromSeconds(_options.SettleSeconds), connection.Lifetime).ConfigureAwait(false);
+                    await all.WaitAsync(settleWait, connection.Lifetime).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
                     settled = false;
                 }
+                catch (OperationCanceledException)
+                {
+                    settled = false;
+                    cancelled = true;
+                }
             }
 
-            if (settled)
-            {
-                await scope.DisposeAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                _ = DisposeWhenSettledAsync(scope, all);
-            }
-
-            handedOver = true;
-            return Outcome(request, run, sink.Finish(), settled, perTarget);
+            return Outcome(request, run, sink.Finish(), settled, cancelled, perTarget);
         }
         finally
         {
-            if (!handedOver)
+            if (!box.IsStarted)
             {
-                await scope.DisposeAsync().ConfigureAwait(false);
+                await scope.DisposeAsync().ConfigureAwait(false); // the delegate never began (and now never will): nothing uses the scope
+            }
+            else
+            {
+                Task settle = box.GetSettleTask();
+                if (settle.IsCompletedSuccessfully)
+                {
+                    await scope.DisposeAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    _ = DisposeWhenSettledAsync(scope, settle); // a command is still open (or still running on the world thread)
+                }
             }
         }
     }
 
+    /// <summary>The world-thread delegate: claims the work (a reader that gave up first wins and nothing runs), then runs it and completes <see cref="RunBox.Done"/> either way.</summary>
+    private static ActionRun RunOnWorld(
+        RunBox box, WorldConsoleExecutor executor, WorldRuntime world, IServiceProvider services, ActionActor actor, ActionRequest request,
+        IReadOnlyList<ExpandedStep> steps, ActionSink sink)
+    {
+        if (!box.TryStart())
+        {
+            return box.Run; // abandoned while queued; the caller has already answered and drops this
+        }
+
+        try
+        {
+            RunSteps(box, executor, world, services, actor, request, steps, sink);
+            box.Done.TrySetResult(box.Run);
+            return box.Run;
+        }
+        catch (Exception ex)
+        {
+            box.Done.TrySetException(ex);
+            throw;
+        }
+    }
+
     /// <summary>On the world thread: every target must exist, then each line runs with its action context attached.</summary>
-    private static ActionRun RunSteps(
-        WorldConsoleExecutor executor, WorldRuntime world, IServiceProvider services, ActionActor actor, ActionRequest request,
+    private static void RunSteps(
+        RunBox box, WorldConsoleExecutor executor, WorldRuntime world, IServiceProvider services, ActionActor actor, ActionRequest request,
         IReadOnlyList<ExpandedStep> steps, ActionSink sink)
     {
         foreach (ulong guid in request.Targets)
         {
             if (GmActionContext.FindUnit(world, services, guid) is null)
             {
-                return new ActionRun { Gone = guid };
+                box.Run.Gone = guid;
+                return;
             }
         }
 
-        var run = new ActionRun();
         foreach (ExpandedStep step in steps)
         {
             ulong[] selection = step.Target is { } target ? [target] : request.Targets;
@@ -544,21 +701,21 @@ internal sealed class MapFeedActions : IFeedExtension
                 Point = request.Point,
             };
             int from = sink.Count;
+            box.Ran = true; // before the executor: from here a command may be running, whatever the reader sees
             CommandContext? context = executor.Run(step.Line, c => GmActionContext.Attach(c, action));
-            run.Steps.Add(new StepRun(step.Target, context, sink.Slice(from, sink.Count)));
+            box.Run.Add(new StepRun(step.Target, context, sink.Slice(from, sink.Count)));
         }
-
-        return run;
     }
 
-    private static ActionOutcome Outcome(ActionRequest request, ActionRun run, string[] lines, bool settled, bool perTarget)
+    private static ActionOutcome Outcome(ActionRequest request, ActionRun run, string[] lines, bool settled, bool cancelled, bool perTarget)
     {
-        string? failure = run.Steps.Select(s => s.Context?.Failure).FirstOrDefault(f => f is not null);
+        StepRun[] ran = run.Steps;
+        string? failure = ran.Select(s => s.Context?.Failure).FirstOrDefault(f => f is not null);
         bool ok = failure is null;
         IReadOnlyList<TargetOutcome>? targets = null;
         if (perTarget)
         {
-            targets = [.. run.Steps.Select(s => new TargetOutcome(s.Target!.Value, s.Context?.Failure is null, s.Context?.Failure, s.Lines))];
+            targets = [.. ran.Select(s => new TargetOutcome(s.Target!.Value, s.Context?.Failure is null, s.Context?.Failure, s.Lines))];
         }
         else if (request.Targets.Length > 0)
         {
@@ -572,6 +729,7 @@ internal sealed class MapFeedActions : IFeedExtension
             Message = ok ? null : $"the command failed ({failure})",
             Lines = lines,
             Settled = settled,
+            Cancelled = cancelled,
             Failure = failure,
             Targets = targets,
         };
@@ -604,13 +762,25 @@ internal sealed class MapFeedActions : IFeedExtension
         MapFeedConnection connection = attempt.Connection;
         ActionRequest request = attempt.Request;
         ActionActor? actor = attempt.Actor;
-        string result = outcome.Ok ? "ok" : outcome.Code ?? ActionCodes.Failed;
+        string result = outcome.AuditResult;
         string who = actor?.Name ?? "-";
         string point = request.Point is { } p
             ? string.Create(CultureInfo.InvariantCulture, $"{p.Map}:{p.X:F1},{p.Y:F1},{p.Z:F1}")
             : "none";
 
-        _logger.LogInformation(
+        bool durable = connection.Role == FeedRole.Web || (actor is not null && _options.AuditLocalDurable);
+
+        // A web request refused before an actor was resolved is merged with the identical refusals before it: one durable record per run of the
+        // same code (plus a count when the run ends), and its repeats are logged at Debug. Nothing ran and no account is named, so nothing is lost.
+        bool repeat = false;
+        WebAuditRecord? summary = null;
+        if (durable && actor is null && result != ActionCodes.AuditUnavailable)
+        {
+            (repeat, summary) = NoteRefusal(connection.ConnectionId, result, request.Ip);
+        }
+
+        _logger.Log(
+            repeat ? LogLevel.Debug : LogLevel.Information,
             "{Line}",
             string.Create(CultureInfo.InvariantCulture, $"atlas action actor={who} tier={request.Tier} cmd={attempt.Line} targets={request.Targets.Length} point={point} -> {result}"));
 
@@ -623,18 +793,101 @@ internal sealed class MapFeedActions : IFeedExtension
                 GmCommandLog.DescribeConsole(attempt.Line) + " [Atlas " + actor.Name + "] -> " + result);
         }
 
-        bool durable = connection.Role == FeedRole.Web || (actor is not null && _options.AuditLocalDurable);
-        if (durable && result != ActionCodes.AuditUnavailable)
+        if (summary is not null)
+        {
+            await _audit.AppendAsync(summary).ConfigureAwait(false);
+        }
+
+        if (durable && result != ActionCodes.AuditUnavailable && !repeat)
         {
             bool written = await _audit.AppendAsync(new WebAuditRecord(
-                "action", actor?.Name, actor?.AccountId, request.Ticket, request.Ip, attempt.Line, request.Targets.Length, result, outcome.Ok ? null : result)).ConfigureAwait(false);
+                "action", actor?.Name, actor?.AccountId, request.Ticket, request.Ip, attempt.Line, request.Targets.Length, result, outcome.AuditCode)).ConfigureAwait(false);
             if (!written && actor is not null)
             {
                 _logger.LogError("atlas action: the durable audit record of an action by {Actor} was lost ({Result})", actor.Name, result);
             }
         }
 
-        await connection.QueueAsync(AnswerLine(request.Id, outcome)).ConfigureAwait(false);
+        try
+        {
+            await connection.QueueAsync(AnswerLine(request.Id, outcome)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
+        {
+            // The client is gone or the daemon is stopping: the records above are the point of this method, and there is nobody to answer.
+        }
+    }
+
+    // ---- repeated refusals -------------------------------------------------------------------------------------------------------
+
+    /// <summary>The most repeats one summary record stands for.</summary>
+    private const int MaxRepeats = 100;
+
+    /// <summary>The run of identical pre-actor refusals on one connection. Touched by its reader task, and once more when the connection ends.</summary>
+    private sealed class RefusalRun
+    {
+        public string? Code;
+        public int Repeats;
+        public string? Ip;
+    }
+
+    private readonly ConcurrentDictionary<long, RefusalRun> _refusals = new();
+
+    /// <summary>
+    /// Count a pre-actor refusal. <c>Repeat</c> is true when the previous refusal on this connection had the same code (nothing new to write);
+    /// <c>Summary</c> is the record for a finished run of repeats (the code changed, or the run reached <see cref="MaxRepeats"/>), else null.
+    /// </summary>
+    private (bool Repeat, WebAuditRecord? Summary) NoteRefusal(long connectionId, string code, string? ip)
+    {
+        RefusalRun run = _refusals.GetOrAdd(connectionId, static _ => new RefusalRun());
+        lock (run)
+        {
+            if (string.Equals(run.Code, code, StringComparison.Ordinal))
+            {
+                run.Repeats++;
+                if (run.Repeats >= MaxRepeats)
+                {
+                    return (true, TakeSummary(run));
+                }
+
+                return (true, null);
+            }
+
+            WebAuditRecord? finished = TakeSummary(run);
+            run.Code = code;
+            run.Ip = ip;
+            return (false, finished);
+        }
+    }
+
+    private static WebAuditRecord? TakeSummary(RefusalRun run)
+    {
+        if (run.Repeats == 0 || run.Code is null)
+        {
+            return null;
+        }
+
+        var summary = new WebAuditRecord("refusals", null, null, null, run.Ip, null, run.Repeats, run.Code, run.Code);
+        run.Repeats = 0;
+        return summary;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask ConnectionEndedAsync(MapFeedConnection connection)
+    {
+        if (_refusals.TryRemove(connection.ConnectionId, out RefusalRun? run))
+        {
+            WebAuditRecord? summary;
+            lock (run)
+            {
+                summary = TakeSummary(run);
+            }
+
+            if (summary is not null)
+            {
+                await _audit.AppendAsync(summary).ConfigureAwait(false);
+            }
+        }
     }
 
     private static byte[] AnswerLine(long id, ActionOutcome outcome)

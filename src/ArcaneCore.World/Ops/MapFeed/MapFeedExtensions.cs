@@ -23,6 +23,9 @@ internal interface IFeedExtension
     /// served line, whatever the answer), false when it could only be refused with an uncorrelated <c>error</c> (a strike).
     /// </summary>
     Task<bool> HandleAsync(MapFeedConnection connection, string op, ReadOnlyMemory<byte> line);
+
+    /// <summary>The connection's reader has ended (called once, after the last <see cref="HandleAsync"/> returned): release what was kept per connection.</summary>
+    ValueTask ConnectionEndedAsync(MapFeedConnection connection);
 }
 
 /// <summary>The extension registry: the declared op names and the hook the feed calls when it starts. Pure apart from the hook; any thread.</summary>

@@ -28,6 +28,12 @@ internal static class ActionCodes
     public const string Timeout = MapFeedProtocol.Timeout;
     public const string WorldStopping = MapFeedProtocol.WorldStopping;
     public const string Failed = "failed";
+
+    /// <summary>The audit result of an action whose connection ended before it was answered (the command may have run; the record says so by its other fields).</summary>
+    public const string Cancelled = "cancelled";
+
+    /// <summary>The audit result of a command that was still open when the settle wait ended.</summary>
+    public const string Unsettled = "unsettled";
 }
 
 /// <summary>One parsed <c>action</c> line. <see cref="HasId"/> is true whenever the id was readable, also when the rest was refused.</summary>

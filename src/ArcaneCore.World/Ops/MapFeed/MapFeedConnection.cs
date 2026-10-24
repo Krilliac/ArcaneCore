@@ -138,6 +138,11 @@ internal sealed partial class MapFeedConnection
             _feed.Unsubscribe(this);
             _subscribed = false;
             _outbound.Writer.TryComplete();
+            if (_feed.Extension is { } extension)
+            {
+                await extension.ConnectionEndedAsync(this).ConfigureAwait(false);
+            }
+
             await EndToolsAsync().ConfigureAwait(false);
             try
             {
@@ -164,6 +169,13 @@ internal sealed partial class MapFeedConnection
         var reader = new MapFeedLineReader(_stream, maxLine);
         while (true)
         {
+            if (Role == FeedRole.Web && maxLine != MapFeedProtocol.MaxLineBytes)
+            {
+                // A connection on the shared pipe starts unbound with the tools' limit; once it binds the web role it gets the web limit.
+                maxLine = MapFeedProtocol.MaxLineBytes;
+                reader.MaxBytes = maxLine;
+            }
+
             LineRead read;
             using (CancellationTokenSource idle = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token))
             {

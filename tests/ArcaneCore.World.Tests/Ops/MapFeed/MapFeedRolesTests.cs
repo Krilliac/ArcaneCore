@@ -24,8 +24,9 @@ public sealed class MapFeedRolesTests
 
     private static FakeFeedTickets Tickets() => new FakeFeedTickets().Set(WebTicket, 77, "WEBGM", AccountSecurity.GameMaster);
 
-    private static FeedWorldSetup World(bool tools = false, Action<WebFeedPipeOptions>? webPipe = null) => new()
+    private static FeedWorldSetup World(bool tools = false, Action<WebFeedPipeOptions>? webPipe = null, bool strictWebPipeAccount = false) => new()
     {
+        StrictWebPipeAccount = strictWebPipeAccount,
         Terrain = true,
         Tickets = Tickets(),
         Actions = o =>
@@ -178,9 +179,73 @@ public sealed class MapFeedRolesTests
         Assert.Equal(0, spies.Total);
     }
 
+    [WindowsFact]
+    public async Task AConnectionThatBindsWeb_DropsFromThePacketToolsLineLimit_ToTheWebLimit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(World(tools: true));
+        string pad = new('x', MapFeedProtocol.MaxLineBytes + 100);
+        string line = $$"""{"op":"caps","id":5,"pad":"{{pad}}"}""";
+
+        // With the packet tools on, a local connection may send a line this long.
+        FeedClient local = await world.ConnectAsync();
+        Assert.True((await ActionWire.RequestAsync(local, line, 5)).Ok());
+
+        // A connection that bound the web role on the shared pipe is held to the web limit from the next line on.
+        FeedClient web = await world.ConnectAsync("web");
+        await web.SendAsync(line);
+        JsonElement reply = await web.ReadAsync();
+
+        Assert.Equal("error", reply.Op());
+        Assert.Equal(MapFeedProtocol.LineTooLong, reply.Code());
+    }
+
     // ---- the separate web pipe ----------------------------------------------------------------------------------------------
 
-    private static string LocalServiceSid => "S-1-5-19"; // NT AUTHORITY\LOCAL SERVICE: a real SID that is not this process's, for the access list read back below
+    // A created account's SID (RID 1001) of a made-up domain: not this process's, and acceptable as the web pipe's one client, for the access list read back below.
+    private static string LocalServiceSid => "S-1-5-21-1111111111-2222222222-3333333333-1001";
+
+    [WindowsFact]
+    public void ClientAccount_RefusesGroupsSystemAndTheDaemon_ButNotACreatedAccount()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        SecurityIdentifier daemon = ControlPipeSecurity.CurrentUser();
+        foreach (string text in new[] { "S-1-1-0", "S-1-5-11", "S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-32-545", "S-1-5-32-544", "S-1-5-21-1-2-3-513", "S-1-5-21-1-2-3-500" })
+        {
+            Assert.NotNull(WebFeedPipeOptions.RefuseClientSid(new SecurityIdentifier(text), daemon));
+        }
+
+        Assert.NotNull(WebFeedPipeOptions.RefuseClientSid(daemon, daemon));
+        Assert.Null(WebFeedPipeOptions.RefuseClientSid(new SecurityIdentifier("S-1-5-21-1-2-3-1001"), daemon));
+    }
+
+    [WindowsFact]
+    public async Task TheWebPipe_RefusesToStart_WhenTheClientAccountIsTheDaemonItself()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string self = WindowsIdentity.GetCurrent().Name;
+        await using FeedWorld world = await FeedWorld.StartAsync(World(strictWebPipeAccount: true, webPipe: o =>
+        {
+            o.Enabled = true;
+            o.ClientAccount = self;
+        }));
+
+        WebFeedPipe pipe = Assert.IsType<WebFeedPipe>(world.WebPipe);
+        Assert.False(pipe.IsListening);
+        Assert.Contains(world.Logs.Entries, e => e.Level >= LogLevel.Warning && e.Message.Contains("ClientAccount", StringComparison.Ordinal));
+    }
 
     [WindowsFact]
     public async Task AConnectionOnTheWebPipe_IsWeb_WithoutARoleOp_AndTheRoleOpIsANoOp()

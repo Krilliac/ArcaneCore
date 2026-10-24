@@ -85,14 +85,17 @@ internal sealed class FeedWorldSetup
     /// <summary>The web ticket service lane auth implements (<see cref="IFeedActorTickets"/>); a test fake here.</summary>
     internal IFeedActorTickets? Tickets { get; init; }
 
-    /// <summary>Use the build's own true-console probe instead of the stand-in registered with <see cref="Tickets"/>.</summary>
-    public bool RealPredicateProbe { get; init; }
-
     /// <summary>The clock the channel's caches and rate limits read (registered as the <see cref="TimeProvider"/>); null leaves the system clock.</summary>
     public TimeProvider? Time { get; init; }
 
     /// <summary>Also start the separate web pipe (<c>WebFeedPipe</c>, section 0.10) with these options; its pipe name is unique.</summary>
     public Action<WebFeedPipeOptions>? WebPipe { get; init; }
+
+    /// <summary>
+    /// Apply the web pipe's client-account rules as production does, including the refusal of the daemon's own account. Off by default: the
+    /// pipe client in a test is this very process, so most web pipe tests must name the daemon's account as the client.
+    /// </summary>
+    public bool StrictWebPipeAccount { get; init; }
 }
 
 /// <summary>
@@ -194,6 +197,7 @@ internal sealed class FeedWorld : IAsyncDisposable
             {
                 world.WebPipe = host.WorldServices.GetRequiredService<WebFeedPipe>();
                 world.WebPipe.PipeNameTemplate = "arcanecore-mapfeed-web-test-" + Guid.NewGuid().ToString("N");
+                world.WebPipe.SkipClientAccountRules = !setup.StrictWebPipeAccount;
                 await world.WebPipe.StartAsync(CancellationToken.None);
             }
         }
@@ -269,12 +273,12 @@ internal sealed class FeedWorld : IAsyncDisposable
                     if (setup.Tickets is { } tickets)
                     {
                         services.AddSingleton(tickets);
-                        if (!setup.RealPredicateProbe)
-                        {
-                            // The remote-console fix is not on every base; web-actor tests stand in for it unless the test is about the probe.
-                            services.AddSingleton(new TrueConsolePredicateProbe(true));
-                        }
                     }
+
+                    // A scoped service the spy commands resolve from the command context's session services: it tells the tests when the
+                    // per-request service scope is disposed.
+                    services.AddSingleton<ScopeProbeState>();
+                    services.AddScoped<ScopeProbe>();
 
                     if (setup.Time is { } time)
                     {

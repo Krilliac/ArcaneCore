@@ -17,6 +17,9 @@ public sealed class MapFeedActionsOptionsTests
 {
     private const string Root = "World:Control:MapFeed:Actions:";
 
+    /// <summary>A created account's SID (RID 1001) of a made-up domain: acceptable as the web pipe's one client.</summary>
+    private const string ClientSid = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+
     private static IConfiguration Config(params (string Key, string Value)[] values)
         => new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => (string?)v.Value)).Build();
 
@@ -75,13 +78,35 @@ public sealed class MapFeedActionsOptionsTests
     [InlineData(9)]
     [InlineData(-1)]
     public void TheWebPipesConnectionCount_MustBeOneToEight(int count)
-        => Assert.NotEmpty(new WebFeedPipeOptions { Enabled = true, ClientAccount = "S-1-5-19", MaxConnections = count }.Problems());
+        => Assert.NotEmpty(new WebFeedPipeOptions { Enabled = true, ClientAccount = ClientSid, MaxConnections = count }.Problems());
 
     [Theory]
     [InlineData(1)]
     [InlineData(8)]
     public void TheEdgesOfTheWebPipesConnectionCount_AreValid(int count)
-        => Assert.Empty(new WebFeedPipeOptions { Enabled = true, ClientAccount = "S-1-5-19", MaxConnections = count }.Problems());
+        => Assert.Empty(new WebFeedPipeOptions { Enabled = true, ClientAccount = ClientSid, MaxConnections = count }.Problems());
+
+    [Theory]
+    [InlineData("Everyone")]
+    [InlineData("BUILTIN\\Users")]
+    [InlineData("builtin\\administrators")]
+    [InlineData("NT AUTHORITY\\SYSTEM")]
+    [InlineData("NT AUTHORITY\\Authenticated Users")]
+    [InlineData("NT SERVICE\\atlas-public")]
+    [InlineData("S-1-1-0")]
+    [InlineData("S-1-5-11")]
+    [InlineData("S-1-5-18")]
+    [InlineData("S-1-5-19")]
+    [InlineData("S-1-5-20")]
+    [InlineData("S-1-5-32-545")]
+    public void TheWebPipesClientAccount_MayNotBeAGroupOrABuiltInPrincipal(string account)
+        => Assert.Contains(new WebFeedPipeOptions { Enabled = true, ClientAccount = account }.Problems(), p => p.Contains("ClientAccount", StringComparison.Ordinal));
+
+    [Theory]
+    [InlineData("MACHINE\\atlas-public")]
+    [InlineData(ClientSid)]
+    public void TheWebPipesClientAccount_MayBeOneNamedAccount(string account)
+        => Assert.Empty(new WebFeedPipeOptions { Enabled = true, ClientAccount = account }.Problems());
 
     [Fact]
     public void NoConfiguration_NoIssues() => Assert.Empty(Check());
@@ -158,7 +183,7 @@ public sealed class MapFeedActionsOptionsTests
         services.AddWorldMapFeed(Config(
             (Root + "Enabled", "true"), (Root + "LocalSecurity", "GameMaster"), (Root + "WebLogin", "true"), (Root + "LocalAccountId", "42"),
             (Root + "PublicDeny:0", "zadmin"), (Root + "WebPerSecond", "3"),
-            ("World:Control:MapFeed:Web:Enabled", "true"), ("World:Control:MapFeed:Web:ClientAccount", "S-1-5-19"), ("World:Control:MapFeed:Web:MaxConnections", "4")));
+            ("World:Control:MapFeed:Web:Enabled", "true"), ("World:Control:MapFeed:Web:ClientAccount", ClientSid), ("World:Control:MapFeed:Web:MaxConnections", "4")));
         using ServiceProvider provider = services.BuildServiceProvider();
 
         MapFeedActionsOptions actions = provider.GetRequiredService<IOptions<MapFeedActionsOptions>>().Value;
@@ -171,7 +196,7 @@ public sealed class MapFeedActionsOptionsTests
         Assert.Contains("zadmin", actions.PublicDeny); // the binder appends to the default list
         Assert.Equal(3, actions.WebPerSecond);
         Assert.True(web.Enabled);
-        Assert.Equal("S-1-5-19", web.ClientAccount);
+        Assert.Equal(ClientSid, web.ClientAccount);
         Assert.Equal(4, web.MaxConnections);
     }
 }

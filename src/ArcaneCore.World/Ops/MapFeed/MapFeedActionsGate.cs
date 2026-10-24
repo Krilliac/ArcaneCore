@@ -3,13 +3,6 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Ops.MapFeed;
 
 /// <summary>
-/// Overrides the build probe for the true-console predicate (design 1.7). Production registers none, so the assembly probe
-/// (<see cref="ActionsGate.PredicatePresent"/>) decides; tests register one to exercise web actors before the remote-console fix is on the base.
-/// </summary>
-/// <param name="Present">Whether the predicate is treated as present.</param>
-internal sealed record TrueConsolePredicateProbe(bool Present);
-
-/// <summary>
 /// Whether the action channel is on, decided once when the feed starts (docs/areas/atlas-actions.md, "Switching it on"), and why not.
 /// </summary>
 /// <param name="On">Actions are accepted.</param>

@@ -15,7 +15,8 @@ namespace ArcaneCore.World.Ops.MapFeed;
 /// The separate web pipe (docs/areas/atlas-actions.md, "The web pipe"; design 0.10): a second map-feed pipe whose connections are the
 /// <see cref="FeedRole.Web"/> role by construction, for a public Atlas listener that runs as its own low-privilege Windows account. Its access
 /// list admits only <see cref="WebFeedPipeOptions.ClientAccount"/> (a protected descriptor owned by the daemon: deny NETWORK, allow that one account;
-/// not the daemon's account, not SYSTEM, not Administrators), and every instance carries <c>PIPE_REJECT_REMOTE_CLIENTS</c> (read back from the
+/// not the daemon's account, not SYSTEM, not Administrators; the pipe is not created at all when the configured account is a group, a built-in or
+/// service principal, a built-in account or the daemon's own account, see <see cref="WebFeedPipeOptions.RefuseClientSid"/>), and every instance carries <c>PIPE_REJECT_REMOTE_CLIENTS</c> (read back from the
 /// kernel). So code running as the public listener's account opens only this pipe, whose connections the daemon serves with the web role: frames
 /// and ticketed actions, never the packet tools, queries or the local actor.
 /// <para>
@@ -46,6 +47,12 @@ public sealed class WebFeedPipe : IHostedService
 
     /// <summary>The pipe name template (tests pick a unique name; parallel test hosts share a process id).</summary>
     internal string PipeNameTemplate { get; set; } = WebFeedPipeOptions.PipeNameTemplate;
+
+    /// <summary>
+    /// Test hook, not reachable from configuration: skip the client-account rules (<see cref="WebFeedPipeOptions.RefuseClientSid"/>). The pipe client of a
+    /// test is the daemon's own process, which the rules refuse by design. Production never sets it.
+    /// </summary>
+    internal bool SkipClientAccountRules { get; set; }
 
     /// <summary>The pipe name being served (without <c>\\.\pipe\</c>), or null when the pipe is off.</summary>
     internal string? PipeName { get; private set; }
@@ -108,6 +115,12 @@ public sealed class WebFeedPipe : IHostedService
         }
 
         SecurityIdentifier daemon = ControlPipeSecurity.CurrentUser();
+        if (!SkipClientAccountRules && WebFeedPipeOptions.RefuseClientSid(client, daemon) is { } reason)
+        {
+            _logger.LogWarning("web feed pipe off: ClientAccount '{Account}' is refused: {Reason}", _options.ClientAccount, reason);
+            return;
+        }
+
         var servers = new List<NamedPipeServerStream>(_options.MaxConnections);
         try
         {

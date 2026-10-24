@@ -209,6 +209,35 @@ internal sealed class ActionSpies
 
     public volatile bool DeferredSawContext;
 
+    private ScopeProbeState _probeState = new();
+    private CommandContext? _holdContext;
+    private IDisposable? _hold;
+
+    /// <summary>Whether the per-request service scope the held command runs in has been disposed.</summary>
+    public bool ScopeProbeDisposed => _probeState.Disposed;
+
+    /// <summary>Whether <see cref="ReleaseHold"/> could still resolve a scoped service from the held command's session services (false: the scope was already disposed under the command).</summary>
+    public volatile bool HoldResolvedScope;
+
+    /// <summary>
+    /// Finish the held <c>zhold</c> command: first use the command's session services the way a deferred handler would (resolve a scoped
+    /// service), then release the hold so the command settles.
+    /// </summary>
+    public void ReleaseHold()
+    {
+        try
+        {
+            _ = _holdContext!.Session.Services.GetRequiredService<ScopeProbe>();
+            HoldResolvedScope = true;
+        }
+        catch (ObjectDisposedException)
+        {
+            HoldResolvedScope = false;
+        }
+
+        _hold!.Dispose();
+    }
+
     private bool Record(CommandContext context, string name, string args, string? reply = null)
     {
         _calls.Enqueue(new Call(name, args, context.InvokerName, context.Security, context.IsRemote));
@@ -218,7 +247,7 @@ internal sealed class ActionSpies
 
     public static ActionSpies Install(WorldTestHost host)
     {
-        var spies = new ActionSpies();
+        var spies = new ActionSpies { _probeState = host.WorldServices.GetService<ScopeProbeState>() ?? new ScopeProbeState() };
         ChatCommand[] roots =
         [
             new("zplayer", AccountSecurity.Player, "Syntax: .zplayer", (c, a) => spies.Record(c, "zplayer", a)),
@@ -229,6 +258,12 @@ internal sealed class ActionSpies
             new("zwho", AccountSecurity.Player, "Syntax: .zwho", (c, a) => spies.Record(c, "zwho", a, $"who:{c.InvokerName}:{c.Security}")),
             new("zoffline", AccountSecurity.GameMaster, "Syntax: .zoffline #accountId", spies.Offline),
             new("zdefer", AccountSecurity.GameMaster, "Syntax: .zdefer", spies.Defer),
+            new("zhold", AccountSecurity.GameMaster, "Syntax: .zhold", spies.Hold),
+            new("zslow", AccountSecurity.GameMaster, "Syntax: .zslow", (c, a) =>
+            {
+                Thread.Sleep(600); // on the world thread: a command already running when the query timeout fires
+                return spies.Record(c, "zslow", a, "slow ran");
+            }),
             new("zctx", AccountSecurity.Player, "Syntax: .zctx", (c, a) => spies.Record(c, "zctx", a, "ctx:" + (GmActionContext.Of(c)?.ActorName ?? "none"))),
         ];
         CommandAddResult added = host.WorldServices.GetRequiredService<CommandTableSource>().TryAdd(roots);
@@ -249,6 +284,15 @@ internal sealed class ActionSpies
         return true;
     }
 
+    private bool Hold(CommandContext context, string args)
+    {
+        _calls.Enqueue(new Call("zhold", args, context.InvokerName, context.Security, context.IsRemote));
+        _holdContext = context;
+        _ = context.Session.Services.GetRequiredService<ScopeProbe>(); // created in the request scope: its Dispose is the scope's
+        _hold = context.Defer();
+        return true;
+    }
+
     private bool Defer(CommandContext context, string args)
     {
         _calls.Enqueue(new Call("zdefer", args, context.InvokerName, context.Security, context.IsRemote));
@@ -262,6 +306,18 @@ internal sealed class ActionSpies
         });
         return true;
     }
+}
+
+/// <summary>Records that the per-request DI scope was disposed (registered as a singleton next to <see cref="ScopeProbe"/>).</summary>
+internal sealed class ScopeProbeState
+{
+    public volatile bool Disposed;
+}
+
+/// <summary>A scoped service whose disposal marks the end of the request scope it was resolved in.</summary>
+internal sealed class ScopeProbe(ScopeProbeState state) : IDisposable
+{
+    public void Dispose() => state.Disposed = true;
 }
 
 /// <summary>Reads the audit files the channel writes.</summary>
@@ -312,21 +368,6 @@ internal static class WebAuditFile
         catch (IOException)
         {
             // A scratch directory in the temp folder.
-        }
-    }
-}
-
-/// <summary>
-/// A theory that needs the remote-console fix (design 1.7, <c>claude/fix-remote-console-bypass</c>): commands must tell a true console from a
-/// remote context. Skipped, visibly, while the world assembly lacks the true-console predicate type; it runs as soon as the fix is on the base.
-/// </summary>
-internal sealed class RemoteConsoleFixTheoryAttribute : TheoryAttribute
-{
-    public RemoteConsoleFixTheoryAttribute()
-    {
-        if (!ActionsGate.PredicatePresent)
-        {
-            Skip = $"needs the true-console predicate ({ActionsGate.TrueConsolePredicateType}) from claude/fix-remote-console-bypass, which is not on this base";
         }
     }
 }
