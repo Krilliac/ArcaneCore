@@ -631,7 +631,7 @@ public sealed class TownProgressionTests
     }
 
     [Fact]
-    public async Task TheMastersOfAFleet_AreMostlyStormwind_AndEveryBotHasOne()
+    public async Task TheMastersOfAFleet_AreEachBotsHashedCapital_AndEveryBotHasOne()
     {
         await using PopulationTestHost world = await WorldAsync(new MemoryHomeStore(), 30);
         world.Population.FreshStartHome = true;
@@ -643,8 +643,14 @@ public sealed class TownProgressionTests
         Assert.InRange(passes, 2, 3);
         string[] masters = [.. bots.Select(id => PlaceOf(world, id).Master)];
         Assert.Equal(30, masters.Length);
-        Assert.InRange(masters.Count(m => m == "stormwind"), 12, 28);
-        Assert.Contains(masters, m => m != "stormwind");
+        // Bot ids are random on every run, so the Stormwind count of 30 bots is binomial and any range on it flakes; the 65 percent share is
+        // covered on seeded ids by TheMasterCapital_FavoursStormwindAndOrgrimmar_ByTheConfiguredShare_Deterministically. Here each bot must
+        // hold exactly the capital its own id and race call for.
+        foreach (Guid id in bots)
+        {
+            byte race = await world.Host.World.InvokeAsync(() => (byte)world.Bots.FindSession(id)!.Player!.Race);
+            Assert.Equal(PopulationTownProgression.MasterFor(Team.Alliance, race, id, world.Population.CapitalMajorSharePct, _ => true), PlaceOf(world, id).Master);
+        }
     }
 
     [Fact]

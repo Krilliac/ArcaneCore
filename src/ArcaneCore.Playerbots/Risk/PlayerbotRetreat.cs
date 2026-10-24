@@ -55,7 +55,9 @@ internal sealed class PlayerbotBreadcrumbs
 /// (cmangos <c>Leash</c>, CheckHardLeash) does the same from the combat start; the creature then evades home
 /// (CreatureAI::EnterEvadeMode). The retreat is over once nothing threatens the bot; it gives up (and fights) after
 /// <see cref="MaxMs"/>, when <see cref="MaxExtensions"/> further runs did not shake its pursuers off, or after
-/// <see cref="MaxFailedReplans"/> thinks in a row with no way out in any direction it tries (<see cref="PlanAway"/>). World thread.
+/// <see cref="MaxFailedReplans"/> thinks in a row with no way out in any direction it tries (<see cref="PlanAway"/>). Inside an instanceable
+/// map there is no soft leash (CreatureMapSystem.IsOutOfThreatArea is false there), so a wiped group does not use this retreat there: it walks
+/// out through the instance exit (PlayerbotGroupAI). World thread.
 /// </summary>
 internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells,
     PlayerbotHazards? hazards = null)

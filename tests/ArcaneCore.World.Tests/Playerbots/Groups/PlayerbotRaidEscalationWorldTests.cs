@@ -73,11 +73,12 @@ public sealed class PlayerbotRaidEscalationWorldTests
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
         int needed = 0;
-        await TankAssessesAsync(world, 10_000, n => needed = n);
+        var tank = await TankAssessesAsync(world, 10_000, n => needed = n);
         Assert.Equal(8, needed);
-        await AddRaidersAsync(world, Plenty, priests: 3);
+        var raiders = await AddRaidersAsync(world, Plenty, priests: 3);
+        var watch = new RefusalWatch(world, tank.Id, raiders);
 
-        Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8)), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(90_000, () => watch.Sample(world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8))), watch + await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Size == 8);
         Assert.True(await world.RunUntilAsync(60_000, () => group.Raid), await world.TraceAsync());
     }
@@ -106,20 +107,52 @@ public sealed class PlayerbotRaidEscalationWorldTests
     /// </summary>
     private const int Plenty = 10;
 
-    private static async Task AddRaidersAsync(GroupTestWorld world, int mages, int priests = 1)
+    private static async Task<List<(Guid Id, string Name)>> AddRaidersAsync(GroupTestWorld world, int mages, int priests = 1)
     {
-        for (int i = 0; i < priests; i++) await world.AddBotAsync("Raidpriest" + (char)('a' + i), Human, Priest, 10, [LesserHeal, Smite]);
-        for (int i = 0; i < mages; i++) await world.AddBotAsync("Raidmage" + (char)('a' + i), Human, Mage, 10, [Fireball]);
+        var added = new List<(Guid Id, string Name)>();
+        for (int i = 0; i < priests; i++) added.Add(await world.AddBotAsync("Raidpriest" + (char)('a' + i), Human, Priest, 10, [LesserHeal, Smite]));
+        for (int i = 0; i < mages; i++) added.Add(await world.AddBotAsync("Raidmage" + (char)('a' + i), Human, Mage, 10, [Fireball]));
+        return added;
+    }
+
+    /// <summary>
+    /// Samples the coordinator's refusals while a raid wait runs (world thread, from the run condition). A refusal leaves no event, and the
+    /// coordinator forgets it once the waiting group is gone, which happens before a failed 90 s wait ends, so only a sample taken during the
+    /// wait can show whether refusing candidates ran the raid short.
+    /// </summary>
+    private sealed class RefusalWatch(GroupTestWorld world, Guid tank, List<(Guid Id, string Name)> raiders)
+    {
+        private readonly Dictionary<(int Group, string Name), uint> _refusals = [];
+
+        /// <summary>Records the current refusals and returns <paramref name="condition"/> unchanged.</summary>
+        public bool Sample(bool condition)
+        {
+            int group = world.Coordinator.WaitingGroupIdOf(tank);
+            if (group != 0)
+            {
+                foreach ((Guid id, string name) in raiders)
+                {
+                    uint at = world.Coordinator.RefusedAtMs(id, group);
+                    if (at != 0) _refusals[(group, name)] = at;
+                }
+            }
+
+            return condition;
+        }
+
+        public override string ToString()
+            => $"refusals: {(_refusals.Count == 0 ? "none" : string.Join(", ", _refusals.Select(r => $"{r.Key.Name}@{r.Value}ms (group {r.Key.Group})")))}; raiders {raiders.Count}; " + Environment.NewLine;
     }
 
     [Fact]
     public async Task ASignalForEight_BecomesARaidGoal_ConvertsAndRecruitsEnoughBots()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([], Options);
-        await TankSignalsAsync(world, 8);
-        await AddRaidersAsync(world, Plenty, priests: 3);
+        var tank = await TankSignalsAsync(world, 8);
+        var raiders = await AddRaidersAsync(world, Plenty, priests: 3);
+        var watch = new RefusalWatch(world, tank.Id, raiders);
 
-        Assert.True(await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8)), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(90_000, () => watch.Sample(world.Coordinator.Groups.Any(g => g.Goal.Size == 8 && g.Members.Count == 8))), watch + await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Goal.Size == 8);
         Assert.True(await world.RunUntilAsync(60_000, () => group.Raid), await world.TraceAsync());
         Assert.All(group.Members, member => Assert.False(member.Real));

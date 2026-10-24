@@ -17,6 +17,16 @@ internal sealed class WorldTestClient : IAsyncDisposable
 {
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Bound of each read of the connection setup (auth, character create, login). Setup is off-world-thread work (database writes
+    /// and loads, the session's async login), so a starved host can exceed <see cref="ReadTimeout"/> without any bug. The reads still
+    /// assert opcode, order and result code; only the hang guard is wider. Replies to commands keep <see cref="ReadTimeout"/>.
+    /// </summary>
+    private static readonly TimeSpan DefaultHandshakeTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>The per-read bound of the setup steps; settable so a test can prove the guard fires.</summary>
+    internal TimeSpan HandshakeTimeout { get; set; } = DefaultHandshakeTimeout;
+
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
     private readonly WorldHeaderCrypt _crypt = new();
@@ -33,7 +43,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// <summary>Run the auth handshake and assert it succeeds; leaves the client at character select.</summary>
     public async Task AuthenticateAsync(string account, byte[] sessionKey)
     {
-        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        (WorldOpcode op, byte[] payload) = await SetupAsync(WorldOpcode.SmsgAuthChallenge, "auth", t => ReadAsync(t));
         Assert.Equal(WorldOpcode.SmsgAuthChallenge, op);
         uint serverSeed = BinaryPrimitives.ReadUInt32LittleEndian(payload);
 
@@ -52,11 +62,11 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await SendAsync(WorldOpcode.CmsgAuthSession, session.ToArray());
         _crypt.Initialize(sessionKey);
 
-        (op, payload) = await ReadAsync();
+        (op, payload) = await SetupAsync(WorldOpcode.SmsgAuthResponse, "auth", t => ReadAsync(t));
         Assert.Equal(WorldOpcode.SmsgAuthResponse, op);
         Assert.Equal((byte)AuthResponseCode.Ok, payload[0]);
 
-        (op, _) = await ReadAsync(); // SMSG_ADDON_INFO
+        (op, _) = await SetupAsync(WorldOpcode.SmsgAddonInfo, "auth", t => ReadAsync(t)); // SMSG_ADDON_INFO
         Assert.Equal(WorldOpcode.SmsgAddonInfo, op);
     }
 
@@ -78,7 +88,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
 
         await SendAsync(WorldOpcode.CmsgCharCreate, create.ToArray());
-        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        (WorldOpcode op, byte[] payload) = await SetupAsync(WorldOpcode.SmsgCharCreate, "char create", t => ReadAsync(t));
         Assert.Equal(WorldOpcode.SmsgCharCreate, op);
         return payload[0];
     }
@@ -104,11 +114,11 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await ExpectLoginPacketAsync(WorldOpcode.SmsgFriendList);
         await ExpectLoginPacketAsync(WorldOpcode.SmsgIgnoreList);
 
-        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        (WorldOpcode op, byte[] payload) = await SetupAsync(WorldOpcode.SmsgSetRestStart, "login MOTD/rest start", t => ReadAsync(t));
         while (op == WorldOpcode.SmsgMessagechat) // MOTD lines
         {
             LastLoginPackets.Add((op, payload));
-            (op, payload) = await ReadAsync();
+            (op, payload) = await SetupAsync(WorldOpcode.SmsgSetRestStart, "login MOTD/rest start", t => ReadAsync(t));
         }
 
         Assert.Equal(WorldOpcode.SmsgSetRestStart, op);
@@ -119,7 +129,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await ExpectLoginPacketAsync(WorldOpcode.SmsgActionButtons);
         await ExpectLoginPacketAsync(WorldOpcode.SmsgInitializeFactions);
         await ExpectLoginPacketAsync(WorldOpcode.SmsgLoginSettimespeed);
-        byte[] self = await ReadUpdateAsync();
+        byte[] self = await SetupAsync(WorldOpcode.SmsgUpdateObject, "login self create", t => ReadUpdateAsync(t));
         LastLoginPackets.Add((WorldOpcode.SmsgUpdateObject, self));
         await ExpectLoginPacketAsync(WorldOpcode.SmsgInitWorldStates);
         return self;
@@ -293,9 +303,9 @@ internal sealed class WorldTestClient : IAsyncDisposable
     }
 
     /// <summary>Read an update packet, plain or compressed, and return its uncompressed body.</summary>
-    public async Task<byte[]> ReadUpdateAsync()
+    public async Task<byte[]> ReadUpdateAsync(TimeSpan? readTimeout = null)
     {
-        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        (WorldOpcode op, byte[] payload) = await ReadAsync(readTimeout);
         return op switch
         {
             WorldOpcode.SmsgUpdateObject => payload,
@@ -352,9 +362,23 @@ internal sealed class WorldTestClient : IAsyncDisposable
 
     private async Task ExpectLoginPacketAsync(WorldOpcode expected)
     {
-        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        (WorldOpcode op, byte[] payload) = await SetupAsync(expected, "login packet " + (LastLoginPackets.Count + 1), t => ReadAsync(t));
         Assert.Equal(expected, op);
         LastLoginPackets.Add((op, payload));
+    }
+
+    /// <summary>Run a setup read with <see cref="HandshakeTimeout"/>; a timeout names the expected opcode, the step and the time spent.</summary>
+    private async Task<T> SetupAsync<T>(WorldOpcode expected, string step, Func<TimeSpan, Task<T>> read)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            return await read(HandshakeTimeout);
+        }
+        catch (OperationCanceledException ex)
+        {
+            throw new TimeoutException($"setup timed out waiting for {WorldOpcodeNames.GetName(expected)} ({step}) after {watch.Elapsed.TotalSeconds:F1} s (bound {HandshakeTimeout.TotalSeconds:F0} s)", ex);
+        }
     }
 
     private static byte[] Le(uint value)

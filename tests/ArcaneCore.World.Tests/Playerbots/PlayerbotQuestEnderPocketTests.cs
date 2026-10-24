@@ -175,9 +175,12 @@ public sealed partial class PlayerbotQuestReturnTests
         bool sawStrong = false;
         try
         {
+            // The reward settles off the world thread (SQLite commit in real time), so game ticks must not
+            // run while it is pending: wait for the settlement itself, bounded by real time.
+            int character = (int)fixture.Session.Player!.Guid.Low;
             for (int tick = 0; tick < 300; tick++)
             {
-                bool rewarded = await fixture.Host.World.InvokeAsync(() =>
+                (bool rewarded, bool pending) = await fixture.Host.World.InvokeAsync(() =>
                 {
                     var player = fixture.Session.Player!;
                     PlayerbotMotion.ElapseForTests(player, 500);
@@ -185,14 +188,23 @@ public sealed partial class PlayerbotQuestReturnTests
                     brain.Update(500);
                     sawStrong |= brain.Risk.Hazards.Active(player.MapId, fixture.Host.World.NowMs)
                         .Any(hazard => hazard.Kind == PlayerbotHazards.StrongKind && hazard.ReturnPassable);
-                    return fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestId)!.Rewarded;
+                    return (fixture.Feature.Services.StateOf(player)!.Quests.Get(QuestId)!.Rewarded,
+                        fixture.Feature.PendingSettlementCount > 0);
                 });
                 if (rewarded) break;
+                if (pending)
+                {
+                    await fixture.Feature.WaitForSettlementAsync(character).WaitAsync(TimeSpan.FromSeconds(30));
+                    continue;
+                }
                 await fixture.Host.World.AdvanceClockAsync(500);
             }
+            if (fixture.Feature.PendingSettlementCount > 0)
+                await fixture.Feature.WaitForSettlementAsync(character).WaitAsync(TimeSpan.FromSeconds(30));
             string trace = await fixture.Host.World.InvokeAsync(() =>
                 $"x={fixture.Session.Player!.X:F1} goal={brain.Goal} visible={fixture.Session.Player.VisibleObjects.Count} " +
-                $"risk={brain.RiskReport} rewarded={fixture.Feature.Services.StateOf(fixture.Session.Player)!.Quests.Get(QuestId)!.Rewarded}");
+                $"risk={brain.RiskReport} pendingSettlements={fixture.Feature.PendingSettlementCount} " +
+                $"rewarded={fixture.Feature.Services.StateOf(fixture.Session.Player)!.Quests.Get(QuestId)!.Rewarded}");
             Assert.True(sawStrong, "the return walk must actually encounter the same-level strong pack: " + trace);
             Assert.True(await fixture.Host.World.InvokeAsync(() =>
                 fixture.Feature.Services.StateOf(fixture.Session.Player!)!.Quests.Get(QuestId)!.Rewarded), trace);
