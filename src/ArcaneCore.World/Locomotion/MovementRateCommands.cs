@@ -3,6 +3,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Locomotion;
@@ -95,7 +96,7 @@ public sealed class MovementRateCommands : ICommandGroup
 
         (string name, Func<LocomotionOptions, float> get, Action<LocomotionOptions, float> set) = Fields[index];
         float old = get(options);
-        set(options, value);
+        OptionCatalog.TrackExternal(new OptionScope(context.Session.Services, context.World, context.Session.Logger), "movement." + name, context.InvokerName, () => set(options, value));
         int refreshed = SpeedRates.ApplyToAll(context.World, options);
         context.Session.Logger.LogWarning(
             "{Player} (account {Account}) set movement rate {Field} from {Old} to {New}; speeds of {Count} online player(s) re-sent",

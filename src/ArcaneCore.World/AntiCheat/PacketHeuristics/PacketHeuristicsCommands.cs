@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -82,7 +83,7 @@ public sealed class PacketHeuristicsCommands : ICommandGroup
             return true;
         }
 
-        apply(feature);
+        OptionCatalog.TrackExternal(new OptionScope(context.Session.Services, context.World, context.Session.Logger), "packetcheck.enabled", context.InvokerName, () => apply(feature));
         context.Session.Logger.LogInformation("Packet heuristics switched {State} by {Invoker} (runtime only)", state, context.InvokerName);
         return Status(context, string.Empty);
     }
@@ -109,7 +110,9 @@ public sealed class PacketHeuristicsCommands : ICommandGroup
             return true;
         }
 
-        apply(feature, include);
+        OptionCatalog.TrackExternal(
+            new OptionScope(context.Session.Services, context.World, context.Session.Logger), what == "bots" ? "packetcheck.exemptbots" : "packetcheck.exemptstaff",
+            context.InvokerName, () => apply(feature, include));
         context.Session.Logger.LogInformation("Packet heuristics: {What} {State} by {Invoker} (runtime only)", what, include ? "included" : "exempt", context.InvokerName);
         return Status(context, string.Empty);
     }

@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -346,7 +347,9 @@ public sealed class AntiCheatCommands : ICommandGroup
             return true;
         }
 
-        feature.ApplyOptions(options);
+        OptionCatalog.TrackExternal(
+            new OptionScope(context.Session.Services, context.World, context.Session.Logger), "anticheat." + (field == "enable" ? "enabled" : field), context.InvokerName,
+            () => feature.ApplyOptions(options));
         context.Session.Logger.LogInformation("AntiCheat: {Gm} set {Field} = {Value} (live until the next .reload config)", context.InvokerName, field, value);
         context.Reply($"AntiCheat: {field} = {value} (live until the next .reload config or restart).");
         return true;
