@@ -69,6 +69,39 @@ public sealed class AccountLoginInfoUpgradeTests : IAsyncLifetime
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RecordLogin_OverwritesPreviousRecord_MatchesUsernameCaseInsensitively_AndKeepsFullBuildRange(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using AuthDbContext db = TestContexts.Create<AuthDbContext>(connection);
+        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema);
+        db.Accounts.Add(new Account { Username = "ALPHA", Salt = new byte[32], Verifier = new byte[32] });
+        db.Accounts.Add(new Account { Username = "BRAVO", Salt = new byte[32], Verifier = new byte[32] });
+        await db.SaveChangesAsync();
+        var store = new EfAccountStore(db);
+
+        DateTime first = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        DateTime second = new(2026, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+        await store.RecordLoginAsync("AlPhA", new AccountLoginInfo(first, "Win", "x86", "enUS", 5875));
+        await store.RecordLoginAsync("alpha", new AccountLoginInfo(second, "OSX", "PPC", "deDE", ushort.MaxValue));
+
+        Assert.Equal(new AccountLoginInfo(second, "OSX", "PPC", "deDE", ushort.MaxValue), await store.GetLoginInfoAsync("ALPHA"));
+        // The other account is untouched.
+        Assert.Equal(new AccountLoginInfo(null, string.Empty, string.Empty, string.Empty, 0), await store.GetLoginInfoAsync("BRAVO"));
+
+        await store.RecordLoginAsync("ALPHA", new AccountLoginInfo(null, string.Empty, string.Empty, string.Empty, 0));
+        Assert.Equal(new AccountLoginInfo(null, string.Empty, string.Empty, string.Empty, 0), await store.GetLoginInfoAsync("alpha"));
+    }
+
+    [Fact]
+    public async Task RecordLogin_RejectsNullInfo()
+    {
+        await using AuthDbContext db = TestContexts.Create<AuthDbContext>(await _databases.CreateAsync(DatabaseProvider.Sqlite));
+        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema);
+        await Assert.ThrowsAsync<ArgumentNullException>(() => new EfAccountStore(db).RecordLoginAsync("X", null!));
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 }

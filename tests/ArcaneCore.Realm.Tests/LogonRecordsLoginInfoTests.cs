@@ -52,7 +52,7 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, accounts);
         await client.WriteAsync(BuildChallenge(Username));
-        (byte result, byte[] b) = await ReadChallengeAsync(client);
+        (byte result, byte[] b, _) = await ReadChallengeAsync(client);
         Assert.Equal((byte)AuthResult.Success, result);
         await client.WriteAsync(BuildProof(ComputeClient(salt, b), wrongProof: true));
         byte[] reply = await ReadExactAsync(client, 2);
@@ -73,6 +73,95 @@ public sealed class LogonRecordsLoginInfoTests
         Assert.Equal(1, failing.Calls);
     }
 
+    [Fact]
+    public async Task AutocreatedAccount_RecordsTheLoginInfoOfItsFirstLogon()
+    {
+        var accounts = new InMemoryAccountStore();
+
+        await using NetworkStream client = await StartSessionAsync(accounts, accounts, autocreate: true);
+        await client.WriteAsync(BuildChallenge(Username));
+        (byte result, byte[] b, byte[] salt) = await ReadChallengeAsync(client);
+        Assert.Equal((byte)AuthResult.Success, result);
+        // The auto-create candidate's salt arrives in the challenge; the proof is computed against it (password == username).
+        await client.WriteAsync(BuildProof(ComputeClient(salt, b, password: Username)));
+        Assert.Equal((byte)AuthResult.Success, (await ReadExactAsync(client, 2))[1]);
+
+        AccountLoginInfo? info = await accounts.GetLoginInfoAsync(Username);
+        Assert.NotNull(info);
+        Assert.Equal(new AccountLoginInfo(info!.LastLoginUtc, "Win", "x86", "enUS", ClientBuild.Vanilla1121), info);
+        Assert.NotNull(info.LastLoginUtc);
+    }
+
+    [Fact]
+    public async Task SecondLogon_OverwritesTheFirstRecord_WithTheNewLocaleAndTime()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+        var clock = new StepClock(new DateTimeOffset(2026, 10, 24, 8, 0, 0, TimeSpan.Zero));
+
+        await using (NetworkStream first = await StartSessionAsync(accounts, accounts, time: clock))
+        {
+            Assert.Equal((byte)AuthResult.Success, await LogOnAsync(first, salt));
+        }
+        Assert.Equal(new AccountLoginInfo(new DateTime(2026, 10, 24, 8, 0, 0, DateTimeKind.Utc), "Win", "x86", "enUS", ClientBuild.Vanilla1121),
+            await accounts.GetLoginInfoAsync(Username));
+
+        clock.Set(new DateTimeOffset(2026, 10, 25, 9, 30, 0, TimeSpan.Zero));
+        await using (NetworkStream second = await StartSessionAsync(accounts, accounts, time: clock))
+        {
+            Assert.Equal((byte)AuthResult.Success, await LogOnAsync(second, salt, wireLocale: "RFrf")); // frFR
+        }
+        Assert.Equal(new AccountLoginInfo(new DateTime(2026, 10, 25, 9, 30, 0, DateTimeKind.Utc), "Win", "x86", "frFR", ClientBuild.Vanilla1121),
+            await accounts.GetLoginInfoAsync(Username));
+    }
+
+    [Fact]
+    public async Task RecordedTime_IsUtcAndComesFromTheSessionClock()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+        // A +05:00 offset: the stored instant must be the UTC equivalent, not the local wall clock.
+        var clock = new StepClock(new DateTimeOffset(2026, 3, 1, 5, 0, 0, TimeSpan.FromHours(5)));
+
+        await using NetworkStream client = await StartSessionAsync(accounts, accounts, time: clock);
+        Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+
+        AccountLoginInfo? info = await accounts.GetLoginInfoAsync(Username);
+        Assert.Equal(new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc), info!.LastLoginUtc);
+        Assert.Equal(DateTimeKind.Utc, info.LastLoginUtc!.Value.Kind);
+    }
+
+    [Fact]
+    public async Task NoLoginInfoStore_LogonStillSucceeds()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+
+        await using NetworkStream client = await StartSessionAsync(accounts, null);
+        Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        Assert.Equal(new AccountLoginInfo(null, string.Empty, string.Empty, string.Empty, 0), await accounts.GetLoginInfoAsync(Username));
+    }
+
+    [Fact]
+    public async Task CancelledRecording_DoesNotAuthenticate_AndSendsNoSuccessReply()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+        var cancelling = new CancellingLoginInfoStore();
+
+        await using NetworkStream client = await StartSessionAsync(accounts, cancelling);
+        await client.WriteAsync(BuildChallenge(Username));
+        (_, byte[] b, _) = await ReadChallengeAsync(client);
+        await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
+
+        // Cancellation propagates out of the logon: the success reply (which would be 2+ bytes) is never written.
+        byte[] buffer = new byte[2];
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        int read = await client.ReadAsync(buffer, timeout.Token);
+        Assert.Equal(0, read);
+        Assert.Equal(1, cancelling.Calls);
+    }
+
     private static async Task<byte[]> SeedAsync(InMemoryAccountStore accounts)
     {
         byte[] salt = WowSrp6.GenerateSalt();
@@ -85,17 +174,18 @@ public sealed class LogonRecordsLoginInfoTests
         return salt;
     }
 
-    private static async Task<byte> LogOnAsync(NetworkStream client, byte[] salt)
+    private static async Task<byte> LogOnAsync(NetworkStream client, byte[] salt, string wireLocale = "SUne")
     {
-        await client.WriteAsync(BuildChallenge(Username));
-        (byte result, byte[] b) = await ReadChallengeAsync(client);
+        await client.WriteAsync(BuildChallenge(Username, wireLocale));
+        (byte result, byte[] b, _) = await ReadChallengeAsync(client);
         Assert.Equal((byte)AuthResult.Success, result);
         await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
         byte[] reply = await ReadExactAsync(client, 2);
         return reply[1];
     }
 
-    private static async Task<NetworkStream> StartSessionAsync(IAccountStore accounts, IAccountLoginInfoStore loginInfo)
+    private static async Task<NetworkStream> StartSessionAsync(
+        IAccountStore accounts, IAccountLoginInfoStore? loginInfo, bool autocreate = false, TimeProvider? time = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -107,8 +197,8 @@ public sealed class LogonRecordsLoginInfoTests
             listener.Stop();
             await using NetworkStream stream = server.GetStream();
             var session = new LogonSession(
-                stream, accounts, new InMemoryRealmStore([]), new AuthOptions(), NullLogger.Instance, "test",
-                loginInfoStore: loginInfo);
+                stream, accounts, new InMemoryRealmStore([]), new AuthOptions { AutocreateAccounts = autocreate },
+                NullLogger.Instance, "test", timeProvider: time, loginInfoStore: loginInfo);
             await session.RunAsync(CancellationToken.None);
         });
 
@@ -117,7 +207,7 @@ public sealed class LogonRecordsLoginInfoTests
         return client.GetStream();
     }
 
-    private static byte[] BuildChallenge(string username)
+    private static byte[] BuildChallenge(string username, string wireLocale = "SUne")
     {
         byte[] name = Encoding.ASCII.GetBytes(username);
         var body = new List<byte>();
@@ -126,7 +216,7 @@ public sealed class LogonRecordsLoginInfoTests
         body.AddRange(LeU16(ClientBuild.Vanilla1121));
         body.AddRange("68x\0"u8.ToArray());  // platform "x86", byte-reversed on the wire
         body.AddRange("niW\0"u8.ToArray());  // os "Win"
-        body.AddRange("SUne"u8.ToArray());   // country "enUS"
+        body.AddRange(Encoding.ASCII.GetBytes(wireLocale)); // country, byte-reversed on the wire ("SUne" is "enUS")
         body.AddRange(LeU32(0));
         body.AddRange(LeU32(0));
         body.Add((byte)name.Length);
@@ -149,20 +239,20 @@ public sealed class LogonRecordsLoginInfoTests
         return [.. packet];
     }
 
-    private static async Task<(byte Result, byte[] B)> ReadChallengeAsync(NetworkStream stream)
+    private static async Task<(byte Result, byte[] B, byte[] Salt)> ReadChallengeAsync(NetworkStream stream)
     {
         byte[] head = await ReadExactAsync(stream, 3);
         if (head[2] != (byte)AuthResult.Success)
         {
-            return (head[2], []);
+            return (head[2], [], []);
         }
 
         // B[32], g_len, g, N_len, N[32], salt[32], crc[16], securityFlag
         byte[] rest = await ReadExactAsync(stream, 32 + 1 + 1 + 1 + 32 + 32 + 16 + 1);
-        return (head[2], rest[..32]);
+        return (head[2], rest[..32], rest[67..99]);
     }
 
-    private static ClientProof ComputeClient(byte[] salt, byte[] serverB)
+    private static ClientProof ComputeClient(byte[] salt, byte[] serverB, string password = Password)
     {
         Span<byte> aBytes = stackalloc byte[19];
         RandomNumberGenerator.Fill(aBytes);
@@ -170,7 +260,7 @@ public sealed class LogonRecordsLoginInfoTests
         BigInteger publicA = BigInteger.ModPow(WowSrp6.G, a, WowSrp6.N);
         BigInteger b = WowSrp6.FromLittleEndian(serverB);
 
-        BigInteger x = WowSrp6.ComputeX(salt, Username, Password);
+        BigInteger x = WowSrp6.ComputeX(salt, Username, password);
         BigInteger u = Srp6Math.Scrambler(publicA, b);
         BigInteger kgx = WowSrp6.Multiplier * BigInteger.ModPow(WowSrp6.G, x, WowSrp6.N) % WowSrp6.N;
         BigInteger numerator = ((b - kgx) % WowSrp6.N + WowSrp6.N) % WowSrp6.N;
@@ -192,6 +282,28 @@ public sealed class LogonRecordsLoginInfoTests
     private static byte[] LeU16(ushort v) { byte[] b = new byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(b, v); return b; }
 
     private static byte[] LeU32(uint v) { byte[] b = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(b, v); return b; }
+
+    private sealed class StepClock(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public void Set(DateTimeOffset value) => _now = value;
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    private sealed class CancellingLoginInfoStore : IAccountLoginInfoStore
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _calls);
+            throw new OperationCanceledException("shutdown");
+        }
+
+        public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+            => Task.FromResult<AccountLoginInfo?>(null);
+    }
 
     private sealed record ClientProof(byte[] PublicKey, byte[] Proof);
 
