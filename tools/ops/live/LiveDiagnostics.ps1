@@ -224,12 +224,14 @@ function Get-CountersCollectArguments {
         [int]$SegmentMinutes = 60
     )
     $providers = 'System.Runtime', 'ArcaneCore.Runtime', 'ArcaneCore.World', 'ArcaneCore.Faults', 'ArcaneCore.Anomalies', 'ArcaneCore.Playerbots.Qa', 'ArcaneCore.Playerbots.Qa.Findings'
-    $hours = [math]::Floor($SegmentMinutes / 60)
+    # --duration is dd:hh:mm:ss: a segment of a day or more needs the days field (24 in the hours field does not parse).
+    $days = [math]::Floor($SegmentMinutes / 1440)
+    $hours = [math]::Floor(($SegmentMinutes % 1440) / 60)
     $minutes = $SegmentMinutes % 60
     return @(
         'collect', '-p', [string]$ProcessId, '--format', 'csv', '-o', $OutputPath,
         '--refresh-interval', [string]$RefreshSeconds, '--counters', ($providers -join ','),
         '--maxTimeSeries', '2000', '--maxHistograms', '50',
-        '--duration', ('00:{0:00}:{1:00}:00' -f $hours, $minutes)
+        '--duration', ('{0:00}:{1:00}:{2:00}:00' -f $days, $hours, $minutes)
     )
 }

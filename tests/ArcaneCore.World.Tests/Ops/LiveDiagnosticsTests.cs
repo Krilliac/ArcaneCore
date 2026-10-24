@@ -466,11 +466,14 @@ public sealed class LiveDiagnosticsTests : IDisposable
     [PwshFact]
     public void CountersArguments_DurationFormatsSegmentLengths()
     {
-        foreach ((int minutes, string expected) in new[] { (60, "00:01:00:00"), (45, "00:00:45:00"), (1, "00:00:01:00"), (1440, "00:24:00:00") })
+        foreach ((int minutes, string expected) in new[] { (60, "00:01:00:00"), (45, "00:00:45:00"), (1, "00:00:01:00"), (90, "00:01:30:00"), (1440, "01:00:00:00") })
         {
             string output = RunPwsh($"Get-CountersCollectArguments -ProcessId 1 -OutputPath 'x.csv' -SegmentMinutes {minutes} | ConvertTo-Json -Compress -AsArray");
             string[] args = JsonSerializer.Deserialize<string[]>(output.Trim())!;
-            Assert.Equal(expected, args[Array.IndexOf(args, "--duration") + 1]);
+            string duration = args[Array.IndexOf(args, "--duration") + 1];
+            Assert.Equal(expected, duration);
+            // dotnet-counters reads dd:hh:mm:ss as a TimeSpan; "00:24:00:00" would not parse.
+            Assert.Equal(TimeSpan.FromMinutes(minutes), TimeSpan.ParseExact(duration, @"dd\:hh\:mm\:ss", System.Globalization.CultureInfo.InvariantCulture));
             Assert.Equal("2000", args[Array.IndexOf(args, "--maxTimeSeries") + 1]);
             Assert.Equal("50", args[Array.IndexOf(args, "--maxHistograms") + 1]);
         }
