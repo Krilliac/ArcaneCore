@@ -12,8 +12,8 @@ namespace ArcaneCore.World.Gm.ServerConfig;
 /// <summary>
 /// <c>.server config list|get|set|reset|diff|sources|dump</c>: the one editor of the server options (<see cref="OptionCatalog"/>). A
 /// GameMaster may list, get and diff; an Administrator may set, reset, dump and list the sources, because one set changes the game for
-/// everyone at once. Restart-only keys are shown but read-only. A set lasts until <c>.reload config</c> or a restart and is never written to
-/// a configuration file (to keep a value, edit the file). Every run is in the GM command audit (<c>CommandTable.Execute</c>) and every set
+/// everyone at once. Restart-only keys are shown but read-only. A set lasts until <c>.reload config</c> or a restart (until a restart for
+/// the PacketHeuristics and pack keys, which the reload does not touch) and is never written to a configuration file (to keep a value, edit the file). Every run is in the GM command audit (<c>CommandTable.Execute</c>) and every set
 /// and reset is logged with old and new value, actor and reason. <c>.rates set</c>, <c>.anticheat set</c>, <c>.movement set</c> and
 /// <c>.packetcheck</c> stay and change the same values (they report their changes to the catalog, so <c>diff</c> sees them).
 /// </summary>
@@ -27,12 +27,12 @@ public sealed class ServerConfigCommands : ICommandExtension
 
     public const string GetSyntax = "Syntax: .server config get $key\nShow one option: value, type and bounds, apply class, aliases and, when overridden, its baseline and who changed it. $key: a path (World:Maps:GridUnload), a rate name or an alias.";
 
-    public const string SetSyntax = "Syntax: .server config set $key $value [$reason]\nChange a live or next-load option for everyone until .reload config or restart (not saved to any file). "
+    public const string SetSyntax = "Syntax: .server config set $key $value [$reason]\nChange a live or next-load option for everyone until .reload config or restart (PacketHeuristics and pack options: until restart; not saved to any file). "
         + "Restart-only keys are read-only. $value is checked against the key's type and bounds; quote a text value that has spaces. $reason is logged with the change.";
 
     public const string ResetSyntax = "Syntax: .server config reset [$key|all]\nPut one option (or all overridden ones, the default) back to the value it had before the first change.";
 
-    public const string DiffSyntax = "Syntax: .server config diff\nList the options changed since start or the last .reload config: baseline, value now, who and why.";
+    public const string DiffSyntax = "Syntax: .server config diff\nList the options changed since start or the last .reload config (PacketHeuristics and pack options: since start): baseline, value now, who and why.";
 
     public const string SourcesSyntax = "Syntax: .server config sources [$filter] [page #n]\nList the configuration providers (last one wins) and, for each option matching $filter, which provider supplies its value, or whether it is a built-in default or overridden.";
 
@@ -182,7 +182,8 @@ public sealed class ServerConfigCommands : ICommandExtension
             return true;
         }
 
-        context.Reply($"Option {key.Path}: {before} -> {after} (until .reload config or restart; not saved to any file)."
+        string lasts = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path) ? "until .reload config or restart" : "until restart";
+        context.Reply($"Option {key.Path}: {before} -> {after} ({lasts}; not saved to any file)."
             + (key.Apply == OptionApplyClass.NextLoad ? " Applies to what is created or loaded afterwards." : string.Empty));
         return true;
     }

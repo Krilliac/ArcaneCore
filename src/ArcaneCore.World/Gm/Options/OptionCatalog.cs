@@ -233,8 +233,8 @@ public enum OptionSetResult
 /// <summary>
 /// The overrides made through <c>.server config</c> (and the alias commands that route into it) for one world: for each changed key the
 /// value it had before the first change (the baseline <c>reset</c> puts back), the value set, who set it and why. A key that tracks its
-/// own override (the rates) is not stored here. An entry whose key no longer holds the value that was set (a <c>.reload config</c> put the
-/// file's value back) is dropped when next looked at. Thread affinity: world thread only; no locking.
+/// own override (the rates) is not stored here. <c>.reload config</c> drops the entries of the keys it puts back (<see cref="EndsAtReload"/>); an
+/// entry whose key no longer holds the value that was set (another path changed it) is dropped when next looked at. Thread affinity: world thread only; no locking.
 /// </summary>
 public sealed class OptionOverrides
 {
@@ -271,6 +271,36 @@ public sealed class OptionOverrides
     }
 
     internal bool Forget(string path) => _entries.Remove(path);
+
+    private static readonly Lazy<HashSet<string>> s_reloadKeys = new(() => new HashSet<string>(Reload.WorldConfigKeys.All.Select(k => k.Path), StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when <c>.reload config</c> puts the file's value back into the key at <paramref name="path"/> (the reload keys and the AntiCheat
+    /// section), so an override of it ends at the reload. The PacketHeuristics keys and the pack keys are not part of the reload and keep
+    /// theirs until restart.
+    /// </summary>
+    public static bool EndsAtReload(string path)
+        => s_reloadKeys.Value.Contains(path) || path.StartsWith(Game.AntiCheat.AntiCheatOptions.SectionName + ":", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Drops the entries of the keys a reload puts back (<see cref="EndsAtReload"/>); returns them so a rolled back reload can restore them.</summary>
+    internal IReadOnlyList<KeyValuePair<string, Entry>> ForgetReloaded()
+    {
+        KeyValuePair<string, Entry>[] reloaded = [.. _entries.Where(e => EndsAtReload(e.Key))];
+        foreach (KeyValuePair<string, Entry> entry in reloaded)
+        {
+            _entries.Remove(entry.Key);
+        }
+
+        return reloaded;
+    }
+
+    internal void Restore(IEnumerable<KeyValuePair<string, Entry>> entries)
+    {
+        foreach (KeyValuePair<string, Entry> entry in entries)
+        {
+            _entries[entry.Key] = entry.Value;
+        }
+    }
 }
 
 /// <summary>

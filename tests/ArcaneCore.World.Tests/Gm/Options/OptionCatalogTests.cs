@@ -241,12 +241,52 @@ public sealed class OptionCatalogTests
             int original = host.World.Options.AutosaveIntervalMs;
             Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, key, "777", Tester, out _, out _, out _));
             bool overridden = catalog.Describe(scope, key).Overridden;
-            host.World.Options.AutosaveIntervalMs = original; // what .reload config does with the file's value
+            host.World.Options.AutosaveIntervalMs = original; // another path puts the first value back
             return (overridden, catalog.Describe(scope, key).Overridden);
         });
 
         Assert.True(during);
         Assert.False(after);
+    }
+
+    [Fact]
+    public async Task ReloadConfig_EndsTheOverridesOfTheKeysItReloads_AndKeepsThePacketHeuristicsOnes_AndRollbackRestoresThem()
+    {
+        await using var host = WorldTestHost.Start();
+        ArcaneCore.Game.Reload.ContentCandidate candidate = await new ArcaneCore.World.Reload.ConfigContentReloadable(host.WorldServices).BuildAsync(CancellationToken.None);
+        const string packetEnabled = "World:PacketHeuristics:Enabled";
+
+        (bool reloadKeyEnds, int valueAfter, int changedTo, bool packetKept, int count, bool rolledBack, int valueRolledBack, IReadOnlyList<Exception> failures) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey autosave = catalog.Find(Autosave)!;
+            OptionKey packet = catalog.Find(packetEnabled)!;
+            int file = host.World.Options.AutosaveIntervalMs;
+            int changed = file == 777 ? 778 : 777;
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, autosave, changed.ToString(), Tester, out _, out _, out _));
+            bool packetNow = (bool)catalog.Describe(scope, packet).Current!;
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, packet, (!packetNow).ToString(), Tester, out _, out _, out _));
+            Assert.Equal(2, OptionOverrides.For(host.World).Count);
+
+            var transaction = new ArcaneCore.Game.Reload.ReloadTransaction();
+            candidate.Commit(host.World, transaction);
+            bool ends = !catalog.Describe(scope, autosave).Overridden;
+            int after = host.World.Options.AutosaveIntervalMs;
+            bool kept = catalog.Describe(scope, packet).Overridden;
+            int remaining = OptionOverrides.For(host.World).Count;
+
+            IReadOnlyList<Exception> errors = transaction.Rollback();
+            return (ends, after, changed, kept, remaining, catalog.Describe(scope, autosave).Overridden, host.World.Options.AutosaveIntervalMs, errors);
+        });
+
+        Assert.True(reloadKeyEnds);
+        Assert.NotEqual(changedTo, valueAfter); // the reload put the configured value back
+        Assert.True(packetKept);
+        Assert.Equal(1, count);
+        Assert.True(rolledBack);
+        Assert.Equal(changedTo, valueRolledBack);
+        Assert.Empty(failures);
     }
 
     [Fact]

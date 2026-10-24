@@ -177,6 +177,20 @@ public sealed class ServerConfigCommandTests
     }
 
     [Fact]
+    public async Task Set_SaysAPacketHeuristicsChangeLastsUntilRestart_BecauseReloadDoesNotTouchIt()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        bool enabled = await host.OnWorldAsync(() => ((ArcaneCore.World.AntiCheat.PacketHeuristics.PacketHeuristicsFeature)host.WorldServices.GetService(typeof(ArcaneCore.World.AntiCheat.PacketHeuristics.PacketHeuristicsFeature))!).Options.ExemptBots);
+
+        string set = await RunAsync(admin, $".server config set World:PacketHeuristics:ExemptBots {(!enabled).ToString().ToLowerInvariant()}");
+
+        Assert.Contains("(until restart; not saved to any file)", set, StringComparison.Ordinal);
+        Assert.DoesNotContain(".reload config", set, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Sources_NamesTheProviderThatSetsARate_ByItsConfigurationPath()
     {
         IConfiguration configuration = new ConfigurationBuilder()
