@@ -1048,7 +1048,7 @@ public sealed class CharacterSaveQueueTests
     [Fact]
     public async Task ASettlementDoesNotWaitOutTheBusyPauseLeftByAnotherCharactersLockedSave()
     {
-        await using var kit = new Kit();
+        await using var kit = new Kit(busyPause: TimeSpan.FromSeconds(60));
         var failedAt = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         kit.Store.OnSave = (state, _) =>
         {
@@ -1061,13 +1061,12 @@ public sealed class CharacterSaveQueueTests
         };
         kit.Queue.Enqueue(State(1, 11));
         kit.Queue.Start();
-        long failed = await failedAt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await failedAt.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(await BecomesTrueAsync(() => kit.Queue.Pending == 0, seconds: 5), "the locked snapshot was not retained");
 
+        // The pause is 60 s and cannot end during the test: completing within 10 s means the settlement did not wait it out.
         kit.Queue.HoldCharacter(2);
         await kit.Queue.SaveForSettlementAsync(State(2, 77)).WaitAsync(TimeSpan.FromSeconds(10));
-        TimeSpan waited = System.Diagnostics.Stopwatch.GetElapsedTime(failed);
-        Assert.True(waited < TimeSpan.FromMilliseconds(600), $"the settlement was written {waited.TotalMilliseconds:F0} ms after the other character's locked save: it waited out the 1000 ms busy pause");
         Assert.Equal(77u, Assert.Single(kit.Store.Saved, s => s.Id == 2).Money);
 
         // The bot's retained snapshot is still written (after the pause, or by a barrier).
@@ -1078,9 +1077,10 @@ public sealed class CharacterSaveQueueTests
     [Fact]
     public async Task ABarrierOfAnotherCharacterDoesNotWaitOutTheBusyPause_ButTheLockedCharactersOwnBarrierKeepsIt()
     {
-        await using var kit = new Kit();
+        await using var kit = new Kit(busyPause: TimeSpan.FromSeconds(60));
         var failedAt = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lockedAttempts = 0;
+        var attemptsAtThreeSave = -1;
         kit.Store.OnSave = (state, _) =>
         {
             if (state.Id == 1)
@@ -1091,12 +1091,17 @@ public sealed class CharacterSaveQueueTests
                     throw Busy();
                 }
             }
+            else if (state.Id == 3)
+            {
+                // Character 3 is written before the locked character is retried.
+                Volatile.Write(ref attemptsAtThreeSave, Volatile.Read(ref lockedAttempts));
+            }
 
             return Task.CompletedTask;
         };
         kit.Queue.Enqueue(State(1, 11));
         kit.Queue.Start();
-        long failed = await failedAt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await failedAt.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(await BecomesTrueAsync(() => kit.Queue.Pending == 0, seconds: 5), "the locked snapshot was not retained");
 
         // The character that just hit the lock keeps the pause: its own barrier does not retry it at once (no loop on a held lock).
@@ -1107,9 +1112,9 @@ public sealed class CharacterSaveQueueTests
         // Another character's barrier (a login or logout drain) is not held by that pause.
         kit.Queue.Enqueue(State(3, 33));
         await kit.Queue.FlushCharacterAsync(3).WaitAsync(TimeSpan.FromSeconds(10));
-        TimeSpan waited = System.Diagnostics.Stopwatch.GetElapsedTime(failed);
-        Assert.True(waited < TimeSpan.FromMilliseconds(700), $"the barrier completed {waited.TotalMilliseconds:F0} ms after the other character's locked save: it waited out the 1000 ms busy pause");
-        Assert.Equal(33u, Assert.Single(kit.Store.Saved, s => s.Id == 3).Money);
+        // Completing within 10 s while the pause is 60 s means the barrier did not wait it out; the pause cannot end meanwhile.
+        Assert.Equal(1, Volatile.Read(ref attemptsAtThreeSave));
+        Assert.Equal(33u,Assert.Single(kit.Store.Saved, s => s.Id == 3).Money);
 
         // That write succeeded, so the database is free again: the pause ends and the locked character's barrier completes too.
         await lockedBarrier.WaitAsync(TimeSpan.FromSeconds(10));
@@ -1656,11 +1661,16 @@ public sealed class CharacterSaveQueueTests
     private sealed class Kit : IAsyncDisposable
     {
         private readonly ServiceProvider _services;
-        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null)
+        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null, TimeSpan? busyPause = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
-            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(),
-                logger ?? NullLogger<CharacterSaveQueue>.Instance, Options.Create(options ?? new WorldRuntimeOptions()), announcer);
+            IServiceScopeFactory scopes = _services.GetRequiredService<IServiceScopeFactory>();
+            ILogger<CharacterSaveQueue> log = logger ?? NullLogger<CharacterSaveQueue>.Instance;
+            IOptions<WorldRuntimeOptions> opts = Options.Create(options ?? new WorldRuntimeOptions());
+            // A pause too long to end during a test makes the ordering asserts independent of wall-clock stalls; without one the production default stands.
+            Queue = busyPause is { } pause
+                ? new CharacterSaveQueue(scopes, log, opts, announcer) { BusyBackoff = [pause] }
+                : new CharacterSaveQueue(scopes, log, opts, announcer);
         }
 
         public RecordingStore Store { get; } = new();

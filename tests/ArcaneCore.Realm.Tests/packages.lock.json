@@ -284,6 +284,13 @@
           "SQLitePCLRaw.bundle_e_sqlite3": "[2.1.13, )"
         }
       },
+      "arcanecore.game": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "ArcaneCore.Protocol": "[1.0.0, )"
+        }
+      },
       "arcanecore.kernel": {
         "type": "Project",
         "dependencies": {
@@ -294,6 +301,12 @@
           "Microsoft.Extensions.Options.ConfigurationExtensions": "[9.0.0, )"
         }
       },
+      "arcanecore.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )"
+        }
+      },
       "arcanecore.realm": {
         "type": "Project",
         "dependencies": {
@@ -301,6 +314,14 @@
           "ArcaneCore.Data": "[1.0.0, )",
           "ArcaneCore.Kernel": "[1.0.0, )",
           "Microsoft.Extensions.Hosting": "[9.0.0, )"
+        }
+      },
+      "arcanecore.testsupport": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Data": "[1.0.0, )",
+          "ArcaneCore.Game": "[1.0.0, )",
+          "xunit.assert": "[2.9.2, )"
         }
       },
       "Microsoft.EntityFrameworkCore": {

@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Realm\ArcaneCore.Realm.csproj" />
     <ProjectReference Include="..\..\src\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
     <ProjectReference Include="..\..\src\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
+    <ProjectReference Include="..\ArcaneCore.TestSupport\ArcaneCore.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>

@@ -41,6 +41,47 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
     private sealed class OutdoorPvPProbeException(string message) : Exception(message);
     private sealed class WorldEventProbeException(string message) : Exception(message);
 
+    /// <summary>
+    /// Logger that stalls the settlement worker inside the reconcile-failure log call, which runs after the
+    /// reconcile anomaly is published but before the Finalize command is posted to the world. This makes the
+    /// window in which a single world tick drains an empty queue deterministic instead of scheduler-dependent.
+    /// </summary>
+    private sealed class SlowReconcileLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).Contains("could not reconcile", StringComparison.Ordinal))
+            {
+                Thread.Sleep(500);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ticks the world in real time until <paramref name="task"/> completes. Settlement completion is posted from a
+    /// worker thread after its anomaly notice, so a fixed number of ticks can drain an empty queue and never see it.
+    /// </summary>
+    private static async Task<T> TickUntilCompletedAsync<T>(WorldRuntime world, Task<T> task, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (!task.IsCompleted)
+        {
+            world.RunTick(1);
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"Task did not complete within {timeout} of world ticking.");
+            }
+
+            await Task.Delay(10);
+        }
+
+        return await task;
+    }
+
     private sealed class ThrowingEconomyStore : IEconomyStore
     {
         public Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
@@ -170,7 +211,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
 
         var saves = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
-        var settlements = new EconomySettlements(scopes, NullLogger.Instance);
+        var settlements = new EconomySettlements(scopes, new SlowReconcileLogger());
         settlements.Attach(world, saves, null);
 
         var opId = Guid.NewGuid();
@@ -187,8 +228,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
         Assert.True(started);
 
         await WorldTestHost.WaitForAsync(() => capture.Notices.Count >= 2, "economy settlement and reconcile anomalies");
-        world.RunTick(1);
-        EconomyOutcome finalOutcome = await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        EconomyOutcome finalOutcome = await TickUntilCompletedAsync(world, done.Task, TimeSpan.FromSeconds(5));
         Assert.Equal(EconomyOutcome.Unknown, finalOutcome);
 
         Assert.Contains(FaultLedger.Shared.Snapshot(),
@@ -215,7 +255,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
 
         var saves = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
-        var settlements = new LootSettlements(scopes, NullLogger.Instance);
+        var settlements = new LootSettlements(scopes, new SlowReconcileLogger());
         settlements.Attach(world, saves, null, static _ => true, static () => 0, static (_, _) => Task.CompletedTask);
 
         var key = new LootStateKey(777, 888);
@@ -235,8 +275,7 @@ public sealed class WorldFeaturesFaultAndAnomalyTests
         Assert.True(started);
 
         await WorldTestHost.WaitForAsync(() => capture.Notices.Count >= 2, "loot settlement and reconcile anomalies");
-        world.RunTick(1);
-        LootOutcome finalOutcome = await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        LootOutcome finalOutcome = await TickUntilCompletedAsync(world, done.Task, TimeSpan.FromSeconds(5));
         Assert.Equal(LootOutcome.Unknown, finalOutcome);
 
         Assert.Contains(FaultLedger.Shared.Snapshot(),
