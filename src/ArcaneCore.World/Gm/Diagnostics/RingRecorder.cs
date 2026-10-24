@@ -51,6 +51,15 @@ public sealed class RingRecorder<TEntry>
         }
     }
 
+    /// <summary>The capacity and held count read under one lock, so the pair is consistent even while another thread resizes.</summary>
+    public (int Capacity, int Count) Status()
+    {
+        lock (_gate)
+        {
+            return (_items.Length, _count);
+        }
+    }
+
     /// <summary>How many entries were overwritten because the ring was full.</summary>
     public long Overwritten
     {
@@ -197,7 +206,7 @@ public sealed class OptInRing<TEntry>(int maxCapacity = OptInRing<TEntry>.Defaul
     public (int Capacity, int Count)? Status()
     {
         RingRecorder<TEntry>? ring = Volatile.Read(ref _ring);
-        return ring is null ? null : (ring.Capacity, ring.Count);
+        return ring?.Status();
     }
 }
 
