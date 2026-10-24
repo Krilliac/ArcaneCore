@@ -235,11 +235,17 @@ public sealed class WorldMapFeed : IHostedService
             return Task.CompletedTask;
         }
 
+        // The ring exists before the pipe does, so a tool that connects at once never finds the anomalies query unanswerable.
+        AnomalyRing = new MapFeedAnomalyRing(AnomalyLedger.Shared, _world.Identity, _options.AnomaliesUnowned);
         Listen(name);
         if (PipeName is not null)
         {
-            AnomalyRing = new MapFeedAnomalyRing(AnomalyLedger.Shared, _world.Identity, _options.AnomaliesUnowned);
             EnableTools();
+        }
+        else
+        {
+            AnomalyRing.Dispose();
+            AnomalyRing = null;
         }
 
         return Task.CompletedTask;
