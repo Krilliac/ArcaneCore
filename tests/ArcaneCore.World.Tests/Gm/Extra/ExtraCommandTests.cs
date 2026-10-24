@@ -155,6 +155,22 @@ public sealed class ExtraCommandTests
         Assert.Contains(await RunAsync(gm, ".debug sessions"), l => l.StartsWith("1 in world: 1 players, 0 bots; latency median", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task DebugSessions_LabelsTheWorldPacketQueueAsInbound()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("XSESSQ", "Xsessq", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+
+        string[] lines = await RunAsync(gm, ".debug sessions");
+        Assert.Contains(lines, l => l.StartsWith("1 in world:", StringComparison.Ordinal) && l.Contains("; queued inbound ", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("  Xsessq", StringComparison.Ordinal) && l.Contains(", queued inbound ", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("outbound", StringComparison.OrdinalIgnoreCase));
+
+        ChatCommand command = ChatCommands.CreateTable().Resolve("debug sessions", AccountSecurity.GameMaster)!;
+        Assert.DoesNotContain("outbound", command.Help, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static SpellInfo Stacking() => new()
     {
         Id = StackingSpell,

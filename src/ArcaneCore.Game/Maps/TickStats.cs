@@ -218,6 +218,12 @@ public sealed class TickStats
     public static readonly TimeSpan SlowTickRetention = TimeSpan.FromSeconds(60);
 
     private readonly SlowTickEntry?[] _slowTicks = new SlowTickEntry?[SlowTickCapacity];
+
+    /// <summary>The timestamp source of the slow-tick ring (<see cref="Stopwatch.GetTimestamp"/>; tests replace it to age entries).</summary>
+    internal Func<long> Clock { get; set; } = Stopwatch.GetTimestamp;
+
+    /// <summary>Seconds from <paramref name="timestamp"/> (a <see cref="SlowTickInfo.Timestamp"/>) to now on this ring's clock.</summary>
+    public double AgeSeconds(long timestamp) => Stopwatch.GetElapsedTime(timestamp, Clock()).TotalSeconds;
     private long _slowSequence;
     private long _total;
     private long _overruns;
@@ -339,7 +345,7 @@ public sealed class TickStats
     /// </summary>
     public void RecordSlowTick(in TickPhases phases, ReadOnlySpan<string?> featureNames, ReadOnlySpan<long> featureMicros, int featureCount, long durationMicros)
     {
-        long stamp = Stopwatch.GetTimestamp();
+        long stamp = Clock();
         lock (_gate)
         {
             int target = -1;
@@ -412,7 +418,7 @@ public sealed class TickStats
     /// <summary>The slow ticks recorded within <paramref name="within"/>, slowest first (any thread).</summary>
     public IReadOnlyList<SlowTickInfo> SlowTicks(TimeSpan within)
     {
-        long now = Stopwatch.GetTimestamp();
+        long now = Clock();
         var result = new List<SlowTickInfo>();
         lock (_gate)
         {

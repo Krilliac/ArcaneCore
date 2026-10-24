@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Death;
+using ArcaneCore.World.Graveyards;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -32,7 +34,8 @@ public sealed class DeathGmCommandTests
     {
         services.AddSingleton<IMapDataStore, MapStore>();
         services.AddSingleton<IGraveyardDataStore>(new GraveyardStore(new GraveyardContent(
-            [new WorldSafeLoc(1, 0, -8800f, -100f, 90f, 1.5f, "Goldshire"), new WorldSafeLoc(2, 0, -9000f, -200f, 90f, 0f, "Elsewhere")], links)));
+            [new WorldSafeLoc(1, 0, -8800f, -100f, 90f, 1.5f, "Goldshire"), new WorldSafeLoc(2, 0, -9000f, -200f, 90f, 0f, "Elsewhere"),
+            new WorldSafeLoc(4, 0, -8700f, -50f, 90f, 0f, "Default Alliance")], links)));
     });
 
     private static async Task<string> ReplyAsync(WorldTestClient client, string command)
@@ -63,6 +66,53 @@ public sealed class DeathGmCommandTests
 
         Assert.Equal("Graveyard #1 (faction: any) is nearest from linked to zone #12.", await ReplyAsync(gm, ".neargrave"));
         Assert.Equal("Graveyard #1 (faction: any) is nearest from linked to zone #12.", await ReplyAsync(gm, ".neargrave horde"));
+    }
+
+    private sealed class ExtraLink(uint id) : IGraveyardLinkSource
+    {
+        public IEnumerable<uint> ExtraLinks(Player player, uint zoneId, uint areaId) => [id];
+    }
+
+    [Fact]
+    public async Task NearGrave_AgreesWithTheRealRepop_WhenARunTimeLinkIsCloser()
+    {
+        // Graveyard 2 is linked to no zone: only a run-time link (an outdoor PvP tower) makes it a candidate, and the real repop
+        // then prefers it to the zone's graveyard 1 because it is closer. .neargrave has to name the one the spirit would get.
+        await using WorldTestHost host = Start(new GraveyardLink(1, 12, 0));
+        await using WorldTestClient gm = await host.EnterWorldAsync("DGMNEAR3", "Dgmnearthree", AccountSecurity.Administrator);
+        await host.PlaceAsync("Dgmnearthree", -8995f, -195f, 90f);
+        await host.OnWorldAsync(() =>
+        {
+            host.World.FindOnlinePlayer("Dgmnearthree")!.ZoneId = 12;
+            host.WorldServices.GetRequiredService<GraveyardFeature>().Service!.AddLinkSource(new ExtraLink(2));
+        });
+        await gm.CollectAsync(Quiet);
+
+        uint real = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Dgmnearthree")!;
+            return host.WorldServices.GetRequiredService<GraveyardFeature>().Service!.Choose(player, player.Map!)!.Id;
+        });
+        Assert.Equal(2u, real);
+        Assert.Equal(DeathGmCommands.GraveyardFromRunTimeLink(2, 12), await ReplyAsync(gm, ".neargrave"));
+    }
+
+    [Fact]
+    public async Task NearGrave_SaysWhenTheGraveyardIsTheDefaultFallback_NotAZoneLink()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("DGMNEAR4", "Dgmnearfour", AccountSecurity.Administrator);
+        await host.OnWorldAsync(() =>
+        {
+            host.World.FindOnlinePlayer("Dgmnearfour")!.ZoneId = 12;
+            ArcaneCore.Game.Death.DeathHooks.For(host.World).Options.GraveyardFallbackToDefaults = true;
+        });
+        await gm.CollectAsync(Quiet);
+
+        Assert.Equal(DeathGmCommands.GraveyardFromDefault(4, 12, "alliance"), await ReplyAsync(gm, ".neargrave alliance"));
+        string own = await ReplyAsync(gm, ".neargrave");
+        Assert.StartsWith("Graveyard #", own, StringComparison.Ordinal);
+        Assert.DoesNotContain("faction: any", own, StringComparison.Ordinal);
     }
 
     [Fact]

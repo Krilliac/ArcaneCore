@@ -9,7 +9,9 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Death;
 
@@ -28,11 +30,20 @@ public sealed class DeathGmCommands : ICommandGroup
     [
         new ChatCommand("revive", AccountSecurity.GameMaster, "Syntax: .revive [$playername]\nRevive the selected player (or the named one, or yourself): half health and mana, the corpse gone.", Revive),
         new ChatCommand("gocorpse", AccountSecurity.GameMaster, "Syntax: .gocorpse [$playername]\nTeleport to the corpse of the selected player (or the named one, or yourself).", GoCorpse),
-        new ChatCommand("neargrave", AccountSecurity.GameMaster, "Syntax: .neargrave [alliance|horde]\nFind the graveyard nearest to you that serves your zone (for the given team, or any).", NearGrave),
+        new ChatCommand("neargrave", AccountSecurity.GameMaster, "Syntax: .neargrave [alliance|horde]\nFind the graveyard a released spirit would be sent to from where you stand (the real repop selection: zone and area links, the default fallback, run-time links, battleground graveyards), for the given team or any. The team applies to the zone and area links and the default fallback; on a battleground map and for run-time links (outdoor PvP towers) your own team still applies. The reply says where a graveyard that no zone link names came from.", NearGrave),
     ];
 
     /// <summary>LANG_COMMAND_GRAVEYARDERROR (454).</summary>
     public static string GraveyardError(uint id) => string.Create(CultureInfo.InvariantCulture, $"No faction in Graveyard with id= #{id} , fix your DB");
+
+    /// <summary>ArcaneCore's own wording: the graveyard is the battleground's choice for the player, not a zone link.</summary>
+    public static string GraveyardFromBattleground(uint id) => string.Create(CultureInfo.InvariantCulture, $"Graveyard #{id} is the battleground's graveyard for you (chosen by the match, not linked to a zone).");
+
+    /// <summary>ArcaneCore's own wording: no link served the zone, the team's default graveyard is used.</summary>
+    public static string GraveyardFromDefault(uint id, uint zone, string team) => string.Create(CultureInfo.InvariantCulture, $"Graveyard #{id} is the default graveyard (no graveyard linked to zone #{zone} for faction: {team}).");
+
+    /// <summary>ArcaneCore's own wording: a run-time link (an outdoor PvP tower) is closer than the zone's graveyard.</summary>
+    public static string GraveyardFromRunTimeLink(uint id, uint zone) => string.Create(CultureInfo.InvariantCulture, $"Graveyard #{id} is a run-time link (an outdoor PvP tower) nearer than the graveyards linked to zone #{zone}.");
 
     /// <summary>LANG_COMMAND_GRAVEYARDNEAREST (459).</summary>
     public static string GraveyardNearest(uint id, string team, uint zone) => string.Create(CultureInfo.InvariantCulture, $"Graveyard #{id} (faction: {team}) is nearest from linked to zone #{zone}.");
@@ -121,24 +132,36 @@ public sealed class DeathGmCommands : ICommandGroup
 
         uint zone = player.ZoneId;
         GraveyardCatalog catalog = WorldGraveyards.Of(context.World).Catalog;
-        MapRegistry registry = WorldMaps.Of(context.World).Registry;
-        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
-        WorldSafeLoc? graveyard = GraveyardSelector.FindClosest(catalog, registry, map.MapId, player.X, player.Y, player.Z, zoneId, areaId, team);
-        if (graveyard is null)
+
+        // The same choice as a real repop (battleground overrides, zone and area links, the default fallback, run-time links),
+        // asked of the graveyard service; the requested team applies where the service can take it (see ChooseNearest).
+        GraveyardRepopService? repop = context.Session.Services.GetService<GraveyardFeature>()?.Service;
+        if (repop?.ChooseNearest(player, map, team) is not { } choice)
         {
             context.Reply(ZoneNoGraveyardForFaction(zone, TeamName(team)));
             return true;
         }
 
-        // vmangos looks the link up in the player's zone: a graveyard that is only linked to the AREA has no data there.
-        GraveyardEntry? link = catalog.LinksOf(zone).Where(e => e.Location.Id == graveyard.Id).Select(e => (GraveyardEntry?)e).FirstOrDefault();
-        if (link is null)
+        uint id = choice.Location.Id;
+        switch (choice.Source)
         {
-            context.Reply(GraveyardError(graveyard.Id));
-            return true;
+            case GraveyardSource.Battleground:
+                context.Reply(GraveyardFromBattleground(id));
+                return true;
+            case GraveyardSource.Default:
+                // Without a team argument the fallback used the player's own team: name that one.
+                context.Reply(GraveyardFromDefault(id, zone, TeamName(team != 0 ? team : player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde)));
+                return true;
+            case GraveyardSource.RunTimeLink:
+                context.Reply(GraveyardFromRunTimeLink(id, zone));
+                return true;
         }
 
-        context.Reply(GraveyardNearest(graveyard.Id, TeamName(link.Value.Team), zone));
+        // The team of the link: the player's zone first (vmangos), then its area (only when that is a different id).
+        (_, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+        IEnumerable<GraveyardEntry> links = areaId == zone ? catalog.LinksOf(zone) : catalog.LinksOf(zone).Concat(catalog.LinksOf(areaId));
+        GraveyardEntry? link = links.Where(e => e.Location.Id == id).Select(e => (GraveyardEntry?)e).FirstOrDefault();
+        context.Reply(link is null ? GraveyardError(id) : GraveyardNearest(id, TeamName(link.Value.Team), zone));
         return true;
     }
 }
