@@ -99,6 +99,13 @@ public sealed class GmOptions
     /// </summary>
     public string LiveFxDbcDirectory { get; set; } = string.Empty;
 
+    /// <summary>
+    /// ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG
+    /// override, forced acks, map/grid unload, watchdog dumps) behind <see cref="DangerousDebugGate"/>. Off by default; changing it
+    /// needs a restart. On the live server (<c>ARCANECORE_LIVE_SERVER=1</c>) the commands are refused whatever this says.
+    /// </summary>
+    public bool AllowDangerousDebug { get; set; }
+
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
 
