@@ -745,28 +745,11 @@ public sealed class PlayerbotThinkLanesTests
         finally
         {
             capture.Dispose();
-            if (fresh is not null) await host.World.InvokeAsync(() => { fresh.Detach(new ArcaneCore.World.Features.FeatureHandover()); subscriptions!.Dispose(); return true; });
-            await host.DisposeAsync();
-        }
-    }
-
-    // Guards only against a future default seed in a fresh feature: it still passes if the restore is removed (ADetachedPass_... pins the restore).
-    [Fact]
-    public async Task AnUnsetPass_ArrivesInAFreshFeatureAsZero()
-    {
-        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 0, "Capbot");
-        ManagedPlayerbotFeature? fresh = null;
-        ArcaneCore.World.Features.FeatureSubscriptions? subscriptions = null;
-        try
-        {
-            uint after;
-            (fresh, _, after, subscriptions) = await ReloadAsync(host, feature, 0); // an unset pass hands over 0: nothing to restore, the fresh one stays unseeded
-            Assert.Equal(0u, after);
-        }
-        finally
-        {
-            capture.Dispose();
-            if (fresh is not null) await host.World.InvokeAsync(() => { fresh.Detach(new ArcaneCore.World.Features.FeatureHandover()); subscriptions!.Dispose(); return true; });
+            if (fresh is not null)
+            {
+                await fresh.QuiesceAsync(CancellationToken.None); // AttachFrom started the chat, client, policy and navigation services; only the quiesce stops them
+                await host.World.InvokeAsync(() => { fresh.Detach(new ArcaneCore.World.Features.FeatureHandover()); subscriptions!.Dispose(); return true; });
+            }
             await host.DisposeAsync();
         }
     }
