@@ -40,6 +40,7 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, accounts);
         Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        await DrainAsync(client);
 
         AccountLoginInfo? info = await accounts.GetLoginInfoAsync(Username);
         Assert.NotNull(info);
@@ -77,6 +78,7 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, failing);
         Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        await DrainAsync(client);
         Assert.Equal(1, failing.Calls);
     }
 
@@ -92,6 +94,7 @@ public sealed class LogonRecordsLoginInfoTests
         // The auto-create candidate's salt arrives in the challenge; the proof is computed against it (password == username).
         await client.WriteAsync(BuildProof(ComputeClient(salt, b, password: Username)));
         Assert.Equal((byte)AuthResult.Success, (await ReadExactAsync(client, 2))[1]);
+        await DrainAsync(client);
 
         AccountLoginInfo? info = await accounts.GetLoginInfoAsync(Username);
         Assert.NotNull(info);
@@ -109,6 +112,7 @@ public sealed class LogonRecordsLoginInfoTests
         await using (NetworkStream first = await StartSessionAsync(accounts, accounts, time: clock))
         {
             Assert.Equal((byte)AuthResult.Success, await LogOnAsync(first, salt));
+            await DrainAsync(first);
         }
         Assert.Equal(new AccountLoginInfo(new DateTime(2026, 10, 24, 8, 0, 0, DateTimeKind.Utc), "Win", "x86", "enUS", ClientBuild.Vanilla1121),
             await accounts.GetLoginInfoAsync(Username));
@@ -117,6 +121,7 @@ public sealed class LogonRecordsLoginInfoTests
         await using (NetworkStream second = await StartSessionAsync(accounts, accounts, time: clock))
         {
             Assert.Equal((byte)AuthResult.Success, await LogOnAsync(second, salt, wireLocale: "RFrf")); // frFR
+            await DrainAsync(second);
         }
         Assert.Equal(new AccountLoginInfo(new DateTime(2026, 10, 25, 9, 30, 0, DateTimeKind.Utc), "Win", "x86", "frFR", ClientBuild.Vanilla1121),
             await accounts.GetLoginInfoAsync(Username));
@@ -132,6 +137,7 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, accounts, time: clock);
         Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        await DrainAsync(client);
 
         AccountLoginInfo? info = await accounts.GetLoginInfoAsync(Username);
         Assert.Equal(new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc), info!.LastLoginUtc);
@@ -146,11 +152,39 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, null);
         Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        await DrainAsync(client);
         Assert.Equal(new AccountLoginInfo(null, string.Empty, string.Empty, string.Empty, 0), await accounts.GetLoginInfoAsync(Username));
     }
 
     [Fact]
-    public async Task CancelledRecording_DoesNotAuthenticate_AndSendsNoSuccessReply()
+    public async Task ProofSuccessReply_IsSentBeforeTheLoginInfoWriteCompletes()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+        var gated = new GatedLoginInfoStore();
+
+        await using NetworkStream client = await StartSessionAsync(accounts, gated);
+        await client.WriteAsync(BuildChallenge(Username));
+        (_, byte[] b, _) = await ReadChallengeAsync(client);
+        await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
+
+        // The write is parked behind the gate; the whole proof reply must still arrive.
+        byte[] reply = new byte[26];
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            await client.ReadExactlyAsync(reply, timeout.Token);
+        }
+        Assert.Equal((byte)AuthResult.Success, reply[1]);
+        Assert.False(gated.Release.Task.IsCompleted);
+
+        await gated.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        gated.Release.SetResult();
+        await SendRealmListAndReadReplyAsync(client);
+        Assert.Equal(1, gated.Calls);
+    }
+
+    [Fact]
+    public async Task CancelledRecording_AfterTheSuccessReply_EndsTheSession()
     {
         var accounts = new InMemoryAccountStore();
         byte[] salt = await SeedAsync(accounts);
@@ -162,11 +196,12 @@ public sealed class LogonRecordsLoginInfoTests
         (_, byte[] b, _) = await ReadChallengeAsync(client);
         await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
 
-        // Cancellation propagates out of the logon: the success reply (which would be 2+ bytes) is never written.
-        byte[] buffer = new byte[2];
+        // The success reply is already on the wire; the shutdown during the write then ends the session.
+        byte[] reply = new byte[26];
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        int read = await client.ReadAsync(buffer, timeout.Token);
-        Assert.Equal(0, read);
+        await client.ReadExactlyAsync(reply, timeout.Token);
+        Assert.Equal((byte)AuthResult.Success, reply[1]);
+        Assert.Equal(0, await client.ReadAsync(new byte[1], timeout.Token));
         Assert.Equal(1, cancelling.Calls);
     }
 
@@ -179,6 +214,7 @@ public sealed class LogonRecordsLoginInfoTests
 
         await using NetworkStream client = await StartSessionAsync(accounts, timingOut);
         Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        await DrainAsync(client);
         Assert.Equal(1, timingOut.Calls);
     }
 
@@ -229,6 +265,7 @@ public sealed class LogonRecordsLoginInfoTests
                 await tcp.ConnectAsync(IPAddress.Loopback, port);
                 NetworkStream client = tcp.GetStream();
                 Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt).WaitAsync(TimeSpan.FromSeconds(30)));
+                await DrainAsync(client).WaitAsync(TimeSpan.FromSeconds(30));
             }
             finally
             {
@@ -293,6 +330,26 @@ public sealed class LogonRecordsLoginInfoTests
         await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
         byte[] reply = await ReadExactAsync(client, 2);
         return reply[1];
+    }
+
+    /// <summary>
+    /// Finishes reading the proof reply (24 bytes after the 2 read by <see cref="LogOnAsync"/>) and round-trips a realm list.
+    /// The session is serial, so the realm list reply means the login-info write that follows the proof reply has finished.
+    /// </summary>
+    private static async Task DrainAsync(NetworkStream client)
+    {
+        await ReadExactAsync(client, 24);
+        await SendRealmListAndReadReplyAsync(client);
+    }
+
+    private static async Task SendRealmListAndReadReplyAsync(NetworkStream client)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 }, timeout.Token);
+        byte[] header = new byte[3];
+        await client.ReadExactlyAsync(header, timeout.Token);
+        byte[] body = new byte[BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1))];
+        await client.ReadExactlyAsync(body, timeout.Token);
     }
 
     private static async Task<NetworkStream> StartSessionAsync(
@@ -412,6 +469,24 @@ public sealed class LogonRecordsLoginInfoTests
             Interlocked.Increment(ref _calls);
             shutdown.Cancel();
             throw new OperationCanceledException("shutdown", shutdown.Token);
+        }
+
+        public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+            => Task.FromResult<AccountLoginInfo?>(null);
+    }
+
+    private sealed class GatedLoginInfoStore : IAccountLoginInfoStore
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _calls);
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)

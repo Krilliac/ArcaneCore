@@ -753,18 +753,20 @@ public sealed class LogonSession(
                 .ConfigureAwait(false);
         }
 
-        await RecordLoginInfoAsync(username, clientOs, clientPlatform, clientLocale, clientBuild, cancellationToken).ConfigureAwait(false);
-
         _authenticated = true;
         _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, LogSafe.Escape(username));
         await SendProofSuccessAsync(srp.ServerProof, cancellationToken).ConfigureAwait(false);
+
+        // After the reply, and awaited (not detached): the session's scoped stores are not safe for concurrent use.
+        await RecordLoginInfoAsync(username, clientOs, clientPlatform, clientLocale, clientBuild, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Stores the client details of a proven logon. Informational only: a failure is logged and never fails the logon
-    /// (the shutdown of the session still propagates). It runs before the proof reply is sent, so a slow auth database
-    /// delays the logon by at most the store's guard timeout.
+    /// (the shutdown of the session still propagates). It runs after the proof success reply, so it can neither delay
+    /// nor fail the proof answer; a slow auth database delays only the session's next command, by at most the store's
+    /// guard timeout. A shutdown during the write still ends the session, which already has its success reply.
     /// </summary>
     private async Task RecordLoginInfoAsync(
         string username, string os, string platform, string locale, ushort build, CancellationToken cancellationToken)
