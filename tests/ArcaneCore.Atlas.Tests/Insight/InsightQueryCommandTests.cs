@@ -270,6 +270,32 @@ public sealed class InsightQueryCommandTests
         Assert.Equal(4096, request["max"]!.GetValue<int>());
     }
 
+    [WindowsFact]
+    public async Task Anomalies_OfARingLargerThanThePage_ReturnTheNewestNotices_AlsoWhenFiltered()
+    {
+        await using InsightRig rig = await InsightRig.StartAsync();
+        const int ring = 600;
+        JsonObject[] all = [.. Enumerable.Range(1, ring).Select(i => Item(i, "warning", i % 100 == 0 ? "rare" : "common", "code", "s" + i, i))];
+        rig.Respond(req =>
+        {
+            long since = req["since"]!.GetValue<long>();
+            int max = req["max"]!.GetValue<int>();
+            return AnomalyReply(req, ring, [.. all.Where(a => a["seq"]!.GetValue<long>() > since).Take(max)]);
+        });
+
+        CommandResult recent = await rig.RunAsync("live.anomalies", null);
+        Assert.True(recent.Ok, recent.ErrorMessage);
+        long[] seqs = [.. recent.Data!["items"]!.AsArray().Select(r => r!["seq"]!.GetValue<long>())];
+        Assert.Equal(256, seqs.Length);
+        Assert.Equal(ring, seqs[^1]);
+        Assert.Equal(ring - 255, seqs[0]);
+
+        CommandResult rare = await rig.RunAsync("live.anomalies", new JsonObject { ["subsystem"] = "rare" });
+        Assert.True(rare.Ok, rare.ErrorMessage);
+        Assert.Equal([100L, 200L, 300L, 400L, 500L, 600L], rare.Data!["items"]!.AsArray().Select(r => r!["seq"]!.GetValue<long>()));
+        Assert.Equal(6, rare.Data["total"]!.GetValue<int>());
+    }
+
     // ---- live.heatmap ----
 
     [WindowsFact]

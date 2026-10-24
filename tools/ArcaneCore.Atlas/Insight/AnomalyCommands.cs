@@ -62,15 +62,24 @@ internal static class AnomalyCommands
         int minSeverity = SeverityRank(call.OptionalString("severity"));
         bool capped = call.Origin == CommandOrigin.Script;
 
+        // The ring answers oldest-first from since+1. The filters run here, so a filtered call fetches the widest page; when that page is
+        // full and newer notices exist, the newest page is fetched instead, so the result is the recent notices, not the oldest ones.
+        int fetch = subsystem is not null || minSeverity > 0 || map is not null ? MaxLimit : limit;
         JsonObject reply = await hub.Feed.RequestAsync(
-            new JsonObject { ["kind"] = "anomalies", ["since"] = since, ["max"] = limit },
+            new JsonObject { ["kind"] = "anomalies", ["since"] = since, ["max"] = fetch },
             cancellationToken).ConfigureAwait(false);
+        JsonArray page = reply["items"] as JsonArray ?? [];
+        long latestSeq = Long(reply["latest"]);
+        if (page.Count >= fetch && page[^1] is JsonObject last && Long(last["seq"]) < latestSeq)
+        {
+            reply = await hub.Feed.RequestAsync(
+                new JsonObject { ["kind"] = "anomalies", ["since"] = Math.Max(since, latestSeq - fetch), ["max"] = fetch },
+                cancellationToken).ConfigureAwait(false);
+            page = reply["items"] as JsonArray ?? [];
+        }
 
-        var rows = new JsonArray();
-        var points = new JsonArray();
-        int total = 0;
-        int nodes = 60;
-        foreach (JsonNode? node in reply["items"] as JsonArray ?? [])
+        var matches = new List<Anomaly>();
+        foreach (JsonNode? node in page)
         {
             if (node is not JsonObject item || !TryRow(item, out Anomaly anomaly))
             {
@@ -84,7 +93,15 @@ internal static class AnomalyCommands
                 continue;
             }
 
-            total++;
+            matches.Add(anomaly);
+        }
+
+        var rows = new JsonArray();
+        var points = new JsonArray();
+        int total = matches.Count;
+        int nodes = 60;
+        foreach (Anomaly anomaly in matches.Skip(Math.Max(0, total - limit)))
+        {
             JsonObject row = anomaly.ToRow();
             JsonObject? point = anomaly.ToPoint();
             int cost = InsightArgs.Nodes(row) + (point is null ? 0 : InsightArgs.Nodes(point));
