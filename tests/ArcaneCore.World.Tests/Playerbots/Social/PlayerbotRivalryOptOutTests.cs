@@ -206,13 +206,35 @@ public sealed class PlayerbotRivalryOptOutTests
     }
 
     [Fact]
-    public void TheStore_IsBounded_AndTheNewestOptOutIsAlwaysKept()
+    public void TheStore_IsBounded_NeverDropsAnOptOut_AndRefusesANewChoiceWhenFullOfThem()
     {
         var store = new PlayerbotRivalryOptOut();
-        int total = PlayerbotRivalryOptOut.MaxPlayers + 25;
-        for (int i = 1; i <= total; i++) store.Handle((ulong)(0x10_0000 + i), 100_000 + i, "rivals off", 0, Options());
+        int max = PlayerbotRivalryOptOut.MaxPlayers;
+        for (int i = 1; i <= max; i++) Assert.NotNull(store.Handle((ulong)(0x10_0000 + i), 100_000 + i, "rivals off", 0, Options()).Answer);
+        Assert.Equal(max, store.Count);
 
-        Assert.True(store.Count <= PlayerbotRivalryOptOut.MaxPlayers, $"{store.Count} players kept");
-        Assert.True(store.IsOptedOut((ulong)(0x10_0000 + total), 100_000 + total));
+        // Full of opt-outs: a new choice is refused (and answered), nothing already chosen is lost.
+        PlayerbotRivalryCommandResult refused = store.Handle(0x20_0000, 200_000, "rivals off", 0, Options());
+        Assert.True(refused.Consumed);
+        Assert.NotNull(refused.Answer);
+        Assert.DoesNotContain("Okay", refused.Answer);
+        Assert.Equal(max, store.Count);
+        Assert.False(store.IsOptedOut(0x20_0000, 200_000));
+        for (int i = 1; i <= max; i++) Assert.True(store.IsOptedOut((ulong)(0x10_0000 + i), 100_000 + i), $"opt-out {i} was dropped");
+    }
+
+    [Fact]
+    public void WhenTheStoreIsFull_ARivalsOnIsDroppedToMakeRoomForAnOptOut()
+    {
+        var store = new PlayerbotRivalryOptOut();
+        int max = PlayerbotRivalryOptOut.MaxPlayers;
+        store.Handle(0x10_0001, 100_001, "rivals on", 0, Options());
+        for (int i = 2; i <= max; i++) store.Handle((ulong)(0x10_0000 + i), 100_000 + i, "rivals off", 0, Options());
+        Assert.Equal(max, store.Count);
+
+        Assert.Contains("Okay", store.Handle(0x20_0000, 200_000, "rivals off", 0, Options()).Answer);
+        Assert.Equal(max, store.Count);
+        Assert.True(store.IsOptedOut(0x20_0000, 200_000));
+        Assert.Null(store.ChoiceOf(0x10_0001, 100_001)); // the "rivals on" went
     }
 }

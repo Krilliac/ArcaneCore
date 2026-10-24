@@ -80,7 +80,8 @@ internal static class PlayerbotRivalryRules
         }
         else
         {
-            if ((relation.Flags & PlayerbotRelationFlags.WarOnly) != 0) return PlayerbotStance.Neutral;
+            // Under War Mode TryGet also returns the blank row of a relation only the war layer keeps (the normal rules evicted it): a stranger here.
+            if (!IsKnown(relation, layer)) return PlayerbotStance.Neutral;
             affinity = relation.Affinity;
             rival = (relation.Flags & PlayerbotRelationFlags.Rival) != 0;
         }
@@ -179,6 +180,19 @@ internal static class PlayerbotRivalryRules
     /// <summary>Whether a place is quiet: its zone is (<see cref="IsQuietZone"/>) or the area it stands in (an area id, not a zone) is one of <paramref name="safeAreas"/>.</summary>
     internal static bool IsQuietPlace(AreaTable? areas, uint zoneId, uint areaId, IReadOnlySet<uint> safeAreas)
         => IsQuietZone(areas, zoneId) || safeAreas.Contains(areaId);
+
+    /// <summary>
+    /// Whether <paramref name="player"/> stands in a quiet place (<see cref="IsQuietPlace"/>). The area under it is only looked up for a zone that is not
+    /// already quiet and when <paramref name="safeAreas"/> is not empty. World thread.
+    /// </summary>
+    internal static bool IsQuiet(Player player, AreaTable? areas, IReadOnlySet<uint> safeAreas)
+    {
+        uint zone = player.ZoneId;
+        uint area = 0;
+        if (!IsQuietZone(areas, zone) && safeAreas.Count > 0 && player.Map is { } map)
+            area = map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
+        return IsQuietPlace(areas, zone, area, safeAreas);
+    }
 }
 
 /// <summary>One emote the lane sent (tests and status): who sent it, to whom, whether the target is a bot, which emote and whether it was rude.</summary>
@@ -449,11 +463,7 @@ internal sealed class PlayerbotRivalryLane(PlayerbotRivalryOptOut optOut)
     private bool IsQuiet(Player player, bool self)
     {
         if (self && _selfQuiet != 0) return _selfQuiet == 1;
-        uint zone = player.ZoneId;
-        uint area = 0;
-        if (!PlayerbotRivalryRules.IsQuietZone(_areas, zone) && _safeAreas.Count > 0 && player.Map is { } map)
-            area = map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
-        bool quiet = PlayerbotRivalryRules.IsQuietPlace(_areas, zone, area, _safeAreas);
+        bool quiet = PlayerbotRivalryRules.IsQuiet(player, _areas, _safeAreas);
         if (self) _selfQuiet = quiet ? 1 : 2;
         return quiet;
     }

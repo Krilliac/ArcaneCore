@@ -81,6 +81,21 @@ public sealed class PlayerbotRivalryRulesTests
         Assert.Equal(PlayerbotStance.Neutral, PlayerbotRivalryRules.StanceOf(liked, PlayerbotRivalryLayer.Normal, 40));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(20)]
+    public void TheBlankRowOfAWarOnlyRelation_IsAStrangerToTheNormalLayer_EvenWithFriendlyAffinityZero(int friendlyAffinity)
+    {
+        // What TryGet returns under War Mode for a relation the normal rules evicted: affinity 0, familiarity 0, the war layer holding the rest.
+        PlayerbotRelation blank = Rel(0, PlayerbotRelationFlags.None, -60, PlayerbotRelationFlags.Rival | PlayerbotRelationFlags.WarSeeded) with { Familiarity = 0 };
+        Assert.Equal(PlayerbotStance.Neutral, PlayerbotRivalryRules.StanceOf(blank, PlayerbotRivalryLayer.Normal, friendlyAffinity));
+        Assert.False(PlayerbotRivalryRules.IsKnown(blank, PlayerbotRivalryLayer.Normal));
+        Assert.Equal(PlayerbotStance.Rival, PlayerbotRivalryRules.StanceOf(blank, PlayerbotRivalryLayer.War, friendlyAffinity));
+
+        // The control: a row the bot really knows, at affinity 0, is Friendly when the threshold is 0.
+        Assert.Equal(PlayerbotStance.Friendly, PlayerbotRivalryRules.StanceOf(Rel(0), PlayerbotRivalryLayer.Normal, 0));
+    }
+
     [Fact]
     public void EachLayer_ReadsItsOwnAffinityAndFlags()
     {

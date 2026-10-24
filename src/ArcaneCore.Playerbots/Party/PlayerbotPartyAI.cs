@@ -577,6 +577,10 @@ internal sealed class PlayerbotPartyAI
         bool optedOut = !fromBot && Social?.RivalryOptOut?.IsOptedOut(emoter.Guid.Value, emoter.AccountId) == true;
         double roll = BotSocial.PlayerbotRivalryRules.ReplyRoll(player.Guid.Value, emoter.Guid.Value, textEmote, now);
         uint? answer = BotSocial.PlayerbotRivalryRules.ReplyTo(stance, textEmote, fromBot, roll, rivalry.Emotes.RudeAtBots, optedOut);
+        // A rude answer to a real player keeps the lane's safeguards: opt-in when the world asks for it, and no capital, safe area or unplaceable zone.
+        if (!fromBot && answer is { } rude && BotSocial.PlayerbotEmoteMoods.Classify(rude) == BotSocial.PlayerbotEmoteMood.Rude
+            && ((rivalry.Emotes.RudeRequiresOptIn && Social?.RivalryOptOut?.ChoiceOf(emoter.Guid.Value, emoter.AccountId) != true) || RudeReplyIsQuiet(player, emoter, rivalry)))
+            answer = BotSocial.PlayerbotSocialEmotes.TextEmotes.Shrug;
         if (answer is { } given)
         {
             if (BotSocial.PlayerbotEmoteMoods.Classify(given) == BotSocial.PlayerbotEmoteMood.Rude) BotSocial.PlayerbotRivalryMeters.CountEmote("reply_rude");
@@ -584,6 +588,13 @@ internal sealed class PlayerbotPartyAI
         }
 
         return answer;
+    }
+
+    private bool RudeReplyIsQuiet(Player player, Player emoter, BotSocial.PlayerbotSocialRivalryOptions rivalry)
+    {
+        ArcaneCore.Game.Maps.Terrain.AreaTable? areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
+        IReadOnlySet<uint> safeAreas = rivalry.Safeguards.SafeAreaIds();
+        return BotSocial.PlayerbotRivalryRules.IsQuiet(player, areas, safeAreas) || BotSocial.PlayerbotRivalryRules.IsQuiet(emoter, areas, safeAreas);
     }
 
     /// <summary>

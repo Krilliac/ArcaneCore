@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
@@ -282,6 +283,33 @@ public sealed class PlayerbotRivalryEmoteWorldTests
 
         // The positive control: the very same scenario in an ordinary zone is taunted, so the checks above did run.
         await RivalryKit.RunAsync(world, t += 60_000, zone: RivalryKit.OrdinaryZone);
+        Assert.Single(Sends(world));
+    }
+
+    [Fact]
+    public async Task NoRudeEmoteIsSent_WhenEitherStandsInASafeArea_ButTheSameScenarioWithoutItIsTaunted()
+    {
+        // The test world has no terrain, so the area under every character is 0 (Map.GetZoneAndAreaId: "(0, 0) when unknown"). Listing area 0 puts every
+        // character in a safe area of an ordinary zone, which reaches the lane's area branch (the zone itself is ordinary and not quiet).
+        await using SocialWorld world = await RivalryKit.StartAsync();
+        (_, _, WorldTestClient player, _) = await PairAsync(world, "Rvareabot", "Rvareafoe");
+        await using WorldTestClient keep = player;
+        await RivalryKit.SeedAsync(world, "Rvareabot", "Rvareafoe", killerIsBot: false);
+        long t = 3_600_000;
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player bot = RivalryKit.Online(world, "Rvareabot");
+            Assert.Equal((0u, 0u), bot.Map!.GetZoneAndAreaId(bot.X, bot.Y, bot.Z)); // the premise
+            return true;
+        });
+        world.Options.Social.Rivalry.Safeguards.SafeAreas = "0";
+        await RivalryKit.RunAsync(world, t += 60_000);
+        Assert.Empty(Sends(world));
+
+        // The positive control: the same run with the default list (area 0 is not in it) is taunted, so the area branch above is what held it back.
+        world.Options.Social.Rivalry.Safeguards.SafeAreas = PlayerbotSocialRivalrySafeguardOptions.DefaultSafeAreas;
+        await RivalryKit.RunAsync(world, t += 60_000);
         Assert.Single(Sends(world));
     }
 

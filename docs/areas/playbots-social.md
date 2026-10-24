@@ -352,17 +352,19 @@ player receives in a login is followed by one system notice that says how to sto
 
 **Toward a bot, an answer that classifies as rude is replaced by a shrug unless `RudeAtBots` is on**, in every stance (this also stops the old one-in-three rude answer to a rude emote and the
 chicken answer to a threat): two bots with different opinions of each other can then never trade rude emotes, so no exchange between bots lowers an affinity. A player who opted out is not
-answered at all until `rivals on`.
+answered at all until `rivals on`. **A rude answer to a real player keeps the lane's safeguards**: with `RudeRequiresOptIn` it needs a `rivals on`, and when either character
+stands in a capital, a safe area or a place the zone table cannot place it becomes a shrug (the per-target and per-pair rude caps belong to the lane; a reply is limited by `EmoteReplyGapSeconds` and the speech budget). A rival bot can
+still answer a real player's friendly emote rudely (the table above): the owner's ruling R11 covers it.
 
 **Opting out.** Whisper any bot of **your own faction** `rivals off`: the server drops a whisper between factions unless `World:AllowTwoSideChat`, but the choice is server-wide, one store shared by every
 bot of both factions, and holds for the whole account. `rivals on` undoes it and `rivals` alone tells the status; the line is read as the "ai off" command is (letters and spaces, any case), answered by a
 system message at most once per 10 seconds, and consumed (the chat service never hears it). It works with bot chat off and when the bot ignores you. **The choice lasts until the server restarts**
-(it is kept in memory); the answers say so. `World:Playerbots:Social:Rivalry:AllowOptOut` (on) only decides whether the line is parsed (it is also parsed while `RudeRequiresOptIn` is on); a choice already recorded is always honoured.
+(it is kept in memory); the answers say so. The store holds 8192 players: past that the oldest `rivals on` is dropped to make room, an opt-out is never dropped, and a new choice made while every slot holds an opt-out is refused (the player is told, and the optouts meter counts `refused`). A bare `rivals` whispered to a bot is consumed even while `World:Playerbots:Social:Rivalry:Enabled` is off, so a player can opt out beforehand. `World:Playerbots:Social:Rivalry:AllowOptOut` (on) only decides whether the line is parsed (it is also parsed while `RudeRequiresOptIn` is on); a choice already recorded is always honoured.
 
 **Organised kills.** `World:Playerbots:Social:Memory:OrganisedPvpKills` (off): a PvP kill on a battleground map, or with either side in a GM-ordered siege group, records no `KilledBy` or `KilledThem`, so players met
 in a match are not remembered as rivals in the open world. On, they are recorded like any other.
 
-Meters: `arcanecore_playerbot_rivalry_emotes_total{kind}` (`greet`, `rude`, `reply_rude`, `reply_shrug`) and `arcanecore_playerbot_rivalry_optouts_total{change}` (`off`, `on`; docs/ops/metrics.md); `.playerbot social $bot` ends with `rivals=N`, the
+Meters: `arcanecore_playerbot_rivalry_emotes_total{kind}` (`greet`, `rude`, `reply_rude`, `reply_shrug`) and `arcanecore_playerbot_rivalry_optouts_total{change}` (`off`, `on`, `refused`; docs/ops/metrics.md); `.playerbot social $bot` ends with `rivals=N`, the
 number of rivals in the bot's normal layer. Faults go to `playerbot.social`.
 
 ## Review round 1 (P2)

@@ -18,7 +18,8 @@ internal readonly record struct PlayerbotRivalryCommandResult(bool Consumed, str
 /// <see cref="Handle"/> parses the line as <c>PlayerbotChatSafety.TryChoice</c> parses "ai off" (letters and spaces, lower case) and answers at most
 /// once per player per <see cref="AnswerGapMs"/>; <see cref="PlayerbotSocialRivalryOptions.AllowOptOut"/> only decides whether the line is parsed at
 /// all, and a choice already recorded is read by <see cref="IsOptedOut"/> whatever that option says. Bounded by <see cref="MaxPlayers"/>: past it the
-/// oldest "rivals on" is dropped first, then the oldest opt-out. Thread-safe (one lock; every call is a few dictionary operations).
+/// oldest "rivals on" is dropped to make room, and an opt-out is never dropped: a table full of opt-outs refuses a new choice (the player is told,
+    /// and the meter counts a "refused" change). Thread-safe (one lock; every call is a few dictionary operations).
 /// </para>
 /// </summary>
 internal sealed class PlayerbotRivalryOptOut
@@ -31,6 +32,7 @@ internal sealed class PlayerbotRivalryOptOut
 
     private const string OffAnswer = "Okay: bots will not taunt you. This lasts until the server restarts; whisper \"rivals off\" again after that. Whisper \"rivals on\" to undo.";
     private const string OnAnswer = "Okay: bots may taunt you again. Whisper \"rivals off\" to stop it.";
+    private const string FullAnswer = "Sorry: the server cannot record more choices right now, so yours was not saved. Please tell a game master.";
     private const string StatusMayTaunt = "Bots may taunt you (whisper \"rivals off\" to stop it)";
     private const string StatusOptedOut = "Bots will not taunt you until the server restarts (whisper \"rivals on\" to undo)";
     private const string StatusNotUnlessOn = "Bots will not taunt you unless you whisper \"rivals on\" (this lasts until the server restarts)";
@@ -79,17 +81,24 @@ internal sealed class PlayerbotRivalryOptOut
         lock (_gate)
         {
             long key = KeyOf(characterGuid, accountId);
+            bool refused = false;
             if (line != "rivals")
             {
-                Set(key, optedIn: line == "rivals on");
-                PlayerbotRivalryMeters.CountOptOut(line == "rivals off" ? "off" : "on");
+                if (Set(key, optedIn: line == "rivals on")) PlayerbotRivalryMeters.CountOptOut(line == "rivals off" ? "off" : "on");
+                else
+                {
+                    // Every slot holds an opt-out, and an opt-out is never dropped: the new choice is refused and the player is told.
+                    PlayerbotRivalryMeters.CountOptOut("refused");
+                    refused = true;
+                }
             }
 
             if (_answered.TryGetValue(characterGuid, out long last) && nowMs - last < AnswerGapMs) return new PlayerbotRivalryCommandResult(true, null);
             if (_answered.Count >= MaxPlayers) _answered.Clear();
             _answered[characterGuid] = nowMs;
             bool? choice = _choices.TryGetValue(key, out Choice? current) ? current.OptedIn : null;
-            string answer = line == "rivals off" ? OffAnswer
+            string answer = refused ? FullAnswer
+                : line == "rivals off" ? OffAnswer
                 : line == "rivals on" ? OnAnswer
                 : choice == false ? StatusOptedOut
                 : options.Emotes.RudeRequiresOptIn && choice != true ? StatusNotUnlessOn
@@ -125,37 +134,34 @@ internal sealed class PlayerbotRivalryOptOut
     // The account id when there is one; the character guid, kept apart from every account id, otherwise.
     private static long KeyOf(ulong characterGuid, int accountId) => accountId > 0 ? accountId : -1 - (long)(characterGuid & 0x3FFF_FFFF_FFFF_FFFFUL);
 
-    // Under _gate.
-    private void Set(long key, bool optedIn)
+    // Under _gate. False when the choice could not be kept: the table is full of opt-outs, which are never dropped.
+    private bool Set(long key, bool optedIn)
     {
         if (!_choices.TryGetValue(key, out Choice? choice))
         {
-            if (_choices.Count >= MaxPlayers) EvictOne();
+            if (_choices.Count >= MaxPlayers && !EvictOptedIn()) return false;
             _choices[key] = choice = new Choice();
         }
 
         choice.OptedIn = optedIn;
         choice.Sequence = ++_sequence;
+        return true;
     }
 
-    // Under _gate. A "rivals on" is the default for everyone but a RudeRequiresOptIn world, so it goes first; then the oldest opt-out.
-    private void EvictOne()
+    // Under _gate. Drops the oldest "rivals on" (the default for everyone but a RudeRequiresOptIn world); false when every entry is an opt-out.
+    private bool EvictOptedIn()
     {
         long victim = 0;
         bool found = false;
         long best = long.MaxValue;
-        bool bestOptedIn = false;
         foreach (KeyValuePair<long, Choice> entry in _choices)
         {
-            Choice choice = entry.Value;
-            bool better = !found || (choice.OptedIn && !bestOptedIn) || (choice.OptedIn == bestOptedIn && choice.Sequence < best);
-            if (!better) continue;
+            if (!entry.Value.OptedIn || entry.Value.Sequence >= best) continue;
             found = true;
             victim = entry.Key;
-            best = choice.Sequence;
-            bestOptedIn = choice.OptedIn;
+            best = entry.Value.Sequence;
         }
 
-        if (found) _choices.Remove(victim);
+        return found && _choices.Remove(victim);
     }
 }

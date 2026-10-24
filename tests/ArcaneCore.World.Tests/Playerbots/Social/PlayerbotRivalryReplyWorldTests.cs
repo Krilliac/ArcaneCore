@@ -72,6 +72,31 @@ public sealed class PlayerbotRivalryReplyWorldTests
     }
 
     [Fact]
+    public async Task ARudeReplyToARealPlayer_BecomesAShrug_InACapital_OrWithoutTheOptInTheWorldAsks()
+    {
+        foreach (bool capital in new[] { true, false })
+        {
+            string prefix = capital ? "Rvqca" : "Rvqop";
+            await using SocialWorld world = await RivalryKit.StartAsync(o => o.Social.Rivalry.Emotes.RudeRequiresOptIn = !capital, chat: true);
+            (string[] bots, ulong[] guids, ulong foeGuid, WorldTestClient foe) = await CrowdAsync(world, prefix, 4);
+            await using WorldTestClient keep = foe;
+            foreach (string bot in bots) await RivalryKit.SeedAsync(world, bot, prefix + "foe", killerIsBot: false);
+            // Every character stands in an ordinary zone, except (first world) the player in a capital.
+            await world.Host.OnWorldAsync(() =>
+            {
+                foreach (ArcaneCore.Game.Entities.Player p in world.Host.World.OnlinePlayers) p.ZoneId = RivalryKit.OrdinaryZone;
+                if (capital) RivalryKit.Online(world, prefix + "foe").ZoneId = RivalryKit.CapitalZone;
+                return true;
+            });
+
+            // The rules alone would answer a rival's rude emote rudely, so a shrug is the guard at work.
+            Assert.All(guids, g => Assert.True(RivalryKit.IsRude(PlayerbotRivalryRules.ReplyTo(PlayerbotStance.Rival, Emotes.Rude, toBot: false, Roll(g, foeGuid, Emotes.Rude)) ?? 0)));
+            uint?[] shrugs = [.. guids.Select(_ => (uint?)Emotes.Shrug)];
+            AssertAnswers(bots, guids, await WaveAtAsync(world, foe, bots, guids, foeGuid, Emotes.Rude, shrugs), shrugs);
+        }
+    }
+
+    [Fact]
     public async Task AFriendsWave_IsAnsweredWithAFriendlyEmote_ByEveryBot()
     {
         await using SocialWorld world = await RivalryKit.StartAsync(chat: true);

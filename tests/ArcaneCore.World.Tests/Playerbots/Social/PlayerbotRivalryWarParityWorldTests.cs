@@ -40,9 +40,17 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         return rows;
     }
 
+    private static List<(string Bot, ulong Target, uint Emote, bool Rude)> BotSends(Outcome outcome)
+        => [.. outcome.Sends.Where(s => s.TargetIsBot).Select(s => (outcome.Bots.First(p => p.Value == s.Bot).Key, s.Target, s.Emote, s.Rude))];
+
     private static async Task<Outcome> RunAsync(bool warWorld, bool rudeAtBots, long? startMs)
     {
-        await using SocialWorld world = await RivalryKit.StartAsync(o => o.Social.Rivalry.Emotes.RudeAtBots = rudeAtBots, chat: true);
+        // FriendlyAffinity 0 (allowed): a blank row would read as Friendly if the normal layer took a war-only row for a known relation.
+        await using SocialWorld world = await RivalryKit.StartAsync(o =>
+        {
+            o.Social.Rivalry.Emotes.RudeAtBots = rudeAtBots;
+            o.Social.Rivalry.Emotes.FriendlyAffinity = 0;
+        }, chat: true);
         await world.AddBotAsync("Rvpara");
         await world.AddBotAsync("Rvparb");
         await world.AddBotAsync("Rvparc", race: RivalryKit.Undead);
@@ -60,6 +68,18 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         Assert.Equal(-20, toPlayer.Affinity);
         Assert.False(toPlayer.Flags.HasFlag(PlayerbotRelationFlags.Rival));
         Assert.Equal(warWorld, RivalryKit.Memory(world).IsRival(toPlayer));
+
+        // B holds a war-only relation for C (the normal rules evicted it, the war layer kept it): visible only under War Mode, and there a blank row.
+        await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialMemory memory = RivalryKit.Memory(world);
+            memory.Load([new PlayerbotRelation(world.Bots["Rvparb"], (int)RivalryKit.Online(world, "Rvparb").Guid.Low, guids["Rvparc"], true, 0, 0, 500,
+                PlayerbotRelationFlags.WarOnly, memory.NowMs, string.Empty, string.Empty, -60, PlayerbotRelationFlags.WarSeeded | PlayerbotRelationFlags.Rival)]);
+            return true;
+        });
+        PlayerbotRelation? evicted = RivalryKit.RelationOf(world, world.Bots["Rvparb"], guids["Rvparc"]);
+        Assert.Equal(warWorld, evicted is not null);
+        if (evicted is not null) Assert.True(evicted.Familiarity == 0 && evicted.Affinity == 0);
         SortedDictionary<string, string> seeded = NormalRows(world, guids);
 
         // One start time for both worlds, chosen in the first: B's greeting to C passes its roll and the pick is one C answers (not a nod).
@@ -107,6 +127,11 @@ public sealed class PlayerbotRivalryWarParityWorldTests
             int sentByC = world.Sends.Count(s => s.Bot == c && s.Target == bTarget);
             Assert.True(heardFromC > sentByC, $"{label}: C emoted at B {heardFromC} times and the lane sent {sentByC}: no bot answered");
         }
+
+        // What the lane sent to bots is identical, send for send (design 7.1): the war layer decides nothing toward a bot.
+        List<(string Bot, ulong Target, uint Emote, bool Rude)> toBotsCalm = BotSends(calm), toBotsWar = BotSends(war);
+        Assert.NotEmpty(toBotsCalm);
+        Assert.Equal(toBotsCalm, toBotsWar);
 
         // The assertion the test exists for.
         Assert.Equal(calm.FinalRows, war.FinalRows);
