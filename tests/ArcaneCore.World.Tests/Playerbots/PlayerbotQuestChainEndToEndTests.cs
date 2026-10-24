@@ -51,6 +51,8 @@ public sealed class PlayerbotQuestChainEndToEndTests
             {
                 QuestNpcFeature feature = host.WorldServices.GetRequiredService<QuestNpcFeature>();
                 await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(Quest15Fixture.Guid), "quest 15 giver");
+                // The quest journal is tracked by the logged-in event, which may land after the giver becomes visible.
+                await host.WaitForWorldAsync(() => session.Player is { } p && feature.Services.StateOf(p) is not null, "quest 15 npc state");
                 await host.World.InvokeAsync(() =>
                 {
                     Player player = session.Player!;
