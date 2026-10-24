@@ -100,22 +100,37 @@ internal static class AnomalyCommands
         var points = new JsonArray();
         int total = matches.Count;
         int nodes = 60;
-        foreach (Anomaly anomaly in matches.Skip(Math.Max(0, total - limit)))
+
+        // The newest rows are kept: walk from the newest backwards and stop at the cap, then put the survivors back in oldest-first order.
+        var keptRows = new List<JsonObject>();
+        var keptPoints = new List<JsonObject>();
+        for (int i = total - 1; i >= Math.Max(0, total - limit); i--)
         {
+            Anomaly anomaly = matches[i];
             JsonObject row = anomaly.ToRow();
             JsonObject? point = anomaly.ToPoint();
             int cost = InsightArgs.Nodes(row) + (point is null ? 0 : InsightArgs.Nodes(point));
-            if (capped && (rows.Count >= InsightArgs.MaxWatchedRows || nodes + cost > InsightArgs.NodeBudget))
+            if (capped && (keptRows.Count >= InsightArgs.MaxWatchedRows || nodes + cost > InsightArgs.NodeBudget))
             {
-                continue;
+                break;
             }
 
             nodes += cost;
-            rows.Add(row);
+            keptRows.Add(row);
             if (point is not null)
             {
-                points.Add(point);
+                keptPoints.Add(point);
             }
+        }
+
+        for (int i = keptRows.Count - 1; i >= 0; i--)
+        {
+            rows.Add(keptRows[i]);
+        }
+
+        for (int i = keptPoints.Count - 1; i >= 0; i--)
+        {
+            points.Add(keptPoints[i]);
         }
 
         return new JsonObject

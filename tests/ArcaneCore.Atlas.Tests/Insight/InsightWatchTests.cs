@@ -245,6 +245,12 @@ public sealed class InsightWatchTests
         Assert.True(anomalies["items"]!.AsArray().Count <= 1500);
         Assert.True(anomalies["items"]!.AsArray().Count > 0);
 
+        // A capped answer keeps the newest notices, oldest first, with no gap between them.
+        long[] seqs = [.. anomalies["items"]!.AsArray().Select(i => i!["seq"]!.GetValue<long>())];
+        Assert.Equal(4096L, seqs[^1]);
+        Assert.Equal(seqs.Order(), seqs);
+        Assert.Equal(seqs[^1] - seqs[0] + 1, seqs.Length);
+
         JsonNode highlight = CommandEvents(rig, "live.highlight").Last()!["data"]!;
         Assert.True(highlight["truncated"]!.GetValue<bool>());
         Assert.Equal(5000, highlight["total"]!.GetValue<int>());
