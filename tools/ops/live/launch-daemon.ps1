@@ -14,9 +14,9 @@ param(
     [ValidateSet('Full', 'Heap')][string]$DumpType = 'Full',
     [ValidateRange(10, 86400)][int]$HangStackIntervalSeconds = 60,
     # Disk caps: the oldest files beyond a cap are deleted at launch and every counters segment.
-    [int]$MaxDumpFiles = 3, [int]$MaxDumpGB = 30,
-    [int]$MaxHangStackFiles = 500, [int]$MaxHangStackMB = 200,
-    [int]$MaxCountersFiles = 48, [int]$MaxCountersMB = 2048
+    [ValidateRange(1, 10000)][int]$MaxDumpFiles = 3, [ValidateRange(1, 10000)][int]$MaxDumpGB = 30,
+    [ValidateRange(1, 100000)][int]$MaxHangStackFiles = 500, [ValidateRange(1, 1048576)][int]$MaxHangStackMB = 200,
+    [ValidateRange(1, 10000)][int]$MaxCountersFiles = 48, [ValidateRange(1, 1048576)][int]$MaxCountersMB = 2048
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
@@ -73,13 +73,20 @@ if ($Diagnostics -eq 'Max') {
     # The sidecar (hidden) trims the capture directories each counters segment and collects the counters; it ends when the daemon,
     # a child of this console, ends. Failing to start it must not stop the daemon.
     try {
-        $sidecarArgs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'diagnostics-sidecar.ps1'), '-Role', $Role, '-LiveHome', $LiveHome, '-ParentPid', $PID,
+        # One pre-quoted argument string: Start-Process joins an array with spaces without quoting, which breaks on a path with a space.
+        $sidecarParts = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'diagnostics-sidecar.ps1'), '-Role', $Role, '-LiveHome', $LiveHome, '-ParentPid', $PID,
             '-MaxDumpFiles', $MaxDumpFiles, '-MaxDumpGB', $MaxDumpGB, '-MaxHangStackFiles', $MaxHangStackFiles, '-MaxHangStackMB', $MaxHangStackMB,
             '-MaxCountersFiles', $MaxCountersFiles, '-MaxCountersMB', $MaxCountersMB)
-        if ($diagPlan.CountersTool) { $sidecarArgs += @('-CountersTool', $diagPlan.CountersTool) }
+        if ($diagPlan.CountersTool) { $sidecarParts += @('-CountersTool', $diagPlan.CountersTool) }
+        $sidecarArgs = ConvertTo-LiveArgumentString $sidecarParts
         # Without the daemon's dump variables: the sidecar and the .NET tools it runs must not dump into the daemon's dump directory.
         $sidecar = Invoke-WithoutDumpEnvironment { Start-Process pwsh -ArgumentList $sidecarArgs -WindowStyle Hidden -PassThru }
-        Write-Host "[diagnostics] sidecar pid $($sidecar.Id) (ends with the daemon)"
+        [void]$sidecar.Handle # open the handle now: ExitCode is $null for a process whose handle was never opened
+        if ($sidecar.WaitForExit(1000)) {
+            Write-Warning "[diagnostics] the sidecar (pid $($sidecar.Id)) exited at once with code $($sidecar.ExitCode): no retention trimming or counters for this run"
+        } else {
+            Write-Host "[diagnostics] sidecar pid $($sidecar.Id) (ends with the daemon)"
+        }
     } catch { Write-Warning "[diagnostics] the sidecar did not start: $($_.Exception.Message)" }
 }
 Set-Location -LiteralPath $LiveProfile

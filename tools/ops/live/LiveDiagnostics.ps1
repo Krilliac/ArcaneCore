@@ -27,6 +27,14 @@ function Find-DotnetTool {
     return $null
 }
 
+function ConvertTo-LiveArgumentString {
+    <# .SYNOPSIS  One command-line string for Start-Process -ArgumentList (an array is joined unquoted): an argument with white space or a quote is quoted, embedded quotes escaped. Same approach as ConvertTo-QualityArgumentString in tools/ops/quality/QualityLib.ps1. #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments)
+    ($Arguments | ForEach-Object {
+        if ($_.Length -gt 0 -and $_ -notmatch '[\s"]') { $_ } else { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
+    }) -join ' '
+}
+
 function Get-LiveDiagnosticsDirectories {
     <# .SYNOPSIS  Where each kind of capture goes under the live home. #>
     param([Parameter(Mandatory)][string]$LiveHome)
@@ -133,14 +141,25 @@ function Get-LiveDiagnosticsPlan {
         $warnings.Add('dotnet-counters not found: no counters CSV; install it with: dotnet tool install -g dotnet-counters')
     }
 
+    # What the daemon will really see: a value kept from the environment replaces the planned one.
+    $eff = @{}
+    foreach ($s in $settings) { $eff[$s.Name] = if ($s.Kept) { $s.Existing } else { $s.Value } }
+
     $active.Add("diagnostics Max ($Role)")
-    $dumpOn = $settings | Where-Object { $_.Name -eq 'DOTNET_DbgEnableMiniDump' -and $_.Kept -and $_.Existing.Trim() -ne '1' }
-    $active.Add($(if ($dumpOn) { "crash dump: off (DOTNET_DbgEnableMiniDump=$($dumpOn.Existing) kept from the environment)" } else { "crash dump: $effectiveDump -> $dumpDir" }))
+    if ($eff['DOTNET_DbgEnableMiniDump'].Trim() -ne '1') {
+        $active.Add("crash dump: off (DOTNET_DbgEnableMiniDump=$($eff['DOTNET_DbgEnableMiniDump']) kept from the environment)")
+    } else {
+        $type = switch ($eff['DOTNET_DbgMiniDumpType'].Trim()) { '4' { 'Full' } '2' { 'Heap' } default { "type $($eff['DOTNET_DbgMiniDumpType'])" } }
+        $target = try { [IO.Path]::GetDirectoryName($eff['DOTNET_DbgMiniDumpName']) } catch { $null }
+        if ([string]::IsNullOrEmpty($target)) { $target = $eff['DOTNET_DbgMiniDumpName'] }
+        $active.Add("crash dump: $type -> $target")
+    }
     if ($Role -eq 'World') {
-        $active.Add($(if ($plan.StackTool) { "hang stacks: $($plan.StackTool) every >= $HangStackIntervalSeconds s -> $($dirs.HangStacks)" } else { 'hang stacks: off (dotnet-stack not found)' }))
+        $active.Add($(if ($plan.StackTool) { "hang stacks: $($eff['Ops__Watchdog__TickMonitor__StackCaptureTool']) every >= $($eff['Ops__Watchdog__TickMonitor__StackCaptureIntervalSeconds']) s -> $($eff['Ops__Watchdog__TickMonitor__StackCaptureDirectory'])" } else { 'hang stacks: off (dotnet-stack not found)' }))
     }
     $active.Add($(if ($counters) { "counters: System.Runtime (+ the ArcaneCore meters when Ops:Metrics:Enabled is true in the profile) -> $($dirs.Counters)" } else { 'counters: off (dotnet-counters not found)' }))
-    $active.Add('repo options: fault log limit 50, slow transaction/command 500 ms, write-gate stats 60 s, heap sample 5 s, counter dump 60 s')
+    $active.Add("repo options: fault log limit $($eff['Diagnostics__FaultLogLimit']), slow transaction $($eff['Database__SlowTransactionWarnMs']) ms, slow command $($eff['Database__SlowCommandWarnMs']) ms, " +
+        "write-gate stats $($eff['Database__Sqlite__SingleWriter__StatsIntervalMs']) ms, heap sample $($eff['Ops__Watchdog__Memory__SampleIntervalSeconds']) s, counter dump $($eff['Ops__Watchdog__Counters__DumpIntervalSeconds']) s")
     foreach ($s in $settings | Where-Object Kept) { $active.Add("kept from the environment: $($s.Name)=$($s.Existing)") }
     return [pscustomobject]$plan
 }

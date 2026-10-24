@@ -58,9 +58,9 @@ runs until it exits, and never outlives it. It stops only its own collector, by 
   `ArcaneCore.Runtime` is created only by `MetricsHost.StartAsync` and `ArcaneCore.World` only by `WorldMetricsFeature`, both after the
   `Ops:Metrics:Enabled` check (`MetricsHost.cs:32-39`, `WorldMetricsFeature.cs:45-46`; default false, `MetricsOptions.cs:23`), so **they
   appear only when the profile enables `Ops:Metrics`** (the launcher does not, because that opens an exporter endpoint). `ArcaneCore.Faults`
-  and `ArcaneCore.Anomalies` are created lazily on the first fault or anomaly (`FaultLedger.cs:1026`, `AnomalyLedger.cs:569`); the Playerbots
+  and `ArcaneCore.Anomalies` are created lazily on the first fault or anomaly (`FaultLedger.cs:1040`, `AnomalyLedger.cs:586`); the Playerbots
   meters when the Playerbots QA code runs (`PlayerbotQaMeters.cs`). With `Ops:Metrics` off the CSV is mostly `System.Runtime`. The collection has at most 2000 time series and 50 histograms so a per-map or per-opcode dimension cannot
-  grow the target's memory without bound. A collector that ends at once is retried after 60 s. Its own log is `<role>-sidecar.log` there.
+  grow the target's memory without bound. A collector that ends at once is retried after 60 s (`-RestartBackoffSeconds` on the sidecar). The sidecar and its collector are tied to the daemon's process object, not to its id, so a reused process id is never followed; paths with spaces are quoted when the sidecar and the collector are started. Its own log is `<role>-sidecar.log` there.
 - **Retention.** At launch and at every segment the oldest files beyond a cap are deleted (the newest file is always kept):
 
 | Directory | Files | Default cap | Parameters |
@@ -69,7 +69,7 @@ runs until it exits, and never outlives it. It stops only its own collector, by 
 | `logs\hangstacks` (`hang-stacks-*.txt`) | hang stacks | 500 files, 200 MB | `-MaxHangStackFiles`, `-MaxHangStackMB` |
 | `logs\counters` (`*.csv`) | counters segments | 48 files, 2048 MB | `-MaxCountersFiles`, `-MaxCountersMB` |
 
-Environment inheritance: the launcher starts the sidecar with the `DOTNET_DbgEnableMiniDump`, `DOTNET_DbgMiniDump*` and `DOTNET_CreateDump*` variables removed (`Invoke-WithoutDumpEnvironment`), so the sidecar and its `dotnet-counters` collectors never dump into `dumps`. The World does pass them on to the `dotnet-stack` it runs for a hang capture (`HangStackCapture.cs:139`): if that tool itself crashes, it writes a dump into `dumps` named with its own process id, and that file counts against the dump cap. The launcher console keeps the `Ops__`/`Database__`/`DOTNET_` variables after the daemon ends (`-NoExit`), so a .NET tool run there afterwards inherits them.
+Environment inheritance: the launcher starts the sidecar with the `DOTNET_DbgEnableMiniDump`, `DOTNET_DbgMiniDump*` and `DOTNET_CreateDump*` variables removed (`Invoke-WithoutDumpEnvironment`), so the sidecar and its `dotnet-counters` collectors never dump into `dumps`. The World removes the same variables (and their `COMPlus_` forms) from the environment of the `dotnet-stack` it runs for a hang capture (`ProcessHangStackRunner.CreateStartInfo`), so a crash of that tool cannot write a `world-<pid>-*.dmp` that counts against the dump cap and pushes the World's own crash dump out. The launcher console keeps the `Ops__`/`Database__`/`DOTNET_` variables after the daemon ends (`-NoExit`), so a .NET tool run there afterwards inherits them.
 
 A dump is written by the crashing process, so a cap trims at the next launch (or the next segment), not at the moment of the crash: keep
 `-MaxDumpFiles` times the dump size free on the volume. Dumps contain session keys and character data (`OpsDiagnosticsOptions.cs:21-26`):

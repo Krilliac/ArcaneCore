@@ -594,6 +594,203 @@ public sealed class LiveDiagnosticsTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_home, "dumps")));
     }
 
+    /// <summary>
+    /// A path with a space in the live home and in the counters tool: the collector is started with every argument intact (the CSV path
+    /// in "-o" is one argument), and when the daemon exits the sidecar stops the collector (the whole tool tree, by process id).
+    /// </summary>
+    [PwshFact]
+    public void Sidecar_StopsItsCounterCollector_WhenTheDaemonExits_WithSpacesInThePaths()
+    {
+        string home = Path.Combine(_root, "live home");
+        Directory.CreateDirectory(home);
+        FakeTool tool = CreateFakeCountersTool(Path.Combine(_root, "dotnet tools"), sleepSeconds: 120);
+        int collectorPid = 0;
+        try
+        {
+            using Process daemon = StartPwsh("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 6");
+            var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "diagnostics-sidecar.ps1"), "-Role", "World",
+                "-LiveHome", home, "-DaemonPid", daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), "-PollSeconds", "1", "-CountersTool", tool.Path);
+            Assert.True(exit == 0, text);
+
+            Assert.True(File.Exists(tool.PidFile), "the collector never started: " + SidecarLog(home, "world"));
+            collectorPid = int.Parse(File.ReadLines(tool.PidFile).First().Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(IsGone(collectorPid), "the collector outlived the daemon");
+
+            string[] args = JsonSerializer.Deserialize<string[]>(File.ReadLines(tool.ArgsFile).First())!;
+            Assert.Equal("collect", args[0]);
+            string output = args[Array.IndexOf(args, "-o") + 1];
+            Assert.StartsWith(Path.Combine(home, "logs", "counters"), output, StringComparison.Ordinal);
+            Assert.EndsWith(".csv", output, StringComparison.Ordinal);
+            Assert.Contains("ended; sidecar exits", SidecarLog(home, "world"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            KillById(collectorPid);
+        }
+    }
+
+    /// <summary>A collector that exits at once is not restarted in a tight loop: the sidecar waits the back-off (here 3 s) between attempts.</summary>
+    [PwshFact]
+    public void Sidecar_DoesNotRestartAnImmediatelyEndingCollector_InATightLoop()
+    {
+        FakeTool tool = CreateFakeCountersTool(Path.Combine(_root, "dotnet tools"), sleepSeconds: 0);
+        using Process daemon = StartPwsh("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 9");
+        var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "diagnostics-sidecar.ps1"), "-Role", "World",
+            "-LiveHome", _home, "-DaemonPid", daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), "-PollSeconds", "1",
+            "-RestartBackoffSeconds", "3", "-CountersTool", tool.Path);
+        Assert.True(exit == 0, text);
+
+        string log = SidecarLog(_home, "world");
+        int endings = log.Split('\n').Count(l => l.Contains("counters collector ended after", StringComparison.Ordinal));
+        int starts = File.ReadLines(tool.PidFile).Count();
+        Assert.InRange(endings, 1, 4); // a tight loop would start a collector every fraction of a second (dozens in 9 s)
+        Assert.InRange(starts, 1, 4);
+        Assert.Contains("retrying in 3 s", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Windows: with -ParentPid the sidecar finds the daemon through the launcher's child process (CIM Win32_Process) by image name, follows
+    /// it, and exits when it does. A copy of cmd.exe named ArcaneCore.World.exe stands in for the daemon; this test process is the launcher.
+    /// </summary>
+    [WindowsPwshFact]
+    public void Sidecar_FindsTheDaemonAsAChildOfTheLauncher_OnWindows()
+    {
+        string bin = Path.Combine(_root, "bin");
+        Directory.CreateDirectory(bin);
+        string exe = Path.Combine(bin, "ArcaneCore.World.exe");
+        File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), exe);
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true };
+        start.ArgumentList.Add("/c");
+        start.ArgumentList.Add("ping -n 7 127.0.0.1 >nul");
+        using Process daemon = Process.Start(start)!;
+        try
+        {
+            var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "diagnostics-sidecar.ps1"), "-Role", "World",
+                "-LiveHome", _home, "-ParentPid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), "-PollSeconds", "1", "-FindTimeoutSeconds", "30");
+            Assert.True(exit == 0, text);
+            string log = SidecarLog(_home, "world");
+            Assert.Contains($"sidecar for ArcaneCore.World pid {daemon.Id}", log, StringComparison.Ordinal);
+            Assert.Contains("ended; sidecar exits", log, StringComparison.Ordinal);
+            Assert.True(daemon.HasExited, "the sidecar returned before the daemon ended");
+        }
+        finally
+        {
+            if (!daemon.HasExited)
+            {
+                daemon.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>Arguments are quoted for Start-Process: an element with a space or a quote is wrapped, others stay as they are, an empty one becomes "".</summary>
+    [PwshFact]
+    public void ArgumentString_QuotesElementsWithSpaces()
+    {
+        string output = RunPwsh("""
+            ConvertTo-LiveArgumentString @('-File', 'C:\live home\a.ps1', '-N', '5', '', 'say "hi"')
+            """);
+        Assert.Equal("-File \"C:\\live home\\a.ps1\" -N 5 \"\" \"say \\\"hi\\\"\"", output.Trim());
+    }
+
+    /// <summary>The Active lines report what the daemon will really get: values kept from the environment replace the planned ones.</summary>
+    [PwshFact]
+    public void ActiveLines_ReportEffectiveValues_NotThePlannedOnes()
+    {
+        InstallTools("dotnet-stack", "dotnet-counters");
+        string output = RunPwsh($$"""
+            $plan = Get-LiveDiagnosticsPlan -Role World -LiveHome '{{Quote(_home)}}' -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}' -Environment @{
+                DOTNET_DbgMiniDumpType = '2'; Diagnostics__FaultLogLimit = '7'; Database__SlowCommandWarnMs = '900'; Ops__Watchdog__TickMonitor__StackCaptureIntervalSeconds = '300' }
+            $plan.Active | ConvertTo-Json -Compress -AsArray
+            """);
+        string[] active = JsonSerializer.Deserialize<string[]>(output.Trim())!;
+        Assert.Contains(active, l => l.StartsWith("crash dump: Heap", StringComparison.Ordinal));
+        Assert.Contains(active, l => l.StartsWith("hang stacks: ", StringComparison.Ordinal) && l.Contains(">= 300 s", StringComparison.Ordinal));
+        Assert.Contains(active, l => l.StartsWith("repo options: ", StringComparison.Ordinal) && l.Contains("fault log limit 7,", StringComparison.Ordinal)
+            && l.Contains("slow command 900 ms", StringComparison.Ordinal) && l.Contains("slow transaction 500 ms", StringComparison.Ordinal));
+    }
+
+    /// <summary>A cap of 0 or an absurd one is rejected at parameter binding, in the launcher and in the sidecar.</summary>
+    [PwshFact]
+    public void CapParameters_AreRangeChecked()
+    {
+        var (launchExit, launchText) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "launch-daemon.ps1"), "-Role", "World", "-LiveHome", _home, "-MaxDumpFiles", "0");
+        Assert.NotEqual(0, launchExit);
+        Assert.Contains("MaxDumpFiles", launchText, StringComparison.Ordinal);
+        var (sidecarExit, sidecarText) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "diagnostics-sidecar.ps1"), "-Role", "World", "-LiveHome", _home,
+            "-DaemonPid", "1", "-MaxCountersMB", "99999999");
+        Assert.NotEqual(0, sidecarExit);
+        Assert.Contains("MaxCountersMB", sidecarText, StringComparison.Ordinal);
+    }
+
+    private sealed record FakeTool(string Path, string PidFile, string ArgsFile);
+
+    /// <summary>
+    /// A stand-in for dotnet-counters: a wrapper (a .cmd on Windows, an executable shell script elsewhere) that runs a pwsh script, which
+    /// appends its own process id and its arguments (JSON) to files next to it and then sleeps. The sidecar starts it hidden.
+    /// </summary>
+    private static FakeTool CreateFakeCountersTool(string directory, int sleepSeconds)
+    {
+        Directory.CreateDirectory(directory);
+        string pidFile = System.IO.Path.Combine(directory, "fake.pid");
+        string argsFile = System.IO.Path.Combine(directory, "fake.args");
+        string script = System.IO.Path.Combine(directory, "fake-counters.ps1");
+        File.WriteAllText(script, $"""
+            Add-Content -LiteralPath '{Quote(pidFile)}' -Value $PID
+            Add-Content -LiteralPath '{Quote(argsFile)}' -Value ($args | ConvertTo-Json -Compress -AsArray)
+            Start-Sleep -Seconds {sleepSeconds}
+            """, new UTF8Encoding(false));
+        string wrapper;
+        if (OperatingSystem.IsWindows())
+        {
+            wrapper = System.IO.Path.Combine(directory, "fake-counters.cmd");
+            File.WriteAllText(wrapper, "@pwsh -NoProfile -NonInteractive -File \"%~dp0fake-counters.ps1\" %*\r\n");
+        }
+        else
+        {
+            wrapper = System.IO.Path.Combine(directory, "fake-counters");
+            File.WriteAllText(wrapper, "#!/bin/sh\nexec pwsh -NoProfile -NonInteractive -File \"$(dirname \"$0\")/fake-counters.ps1\" \"$@\"\n", new UTF8Encoding(false));
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        return new FakeTool(wrapper, pidFile, argsFile);
+    }
+
+    private static string SidecarLog(string home, string role) => File.ReadAllText(System.IO.Path.Combine(home, "logs", "counters", role + "-sidecar.log"));
+
+    private static bool IsGone(int pid)
+    {
+        try
+        {
+            using Process p = Process.GetProcessById(pid);
+            return p.WaitForExit(5000);
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>Test cleanup only: stops one process, by its id, if the test failed before the sidecar did.</summary>
+    private static void KillById(int pid)
+    {
+        if (pid <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using Process p = Process.GetProcessById(pid);
+            p.Kill(entireProcessTree: true);
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
     private static void Touch(string path, DateTime utc)
     {
         File.WriteAllText(path, "x");
@@ -693,10 +890,28 @@ public sealed class LiveDiagnosticsTests : IDisposable
         return stdout.Result;
     }
 
+    /// <summary>Runs only on Windows with PowerShell 7 on PATH (the sidecar's daemon discovery uses CIM, which exists only there).</summary>
+    private sealed class WindowsPwshFactAttribute : FactAttribute
+    {
+        public WindowsPwshFactAttribute()
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Skip = "Windows only (CIM process discovery).";
+            }
+            else if (!PwshFactAttribute.IsAvailable)
+            {
+                Skip = "pwsh (PowerShell 7) is not on PATH on this host.";
+            }
+        }
+    }
+
     /// <summary>Runs only where PowerShell 7 (<c>pwsh</c>) is on PATH; CI (ubuntu-latest) has it.</summary>
     private sealed class PwshFactAttribute : FactAttribute
     {
         private static readonly Lazy<bool> Available = new(Probe);
+
+        internal static bool IsAvailable => Available.Value;
 
         public PwshFactAttribute()
         {

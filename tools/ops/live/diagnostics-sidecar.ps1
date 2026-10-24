@@ -14,9 +14,11 @@ param(
     [ValidateRange(1, 3600)][int]$RefreshSeconds = 10,
     [ValidateRange(1, 3600)][int]$PollSeconds = 5,
     [ValidateRange(1, 3600)][int]$FindTimeoutSeconds = 180,
-    [int]$MaxDumpFiles = 3, [int]$MaxDumpGB = 30,
-    [int]$MaxHangStackFiles = 500, [int]$MaxHangStackMB = 200,
-    [int]$MaxCountersFiles = 48, [int]$MaxCountersMB = 2048
+    # A collector that ends within a minute of its start is restarted only after this many seconds (tests shorten it).
+    [ValidateRange(0, 3600)][int]$RestartBackoffSeconds = 60,
+    [ValidateRange(1, 10000)][int]$MaxDumpFiles = 3, [ValidateRange(1, 10000)][int]$MaxDumpGB = 30,
+    [ValidateRange(1, 100000)][int]$MaxHangStackFiles = 500, [ValidateRange(1, 1048576)][int]$MaxHangStackMB = 200,
+    [ValidateRange(1, 10000)][int]$MaxCountersFiles = 48, [ValidateRange(1, 1048576)][int]$MaxCountersMB = 2048
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveDiagnostics.ps1')
@@ -30,29 +32,43 @@ function Write-SidecarLog([string]$Text) {
     try { Add-Content -LiteralPath $log -Value ("{0:u} {1}" -f [DateTime]::UtcNow, $Text) } catch { }
 }
 
-function Test-Alive([int]$ProcId) {
-    # An exited process whose handle another process still holds is listed until that handle closes; HasExited tells them apart.
+function Get-HeldProcess([int]$ProcId) {
+    # The Process object with its OS handle opened now: from then on HasExited and WaitForExit follow this very process, so a later
+    # process that is given the same id is never mistaken for it (a fresh Get-Process -Id each poll would find the newcomer).
+    # A process that exited but is still listed because another process holds a handle reports HasExited, so it counts as gone.
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
-    return $null -ne $p -and -not $p.HasExited
+    if ($null -eq $p) { return $null }
+    try {
+        [void]$p.Handle
+        if ($p.HasExited) { return $null }
+    } catch { return $null }
+    return $p
 }
 
 function Find-Daemon {
-    if ($DaemonPid -gt 0) { return $(if (Test-Alive $DaemonPid) { $DaemonPid } else { 0 }) }
+    # Returns the daemon's held Process object, or $null when it is not (or no longer) there.
+    if ($DaemonPid -gt 0) { return Get-HeldProcess $DaemonPid }
+    $launcher = Get-HeldProcess $ParentPid
+    if ($null -eq $launcher) { return $null }
     $deadline = [DateTime]::UtcNow.AddSeconds($FindTimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
-        if (-not (Test-Alive $ParentPid)) { return 0 }
+        if ($launcher.HasExited) { return $null }
         $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentPid AND Name='ArcaneCore.$Role.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($child) { return [int]$child.ProcessId }
-        Start-Sleep -Seconds 1
+        if ($child) { return Get-HeldProcess ([int]$child.ProcessId) }
+        [void]$launcher.WaitForExit(1000)
     }
-    return 0
+    return $null
 }
 
-$daemon = Find-Daemon
-if ($daemon -le 0) { Write-SidecarLog "no ArcaneCore.$Role found under launcher $ParentPid; sidecar exits"; exit 0 }
+# No console window for the collector on Windows (a visible one would flash up and, if killed, leave an error tab in Windows Terminal).
+$hidden = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+
+$daemonProcess = Find-Daemon
+if ($null -eq $daemonProcess) { Write-SidecarLog "no ArcaneCore.$Role found under launcher $ParentPid; sidecar exits"; exit 0 }
+$daemon = $daemonProcess.Id
 Write-SidecarLog "sidecar for ArcaneCore.$Role pid $daemon (counters tool: $(if ($CountersTool) { $CountersTool } else { 'none' }))"
 
-while (Test-Alive $daemon) {
+while (-not $daemonProcess.HasExited) {
     foreach ($removed in Invoke-DiagnosticsRetentionRules -Rules $rules) { Write-SidecarLog "retention removed $removed" }
     $collector = $null
     if ($CountersTool) {
@@ -60,7 +76,7 @@ while (Test-Alive $daemon) {
         $out = Join-Path $dirs.Counters "$($Role.ToLowerInvariant())-$daemon-$stamp.csv"
         $arguments = Get-CountersCollectArguments -ProcessId $daemon -OutputPath $out -RefreshSeconds $RefreshSeconds -SegmentMinutes $SegmentMinutes
         try {
-            $collector = Start-Process -FilePath $CountersTool -ArgumentList $arguments -PassThru -WindowStyle Hidden `
+            $collector = Start-Process -FilePath $CountersTool -ArgumentList (ConvertTo-LiveArgumentString $arguments) -PassThru @hidden `
                 -RedirectStandardOutput (Join-Path $dirs.Counters "$($Role.ToLowerInvariant())-collector.out") `
                 -RedirectStandardError (Join-Path $dirs.Counters "$($Role.ToLowerInvariant())-collector.err")
             [void]$collector.Handle # cache the handle now: ExitCode is $null for a process whose handle was never opened
@@ -69,20 +85,21 @@ while (Test-Alive $daemon) {
     $segmentStart = [DateTime]::UtcNow
     $segmentEnd = $segmentStart.AddMinutes($SegmentMinutes)
     # One segment: until the collector ends by itself (--duration), the daemon ends, or (no collector) the retention interval passes.
-    while ((Test-Alive $daemon) -and [DateTime]::UtcNow -lt $segmentEnd.AddSeconds(60) -and ($null -eq $collector -or -not $collector.HasExited)) {
+    # The daemon is held as a Process object, so these checks cannot be fooled by a reused process id.
+    while (-not $daemonProcess.HasExited -and [DateTime]::UtcNow -lt $segmentEnd.AddSeconds(60) -and ($null -eq $collector -or -not $collector.HasExited)) {
         if ($null -eq $collector -and [DateTime]::UtcNow -ge $segmentEnd) { break }
-        Start-Sleep -Seconds $PollSeconds
+        [void]$daemonProcess.WaitForExit($PollSeconds * 1000)
     }
     if ($collector -and -not $collector.HasExited) {
         # The daemon is gone (or the segment overran): the collector ends itself when its target exits; give it a moment, then stop this one process by id.
         if (-not $collector.WaitForExit(10000)) {
-            try { $collector.Kill(); Write-SidecarLog "stopped collector pid $($collector.Id)" } catch { }
+            try { $collector.Kill($true); Write-SidecarLog "stopped collector pid $($collector.Id)" } catch { }
         }
     }
     # A collector that ends at once (bad tool, the runtime refusing a second session) must not be restarted in a tight loop.
-    if ($collector -and (Test-Alive $daemon) -and ([DateTime]::UtcNow - $segmentStart).TotalSeconds -lt 60) {
-        Write-SidecarLog "counters collector ended after $([int]([DateTime]::UtcNow - $segmentStart).TotalSeconds) s (exit $($collector.ExitCode)); retrying in 60 s"
-        Start-Sleep -Seconds 60
+    if ($collector -and -not $daemonProcess.HasExited -and ([DateTime]::UtcNow - $segmentStart).TotalSeconds -lt 60) {
+        Write-SidecarLog "counters collector ended after $([int]([DateTime]::UtcNow - $segmentStart).TotalSeconds) s (exit $($collector.ExitCode)); retrying in $RestartBackoffSeconds s"
+        [void]$daemonProcess.WaitForExit($RestartBackoffSeconds * 1000) # returns early when the daemon ends
     }
 }
 foreach ($removed in Invoke-DiagnosticsRetentionRules -Rules $rules) { Write-SidecarLog "retention removed $removed" }
