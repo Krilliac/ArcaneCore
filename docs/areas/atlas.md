@@ -106,7 +106,7 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 #### Client textures, model packages and display tables (`Textures/`, `Reference/Client/Models/Packages/`, `Reference/Dbc/`)
 - `texture.get` (`key` or `path`, `fmt?`, `maxSize?`, `mip?`, `out?`), `texture.stats`: BLP2 decode and the texture cache; see [atlas-models](atlas-models.md).
 - `model.info` (`path` or `kind` + `id`), `model.package` (`key` or `path`, `view?`, `out?`): M2 model package summary and its ATG1 v2 bytes.
-- `display.resolve` (`kind`, `id`, `gender?`): the DBC display chain of a creature, game object, item or race down to model and texture files.
+- `display.resolve` (`kind`, `id`, `gender?`): the DBC display chain of a creature (with scale and humanoid extra), game object, item or race (with `gender`) down to model and texture files.
 
 #### Server vs client diff (`Diff/`)
 - `diff.terrain` (`map`, `x`, `y`, `radius?`): compares every `129x129` V9 and `128x128` V8 height sample and `16x16` chunk hole mask between `.map` and client `.adt` (`TerrainDiff`), classifying documented extractor rules (`flat-no-height-tile`, `clamped-at-minus-500`) under `expectedCount` (`ColorKeys.Expected`) and any other discrepancy above `1e-3` yd or hole mismatch under `unexplainedCount` (`ColorKeys.OnlyServer` / `ColorKeys.OnlyReference`).
