@@ -75,6 +75,8 @@ public sealed class ClientFsFixtureTests(ITestOutputHelper output)
         "localTileProvider returns Api.tile envelopes whose geometry equals the C# ATG1 (through the Worker pool)",
         "the second load is served from the OPFS cache without reading an archive, and a changed archive misses it",
         "the webkitdirectory fallback caches parsed results and asks again only when the cache misses",
+        "Skip on a cache-miss dialog is remembered for the session",
+        "localTileProvider rejects at once when its signal aborts while the request waits for files",
         "the Worker mounts a tile chain in MpqFileSystem load order whatever order the archives arrive in",
         "localTileProvider resolves a patched tile from the patch when the FileList arrives in non-load order",
         "Forget folder while a tile is in flight leaves no cache entry behind",

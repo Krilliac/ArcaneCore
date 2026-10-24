@@ -51,6 +51,7 @@ let dialog = null;
 let banner = null;
 let settings = null;
 let waiters = [];
+let declined = false; // Skip / Not now / closing the dialog this session: later cache misses resolve false without any UI
 let generation = 0; // bumped by Forget folder so a pick that is still validating cannot store its folder afterwards
 
 const spawn = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -156,6 +157,7 @@ async function finishPick(scan, handle, started) {
         }
         await dbPut('meta', META_KEY, meta);
         Object.assign(model, { state: 'ready', error: null, kind: scan.kind, handle: handle ?? null, folder: scan, folderName: scan.name, build: result.build, version: result.version, warnings: result.warnings, archives });
+        declined = false;
         closeDialog();
         resolveWaiters(true);
     } catch (error) {
@@ -204,6 +206,7 @@ async function skip() {
         await dbPut('meta', META_KEY, { choice: 'skipped' });
         model.state = 'skipped';
     }
+    declined = true;
     closeDialog();
     resolveWaiters(false);
 }
@@ -214,6 +217,7 @@ function closeDialog() {
 }
 
 export function openClientFilesDialog() {
+    declined = false; // an explicit request overrides an earlier decline
     if (dialog !== null) {
         return;
     }
@@ -221,6 +225,7 @@ export function openClientFilesDialog() {
         onChoose: () => { pickFolder(); },
         onSkip: () => { skip(); },
         onDismiss: () => {
+            declined = true;
             closeDialog();
             resolveWaiters(false);
         },
@@ -242,6 +247,7 @@ function showBanner() {
                 }
                 await grant();
                 if (model.state === 'ready') {
+                    declined = false;
                     banner?.close();
                     banner = null;
                     resolveWaiters(true);
@@ -251,6 +257,7 @@ function showBanner() {
             }, () => banner?.setError(ERROR_BLOCKED));
         },
         onLater: () => {
+            declined = true;
             banner?.close();
             banner = null;
             resolveWaiters(false);
@@ -288,6 +295,7 @@ async function forgetNow() {
     // Everything that could still write to the cache is cut off before the first await: the generation bump makes a tile that is
     // already in flight drop its result instead of caching it, the pool is closed and the model no longer names a folder.
     generation++;
+    declined = false;
     settings?.close();
     settings = null;
     closeDialog();
@@ -398,6 +406,9 @@ function waitForFiles() {
     if (model.folder !== null) {
         return Promise.resolve(true);
     }
+    if (declined) {
+        return Promise.resolve(false);
+    }
     if (model.state === 'needs-permission') {
         showBanner();
     } else {
@@ -455,6 +466,22 @@ async function buildOrLoad(layer, map, x, y) {
     return { state: result.state, detail: result.detail, body: result.body.slice(0) };
 }
 
+/** Rejects as soon as the signal aborts; the shared job keeps running for other callers and its late result is dropped. */
+function raceAbort(job, signal) {
+    if (!signal || typeof signal.addEventListener !== 'function') {
+        return job;
+    }
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+        if (signal.aborted) {
+            onAbort();
+            return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+        job.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
 export function localTileProvider() {
     return {
         async tile(layer, map, x, y, signal) {
@@ -472,7 +499,7 @@ export function localTileProvider() {
                 job = buildOrLoad(layer, map, x, y).finally(() => inflight.delete(id));
                 inflight.set(id, job);
             }
-            const result = await job;
+            const result = await raceAbort(job, signal);
             signal?.throwIfAborted?.();
             return { state: result.state, detail: result.detail, body: result.body.slice(0) };
         },

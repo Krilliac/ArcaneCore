@@ -1392,6 +1392,53 @@ test('the webkitdirectory fallback caches parsed results and asks again only whe
     }, { helpers: PAGE_HELPERS_NO_PICKER });
 });
 
+test('Skip on a cache-miss dialog is remembered for the session', async () => {
+    await withBrowser(async ({ fx, harness, page }) => {
+        assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog');
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "ready")()', 'the folder to validate', 60_000);
+        await reload(page, harness);
+
+        const layer = JSON.stringify(fx.manifest.layers.terrain);
+        const ask = (tile) => `cf.localTileProvider().tile(${layer}, 0, ${tile.x}, ${tile.y}, new AbortController().signal).then((r) => r.state, () => 'rejected')`;
+        await page.evaluate(`window.__first = ${ask(fx.manifest.tiles[2])}; true`);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog on a cache miss', 15_000);
+        await clickText(page, 'Skip');
+        await page.waitFor('!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog to close');
+        assert.equal(await page.evaluate('window.__first'), 'NotApplicable');
+
+        // The next uncached tile resolves at once and the modal stays closed.
+        assert.equal(await page.evaluate(ask(fx.manifest.tiles[1])), 'NotApplicable');
+        assert.equal(await dialogOpen(page), false, 'a declined visitor is not asked again this session');
+        assert.deepEqual(problems(page), []);
+    }, { helpers: PAGE_HELPERS_NO_PICKER });
+});
+
+test('localTileProvider rejects at once when its signal aborts while the request waits for files', async () => {
+    await withBrowser(async ({ fx, harness, page }) => {
+        assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog');
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "ready")()', 'the folder to validate', 60_000);
+        await reload(page, harness);
+
+        const tile = fx.manifest.tiles[2];
+        const outcome = await page.evaluate(`(async () => {
+            const controller = new AbortController();
+            const pending = cf.localTileProvider().tile(${JSON.stringify(fx.manifest.layers.terrain)}, 0, ${tile.x}, ${tile.y}, controller.signal).then(() => 'settled', (e) => e.name);
+            await new Promise((r) => setTimeout(r, 500));
+            controller.abort();
+            return Promise.race([pending, new Promise((r) => setTimeout(() => r('still waiting'), 2000))]);
+        })()`);
+        assert.equal(outcome, 'AbortError');
+    }, { helpers: PAGE_HELPERS_NO_PICKER });
+});
+
 const sha256Page = `const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');`;
 
 test('the Worker mounts a tile chain in MpqFileSystem load order whatever order the archives arrive in', async () => {

@@ -43,3 +43,21 @@ Only `Data/*.MPQ`, the names of Data's sub-folders (for the locale warning) and 
 Workers are started from `/app/js/clientfs/worker.js` (same origin), which the public listener's `worker-src 'self'` and Local's `script-src 'self'` allow. No client byte is committed to the repository; the tests build synthetic archives and run a canary detector over every request, header, body and WebSocket frame.
 
 Not verified against real client data in CI (the real-data tests run only with `ARCANECORE_TEST_CLIENT_DIR`): the strict archive-size check, the compression-mask census and the bzip2 refusal on real archives.
+
+## Deferred deliverables
+
+Design D4 lists more files than this lane ships. Deferred, with owners:
+
+| Deliverable | Reason | Owner |
+|---|---|---|
+| `clientfs/blp.js` (BLP2 decoder) | A1's C# BLP decoder is not on `main` yet; a port follows its output | follow-up lane after A1 merges |
+| terrain texture decoding (MTEX/MCLY/MCAL materials) in `adt.js` | A2 not merged | follow-up lane after A2 merges |
+| `clientfs/m2.js`, `clientfs/wmo.js` | A3 (WMO/M2 materials) not merged | follow-up lane after A3 merges |
+| animation decoding | A4 is later still | follow-up lane after A4 merges |
+| `js/assets/source.js`, `visitor.js`, `server.js` and the `assets.source()` loader lines | phase 2 seam, depends on A1-A4 | follow-up lane after A1-A4 merge |
+
+Shipped now: MPQ, explode, DBC, ADT heights/liquid, validation, the dialog and settings.
+
+## Declining
+
+Skip, Not now and closing the dialog are remembered for the page session: later cache misses resolve `NotApplicable` without showing the modal or banner. An explicit `openClientFilesDialog()` (or a successful pick/re-allow) clears the decline. A request whose `AbortSignal` fires while it waits for files or for a Worker rejects immediately.
