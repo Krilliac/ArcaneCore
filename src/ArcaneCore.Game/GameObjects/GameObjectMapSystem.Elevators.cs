@@ -153,6 +153,15 @@ public sealed partial class GameObjectMapSystem
 
     private void UpdateElevators()
     {
+        // A map-wide car is in no grid list, so no grid unload ends a GM override of it: it ends when the last player leaves the map.
+        if (_elevatorControls.Count != 0 && _mapWideElevators.Count != 0 && Map.PlayerCount == 0)
+        {
+            foreach (GameObject car in _mapWideElevators)
+            {
+                _elevatorControls.Remove(car.Guid);
+            }
+        }
+
         // The transports among the objects (cached until the object set changes; validating one is read-only).
         foreach (GameObject go in Transports())
         {

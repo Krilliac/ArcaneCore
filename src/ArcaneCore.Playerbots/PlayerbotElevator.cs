@@ -559,14 +559,18 @@ internal static class PlayerbotElevator
     /// <summary>The bot's trip, done or not (inspection and tests).</summary>
     internal static ElevatorTrip? TripOf(Player player) => Trips.TryGetValue(player, out ElevatorTrip? trip) ? trip : null;
 
-    /// <summary>The trips under way (not done, not failed) of the players online in <paramref name="world"/> (inspection: <c>.playerbot lift</c>).</summary>
-    internal static IEnumerable<(Player Player, ElevatorTrip Trip)> ActiveTrips(WorldRuntime world)
+    /// <summary>
+    /// The trips under way (not done, not failed) of the players on <paramref name="map"/> (inspection: <c>.playerbot lift</c>). Only that
+    /// map's own players are read: a trip is written by the thread updating its bot's map, so the caller must be on <paramref name="map"/>'s
+    /// thread (the world thread outside the parallel maps phase); another map's trips are never touched.
+    /// </summary>
+    internal static IEnumerable<(Player Player, ElevatorTrip Trip)> ActiveTrips(Map map)
     {
-        foreach (KeyValuePair<Player, ElevatorTrip> pair in Trips)
+        foreach (Player player in map.Players)
         {
-            if (pair.Key.IsInWorld && ReferenceEquals(world.FindOnlinePlayer(pair.Key.Guid), pair.Key) && pair.Value.Stage is not (ElevatorStage.Done or ElevatorStage.Failed))
+            if (player.IsInWorld && Trips.TryGetValue(player, out ElevatorTrip? trip) && trip.Stage is not (ElevatorStage.Done or ElevatorStage.Failed))
             {
-                yield return (pair.Key, pair.Value);
+                yield return (player, trip);
             }
         }
     }

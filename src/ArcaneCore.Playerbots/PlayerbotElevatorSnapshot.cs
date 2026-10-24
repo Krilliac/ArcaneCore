@@ -20,13 +20,13 @@ internal sealed record ElevatorTripInfo(
     string? Failure)
 {
     /// <summary>
-    /// The lift rides under way (not done, not failed) of the bots online in <paramref name="world"/>, ordered by bot name. Times are measured
-    /// on the world clock. World thread; changes nothing.
+    /// The lift rides under way (not done, not failed) of the bots on <paramref name="map"/>, ordered by bot name. Times are measured on the
+    /// world clock. Call it from the thread that owns <paramref name="map"/> (the live trips of other maps are not read); changes nothing.
     /// </summary>
-    internal static IReadOnlyList<ElevatorTripInfo> Active(WorldRuntime world)
+    internal static IReadOnlyList<ElevatorTripInfo> Active(WorldRuntime world, Map map)
     {
         var rows = new List<ElevatorTripInfo>();
-        foreach ((Player player, ElevatorTrip trip) in PlayerbotElevator.ActiveTrips(world))
+        foreach ((Player player, ElevatorTrip trip) in PlayerbotElevator.ActiveTrips(map))
         {
             rows.Add(new ElevatorTripInfo(
                 player.Name, trip.Lift.Name, trip.Stage, trip.From, trip.To,

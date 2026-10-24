@@ -29,14 +29,25 @@ public sealed class ElevatorControlTests
         (Elevator, new TransportAnimationNode(Cycle, 0, 0, 0)),
     ]);
 
-    private static (WorldRuntime World, GameObjectMapSystem System, GameObject Lift, Player Player, FakeSession Session) Start(bool animated = true)
+    // The same cycle, but the car travels 3000 yards sideways at 5000 ms: farther than the visibility range, so it is a map-wide car (a tram).
+    private static readonly TransportAnimationCatalog TramAnimation = new(
+    [
+        (Elevator, new TransportAnimationNode(0, 0, 0, 0)),
+        (Elevator, new TransportAnimationNode(3000, 0, 0, 0)),
+        (Elevator, new TransportAnimationNode(5000, 3000, 0, 0)),
+        (Elevator, new TransportAnimationNode(8000, 3000, 0, 0)),
+        (Elevator, new TransportAnimationNode(Cycle, 0, 0, 0)),
+    ]);
+
+    private static (WorldRuntime World, GameObjectMapSystem System, GameObject Lift, Player Player, FakeSession Session) Start(
+        bool animated = true, TransportAnimationCatalog? animation = null)
     {
         WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
         var system = new GameObjectMapSystem(map, new GameObjectContent(
             [GoTemplate(Elevator, GameObjectType.Transport, (0, 3000))], [GoSpawn(1, Elevator, 3, 0)], [], [], []))
         {
-            ElevatorAnimations = animated ? Animation : TransportAnimationCatalog.Empty,
+            ElevatorAnimations = animated ? animation ?? Animation : TransportAnimationCatalog.Empty,
         };
         map.AddUpdater(system);
         var session = new FakeSession();
@@ -237,6 +248,111 @@ public sealed class ElevatorControlTests
             reader.ReadUInt32();                                                          // ALL's unknown uint
             Assert.Equal(7000u, reader.ReadUInt32());                                     // the path progress of the new phase
             Assert.Contains(lift.Guid, player.VisibleObjects);
+        }
+    }
+
+    [Fact]
+    public void ALiftUnloadedWithItsGrid_ComesBackOnTheDefaultSchedule()
+    {
+        (WorldRuntime world, GameObjectMapSystem system, GameObject lift, Player player, _) = Start();
+        using (world)
+        {
+            Run(world, 5);
+            Assert.True(system.SetElevatorPhase(lift, 7000));
+            Assert.True(system.SetElevatorScale(lift, 3.0));
+            Assert.True(system.GetElevatorControl(lift).Overridden);
+
+            world.RemovePlayer(player);                                                   // nobody is left: the lift's grid unloads
+            for (int i = 0; i < 400 && system.LoadedGridCount > 0; i++)
+            {
+                world.RunTick(1000);
+            }
+
+            Assert.Equal(0, system.LoadedGridCount);
+            Assert.Null(system.Find(lift.Guid));
+            Assert.False(system.GetElevatorControl(lift).Overridden);                     // the override left with the object
+
+            world.AddPlayer(TestWorld.CreatePlayer(3, 0, 0, new FakeSession(3)));         // a player comes back: the grid loads again
+            world.RunTick(50);
+            GameObject reloaded = system.GameObjects.Single(g => g.Entry == Elevator);
+            Assert.NotSame(lift, reloaded);
+            Assert.Equal(lift.Guid, reloaded.Guid);
+            Assert.False(system.GetElevatorControl(reloaded).Overridden);
+            Assert.Equal(DefaultProgress(system, reloaded), reloaded.PathProgress);
+            Assert.Equal(DefaultProgress(system, reloaded), system.ElevatorProgressAhead(reloaded, 0));
+        }
+    }
+
+    [Fact]
+    public void ARemovedLift_LosesItsOverride_AndItsProgressIsTheDefaultSchedule()
+    {
+        (WorldRuntime world, GameObjectMapSystem system, GameObject lift, _, _) = Start();
+        using (world)
+        {
+            Run(world, 5);
+            Assert.True(system.SetElevatorPhase(lift, 7000));
+            Assert.True(system.SetElevatorScale(lift, 3.0));
+
+            Assert.True(system.Remove(lift));
+            Assert.False(system.GetElevatorControl(lift).Overridden);
+            Assert.Equal(1.0, system.GetElevatorControl(lift).Scale);
+            Assert.Equal(DefaultProgress(system, lift), system.ElevatorProgressAhead(lift, 0));
+        }
+    }
+
+    [Fact]
+    public void AMapWideCar_KeepsItsOverrideWhileAPlayerIsOnTheMap_AndLosesItWhenTheLastOneLeaves()
+    {
+        (WorldRuntime world, GameObjectMapSystem system, GameObject car, Player player, _) = Start(animation: TramAnimation);
+        using (world)
+        {
+            Assert.True(system.IsMapWideElevator(car));
+            Assert.Contains(car, system.MapWideElevators);
+            Run(world, 5);
+            Assert.True(system.SetElevatorPhase(car, 7000));
+            Run(world, 5);
+            Assert.True(system.GetElevatorControl(car).Overridden);
+            Assert.Equal(7500u, car.PathProgress);
+
+            world.RemovePlayer(player);
+            world.RunTick(50);
+            Assert.False(system.GetElevatorControl(car).Overridden);
+            Assert.Equal(DefaultProgress(system, car), car.PathProgress);
+        }
+    }
+
+    [Fact]
+    public void AnOrdinaryLift_IsNotMapWide()
+    {
+        (WorldRuntime world, GameObjectMapSystem system, GameObject lift, _, _) = Start();
+        using (world)
+        {
+            Assert.False(system.IsMapWideElevator(lift));
+        }
+    }
+
+    [Fact]
+    public void AResync_SkipsASessionThatReadsNoUpdateObjects()
+    {
+        (WorldRuntime world, GameObjectMapSystem system, GameObject lift, Player player, FakeSession session) = Start();
+        using (world)
+        {
+            var botSession = new FakeSession(2) { WantsUpdateObjects = false };
+            Player bot = TestWorld.CreatePlayer(2, 1, 0, botSession);
+            world.AddPlayer(bot);
+            world.RunTick(50);
+            Assert.Contains(bot, system.Map.ObserversOf(lift));                           // the bot has the lift in its visible set
+            Assert.Contains(player, system.Map.ObserversOf(lift));
+            Assert.Equal([player], system.ElevatorViewers(lift));
+            session.Clear();
+            botSession.Clear();
+
+            Assert.True(system.SetElevatorPhase(lift, 7000));
+            world.RunTick(50);
+
+            Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgUpdateObject);
+            Assert.DoesNotContain(botSession.Sent, p => p.Opcode == WorldOpcode.SmsgUpdateObject);
+            Assert.Equal([player], system.Map.ResendToObservers(lift));
         }
     }
 

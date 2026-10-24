@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Playerbots.Commands;
 
 /// <summary>
 /// <c>.playerbot lift [$bot]</c> (GameMaster, read-only): the bots riding the elevators now, or one bot's ride in detail. A bot's ride is
-/// kept as its trip (<see cref="PlayerbotElevator"/>); this reads a copy of it (<see cref="ElevatorTripInfo.Active"/>).
+/// kept as its trip (<see cref="PlayerbotElevator"/>); this reads a copy of it (<see cref="ElevatorTripInfo.Active"/>), for the bots on the invoker's map only.
 /// The lift itself (cycle, stops, who has it in view) is <c>.debug lift</c>.
 /// </summary>
 public sealed class PlayerbotLiftCommands : ICommandExtension
@@ -19,7 +19,7 @@ public sealed class PlayerbotLiftCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("lift", AccountSecurity.GameMaster,
-            "Syntax: .playerbot lift [$name]\nList the bots riding an elevator now: stage (ToStop, Waiting, Aboard, Falling), the lift and chosen car, the time in the stage, and whether a walking route is held. With $name, that bot's ride in detail. For the lift itself see .debug lift.",
+            "Syntax: .playerbot lift [$name]\nList the bots on your map riding an elevator now: stage (ToStop, Waiting, Aboard, Falling), the lift and chosen car, the time in the stage, and whether a walking route is held. With $name, that bot's ride in detail. For the lift itself see .debug lift.",
             Lift),
     ];
 
@@ -37,7 +37,7 @@ public sealed class PlayerbotLiftCommands : ICommandExtension
             return false;
         }
 
-        IReadOnlyList<ElevatorTripInfo> trips = ElevatorTripInfo.Active(context.World);
+        IReadOnlyList<ElevatorTripInfo> trips = context.Player.Map is { } map ? ElevatorTripInfo.Active(context.World, map) : [];
         if (name is null)
         {
             foreach (ElevatorTripInfo trip in trips)

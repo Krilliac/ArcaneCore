@@ -1,10 +1,14 @@
 using System.Numerics;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Playerbots;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Elevator;
@@ -75,7 +79,66 @@ public sealed class LiftCommandTests
 
         Assert.Contains(await RunAsync(gm, $".debug lift reset {id}"), l => l.Contains("back on its default schedule", StringComparison.Ordinal));
         Assert.False(await world.OnWorldAsync(() => system.GetElevatorControl(car).Overridden));
-        Assert.Contains(await RunAsync(gm, ".debug lift 999999"), l => l.Contains("999999", StringComparison.Ordinal));
+
+        string[] fast = await RunAsync(gm, $".debug lift speed 50 {id}");
+        Assert.Contains(fast, l => l.Contains("speed x10 (requested x50, clamped to 0.1-10);", StringComparison.Ordinal));
+        string[] exact = await RunAsync(gm, $".debug lift speed 4 {id}");
+        Assert.Contains(exact, l => l.Contains("speed x4;", StringComparison.Ordinal) && !l.Contains("clamped", StringComparison.Ordinal));
+        Assert.Equal(["No transport game object with guid 999999 on this map."], await RunAsync(gm, ".debug lift 999999"));
+    }
+
+    [Fact]
+    public async Task WithoutAGuid_TheNearestLiftIsPicked_EvenWhenAnotherKindOfObjectIsCloser()
+    {
+        const uint doorEntry = 90001;
+        var door = new GameObjectTemplate
+        {
+            Entry = doorEntry, Type = (uint)GameObjectType.Door, DisplayId = 1, Name = "Nearby Door", Data = new uint[GameObjectTemplate.DataCount],
+        };
+        Vector3 doorAt = TopCar + new Vector3(8f, 0f, 2f);
+        GameObjectContent content = new(
+            [.. ElevatorTestData.Cars.Select(c => c.Entry).Distinct().Select(ElevatorTestData.Template), door],
+            [.. ElevatorTestData.Cars.Where(c => c.Guid is TopCarSpawn or 16876).Select(ElevatorTestData.Spawn),
+                new GameObjectSpawn { Guid = 90001, Entry = doorEntry, MapId = ElevatorTestData.Kalimdor, X = doorAt.X + 1f, Y = doorAt.Y, Z = doorAt.Z, SpawnTimeSeconds = 180 }],
+            [], [], []);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(configure: services => services.AddScoped<IGameObjectDataStore>(_ => new FixedStore(content)));
+        await using WorldTestClient gm = await world.ObserverAsync("LIFTGM", "Liftgm", doorAt, AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        GameObjectMapSystem system = world.Objects()!;
+        Assert.True(await world.OnWorldAsync(() => system.GameObjects.Any(g => g.Entry == doorEntry)), "the door was not spawned");
+
+        string[] info = await RunAsync(gm, ".debug lift");
+        Assert.Contains(info, l => l.StartsWith($"Mesa Elevator (entry {ElevatorTestData.Cars[0].Entry}, guid {TopCarSpawn}", StringComparison.Ordinal));
+        Assert.DoesNotContain(info, l => l.Contains("Nearby Door", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FreezeAndSpeed_AreRefusedOnAMapWideTram_ButPhaseAndResetWork()
+    {
+        // The top car travels 3000 yards sideways, farther than the visibility range: a map-wide car like the Deeprun Tram's.
+        TransportAnimationCatalog tram = new([.. ElevatorTestData.Paths.SelectMany(p => p.Value.Select(n =>
+            (p.Key, new TransportAnimationNode(n.T, p.Key == 11898 && n.T == 15000 ? 3000f : 0f, 0, n.Z))))]);
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(tram);
+        await using WorldTestClient gm = await world.ObserverAsync("LIFTGM", "Liftgm", TopCar + new Vector3(8f, 0f, 2f), AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        GameObjectMapSystem system = world.Objects()!;
+        GameObject car = await world.OnWorldAsync(() => system.GameObjects.Single(g => g.Spawn!.Guid == TopCarSpawn));
+        Assert.True(await world.OnWorldAsync(() => system.IsMapWideElevator(car)), "the fixture car is not map-wide");
+        uint id = car.Guid.Counter;
+
+        Assert.Contains(await RunAsync(gm, $".debug lift freeze {id}"), l => l.Contains("map-wide tram car: 'freeze' is refused", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, $".debug lift speed 3 {id}"), l => l.Contains("map-wide tram car: 'speed' is refused", StringComparison.Ordinal));
+        Assert.False(await world.OnWorldAsync(() => system.GetElevatorControl(car).Overridden));
+
+        Assert.Contains(await RunAsync(gm, $".debug lift phase 12000 {id}"), l => l.Contains("now at 12000 ms of 30000", StringComparison.Ordinal));
+        Assert.True(await world.OnWorldAsync(() => system.GetElevatorControl(car).Overridden));
+        Assert.Contains(await RunAsync(gm, $".debug lift reset {id}"), l => l.Contains("back on its default schedule", StringComparison.Ordinal));
+        Assert.False(await world.OnWorldAsync(() => system.GetElevatorControl(car).Overridden));
+    }
+
+    private sealed class FixedStore(GameObjectContent content) : IGameObjectDataStore
+    {
+        public Task<GameObjectContent> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(content);
     }
 
     [Fact]

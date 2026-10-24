@@ -36,7 +36,8 @@ public sealed partial class GameObjectMapSystem
 
     /// <summary>
     /// Overrides by object guid. Empty (and so allocation free per tick) unless a GM changed a lift; an entry is dropped with its object
-    /// (grid unload, removal), after which the lift is created again on the default schedule.
+    /// (grid unload, removal), after which the lift is created again on the default schedule. A map-wide car (Deeprun Tram) is in no grid
+    /// list: its entry ends with a reset, a removal, or when the map has no players left (<c>UpdateElevators</c>), else with the map.
     /// </summary>
     private readonly Dictionary<ObjectGuid, ElevatorControl> _elevatorControls = [];
 
@@ -104,6 +105,13 @@ public sealed partial class GameObjectMapSystem
         _elevatorControls.Remove(go.Guid);
         Republish(go);
         return true;
+    }
+
+    /// <summary>Whether <paramref name="go"/> is a map-wide elevator (a Deeprun Tram car): it moves horizontally and is in no grid.</summary>
+    public bool IsMapWideElevator(GameObject go)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        return _mapWideElevators.Contains(go);
     }
 
     /// <summary>The players whose clients have <paramref name="go"/> (a lift in view), in join order.</summary>
