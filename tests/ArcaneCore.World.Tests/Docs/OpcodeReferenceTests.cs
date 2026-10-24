@@ -21,6 +21,8 @@ public sealed class OpcodeReferenceTests
         Assert.Equal("dropped (dev)", Status(WorldOpcode.CmsgBootme, table));
         Assert.Equal("unhandled", Status(WorldOpcode.CmsgNewSpellSlot, table));
         Assert.Equal("handled", Status(WorldOpcode.MsgMoveWorldportAck, table));
+        Assert.Equal("handled", Status(WorldOpcode.CmsgOpeningCinematic, table));
+        Assert.Equal("handled", Status(WorldOpcode.CmsgGmsurveySubmit, table));
     }
 
     [Fact]
