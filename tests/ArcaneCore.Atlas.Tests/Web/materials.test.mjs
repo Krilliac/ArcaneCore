@@ -464,6 +464,18 @@ test('TextureStore asks for DXT only when the S3TC extension exists, and uploads
     assert.equal(withS3tc.compressedUploads[0].bytes, 8);
     a.dispose();
 
+    // The same DXT1 block without the hasAlpha flag is opaque: it takes the RGB format.
+    const opaqueBytes = encodeTexture({ format: FORMAT.DXT1, width: 4, height: 4, flags: 0, levels: [new Uint8Array(8)], meta: {} });
+    const rgbGl = new FakeGl({ s3tc: true });
+    const c = new TextureStore({ gl: rgbGl, budgetBytes: 1 << 20, fetchTexture: async () => opaqueBytes });
+    c.beginFrame();
+    c.get('client:opaque');
+    c.endFrame();
+    await c.whenIdle();
+    assert.equal(rgbGl.compressedUploads.length, 1);
+    assert.equal(rgbGl.compressedUploads[0].internalFormat, 0x83F0);
+    c.dispose();
+
     const without = new FakeGl({ s3tc: false });
     const asked2 = [];
     const b = new TextureStore({ gl: without, budgetBytes: 1 << 20, fetchTexture: async (key, options) => (asked2.push(options.fmt), rgba(4, 4)) });

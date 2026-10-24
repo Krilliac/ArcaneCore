@@ -29,7 +29,7 @@ const VIEW_HALF = 30;
 const DXT_BLOCK = Uint8Array.from([0x00, 0xF8, 0x1F, 0x00, 0x50, 0x50, 0xFA, 0xFA]);
 const DXT_EXPECTED = { topLeft: RED, topRight: BLUE, bottomLeft: [170, 0, 85], bottomRight: [85, 0, 170] };
 
-function quadChunk(tile, origin, key) {
+function quadChunk(tile, origin, key, blend = 0, alphaRef = 0) {
     const [x0, y0, x1, y1] = [INN[0] - HALF, INN[1] - HALF, INN[0] + HALF, INN[1] + HALF];
     const p = (x, y) => [x - origin[0], y - origin[1], 57 - origin[2]];
     return encodeChunkV2({
@@ -42,18 +42,18 @@ function quadChunk(tile, origin, key) {
         normals: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
         uv0: [0, 1, 1, 1, 1, 0, 0, 0],
         batches: [[0, 2, 0, 0]],
-        materials: [{ kind: 'generic', blend: 0, flags: 3, textures: [{ key, slot: 0, wrap: [0, 0] }], alphaRef: 0 }],
+        materials: [{ kind: 'generic', blend, flags: 3, textures: [{ key, slot: 0, wrap: [0, 0] }], alphaRef }],
         attributes: { 0: {} },
         stats: {},
     });
 }
 
-function configure(key) {
+function configure(key, { blend = 0, alphaRef = 0, dxt } = {}) {
     return (host) => {
         const tile = tileOf(INN[0], INN[1]);
         const origin = [...tileOrigin(tile.x, tile.y).slice(0, 2), 0];
         host.sourceLayers.add('ref.m2.tex');
-        host.setTile('ref.m2.tex', 0, tile.x, tile.y, { state: 'Ok', parts: [quadChunk(tile, origin, key)] });
+        host.setTile('ref.m2.tex', 0, tile.x, tile.y, { state: 'Ok', parts: [quadChunk(tile, origin, key, blend, alphaRef)] });
         host.textureRequests = [];
         host.setBinary('texture', (q) => {
             host.textureRequests.push({ key: q.get('key'), fmt: q.get('fmt'), maxSize: q.get('maxSize') });
@@ -61,7 +61,7 @@ function configure(key) {
                 return { status: 404, type: 'application/json', body: JSON.stringify({ error: { code: 'not-found', message: 'no such texture' } }) };
             }
             if (q.get('fmt') === 'dxt') {
-                return { body: encodeTexture({ format: FORMAT.DXT1, width: 4, height: 4, flags: 1, levels: [DXT_BLOCK], meta: { key: q.get('key') } }) };
+                return { body: encodeTexture({ format: FORMAT.DXT1, width: 4, height: 4, flags: dxt?.flags ?? 1, levels: [dxt?.block ?? DXT_BLOCK], meta: { key: q.get('key') } }) };
             }
             return { body: probeTexture(q.get('key')) };
         });
@@ -180,6 +180,26 @@ test('a textured quad in a real browser, S3TC path', { skip }, async (t) => {
         const textures = JSON.parse(await page.evaluate('JSON.stringify(window.__atlas.app.stats.textures)'));
         assert.equal(textures.bytes, 8);
     });
+});
+
+// c0 = 0x001F (blue) <= c1 = 0xF800 (red): three colours plus index 3, which is transparent black only in an RGBA DXT1 upload.
+// Every texel is index 3. With hasAlpha clear the block is opaque (black), so alpha-key must not discard it.
+test('an opaque DXT1 texture is uploaded as RGB: index 3 stays black under alpha-key, S3TC path', { skip }, async (t) => {
+    const block = Uint8Array.from([0x1F, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF]);
+    const browser = await Browser.launch(executable);
+    t.after(() => browser.close());
+    const s = await startScenario(executable, { browser, configure: configure(PROBE_KEY, { blend: 1, alphaRef: 0.5, dxt: { flags: 0, block } }) });
+    t.after(() => s.close());
+    const { page } = s;
+    const hasS3tc = await page.evaluate("Boolean(document.createElement('canvas').getContext('webgl2')?.getExtension('WEBGL_compressed_texture_s3tc'))");
+    assert.equal(hasS3tc, true, 'this browser has no WEBGL_compressed_texture_s3tc, so the DXT path cannot be tested: that is a failure, not a skip');
+    await page.waitFor('window.__atlas.app.stats.textures && window.__atlas.app.stats.textures.resident === 1', 'the DXT texture');
+    await sleep(300);
+    const box = await stage(page);
+    const image = decodePng(await page.screenshot());
+
+    near(probe(image, box, -7.5, 7.5), [0, 0, 0], 6, 'the quad (top-left)');
+    near(probe(image, box, 7.5, -7.5), [0, 0, 0], 6, 'the quad (bottom-right)');
 });
 
 test('a missing texture draws the placeholder once and is counted', { skip }, async (t) => {

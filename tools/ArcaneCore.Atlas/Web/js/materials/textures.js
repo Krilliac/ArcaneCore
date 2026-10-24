@@ -16,7 +16,7 @@
 //
 // Nothing here writes to browser storage of any kind: textures live in GPU memory for the page's lifetime only.
 
-import { FORMAT, decodeTexture } from '../atx1.js';
+import { FLAG, FORMAT, decodeTexture } from '../atx1.js';
 
 const MAX_CONCURRENT_FETCHES = 4;
 const TRANSIENT_RETRY_MS = 5000;
@@ -426,8 +426,11 @@ export class TextureStore {
             if (!this.usesDxt) {
                 throw new Error('The host sent a compressed texture but this browser has no S3TC support.');
             }
+            // DXT1 without 1-bit alpha is opaque (the CPU decoder forces it): the RGB format keeps c0 <= c1 index 3 black, not clear.
             internalFormat = texture.format === FORMAT.DXT1
-                ? this.#s3tc.COMPRESSED_RGBA_S3TC_DXT1_EXT
+                ? ((texture.flags & FLAG.HAS_ALPHA) !== 0
+                    ? this.#s3tc.COMPRESSED_RGBA_S3TC_DXT1_EXT
+                    : this.#s3tc.COMPRESSED_RGB_S3TC_DXT1_EXT)
                 : texture.format === FORMAT.DXT3
                     ? this.#s3tc.COMPRESSED_RGBA_S3TC_DXT3_EXT
                     : this.#s3tc.COMPRESSED_RGBA_S3TC_DXT5_EXT;
