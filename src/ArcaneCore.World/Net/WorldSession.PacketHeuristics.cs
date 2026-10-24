@@ -34,6 +34,12 @@ public sealed partial class WorldSession
     internal bool HeuristicsGmMode => _heuristicsGm;
 
     /// <summary>
+    /// Whether this session counts as staff for the heuristics: not a bot and not a packet-tool injection, and either managed, a moderator or above, or in GM mode.
+    /// The one predicate <see cref="PacketHeuristicsFeature"/> admission and the dev-opcode audit both use, so they never disagree.
+    /// </summary>
+    internal bool IsHeuristicsStaff => !IsPlayerbot && !HeuristicsToolPacket && (IsManaged || Security >= Kernel.Accounts.AccountSecurity.Moderator || HeuristicsGmMode);
+
+    /// <summary>
     /// Whether the packet being handled right now was injected by a packet tool (<see cref="InjectAsync"/>). On the world thread that is the world
     /// packet being processed; elsewhere it is the injection holding the dispatch gate. Report only: it picks the traffic kind and subject of a finding.
     /// </summary>
@@ -150,6 +156,13 @@ public sealed partial class WorldSession
     /// </summary>
     private void NoteManagedRejected(WorldOpcode opcode, int length)
     {
+        if (_managed && World.IsWorldThread && !_kick.IsCancellationRequested && IsCurrentSession && _state != SessionState.Closed
+            && _opcodes.TryGet(opcode, out OpcodeHandler? stripped) && stripped.Stripped)
+        {
+            DropDevOpcode(opcode, length); // counted and flagged even with the heuristics off; the bot's action is still refused
+            return;
+        }
+
         if (_heuristics is not { Active: true } heuristics || !_managed || !World.IsWorldThread || _kick.IsCancellationRequested || !IsCurrentSession
             || _state == SessionState.Closed)
         {

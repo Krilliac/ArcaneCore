@@ -78,6 +78,7 @@ public sealed class TotemContentImporterCliTests : IDisposable
     {
         string database = Path.Combine(_directory, "world.db");
         Assert.Equal(ExitCodes.Ok, (await Run("import", Write("totems.sql", Dump), "--database", database)).Code);
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int clean, string output, _) = await Run("verify", "--database", database);
         Assert.Equal(ExitCodes.Ok, clean);
         Assert.Contains("totem_spell  2", output, StringComparison.Ordinal);
