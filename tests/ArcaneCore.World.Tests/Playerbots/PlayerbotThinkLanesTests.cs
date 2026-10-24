@@ -705,6 +705,71 @@ public sealed class PlayerbotThinkLanesTests
         }
     }
 
+    /// <summary>
+    /// The host's feature is detached (its subscriptions and registry claims released, as a reload does), then a second instance takes the
+    /// handover: <see cref="ManagedPlayerbotFeature.Detach"/> never clears the first instance's pass, so only a restore through
+    /// AttachFrom -> RestoreHandover -> RestoreMainPass can bring the value to the fresh instance.
+    /// </summary>
+    private static async Task<(ManagedPlayerbotFeature Fresh, uint Before, uint After, ArcaneCore.World.Features.FeatureSubscriptions Subscriptions)> ReloadAsync(
+        WorldTestHost host, ManagedPlayerbotFeature feature, uint seed)
+    {
+        var features = host.WorldServices.GetRequiredService<ArcaneCore.World.Features.FeatureHost>();
+        Assert.True((await features.DetachAsync(nameof(ManagedPlayerbotFeature))).Ok);
+        var fresh = new ManagedPlayerbotFeature(host.WorldServices, Microsoft.Extensions.Logging.Abstractions.NullLogger<ManagedPlayerbotFeature>.Instance);
+        var subscriptions = new ArcaneCore.World.Features.FeatureSubscriptions(nameof(ManagedPlayerbotFeature));
+        (uint before, uint after) = await host.World.InvokeAsync(() =>
+        {
+            feature.SeedMainPassForTests(seed, pin: true);
+            var handover = new ArcaneCore.World.Features.FeatureHandover();
+            feature.Detach(handover);
+            uint untouched = fresh.MainPassMs;
+            fresh.AttachFrom(host.World, handover, subscriptions);
+            return (untouched, fresh.MainPassMs);
+        });
+        return (fresh, before, after, subscriptions);
+    }
+
+    [Fact]
+    public async Task ADetachedPass_ReachesAFreshFeatureThroughAttachFrom()
+    {
+        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 0, "Reloadbot");
+        ManagedPlayerbotFeature? fresh = null;
+        ArcaneCore.World.Features.FeatureSubscriptions? subscriptions = null;
+        try
+        {
+            uint before, after;
+            (fresh, before, after, subscriptions) = await ReloadAsync(host, feature, 20_000);
+            Assert.Equal(0u, before);
+            Assert.Equal(20_000u, after);
+        }
+        finally
+        {
+            capture.Dispose();
+            if (fresh is not null) await host.World.InvokeAsync(() => { fresh.Detach(new ArcaneCore.World.Features.FeatureHandover()); subscriptions!.Dispose(); return true; });
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AnUnsetPass_ArrivesInAFreshFeatureAsZero()
+    {
+        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 0, "Capbot");
+        ManagedPlayerbotFeature? fresh = null;
+        ArcaneCore.World.Features.FeatureSubscriptions? subscriptions = null;
+        try
+        {
+            uint after;
+            (fresh, _, after, subscriptions) = await ReloadAsync(host, feature, 0); // an unset pass hands over 0: nothing to restore, the fresh one stays unseeded
+            Assert.Equal(0u, after);
+        }
+        finally
+        {
+            capture.Dispose();
+            if (fresh is not null) await host.World.InvokeAsync(() => { fresh.Detach(new ArcaneCore.World.Features.FeatureHandover()); subscriptions!.Dispose(); return true; });
+            await host.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task AFeatureWithNoPassYet_DoesNotWipeThePassABotsMotionKnows()
     {
