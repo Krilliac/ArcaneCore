@@ -309,7 +309,8 @@ public sealed partial class CreatureMapSystem
     /// it is put on that floor (when it is more than a yard below it). Reported once per episode: the episode stays open until a later sample
     /// finds the creature on the floor, so a mover that keeps putting it back under is lifted again without a new report.
     /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a
-    /// stranded creature; it does not prevent whatever put it there.
+    /// stranded creature; it does not prevent whatever put it there. The cause is NOT established: live logs show warlock imps (entry 416) 16-36 yd under the floor on several
+    /// maps with no placement context, and the summon placement and ramp-follow tests here do not reproduce it, so this stays a heal until a reproducing placement is captured.
     /// </summary>
     private bool TryLiftOntoFloorAbove(Creature creature)
     {

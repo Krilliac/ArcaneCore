@@ -222,7 +222,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
     public void AnImp_6Point6YardsUnderTheWsgTunnelFloor_IsLiftedOntoTheFloor_AndReportedOnce()
     {
         // Logged position of two different warlock imps: terrain 358.3, ceiling 351.4, tunnel floor 342.6, creature at 335.9.
-        const uint Entry = 949202;
+        const uint Entry = 949210;
         const float X = 1448.2f;
         const float Z = 335.9f;
         using WorldRuntime world = TestWorld.CreateRuntime();
@@ -250,7 +250,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
     {
         // Whatever put the imp under the floor may do it again: every re-placement is healed at the next sample, but the episode stays
         // open until a sample sees the creature on the floor, so a mover that undoes every lift does not turn one report into one per sample.
-        const uint Entry = 949202;
+        const uint Entry = 949210;
         const float X = 1448.2f;
         const float Z = 335.9f;
         using WorldRuntime world = TestWorld.CreateRuntime();
@@ -292,7 +292,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
     [InlineData(1390f, 1470f, 25f, 2000u, true)]
     public void APetFollowingItsOwnerAlongTheWsgTunnelRamp_StaysOnTheFloor_AndIsNeverLifted(float fromX, float toX, float ownerStep, uint tickMs, bool pathJobs)
     {
-        const uint Entry = 949203;
+        const uint Entry = 949211;
         using WorldRuntime world = TestWorld.CreateRuntime();
         InstallRealCollision(world, Wsg, 1450f, 1460f);
         Map map = world.GetMap(Wsg);
