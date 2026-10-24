@@ -8,7 +8,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm.Core;
 
-/// <summary>The <c>AllowDangerousDebug</c> gate (plan I8) wired into a host: both outcomes of <see cref="DangerousDebugGate.TryAllow"/>, every security level, and the value parsing.</summary>
+/// <summary>The <c>AllowDangerousDebug</c> gate (plan I8) wired into a host: both outcomes of <see cref="DangerousDebugGate.Allow"/>, every security level, and the value parsing.</summary>
 public sealed class DangerousDebugGateHostTests
 {
     private static IConfiguration Config(string? value)
@@ -25,44 +25,46 @@ public sealed class DangerousDebugGateHostTests
     [InlineData("on", false)]
     [InlineData("", false)]
     [InlineData("tru", false)]
-    public void TheRawValue_IsParsedAsABoolean_AndAnythingElseIsOff(string value, bool allowed)
+    public void TheRawValue_IsParsedAsABoolean_AndAnythingElseIsOff_AndTheLiveServerIsAlwaysOff(string value, bool allowed)
     {
         Assert.Equal(allowed, DangerousDebugGate.Create(Config(value), liveServer: false).Allowed);
-        Assert.Equal(allowed, DangerousDebugGate.Create(Config(value), liveServer: true).Allowed);
+        Assert.False(DangerousDebugGate.Create(Config(value), liveServer: true).Allowed);
     }
 
     [Fact]
-    public void AnEmptyValue_CountsAsExplicitlySet_ButIsOff()
+    public void AnEmptyValue_IsOff()
     {
         DangerousDebugGate gate = DangerousDebugGate.Create(Config(string.Empty), liveServer: true);
 
-        Assert.True(gate.ExplicitlySet);
+        Assert.False(gate.Configured);
         Assert.False(gate.Allowed);
     }
 
     [Fact]
-    public void Create_ReportsTheLiveFlag_AndDescribeNamesTheKeyWhenOffOnLive()
+    public void Create_ReportsTheLiveFlag_AndDescribeSaysOffWhenTheKeyIsAbsent()
     {
         DangerousDebugGate gate = DangerousDebugGate.Create(Config(null), liveServer: true);
 
         Assert.True(gate.LiveServer);
-        Assert.False(gate.ExplicitlySet);
-        Assert.Equal("AllowDangerousDebug: off", gate.Describe());
+        Assert.False(gate.Configured);
+        Assert.Contains("off", gate.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void TheRefusalTexts_NameTheKey_AndTheLiveOneSaysExplicit()
+    public void TheRefusalTexts_NameTheKeyAndRestart_AndTheLiveOneHasNoOverride()
     {
         Assert.Contains(DangerousDebugGate.OptionPath, DangerousDebugGate.RefusedText, StringComparison.Ordinal);
         Assert.Contains("restart", DangerousDebugGate.RefusedText, StringComparison.Ordinal);
-        Assert.Contains(DangerousDebugGate.OptionPath, DangerousDebugGate.RefusedLiveText, StringComparison.Ordinal);
-        Assert.Contains("explicitly", DangerousDebugGate.RefusedLiveText, StringComparison.Ordinal);
+        Assert.Equal("Refused: dangerous debug commands are disabled on the live server.", DangerousDebugGate.RefusedLiveText);
+        Assert.DoesNotContain(DangerousDebugGate.OptionPath, DangerousDebugGate.RefusedLiveText, StringComparison.Ordinal);
         Assert.Equal("dangerous-debug-disabled", DangerousDebugGate.FailureReason);
     }
 
     [Fact]
-    public void TryAllow_RejectsANullContext()
-        => Assert.Throws<ArgumentNullException>(() => DangerousDebugGate.TryAllow(null!));
+    public void Allow_RejectsANullContext()
+    {
+        Assert.Throws<ArgumentNullException>(() => DangerousDebugGate.Allow(null!, "inject"));
+    }
 
     [Fact]
     public async Task TheFeature_DefaultsToOff_WithoutConfiguration()
@@ -73,7 +75,7 @@ public sealed class DangerousDebugGateHostTests
     }
 
     [Fact]
-    public async Task TheFeature_ReadsTheConfiguredValue_AndTryAllowPasses_ForConsoleAndPlayer()
+    public async Task TheFeature_ReadsTheConfiguredValue_AndAllowPasses_ForConsoleAndPlayer()
     {
         await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(Config("true")));
         await using WorldTestClient client = await host.EnterWorldAsync("DDHONE", "Ddhone", AccountSecurity.Administrator);
@@ -84,9 +86,9 @@ public sealed class DangerousDebugGateHostTests
         await host.OnWorldAsync(() =>
         {
             CommandContext console = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Add);
-            results.Add((DangerousDebugGate.TryAllow(console), console.Failure));
+            results.Add((DangerousDebugGate.Allow(console, "inject"), console.Failure));
             CommandContext player = new(session, session.Player!, ChatCommands.CreateTable());
-            results.Add((DangerousDebugGate.TryAllow(player), player.Failure));
+            results.Add((DangerousDebugGate.Allow(player, "inject"), player.Failure));
         });
 
         Assert.True(host.WorldServices.GetRequiredService<GmAuditFeature>().DangerousDebug.Allowed);
@@ -97,7 +99,7 @@ public sealed class DangerousDebugGateHostTests
     [Theory]
     [InlineData(AccountSecurity.GameMaster)]
     [InlineData(AccountSecurity.Administrator)]
-    public async Task TryAllow_RefusesEverySecurityLevel_WhenOff_WithTheReplyOnThatInvoker(AccountSecurity security)
+    public async Task Allow_RefusesEverySecurityLevel_WhenOff_WithTheReplyOnThatInvoker(AccountSecurity security)
     {
         string account = "DDH" + security.ToString()[..3].ToUpperInvariant();
         await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(Config("false")));
@@ -110,24 +112,24 @@ public sealed class DangerousDebugGateHostTests
         await host.OnWorldAsync(() =>
         {
             CommandContext context = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Add);
-            allowed = DangerousDebugGate.TryAllow(context);
+            allowed = DangerousDebugGate.Allow(context, "stall");
             failure = context.Failure;
         });
 
         Assert.False(allowed);
         Assert.Equal(DangerousDebugGate.FailureReason, failure);
-        Assert.Contains(replies, l => l.Contains("disabled", StringComparison.Ordinal));
+        Assert.Contains(replies, l => l.Contains("restart", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task TryAllow_AFailedGate_DoesNotLeaveAnythingInTheWriteLog()
+    public async Task Allow_AFailedGate_DoesNotLeaveAnythingInTheWriteLog()
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("DDHTWO", "Ddhtwo", AccountSecurity.Administrator);
         var session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DDHTWO"))!.Id)!;
         GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
 
-        await host.OnWorldAsync(() => DangerousDebugGate.TryAllow(CommandContext.ForConsole(session, ChatCommands.CreateTable(), _ => { })));
+        await host.OnWorldAsync(() => DangerousDebugGate.Allow(CommandContext.ForConsole(session, ChatCommands.CreateTable(), _ => { }), "inject"));
 
         Assert.Equal(0, audit.DebugWrites.Total);
     }

@@ -102,7 +102,7 @@ public sealed class GmOptions
     /// <summary>
     /// ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG
     /// override, forced acks, map/grid unload, watchdog dumps) behind <see cref="DangerousDebugGate"/>. Off by default; changing it
-    /// needs a restart. On the live server (<c>ARCANECORE_LIVE_SERVER=1</c>) it counts only when the key is set explicitly.
+    /// needs a restart. On the live server (<c>ARCANECORE_LIVE_SERVER=1</c>) the commands are refused whatever this says.
     /// </summary>
     public bool AllowDangerousDebug { get; set; }
 
