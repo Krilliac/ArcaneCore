@@ -70,6 +70,21 @@ public sealed class DebugToolsCommandTests
     }
 
     [Fact]
+    public async Task SlowTicks_ClampsTheWindowToTheRetainedSixtySeconds_AndSaysSo()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("DBGSLOW", "Dbgslow", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+
+        string[] longWindow = await RunAsync(gm, ".debug slowticks 600");
+        Assert.Contains(longWindow, l => l.Contains("within the last 60 s (requested 600 s; only the last 60 s are retained)", StringComparison.Ordinal));
+
+        string[] withinRetention = await RunAsync(gm, ".debug slowticks 30");
+        Assert.Contains(withinRetention, l => l.Contains("within the last 30 s", StringComparison.Ordinal));
+        Assert.DoesNotContain(withinRetention, l => l.Contains("requested", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void MapCostTrackerKeepsMeanLastAndMax()
     {
         var tracker = new MapCostTracker();

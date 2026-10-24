@@ -36,7 +36,7 @@ public sealed class DebugToolsCommands : ICommandExtension
             "Syntax: .debug tick\nShow the world tick: target interval, body p50/p99/max over the last minute, each phase (commands, world-tick handlers, features, maps, autosave) over the last minute, late and skipped starts, and what the world thread is doing right now.",
             Tick, RetailLevel: 3),
         new("slowticks", AccountSecurity.GameMaster,
-            "Syntax: .debug slowticks [#seconds]\nList the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600): duration, phase split, GC and the slowest features of each.",
+            "Syntax: .debug slowticks [#seconds]\nList the slowest recent world ticks kept for the hang log (within #seconds, default 60; only the last 60 s are kept, so a longer window is clamped to 60 and the reply says so): duration, phase split, GC and the slowest features of each.",
             SlowTicks, RetailLevel: 3),
         new("features", AccountSecurity.GameMaster,
             "Syntax: .debug features [#count]\nList the world features by their smoothed per-tick time (about the last 50 ticks) with their allocation per tick, slowest first (default 15 rows). The playerbot think pass is one of them.",
@@ -133,14 +133,19 @@ public sealed class DebugToolsCommands : ICommandExtension
             return false;
         }
 
-        IReadOnlyList<SlowTickInfo> slow = context.World.Stats.SlowTicks(TimeSpan.FromSeconds(seconds));
+        // Only SlowTickCapacity ticks of the last SlowTickRetention are kept, so a longer window would look complete without being.
+        uint kept = (uint)TickStats.SlowTickRetention.TotalSeconds;
+        uint window = Math.Min(seconds, kept);
+        string clamp = window < seconds ? $" (requested {seconds} s; only the last {kept} s are retained)" : string.Empty;
+        IReadOnlyList<SlowTickInfo> slow = context.World.Stats.SlowTicks(TimeSpan.FromSeconds(window));
         if (slow.Count == 0)
         {
-            context.Reply(string.Create(C, $"No slow ticks kept within the last {seconds} s."));
+            context.Reply(string.Create(C, $"No slow ticks kept within the last {window} s{clamp}."));
             return true;
         }
 
-        context.Reply(string.Create(C, $"{slow.Count} slow tick(s) within the last {seconds} s, slowest first:"));
+        string full = slow.Count >= TickStats.SlowTickCapacity ? $"; the ring holds at most {TickStats.SlowTickCapacity}, so faster slow ticks may have been dropped" : string.Empty;
+        context.Reply(string.Create(C, $"{slow.Count} slow tick(s) within the last {window} s{clamp}{full}, slowest first:"));
         foreach (SlowTickInfo tick in slow.OrderByDescending(t => t.DurationMicros))
         {
             double ago = Stopwatch.GetElapsedTime(tick.Timestamp).TotalSeconds;
