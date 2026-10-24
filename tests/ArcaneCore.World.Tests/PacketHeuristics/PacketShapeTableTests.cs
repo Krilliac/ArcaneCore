@@ -51,7 +51,7 @@ public sealed partial class PacketShapeTableTests
     /// <summary>Fixed oracle messages left out of the table because the server handler does not agree with (or does not use) the oracle length.</summary>
     private static readonly Dictionary<WorldOpcode, string> Removed = new()
     {
-        [WorldOpcode.CmsgBootme] = "no handler: the server drops it as unknown",
+        [WorldOpcode.CmsgBootme] = "no handler: registered as a stripped dev opcode, the server drops it unread (counted as a dev-opcode finding)",
         [WorldOpcode.MsgLookingForGroup] = "the handler never reads the body and answers regardless; an empty request is UNVERIFIED against a client",
         [WorldOpcode.CmsgMailCreateTextItem] = "the handler reads 12 bytes (mailbox, mail id), the oracle declares 16",
         [WorldOpcode.CmsgAcceptTrade] = "the handler ignores the body entirely",

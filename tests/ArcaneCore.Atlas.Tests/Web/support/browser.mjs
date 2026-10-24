@@ -36,9 +36,26 @@ export class Browser {
             }
             await sleep(100);
         }
-        await sleep(100);
-        browser.port = Number(fs.readFileSync(portFile, 'utf8').split(/\r?\n/)[0]);
-        return browser;
+        // Chromium may still hold the file open while it writes it (EBUSY/EPERM on Windows); retry until the port parses.
+        for (;;) {
+            await sleep(100);
+            try {
+                const port = Number(fs.readFileSync(portFile, 'utf8').split(/\r?\n/)[0]);
+                if (Number.isInteger(port) && port > 0) {
+                    browser.port = port;
+                    return browser;
+                }
+            } catch (error) {
+                if (error.code !== 'EBUSY' && error.code !== 'EPERM' && error.code !== 'EACCES' && error.code !== 'ENOENT') {
+                    await browser.close();
+                    throw error;
+                }
+            }
+            if (Date.now() > deadline || child.exitCode !== null) {
+                await browser.close();
+                throw new Error('The browser did not publish a DevTools port.');
+            }
+        }
     }
 
     constructor(child, profile) {
