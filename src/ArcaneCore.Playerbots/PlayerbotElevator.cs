@@ -721,6 +721,7 @@ internal static class PlayerbotElevator
         if (!Trips.TryGetValue(player, out ElevatorTrip? trip)) return;
         if (!player.IsAlive)
         {
+            trip.Route = null;
             Trips.Remove(player);
             if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? deadState)) deadState.ElevatorTrip = null;
             if ((player.Movement.Flags & MovementFlags.OnTransport) != 0 && player.Session is WorldSession session) ClearTransport(session, player);
@@ -741,6 +742,7 @@ internal static class PlayerbotElevator
             case ElevatorStage.Falling:
                 return;
             default:
+                trip.Route = null;
                 Trips.Remove(player);
                 if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? cancelState)) cancelState.ElevatorTrip = null;
                 return;
@@ -2057,6 +2059,7 @@ internal static class PlayerbotElevator
     /// </summary>
     private static void AbandonRelocated(WorldSession session, Player player, ElevatorTrip trip)
     {
+        trip.Route = null;
         Trips.Remove(player);
         if (PlayerbotMotion.TryGetState(player, out PlayerbotMotion.MotionState? state)) state.ElevatorTrip = null;
         session.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(PlayerbotElevator)).LogDebug(

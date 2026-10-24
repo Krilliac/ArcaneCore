@@ -2525,6 +2525,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                         if (!active.BattlegroundDriven)
                         {
+                            ReleaseBrainRoute(driven);
                             PlayerbotTaxi.Cancel(driven);
                             PlayerbotTravel.CancelLegs(active.Session, driven);
                         }
@@ -2555,6 +2556,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                         if (!active.GroupDriven)
                         {
+                            ReleaseBrainRoute(driven);
                             PlayerbotTaxi.Cancel(driven);
                             PlayerbotTravel.CancelLegs(active.Session, driven);
                         }
@@ -2615,6 +2617,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private static void ReleaseMotion(WorldSession session, Player player)
     {
         if (PlayerbotMotion.IsActive(player)) PlayerbotMovementControl.Stop(session, player);
+    }
+
+    /// <summary>
+    /// The battleground coordinator or a bot-led group takes the bot from its brain: the brain's route is marked released
+    /// (<see cref="PlayerbotRoute.Released"/>) without stopping the bot (see <see cref="ReleaseMotion"/>). The driver's settle
+    /// (<see cref="PlayerbotMotion.SettleAfterDriver"/>) stops a walk the driver does not take over (its own Follow clears the mark).
+    /// </summary>
+    private static void ReleaseBrainRoute(Player player)
+    {
+        if (PlayerbotMotion.RouteOf(player) is { } route) route.Released = true;
     }
 
     /// <summary>

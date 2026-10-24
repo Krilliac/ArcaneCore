@@ -87,7 +87,9 @@ internal sealed class PlayerbotFollower
     private PlayerbotDropPlan? _dropSlot;
 
     /// <summary>The follower's drop plan. Letting go of one (null or another plan) releases its walk to the edge
-    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.
+    /// Assign a <c>with</c> copy of the plan only when its ToEdge route is replaced too: the copy is a different object, so the assignment
+    /// releases the old plan's ToEdge even if the new plan still holds it.</summary>
     private PlayerbotDropPlan? _drop
     {
         get => _dropSlot;
@@ -172,6 +174,8 @@ internal sealed class PlayerbotFollower
         if (_phase == DropPhase.Falling) FinishFall(player);
         CancelDrop();
         _routeStale = true;
+        // The route is kept for Blocker, but nothing may keep walking it: the driver's settle stops a walk that still follows it.
+        if (_route is { } kept) kept.Released = true;
     }
 
     /// <summary>

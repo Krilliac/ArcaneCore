@@ -16,6 +16,8 @@ using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Tests.Playerbots.Dungeon;
+using ArcaneCore.World.Tests.Playerbots.Elevator;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -466,79 +468,188 @@ public sealed class PlayerbotLeaseSettleTests
         return true;
     }));
 
-    // --- the cap -------------------------------------------------------------------------------------------------------------
+    // --- the time bound ------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Test 5. A route that nobody follows and nobody releases (an owner whose slot never lets go) is renewed by the settle at most
-    /// <see cref="PlayerbotMotion.MaxUnfollowedRenewals"/> times, then left to die at its lease: the cap is the safety net for owners
-    /// without a releasing slot. Nine gate-only thinks, each settled: the ninth is not renewed and the walk ends at its lease. A Follow
-    /// (a decided think that re-asserts the route) clears the count: eight more settles renew again. Fails with the cap removed (the
-    /// ninth settle renews and the bot walks on) and with a cap that Follow does not reset (the second run of settles is not renewed).
+    /// Test 5. A route that nobody follows and nobody releases (an owner whose slot never lets go) is renewed by the settle only while less
+    /// than its lease has passed since its last Follow, then left to die: a route nobody re-asserts lives about two leases. A gate-only settle
+    /// half a lease after the Follow is renewed; one more than half a lease later (past the lease measured from the Follow) is not, and the
+    /// walk has run out half a lease and 200 ms after that. Fails with the bound removed (the second settle renews and the bot walks on).
     /// </summary>
     [Fact]
-    public Task TheSettleRenewsAnUnfollowedRouteAtMostMaxUnfollowedRenewalsTimes_AndAFollowResetsTheCount() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
+    public Task TheSettleRenewsAnUnfollowedRouteOnlyWhileLessThanItsLeaseHasPassedSinceTheLastFollow() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
     {
         Player bot = rig.BotPlayer;
         PlayerbotRoute route = StartFollowWalk(rig, 90f);
         uint lease = PlayerbotMotion.LeaseMsOf(bot);
-        uint max = PlayerbotMotion.MaxUnfollowedRenewals;
-        uint gate = Math.Max(1u, (uint)rig.Options.ThinkIntervalMs / (max + 4u)); // max + 1 gate-only thinks stay under the think interval
-        Assert.True(gate * (max + 1u) < rig.Options.ThinkIntervalMs);
+        Assert.InRange(lease, 2000u, 8000u);
+        uint gate = Gate(rig.Options);
 
-        // Each settle is a gate-only think 1 ms after the last, except the ninth: it comes lease - 500 ms after the eighth renewal, still
-        // inside that lease. Renewed, the walk lives 1000 ms past it; not renewed, it is past the eighth renewal's lease by then.
-        for (uint i = 0; i < max + 1u; i++)
-        {
-            PlayerbotMotion.ElapseForTests(bot, i == max ? lease - 500 : 1);
-            uint renewals = PlayerbotMotion.RenewalsOf(bot);
-            rig.Think(gate);
-            Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot));
-            Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // nothing is released: never stops the bot itself
-            if (i < max) Assert.True(PlayerbotMotion.IsActive(bot));
-        }
+        // Inside the lease measured from the Follow: renewed.
+        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        uint renewals = PlayerbotMotion.RenewalsOf(bot);
+        rig.Think(gate);
+        Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot));
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // nothing is released: never stops the bot itself
+        Assert.True(PlayerbotMotion.IsActive(bot));
 
+        // Past it: not renewed, so the walk is past the lease of the first settle's renewal by the time it is checked.
+        PlayerbotMotion.ElapseForTests(bot, lease / 2 + 100);
+        renewals = PlayerbotMotion.RenewalsOf(bot);
+        rig.Think(gate);
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
         Assert.False(route.Released);
-        Assert.False(WalksAfter(rig.Bot, 1000), $"the ninth unfollowed settle renewed the route (cap {max}); it kept walking past the lease of the eighth renewal");
+        Assert.False(WalksAfter(rig.Bot, lease / 2 + 200), "a settle renewed a route that had gone a whole lease without a Follow");
         Assert.False(PlayerbotMotion.IsActive(bot));
         return true;
     }));
 
+    /// <summary>
+    /// Test 5b. A Follow (a decided think that re-asserts the route) starts the bound over: after one, a settle half a lease later
+    /// renews again and the walk is alive past the lease measured from the old Follow. Fails when Follow does not record its time (the settle then
+    /// measures from the first Follow, refuses, and the walk has run out of lease).
+    /// </summary>
     [Fact]
-    public Task AFollowClearsTheCountOfUnfollowedRenewals_SoEightMoreSettlesRenew() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
+    public Task AFollowStartsTheTimeBoundOver_SoTheNextSettleRenewsAgain() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
     {
         Player bot = rig.BotPlayer;
         PlayerbotRoute route = StartFollowWalk(rig, 90f);
         uint lease = PlayerbotMotion.LeaseMsOf(bot);
-        uint max = PlayerbotMotion.MaxUnfollowedRenewals;
-        uint gate = Math.Max(1u, (uint)rig.Options.ThinkIntervalMs / (max + 4u));
+        Assert.InRange(lease, 2000u, 8000u);
+        uint gate = Gate(rig.Options);
 
-        // Use the whole allowance with gate-only thinks.
-        for (uint i = 0; i < max; i++)
-        {
-            PlayerbotMotion.ElapseForTests(bot, 1);
-            uint before = PlayerbotMotion.RenewalsOf(bot);
-            rig.Think(gate);
-            Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, before, gate));
-        }
+        // Let the bound pass: a settle past the lease since the Follow does not renew.
+        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        uint renewals = PlayerbotMotion.RenewalsOf(bot);
+        rig.Think(gate);
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
+        PlayerbotMotion.ElapseForTests(bot, lease / 2 + 100);
+        renewals = PlayerbotMotion.RenewalsOf(bot);
+        rig.Think(gate);
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // past the lease since the Follow: not renewed
 
-        // One decided think re-asserts the route through Follow: it renews it and clears the count.
+        // One decided think re-asserts the route through Follow (the leader has not moved: the same route).
         uint followed = PlayerbotMotion.RenewalsOf(bot);
         rig.Decide();
         Assert.NotEqual(followed, PlayerbotMotion.RenewalsOf(bot));
         Assert.Same(route, PlayerbotMotion.RouteOf(bot));
 
-        // Eight more settles each renew (500 ms apart: 4000 ms in all, the whole lease), so the walk is alive a lease-minus-1000 later.
-        // With the count not cleared none of them would renew and the walk would have run out of lease by then.
-        for (uint i = 0; i < max; i++)
-        {
-            PlayerbotMotion.ElapseForTests(bot, 500);
-            uint before = PlayerbotMotion.RenewalsOf(bot);
-            rig.Think(gate);
-            Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, before, gate));
-        }
-
-        Assert.True(WalksAfter(rig.Bot, lease - 1000), "the count of unfollowed renewals was not cleared by a Follow");
+        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        renewals = PlayerbotMotion.RenewalsOf(bot);
+        rig.Think(gate);
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
+        Assert.True(WalksAfter(rig.Bot, lease / 2 + 200), "the time bound was not started over by a Follow");
         Assert.Same(route, PlayerbotMotion.RouteOf(bot));
         return true;
     }));
+
+    // --- the party AI's fight ------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Test 6. The party AI's fight returns without a Follow or a Stop when the combat spells' helper says it acted while the bot is still
+    /// moving: here the helper's first step, standing the bot up, is refused for want of action budget and it returns true at once.
+    /// The fight suspended the follower first, which keeps its follow route (the way FightThrough looks along) but must release it:
+    /// otherwise the settle renews a follow walk nobody holds. Drives the real <c>PlayerbotPartyAI.Update</c> (Fight, Suspend, the early
+    /// return), then the settle. Fails with Suspend not releasing the kept route.
+    /// </summary>
+    [Fact]
+    public async Task PartyFightThatReturnsWithoutFollowing_ReleasesTheKeptFollowRoute_SoTheSettleStopsTheBot()
+    {
+        await using WorldTestHost host = PartyTestHost.Start(o => o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        await using WorldTestClient master = await host.EnterWorldAsync("LEASEFGM", "Leasefgm");
+        WorldSession session = await PartyTestHost.EnterManagedAsync(host, "LEASEFGB", "Leasefgb");
+        try
+        {
+            PlayerbotOptions options = PartyTestHost.PlayerbotOptionsOf(host);
+            var ai = new PlayerbotPartyAI(session, options);
+            await host.OnWorldAsync(() =>
+            {
+                OpenWorld(host);
+                Player owner = host.World.FindOnlinePlayer("Leasefgm")!;
+                Player bot = session.Player!;
+                GroupManager groups = host.WorldServices.GetRequiredService<SocialFeature>().Context.Groups;
+                groups.Invite(owner, bot.Name);
+                groups.Accept(bot);
+                Assert.True(ai.Drives(bot));
+                owner.Relocate(bot.X, bot.Y + 90f, bot.Z, 0f, host.World.NowMs);
+
+                // The follow walk, as any decided think starts it.
+                session.ManagedBudget = new ManagedActionBudget(8);
+                ai.Update(bot, DecidedMs(options));
+                Assert.True(PlayerbotMotion.IsActive(bot), $"the party AI did not start following (goal {ai.Goal})");
+                Assert.True(Forward(bot));
+                PlayerbotRoute followRoute = PlayerbotMotion.RouteOf(bot)!;
+                Assert.False(followRoute.Released);
+
+                // A hostile on the bot and the bot sitting with no action budget left: the fight's spell helper asks the server to stand
+                // the bot up, is refused, and says it acted without stopping the walk.
+                Creature attacker = DungeonBotHost.AddCreature(bot.Map!, 990_811, bot.X + 3f, bot.Y, bot.Z, 0, host.World.NowMs, faction: 14);
+                bot.Combat.AttackersInternal.Add(attacker);
+                bot.SetStandState(StandState.Sit);
+                session.ManagedBudget = new ManagedActionBudget(0);
+                uint renewals = PlayerbotMotion.RenewalsOf(bot);
+                ai.Update(bot, DecidedMs(options));
+                Assert.Equal(ArcaneCore.Kernel.Characters.PlayerbotGoalKind.Assist, ai.Goal);
+                Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot)); // the fight followed nothing
+                Assert.Same(followRoute, PlayerbotMotion.RouteOf(bot));  // and stopped nothing
+                Assert.True(Forward(bot), "the fight stopped the bot itself; this test needs the early return without a stop");
+                Assert.True(followRoute.Released, "Suspend kept the follow route without releasing it");
+
+                Assert.True(PlayerbotMotion.SettleAfterDriver(session, bot, renewals, DecidedMs(options)), "the settle renewed a follow walk the fight had given up");
+                Assert.False(PlayerbotMotion.IsActive(bot));
+                Assert.False(Forward(bot));
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    // --- the elevator trip ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Test 7. A party takes a bot whose lift trip has not boarded yet: <see cref="PlayerbotElevator.Cancel"/> removes the trip while the
+    /// bot walks the trip's route to the stop. The trip's route is released with it (the releasing setter), so the settle stops the bot
+    /// rather than renewing a walk no one holds. Fails when Cancel removes the trip without clearing its route.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledElevatorTripInToStop_ReleasesItsRoute_SoTheSettleStopsTheBot()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        ElevatorLift lift = await world.GreatLiftAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player bot = world.Player;
+            ElevatorTrip trip = PlayerbotElevator.Begin(world.Session, bot, lift, ElevatorLevel.Low, ElevatorTestWorld.Ratchet);
+            Assert.Equal(ElevatorStage.ToStop, trip.Stage);
+
+            // The bot walks the trip's route (what the trip's TryAdvance leaves behind), scripted without a path query.
+            Vector3 here = new(bot.X, bot.Y, bot.Z);
+            var route = new PlayerbotRoute([here, here + new Vector3(30f, 0f, 0f)], 30f) { NextPoint = 1 };
+            trip.Route = route;
+            PlayerbotMotion.MotionState state = PlayerbotMotion.Of(bot);
+            state.Route = route;
+            state.Map = bot.Map;
+            state.Anchor = here;
+            state.AnchorMs = world.Host.World.NowMs;
+            state.RenewedMs = world.Host.World.NowMs;
+            state.FollowedMs = world.Host.World.NowMs;
+            state.LeaseMs = 4000;
+            state.Heading = 0f;
+            state.Speed = 0f;
+            Assert.True(PlayerbotMotion.IsActive(bot));
+            uint renewals = PlayerbotMotion.RenewalsOf(bot);
+
+            PlayerbotElevator.Cancel(bot);
+            Assert.Null(PlayerbotElevator.TripOf(bot));
+            Assert.True(route.Released, "Cancel removed the trip without releasing the route it walked");
+
+            Assert.True(PlayerbotMotion.SettleAfterDriver(world.Session, bot, renewals, 500), "the settle renewed a walk whose trip was cancelled");
+            Assert.False(PlayerbotMotion.IsActive(bot));
+        });
+    }
 }
