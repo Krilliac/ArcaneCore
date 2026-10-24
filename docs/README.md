@@ -29,6 +29,7 @@ unfinished parts documented as limits).
 | [Provisioning bots and boosted characters](ops/bot-provisioning.md) | `tools/ops/provision-bots.ps1` (N playerbots at level L in zone Z) and a boosted character for an account through `.pdump`; both change the live server, so start with a dry run. |
 | [Remote administration (RA)](ops/remote-admin.md) | The world daemon's TCP command console (`World:RemoteAdmin`, on by default, loopback only): account or token login, the account's security level, automation mode with one `#done` line per command, and its options. |
 | [Headless bot control](ops/botctl.md) | `.botctl`: drive playerbots from the console, the control pipe or RA to test a feature in game without a client; bot selectors, verbs, results and the client scripts for agents. |
+| [Live launch diagnostics](ops/live-diagnostics.md) | `launch-daemon.ps1 -Diagnostics Max` (the default): crash dumps, hang stacks, a counters CSV sidecar and the repo's diagnostic options at their most informative safe values, the disk caps, and what was left out and why. |
 | [Redeploy prefers hot reload](ops/redeploy.md) | How `tools/ops/live/redeploy.ps1` plans a redeploy (None, Hot, Restart, Blocked), the deploy record, the hot apply through the World's control pipe and when it falls back to the hard restart. |
 | [Wiring audit](ops/wiring-audit.md) | `.server wiring` and the start-up summary line: client opcodes with no handler, options asked for but never configured, config checks `check-config` does not run, handlers on server-only opcodes; the CI guards behind them. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
@@ -95,6 +96,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | GM debug drawing (`.debug vis`: LoS, paths, waypoints, cells) | [debug-draw](areas/debug-draw.md) |
 | Atlas 3D map, collision, navmesh and live world visualizer (`arcane-atlas`) | [atlas](areas/atlas.md) |
 | Atlas client textures, model packages and display tables (BLP, ATG1 v2, ATX1) | [atlas-models](areas/atlas-models.md) |
+| Atlas browser-side client-file reader (local game folder, cache, Workers) | [atlas-client-files](areas/atlas-client-files.md) |
 | World daemon live map feed (`\\.\pipe\arcanecore-mapfeed-{pid}`) | [map-feed](areas/map-feed.md) |
 | Locomotion, falls and environment | [locomotion](areas/locomotion.md) |
 | Anticheat (movement checks, scores, escalation, violation log) | [anticheat](areas/anticheat.md) |

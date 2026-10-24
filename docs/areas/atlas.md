@@ -9,6 +9,7 @@ Code: `tools/ArcaneCore.Atlas`. Tests: `tests/ArcaneCore.Atlas.Tests`. Live worl
 [map-feed](map-feed.md) (`src/ArcaneCore.World/Ops/MapFeed`). Real client textures and models (BLP/M2/display tables, ATG1 v2, ATX1):
 [atlas-models](atlas-models.md); the lanes that build on it: [terrain textures](atlas-terrain-textures.md),
 [WMO and M2 materials](atlas-model-materials.md), [live models and characters](atlas-live-models.md).
+Browser-side reader for a local game folder: [atlas-client-files](atlas-client-files.md).
 
 ## Delivered
 

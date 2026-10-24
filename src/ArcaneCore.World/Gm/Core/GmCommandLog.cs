@@ -20,6 +20,11 @@ public static class GmCommandLog
     /// <summary>The audit line of a command typed at the server console (no player, no account, no position).</summary>
     public static string DescribeConsole(string commandText) => $"Command: {commandText} [Console]";
 
+    /// <summary>The audit line of a stripped developer opcode a staff session sent (dropped unread, no effect).</summary>
+    public static string DescribeDevOpcode(string opcodeName, int accountId, string playerName, int length)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"Command: dev-opcode {opcodeName} [Player: {playerName} (Account: {accountId}) {length} bytes, dropped unread]");
+
     public static string Describe(string commandText, int accountId, string playerName, uint mapId, float x, float y, float z, string selection)
         => string.Create(CultureInfo.InvariantCulture,
             $"Command: {commandText} [Player: {playerName} (Account: {accountId}) X: {x} Y: {y} Z: {z} Map: {mapId} Selected: {selection}]");

@@ -18,12 +18,7 @@ public sealed class ProcessHangStackRunner : IHangStackRunner
 {
     public async Task<(int ExitCode, string Output)> RunAsync(string tool, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
-        var start = new ProcessStartInfo(tool) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-        foreach (string argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-
+        ProcessStartInfo start = CreateStartInfo(tool, arguments);
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"{tool} did not start");
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
@@ -39,6 +34,48 @@ public sealed class ProcessHangStackRunner : IHangStackRunner
         }
 
         return (process.ExitCode, await stdout.ConfigureAwait(false) + await stderr.ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// The child's start info: output redirected, no window, and the runtime's crash-dump variables removed from its environment. The World
+    /// has them set (launch-daemon.ps1 -Diagnostics Max) for its own crash; a crashing stack tool that inherited them would write a dump named
+    /// like the World's into the same directory and could push the World's real crash dump out of the dump-count retention.
+    /// </summary>
+    public static ProcessStartInfo CreateStartInfo(string tool, IReadOnlyList<string> arguments)
+    {
+        var start = new ProcessStartInfo(tool) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (string argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        RemoveDumpVariables(start.Environment);
+        return start;
+    }
+
+    /// <summary>Removes <c>DOTNET_</c>/<c>COMPlus_</c> DbgEnableMiniDump, DbgMiniDump* and CreateDump* (any case) from <paramref name="environment"/>.</summary>
+    public static void RemoveDumpVariables(IDictionary<string, string?> environment)
+    {
+        foreach (string name in environment.Keys.Where(IsDumpVariable).ToList())
+        {
+            environment.Remove(name);
+        }
+    }
+
+    private static bool IsDumpVariable(string name)
+    {
+        foreach (string prefix in (string[])["DOTNET_", "COMPlus_"])
+        {
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string rest = name[prefix.Length..];
+                return rest.StartsWith("DbgEnableMiniDump", StringComparison.OrdinalIgnoreCase)
+                    || rest.StartsWith("DbgMiniDump", StringComparison.OrdinalIgnoreCase)
+                    || rest.StartsWith("CreateDump", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return false;
     }
 }
 

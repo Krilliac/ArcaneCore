@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -33,10 +35,11 @@ public sealed class PopulationProvisionerTests
         await world.Host.World.InvokeAsync(() =>
         {
             var provisioner = new PopulationProvisioner(world.Host.WorldServices);
-            Assert.Equal("placement-unsafe", provisioner.Provision(id, 38, unsafeAt));
+            PopulationPlacementFacts facts = FactsFor(world, unsafeAt, safeAt);
+            Assert.Equal("placement-unsafe", provisioner.Provision(id, 38, unsafeAt, facts));
             Assert.Equal((byte)1, world.Bots.FindSession(id)!.Player!.Level);
-            Assert.Equal("placement-unsafe", provisioner.Relocate(id, unsafeAt));
-            Assert.Null(provisioner.Relocate(id, safeAt));
+            Assert.Equal("placement-unsafe", provisioner.Relocate(id, unsafeAt, facts));
+            Assert.Null(provisioner.Relocate(id, safeAt, facts));
             return true;
         });
     }
@@ -57,10 +60,11 @@ public sealed class PopulationProvisionerTests
             {
                 AreaLevelSource = at => at.Id == high.Id ? 30 : 4, // level one tolerates a starting area of 5 at most
             };
+            PopulationPlacementFacts facts = FactsFor(world, high, low);
             Player bot = world.Bots.FindSession(id)!.Player!;
-            Assert.Equal("placement-unsafe", provisioner.Relocate(id, high));
+            Assert.Equal("placement-unsafe", provisioner.Relocate(id, high, facts));
             Assert.NotEqual(high.X, bot.X);
-            Assert.Null(provisioner.Relocate(id, low));
+            Assert.Null(provisioner.Relocate(id, low, facts));
             return true;
         });
         // A same-map teleport lands on a following world tick.
@@ -88,11 +92,17 @@ public sealed class PopulationProvisionerTests
         await world.Host.World.InvokeAsync(() =>
         {
             var provisioner = new PopulationProvisioner(world.Host.WorldServices) { AreaLevelSource = _ => 0 };
-            Assert.Equal("placement-unsafe", provisioner.Relocate(id, near));
-            Assert.Null(provisioner.Relocate(id, far));
+            PopulationPlacementFacts facts = FactsFor(world, near, far);
+            Assert.Equal("placement-unsafe", provisioner.Relocate(id, near, facts));
+            Assert.Null(provisioner.Relocate(id, far, facts));
             return true;
         });
     }
+
+    /// <summary>The placement facts for the host's current creature content and area table (no terrain tiles), built inline for a direct call.</summary>
+    internal static PopulationPlacementFacts FactsFor(PopulationTestHost world, params WorldSafeLoc[] sites)
+        => PopulationPlacementFacts.Build(world.Host.WorldServices.GetService<CreatureWorldFeature>()?.Content ?? CreatureContent.Empty,
+            WorldMaps.Of(world.Host.World).Terrain.Areas, null, sites, CancellationToken.None);
 
     private sealed class HostileStore : ICreatureDataStore
     {

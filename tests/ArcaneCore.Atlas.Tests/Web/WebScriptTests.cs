@@ -55,7 +55,7 @@ public sealed class WebScriptTests(ITestOutputHelper output)
             Assert.True(manifest["cameras"]!.AsArray().Count >= 9, "the golden export wrote fewer cameras than the three modes need");
             Assert.True(File.Exists(Path.Combine(golden, "golden.json")));
 
-            IReadOnlyList<string> files = WebTestEnvironment.TestFiles(RealDataScript);
+            IReadOnlyList<string> files = WebTestEnvironment.TestFiles(RealDataScript, "clientfs.test.mjs");
             Assert.Contains(files, f => f.EndsWith("golden.test.mjs", StringComparison.Ordinal));
             NodeRun run = await WebTestEnvironment.RunNodeTestsAsync(
                 files,
