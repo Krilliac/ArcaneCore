@@ -188,6 +188,29 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <summary>Run the world (manual clock) until <paramref name="condition"/> holds after a tick, at most <paramref name="maxMs"/> of game time.</summary>
     public Task<bool> RunUntilAsync(uint maxMs, Func<bool> condition) => World.Host.World.AdvanceClockUntilAsync(maxMs, condition);
 
+    /// <summary>
+    /// Run the world (manual clock) one 50 ms tick at a time until <paramref name="condition"/> holds after a tick, pacing game time against real
+    /// time: game time never runs ahead of the wall clock, as in production. For a condition that waits on work outside the world thread (a chat
+    /// worker, a packet still on its way over the socket), which a free-running manual clock would outrun on a loaded machine. Returns false once
+    /// <paramref name="gameBudgetMs"/> of game time is used (keep the site's own budget, so game-time timeouts such as an invitation's still mean
+    /// what they did) or <paramref name="realTimeout"/> (default 60 s) of real time has passed.
+    /// </summary>
+    public async Task<bool> RunUntilPacedAsync(Func<bool> condition, int gameBudgetMs, TimeSpan? realTimeout = null)
+    {
+        const int StepMs = 50;
+        System.Diagnostics.Stopwatch wall = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan limit = realTimeout ?? TimeSpan.FromSeconds(60);
+        for (int advanced = 0; advanced < gameBudgetMs; advanced += StepMs)
+        {
+            if (await RunUntilAsync(StepMs, condition)) return true;
+            if (wall.Elapsed >= limit) return false;
+            long ahead = advanced + StepMs - wall.ElapsedMilliseconds;
+            if (ahead > 0) await Task.Delay((int)ahead);
+        }
+
+        return false;
+    }
+
     public Task RunAsync(uint ms) => World.Host.World.AdvanceClockAsync(ms);
 
     /// <summary>Whether the bot's quest log has <paramref name="quest"/> (any state).</summary>
