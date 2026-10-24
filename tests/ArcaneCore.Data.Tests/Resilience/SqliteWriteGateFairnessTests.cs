@@ -1,0 +1,208 @@
+using System.Diagnostics;
+using ArcaneCore.Data.Resilience;
+using Microsoft.Data.Sqlite;
+using Xunit;
+
+namespace ArcaneCore.Data.Tests.Resilience;
+
+/// <summary>
+/// Arrival-order fairness of <see cref="SqliteWriteGate"/> for the async and the blocking path alike, and the guarantee that a throwing stuck-release handler neither
+/// fails an innocent waiter nor leaks the gate. No SQLite file is created: the gate only needs a normalized path.
+/// </summary>
+public sealed class SqliteWriteGateFairnessTests
+{
+    private static SqliteWriteGate NewGate()
+        => SqliteWriteGate.For(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(Path.GetTempPath(), "gate-fair-" + Guid.NewGuid().ToString("N") + ".db"),
+        }.ToString())!;
+
+    private static void WaitUntilWaiting(SqliteWriteGate gate, int count)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (gate.Waiting != count)
+        {
+            Assert.True(deadline.ElapsedMilliseconds < 5000, $"Waiting stayed at {gate.Waiting}, expected {count}");
+            Thread.Sleep(2);
+        }
+    }
+
+    private static Task StartAsyncWaiter(SqliteWriteGate gate, int id, List<int> order, int timeoutMs = 10_000, int maxHoldMs = 0)
+        => Task.Run(async () =>
+        {
+            SqliteWriteGate.Hold? hold = await gate.EnterAsync(timeoutMs, "w" + id, maxHoldMs, CancellationToken.None);
+            Assert.NotNull(hold);
+            lock (order) order.Add(id);
+            hold.Release();
+        });
+
+    private static Task StartSyncWaiter(SqliteWriteGate gate, int id, List<int> order, int timeoutMs = 10_000, int maxHoldMs = 0)
+        => Task.Factory.StartNew(() =>
+        {
+            SqliteWriteGate.Hold? hold = gate.Enter(timeoutMs, "w" + id, maxHoldMs);
+            Assert.NotNull(hold);
+            lock (order) order.Add(id);
+            hold.Release();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    [Fact]
+    public async Task AsyncWaiters_AreServedOldestFirst_WhenTheQueueIsOlderThanASecond()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
+        var order = new List<int>();
+        var clock = Stopwatch.StartNew();
+        var tasks = new List<Task> { StartAsyncWaiter(gate, 0, order) };
+        WaitUntilWaiting(gate, 1);
+        await Task.Delay(500);
+        for (int i = 1; i <= 3; i++)
+        {
+            tasks.Add(StartAsyncWaiter(gate, i, order));
+            WaitUntilWaiting(gate, i + 1);
+        }
+
+        int left = 1300 - (int)clock.ElapsedMilliseconds;
+        if (left > 0) await Task.Delay(left);
+        h.Release();
+        await Task.WhenAll(tasks);
+        Assert.Equal(new[] { 0, 1, 2, 3 }, order);
+    }
+
+    [Fact]
+    public async Task AnAsyncWaiter_IsNotOvertakenByASyncWaiterQueuedAfterIt()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
+        var order = new List<int>();
+        Task w0 = StartAsyncWaiter(gate, 0, order);
+        WaitUntilWaiting(gate, 1);
+        Task w1 = StartSyncWaiter(gate, 1, order);
+        WaitUntilWaiting(gate, 2);
+        h.Release();
+        await Task.WhenAll(w0, w1);
+        Assert.Equal(new[] { 0, 1 }, order);
+    }
+
+    [Fact]
+    public async Task SyncWaiters_AreServedOldestFirst_WhenTheQueueIsOlderThanASecond()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
+        var order = new List<int>();
+        var clock = Stopwatch.StartNew();
+        var tasks = new List<Task> { StartSyncWaiter(gate, 0, order) };
+        WaitUntilWaiting(gate, 1);
+        await Task.Delay(500);
+        for (int i = 1; i <= 3; i++)
+        {
+            tasks.Add(StartSyncWaiter(gate, i, order));
+            WaitUntilWaiting(gate, i + 1);
+        }
+
+        int left = 1300 - (int)clock.ElapsedMilliseconds;
+        if (left > 0) await Task.Delay(left);
+        h.Release();
+        await Task.WhenAll(tasks);
+        Assert.Equal(new[] { 0, 1, 2, 3 }, order);
+    }
+
+    [Fact]
+    public async Task AStuckReleaseWhoseHandlerThrows_StillGrantsTheWaiter_AndLeaksNothing()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", 200)!;
+        static void Throwing(SqliteWriteGate.Hold _) => throw new InvalidOperationException("handler fault");
+        gate.StuckReleased += Throwing;
+        try
+        {
+            var order = new List<int>();
+            Task a = StartAsyncWaiter(gate, 0, order, 3000, 200);
+            Task b = StartAsyncWaiter(gate, 1, order, 3000, 200);
+            WaitUntilWaiting(gate, 2);
+            await Task.WhenAll(a, b);
+            Assert.Equal(2, order.Count);
+        }
+        finally
+        {
+            gate.StuckReleased -= Throwing;
+        }
+
+        Assert.True(leaked.Forced);
+        Assert.Null(gate.Current);
+        Assert.Equal(0, gate.Waiting);
+        SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
+        Assert.NotNull(fresh);
+        fresh.Release();
+    }
+
+    [Fact]
+    public async Task AStuckReleaseWhoseHandlerThrows_StillGrantsTheSyncWaiter_AndLeaksNothing()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", 200)!;
+        static void Throwing(SqliteWriteGate.Hold _) => throw new InvalidOperationException("handler fault");
+        gate.StuckReleased += Throwing;
+        try
+        {
+            var order = new List<int>();
+            Task a = StartSyncWaiter(gate, 0, order, 3000, 200);
+            WaitUntilWaiting(gate, 1);
+            Task b = StartSyncWaiter(gate, 1, order, 3000, 200);
+            WaitUntilWaiting(gate, 2);
+            await Task.WhenAll(a, b);
+            Assert.Equal(2, order.Count);
+        }
+        finally
+        {
+            gate.StuckReleased -= Throwing;
+        }
+
+        Assert.True(leaked.Forced);
+        Assert.Null(gate.Current);
+        Assert.Equal(0, gate.Waiting);
+        SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
+        Assert.NotNull(fresh);
+        fresh.Release();
+    }
+
+    [Fact]
+    public async Task ACanceledWaiter_LeavesTheQueue_AndTheNextIsServed()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
+        using var cts = new CancellationTokenSource();
+        Task<SqliteWriteGate.Hold?> w0 = Task.Run(async () => await gate.EnterAsync(10_000, "w0", 0, cts.Token));
+        WaitUntilWaiting(gate, 1);
+        var order = new List<int>();
+        Task w1 = StartAsyncWaiter(gate, 1, order);
+        WaitUntilWaiting(gate, 2);
+        cts.Cancel();
+        WaitUntilWaiting(gate, 1);
+        h.Release();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => w0);
+        await w1;
+        Assert.Equal(new[] { 1 }, order);
+        Assert.Equal(0, gate.Waiting);
+        Assert.Null(gate.Current);
+    }
+
+    [Fact]
+    public async Task ATimedOutWaiter_ReturnsNull_WithinItsBound_AndLeavesTheQueue()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
+        long timeouts = gate.TimeoutsTotal;
+        var clock = Stopwatch.StartNew();
+        SqliteWriteGate.Hold? asyncHold = await gate.EnterAsync(300, "async", 0, CancellationToken.None);
+        SqliteWriteGate.Hold? syncHold = await Task.Run(() => gate.Enter(300, "sync", 0));
+        Assert.Null(asyncHold);
+        Assert.Null(syncHold);
+        Assert.True(clock.ElapsedMilliseconds < 1500, $"took {clock.ElapsedMilliseconds} ms");
+        Assert.Equal(0, gate.Waiting);
+        Assert.Equal(timeouts + 2, gate.TimeoutsTotal);
+        h.Release();
+        SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
+        Assert.NotNull(fresh);
+        fresh.Release();
+    }
+}
