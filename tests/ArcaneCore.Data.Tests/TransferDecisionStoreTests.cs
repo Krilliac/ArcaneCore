@@ -55,9 +55,12 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         Assert.Equal(0, await store.CountUnresolvedAsync());
 
         Guid preCommit = Guid.NewGuid(), committed = Guid.NewGuid(), completed = Guid.NewGuid(), aborted = Guid.NewGuid();
+        var tokens = new Dictionary<Guid, (ulong Guid, CharacterOwnershipToken Token)>();
         foreach ((Guid id, ulong guid) in new[] { (preCommit, 21UL), (committed, 22UL), (completed, 23UL), (aborted, 24UL) })
         {
-            await store.CreateReservationAsync(id, guid, 11, 5, A, B, 0, 0, 1, 0, new CharacterOwnershipToken($"char:{guid}", 1, Guid.NewGuid()));
+            var token = new CharacterOwnershipToken($"char:{guid}", 1, Guid.NewGuid());
+            tokens[id] = (guid, token);
+            await store.CreateReservationAsync(id, guid, 11, 5, A, B, 0, 0, 1, 0, token);
         }
 
         Assert.Equal(4, await store.CountUnresolvedAsync());
@@ -67,7 +70,7 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
 
         foreach (Guid id in new[] { committed, completed })
         {
-            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture);
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture, Bundle(id, tokens[id].Guid, tokens[id].Token));
             await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.InstallPassive);
             await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.StageWorldPort);
             await store.CommitDecisionAsync(id, Guid.NewGuid());

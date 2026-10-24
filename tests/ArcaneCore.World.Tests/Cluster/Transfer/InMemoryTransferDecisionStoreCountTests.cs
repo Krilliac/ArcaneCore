@@ -34,7 +34,7 @@ public sealed class InMemoryTransferDecisionStoreCountTests
 
         foreach (Guid id in new[] { committed, completed })
         {
-            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture);
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture, PlayerTransferValidatorTests.CreateSampleValidBundle(transferId: id));
             await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.InstallPassive);
             await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.StageWorldPort);
             await store.CommitDecisionAsync(id, Guid.NewGuid());

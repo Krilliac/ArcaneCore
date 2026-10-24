@@ -148,7 +148,7 @@ public sealed class ClusterCommandTests
 
         var drained = new ClusterNodeDescriptor("n", nameof(ClusterRole.Combined), Guid.NewGuid(), ClusterNodeLifecycleState.Drained,
             ClusterNodeManifest.CurrentContractVersion, schema.Auth, schema.Characters, schema.World, "rev", IsFencedWriter: true);
-        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
+        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
 
         Assert.Equal(schema.Auth, snapshot.AuthSchemaVersion);
         Assert.Equal(schema.Characters, snapshot.CharactersSchemaVersion);

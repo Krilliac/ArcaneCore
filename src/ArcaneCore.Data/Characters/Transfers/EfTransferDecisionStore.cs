@@ -328,6 +328,17 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         return [.. rows.OrderBy(r => r.UpdatedAtUtcMs).Select(ToRecord)];
     }
 
+    /// <inheritdoc />
+    public async Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        return await db.Set<ClusterTransferDecisionRow>().AsNoTracking()
+            .CountAsync(r => r.State == (int)PlayerTransferDecisionState.PreCommit || r.State == (int)PlayerTransferDecisionState.Committed, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     // ---------------------------------------------------------------- IWorldHandoffStore
 
     /// <inheritdoc />
@@ -601,6 +612,9 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
 
         public Task<IReadOnlyList<TransferDecisionRecord>> GetUnresolvedForCharacterAsync(ulong characterGuid, CancellationToken cancellationToken = default)
             => inner.GetUnresolvedForCharacterAsync(characterGuid, cancellationToken);
+
+        public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+            => inner.CountUnresolvedAsync(cancellationToken);
     }
 
     // ---------------------------------------------------------------- helpers

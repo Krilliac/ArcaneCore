@@ -542,6 +542,7 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
+        int pendingTransfers = CountUnresolvedTransfers(services);
 
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
@@ -594,7 +595,7 @@ public sealed class ClusterCommands : ICommandGroup
             OwnershipEpoch: worldToken?.Epoch ?? 0,
             OperationId: "gm-cluster-diag");
 
-        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
+        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingTransfers, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
 
         ClusterDiagnosticsReport report = collector.Collect(
             correlation,
@@ -617,6 +618,7 @@ public sealed class ClusterCommands : ICommandGroup
     internal static ClusterRollbackSnapshot BuildRollbackSnapshot(
         int realmId,
         IReadOnlyList<ClusterNodeDescriptor> nodes,
+        int pendingTransfers,
         int pendingWrites,
         int retainedFailures,
         bool fencingEnabled,
@@ -625,7 +627,7 @@ public sealed class ClusterCommands : ICommandGroup
         => new(
             RealmId: realmId,
             ClusterNodes: nodes,
-            PendingTransfers: 0,
+            PendingTransfers: pendingTransfers,
             PendingCharacterWrites: pendingWrites,
             RetainedWriteFailures: retainedFailures,
             ActiveUnfencedWriters: fencingEnabled ? 0 : 1,
@@ -731,6 +733,12 @@ public sealed class ClusterCommands : ICommandGroup
     // The core bot registry (logged in and running), not the playerbot pack's feature: World does not reference the pack (tier 2b).
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered.</summary>
+    private static int CountUnresolvedTransfers(IServiceProvider services)
+        => services.GetService<ITransferDecisionStore>() is { } store
+            ? store.CountUnresolvedAsync().GetAwaiter().GetResult()
+            : 0;
 
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {
