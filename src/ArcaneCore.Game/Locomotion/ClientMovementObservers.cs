@@ -49,7 +49,7 @@ public sealed class MovementObserverAttribute : Attribute
 }
 
 /// <summary>Discovery and dispatch of the <see cref="IClientMovementObserver"/> classes of this assembly.</summary>
-public static class MovementObservers
+public static partial class MovementObservers
 {
     private static readonly (IClientMovementObserver Observer, int Order, string Name)[] s_discovered =
         Discover(CodeAssemblies.Of(typeof(MovementObservers).Assembly));

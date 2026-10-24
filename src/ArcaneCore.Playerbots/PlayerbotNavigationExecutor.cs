@@ -117,7 +117,7 @@ internal sealed class PlayerbotNavigationJob : IDisposable
 /// keeps mutable navmesh/tile state serial and prevents a queue burst from creating one task per
 /// request.
 /// </summary>
-internal sealed class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposable
+internal sealed partial class PlayerbotNavigationExecutor : IDisposable, IAsyncDisposable
 {
     internal const int DefaultCapacity = 32;
     private const float RegionLegYards = 1000f;

@@ -47,7 +47,7 @@ internal enum PlayerbotEconomyPhase
 /// is checked before it is sent, because the server answers some of them with silence.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotEconomy(WorldSession session, PlayerbotOptions options)
+internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOptions options)
 {
     /// <summary>The longest one visit lasts (world time) before it is dropped.</summary>
     internal const uint VisitCapMs = 300_000;

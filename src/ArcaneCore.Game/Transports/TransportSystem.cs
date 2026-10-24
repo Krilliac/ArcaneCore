@@ -30,7 +30,7 @@ namespace ArcaneCore.Game.Transports;
 /// </list>
 /// World thread only.
 /// </summary>
-public sealed class TransportSystem
+public sealed partial class TransportSystem
 {
     /// <summary>Maximum allowed passenger local offset coordinate magnitude (vmangos Player::LoadFromDB 250yd bound).</summary>
     public const float MaxPassengerOffset = 250.0f;
