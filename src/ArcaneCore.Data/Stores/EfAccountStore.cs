@@ -150,15 +150,16 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
     {
         ArgumentNullException.ThrowIfNull(info);
         string normalized = username.ToUpperInvariant();
-        Account? account = await db.Accounts.FirstOrDefaultAsync(a => a.Username == normalized, cancellationToken)
+        // One UPDATE statement; an unknown account matches no row. The column holds UTC and providers reject other kinds on write.
+        DateTime? when = info.LastLoginUtc is { } t ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : null;
+        await db.Accounts.Where(a => a.Username == normalized)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(a => a.LastLoginUtc, when)
+                .SetProperty(a => a.LastOs, info.Os)
+                .SetProperty(a => a.LastPlatform, info.Platform)
+                .SetProperty(a => a.LastLocale, info.Locale)
+                .SetProperty(a => a.LastBuild, info.Build), cancellationToken)
             .ConfigureAwait(false);
-        if (account is null) return;
-        account.LastLoginUtc = info.LastLoginUtc;
-        account.LastOs = info.Os;
-        account.LastPlatform = info.Platform;
-        account.LastLocale = info.Locale;
-        account.LastBuild = info.Build;
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)

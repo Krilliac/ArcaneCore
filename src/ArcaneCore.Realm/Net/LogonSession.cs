@@ -763,7 +763,8 @@ public sealed class LogonSession(
 
     /// <summary>
     /// Stores the client details of a proven logon. Informational only: a failure is logged and never fails the logon
-    /// (the shutdown of the session still propagates).
+    /// (the shutdown of the session still propagates). It runs before the proof reply is sent, so a slow auth database
+    /// delays the logon by at most the store's guard timeout.
     /// </summary>
     private async Task RecordLoginInfoAsync(
         string username, string os, string platform, string locale, ushort build, CancellationToken cancellationToken)
