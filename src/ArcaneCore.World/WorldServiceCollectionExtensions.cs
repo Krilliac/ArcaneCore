@@ -68,6 +68,7 @@ public static class WorldServiceCollectionExtensions
         }
 
         services.AddSingleton(_ => BuildOpcodeTable());
+        services.AddSingleton(Net.DevOpcodeTracker.Shared); // stripped developer opcodes: dropped, counted apart from the unhandled ones, metric arcanecore.net.opcode.dev_dropped
         services.AddSingleton(Net.UnhandledOpcodeTracker.Shared); // client opcodes with no handler: counted, warned once, metric arcanecore.net.opcode.unhandled
         services.AddSingleton(sp => new Ops.Diagnostics.WiringAudit(sp)); // .server wiring and the start-up summary (docs/ops/wiring-audit.md)
         services.AddSingleton(sp => ChatCommands.CreateTable(configuration, sp));

@@ -45,8 +45,11 @@ public delegate Task SessionHandler(WorldSession session, byte[] payload);
 /// <summary>A handler that runs on the world thread against the session's in-world player.</summary>
 public delegate void WorldHandler(WorldSession session, Player player, byte[] payload);
 
-/// <summary>How one opcode is accepted and dispatched.</summary>
-public sealed record OpcodeHandler(WorldOpcode Opcode, SessionStates AllowedStates, SessionHandler? Session, WorldHandler? World)
+/// <summary>
+/// How one opcode is accepted and dispatched. <paramref name="Stripped"/> marks a stripped developer opcode (<see cref="StrippedDevOpcodes"/>):
+/// it has no handler, the session drops it unread and flags it instead.
+/// </summary>
+public sealed record OpcodeHandler(WorldOpcode Opcode, SessionStates AllowedStates, SessionHandler? Session, WorldHandler? World, bool Stripped = false)
 {
     public bool AllowsState(SessionState state) => (AllowedStates & (SessionStates)(1 << (int)state)) != 0;
 }
@@ -71,6 +74,10 @@ public sealed class OpcodeTable
     /// <summary>Register an in-world handler (runs on the world thread).</summary>
     public void OnWorld(WorldOpcode opcode, WorldHandler handler)
         => Add(new OpcodeHandler(opcode, SessionStates.InWorld, null, handler));
+
+    /// <summary>Register a stripped developer opcode (no handler; accepted in every authenticated state and dropped by the session).</summary>
+    public void OnStripped(WorldOpcode opcode)
+        => Add(new OpcodeHandler(opcode, SessionStates.Authenticated, null, null, Stripped: true));
 
     public bool TryGet(WorldOpcode opcode, out OpcodeHandler handler)
         => _handlers.TryGetValue(opcode, out handler!);
