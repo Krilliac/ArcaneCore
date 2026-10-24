@@ -278,6 +278,31 @@ public sealed class PlayerbotPartyTradeTests
         Assert.Equal(before + (counts ? AffinityPerTrade(scene) : 0), await scene.AffinityAsync(scene.MasterGuid));
     }
 
+    /// <summary>
+    /// A window cancelled after the bot refused to accept it (its own side was not empty, so the window was counted) is forgotten: a later
+    /// completed window the party AI did not open (the mage fee, a tip) must not credit the earlier partner.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledWindow_IsForgotten_ALaterCompletionGivesItsPartnerNoAffinity()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddMasterAsync();
+        int before = await scene.AffinityAsync(scene.MasterGuid);
+        await scene.OpenWindowAsync(scene.Master!, MasterName);
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgSetTradeGold, Gold(5)));
+        await scene.AcceptAsync(scene.Master!);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(MasterName).Result is { Exists: false } or { PlayerAccepted: true }, "the master's accept to reach the server");
+        await Task.Delay(500); // the bot reads the accept and refuses (it gives gold), which marks the window as counted
+        await scene.Master!.SendAsync(WorldOpcode.CmsgCancelTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(MasterName).Result is { Exists: false }, "the window to be cancelled");
+
+        await scene.InjectStatusAsync(8); // a completion of a window the party AI never opened
+        await scene.WaitForBotToSeeCompletionAsync();
+
+        Assert.Equal(0, scene.AcceptsSent);
+        Assert.Equal(before, await scene.AffinityAsync(scene.MasterGuid));
+    }
+
     /// <summary>A trade that gives the bot nothing (an empty window) is not a trade for its memory.</summary>
     [Fact]
     public async Task AnEmptyWindow_GivesNoAffinity()
@@ -337,6 +362,30 @@ public sealed class PlayerbotPartyTradeTests
 
         Assert.Equal(1, scene.AcceptsSent);
         Assert.Equal(1u, await scene.CountAsync(BotName, RichEntry));
+    }
+
+    /// <summary>A stranger's grey item through the bot-initiated "trade me" window is accepted but earns no affinity.</summary>
+    [Fact]
+    public async Task TradeMe_FromAnAllowedStranger_WithAGreyItem_GivesNoAffinity()
+    {
+        await using Scene scene = await Scene.StartAsync(chat: true);
+        await scene.AddStrangerAsync();
+        byte[] offer = await scene.GiveAsync(StrangerName, GreyEntry);
+        await HelpTestKit.StandAsync(scene.World, BotName, (StrangerName, 2f));
+
+        await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
+        await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result.Opened, "the window to open");
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgSetTradeItem, offer);
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(scene.World).NoteById(scene.Bot, scene.BotGuid, scene.StrangerGuid, PlayerbotSocialEvent.ChatExchange));
+        int before = await scene.AffinityAsync(scene.StrangerGuid);
+        await scene.AcceptAsync(scene.Stranger);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the gift to complete");
+        await scene.WaitForBotToSeeCompletionAsync();
+
+        Assert.Equal(1u, await scene.CountAsync(BotName, GreyEntry));
+        Assert.Equal(before, await scene.AffinityAsync(scene.StrangerGuid));
     }
 
     /// <summary>

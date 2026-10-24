@@ -852,7 +852,8 @@ internal sealed class PlayerbotPartyAI
 
     /// <summary>
     /// Answer a party member's or master's trade (SMSG_TRADE_STATUS): open the trade window on BeginTrade (1), accept when the
-    /// partner accepts on TradeAccept (4), and run equipment evaluation when the trade completes so any traded upgrade is worn.
+    /// partner accepts on TradeAccept (4) under the rules of <see cref="AnswerPartnerAccept"/>, and run equipment
+    /// evaluation when the trade completes so any traded upgrade is worn.
     /// </summary>
     private void OnTradeStatus(Player player, byte[] payload)
     {
@@ -885,6 +886,11 @@ internal sealed class PlayerbotPartyAI
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
                 break;
+            case 3 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
+                // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.
+                _tradePartner = ObjectGuid.Empty;
+                _tradeCounts = false;
+                break;
         }
     }
 
@@ -898,14 +904,16 @@ internal sealed class PlayerbotPartyAI
     /// The partner accepted (status 4). The bot accepts only a window it opened or answered for <see cref="_tradePartner"/> (trusted, or the
     /// bot-initiated "trade me" partner) in which its own side is empty, read from the live window in this same world-thread step, so a
     /// partner cannot talk it into giving something it did not check. Notes whether the window counts as a trade for the memory (it received
-    /// at least <see cref="GiftMinValueCopper"/> of vendor value, or the bot gave something).
+    /// at least <see cref="GiftMinValueCopper"/> of item vendor value, or the bot gave something). Gold the partner puts in is not counted
+    /// (the design's "vendor value"). A window the partner has since changed (its accept cleared) is left alone.
     /// </summary>
     private void AnswerPartnerAccept(Player player)
     {
         if (_tradePartner.IsEmpty || _session.Services.GetService<EconomyFeature>()?.TradeOf(player) is not { Opened: true, Settling: false } trade) return;
         TradeSide mine = trade.SideOf(player), theirs = trade.OtherSide(player);
-        if (theirs.Player.Guid != _tradePartner) return;
-        bool gave = mine.Gold != 0 || mine.TradedItems.Any();
+        if (theirs.Player.Guid != _tradePartner || !theirs.Accepted) return;
+        bool gave = mine.Gold != 0;
+        foreach (ObjectGuid _ in mine.TradedItems) { gave = true; break; }
         long received = 0;
         foreach (ObjectGuid guid in theirs.TradedItems)
             if (theirs.Player.Inventory.GetItemByGuid(guid) is { } item) received += (long)item.Template.SellPrice * item.Count;
