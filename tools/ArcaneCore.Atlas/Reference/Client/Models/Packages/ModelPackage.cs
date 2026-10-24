@@ -146,7 +146,7 @@ public sealed class ModelPackageCache : ICacheParticipant
         string text = keyOrPath.Trim();
         string? kind = null;
         int colon = text.IndexOf(':', StringComparison.Ordinal);
-        if (colon > 0 && text[..colon].All(char.IsAsciiLetter))
+        if (colon > 0 && text[..colon].All(char.IsAsciiLetterOrDigit))
         {
             kind = text[..colon].ToLowerInvariant();
             text = text[(colon + 1)..];
