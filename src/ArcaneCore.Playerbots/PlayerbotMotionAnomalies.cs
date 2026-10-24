@@ -242,9 +242,12 @@ internal static class PlayerbotMotionAnomalies
         if (AgeOf(now, state.RenewedMs) <= state.LeaseMs || session.IsInChaosProbe) return;
         if (!PlayerbotMotion.TryYardsToEnd(player, route, out float yards) || yards <= MidRouteYards) return;
         if (!state.Watch.Due(Code.LeaseExpired, now)) return;
+        string lastThink = state.Thought
+            ? string.Create(CultureInfo.InvariantCulture, $"last think {AgeOf(now, state.LastThinkMs)} ms ago, driver {state.LastThinkDriver}")
+            : "no think seen";
         Emit(player, Code.LeaseExpired,
             string.Create(CultureInfo.InvariantCulture,
-                $"no think renewed the route for {AgeOf(now, state.RenewedMs)} ms (lease {state.LeaseMs} ms, think gap {state.GapMs} ms); {yards:F0} yd were left"),
+                $"no think renewed the route for {AgeOf(now, state.RenewedMs)} ms (lease {state.LeaseMs} ms, think gap {state.GapMs} ms, {lastThink}); {yards:F0} yd were left"),
             AnomalySeverity.Info);
     }
 

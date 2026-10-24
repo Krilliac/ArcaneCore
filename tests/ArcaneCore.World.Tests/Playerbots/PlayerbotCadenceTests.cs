@@ -520,4 +520,52 @@ public sealed class PlayerbotCadenceTests
         }
         finally { session.Kick(); await session.ManagedClosed; }
     }
+
+    [Fact]
+    public async Task SettleAfterThink_WhenDriverThinkPassesNoRenewalSnapshot_StillRenewsTheLeaseTheThinkGapRaised()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                StartWalk(host, session, 1000, 4);
+                Assert.True(PlayerbotMotion.RenewalsOf(player) >= 1u, "a started route has been granted at least one renewal");
+
+                Assert.True(Walking(session, 3000));
+                // The battleground, bot-led group and party drivers pass renewalsBefore 0 (they take no snapshot).
+                PlayerbotMotion.NoteThinkGap(player, 10_000);
+                uint lease = PlayerbotMotion.LeaseMsOf(player);
+                Assert.True(lease > 4000u && lease < 20_000u, $"lease {lease}");
+                Assert.False(PlayerbotMotion.SettleAfterThink(session, player, gaveUp: false, renewalsBefore: 0, 10_000));
+
+                // Past the lease measured from the start (3000 + lease - 1000), but inside it measured from the think.
+                Assert.True(Walking(session, lease - 1000), "driver think with renewalsBefore 0 did not renew the route; motion lease expired midroute");
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task SettleAfterThink_WhenThinkGaveUpWithoutFollow_StopsTheBot()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                StartWalk(host, session, 1000, 4);
+                uint renewals = PlayerbotMotion.RenewalsOf(player);
+                Assert.True(PlayerbotMotion.SettleAfterThink(session, player, gaveUp: true, renewals, 3000));
+                Assert.False(PlayerbotMotion.IsActive(player));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
 }

@@ -89,6 +89,11 @@ internal static class PlayerbotMotion
         internal uint GapMs;
         /// <summary>The scheduler's measured main-lane full-pass time in ms (<see cref="NoteSchedulerPass"/>); 0 until the feature has one.</summary>
         internal uint PassMs;
+        /// <summary>The server time of the bot's last think (<see cref="NoteThink"/>); meaningful only when <see cref="Thought"/>.</summary>
+        internal uint LastThinkMs;
+        /// <summary>Which driver made the last think (a static string: no allocation per think).</summary>
+        internal string LastThinkDriver = "";
+        internal bool Thought;
         internal readonly PlayerbotLoopDetector Loops = new();
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
@@ -1204,9 +1209,10 @@ internal static class PlayerbotMotion
     internal static bool SettleAfterThink(WorldSession session, Player player, bool gaveUp, uint renewalsBefore, uint sinceLast)
     {
         if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || !state.Active) return false;
-        if (state.Renewals != renewalsBefore) return false;
         if (!gaveUp)
         {
+            // A think that gave nothing up keeps the route it has, whether or not it called Follow (a Follow already renewed; doing it
+            // again is harmless). The drivers that cannot snapshot Renewals pass renewalsBefore 0, which must not skip this.
             state.RenewedMs = session.World.NowMs;
             if (state.Options is { } opts)
             {
@@ -1216,8 +1222,18 @@ internal static class PlayerbotMotion
             return false;
         }
 
+        if (state.Renewals != renewalsBefore) return false;
         Stop(session, player);
         return true;
+    }
+
+    /// <summary>Records that the bot thought now under <paramref name="driver"/> (a static string), for the lease-expiry anomaly's detail.</summary>
+    internal static void NoteThink(Player player, string driver, uint now)
+    {
+        MotionState state = Of(player);
+        state.LastThinkMs = now;
+        state.LastThinkDriver = driver;
+        state.Thought = true;
     }
 
     /// <summary>The scheduler's measured main-lane full-pass time (ms; 0 = none yet) as this bot's motion should see it.</summary>

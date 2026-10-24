@@ -2596,6 +2596,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
+            if (measured is not null) PlayerbotMotion.NoteThink(measured, driver, world.NowMs);
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
         if (driver != "brain") active.Brain.CancelNavigationPlanning();
