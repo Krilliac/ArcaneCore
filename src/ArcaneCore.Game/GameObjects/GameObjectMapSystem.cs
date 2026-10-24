@@ -1472,6 +1472,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _objects.Remove(go.Guid);
+        _elevatorControls.Remove(go.Guid);
         OnObjectMembershipChanged(go);
         IndexRitual(go, tracked: false);
         Loot?.ForgetLoot(go);
@@ -1810,6 +1811,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             }
 
             _objects.Remove(go.Guid);
+            _elevatorControls.Remove(go.Guid); // a lift reloaded with its grid runs the default schedule again
             OnObjectMembershipChanged(go);
             IndexRitual(go, tracked: false);
             if (_questFlagsSent.Count > 0)

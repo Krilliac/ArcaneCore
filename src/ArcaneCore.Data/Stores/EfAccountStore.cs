@@ -8,7 +8,7 @@ namespace ArcaneCore.Data.Stores;
 /// EF Core implementation of <see cref="IAccountStore"/> and <see cref="IAccountAdmin"/>. The events
 /// parameter is optional so existing <c>new EfAccountStore(db)</c> call sites keep compiling; DI supplies it.
 /// </summary>
-public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events = null) : IAccountStore, IAccountAdmin, IAccountLoginSecurityStore
+public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events = null) : IAccountStore, IAccountAdmin, IAccountLoginSecurityStore, IAccountLoginInfoStore
 {
     /// <summary>Ids per query (see <see cref="EfBanStore"/>).</summary>
     private const int ChunkSize = 500;
@@ -144,6 +144,35 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
         account.SessionKey = sessionKey;
         if (address is not null) account.LastIp = address;
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        string normalized = username.ToUpperInvariant();
+        // One UPDATE statement; an unknown account matches no row. The column holds UTC and providers reject other kinds on write.
+        DateTime? when = info.LastLoginUtc is { } t ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : null;
+        await db.Accounts.Where(a => a.Username == normalized)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(a => a.LastLoginUtc, when)
+                .SetProperty(a => a.LastOs, info.Os)
+                .SetProperty(a => a.LastPlatform, info.Platform)
+                .SetProperty(a => a.LastLocale, info.Locale)
+                .SetProperty(a => a.LastBuild, info.Build), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+    {
+        string normalized = username.ToUpperInvariant();
+        var row = await db.Accounts.AsNoTracking()
+            .Where(a => a.Username == normalized)
+            .Select(a => new { a.LastLoginUtc, a.LastOs, a.LastPlatform, a.LastLocale, a.LastBuild })
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        if (row is null) return null;
+        // Providers hand back an Unspecified kind; the column always holds UTC.
+        DateTime? when = row.LastLoginUtc is { } t ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : null;
+        return new AccountLoginInfo(when, row.LastOs, row.LastPlatform, row.LastLocale, row.LastBuild);
     }
 
     public async Task<bool> SetAsync(string username, AccountLockFlags flags, string securityInfo,
