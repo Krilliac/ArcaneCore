@@ -110,6 +110,9 @@ public sealed class DeathGmCommandTests
         await gm.CollectAsync(Quiet);
 
         Assert.Equal(DeathGmCommands.GraveyardFromDefault(4, 12, "alliance"), await ReplyAsync(gm, ".neargrave alliance"));
+        string own = await ReplyAsync(gm, ".neargrave");
+        Assert.StartsWith("Graveyard #", own, StringComparison.Ordinal);
+        Assert.DoesNotContain("faction: any", own, StringComparison.Ordinal);
     }
 
     [Fact]

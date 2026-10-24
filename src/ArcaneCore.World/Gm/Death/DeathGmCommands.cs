@@ -149,7 +149,8 @@ public sealed class DeathGmCommands : ICommandGroup
                 context.Reply(GraveyardFromBattleground(id));
                 return true;
             case GraveyardSource.Default:
-                context.Reply(GraveyardFromDefault(id, zone, TeamName(team)));
+                // Without a team argument the fallback used the player's own team: name that one.
+                context.Reply(GraveyardFromDefault(id, zone, TeamName(team != 0 ? team : player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde)));
                 return true;
             case GraveyardSource.RunTimeLink:
                 context.Reply(GraveyardFromRunTimeLink(id, zone));
