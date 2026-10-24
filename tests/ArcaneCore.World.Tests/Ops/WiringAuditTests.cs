@@ -261,7 +261,7 @@ public sealed class WiringAuditTests
         using ServiceProvider provider = services.BuildServiceProvider();
         var audit = new WiringAudit(provider, [typeof(WiringAuditTests).Assembly], FixtureCatalog());
         Assert.DoesNotContain(audit.Run().Findings, f => f.Category == WiringAudit.UnhandledOpcode);
-        tracker.Record(WorldOpcode.CmsgBootme);
+        tracker.Record(WorldOpcode.CmsgNewSpellSlot);
         WiringReport second = audit.Run();
         Assert.Contains(second.Findings, f => f.Category == WiringAudit.UnhandledOpcode);
         Assert.Contains(second.Findings, f => f.Category == WiringAudit.OptionsUnbound); // still reported from the cached scan
@@ -295,19 +295,19 @@ public sealed class WiringAuditTests
     public void UnhandledOpcodeTracker_CountsPerOpcode_BoundsUnnamedValues_AndIsThreadSafe()
     {
         var tracker = new UnhandledOpcodeTracker();
-        Assert.Equal(1, tracker.Record(WorldOpcode.CmsgBootme));
-        Assert.Equal(2, tracker.Record(WorldOpcode.CmsgBootme));
-        Assert.Equal(1, tracker.Record(WorldOpcode.CmsgDblookup));
+        Assert.Equal(1, tracker.Record(WorldOpcode.CmsgNewSpellSlot));
+        Assert.Equal(2, tracker.Record(WorldOpcode.CmsgNewSpellSlot));
+        Assert.Equal(1, tracker.Record(WorldOpcode.CmsgEmblazonTabardObsolete));
 
         // The 826 gap, and values past the last opcode, share one bucket however many distinct values arrive.
         Assert.Equal(1, tracker.Record((WorldOpcode)826));
         Assert.Equal(2, tracker.Record((WorldOpcode)0xFFFF));
         Assert.Equal(3, tracker.Record((WorldOpcode)5000));
         Assert.Equal(UnhandledOpcodeTracker.UnknownLabel, UnhandledOpcodeTracker.LabelOf((WorldOpcode)5000));
-        Assert.Equal("CMSG_BOOTME", UnhandledOpcodeTracker.LabelOf(WorldOpcode.CmsgBootme));
+        Assert.Equal("CMSG_NEW_SPELL_SLOT", UnhandledOpcodeTracker.LabelOf(WorldOpcode.CmsgNewSpellSlot));
 
         Assert.Equal(
-            [new UnhandledOpcodeCount(UnhandledOpcodeTracker.UnknownLabel, 3), new UnhandledOpcodeCount("CMSG_BOOTME", 2), new UnhandledOpcodeCount("CMSG_DBLOOKUP", 1)],
+            [new UnhandledOpcodeCount(UnhandledOpcodeTracker.UnknownLabel, 3), new UnhandledOpcodeCount("CMSG_NEW_SPELL_SLOT", 2), new UnhandledOpcodeCount("CMSG_EMBLAZON_TABARD_OBSOLETE", 1)],
             tracker.Snapshot());
         Assert.Equal(6, tracker.Total);
 
@@ -317,7 +317,7 @@ public sealed class WiringAuditTests
         {
             for (int i = 0; i < 1000; i++)
             {
-                if (parallel.Record(WorldOpcode.CmsgDblookup) == 1)
+                if (parallel.Record(WorldOpcode.CmsgEmblazonTabardObsolete) == 1)
                 {
                     Interlocked.Increment(ref firsts);
                 }
@@ -394,15 +394,15 @@ public sealed class WiringAuditTests
 
         for (int i = 0; i < 3; i++)
         {
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
         }
 
-        await client.SendAsync(WorldOpcode.CmsgDblookup, []);
+        await client.SendAsync(WorldOpcode.CmsgEmblazonTabardObsolete, []);
         await client.SendAsync(WorldOpcode.CmsgPing, new byte[8]);
         await client.ReadUntilAsync(WorldOpcode.SmsgPong); // pings are answered in order: the four packets above were dispatched
 
         Assert.Equal(
-            [new UnhandledOpcodeCount("CMSG_BOOTME", 3), new UnhandledOpcodeCount("CMSG_DBLOOKUP", 1)],
+            [new UnhandledOpcodeCount("CMSG_NEW_SPELL_SLOT", 3), new UnhandledOpcodeCount("CMSG_EMBLAZON_TABARD_OBSOLETE", 1)],
             tracker.Snapshot());
 
         string[] warnings;
@@ -412,15 +412,15 @@ public sealed class WiringAuditTests
         }
 
         Assert.Equal(2, warnings.Length); // one per opcode, not one per packet
-        Assert.Contains(warnings, m => m.Contains("client sent CMSG_BOOTME (0x001) which has no handler; further occurrences are counted", StringComparison.Ordinal));
-        Assert.Contains(warnings, m => m.Contains("client sent CMSG_DBLOOKUP (0x002) which has no handler", StringComparison.Ordinal));
+        Assert.Contains(warnings, m => m.Contains("client sent CMSG_NEW_SPELL_SLOT (0x12D) which has no handler; further occurrences are counted", StringComparison.Ordinal));
+        Assert.Contains(warnings, m => m.Contains("client sent CMSG_EMBLAZON_TABARD_OBSOLETE (0x00D) which has no handler", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Audit_ListsUnhandledOpcodes_UnconfiguredOptions_ServerOpcodeHandlers_AndUnrunChecks()
     {
         var tracker = new UnhandledOpcodeTracker();
-        tracker.Record(WorldOpcode.CmsgBootme);
+        tracker.Record(WorldOpcode.CmsgNewSpellSlot);
         var table = new ArcaneCore.World.Handlers.OpcodeTable();
         table.OnSession(WorldOpcode.SmsgPong, SessionStates.Authenticated, (_, _) => Task.CompletedTask);
         table.OnSession(WorldOpcode.CmsgPing, SessionStates.Authenticated, (_, _) => Task.CompletedTask);
@@ -433,7 +433,7 @@ public sealed class WiringAuditTests
             // The fixture assembly holds a consumer of an options type whose section is in the catalog; the container configures nothing for it.
             WiringReport report = new WiringAudit(provider, [typeof(WiringAuditTests).Assembly], FixtureCatalog()).Run();
 
-            Assert.Contains(report.Findings, f => f is { Category: WiringAudit.UnhandledOpcode, Subject: "CMSG_BOOTME" });
+            Assert.Contains(report.Findings, f => f is { Category: WiringAudit.UnhandledOpcode, Subject: "CMSG_NEW_SPELL_SLOT" });
             Assert.Contains(report.Findings, f => f is { Category: WiringAudit.ServerOpcodeHandler, Subject: "SMSG_PONG" });
             Assert.DoesNotContain(report.Findings, f => f.Subject == "CMSG_PING");
             WiringFinding unbound = Assert.Single(report.Findings, f => f.Category == WiringAudit.OptionsUnbound);
@@ -483,8 +483,8 @@ public sealed class WiringAuditTests
     public async Task ServerWiring_RunsAtTheConsole_AndListsTheFindings()
     {
         var tracker = new UnhandledOpcodeTracker();
-        tracker.Record(WorldOpcode.CmsgBootme);
-        tracker.Record(WorldOpcode.CmsgBootme);
+        tracker.Record(WorldOpcode.CmsgNewSpellSlot);
+        tracker.Record(WorldOpcode.CmsgNewSpellSlot);
         await using var host = WorldTestHost.Start(configureServices: c =>
         {
             c.AddSingleton(tracker);
@@ -508,7 +508,7 @@ public sealed class WiringAuditTests
         }
 
         Assert.StartsWith(WorldConsoleExecutor.Prefix + "wiring audit: ", output[0], StringComparison.Ordinal);
-        Assert.Contains(output, l => l.Contains("[unhandled-opcode] CMSG_BOOTME: 2 client packet(s) arrived with no handler", StringComparison.Ordinal));
+        Assert.Contains(output, l => l.Contains("[unhandled-opcode] CMSG_NEW_SPELL_SLOT: 2 client packet(s) arrived with no handler", StringComparison.Ordinal));
 
         // The formatter caps a long list and says how many it left out.
         var many = new WiringReport([.. Enumerable.Range(0, WiringCommands.MaxListed + 5).Select(i => new WiringFinding("c", "s" + i, "d"))], 0, 0, 0);

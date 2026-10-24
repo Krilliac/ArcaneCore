@@ -250,8 +250,10 @@ public sealed class QualityScriptTests
             $dir = '{{temp.Path.Replace("'", "''")}}'
             $pid1 = Join-Path $dir 'child1.pid'; $pid2 = Join-Path $dir 'child2.pid'
             $child = 'Start-Sleep 120'
-            $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$pid1' `$p.Id; Start-Sleep 120"
-            $parentExits = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru; Set-Content '$pid2' `$p.Id"
+            # Hidden on Windows: a visible child console is handed to Windows Terminal, which shows error 0x800700E8 when the test kills it.
+            $hide = if ($IsWindows) { ' -WindowStyle Hidden' } else { '' }
+            $parentSleeps = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru$hide; Set-Content '$pid1' `$p.Id; Start-Sleep 120"
+            $parentExits = "`$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','$child' -PassThru$hide; Set-Content '$pid2' `$p.Id"
             $started = Get-Date
             $timeout = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', $parentSleeps) -LogFile (Join-Path $dir 'a.log') -TimeoutSec 3
             $elapsed = ((Get-Date) - $started).TotalSeconds
@@ -288,7 +290,9 @@ public sealed class QualityScriptTests
         JsonElement r = Eval("""
             function Sleeper([string]$tagValue) {
                 if ($tagValue) { $env:ARCANECORE_QUALITY_RUN = $tagValue }
-                try { Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 60' -PassThru } finally { Remove-Item env:ARCANECORE_QUALITY_RUN -ErrorAction SilentlyContinue }
+                # Hidden on Windows, as above: a visible console would be handed to Windows Terminal and error when it is killed.
+                $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+                try { Start-Process pwsh -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 60' -PassThru @hide } finally { Remove-Item env:ARCANECORE_QUALITY_RUN -ErrorAction SilentlyContinue }
             }
             $reused = Sleeper 'tagA'; $unknown = Sleeper 'tagA'; $untagged = Sleeper ''; $control = Sleeper 'tagA'
             Start-Sleep -Milliseconds 1500 # let /proc/<id>/environ show the exec'd image's environment

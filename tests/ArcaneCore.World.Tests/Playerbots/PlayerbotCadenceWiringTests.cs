@@ -125,6 +125,70 @@ public sealed class PlayerbotCadenceWiringTests
         }
     }
 
+    /// <summary>
+    /// The call site of the party path: <c>UpdateAutonomous</c> snapshots the motion's renewals around the party AI's think and settles it
+    /// with <see cref="PlayerbotMotion.SettleAfterDriver"/>. A gate-only think of the AI follows nothing, so the settle must renew the
+    /// walk it keeps: the walk is alive past the lease measured from its start. Fails with the call site passing a zero renewals snapshot
+    /// (<c>SettleAfterThink(..., renewalsBefore: 0, ...)</c> never renews, the lease runs out at 4 s).
+    /// </summary>
+    [Fact]
+    public async Task UpdateAutonomous_APartyBotsGateOnlyThink_RenewsTheLeaseOfTheWalkItKeeps()
+    {
+        // The feature's stores are its own, so the real master player is made in them (WorldTestHost.EnterWorldAsync uses the host's).
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore(), manualClock: true);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await using (host)
+        {
+            await feature.StartupAsync(default);
+            Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Wiringtwo", 1, 1)).BotId);
+            Assert.True((await feature.StartScriptedAsync(id.ToString(), new Idle())).Success);
+            WorldSession session = feature.FindSession(id)!;
+            byte[] key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(ArcaneCore.Cryptography.WowSrp6.SessionKeyLength);
+            await accounts.CreateAsync(new Account { Username = "WIREMASTER", Salt = new byte[32], Verifier = new byte[32], SessionKey = key });
+            await using WorldTestClient master = await host.ConnectAsync();
+            await master.AuthenticateAsync("WIREMASTER", key);
+            await master.CreateCharacterAsync("Wiremaster", 1);
+            Account stored = (await accounts.FindByUsernameAsync("WIREMASTER"))!;
+            await master.LoginAsync((ulong)(await characters.GetByAccountAsync(stored.Id)).Single().Id);
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player bot = session.Player!;
+                Player owner = host.World.FindOnlinePlayer("Wiremaster")!;
+                ArcaneCore.Game.Groups.GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+                groups.Invite(owner, bot.Name);
+                groups.Accept(bot);
+                owner.Relocate(bot.X + 90f, bot.Y, bot.Z, 0f, host.World.NowMs);
+                object active = ((IDictionary)typeof(ManagedPlayerbotFeature).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(feature)!).Values.Cast<object>().Single();
+                var update = typeof(ManagedPlayerbotFeature).GetMethod("UpdateAutonomous", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+                // A decided think: the party AI follows its master.
+                update.Invoke(feature, [active, bot, 5000u]);
+                Assert.True(PlayerbotMotion.IsActive(bot), "the party AI did not start following");
+                Assert.True(bot.Movement.HasFlag(MovementFlags.Forward));
+                PlayerbotRoute route = PlayerbotMotion.RouteOf(bot)!;
+                uint lease = PlayerbotMotion.LeaseMsOf(bot);
+
+                // 3000 ms on, a think that only the AI's gate turned away: the walk is kept and the settle renews it.
+                PlayerbotMotion.ElapseForTests(bot, 3000);
+                uint renewals = PlayerbotMotion.RenewalsOf(bot);
+                update.Invoke(feature, [active, bot, 10u]);
+                Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot));
+                Assert.False(route.Released);
+
+                PlayerbotMotion.ElapseForTests(bot, lease - 1000);
+                PlayerbotMotion.Pump(session, bot, host.World.NowMs);
+                Assert.True(bot.Movement.HasFlag(MovementFlags.Forward), "the lease ran out after a gate-only think of the party AI: the call site did not settle with the real renewals");
+                Assert.Same(route, PlayerbotMotion.RouteOf(bot));
+                return true;
+            });
+            await feature.ShutdownBeforeWorldStopAsync();
+        }
+    }
+
     private sealed class Idle : IPlayerbotController
     {
         public void Tick(PlayerbotControllerContext context, uint elapsedMs) { }

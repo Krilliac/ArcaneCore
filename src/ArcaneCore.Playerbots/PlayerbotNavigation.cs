@@ -113,6 +113,10 @@ internal sealed class PlayerbotRoute
     internal bool IsStaleFor(Map? map)
         => Pathfinder is not null && map is not null && !ReferenceEquals(Pathfinder, map.Collision.Pathfinder);
 
+    /// <summary>An owner let go of this route (its slot moved to null or another route) without stopping the bot;
+    /// a driver's settle (PlayerbotMotion.SettleAfterDriver) stops a walk that still follows it. Cleared when Follow adopts or renews it.</summary>
+    internal bool Released { get; set; }
+
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
 

@@ -68,10 +68,38 @@ internal sealed class PlayerbotFollower
     private readonly PlayerbotFollowProgress _progress = new();
     private readonly PlayerbotFollowWatch _watch = new();
     private readonly ILogger _logger;
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
+
+    /// <summary>The route this follower walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
     private Vector3 _routeGoal;
     private PlayerbotFollowStep _step = PlayerbotFollowStep.Walk;
-    private PlayerbotDropPlan? _drop;
+    private PlayerbotDropPlan? _dropSlot;
+
+    /// <summary>The follower's drop plan. Letting go of one (null or another plan) releases its walk to the edge
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.
+    /// Assign a <c>with</c> copy of the plan only when its ToEdge route is replaced too: the copy is a different object, so the assignment
+    /// releases the old plan's ToEdge even if the new plan still holds it.</summary>
+    private PlayerbotDropPlan? _drop
+    {
+        get => _dropSlot;
+        set
+        {
+            if (ReferenceEquals(_dropSlot, value)) return;
+            if (_dropSlot is { ToEdge: { } old }) old.Released = true;
+            _dropSlot = value;
+        }
+    }
     private DropPhase _phase;
     private Vector3 _dropLeader;
     private uint _fallStartMs;
@@ -146,6 +174,8 @@ internal sealed class PlayerbotFollower
         if (_phase == DropPhase.Falling) FinishFall(player);
         CancelDrop();
         _routeStale = true;
+        // The route is kept for Blocker, but nothing may keep walking it: the driver's settle stops a walk that still follows it.
+        if (_route is { } kept) kept.Released = true;
     }
 
     /// <summary>
