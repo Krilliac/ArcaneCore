@@ -132,7 +132,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot))
+        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot, score: false))
         {
             return;
         }
@@ -177,7 +177,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (RefuseIfOffered(session, player, InventorySlots.Bag0, srcSlot) || RefuseIfOffered(session, player, InventorySlots.Bag0, dstSlot))
+        if (RefuseIfOffered(session, player, InventorySlots.Bag0, srcSlot) || RefuseIfOffered(session, player, InventorySlots.Bag0, dstSlot, score: false))
         {
             return;
         }
@@ -278,9 +278,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // vmangos Player::SplitItem returns silently for an item in the trade window; the destination
-        // is checked too because a split onto an offered stack would merge into it.
-        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot))
+        // vmangos Player::SplitItem returns silently for a source in the trade window (log and anticheat only);
+        // here the client is also told ItemLocked. The destination is checked too because a split onto an offered
+        // stack would merge into it, but unscored: vmangos never checks the destination, so a client that lets
+        // the drop through must not be charged for it.
+        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot, score: false))
         {
             return;
         }
@@ -309,28 +311,32 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
-    /// True (after sending ItemLocked and scoring the anticheat) when the item at the position is offered in
-    /// the player's open trade. Moving, splitting, merging or destroying an offered item would change what
-    /// the partner accepted, because the trade settles from the item's count at completion.
+    /// True (after sending ItemLocked, and scoring the anticheat when <paramref name="score"/>) when the item at the
+    /// position is offered in the player's open trade. Moving, splitting, merging or destroying an offered item would
+    /// change what the partner accepted, because the trade settles from the item's count at completion. This is
+    /// deliberately stricter than vmangos, which sets Item::IsInTrade only while a trade completes and so only refuses
+    /// the split; swap, destroy, autoequip and autostore of an offered item are refused here as well.
     /// </summary>
-    private static bool RefuseIfOffered(WorldSession session, Player player, byte bag, byte slot)
+    private static bool RefuseIfOffered(WorldSession session, Player player, byte bag, byte slot, bool score = true)
     {
         Item? item = player.Inventory.GetItem(bag, slot);
-        if (item is null)
+        if (item is null || !IsOffered(session, player, item))
         {
             return false;
         }
 
-        EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
-        if (economy?.TradeOf(player) is not { } trade || !trade.SideOf(player).TradedItems.Contains(item.Guid))
+        if (score)
         {
-            return false;
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "inventory change of an item offered in the trade window");
         }
 
-        session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "inventory change of an item offered in the trade window");
         player.Inventory.SendEquipError(InventoryResult.ItemLocked, item, null);
         return true;
     }
+
+    /// <summary>Whether the item is in the player's own side of an open trade window.</summary>
+    internal static bool IsOffered(WorldSession session, Player player, Item item)
+        => session.Services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid);
 
     /// <summary>
     /// CMSG_ITEM_QUERY_SINGLE: u32 entry, u64 guid (unused) → SMSG_ITEM_QUERY_SINGLE_RESPONSE,
