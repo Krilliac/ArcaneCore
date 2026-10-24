@@ -13,7 +13,7 @@ internal sealed class SpellNames
     public const string TablePath = "DBFilesClient\\Spell.dbc";
 
     /// <summary>Cells per Spell.dbc row in build 5875.</summary>
-    // ref: src/ArcaneCore.Data/Content/Spells/SpellDbcImporter.cs:14 (SpellFieldCount = 173), :217 (SpellName = field 120); D:\ArcaneCore-data\client-dbc-5875\README.txt:132 (Spell.dbc, 173 fields)
+    // ref: src/ArcaneCore.Data/Content/Spells/SpellDbcImporter.cs:14 (SpellFieldCount = 173), :217 (SpellName = field 120)
     public const int FieldCount = 173;
 
     private const int IdField = 0;
