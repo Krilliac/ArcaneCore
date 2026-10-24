@@ -179,6 +179,115 @@ public sealed class BotSelectorTests
     public void AFailureIsACodeAndAMessage(string selector, string expectedStart)
         => Assert.StartsWith(expectedStart, Error(selector), StringComparison.Ordinal);
 
+    [Theory]
+    [InlineData("where:map=0&map=1")]
+    [InlineData("where:level=40-30")]
+    [InlineData("where:level=5-x")]
+    [InlineData("where:level=x")]
+    [InlineData("where:map=abc")]
+    [InlineData("where:map=-1")]
+    [InlineData("where:class=nope")]
+    [InlineData("where:state=nope")]
+    [InlineData(",")]
+    public void AFilterThatCanNeverMatchIsNoMatchNotAnException(string selector)
+        => Assert.StartsWith("no-match", Error(selector), StringComparison.Ordinal);
+
+    [Fact]
+    public void FilterKeysAndKeywordsIgnoreCaseButAreNotRequiredToHaveTheDollar()
+    {
+        Assert.Equal(["Bob"], Names("WHERE:CLASS=Warrior&Map=0", out BotSelection where));
+        Assert.True(where.Broad);
+        Assert.Equal(["Bob"], Names("CONTROLLED", out _));
+        Assert.Equal(["Alice", "Bob", "Bobby"], Names("$RUNNING", out _));
+        Assert.Equal(["Alice", "Bob"], Names("@PAIR", out _));
+    }
+
+    [Fact]
+    public void ABroadPartMakesTheWholeListBroadEvenWhenAnEarlierPartWasNot()
+    {
+        Assert.Equal(["Alice", "Bob"], Names("Alice,Bob", out BotSelection narrow));
+        Assert.False(narrow.Broad);
+        Names("Alice,all", out BotSelection wide);
+        Assert.True(wide.Broad);
+        Names("Alice,where:map=0", out BotSelection filtered);
+        Assert.True(filtered.Broad);
+    }
+
+    [Theory]
+    [InlineData("where:map=0&zone=12&level=30-40&class=warrior&race=orc&controlled=1&running=1&state=running&goal=grind&name=bo", "Bob")]
+    [InlineData("where:level=60", "Bobby")]
+    [InlineData("where:level=20-20", "Alice")]
+    [InlineData("where:controlled=true", "Bob")]
+    [InlineData("where:controlled=yes", "Bob")]
+    [InlineData("where:controlled=on", "Bob")]
+    public void WhereTermsAreAndedAndAFlagTakesTheUsualTruthWords(string selector, string expected)
+        => Assert.Equal([expected], Names(selector, out _));
+
+    [Fact]
+    public void AnEmptySnapshotIsNoMatchForEveryBroadForm()
+    {
+        var empty = new EmptySource();
+        foreach (string selector in new[] { "all", "running", "controlled", "Bo*", "where:map=0" })
+        {
+            string? error = BotSelector.TryResolve(selector, empty, out BotSelection selection);
+            Assert.StartsWith("no-match", error, StringComparison.Ordinal);
+            Assert.Empty(selection.Bots);
+            Assert.False(selection.Broad);
+        }
+    }
+
+    [Fact]
+    public void AnAliasMemberThatFailsFailsTheWholeSelectorAndAnAliasCanNestWithinTheLimit()
+    {
+        var source = new FakeSource();
+        source.Aliases["bad"] = ["Alice", "zed"];
+        source.Aliases["one"] = ["@two"];
+        source.Aliases["two"] = ["@three"];
+        source.Aliases["three"] = ["Carol"];
+        source.Aliases["a1"] = ["@a2"];
+        source.Aliases["a2"] = ["@a3"];
+        source.Aliases["a3"] = ["@a4"];
+        source.Aliases["a4"] = ["@a5"];
+        source.Aliases["a5"] = ["Carol"];
+
+        string? bad = BotSelector.TryResolve("@bad", source, out BotSelection none);
+        Assert.StartsWith("no-match: no playerbot 'zed'", bad, StringComparison.Ordinal);
+        Assert.Empty(none.Bots);
+
+        Assert.Null(BotSelector.TryResolve("@one", source, out BotSelection nested));
+        Assert.Equal(["Carol"], nested.Bots.Select(b => b.Name));
+        Assert.True(nested.Broad);
+
+        Assert.StartsWith("bad-selector: aliases nest too deep", BotSelector.TryResolve("@a1", source, out _), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheResolvedPickCarriesTheBotIdAndName()
+    {
+        Names("$bob", out BotSelection selection);
+        Assert.Equal(new BotPick(Bob, "Bob"), Assert.Single(selection.Bots));
+    }
+
+    private sealed class EmptySource : IBotSelectorSource
+    {
+        public IReadOnlyList<PlayerbotStatus> Snapshot() => [];
+
+        public bool TryResolve(string idOrName, out Guid botId, out string name)
+        {
+            botId = Guid.Empty;
+            name = string.Empty;
+            return false;
+        }
+
+        public bool IsRunning(Guid botId) => false;
+
+        public bool IsControlled(Guid botId) => false;
+
+        public IReadOnlyList<string>? Alias(string name) => null;
+
+        public BotAttributes Attributes(PlayerbotStatus bot) => new(0, null, null, null, null);
+    }
+
     [Fact]
     public void TheFilterKeysAreTheDocumentedOnes()
         => Assert.Equal(["map", "zone", "level", "class", "race", "controlled", "running", "state", "goal", "name"], BotSelector.FilterKeys);

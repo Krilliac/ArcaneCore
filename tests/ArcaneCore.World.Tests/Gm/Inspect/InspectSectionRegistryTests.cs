@@ -2,8 +2,11 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using System.Runtime.CompilerServices;
+using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Inspect;
+using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -116,6 +119,94 @@ public sealed class InspectSectionRegistryTests
         Assert.Equal("for Player", lines[^1]);
         Assert.DoesNotContain(lines, l => l.Contains("empty", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("secret detail", StringComparison.Ordinal));
+    }
+
+    private static CommandContext Console(List<string> output)
+        => CommandContext.ForConsole((WorldSession)RuntimeHelpers.GetUninitializedObject(typeof(WorldSession)), new CommandTable([]), output.Add);
+
+    /// <summary>The registry is process-wide: these sections answer a console context only, so other tests' inspect output is unchanged.</summary>
+    private static InspectSectionRenderer ConsoleOnly(Func<IEnumerable<string>?> body) => (context, _) => context.IsConsole ? body() : null;
+
+    private static IEnumerable<string> FailsHalfway()
+    {
+        yield return "partial line";
+        throw new InvalidOperationException("halfway");
+    }
+
+    [Fact]
+    public void RenderPrintsAHeadingThenLinesInOrderAndSkipsEmptySections()
+    {
+        var output = new List<string>();
+        using IDisposable second = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Threat, "rt-second", ConsoleOnly(() => ["two"]), Order: 2));
+        using IDisposable first = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Threat, "rt-first", ConsoleOnly(() => ["one-a", "one-b"]), Order: 1));
+        using IDisposable nothing = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Threat, "rt-nothing", ConsoleOnly(() => null), Order: 3));
+
+        InspectSectionRegistry.Render(Console(output), InspectLeaf.Threat, default);
+
+        Assert.Equal(["[rt-first]", "one-a", "one-b", "[rt-second]", "two"], output.SkipWhile(l => l != "[rt-first]").ToArray());
+        Assert.DoesNotContain("[rt-nothing]", output);
+    }
+
+    [Fact]
+    public void ASectionOnlyRendersForItsOwnLeaf()
+    {
+        var output = new List<string>();
+        using IDisposable only = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Motion, "rt-motion-only", ConsoleOnly(() => ["m"])));
+
+        InspectSectionRegistry.Render(Console(output), InspectLeaf.Ai, default);
+
+        Assert.DoesNotContain("[rt-motion-only]", output);
+    }
+
+    [Fact]
+    public void ASectionThatThrowsHalfwayPrintsNoPartialLines()
+    {
+        var output = new List<string>();
+        using IDisposable halfway = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Map, "rt-halfway", ConsoleOnly(FailsHalfway)));
+
+        InspectSectionRegistry.Render(Console(output), InspectLeaf.Map, default);
+
+        Assert.Contains("[rt-halfway] failed: InvalidOperationException", output);
+        Assert.DoesNotContain("partial line", output);
+        Assert.DoesNotContain("[rt-halfway]", output);
+    }
+
+    [Fact]
+    public void ARemovedSectionNoLongerRendersAndItsNameIsFreeAgain()
+    {
+        var output = new List<string>();
+        IDisposable registration = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "rt-reuse", ConsoleOnly(() => ["x"])));
+        registration.Dispose();
+
+        InspectSectionRegistry.Render(Console(output), InspectLeaf.Unit, default);
+        Assert.DoesNotContain("[rt-reuse]", output);
+
+        using IDisposable again = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "rt-reuse", ConsoleOnly(() => ["y"])));
+        output.Clear();
+        InspectSectionRegistry.Render(Console(output), InspectLeaf.Unit, default);
+        Assert.Contains("[rt-reuse]", output);
+    }
+
+    [Fact]
+    public void RegisterAndRenderRefuseNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => InspectSectionRegistry.Register(null!));
+        Assert.Throws<ArgumentNullException>(() => InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Unit, "rt-nullrender", null!)));
+        Assert.Throws<ArgumentNullException>(() => InspectSectionRegistry.Render(null!, InspectLeaf.Unit, default));
+    }
+
+    [Fact]
+    public void ConcurrentRegistrationsAllLandAndAllLeave()
+    {
+        const int Count = 64;
+        var registrations = new IDisposable[Count];
+
+        Parallel.For(0, Count, i =>
+            registrations[i] = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Map, "rt-par-" + i, (_, _) => null)));
+        Assert.Equal(Count, InspectSectionRegistry.SectionsOf(InspectLeaf.Map).Count(s => s.Name.StartsWith("rt-par-", StringComparison.Ordinal)));
+
+        Parallel.ForEach(registrations, r => r.Dispose());
+        Assert.Equal(0, InspectSectionRegistry.SectionsOf(InspectLeaf.Map).Count(s => s.Name.StartsWith("rt-par-", StringComparison.Ordinal)));
     }
 
     private static async Task<string[]> RunAsync(WorldTestClient gm, string command)

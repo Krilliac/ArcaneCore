@@ -156,6 +156,61 @@ public sealed class GmTargetResolverTests
         Assert.Equal("25 fast", rest);
     }
 
+    [Theory]
+    [InlineData("nearest creature player", GmSelectorKind.Nearest, "player")]
+    [InlineData("nearest #10 #20", GmSelectorKind.Nearest, "#20")]
+    [InlineData("nearest #-5", GmSelectorKind.Nearest, "#-5")]
+    [InlineData("nearest gobject 3", GmSelectorKind.Nearest, "3")]
+    [InlineData("entry #299 abc", GmSelectorKind.Entry, "abc")]
+    [InlineData("entry #299 #1 #2", GmSelectorKind.Entry, "#2")]
+    [InlineData("spawn #7 #8", GmSelectorKind.Spawn, "#8")]
+    [InlineData("offline $bob 5", GmSelectorKind.Offline, "5")]
+    [InlineData("#5 spawn #7", GmSelectorKind.Guid, "spawn #7")]
+    public void ALeadingSelectorTakesOnlyTheWordsTheGrammarGivesIt(string text, GmSelectorKind kind, string expectedRest)
+    {
+        Assert.True(GmSelector.TryTakeLeading(text, out GmSelector selector, out string rest, out _));
+        Assert.Equal(kind, selector.Kind);
+        Assert.Equal(expectedRest, rest);
+    }
+
+    [Theory]
+    [InlineData("nearest #1e3")]
+    [InlineData("nearest #NaN1")]
+    [InlineData("spawn #4294967296")]
+    [InlineData("entry #0")]
+    [InlineData("#18446744073709551616")]
+    [InlineData("0x10000000000000000")]
+    [InlineData("offline $")]
+    public void AnOutOfRangeNumberIsABadSelectorNotAnException(string text)
+    {
+        bool parsed = GmSelector.TryTakeLeading(text, out _, out string rest, out string error);
+
+        // "nearest #NaN1" is not a radius word, so nearest stops and the word is left over; the others are refused outright.
+        Assert.Equal(text == "nearest #NaN1", parsed);
+        Assert.Equal(parsed, error.Length == 0);
+        if (parsed)
+        {
+            Assert.Equal("#NaN1", rest);
+        }
+    }
+
+    [Fact]
+    public void ANullSelectorIsTheDefaultChain()
+    {
+        Assert.True(GmSelector.TryParse(null, out GmSelector selector, out _));
+        Assert.Equal(GmSelectorKind.Default, selector.Kind);
+        Assert.True(GmSelector.TryTakeLeading(null, out _, out string rest, out _));
+        Assert.Equal(string.Empty, rest);
+    }
+
+    [Fact]
+    public void TheNearestRadiusIsBoundedAtTheDocumentedMaximum()
+    {
+        Assert.True(GmSelector.TryParse("nearest #500", out GmSelector top, out _));
+        Assert.Equal(GmSelector.MaxYards, top.Yards);
+        Assert.False(GmSelector.TryParse("nearest #500.5", out _, out _));
+    }
+
     // --- resolution (world) ------------------------------------------------------------------------------------
 
     [Fact]
@@ -320,6 +375,126 @@ public sealed class GmTargetResolverTests
         Assert.Null(write.Target);
         Assert.Equal([GmTargetResolver.OtherMap], write.Replies);
         Assert.Equal("other-map", write.Failure);
+
+        // A console issuer has no map, so the same-map rule does not apply to it.
+        var consoleOutput = new List<string>();
+        (GmTarget? viaConsole, string? consoleFailure) = await host.OnWorldAsync(() =>
+        {
+            Player any = host.World.FindOnlinePlayer("Rslvmapa")!;
+            CommandContext console = CommandContext.ForConsole((WorldSession)any.Session, ChatCommands.CreateTable(), consoleOutput.Add);
+            return (GmTargetResolver.Resolve(console, "$rslvmapb", GmTargetRequest.Writing), console.Failure);
+        });
+        Assert.Equal("Rslvmapb", viaConsole?.Player?.Name);
+        Assert.Null(consoleFailure);
+        Assert.Empty(consoleOutput);
+    }
+
+    [Fact]
+    public async Task TheRankRuleAppliesToEverySelectorFormAndReadsToo()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RSLVRKL", "Rslvrkl", AccountSecurity.GameMaster);
+        await using WorldTestClient boss = await host.EnterWorldAsync("RSLVRKH", "Rslvrkh", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await boss.CollectAsync();
+        Player high = await host.PlayerAsync("Rslvrkh");
+        await host.PlaceAsync("Rslvrkl", -8940f, -132f, 83.5f);
+        await host.PlaceAsync("Rslvrkh", -8938f, -132f, 83.5f);
+
+        // By guid, by hex guid, by nearest, and through the selection: each read is refused with the standard reply.
+        foreach (string selector in new[] { $"#{high.Guid.Value}", $"0x{high.Guid.Value:X16}", "nearest #10 player" })
+        {
+            Resolved refused = await ResolveAsync(host, gm, "Rslvrkl", selector, GmTargetRequest.Reading);
+            Assert.Null(refused.Target);
+            Assert.Equal("security", refused.Failure);
+            Assert.NotEmpty(refused.Replies);
+        }
+
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Rslvrkl")!.Selection = high.Guid);
+        Resolved selected = await ResolveAsync(host, gm, "Rslvrkl", "", GmTargetRequest.Writing);
+        Assert.Null(selected.Target);
+        Assert.Equal("security", selected.Failure);
+
+        // The issuer may always act on itself, and a higher rank may act on a lower one by guid.
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Rslvrkl")!.Selection = default);
+        Resolved self = await ResolveAsync(host, gm, "Rslvrkl", "$rslvrkl", GmTargetRequest.Writing);
+        Assert.Equal("Rslvrkl", self.Target?.Player?.Name);
+        Player low = await host.PlayerAsync("Rslvrkl");
+        Resolved down = await ResolveAsync(host, boss, "Rslvrkh", $"#{low.Guid.Value}", GmTargetRequest.Writing);
+        Assert.Equal("Rslvrkl", down.Target?.Player?.Name);
+    }
+
+    [Fact]
+    public async Task TheUnitTargetIsTheFallbackWhenNothingIsSelected()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RSLVTGT", "Rslvtgt", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        Creature wolf = await WolfAsync(host);
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Rslvtgt")!;
+            player.Selection = default;
+            player.Target = wolf.Guid;
+        });
+
+        Resolved viaTarget = await ResolveAsync(host, gm, "Rslvtgt", "", GmTargetRequest.Reading);
+        Assert.Same(wolf, viaTarget.Target?.Creature);
+
+        // A set selection wins over the target.
+        Player self = await host.PlayerAsync("Rslvtgt");
+        await host.OnWorldAsync(() => self.Selection = self.Guid);
+        Resolved viaSelection = await ResolveAsync(host, gm, "Rslvtgt", "", GmTargetRequest.Reading);
+        Assert.Equal("Rslvtgt", viaSelection.Target?.Player?.Name);
+    }
+
+    [Fact]
+    public async Task TheAcceptedKindsFilterEveryNonDefaultSelector()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RSLVKNDS", "Rslvknds", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        Creature wolf = await WolfAsync(host);
+        await host.PlaceAsync("Rslvknds", wolf.X + 2, wolf.Y, wolf.Z);
+        var creaturesOnly = new GmTargetRequest(GmTargetKinds.Creature);
+        var playersOnly = new GmTargetRequest(GmTargetKinds.Player);
+
+        // A name resolves a player, which a creature-only command refuses by kind.
+        Resolved named = await ResolveAsync(host, gm, "Rslvknds", "$rslvknds", creaturesOnly);
+        Assert.Null(named.Target);
+        Assert.Equal("wrong-kind", named.Failure);
+        Assert.Equal([GmTargetResolver.WrongKind(GmTargetKinds.Creature)], named.Replies);
+
+        // The creature selectors cannot reach a command that only takes players.
+        // A guid names the object outright, so its kind is refused; the searching selectors only look at accepted kinds.
+        Resolved byGuid = await ResolveAsync(host, gm, "Rslvknds", $"#{wolf.Guid.Value}", playersOnly);
+        Assert.Null(byGuid.Target);
+        Assert.Equal("wrong-kind", byGuid.Failure);
+
+        foreach (string selector in new[] { $"spawn #{WolfSpawn}", $"entry #{WolfEntry}", "nearest #10", "nearest #10 creature" })
+        {
+            Resolved none = await ResolveAsync(host, gm, "Rslvknds", selector, playersOnly);
+            Assert.Null(none.Target);
+            Assert.Equal("no-target", none.Failure);
+        }
+
+        // A request that names no kind (default struct) accepts any.
+        Resolved any = await ResolveAsync(host, gm, "Rslvknds", $"spawn #{WolfSpawn}", default);
+        Assert.Same(wolf, any.Target?.Creature);
+    }
+
+    [Fact]
+    public async Task EveryOfflineRefusalSetsItsFailureCode()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RSLVOFC", "Rslvofc", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+
+        Resolved notAccepted = await ResolveAsync(host, gm, "Rslvofc", "offline $bob", GmTargetRequest.Writing);
+        Assert.Equal("offline-not-accepted", notAccepted.Failure);
+
+        Resolved lowRank = await ResolveAsync(host, gm, "Rslvofc", "offline $bob", new GmTargetRequest(AllowOffline: true));
+        Assert.Equal("security", lowRank.Failure);
     }
 
     [Fact]

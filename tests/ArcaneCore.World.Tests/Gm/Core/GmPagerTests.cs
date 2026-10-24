@@ -198,6 +198,78 @@ public sealed class GmPagerTests
     }
 
     [Fact]
+    public void ThePageBoundaryIs25Rows()
+    {
+        var output = new List<string>();
+        GmPager.Reply(Console(output), "Bots", Rows(25), new GmOutputOptions(2, false));
+        Assert.Equal(["Page 2 does not exist; there is 1 page."], output);
+
+        output.Clear();
+        GmPager.Reply(Console(output), "Bots", Rows(26), new GmOutputOptions(2, false));
+        Assert.Equal(["Bots: 26", "n=26 name=row26", "Page 2/2 (rows 26-26 of 26)."], output);
+
+        output.Clear();
+        GmPager.Reply(Console(output), "Bots", Rows(26), new GmOutputOptions(1, true));
+        JsonNode json = JsonNode.Parse(Assert.Single(output))!;
+        Assert.Equal(25, json["rows"]!.AsArray().Count);
+        Assert.Equal(2, (int)json["pages"]!);
+        Assert.Equal(26, (int)json["total"]!);
+    }
+
+    [Fact]
+    public void AJsonPageOutOfRangeIsAnErrorObjectWithThePageCount()
+    {
+        var output = new List<string>();
+        CommandContext context = Console(output);
+
+        GmPager.Reply(context, "Bots", Rows(26), new GmOutputOptions(9, true));
+
+        Assert.Equal(["{\"error\":\"page-out-of-range\",\"message\":\"Page 9 does not exist; there are 2 pages.\",\"pages\":2}"], output);
+        Assert.Equal("page-out-of-range", context.Failure);
+    }
+
+    [Fact]
+    public void JsonIgnoresTheTextOverrideAndTextIgnoresNothingInTheFields()
+    {
+        var output = new List<string>();
+        GmRow row = new GmRow().Add("a", 1).Add("b", "x").WithText("custom line");
+
+        GmPager.Reply(Console(output), "T", [row], new GmOutputOptions(1, true));
+        Assert.Equal(["{\"title\":\"T\",\"total\":1,\"page\":1,\"pages\":1,\"rows\":[{\"a\":1,\"b\":\"x\"}]}"], output);
+
+        output.Clear();
+        GmPager.ReplyRow(Console(output), "T", row, new GmOutputOptions(1, true));
+        Assert.Equal(["{\"title\":\"T\",\"row\":{\"a\":1,\"b\":\"x\"}}"], output);
+    }
+
+    [Fact]
+    public void ARowRefusesABlankKey()
+    {
+        Assert.Throws<ArgumentException>(() => new GmRow().Add(" ", 1));
+        Assert.Throws<ArgumentNullException>(() => new GmRow().Add(null!, 1));
+    }
+
+    [Fact]
+    public void ABadPageErrorIsJsonOnlyWhenTheFlagWasGivenAnywhere()
+    {
+        var output = new List<string>();
+        Assert.False(GmPager.TryParse(Console(output), "--json wolf page #x", out _, out _));
+        Assert.Equal("{\"error\":\"bad-page\",\"message\":\"" + GmPager.PageNeedsNumber + "\"}", Assert.Single(output));
+
+        output.Clear();
+        Assert.False(GmPager.TryParse(Console(output), "wolf page #x", out _, out _));
+        Assert.Equal([GmPager.PageNeedsNumber], output);
+    }
+
+    [Fact]
+    public void ANullArgumentIsNoOptions()
+    {
+        Assert.True(GmPager.TryParse(null, out string rest, out GmOutputOptions options, out _));
+        Assert.Equal(string.Empty, rest);
+        Assert.Equal(GmOutputOptions.Default, options);
+    }
+
+    [Fact]
     public void AJsonErrorCarriesTheCodeAndMessage()
     {
         var output = new List<string>();
