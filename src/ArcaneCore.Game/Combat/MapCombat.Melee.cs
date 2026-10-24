@@ -1096,9 +1096,11 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// vmangos Unit::SetInCombatState: UNIT_FLAG_IN_COMBAT plus the PvP linger timer (rounded up to the 1.2 s check). <paramref name="caller"/>
-    /// is kept for the combat/combat-never-left report (<see cref="UnitCombat.LastCombatSetBy"/>).
+    /// is kept for the combat/combat-never-left and creature/evade-loop reports (<see cref="UnitCombat.LastCombatSetBy"/>); <paramref name="via"/> is
+    /// the helper it went through (a compile-time constant, <see cref="UnitCombat.LastCombatSetVia"/>). Both are string references copied
+    /// from call sites: no allocation on the combat path.
     /// </summary>
-    public void SetInCombatState(Unit unit, uint combatTimer, [CallerMemberName] string caller = "")
+    public void SetInCombatState(Unit unit, uint combatTimer, [CallerMemberName] string caller = "", string? via = null)
     {
         if (IsQuestSettlementPending(unit) || !IsAliveState(unit))
         {
@@ -1115,6 +1117,7 @@ public sealed partial class MapCombat
 
         unit.UnitFlags |= UnitFlags.InCombat;
         c.LastCombatSetBy = caller;
+        c.LastCombatSetVia = via;
         c.CombatSetsSinceClear++;
         Track(unit);
     }
@@ -1127,12 +1130,12 @@ public sealed partial class MapCombat
     /// (<paramref name="direct"/> false: a DoT tick, SpellAuras.cpp:5921, or the split part of a damage split, Unit.cpp:2140, 2179): that
     /// refresh is the spell hit's (Spell.cpp:1260, 1684, 1692), and Unit::DealDamage itself never calls SetOutOfCombatWithVictim.
     /// </summary>
-    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, bool direct, SpellInfo? threatSpell)
+    private void LinkHostileHit(Unit attacker, Unit victim, bool combatLink, bool direct, SpellInfo? threatSpell, [CallerMemberName] string caller = "")
     {
         if (combatLink)
         {
-            SetInCombatWithAggressor(victim, attacker);
-            SetInCombatWithVictim(attacker, victim);
+            SetInCombatWithAggressor(victim, attacker, caller);
+            SetInCombatWithVictim(attacker, victim, caller);
         }
         else if (direct && !ReferenceEquals(attacker, victim) && threatSpell?.HasAura(AuraType.DamageShield) != true)
         {
@@ -1154,7 +1157,7 @@ public sealed partial class MapCombat
     /// timer (<see cref="UsesPvpCombatTimer"/>: a player, a player's pet or charm, a NO_THREAT_LIST creature) lingers 5.5 s. It was players
     /// only, so a NO_THREAT_LIST creature (Mr. Smite) hit by a player had no linger and left combat - evaded - at the next 1.2 s check.
     /// </summary>
-    private void SetInCombatWithAggressor(Unit victim, Unit aggressor)
+    private void SetInCombatWithAggressor(Unit victim, Unit aggressor, string caller)
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
         if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa)
@@ -1164,18 +1167,18 @@ public sealed partial class MapCombat
             UpdatePvp(pv, true);
         }
 
-        SetInCombatState(victim, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0);
+        SetInCombatState(victim, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithAggressor));
     }
 
     /// <summary>vmangos Unit::SetInCombatWithVictim (Unit.cpp:6070): PvP flag on attack, then combat (5.5 s when the victim uses the PvP combat timer).</summary>
-    private void SetInCombatWithVictim(Unit attacker, Unit victim)
+    private void SetInCombatWithVictim(Unit attacker, Unit victim, string caller)
     {
         if (attacker is Player player)
         {
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }
 
-        SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0);
+        SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithVictim));
     }
 
     /// <summary>vmangos Unit::ClearInCombat.</summary>

@@ -100,6 +100,13 @@ public sealed class UnitCombat
 
     internal uint CombatSetsSinceClear { get; set; }
 
+    /// <summary>The helper <see cref="LastCombatSetBy"/> went through (SetInCombatWithAggressor / SetInCombatWithVictim), or null for a direct call; a constant string.</summary>
+    internal string? LastCombatSetVia { get; set; }
+
+    /// <summary>The report text "by Caller/Helper xN": built only when a report is written, never on the combat path.</summary>
+    internal string DescribeLastCombatSet()
+        => $"by {LastCombatSetBy ?? "?"}{(LastCombatSetVia is null ? "" : "/" + LastCombatSetVia)} x{CombatSetsSinceClear}";
+
     /// <summary>Diagnostics for creature/evade-loop: the last unit this one started auto-attacking (<see cref="MapCombat.Attack"/>).</summary>
     internal ObjectGuid LastVictimGuid { get; set; }
 

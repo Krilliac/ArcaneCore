@@ -274,7 +274,7 @@ public sealed partial class MapCombat
     private string StuckCombatFacts(Unit unit, UnitCombat c)
     {
         string facts = string.Create(CultureInfo.InvariantCulture,
-            $"set by {c.LastCombatSetBy ?? "?"} x{c.CombatSetsSinceClear}, pvp timer {UsesPvpCombatTimer(unit)} ({c.CombatTimer} ms)");
+            $"set {c.DescribeLastCombatSet()}, pvp timer {UsesPvpCombatTimer(unit)} ({c.CombatTimer} ms)");
         if (unit is not Creatures.Creature creature)
         {
             return facts;

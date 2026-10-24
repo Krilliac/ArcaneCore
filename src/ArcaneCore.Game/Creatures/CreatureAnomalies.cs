@@ -27,6 +27,7 @@ public static class CreatureAnomalies
     public const string NonFiniteCode = "non-finite";
     public const string PathFailedCode = "path-failed";
     public const string StuckCode = "stuck";
+    public const string StuckChasingCode = "stuck-chasing";
     public const string HomeUnreachableCode = "home-unreachable";
     public const string StuckInCombatCode = "stuck-in-combat";
     public const string WaypointPathMissingCode = "waypoint-path-missing";
@@ -37,6 +38,14 @@ public static class CreatureAnomalies
 
     public const string RespawnStuckCode = "stuck";
     public const string RespawnDuplicateCode = "duplicate";
+
+    /// <summary>
+    /// The evade reason of a scripted EventAI evade (ACTION_T_EVADE): a fight a script ends on purpose is no evade loop. A shared constant,
+    /// not a caller name, so the exemption cannot drift from what production passes (<c>GetType().Name + "." + caller</c> never read "Execute").
+    /// Only the EventAI action passes it: SmartAI's SMART_ACTION_EVADE (<c>SmartScript</c>) is deliberately not exempt, and no fight against a
+    /// player, or a unit a player owns or charms, is ever exempt.
+    /// </summary>
+    public const string ScriptedEvadeReason = "EventAi.Evade";
 
     /// <summary>Rolling window (ms) in which repeated evades or leash resets trigger loop anomalies.</summary>
     public const long LoopWindowMs = 60_000;
@@ -141,13 +150,18 @@ public static class CreatureAnomalies
         }
     }
 
-    public static void ReportStuck(Creature creature, uint elapsedMs, string context)
+    /// <summary>
+    /// A stuck creature. <paramref name="chasing"/> (the chase generator is on top and the creature makes no progress: either standing out of
+    /// melee reach of a reachable victim, or on a chase spline that goes nowhere) is <c>creature/stuck-chasing</c>; any other spline or a
+    /// waypoint walk without progress (bad path data) stays <c>creature/stuck</c>.
+    /// </summary>
+    public static void ReportStuck(Creature creature, uint elapsedMs, string context, bool chasing = false)
     {
         if (creature.TryReportStuck())
         {
             AnomalyLedger.Shared.Report(
                 CreatureSubsystem,
-                StuckCode,
+                chasing ? StuckChasingCode : StuckCode,
                 Subject(creature),
                 $"Creature made < {StuckMinProgressYards:F1} yd progress over {elapsedMs} ms while {context} at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {creature.MapId}");
         }

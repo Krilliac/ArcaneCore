@@ -53,14 +53,14 @@ public sealed partial class CreatureMapSystem
                 CreatureAnomalies.EvadeLoopCode,
                 CreatureAnomalies.Subject(creature),
                 $"entered evade mode {count} times within {windowMs} ms at ({creature.X:F1}, {creature.Y:F1}, {creature.Z:F1}) on map {Map.MapId}"
-                    + (reasons is null ? "" : $"; evades: {reasons}"));
+                    + (reasons is null ? "" : $"; evades, newest first: {reasons}"));
         }
     }
 
     /// <summary>
     /// One evade for the loop report: who asked, and the fight it ended (the victim, its state and distance, the attackers left, the motion).
     /// Without a victim it adds the last unit the creature attacked and its state now (live 2026-10-18: nearly every loop was "no victim,
-    /// 0 att, Chase", e.g. six Stockade guards at -8784,830 evading together every 2-3 s). Kept short: the ledger cuts a detail at 300 chars.
+    /// 0 att, Chase", e.g. six Stockade guards at -8784,830 evading together every 2-3 s). The ledger cuts a detail at 300 chars (297 and "..."): the report lists the newest evade first so the cut falls on the oldest.
     /// </summary>
     private string DescribeEvade(Creature creature, string reason)
     {
@@ -68,7 +68,12 @@ public sealed partial class CreatureMapSystem
         string victim = combat.Victim is { } v ? DescribeEvadeTarget(creature, v) : "no victim";
         string threat = combat.HasThreatList ? $", threat {combat.Threat.Entries.Count}" : "";
         string last = combat.Victim is null && !combat.LastVictimGuid.IsEmpty ? ", last " + DescribeLastVictim(creature, combat.LastVictimGuid) : "";
-        return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last})";
+        // Who last flagged the creature in combat, and how often since the flag was last cleared: an evade without a victim means something
+        // re-flagged combat without threat (live 2026-10-22: Firemane mobs 4328/4329/4331, SelectHostileTarget(no victim, 0 att) every 2-3 s).
+        // Only for an evade without a victim; the report lists the newest evade first (Creature.RecordEvadeForAnomaly), so the ledger's cut
+        // at 300 chars drops the oldest evades, never the one that triggered the report.
+        string flagged = combat.Victim is null ? ", " + combat.DescribeLastCombatSet() : "";
+        return $"{reason}({victim}, {combat.AttackersInternal.Count} att{threat}, {creature.Motion.CurrentType}{last}{flagged})";
     }
 
     /// <summary>Whether the evading creature's victim, or else the last unit it attacked, is dead (the creature won the fight).</summary>
@@ -82,7 +87,13 @@ public sealed partial class CreatureMapSystem
         UnitCombat combat = creature.Combat;
         Unit? last = combat.Victim
             ?? (combat.LastVictimGuid.IsEmpty ? null : Map.FindPlayer(combat.LastVictimGuid) as Unit ?? Map.FindObject(combat.LastVictimGuid) as Unit);
-        if (reason == "Execute" && combat.Victim is not Player && combat.LastVictimGuid.High != HighGuid.Player)
+        // A scripted evade ends a fight on purpose, unless a player is on the other side: the player, or a unit a player owns or charms (a
+        // hunter's pet): a loop of those is a real defect.
+        if (reason == CreatureAnomalies.ScriptedEvadeReason
+            && combat.Victim is not Player
+            && !combat.LastVictimGuid.IsPlayer // HighGuid.Player is 0: an empty GUID (cleared after each evade) must not read as a player
+            && combat.LastVictimGuid.High != HighGuid.Pet
+            && !(last?.CharmerOrOwnerGuid.IsPlayer ?? false))
         {
             return true;
         }
@@ -345,7 +356,7 @@ public sealed partial class CreatureMapSystem
                 2 => $"chasing target {chaseVictim!.Guid} out of melee reach",
                 _ => "walking waypoint path",
             };
-            CreatureAnomalies.ReportStuck(creature, stuckMs, movingContext);
+            CreatureAnomalies.ReportStuck(creature, stuckMs, movingContext, chasing: movingKind == 2 || (movingKind == 1 && creature.Motion.CurrentType == MovementGeneratorType.Chase));
         }
     }
 
