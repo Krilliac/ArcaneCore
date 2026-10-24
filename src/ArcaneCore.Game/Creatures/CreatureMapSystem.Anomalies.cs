@@ -231,7 +231,7 @@ public sealed partial class CreatureMapSystem
         {
             if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
             {
-                if (TryRecoverClippedUnderTerrain(creature, validLocal))
+                if (TryRecoverClippedUnderTerrain(creature, validLocal) || TryLiftOntoFloorAbove(creature))
                 {
                     return;
                 }
@@ -255,7 +255,7 @@ public sealed partial class CreatureMapSystem
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
             && ConfirmUnderMap(creature))
         {
-            if (TryRecoverClippedUnderTerrain(creature, validUpper))
+            if (TryRecoverClippedUnderTerrain(creature, validUpper) || TryLiftOntoFloorAbove(creature))
             {
                 return;
             }
@@ -293,6 +293,37 @@ public sealed partial class CreatureMapSystem
         }
 
         float standZ = surface + GroundHeight.StandOffset;
+        if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
+        {
+            creature.SetHome(creature.Home with { Z = standZ });
+        }
+
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.ClearUnderMapEpisode();
+        return true;
+    }
+
+    /// <summary>
+    /// A creature already convicted of being under the map that has a navmesh floor straight above within 10 yd and none below within
+    /// 60 yd (a tunnel or cellar ceiling sits between it and the terrain, which <see cref="TryRecoverClippedUnderTerrain"/> declines):
+    /// it is put on that floor. Reported once.
+    /// </summary>
+    private bool TryLiftOntoFloorAbove(Creature creature)
+    {
+        const float LiftYards = 10f;
+        if (!Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 0f, LiftYards, out float floor)
+            || !float.IsFinite(floor)
+            || floor <= creature.Z
+            || Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 60f, 0f, out _))
+        {
+            return false;
+        }
+
+        float standZ = floor + GroundHeight.StandOffset;
+        CreatureAnomalies.ReportUnderMap(
+            creature,
+            floor,
+            $"Creature {creature.Guid} was {floor - creature.Z:F1} yd under a navmesh floor (z={creature.Z:F1}, floor={floor:F1}) at ({creature.X:F1}, {creature.Y:F1}) on map {Map.MapId}: lifted onto it");
         if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
         {
             creature.SetHome(creature.Home with { Z = standZ });
