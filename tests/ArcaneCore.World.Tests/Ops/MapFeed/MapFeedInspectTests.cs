@@ -259,6 +259,7 @@ public sealed class MapFeedInspectTests
         AnomalyLedger.Shared.Report(tag, "stuck", $"creature {FeedWorld.WolfEntry} spawn {FeedWorld.WolfSpawn}", "wolf is stuck", AnomalySeverity.Warning, mine);
         AnomalyLedger.Shared.Report(tag, "lost", $"bot Anomalyone (guid {playerLow})", "bot lost", AnomalySeverity.Error, mine);
         AnomalyLedger.Shared.Report(tag, "gone", "creature 299 spawn 999999", "no such spawn", AnomalySeverity.Info, mine);
+        AnomalyLedger.Shared.Report(tag, "real", ArcaneCore.Game.Creatures.CreatureAnomalies.Subject(FeedWorld.WolfEntry, FeedWorld.WolfSpawn), "evade loop", AnomalySeverity.Warning, mine);
         AnomalyLedger.Shared.Report(tag, "other", $"creature {FeedWorld.WolfEntry} spawn {FeedWorld.WolfSpawn}", "other world's notice", AnomalySeverity.Warning, other.Host.World.Identity);
         AnomalyLedger.Shared.Report(tag, "unowned", "something", "no owner", AnomalySeverity.Warning, origin: null);
 
@@ -266,8 +267,13 @@ public sealed class MapFeedInspectTests
 
         AssertOk(r, 9, "anomalies");
         JsonElement[] items = [.. r.GetProperty("items").EnumerateArray().Where(i => i.GetProperty("subsystem").GetString() == tag)];
-        Assert.Equal(["stuck", "lost", "gone"], items.Select(i => i.GetProperty("code").GetString()));
-        Assert.Equal(["warning", "error", "info"], items.Select(i => i.GetProperty("severity").GetString()));
+        Assert.Equal(["stuck", "lost", "gone", "real"], items.Select(i => i.GetProperty("code").GetString()));
+        Assert.Equal(["warning", "error", "info", "warning"], items.Select(i => i.GetProperty("severity").GetString()));
+
+        // The subject the creature reporters really write ("creature entry E spawn S") is positioned like the hand-written form.
+        JsonElement real = items[3];
+        Assert.Equal("current", real.GetProperty("pos").GetString());
+        Assert.True(Vector3.Distance(real.GetProperty("p").ToVector(), new Vector3(-8940f, -132f, 83.5f)) < 5f);
 
         JsonElement wolf = items[0];
         Assert.Equal("current", wolf.GetProperty("pos").GetString());

@@ -308,7 +308,7 @@ internal static partial class MapFeedAnomalies
         return false;
     }
 
-    [GeneratedRegex(@"^(creature|gameobject) (\d+) spawn (\d+)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(creature|gameobject) (?:entry )?(\d+) spawn (\d+)", RegexOptions.CultureInvariant)]
     private static partial Regex SpawnSubject();
 
     [GeneratedRegex(@"^(?:bot|player) .*\(guid (\d+)\)", RegexOptions.CultureInvariant)]

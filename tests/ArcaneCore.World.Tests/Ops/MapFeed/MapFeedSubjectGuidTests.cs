@@ -21,6 +21,13 @@ public sealed class MapFeedSubjectGuidTests
     }
 
     [Fact]
+    public void TheCreatureReportersOwnSubject_NamesTheCreatureGuid()
+    {
+        Assert.True(MapFeedAnomalies.TryGuid(ArcaneCore.Game.Creatures.CreatureAnomalies.Subject(3100, 812), out ulong creature));
+        Assert.Equal(ObjectGuid.WithEntry(HighGuid.Unit, 3100, 812).Value, creature);
+    }
+
+    [Fact]
     public void ABotOrPlayerSubject_NamesThePlayerGuid_WhateverTheNameHolds()
     {
         Assert.True(MapFeedAnomalies.TryGuid("bot Thrall (guid 1234)", out ulong bot));
