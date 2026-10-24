@@ -33,15 +33,20 @@ public sealed class WorldRuntimePositionTests
         writer.Start();
         Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(10)));
 
-        long reads = 0, sawIdle = 0, sawFeatures = 0, torn = 0;
+        // A read that exhausts PositionReadBudgetMs deliberately returns an unverified, possibly mixed position (and counts it), so
+        // only verified reads are held to consistency. This thread is the only reader, so the counter moving across a read
+        // identifies exactly that read.
+        long reads = 0, sawIdle = 0, sawFeatures = 0, torn = 0, unverifiedReads = 0;
         string? firstTorn = null;
         long deadline = Environment.TickCount64 + 400;
         try
         {
             while (Environment.TickCount64 < deadline)
             {
+                long unverifiedBefore = world.PositionReadsUnverified;
                 TickPosition p = world.CurrentPosition;
                 reads++;
+                if (world.PositionReadsUnverified != unverifiedBefore) { unverifiedReads++; continue; }
                 bool consistent;
                 if (p.Phase == TickPhase.Features) { sawFeatures++; consistent = ReferenceEquals(p.Work, marker) && p.SinceTimestamp == FeaturesSince; }
                 else if (p.Phase == TickPhase.Idle) { sawIdle++; consistent = p.Work is null && p.SinceTimestamp == 0; }
@@ -56,6 +61,6 @@ public sealed class WorldRuntimePositionTests
         }
 
         Assert.True(sawIdle > 0 && sawFeatures > 0, $"vacuous run: {reads} reads, {sawIdle} Idle, {sawFeatures} Features");
-        Assert.True(torn == 0, $"{torn} of {reads} reads were torn ({world.PositionReadsUnverified} unverified after the read budget); first: {firstTorn}");
+        Assert.True(torn == 0, $"{torn} of {reads - unverifiedReads} verified reads were torn ({unverifiedReads} unverified reads excluded); first: {firstTorn}");
     }
 }

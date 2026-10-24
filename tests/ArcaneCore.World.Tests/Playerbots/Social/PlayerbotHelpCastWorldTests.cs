@@ -68,8 +68,11 @@ public sealed class PlayerbotHelpCastWorldTests
             SpellFeature feature = world.Host.WorldServices.GetRequiredService<SpellFeature>();
             feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => spells.All(x => x.Id != s.Id)), .. spells], [], []);
             Player priest = HelpTestKit.Online(world, "Helpprie");
+            // The bot's own think resolves its abilities now and then; one that ran before the learn below is the case to cover (without this it depends on timing).
+            _ = HelpTestKit.BrainOf(world, bot).CombatSpells.Abilities(priest);
             world.Host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.GiveLevel(priest, 20);
-            foreach (SpellInfo spell in spells) feature.Spellbook.LearnSpell(priest, spell.Id);
+            // Through the spell system, not the book: only it sends SMSG_LEARNED_SPELL, which is what makes the bot rebuild the abilities it already resolved.
+            foreach (SpellInfo spell in spells) feature.System.LearnSpell(priest, spell.Id);
             priest.Health = priest.MaxHealth;
             SpellSystem.SetPower(priest, PowerType.Mana, priest.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // a healer helps only with mana to spare
         });
@@ -82,6 +85,21 @@ public sealed class PlayerbotHelpCastWorldTests
 
     private static Task ScanAsync(SocialWorld world, long nowMs)
         => world.Host.OnWorldAsync(() => SocialTestKit.Feature(world.Host).Help.Run(SocialTestKit.BotPass(world.Host, nowMs)));
+
+    /// <summary>
+    /// Scans until the buff lane has made one more offer than it had. A scan that finds the bot not free (a goal change, a vital, a sight or range
+    /// check that has not settled since <see cref="SetUpAsync"/> looked) offers nothing and records nothing, so it is safe to take again.
+    /// </summary>
+    private static async Task ScanUntilBuffedAsync(SocialWorld world, long nowMs)
+    {
+        PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
+        int before = lane.Buffs;
+        await HelpTestKit.UntilAsync(() =>
+        {
+            ScanAsync(world, nowMs).GetAwaiter().GetResult();
+            return lane.Buffs > before;
+        }, "the scan to offer the buff");
+    }
 
     [Fact]
     public async Task APriest_ResurrectsADeadStranger_WithItsRealSpell_OncePerCorpse()
@@ -198,7 +216,7 @@ public sealed class PlayerbotHelpCastWorldTests
         float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
         long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
 
-        await ScanAsync(world, now);
+        await ScanUntilBuffedAsync(world, now);
 
         PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
         Assert.Equal(1, lane.Buffs);
@@ -226,7 +244,7 @@ public sealed class PlayerbotHelpCastWorldTests
 
         // ...and once the cooldown is over, a pass whose roll says yes offers it again.
         long after = HelpTestKit.NowWhere(t => t > now + 31 * 60_000L && PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
-        await ScanAsync(world, after);
+        await ScanUntilBuffedAsync(world, after);
         Assert.Equal(2, lane.Buffs);
     }
 
