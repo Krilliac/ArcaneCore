@@ -1266,9 +1266,12 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal("under-budget-confirming", status.State);
         Assert.Contains("moved 1", status.Reason);
 
-        // The move is a teleport the bot acknowledges on its own think; until then it counts as busy and the next pass skips it.
+        // The move is a teleport the bot acknowledges on its own think; until then it counts as busy and the next pass skips it. Once landed
+        // the brain may start a leg or a fight at any think, which skips the bot just the same, and a pass reads the bot in several world-thread
+        // steps (the facts, the transit recheck, the relocation) with ticks and thinks between them. So the same step that sees the bot free
+        // also stops its thinks (the bot stays autonomous, which the relocation needs), and they stay stopped for the rest of the test.
         await world.WaitForSettledAsync(1);
-        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn); // a misfit again
+        await SetBotWhenFreeAndHoldItsThinksAsync(world, bot, 20, PopulationTestHost.Elwynn); // a misfit again
         world.Ticks.Set(200, 10);
         status = await world.PassAsync();
         Assert.Equal("under-budget", status.State);
@@ -1406,6 +1409,35 @@ public sealed class PlayerbotPopulationFeatureTests
         player.ZoneId = zone;
         return true;
     });
+
+    /// <summary>
+    /// <see cref="SetBotAsync"/> once the bot is one a pass can move (in the world, out of combat, no teleport pending, no leg under way: that is covered
+    /// by <see cref="PopulationProvisioner.IsInTransit"/>), checked and set in the same world-thread step. That step also sets the think interval
+    /// so high that no bot brain thinks again: with no think the bot starts no leg and no fight, so what the step saw holds through every
+    /// world-thread step of the pass that follows. The 3_600_000 ms deliberately bypasses <see cref="PlayerbotOptions.Validate"/>'s 50..60000 range
+    /// (the host's options object is mutated after validation). The "no fight" half rests on nothing being near the bot, which the step checks
+    /// instead of assuming: it does not hold (the step returns false and is retried) while any live creature is within
+    /// <see cref="HostileFreeRadius"/> yards, far beyond any creature's aggro range, so no creature can aggro the bot between the step and the pass.
+    /// The options are the host's own and the test never gives the interval back: the host is disposed when the test ends.
+    /// </summary>
+    private static Task SetBotWhenFreeAndHoldItsThinksAsync(PopulationTestHost world, Guid bot, byte level, uint zone) => world.Host.WaitForWorldAsync(() =>
+    {
+        if (world.Bots.FindSession(bot)?.Player is not { IsInWorld: true } player) return false;
+        if (!player.IsAlive || player.Combat.IsInCombat || PopulationProvisioner.IsInTransit(player)) return false;
+        if (world.Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player)) return false;
+        if (player.Map?.FindUpdater<ArcaneCore.Game.Creatures.CreatureMapSystem>()?.Creatures.Any(c =>
+            {
+                float dx = c.X - player.X, dy = c.Y - player.Y;
+                return c.IsAlive && (dx * dx) + (dy * dy) <= HostileFreeRadius * HostileFreeRadius;
+            }) == true) return false;
+        player.Level = level;
+        player.ZoneId = zone;
+        world.Options.ThinkIntervalMs = 3_600_000;
+        return true;
+    }, "the bot is free to be moved again");
+
+    /// <summary>Yards around the bot that hold no live creature when its thinks are held (a creature's aggro range is 18 yards by default).</summary>
+    private const float HostileFreeRadius = 60f;
 
     private sealed class TestPlacementVeto : IPopulationPlacementVeto
     {
