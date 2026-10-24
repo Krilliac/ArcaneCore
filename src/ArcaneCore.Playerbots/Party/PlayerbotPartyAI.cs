@@ -666,9 +666,11 @@ internal sealed class PlayerbotPartyAI
                 bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || TradeAllowed(player, speaker);
                 if (trusted)
                 {
-                    _tradePartner = speaker.Guid;
-                    _tradeCounts = false;
-                    Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false);
+                    if (Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false))
+                    {
+                        _tradePartner = speaker.Guid; // only a window this bot really asked for
+                        _tradeCounts = false;
+                    }
                 }
                 return;
             }
@@ -886,7 +888,7 @@ internal sealed class PlayerbotPartyAI
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
                 break;
-            case 3 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
+            case 0 or 3 or 5 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
                 // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;

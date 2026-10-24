@@ -25,7 +25,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Party;
 /// </summary>
 public sealed class PlayerbotPartyTradeTests
 {
-    private const uint GreyEntry = 995_001, CheapEntry = 995_002, WorthEntry = 995_003, RichEntry = 995_004, HalfEntry = 995_005, BotItemEntry = 995_006;
+    private const uint GreyEntry = 995_001, CheapEntry = 995_002, WorthEntry = 995_003, RichEntry = 995_004, HalfEntry = 995_005, BotItemEntry = 995_006, BootsEntry = 995_007;
 
     // The vendor sell value at which a gift counts as a trade for the bot's memory: the GiftMinValueCopper default of the design (section 5).
     private const uint GiftMinValueCopper = 100;
@@ -71,6 +71,7 @@ public sealed class PlayerbotPartyTradeTests
                 Template(RichEntry, "Tradetest Rich", 5_000),
                 Template(HalfEntry, "Tradetest Half", GiftMinValueCopper / 2, stackable: 20),
                 Template(BotItemEntry, "Tradetest Botitem", 500),
+                PlayerbotEquipmentTests.Template(BootsEntry, InventoryType.Feet, 70),
             ]);
             SocialWorld world;
             using (items.Use())
@@ -251,6 +252,24 @@ public sealed class PlayerbotPartyTradeTests
         Assert.Equal(0u, await scene.CountAsync(MasterName, RichEntry));
     }
 
+    /// <summary>A gift of gear that is an upgrade is worn: the status 4 and 8 paths still run the equipment pass after the trade-safety change.</summary>
+    [Fact]
+    public async Task AMastersGiftOfAnUpgrade_IsWorn()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddMasterAsync();
+        byte[] offer = await scene.GiveAsync(MasterName, BootsEntry);
+        await scene.OpenWindowAsync(scene.Master!, MasterName);
+        await scene.Master!.SendAsync(WorldOpcode.CmsgSetTradeItem, offer);
+        await scene.AcceptAsync(scene.Master);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(MasterName).Result is { Exists: false }, "the gift to complete");
+        await scene.WaitForBotToSeeCompletionAsync();
+
+        await HelpTestKit.UntilAsync(() => scene.World.Host.OnWorldAsync(() =>
+            HelpTestKit.Online(scene.World, BotName).Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)?.Entry == BootsEntry).Result, "the bot to wear the gift");
+        Assert.Equal(1u, await scene.CountAsync(BotName, BootsEntry));
+    }
+
     /// <summary>
     /// Affinity from the party AI's trade note (<c>TradeCompleted</c>, +AffinityPerTrade): a worthless gift gave the junk-gift farm its affinity.
     /// Now only a gift worth at least <c>GiftMinValueCopper</c> of vendor value counts, summed over the stack. The boundary is the design's default (100).
@@ -301,6 +320,40 @@ public sealed class PlayerbotPartyTradeTests
 
         Assert.Equal(0, scene.AcceptsSent);
         Assert.Equal(before, await scene.AffinityAsync(scene.MasterGuid));
+    }
+
+    /// <summary>
+    /// A bot-initiated window ("trade me") the partner bounces with CMSG_BUSY_TRADE is forgotten like any other close: a later completion the party AI
+    /// did not open (a tip where the bot gives gold) must not credit that player.
+    /// </summary>
+    [Fact]
+    public async Task ABotInitiatedWindow_AnsweredWithBusy_IsForgotten_ALaterCompletionGivesNoAffinity()
+    {
+        await using Scene scene = await Scene.StartAsync(chat: true);
+        await scene.AddStrangerAsync();
+        await HelpTestKit.StandAsync(scene.World, BotName, (StrangerName, 2f));
+
+        await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
+        await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgBusyTrade, []);
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(scene.World).NoteById(scene.Bot, scene.BotGuid, scene.StrangerGuid, PlayerbotSocialEvent.ChatExchange));
+        int before = await scene.AffinityAsync(scene.StrangerGuid);
+
+        // Window two is not the party AI's: the bot opens it itself, as a tip would, and puts gold on its side. The stale partner would make the
+        // party AI count it on the stranger's accept and credit it on completion.
+        var initiate = new PacketWriter(8);
+        initiate.WriteUInt64(scene.StrangerGuid.Value);
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgInitiateTrade, initiate.ToArray()));
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result.Opened, "the second window to open");
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgSetTradeGold, Gold(5)));
+        await scene.AcceptAsync(scene.Stranger);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false } or { PlayerAccepted: true }, "the stranger's accept to reach the server");
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgAcceptTrade, Gold(1)));
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the tip window to complete");
+        await scene.WaitForBotToSeeCompletionAsync();
+
+        Assert.Equal(before, await scene.AffinityAsync(scene.StrangerGuid));
     }
 
     /// <summary>A trade that gives the bot nothing (an empty window) is not a trade for its memory.</summary>
