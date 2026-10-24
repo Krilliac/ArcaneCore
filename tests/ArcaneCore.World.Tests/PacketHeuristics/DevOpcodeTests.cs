@@ -385,6 +385,37 @@ public sealed class DevOpcodeTests
     }
 
     [Fact]
+    public async Task APlayerAccountInGmMode_IsTreatedAsStaff_AuditedWithNoFinding()
+    {
+        var dev = new DevOpcodeTracker();
+        await using var host = WorldTestHost.Start(configureServices: c => c.AddSingleton(dev));
+        (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVGMM", "Devgmmode");
+        await using (client)
+        {
+            using AnomalyCapture capture = ledger.Capture();
+            GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+            Player player = await host.PlayerAsync("Devgmmode");
+            Assert.False(session.IsHeuristicsStaff);
+
+            await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
+            await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet: the session learns the GM mode on dispatch
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+            Assert.True(session.HeuristicsGmMode);
+            Assert.True(session.IsHeuristicsStaff);
+
+            await client.SendAsync(WorldOpcode.CmsgGodmode, Junk);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            string name = WorldOpcodeNames.GetName(WorldOpcode.CmsgGodmode);
+            Assert.Single(audit.Tail(1000), e => e.Command == "dev-opcode " + name && e.AccountId == session.AccountId);
+            Assert.DoesNotContain(capture.Notices, n => n.Key == Key);
+            Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.DevOpcode));
+            Assert.Equal(1, dev.Total);
+        }
+    }
+
+    [Fact]
     public async Task AFloodOfOneDevOpcode_IsCountedInFull_ButReportedAndLoggedOncePerInterval()
     {
         long now = 1_000_000;

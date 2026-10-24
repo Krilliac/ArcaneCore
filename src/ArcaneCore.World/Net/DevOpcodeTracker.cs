@@ -32,6 +32,7 @@ public sealed class DevOpcodeTracker
     /// <summary>The process-wide instance: the one the daemon registers, the one a session uses when its container has none, and the one the metric reads.</summary>
     public static DevOpcodeTracker Shared { get; } = new();
 
+    // Never read: creating the instrument at type initialisation is the side effect that registers the metric (as in UnhandledOpcodeTracker).
     private static readonly ObservableCounter<long> Metric = ArcaneMeters.Net.CreateObservableCounter(
         MetricName, ObserveShared, "{packet}", "Stripped developer, GM and cheat opcodes a client sent that were dropped unread, by protocol, opcode and traffic kind.");
 

@@ -32,8 +32,8 @@ public sealed partial class WorldSession
     private void DropDevOpcode(WorldOpcode opcode, int length)
     {
         string name = WorldOpcodeNames.GetName(opcode);
-        // The same staff predicate as PacketHeuristicsFeature.Admit (a managed non-bot session, a moderator or above, or a session in GM mode), so the audit branch and the ledger traffic class never disagree.
-        bool staff = !IsPlayerbot && !HeuristicsToolPacket && (IsManaged || Security >= Kernel.Accounts.AccountSecurity.Moderator || HeuristicsGmMode);
+        // The same predicate PacketHeuristicsFeature.Admit uses, so the audit branch and the ledger traffic class never disagree.
+        bool staff = IsHeuristicsStaff;
         _devOpcodes.Record(opcode, staff ? PacketTraffic.Staff : HeuristicsToolPacket ? PacketTraffic.Tool : IsPlayerbot ? PacketTraffic.Bot : PacketTraffic.Player);
         if (staff)
         {
@@ -51,7 +51,7 @@ public sealed partial class WorldSession
 
             Services.GetService<GmAuditFeature>()?.RecordCommand(AccountId, playerName, "dev-opcode " + name, line);
             // Benign race: two dispatch threads may each create a logger for the same category; either is valid and the loser is dropped.
-            _devAuditLog ??=Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? _logger;
+            _devAuditLog ??= Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? _logger;
             _devAuditLog.LogInformation("{Line}", line);
             return;
         }

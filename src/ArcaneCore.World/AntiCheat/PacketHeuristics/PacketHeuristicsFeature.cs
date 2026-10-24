@@ -170,7 +170,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
                 return false;
             }
         }
-        else if (session.IsManaged || session.Security >= AccountSecurity.Moderator || session.HeuristicsGmMode)
+        else if (session.IsHeuristicsStaff)
         {
             traffic = PacketTraffic.Staff;
             if (settings.ExemptStaff)
