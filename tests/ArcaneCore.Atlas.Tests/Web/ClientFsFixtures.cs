@@ -587,6 +587,18 @@ internal static class ClientFsFixtures
             return copy;
         }
 
+        // The block's data is a verbatim copy placed after the declared archive end: inside the file, so only archiveSize rejects it.
+        byte[] BlockBeyondDeclaredArchive()
+        {
+            int dataStart = 0x20;
+            int dataEnd = (int)Math.Min(hashOffset, blockOffset);
+            byte[] copy = Block(0, (uint)good.Length);
+            byte[] extended = new byte[copy.Length + (dataEnd - dataStart)];
+            copy.CopyTo(extended, 0);
+            good.AsSpan(dataStart, dataEnd - dataStart).CopyTo(extended.AsSpan(good.Length));
+            return extended;
+        }
+
         string[] archive = ["bad-archive"];
         string[] either = ["bad-archive", "bad-file"];
         string[] file = ["bad-file"];
@@ -604,6 +616,7 @@ internal static class ClientFsFixtures
         coded["not-an-mpq"] = (Enumerable.Repeat((byte)0x5A, 4096).ToArray(), archive, "magic");
         coded["block-size-beyond-archive"] = (Block(1, 0x7FFFFF00), either, "block offset + compressedSize inside the archive");
         coded["block-offset-beyond-archive"] = (Block(0, (uint)good.Length + 0x1000), either, "block offset inside the archive");
+        coded["block-beyond-declared-archive"] = (BlockBeyondDeclaredArchive(), either, "block offset + compressedSize inside the header's archiveSize");
         coded["file-size-over-64MiB"] = (Block(2, (64u << 20) + 1), either, "fileSize <= 64 MiB");
         coded["file-size-4GiB-1"] = (Block(2, 0xFFFFFFFF), either, "fileSize <= 64 MiB");
         coded["sector-offsets-not-monotonic"] = (SectorTable(2, BinaryPrimitives.ReadUInt32LittleEndian(good.AsSpan(0x20 + 4)) - 1), file, "sector offsets monotonic");

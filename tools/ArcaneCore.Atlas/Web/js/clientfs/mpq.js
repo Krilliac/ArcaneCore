@@ -370,6 +370,8 @@ export async function openArchive(blob, { name = '' } = {}) {
     const { position, hashCount, blockCount } = header;
     const sectorSize = 0x200 << header.shift;
     // Version 0 offsets are 32-bit and wrap (StormLib); version 1 offsets are 48-bit.
+    // Block data must also lie inside the end the header declares (when it declares one), not merely inside the file.
+    const dataLimit = header.archiveSize !== 0 ? Math.min(size, position + header.archiveSize) : size;
     const absolute = (offset) => (header.version === 0 ? (position + offset) % TWO32 : position + offset);
 
     const hashRaw = await readRange(blob, absolute(header.hashOffset), hashCount * 16, name);
@@ -464,7 +466,7 @@ export async function openArchive(blob, { name = '' } = {}) {
             throw badFile(`${tag} stores ${csize} bytes (limit ${LIMITS.maxFileBytes}).`);
         }
         const start = absolute(offset);
-        if (start + csize > size) {
+        if (start + csize > dataLimit) {
             throw badFile(`${tag}: ${csize} bytes at 0x${start.toString(16)} lie outside the ${size}-byte archive.`);
         }
         const encrypted = (flags & FLAG_ENCRYPTED) !== 0;
@@ -567,7 +569,7 @@ export async function openArchive(blob, { name = '' } = {}) {
             const fileSize = bSize[block];
             const csize = bCompressed[block];
             const start = absolute(bOffset[block]);
-            if (fileSize > LIMITS.maxFileBytes || csize > LIMITS.maxFileBytes || start + csize > size) {
+            if (fileSize > LIMITS.maxFileBytes || csize > LIMITS.maxFileBytes || start + csize > dataLimit) {
                 bump('damaged');
                 continue;
             }

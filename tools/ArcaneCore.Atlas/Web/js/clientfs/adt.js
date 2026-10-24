@@ -619,6 +619,12 @@ async function loadDirectory(chain) {
             return { maps, areas, problem: map.missing ?? map.rejected ?? area.missing ?? area.rejected ?? null, rejected: Boolean(map.rejected ?? area.rejected) };
         })();
         tables.set(chain, loaded);
+        // A rejected load (a thrown read, not a refused table, which resolves with a problem) must not be remembered for the chain.
+        loaded.catch(() => {
+            if (tables.get(chain) === loaded) {
+                tables.delete(chain);
+            }
+        });
     }
     return loaded;
 }

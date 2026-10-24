@@ -219,6 +219,7 @@ test('mpq.js refuses every malformed archive with a typed error inside the worke
 
     const cases = fx.manifest.malformedArchives;
     assert.ok(cases.length >= 20, `only ${cases.length} malformed archives`);
+    assert.ok(cases.some((c) => c.name === 'block-beyond-declared-archive'), 'the archiveSize block-bound case is part of the set');
     for (const c of cases) {
         const started = performance.now();
         await refuses(async () => {
@@ -450,6 +451,22 @@ test('adt.js builds a tile from the archive chain with Api.tile states', async (
         assert.equal(noMap.state, 'Missing', 'a map id Map.dbc does not list has no terrain');
     }
     await refuses(() => buildTile(chain, 'tiles', 0, 33, 31), 'unknown-layer', 'a layer the client files do not build');
+});
+
+test('adt.js does not remember a rejected Map.dbc/AreaTable.dbc load for the chain', async () => {
+    const fx = loadFixtures();
+    const { openChain } = await clientfs('mpq');
+    const { buildTile } = await clientfs('adt');
+    const names = ['dbc.MPQ', 'terrain.MPQ', 'patch.MPQ', 'patch-2.MPQ'];
+    const real = await openChain(names.map((name) => ({ name, blob: fx.blob(fx.manifest.archives[name].file) })));
+    let failures = 1;
+    const chain = Object.create(real, {
+        read: { value: async (p) => { if (failures-- > 0) { throw new Error('transient read failure'); } return real.read(p); } },
+    });
+    const tile = fx.manifest.tiles[0];
+    await assert.rejects(() => buildTile(chain, fx.manifest.layers.terrain, tile.map, tile.x, tile.y), /transient read failure/);
+    const again = await buildTile(chain, fx.manifest.layers.terrain, tile.map, tile.x, tile.y);
+    assert.equal(again.state, 'Ok', 'the second request retries instead of replaying the cached rejection');
 });
 
 // ==================================================================================================================
@@ -762,6 +779,155 @@ test('store.js default cache budget is 2 GiB capped by the storage estimate', as
     assert.equal(defaultCacheBudget({ quota: 2 * GiB }), 2 * GiB);
     assert.equal(defaultCacheBudget({ quota: GiB }), GiB);
     assert.equal(defaultCacheBudget({ quota: 0 }), 0);
+});
+
+/** An in-memory OPFS (just what OpfsCache calls); `stats.listings` counts directory scans, `stats.gate` holds every writable.close(). */
+function mockOpfs() {
+    const stats = { listings: 0, gate: null };
+    let clock = 1_000;
+    const missing = () => Object.assign(new Error('not found'), { name: 'NotFoundError' });
+    const makeDirectory = () => {
+        const files = new Map();
+        const describe = (file) => ({ size: file.data.byteLength, lastModified: file.time, arrayBuffer: async () => file.data.slice().buffer });
+        return {
+            files,
+            kind: 'directory',
+            async *entries() {
+                stats.listings++;
+                for (const [name, file] of [...files]) {
+                    yield [name, { kind: 'file', getFile: async () => describe(file) }];
+                }
+            },
+            async getFileHandle(name, { create = false } = {}) {
+                if (!files.has(name)) {
+                    if (!create) {
+                        throw missing();
+                    }
+                    files.set(name, { data: new Uint8Array(0), time: ++clock });
+                }
+                const file = files.get(name);
+                return {
+                    kind: 'file',
+                    getFile: async () => describe(file),
+                    createWritable: async () => {
+                        let pending = null;
+                        return {
+                            write: async (bytes) => { pending = new Uint8Array(bytes); },
+                            close: async () => {
+                                await stats.gate;
+                                file.data = pending;
+                                file.time = ++clock;
+                            },
+                        };
+                    },
+                };
+            },
+            async removeEntry(name) {
+                if (!files.delete(name)) {
+                    throw missing();
+                }
+            },
+        };
+    };
+    const directories = new Map();
+    const root = {
+        async getDirectoryHandle(name, { create = false } = {}) {
+            if (!directories.has(name)) {
+                if (!create) {
+                    throw missing();
+                }
+                directories.set(name, makeDirectory());
+            }
+            return directories.get(name);
+        },
+        async removeEntry(name) {
+            if (!directories.delete(name)) {
+                throw missing();
+            }
+        },
+    };
+    const names = (directory) => [...(directories.get(directory)?.files.keys() ?? [])];
+    return { stats, root, names };
+}
+
+async function withOpfs(body) {
+    const opfs = mockOpfs();
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { storage: { getDirectory: async () => opfs.root } } });
+    try {
+        await body(opfs);
+    } finally {
+        if (saved) {
+            Object.defineProperty(globalThis, 'navigator', saved);
+        } else {
+            delete globalThis.navigator;
+        }
+    }
+}
+
+test('store.js OpfsCache serialises concurrent writes, keeps the byte count exact and never re-lists the directory', async () => {
+    const { OpfsCache, CACHE_DIRECTORY } = await clientfs('store');
+    await withOpfs(async (opfs) => {
+        const cache = new OpfsCache(() => 250);
+        const results = await Promise.all(Array.from({ length: 8 }, (_, i) => cache.set(`k${i}`, new Uint8Array(100).fill(i))));
+        assert.deepEqual(results, Array(8).fill(true));
+        assert.equal(opfs.names(CACHE_DIRECTORY).length, 2, 'only two 100-byte entries fit 250 bytes');
+        assert.equal(await cache.size(), 200);
+        assert.equal(opfs.stats.listings, 0, 'the directory did not exist at the first scan and is never listed again, however many writes hit the budget');
+        assert.ok(await cache.get('k7'), 'the newest write survives');
+        assert.ok(await cache.get('k6'));
+        assert.equal(await cache.get('k0'), null, 'the oldest write was evicted first');
+        // Rewriting an entry replaces its size and makes it the newest.
+        await cache.set('k6', new Uint8Array(40));
+        assert.equal(await cache.size(), 140);
+        await cache.set('k9', new Uint8Array(120)); // 140 + 120 > 250
+        assert.equal(await cache.get('k7'), null, 'k7 is now the oldest write');
+        assert.ok(await cache.get('k6'));
+        // A fresh instance rebuilds the same count from the directory.
+        const again = new OpfsCache(() => 250);
+        assert.equal(await again.size(), 160);
+        assert.equal(opfs.stats.listings, 1, 'a fresh instance scans the existing directory once');
+    });
+});
+
+test('store.js OpfsCache.set drops a write whose folder was forgotten while it was in flight', async () => {
+    const { OpfsCache, CACHE_DIRECTORY } = await clientfs('store');
+    await withOpfs(async (opfs) => {
+        const cache = new OpfsCache(() => 1000);
+        const heldWrite = async (isCurrent, queueClear) => {
+            let release;
+            opfs.stats.gate = new Promise((resolve) => { release = resolve; });
+            const write = cache.set('tile', new Uint8Array(64), isCurrent);
+            const cleared = queueClear ? cache.clear() : Promise.resolve(); // Forget folder's clear, queued behind the write
+            while (opfs.names(CACHE_DIRECTORY).length === 0) {
+                await new Promise((resolve) => setTimeout(resolve, 1)); // the write has reached its (held) close
+            }
+            return { write, cleared, release: () => { opfs.stats.gate = null; release(); } };
+        };
+
+        // Forget (the generation bump plus clear) lands inside the write window.
+        let current = true;
+        const first = await heldWrite(() => current, true);
+        current = false;
+        first.release();
+        assert.equal(await first.write, false);
+        await first.cleared;
+        assert.deepEqual(opfs.names(CACHE_DIRECTORY), [], 'nothing may remain after Forget');
+        assert.equal(await cache.size(), 0);
+
+        // The guard alone also removes a write that finished after the generation moved on.
+        let still = true;
+        const second = await heldWrite(() => still, false);
+        still = false;
+        second.release();
+        assert.equal(await second.write, false);
+        assert.deepEqual(opfs.names(CACHE_DIRECTORY), []);
+        assert.equal(await cache.size(), 0);
+
+        // A write that starts after the generation moved on never touches OPFS.
+        assert.equal(await cache.set('tile3', new Uint8Array(8), () => false), false);
+        assert.deepEqual(opfs.names(CACHE_DIRECTORY), []);
+    });
 });
 
 test('pool.js sizes the worker pool min(4, hardwareConcurrency - 1)', async () => {

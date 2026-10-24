@@ -201,14 +201,22 @@ function pickFolder() {
     return Promise.resolve();
 }
 
+/** Never rejects: the dialog closes whatever IndexedDB says, and a choice that could not be stored is surfaced as model.error. */
 async function skip() {
-    if (model.state === 'none') {
-        await dbPut('meta', META_KEY, { choice: 'skipped' });
+    const remember = model.state === 'none';
+    if (remember) {
         model.state = 'skipped';
     }
     declined = true;
     closeDialog();
     resolveWaiters(false);
+    if (remember) {
+        try {
+            await dbPut('meta', META_KEY, { choice: 'skipped' });
+        } catch (error) {
+            model.error = `Could not remember the choice: ${error?.message ?? error}`;
+        }
+    }
 }
 
 function closeDialog() {
@@ -281,13 +289,15 @@ export async function showFirstEntryDialogIfNeeded() {
 // ---- settings ------------------------------------------------------------------------------------------------------
 let forgetting = null; // the running Forget folder, awaited by init() so a status read never sees the half-deleted store
 
+/** Returns the real outcome; `forgetting` (awaited by init) is the same run with the rejection swallowed so a failure cannot break a status read. */
 function forget() {
-    const run = forgetNow().finally(() => {
-        if (forgetting === run) {
+    const run = forgetNow();
+    const settled = run.then(() => undefined, () => undefined).then(() => {
+        if (forgetting === settled) {
             forgetting = null;
         }
     });
-    forgetting = run;
+    forgetting = settled;
     return run;
 }
 
@@ -335,7 +345,11 @@ export async function openClientFilesSettings() {
             openClientFilesDialog();
             pickFolder();
         },
-        onForget: () => { forget(); },
+        onForget: () => {
+            forget().catch((error) => {
+                model.error = `Could not forget the folder: ${error?.message ?? error}`;
+            });
+        },
         onBudget: (bytes, budgetLabel) => {
             model.budget = Math.max(0, Math.min(bytes, model.quota ?? bytes));
             budgetLabel.textContent = label(model.budget);
@@ -417,6 +431,7 @@ function waitForFiles() {
     return new Promise((resolve) => waiters.push(resolve));
 }
 
+/** The cache-owned result (shared by every caller of the same tile); localTileProvider copies the body once per caller. */
 async function buildOrLoad(layer, map, x, y) {
     const started = generation; // Forget folder bumps it; a result from before that must not be cached under the old folder's key
     const forgotten = () => started !== generation;
@@ -425,7 +440,7 @@ async function buildOrLoad(layer, map, x, y) {
     const hot = lru.get(key);
     if (hot !== undefined) {
         model.cacheHits++;
-        return { state: hot.state, detail: hot.detail, body: hot.body.slice(0) };
+        return hot;
     }
     const stored = await opfs.get(key).catch(() => null);
     if (forgotten()) {
@@ -435,7 +450,7 @@ async function buildOrLoad(layer, map, x, y) {
         const result = decodeResult(stored);
         lru.set(key, result, result.body.byteLength);
         model.cacheHits++;
-        return { state: result.state, detail: result.detail, body: result.body.slice(0) };
+        return result;
     }
 
     if (!await waitForFiles()) {
@@ -461,9 +476,10 @@ async function buildOrLoad(layer, map, x, y) {
     const result = { state: tile.state, detail: tile.detail, body: envelope(tile.parts) };
     if (CACHEABLE.has(result.state)) {
         lru.set(liveKey, result, result.body.byteLength);
-        await opfs.set(liveKey, encodeResult(result)).catch(() => false);
+        // The generation is re-checked inside the cache after its last await, so a Forget folder in the write window leaves nothing.
+        await opfs.set(liveKey, encodeResult(result), () => !forgotten()).catch(() => false);
     }
-    return { state: result.state, detail: result.detail, body: result.body.slice(0) };
+    return result;
 }
 
 /** Rejects as soon as the signal aborts; the shared job keeps running for other callers and its late result is dropped. */

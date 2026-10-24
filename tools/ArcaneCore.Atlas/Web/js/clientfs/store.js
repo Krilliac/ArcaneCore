@@ -100,10 +100,19 @@ export const opfsAvailable = () => typeof navigator !== 'undefined' && typeof na
  */
 export class OpfsCache {
     #budget;
-    #bytes = null;
+    #bytes = 0;
+    #index = null; // file name -> size, in write order (oldest first); null until the directory has been scanned once
+    #queue = Promise.resolve(); // every mutation runs through this chain, one at a time
 
     constructor(budget) {
         this.#budget = budget;
+    }
+
+    /** Runs `task` after every earlier mutation has settled; a failed task does not poison the chain. */
+    #serial(task) {
+        const run = this.#queue.then(task);
+        this.#queue = run.then(() => undefined, () => undefined);
+        return run;
     }
 
     async #directory(create) {
@@ -121,20 +130,32 @@ export class OpfsCache {
         }
     }
 
-    /** Total bytes stored (scanned once, then tracked). */
-    async size() {
-        if (this.#bytes === null) {
-            this.#bytes = 0;
-            const directory = await this.#directory(false);
-            if (directory !== null) {
-                for await (const [, handle] of directory.entries()) {
-                    if (handle.kind === 'file') {
-                        this.#bytes += (await handle.getFile()).size;
-                    }
+    /** Scans the directory once into the write-ordered index; later writes and evictions keep it current without listing. */
+    async #load() {
+        if (this.#index !== null) {
+            return;
+        }
+        const found = [];
+        const directory = await this.#directory(false);
+        if (directory !== null) {
+            for await (const [name, handle] of directory.entries()) {
+                if (handle.kind === 'file') {
+                    const file = await handle.getFile();
+                    found.push({ name, size: file.size, time: file.lastModified });
                 }
             }
         }
-        return this.#bytes;
+        found.sort((x, y) => x.time - y.time);
+        this.#index = new Map(found.map((f) => [f.name, f.size]));
+        this.#bytes = found.reduce((n, f) => n + f.size, 0);
+    }
+
+    /** Total bytes stored (scanned once, then tracked). */
+    size() {
+        return this.#serial(async () => {
+            await this.#load();
+            return this.#bytes;
+        });
     }
 
     /** @returns {Promise<Uint8Array|null>} the stored bytes, or null on a miss */
@@ -154,64 +175,91 @@ export class OpfsCache {
         }
     }
 
-    /** Stores `bytes` under `key` unless it alone exceeds the budget; evicts the oldest entries beyond the budget. */
-    async set(key, bytes) {
-        const budget = this.#budget();
-        if (!opfsAvailable() || bytes.byteLength > budget) {
-            return false;
-        }
-        await this.size();
-        const directory = await this.#directory(true);
-        const name = `${await digestName(key)}.bin`;
-        const handle = await directory.getFileHandle(name, { create: true });
-        const previous = (await handle.getFile()).size;
-        const writable = await handle.createWritable();
-        await writable.write(bytes);
-        await writable.close();
-        this.#bytes += bytes.byteLength - previous;
-        await this.enforce(budget, name);
-        return true;
+    /**
+     * Stores `bytes` under `key` unless it alone exceeds the budget; evicts the oldest entries beyond the budget. Writes, evictions
+     * and clear() are serialised. `isCurrent` is asked before the write and again after its last await: when it answers false
+     * (the folder was forgotten meanwhile) nothing stays behind and false is returned.
+     */
+    set(key, bytes, isCurrent = () => true) {
+        return this.#serial(async () => {
+            const budget = this.#budget();
+            if (!opfsAvailable() || bytes.byteLength > budget || !isCurrent()) {
+                return false;
+            }
+            await this.#load();
+            const directory = await this.#directory(true);
+            const name = `${await digestName(key)}.bin`;
+            const handle = await directory.getFileHandle(name, { create: true });
+            const writable = await handle.createWritable();
+            await writable.write(bytes);
+            await writable.close();
+            this.#bytes += bytes.byteLength - (this.#index.get(name) ?? 0);
+            this.#index.delete(name); // re-inserted last: the index stays ordered by write time
+            this.#index.set(name, bytes.byteLength);
+            if (!isCurrent()) {
+                await this.#remove(directory, name);
+                return false;
+            }
+            await this.#enforce(budget, name, directory);
+            return true;
+        });
     }
 
-    /** Deletes the least recently written entries until the cache fits `budget`. */
-    async enforce(budget = this.#budget(), keep = null) {
-        if (await this.size() <= budget) {
+    async #remove(directory, name) {
+        const size = this.#index.get(name) ?? 0;
+        try {
+            await directory.removeEntry(name);
+        } catch (error) {
+            if (error?.name !== 'NotFoundError') {
+                throw error;
+            }
+        }
+        this.#index.delete(name);
+        this.#bytes -= size;
+    }
+
+    async #enforce(budget, keep, directory) {
+        if (this.#bytes <= budget) {
             return;
         }
-        const directory = await this.#directory(false);
+        directory ??= await this.#directory(false);
         if (directory === null) {
             return;
         }
-        const files = [];
-        for await (const [name, handle] of directory.entries()) {
-            if (handle.kind === 'file' && name !== keep) {
-                const file = await handle.getFile();
-                files.push({ name, size: file.size, time: file.lastModified });
-            }
-        }
-        files.sort((a, b) => a.time - b.time);
-        for (const file of files) {
+        for (const name of [...this.#index.keys()]) {
             if (this.#bytes <= budget) {
                 break;
             }
-            await directory.removeEntry(file.name);
-            this.#bytes -= file.size;
+            if (name !== keep) {
+                await this.#remove(directory, name);
+            }
         }
     }
 
-    /** Removes the directory and everything in it. */
-    async clear() {
-        if (opfsAvailable()) {
-            const root = await navigator.storage.getDirectory();
-            try {
-                await root.removeEntry(CACHE_DIRECTORY, { recursive: true });
-            } catch (error) {
-                if (error?.name !== 'NotFoundError') {
-                    throw error;
+    /** Deletes the least recently written entries until the cache fits `budget`. */
+    enforce(budget = this.#budget(), keep = null) {
+        return this.#serial(async () => {
+            await this.#load();
+            await this.#enforce(budget, keep, null);
+        });
+    }
+
+    /** Removes the directory and everything in it (after the writes already queued). */
+    clear() {
+        return this.#serial(async () => {
+            if (opfsAvailable()) {
+                const root = await navigator.storage.getDirectory();
+                try {
+                    await root.removeEntry(CACHE_DIRECTORY, { recursive: true });
+                } catch (error) {
+                    if (error?.name !== 'NotFoundError') {
+                        throw error;
+                    }
                 }
             }
-        }
-        this.#bytes = 0;
+            this.#index = new Map();
+            this.#bytes = 0;
+        });
     }
 }
 
