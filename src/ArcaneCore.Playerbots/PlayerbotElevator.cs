@@ -559,12 +559,12 @@ internal static class PlayerbotElevator
     /// <summary>The bot's trip, done or not (inspection and tests).</summary>
     internal static ElevatorTrip? TripOf(Player player) => Trips.TryGetValue(player, out ElevatorTrip? trip) ? trip : null;
 
-    /// <summary>The trips under way (not done, not failed) of the players in the world (inspection: <c>.playerbot lift</c>).</summary>
-    internal static IEnumerable<(Player Player, ElevatorTrip Trip)> ActiveTrips()
+    /// <summary>The trips under way (not done, not failed) of the players online in <paramref name="world"/> (inspection: <c>.playerbot lift</c>).</summary>
+    internal static IEnumerable<(Player Player, ElevatorTrip Trip)> ActiveTrips(WorldRuntime world)
     {
         foreach (KeyValuePair<Player, ElevatorTrip> pair in Trips)
         {
-            if (pair.Key.IsInWorld && pair.Value.Stage is not (ElevatorStage.Done or ElevatorStage.Failed))
+            if (pair.Key.IsInWorld && ReferenceEquals(world.FindOnlinePlayer(pair.Key.Guid), pair.Key) && pair.Value.Stage is not (ElevatorStage.Done or ElevatorStage.Failed))
             {
                 yield return (pair.Key, pair.Value);
             }

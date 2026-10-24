@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -19,17 +20,17 @@ internal sealed record ElevatorTripInfo(
     string? Failure)
 {
     /// <summary>
-    /// The lift rides under way (not done, not failed) of the bots in the world, ordered by bot name. Times are measured at <paramref name="nowMs"/>
+    /// The lift rides under way (not done, not failed) of the bots online in <paramref name="world"/>, ordered by bot name. Times are measured
     /// on the world clock. World thread; changes nothing.
     /// </summary>
-    internal static IReadOnlyList<ElevatorTripInfo> Active(uint nowMs)
+    internal static IReadOnlyList<ElevatorTripInfo> Active(WorldRuntime world)
     {
         var rows = new List<ElevatorTripInfo>();
-        foreach ((Player player, ElevatorTrip trip) in PlayerbotElevator.ActiveTrips())
+        foreach ((Player player, ElevatorTrip trip) in PlayerbotElevator.ActiveTrips(world))
         {
             rows.Add(new ElevatorTripInfo(
                 player.Name, trip.Lift.Name, trip.Stage, trip.From, trip.To,
-                trip.Car?.Entry, trip.Car?.SpawnGuid, unchecked(nowMs - trip.StageMs), unchecked(nowMs - trip.BeganMs),
+                trip.Car?.Entry, trip.Car?.SpawnGuid, unchecked(world.NowMs - trip.StageMs), unchecked(world.NowMs - trip.BeganMs),
                 trip.Route is not null, trip.Alighting, trip.MissedStops, trip.Failure));
         }
 

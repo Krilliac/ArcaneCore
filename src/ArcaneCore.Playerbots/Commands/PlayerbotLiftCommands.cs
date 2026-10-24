@@ -37,7 +37,7 @@ public sealed class PlayerbotLiftCommands : ICommandExtension
             return false;
         }
 
-        IReadOnlyList<ElevatorTripInfo> trips = ElevatorTripInfo.Active(context.World.NowMs);
+        IReadOnlyList<ElevatorTripInfo> trips = ElevatorTripInfo.Active(context.World);
         if (name is null)
         {
             foreach (ElevatorTripInfo trip in trips)
