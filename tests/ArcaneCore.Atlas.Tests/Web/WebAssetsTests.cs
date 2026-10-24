@@ -166,6 +166,8 @@ public sealed class WebAssetsTests(ITestOutputHelper output)
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         queue.Enqueue("js/main.js");
+        queue.Enqueue("js/clientfs/index.js"); // the client-file reader is wired in by the page shell
+        queue.Enqueue("js/clientfs/worker.js"); // started with new Worker(), not imported
         while (queue.Count > 0)
         {
             string file = queue.Dequeue();
