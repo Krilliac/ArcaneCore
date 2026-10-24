@@ -59,12 +59,19 @@ public sealed class PlayerbotQuestChainEndToEndTests
                     feature.Options.OrdinaryRewardQuestIds = [783, 7];
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.False(goals.HasCandidate(player));
+                    Assert.False(feature.Services.IsRewardable(15));
                     feature.Options.OrdinaryRewardQuestIds = [783, 7, 15];
-                    session.ManagedBudget = new ManagedActionBudget(1);
-                    goals.Update(player, 500);
-                    session.ManagedBudget = new ManagedActionBudget(1);
-                    goals.Update(player, 500);
-                    Assert.Equal(QuestStatus.Incomplete, feature.Services.StateOf(player)!.Quests.Get(15)!.Status);
+                    // The starter search is gated by a wall-clock phase budget, so a stalled think (GC, preemption)
+                    // may defer the accept to the next think. Bound by think count, not time.
+                    var state = feature.Services.StateOf(player)!;
+                    for (int think = 0; think < 6 && state.Quests.Get(15) is not { Status: QuestStatus.Incomplete }; think++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        goals.Update(player, 500);
+                    }
+                    QuestStatusData? accepted = state.Quests.Get(15);
+                    Assert.NotNull(accepted);
+                    Assert.Equal(QuestStatus.Incomplete, accepted.Status);
                     InstallHumanBonus(host.WorldServices.GetRequiredService<SpellFeature>().System, player);
                     for (uint i = 0; i < 10; i++)
                         feature.Services.KilledMonsterCredit(player, 257, ObjectGuid.WithEntry(HighGuid.Unit, 257, i + 1));
