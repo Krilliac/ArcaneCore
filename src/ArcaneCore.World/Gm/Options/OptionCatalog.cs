@@ -46,8 +46,9 @@ public sealed class OptionKey
     internal OptionKey(
         string path, string description, OptionType type, OptionApplyClass apply, string group, Func<OptionScope, object?> get,
         Func<OptionScope, object, OptionActor, string?>? set, double min = double.NaN, double max = double.NaN, bool secret = false,
-        IReadOnlyList<string>? choices = null, IReadOnlyList<string>? aliases = null, OptionTracking? tracking = null)
+        IReadOnlyList<string>? choices = null, IReadOnlyList<string>? aliases = null, OptionTracking? tracking = null, string? configPath = null)
     {
+        ConfigPath = configPath ?? path;
         Path = path;
         Description = description;
         Type = type;
@@ -65,6 +66,12 @@ public sealed class OptionKey
 
     /// <summary>The configuration path (<c>World:Maps:GridUnload</c>) or the vmangos name (<c>Rate.XP.Kill</c>).</summary>
     public string Path { get; }
+
+    /// <summary>
+    /// The path the configuration providers know the option by (<c>Progression:RateXpKill</c> for <c>Rate.XP.Kill</c>); the same as
+    /// <see cref="Path"/> except for a rate. Empty when no configuration key is known for the option.
+    /// </summary>
+    public string ConfigPath { get; }
 
     /// <summary>What the option does.</summary>
     public string Description { get; }

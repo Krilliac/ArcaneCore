@@ -269,7 +269,8 @@ public sealed class ServerConfigCommands : ICommandExtension
             OptionStatus status = catalog.Describe(scope, key);
             string source = status.Overridden
                 ? "overridden at runtime"
-                : ConfigSources.Locate(root, key.Path) is { } provider ? ConfigSources.Describe(provider) : "built-in default";
+                : key.ConfigPath.Length == 0 ? "no configuration key known"
+                : ConfigSources.Locate(root, key.ConfigPath) is { } provider ? ConfigSources.Describe(provider) : "built-in default";
             rows.Add($"{key.Path}: {source}");
         }
 

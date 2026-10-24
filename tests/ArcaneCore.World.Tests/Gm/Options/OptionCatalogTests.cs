@@ -1,4 +1,5 @@
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Gm.ServerConfig;
 using ArcaneCore.World.OptionKeys;
@@ -71,6 +72,18 @@ public sealed class OptionCatalogTests
         Assert.Same(catalog.Find("Locomotion:PlayerRunSpeedRate"), catalog.Find("movement.run"));
         Assert.All(catalog.Keys.Where(k => k.Apply == OptionApplyClass.Restart), k => Assert.False(k.Writable));
         Assert.All(catalog.Keys.Where(k => k.Writable), k => Assert.NotEqual(OptionApplyClass.Restart, k.Apply));
+    }
+
+    [Fact]
+    public async Task EveryRate_NamesARealConfigurationKey_ForTheSourcesListing()
+    {
+        await using var host = WorldTestHost.Start();
+        OptionKey[] rates = await host.OnWorldAsync(() => OptionCatalog.Create(Scope(host)).Keys.Where(k => k.Group == "Rates").ToArray());
+
+        Assert.NotEmpty(rates);
+        Assert.Equal("Progression:RateXpKill", rates.Single(k => k.Path == "Rate.XP.Kill").ConfigPath);
+        Assert.All(rates, k => Assert.True(ConfCatalog.Embedded.Find(k.ConfigPath) is not null, $"{k.Path} -> '{k.ConfigPath}' is not a configuration key"));
+        Assert.Equal(rates.Length, rates.Select(k => k.ConfigPath).Distinct().Count());
     }
 
     [Fact]

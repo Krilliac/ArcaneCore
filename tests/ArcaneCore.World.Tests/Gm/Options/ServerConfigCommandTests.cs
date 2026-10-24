@@ -1,6 +1,8 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Rates;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm.ConfigEditor;
@@ -172,5 +174,21 @@ public sealed class ServerConfigCommandTests
         Assert.Contains("World:Maps:GridUnload = ", dump, StringComparison.Ordinal);
         Assert.StartsWith("Syntax: .server config dump", await RunAsync(admin, ".server config dump"), StringComparison.Ordinal);
         Assert.Contains("no option path starts with", await RunAsync(admin, ".server config dump Nope:"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Sources_NamesTheProviderThatSetsARate_ByItsConfigurationPath()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Progression:RateXpKill"] = "3" })
+            .Build();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(configuration));
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+
+        string sources = await RunAsync(admin, ".server config sources Rate.XP.Kill");
+
+        Assert.Contains("Rate.XP.Kill: Memory", sources, StringComparison.Ordinal);
+        Assert.Contains("Rate.XP.Kill.Elite: built-in default", sources, StringComparison.Ordinal);
     }
 }

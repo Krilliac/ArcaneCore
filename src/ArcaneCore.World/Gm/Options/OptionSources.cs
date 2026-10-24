@@ -258,8 +258,70 @@ internal static class OptionSources
                 (s, actor) => ServerRates.For(s.World).Reset(RateScopeOf(s), rate, actor));
             keys.Add(new OptionKey(
                 rate.Name, rate.Description, OptionType.Number, rate.AppliesTo == "live" ? OptionApplyClass.Live : OptionApplyClass.NextLoad, RatesGroup, get, set,
-                min: rate.Min, max: rate.Max, aliases: aliases, tracking: tracking));
+                min: rate.Min, max: rate.Max, aliases: aliases, tracking: tracking, configPath: RateConfigPath(rate.Name) ?? string.Empty));
         }
+    }
+
+    /// <summary>
+    /// The configuration key a rate is bound from (<c>Progression:RateXpKill</c> for <c>Rate.XP.Kill</c>); null when the name is not a known rate.
+    /// A rate that scales two options (<c>Rate.Drop.Money</c>) answers for the first one.
+    /// </summary>
+    internal static string? RateConfigPath(string name)
+    {
+        const string dropItem = "Rate.Drop.Item.";
+        const string creature = "Rate.Creature.";
+        if (name.StartsWith(dropItem, StringComparison.Ordinal))
+        {
+            return $"Loot:DropItem{name[dropItem.Length..]}Rate";
+        }
+
+        if (name.StartsWith(creature, StringComparison.Ordinal) && name != "Rate.Creature.Aggro")
+        {
+            string[] parts = name[creature.Length..].Split('.');
+            string stat = parts[^1] switch { "HP" => "Hp", var other => other };
+            string? rank = string.Join('.', parts[..^1]) switch
+            {
+                "Normal" => "Normal",
+                "Elite.Elite" => "Elite",
+                "Elite.RAREELITE" => "RareElite",
+                "Elite.WORLDBOSS" => "WorldBoss",
+                "Elite.RARE" => "Rare",
+                _ => null,
+            };
+            return rank is null ? null : $"Creatures:Rates:{rank}{stat}";
+        }
+
+        return name switch
+        {
+            "Rate.XP.Kill" => "Progression:RateXpKill",
+            "Rate.XP.Kill.Elite" => "Progression:RateXpKillElite",
+            "Rate.XP.Quest" => "Quests:RateXpQuest",
+            "Rate.XP.Explore" => "World:Exploration:RateXp",
+            "Rate.XP.Personal.Min" => "Progression:RateXpPersonalMin",
+            "Rate.XP.Personal.Max" => "Progression:RateXpPersonalMax",
+            "Rate.Rest.InGame" => "Rest:RateInGame",
+            "Rate.Rest.Offline.InTavernOrCity" => "Rest:RateOfflineInTavernOrCity",
+            "Rate.Rest.Offline.InWilderness" => "Rest:RateOfflineInWilderness",
+            "Rate.Reputation.Gain" => "Reputation:RateGain",
+            "Rate.Reputation.LowLevel.Kill" => "Reputation:RateLowLevelKill",
+            "Rate.Honor" => "World:Honor:Rate",
+            "Rate.Talent" => "Talents:PointsRate",
+            "Rate.Health" => "Combat:RateHealth",
+            "Rate.Mana" => "Combat:RateMana",
+            "Rate.Rage.Income" => "Combat:RateRageIncome",
+            "Rate.Rage.Loss" => "Combat:RateRageLoss",
+            "Rate.Energy" => "Combat:RateEnergy",
+            "Rate.Damage.Fall" => "Locomotion:RateDamageFall",
+            "Rate.Drop.Money" => "Loot:MoneyRate",
+            "Rate.Corpse.Decay.Looted" => "Loot:LootedCorpseDecayRate",
+            "Rate.Mining.Amount" => "GameObjects:MiningAmountRate",
+            "Rate.Mining.Next" => "GameObjects:MiningNextRate",
+            "Rate.Auction.Time" => "Economy:AuctionRateTime",
+            "Rate.Auction.Deposit" => "Economy:AuctionRateDeposit",
+            "Rate.Auction.Cut" => "Economy:AuctionRateCut",
+            "Rate.Creature.Aggro" => "Creatures:AggroRate",
+            _ => null,
+        };
     }
 
     private static object? Canonical(float? value)
