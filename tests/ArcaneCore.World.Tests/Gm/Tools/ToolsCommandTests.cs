@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Metrics;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
@@ -125,6 +126,23 @@ public sealed class ToolsCommandTests
         string[] botthink = await RunAsync(gm, ".debug botthink 3");
         Assert.Contains(botthink, l => l.StartsWith("Playerbot think: ", StringComparison.Ordinal));
         Assert.Contains(await RunAsync(gm, ".debug botthink 0"), l => l.StartsWith("Syntax:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BotThink_ShowsTheSlowThinkSubjectCountAsAFloor_WhenTheLedgerSaturated()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("TOOLSBT", "Toolsbt", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        // More distinct bots than the ledger tracks: its count stops at MaxTrackedSubjects, so "across 256 bot(s)" would read as exact.
+        // The command reads the process-wide ledger and takes no key or ledger, so this pollution of bot-brain/think-slow is intended
+        // (other think-slow tests filter by subject through Capture).
+        for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects + 20; i++)
+            AnomalyLedger.Shared.Report("bot-brain", "think-slow", $"bot Saturated{i} (ToolsCommandTests)", "slow think");
+
+        string[] lines = await RunAsync(gm, ".debug botthink 3");
+        string summary = Assert.Single(lines, l => l.StartsWith("  slow thinks (bot-brain/think-slow): ", StringComparison.Ordinal));
+        Assert.EndsWith($" total across >={AnomalyLedger.MaxTrackedSubjects} bot(s)", summary);
     }
 
     private static uint[] DoorData()
