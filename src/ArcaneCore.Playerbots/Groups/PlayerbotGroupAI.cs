@@ -309,7 +309,24 @@ internal sealed class PlayerbotGroupAI
         _risk.Track(player);
         PlayerbotNavigation.Guard(player, null); // a group goes where its leader goes; the leader chose the way
 
-        // A wiping group gets out: back the way it came, past the creatures' leash (the solo retreat).
+        // A wiped group inside its dungeon leaves through the exit: instanceable maps have no soft leash (CreatureMapSystem.IsOutOfThreatArea is
+        // false there, as in vmangos), so trash that is still alive keeps its target for good and a leash-based retreat only gets out if its
+        // straight line happens to cross the exit trigger. Checked every think, so a member revived at the landing and pulled again leaves too.
+        if (group.State == PlayerbotGroupState.Wiped && player.Combat.IsInCombat && player.MapId == group.Goal.MapId
+            && WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
+            && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } wipeExit)
+        {
+            StopAttacking(player);
+            _risk.Retreat.Stop("instance-exit");
+            _target = null;
+            _attacking = false;
+            Goal = PlayerbotGoalKind.Retreat;
+            Step = WalkTo(player, new Vector3(wipeExit.X, wipeExit.Y, wipeExit.Z), interval, toward: true) ? "wipe:run-exit" : "wipe:no-path-exit";
+            return;
+        }
+
+        // A wiping group gets out: back the way it came, past the creatures' leash (the solo retreat). In an instance with an exit the block
+        // above takes the bot out instead; this is the open world's way (and an instance with no exit trigger).
         if (_risk.UpdateRetreat(player, interval))
         {
             Step = "retreat";

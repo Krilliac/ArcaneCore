@@ -119,6 +119,53 @@ public sealed class PlayerbotRunClearWorldTests
         }
     }
 
+    /// <summary>
+    /// Dungeon trash never leashes (CreatureMapSystem.IsOutOfThreatArea is false in an instanceable map), so a wiped group's leash-based retreat
+    /// can run in a line that misses the exit trigger and be chased for good. The survivors here start south of the exit box, where the way
+    /// straight away from the pack does not cross it: they must walk out through the exit instead.
+    /// </summary>
+    [Fact]
+    public async Task AWipeInsideTheInstance_SurvivorsLeaveThroughTheExit_EvenWhenTheWayAwayMissesIt()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        (Guid Id, string Name)[] bots = await AddParty(world, resurrection: true);
+        PlayerbotGroupCoordinator.BotGroup group = await StartRun(world, bots);
+        PlayerbotRunMachine run = group.Run!;
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(120_000, () =>
+        {
+            Creature[] trash = Pack(world, bots[0].Id);
+            return trash.Length == 3 && trash.Count(c => !c.IsAlive) >= 1 && trash.Any(c => c.IsAlive);
+        }), await world.TraceAsync());
+        (Guid Id, string Name)[] survivors = [.. bots.Skip(3)];
+        await world.OnWorldAsync(() =>
+        {
+            Creature[] live = [.. Pack(world, bots[0].Id).Where(c => c.IsAlive)];
+            foreach ((Guid id, string _) in survivors)
+            {
+                Player survivor = world.Player(id);
+                survivor.Relocate(-2f, -16f, -15.5288f, 0f, world.World.Host.World.NowMs);
+                foreach (Creature c in live) survivor.Map!.Combat.DealDamage(c, survivor, 1, direct: false);
+                Assert.True(survivor.IsAlive);
+            }
+
+            foreach ((Guid id, string _) in bots.Take(3))
+            {
+                Player victim = world.Player(id);
+                victim.Map!.Combat.DealDamage(live[0], victim, victim.Health, direct: false);
+                Assert.False(victim.IsAlive);
+            }
+
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(5_000, () => run.Step == PlayerbotRunStep.Wiped), await world.TraceAsync());
+
+        // The exit is a few yards away and the trash hits for 2-3 every 2 s: both survivors are out, alive and out of combat, long before they
+        // could die (a survivor chased east by the leash retreat is still inside, in combat, at this point).
+        Assert.True(await world.RunUntilPacedAsync(() => survivors.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat), 30_000), await world.TraceAsync());
+        Assert.True(await world.RunUntilPacedAsync(() => run.Step == PlayerbotRunStep.Retry, 180_000, TimeSpan.FromSeconds(240)), await world.TraceAsync());
+    }
+
     private static async Task<GroupTestWorld> StartAsync()
         => await GroupTestWorld.StartAsync([], options =>
         {
