@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
+using ArcaneCore.World.Locomotion;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,17 +18,18 @@ internal static class LegacyOptionSources
     private const string RatesGroup = "Rates";
 
     /// <summary>The <c>.movement set</c> field of a player speed rate key (<c>movement.run</c>), null for any other key.</summary>
-    internal static string? MovementAlias(string path) => path switch
+    internal static string? MovementAlias(string path)
     {
-        "Locomotion:PlayerSpeedRate" => "movement.speedrate",
-        "Locomotion:PlayerRunSpeedRate" => "movement.run",
-        "Locomotion:PlayerRunBackSpeedRate" => "movement.runback",
-        "Locomotion:PlayerSwimSpeedRate" => "movement.swim",
-        "Locomotion:PlayerSwimBackSpeedRate" => "movement.swimback",
-        "Locomotion:PlayerWalkSpeedRate" => "movement.walk",
-        "Locomotion:PlayerTurnRate" => "movement.turn",
-        _ => null,
-    };
+        foreach ((string field, string rowPath, _, _) in MovementRateCommands.Fields)
+        {
+            if (rowPath.Equals(path, StringComparison.OrdinalIgnoreCase))
+            {
+                return "movement." + field;
+            }
+        }
+
+        return null;
+    }
 
     private static RateScope RateScopeOf(OptionScope scope) => new(scope.Services, scope.World, scope.Logger);
 

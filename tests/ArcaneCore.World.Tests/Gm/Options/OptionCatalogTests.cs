@@ -1,7 +1,9 @@
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Gm.ServerConfig;
+using ArcaneCore.World.Locomotion;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
@@ -320,32 +322,62 @@ public sealed class OptionCatalogTests
     }
 
     [Fact]
-    public async Task ExternalChanges_OfTheAliasCommands_AreTrackedAndResettable()
+    public async Task TheAliasNames_ReachTheSameKeysAsThePaths_SoTheOldVerbsSetThroughTheCatalog()
     {
         await using var host = WorldTestHost.Start();
-        (bool changedByAlias, bool overridden, bool reset, bool restored) = await host.OnWorldAsync(() =>
+        (bool sameKey, bool changedByAlias, bool overridden, bool reset, bool restored) = await host.OnWorldAsync(() =>
         {
             OptionScope scope = Scope(host);
             AntiCheatFeature feature = host.WorldServices.GetRequiredService<AntiCheatFeature>();
             bool original = feature.Options.Enabled;
-            OptionCatalog.TrackExternal(scope, "anticheat.enabled", "Tester", () =>
-            {
-                AntiCheatOptions copy = feature.Options.Clone();
-                copy.Enabled = !original;
-                feature.ApplyOptions(copy);
-            });
             var catalog = OptionCatalog.Create(scope);
-            OptionKey key = catalog.Find("AntiCheat:Enabled")!;
+            OptionKey key = catalog.Find("anticheat.enabled")!;
+            bool same = ReferenceEquals(key, catalog.Find("AntiCheat:Enabled"));
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, key, (!original).ToString(), Tester, out _, out _, out _));
             bool changed = feature.Options.Enabled != original;
             bool isOverridden = catalog.Describe(scope, key).Overridden;
             bool wasReset = catalog.Reset(scope, key, "Tester");
-            return (changed, isOverridden, wasReset, feature.Options.Enabled == original);
+            return (same, changed, isOverridden, wasReset, feature.Options.Enabled == original);
         });
 
+        Assert.True(sameKey);
         Assert.True(changedByAlias);
         Assert.True(overridden);
         Assert.True(reset);
         Assert.True(restored);
+    }
+
+    [Fact]
+    public async Task EveryMovementSetField_ResolvesToACatalogKey_ThatReadsTheValueTheFieldReads()
+    {
+        await using var host = WorldTestHost.Start();
+        (string[] missing, string[] wrongValue) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            var catalog = OptionCatalog.Create(scope);
+            LocomotionOptions options = LocomotionEnvironment.RegisteredOptions(host.World)!;
+            var none = new List<string>();
+            var wrong = new List<string>();
+            foreach ((string field, string path, Func<LocomotionOptions, float> get, _) in MovementRateCommands.Fields)
+            {
+                OptionKey? key = catalog.Find("movement." + field);
+                if (key is null)
+                {
+                    none.Add(field); // a new .movement set field needs its WorldConfigKeys entry
+                    continue;
+                }
+
+                if (key.Path != path || Math.Abs(Convert.ToDouble(catalog.Describe(scope, key).Current, System.Globalization.CultureInfo.InvariantCulture) - get(options)) > 1e-6)
+                {
+                    wrong.Add(field);
+                }
+            }
+
+            return (none.ToArray(), wrong.ToArray());
+        });
+
+        Assert.Empty(missing);
+        Assert.Empty(wrongValue);
     }
 
     [Fact]

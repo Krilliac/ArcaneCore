@@ -13,8 +13,10 @@ namespace ArcaneCore.World.Gm.ServerConfig;
 /// GameMaster may list, get and diff; an Administrator may set, reset, dump and list the sources, because one set changes the game for
 /// everyone at once. Restart-only keys are shown but read-only. A set lasts until <c>.reload config</c> or a restart (until a restart for
 /// the PacketHeuristics and pack keys, which the reload does not touch) and is never written to a configuration file (to keep a value, edit the file). Every run is in the GM command audit (<c>CommandTable.Execute</c>) and every set
-/// and reset is logged with old and new value, actor and reason. <c>.rates set</c>, <c>.anticheat set</c>, <c>.movement set</c> and
-/// <c>.packetcheck</c> stay and change the same values (they report their changes to the catalog, so <c>diff</c> sees them).
+/// and reset is logged with old and new value, actor and reason. A set and a reset change global state, so they are queued with
+/// <c>World.Post</c> (serial, at the start of the next tick) and reply from inside it. <c>.rates set</c>, <c>.anticheat set</c>,
+/// <c>.movement set</c> and <c>.packetcheck on|off|bots|staff</c> stay and run the same set (<see cref="PostSet"/>), so the old and the new
+/// command cannot diverge and <c>diff</c> sees what they change.
 /// </summary>
 public sealed class ServerConfigCommands : ICommandExtension
 {
@@ -54,6 +56,36 @@ public sealed class ServerConfigCommands : ICommandExtension
     ];
 
     internal static OptionScope ScopeOf(CommandContext context) => new(context.Session.Services, context.World, context.Session.Logger);
+
+    /// <summary>What <see cref="PostSet"/> hands back: the key (null when the name matches none), the result, and the texts of <see cref="OptionCatalog.TrySet"/>.</summary>
+    internal readonly record struct SetOutcome(OptionKey? Key, OptionSetResult Result, string Error, string Before, string After);
+
+    /// <summary>
+    /// Sets the option <paramref name="name"/> (a path or alias) to the typed <paramref name="value"/> in <c>World.Post</c>, where the catalog is
+    /// built for what runs then, and hands the outcome to <paramref name="done"/>, which replies. This is the one set path: <c>.server config set</c>
+    /// and the old <c>set</c> commands call it. A name that matches no key gives a null <see cref="SetOutcome.Key"/> and <see cref="OptionSetResult.NotAvailable"/>.
+    /// </summary>
+    internal static void PostSet(CommandContext context, string name, string value, string? reason, Action<SetOutcome> done)
+    {
+        OptionScope scope = ScopeOf(context);
+        var actor = new OptionActor(context.InvokerName, reason);
+        IDisposable hold = context.Defer(); // a console or remote invoker waits for the reply before it reports the command done
+        context.World.Post(() =>
+        {
+            using (hold)
+            {
+                var catalog = OptionCatalog.Create(scope);
+                if (catalog.Find(name) is not { } key)
+                {
+                    done(new SetOutcome(null, OptionSetResult.NotAvailable, $"{name} is not available: the feature that owns it is not running", string.Empty, string.Empty));
+                    return;
+                }
+
+                OptionSetResult result = catalog.TrySet(scope, key, value, actor, out string error, out string before, out string after);
+                done(new SetOutcome(key, result, error, before, after));
+            }
+        });
+    }
 
     /// <summary>Splits a trailing <c>page #n</c> off <paramref name="text"/>; false when the number is not a positive integer.</summary>
     internal static bool TryPage(ref string text, out int page)
@@ -166,24 +198,23 @@ public sealed class ServerConfigCommands : ICommandExtension
         }
 
         string? reason = args.IsEmpty ? null : args.Rest.Trim();
-        OptionScope scope = ScopeOf(context);
-        OptionCatalog catalog = OptionCatalog.Create(scope);
-        if (catalog.Find(name) is not { } key)
+        PostSet(context, name, value, reason, outcome =>
         {
-            context.Reply($".server config set: unknown option '{name}'. .server config list shows the names.");
-            return true;
-        }
-
-        OptionSetResult result = catalog.TrySet(scope, key, value, new OptionActor(context.InvokerName, reason), out string error, out string before, out string after);
-        if (result != OptionSetResult.Ok)
-        {
-            context.Reply($".server config set: {error}.");
-            return true;
-        }
-
-        string lasts = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path) ? "until .reload config or restart" : "until restart";
-        context.Reply($"Option {key.Path}: {before} -> {after} ({lasts}; not saved to any file)."
-            + (key.Apply == OptionApplyClass.NextLoad ? " Applies to what is created or loaded afterwards." : string.Empty));
+            if (outcome.Key is not { } key)
+            {
+                context.Reply($".server config set: unknown option '{name}'. .server config list shows the names.");
+            }
+            else if (outcome.Result != OptionSetResult.Ok)
+            {
+                context.Reply($".server config set: {outcome.Error}.");
+            }
+            else
+            {
+                string lasts = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path) ? "until .reload config or restart" : "until restart";
+                context.Reply($"Option {key.Path}: {outcome.Before} -> {outcome.After} ({lasts}; not saved to any file)."
+                    + (key.Apply == OptionApplyClass.NextLoad ? " Applies to what is created or loaded afterwards." : string.Empty));
+            }
+        });
         return true;
     }
 
@@ -196,28 +227,34 @@ public sealed class ServerConfigCommands : ICommandExtension
             return false;
         }
 
+        // Like a set, a reset changes global state: it runs in World.Post and replies from inside it.
         OptionScope scope = ScopeOf(context);
-        OptionCatalog catalog = OptionCatalog.Create(scope);
-        if (name is null || name.Equals("all", StringComparison.OrdinalIgnoreCase))
+        string actor = context.InvokerName;
+        IDisposable hold = context.Defer();
+        context.World.Post(() =>
         {
-            int count = catalog.ResetAll(scope, context.InvokerName);
-            context.Reply(count == 0 ? "No option is overridden." : $"{count} option(s) back to their baseline values.");
-            return true;
-        }
-
-        if (catalog.Find(name) is not { } key)
-        {
-            context.Reply($".server config reset: unknown option '{name}'. .server config list shows the names.");
-            return true;
-        }
-
-        if (!catalog.Reset(scope, key, context.InvokerName))
-        {
-            context.Reply($"{key.Path} is not overridden.");
-            return true;
-        }
-
-        context.Reply($"{key.Path} is back to its baseline value {key.Format(catalog.Describe(scope, key).Current)}.");
+            using (hold)
+            {
+                OptionCatalog catalog = OptionCatalog.Create(scope);
+                if (name is null || name.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    int count = catalog.ResetAll(scope, actor);
+                    context.Reply(count == 0 ? "No option is overridden." : $"{count} option(s) back to their baseline values.");
+                }
+                else if (catalog.Find(name) is not { } key)
+                {
+                    context.Reply($".server config reset: unknown option '{name}'. .server config list shows the names.");
+                }
+                else if (!catalog.Reset(scope, key, actor))
+                {
+                    context.Reply($"{key.Path} is not overridden.");
+                }
+                else
+                {
+                    context.Reply($"{key.Path} is back to its baseline value {key.Format(catalog.Describe(scope, key).Current)}.");
+                }
+            }
+        });
         return true;
     }
 

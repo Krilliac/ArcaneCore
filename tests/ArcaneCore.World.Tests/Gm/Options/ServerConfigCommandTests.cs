@@ -1,5 +1,8 @@
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -154,6 +157,74 @@ public sealed class ServerConfigCommandTests
 
         Assert.StartsWith("2 option(s) back", await RunAsync(admin, ".server config reset all"), StringComparison.Ordinal);
         Assert.Equal(2f, await host.OnWorldAsync(() => host.WorldServices.GetService(typeof(ArcaneCore.World.AntiCheat.AntiCheatFeature)) is ArcaneCore.World.AntiCheat.AntiCheatFeature f ? f.Options.DecayPerSecond : -1f));
+    }
+
+    [Fact]
+    public async Task TheOldSetVerbs_ParseAndRefuseLikeTheEditor_SoTheTwoPathsCannotDiverge()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+
+        // A number where the editor wants a name: the old verb used to accept it, the one parser does not.
+        Assert.StartsWith("AntiCheat: cannot set 'action' to '2'", await RunAsync(admin, ".anticheat set action 2"), StringComparison.Ordinal);
+        Assert.Contains("is not one of", await RunAsync(admin, ".server config set anticheat.action 2"), StringComparison.Ordinal);
+
+        // A value of the right type that the settings together refuse: the owner's own text, behind the same prefix as before.
+        string refusedByVerb = await RunAsync(admin, ".anticheat set kick 1");
+        string refusedByEditor = await RunAsync(admin, ".server config set anticheat.kick 1");
+        Assert.StartsWith("AntiCheat: refused: ", refusedByVerb, StringComparison.Ordinal);
+        Assert.Contains(refusedByVerb["AntiCheat: refused: ".Length..].TrimEnd('.'), refusedByEditor, StringComparison.Ordinal);
+
+        string tooFast = await RunAsync(admin, ".movement set run 11");
+        Assert.Contains("out of range", tooFast, StringComparison.Ordinal);
+        Assert.Contains("must be between 0.1 and 10", tooFast, StringComparison.Ordinal);
+        Assert.Contains("must be between 0.1 and 10", await RunAsync(admin, ".server config set movement.run 11"), StringComparison.Ordinal);
+        Assert.Equal(1f, (await host.OnWorldAsync(() => LocomotionEnvironment.RegisteredOptions(host.World)))!.PlayerRunSpeedRate);
+
+        Assert.StartsWith("No option is overridden", await RunAsync(admin, ".server config diff"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ASet_RunsInWorldPost_NotInline_AndKeepsAConsoleCommandOpenUntilItReplied()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+        int original = host.World.Options.AutosaveIntervalMs;
+        var replies = new List<string>();
+
+        (CommandContext context, int inline, bool settledEarly) = await host.OnWorldAsync(() =>
+        {
+            CommandTable table = ChatCommands.CreateTable();
+            CommandContext ctx = CommandContext.ForConsole(session, table, replies.Add);
+            Assert.True(table.Resolve("server config set", AccountSecurity.Administrator)!.Handler!(ctx, $"World:AutosaveIntervalMs {original + 7}"));
+            int seen = host.World.Options.AutosaveIntervalMs;
+            return (ctx, seen, ctx.WhenSettled.IsCompleted);
+        });
+        context.Complete();
+        await context.WhenSettled.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(original, inline); // queued, not applied inside the handler
+        Assert.False(settledEarly); // the console command stayed open for the posted reply
+        Assert.Equal(original + 7, host.World.Options.AutosaveIntervalMs);
+        Assert.StartsWith($"Option World:AutosaveIntervalMs: {original} -> {original + 7}", Assert.Single(replies), StringComparison.Ordinal);
+
+        replies.Clear();
+        (CommandContext reset, int stillSet) = await host.OnWorldAsync(() =>
+        {
+            CommandTable table = ChatCommands.CreateTable();
+            CommandContext ctx = CommandContext.ForConsole(session, table, replies.Add);
+            Assert.True(table.Resolve("server config reset", AccountSecurity.Administrator)!.Handler!(ctx, "World:AutosaveIntervalMs"));
+            return (ctx, host.World.Options.AutosaveIntervalMs);
+        });
+        reset.Complete();
+        await reset.WhenSettled.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(original + 7, stillSet);
+        Assert.Equal(original, host.World.Options.AutosaveIntervalMs);
+        Assert.Equal($"World:AutosaveIntervalMs is back to its baseline value {original}.", Assert.Single(replies));
     }
 
     [Fact]

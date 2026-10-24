@@ -7,7 +7,9 @@ namespace ArcaneCore.World.Gm.ServerConfig;
 /// The overrides made through <c>.server config</c> (and the alias commands that route into it) for one world: for each changed key the
 /// value it had before the first change (the baseline <c>reset</c> puts back), the value set, who set it and why. A key that tracks its
 /// own override (the rates) is not stored here. <c>.reload config</c> drops the entries of the keys it puts back (<see cref="EndsAtReload"/>); an
-/// entry whose key no longer holds the value that was set (another path changed it) is dropped when next looked at. Thread affinity: world thread only; no locking.
+/// entry whose key no longer holds the value that was set (another path changed it) is stale: reads ignore it and the next change of
+/// that key drops it. Thread affinity: world thread, no locking. Set and reset are posted (<c>World.Post</c>, serial at tick
+/// start, so they stay safe even if the Packets stage is ever run in parallel); a read never writes.
 /// </summary>
 public sealed class OptionOverrides
 {
@@ -24,7 +26,7 @@ public sealed class OptionOverrides
         return s_perWorld.GetValue(world, static _ => new OptionOverrides());
     }
 
-    /// <summary>How many keys are overridden (stale entries may still be counted until looked at).</summary>
+    /// <summary>How many keys are overridden (a stale entry is counted until its key is next changed).</summary>
     public int Count => _entries.Count;
 
     internal Entry? Find(string path) => _entries.GetValueOrDefault(path);

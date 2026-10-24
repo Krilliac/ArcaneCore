@@ -92,7 +92,7 @@ public sealed class PacketHeuristicsCommandTests
     }
 
     [Fact]
-    public async Task TheConsoleRoute_RunsTheSameCommand()
+    public async Task TheConsoleRoute_RunsTheSameCommand_ThroughThePostedSet()
     {
         await using var host = WorldTestHost.Start();
         PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
@@ -100,14 +100,19 @@ public sealed class PacketHeuristicsCommandTests
         await using (client)
         {
             var replies = new List<string>();
-            await host.OnWorldAsync(() =>
+            bool enabledBefore = feature.Settings.Enabled;
+            (CommandContext context, bool appliedInline) = await host.OnWorldAsync(() =>
             {
                 CommandTable table = ChatCommands.CreateTable();
-                CommandContext context = CommandContext.ForConsole(session, table, replies.Add);
+                CommandContext ctx = CommandContext.ForConsole(session, table, replies.Add);
                 ChatCommand command = table.Resolve("packetcheck on", AccountSecurity.Administrator)!;
-                Assert.True(command.Handler!(context, string.Empty));
+                Assert.True(command.Handler!(ctx, string.Empty));
+                return (ctx, feature.Settings.Enabled != enabledBefore); // the set is queued with World.Post: it cannot have run yet
             });
+            context.Complete();
+            await context.WhenSettled.WaitAsync(TimeSpan.FromSeconds(30)); // the command is open until the posted set has replied
 
+            Assert.False(appliedInline);
             Assert.True(feature.Settings.Enabled);
             Assert.StartsWith("Packet heuristics: ON", replies[0], StringComparison.Ordinal);
             Assert.Equal(StatusLineCount, replies.Count);

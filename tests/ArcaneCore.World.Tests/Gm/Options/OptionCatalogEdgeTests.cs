@@ -413,38 +413,47 @@ public sealed class OptionCatalogEdgeTests
     }
 
     [Fact]
-    public async Task TrackExternal_RunsTheChangeForAnUnknownPath_KeepsTheFirstBaseline_AndDropsAReturn()
+    public async Task AReadNeverWritesTheStore_AStaleOverrideIsIgnored_AndTheNextChangeStartsFromTheValueThenInForce()
     {
         await using var host = WorldTestHost.Start();
-        (bool ranUnknown, long baseline, int overridesAfterReturn) = await host.OnWorldAsync(() =>
+        (bool staleShown, int storeAfterRead, long freshBaseline, int diffAfterReturn) = await host.OnWorldAsync(() =>
         {
             OptionScope scope = Scope(host);
-            bool ran = false;
-            OptionCatalog.TrackExternal(scope, "No:Such:Key", "Tester", () => ran = true);
-
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey key = catalog.Find("World:AutosaveIntervalMs")!;
             int original = host.World.Options.AutosaveIntervalMs;
-            OptionCatalog.TrackExternal(scope, "World:AutosaveIntervalMs", "Tester", () => host.World.Options.AutosaveIntervalMs = original + 1);
-            OptionCatalog.TrackExternal(scope, "autosaveintervalms", "Tester", () => host.World.Options.AutosaveIntervalMs = original + 2);
-            long first = (long)OptionOverrides.For(host.World).Find("World:AutosaveIntervalMs")!.Baseline;
-            Assert.Equal(original, (int)first);
-            OptionCatalog.TrackExternal(scope, "World:AutosaveIntervalMs", "Tester", () => host.World.Options.AutosaveIntervalMs = original);
-            return (ran, first - original, OptionCatalog.Create(scope).Diff(scope).Count);
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, key, (original + 1).ToString(), Tester, out _, out _, out _));
+
+            host.World.Options.AutosaveIntervalMs = original + 5; // another path changed the key: the entry is stale
+            bool shown = catalog.Describe(scope, key).Overridden;
+            int count = OptionOverrides.For(host.World).Count;
+
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, key, (original + 9).ToString(), Tester, out _, out _, out _));
+            long baseline = (long)OptionOverrides.For(host.World).Find(key.Path)!.Baseline;
+            host.World.Options.AutosaveIntervalMs = original;
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, key, original.ToString(), Tester, out _, out _, out _));
+            return (shown, count, baseline - original, catalog.Diff(scope).Count);
         });
 
-        Assert.True(ranUnknown);
-        Assert.Equal(0, baseline);
-        Assert.Equal(0, overridesAfterReturn);
+        Assert.False(staleShown);
+        Assert.Equal(1, storeAfterRead);
+        Assert.Equal(5, freshBaseline);
+        Assert.Equal(0, diffAfterReturn);
     }
 
     [Fact]
-    public async Task TrackExternal_DoesNotSwallowAnExceptionOfTheChange()
+    public async Task ARateSetThroughTheEditor_IsLoggedOnce_ByTheRatesOwn()
     {
         await using var host = WorldTestHost.Start();
-        InvalidOperationException ex = await host.OnWorldAsync(() =>
-            Assert.Throws<InvalidOperationException>(() => OptionCatalog.TrackExternal(Scope(host), "World:AutosaveIntervalMs", "Tester", () => throw new InvalidOperationException("boom"))));
+        var logger = new CapturingLogger();
+        await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = new(host.WorldServices, host.World, logger);
+            var catalog = OptionCatalog.Create(scope);
+            Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, catalog.Find("Rate.XP.Kill")!, "2", Tester, out _, out _, out _));
+        });
 
-        Assert.Equal("boom", ex.Message);
-        Assert.Equal(0, await host.OnWorldAsync(() => OptionCatalog.Create(Scope(host)).Diff(Scope(host)).Count));
+        Assert.Single(logger.Lines, l => l.Contains("Rate.XP.Kill", StringComparison.Ordinal));
     }
 
     [Fact]

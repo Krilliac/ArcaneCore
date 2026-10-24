@@ -26,7 +26,7 @@ public sealed class OptionCatalog
 {
     private readonly Dictionary<string, OptionKey> _byName;
 
-    private OptionCatalog(IReadOnlyList<OptionKey> keys, int skipped, IReadOnlyList<string> conflicts)
+    private OptionCatalog(IReadOnlyList<OptionKey> keys, int skipped, List<string> conflicts)
     {
         Keys = keys;
         Skipped = skipped;
@@ -41,7 +41,10 @@ public sealed class OptionCatalog
         {
             foreach (string alias in key.Aliases)
             {
-                _byName.TryAdd(alias, key);
+                if (!_byName.TryAdd(alias, key) && !ReferenceEquals(_byName[alias], key))
+                {
+                    conflicts.Add(alias);
+                }
             }
         }
     }
@@ -52,7 +55,7 @@ public sealed class OptionCatalog
     /// <summary>How many reload keys hold a structured value (a list, a table) that cannot be typed in one line; they are left out.</summary>
     public int Skipped { get; }
 
-    /// <summary>Path or alias collisions between sources (the first key kept), for the tests and the startup log.</summary>
+    /// <summary>Paths and aliases that two keys claim (the first key kept; a path wins over an alias), for the tests and the startup log.</summary>
     public IReadOnlyList<string> Conflicts { get; }
 
     /// <summary>Builds the catalog for what is running now.</summary>
@@ -111,15 +114,11 @@ public sealed class OptionCatalog
             return new OptionStatus(key, true, current, overridden ? baseline : current, overridden, null, null);
         }
 
-        OptionOverrides store = OptionOverrides.For(scope.World);
-        if (store.Find(key.Path) is { } entry)
+        // An entry whose value is no longer the key's (a reload or another path put another one in) is stale: it is ignored here, because a
+        // read must not change the store, and dropped by the next write (TrySet).
+        if (OptionOverrides.For(scope.World).Find(key.Path) is { } entry && Equals(entry.Value, current))
         {
-            if (Equals(entry.Value, current))
-            {
-                return new OptionStatus(key, true, current, entry.Baseline, true, entry.Actor, entry.Reason);
-            }
-
-            store.Forget(key.Path); // a reload (or another path) put another value in
+            return new OptionStatus(key, true, current, entry.Baseline, true, entry.Actor, entry.Reason);
         }
 
         return new OptionStatus(key, true, current, current, false, null, null);
@@ -180,13 +179,21 @@ public sealed class OptionCatalog
         object? now = key.Get(scope) ?? value;
         if (key.Tracking is null)
         {
-            OptionOverrides.For(scope.World).Remember(key.Path, current, now, actor.Name, actor.Reason);
+            OptionOverrides store = OptionOverrides.For(scope.World);
+            if (store.Find(key.Path) is { } entry && !Equals(entry.Value, current))
+            {
+                store.Forget(key.Path); // stale: the baseline it holds is not the one this change started from
+            }
+
+            store.Remember(key.Path, current, now, actor.Name, actor.Reason);
+
+            // A key that tracks its own override (the rates) logs its changes itself.
+            scope.Logger.LogInformation(
+                "Option {Option} {Old} -> {New} by {Actor}{Reason} ({Apply})",
+                key.Path, key.Format(current), key.Format(now), actor.Name, string.IsNullOrWhiteSpace(actor.Reason) ? string.Empty : $" (reason: {actor.Reason})",
+                OptionKey.Show(key.Apply));
         }
 
-        scope.Logger.LogInformation(
-            "Option {Option} {Old} -> {New} by {Actor}{Reason} ({Apply})",
-            key.Path, key.Format(current), key.Format(now), actor.Name, string.IsNullOrWhiteSpace(actor.Reason) ? string.Empty : $" (reason: {actor.Reason})",
-            OptionKey.Show(key.Apply));
         error = string.Empty;
         before = key.Format(current);
         after = key.Format(now);
@@ -231,26 +238,5 @@ public sealed class OptionCatalog
         }
 
         return count;
-    }
-
-    /// <summary>
-    /// Runs <paramref name="mutate"/> (an alias command's own change, such as <c>.anticheat set</c>) and remembers it as an override of the key
-    /// at <paramref name="path"/>, so <c>diff</c> and <c>reset</c> see it. When the key is unknown or unavailable the change still runs.
-    /// </summary>
-    public static void TrackExternal(OptionScope scope, string path, string actor, Action mutate)
-    {
-        ArgumentNullException.ThrowIfNull(mutate);
-        OptionKey? key = Create(scope).Find(path);
-        object? before = key?.Get(scope);
-        mutate();
-        if (key is null || before is null || key.Tracking is not null)
-        {
-            return;
-        }
-
-        if (key.Get(scope) is { } after)
-        {
-            OptionOverrides.For(scope.World).Remember(key.Path, before, after, actor, null);
-        }
     }
 }
