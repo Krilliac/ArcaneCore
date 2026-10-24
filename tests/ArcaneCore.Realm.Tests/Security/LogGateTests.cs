@@ -52,20 +52,25 @@ public sealed class LogGateTests
         long now = 0;
         var gate = new LogGate(TimeSpan.FromSeconds(10), () => Volatile.Read(ref now));
         int admitted = 0;
+        int reportedByAdmitted = 0;
         Parallel.For(0, 10_000, _ =>
         {
-            if (gate.TryEnter(out _))
+            if (gate.TryEnter(out int reported))
             {
                 Interlocked.Increment(ref admitted);
+                Interlocked.Add(ref reportedByAdmitted, reported);
             }
         });
 
         Assert.Equal(1, admitted);
-        Assert.Equal(9_999, gate.Suppressed);
+        // Callers refused before the admitted one drained the counter are reported on that admitted line, not left in Suppressed
+        // (which of the two depends on thread timing), so every refused call is accounted for exactly once across the two.
+        Assert.Equal(9_999, reportedByAdmitted + gate.Suppressed);
 
+        int pending = gate.Suppressed;
         Volatile.Write(ref now, 10_000);
         Assert.True(gate.TryEnter(out int suppressed));
-        Assert.Equal(9_999, suppressed);
+        Assert.Equal(pending, suppressed);
     }
 
     [Fact]
