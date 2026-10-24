@@ -80,6 +80,10 @@ try {
     Remove-Item $held -ErrorAction SilentlyContinue
     "[$Lane] released $(Split-Path $held -Leaf); exit $rc"
 }
-if (Test-Path "$log.err") { Get-Content "$log.err" | Add-Content $log; Remove-Item "$log.err" }
+if (Test-Path "$log.err") {
+    # The redirected-stderr handle can outlive the child for a moment (or be held by a scanner); a failed cleanup must not replace the command's exit code.
+    try { Get-Content "$log.err" -ErrorAction Stop | Add-Content $log -ErrorAction Stop; Remove-Item "$log.err" -ErrorAction Stop }
+    catch { "[$Lane] could not merge or remove $log.err ($($_.Exception.Message)); left in place" }
+}
 Get-Content $log -Tail 60
 exit $rc
