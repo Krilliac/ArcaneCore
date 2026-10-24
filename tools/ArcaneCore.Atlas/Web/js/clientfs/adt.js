@@ -320,7 +320,7 @@ export function parseAdt(bytes) {
         wmos = readPlacements(reader, modf, WMO_BYTES, wmoNames, 'MODF', context);
     }
 
-    const chunks = new Array(CHUNK_TOTAL);
+    const chunks = Array.from({ length: CHUNK_TOTAL });
     for (let index = 0; index < CHUNK_TOTAL; index++) {
         const entry = mcin.dataStart + (index * 16);
         const offset = reader.u32(entry);

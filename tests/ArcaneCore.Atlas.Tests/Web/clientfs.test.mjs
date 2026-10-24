@@ -297,7 +297,9 @@ test('dbc.js parses the synthetic tables and refuses damaged ones', async () => 
     assert.equal(cdi.fieldCount, 12);
     assert.equal(cdi.recordSize, 48);
     assert.equal(cdi.stringBlockSize, expect.creatureDisplayInfo.stringBlockSize);
-    expect.creatureDisplayInfo.cells.forEach((row, r) => row.forEach((value, f) => assert.equal(cdi.cell(r, f), value, `cell ${r},${f}`)));
+    expect.creatureDisplayInfo.cells.forEach((row, r) => row.forEach((value, f) => {
+        assert.equal(cdi.cell(r, f), value, `cell ${r},${f}`);
+    }));
     for (const [offset, text] of Object.entries(expect.creatureDisplayInfo.strings)) {
         assert.equal(cdi.string(Number(offset)), text, `string at ${offset}`);
     }
