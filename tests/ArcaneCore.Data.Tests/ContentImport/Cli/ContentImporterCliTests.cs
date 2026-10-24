@@ -850,10 +850,22 @@ public sealed class ContentImporterCliTests : IDisposable
         (int code, _, _) = await RunAsync("import-dbc", dbc, "--database", database);
 
         Assert.NotEqual(ExitCodes.Ok, code);
+        await using (WorldDbContext failed = Open(database))
+        {
+            Assert.Equal(0, await failed.Set<AreaTriggerTemplateRow>().CountAsync());
+            Assert.Equal(0, await failed.Set<TaxiNode>().CountAsync());
+            Assert.Equal(0, await failed.Set<TaxiPath>().CountAsync());
+        }
+
+        // The rerun with the file fixed imports all three: nothing was left behind to be mistaken for a finished import.
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [[1u, 1u, 2u, 100u]], " "));
+        (int rerunCode, _, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, rerunCode);
         await using WorldDbContext db = Open(database);
-        Assert.Equal(0, await db.Set<AreaTriggerTemplateRow>().CountAsync());
-        Assert.Equal(0, await db.Set<TaxiNode>().CountAsync());
-        Assert.Equal(0, await db.Set<TaxiPath>().CountAsync());
+        Assert.Equal(1, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+        Assert.Equal(1, await db.Set<TaxiNode>().CountAsync());
+        Assert.Equal(1, await db.Set<TaxiPath>().CountAsync());
     }
 
     private static void WriteSpellDbcs(string dbc)
