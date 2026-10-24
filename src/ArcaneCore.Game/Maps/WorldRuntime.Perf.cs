@@ -13,7 +13,9 @@ public sealed partial class WorldRuntime
     private bool _perfLogResolved;
 
     // The world thread's position and the slowest features of the tick in progress (docs/ops/watchdog.md). Written by the
-    // world thread only; the position is read by the watchdog thread, so it is published with volatile stores.
+    // world thread only; the position is read by the watchdog thread, so it is published with volatile stores under a
+    // sequence count (odd while a write is in progress) so a reader never pairs one tick's phase with another's work.
+    private int _positionVersion;
     private volatile int _phase;
     private volatile object? _currentWork;
     private long _currentWorkSince;
@@ -24,15 +26,46 @@ public sealed partial class WorldRuntime
 
     /// <summary>
     /// Where the world thread is now (any thread; the watchdog's hang log): the tick phase and the feature, command or map running in it.
-    /// <see cref="TickPhase.Idle"/> between ticks.
+    /// <see cref="TickPhase.Idle"/> between ticks. Off the world thread it may wait briefly while a write is in progress.
     /// </summary>
-    public TickPosition CurrentPosition => new((TickPhase)_phase, _currentWork, Volatile.Read(ref _currentWorkSince));
-
-    private void SetPosition(TickPhase phase, object? work, long since)
+    public TickPosition CurrentPosition
     {
+        get
+        {
+            // Retry until one read sees the same even version before and after. SetPosition never blocks, so a failed read means the
+            // writer was preempted inside a write or published again meanwhile: spin, then yield so it can finish. Bounded by time,
+            // not attempts (a busy writer can win many attempts in a row): after PositionReadBudgetMs, the last read (counted).
+            TickPosition read;
+            long yieldingSince = 0;
+            for (int attempt = 0; ; attempt++)
+            {
+                int before = Volatile.Read(ref _positionVersion);
+                read = new((TickPhase)_phase, _currentWork, Volatile.Read(ref _currentWorkSince));
+                if ((before & 1) == 0 && Volatile.Read(ref _positionVersion) == before) return read;
+                if (attempt < PositionSpinAttempts) { Thread.SpinWait(8); continue; }
+                if (yieldingSince == 0) yieldingSince = Stopwatch.GetTimestamp();
+                else if (Stopwatch.GetElapsedTime(yieldingSince).TotalMilliseconds > PositionReadBudgetMs) break;
+                Thread.Yield();
+            }
+            Interlocked.Increment(ref _positionReadsUnverified);
+            return read;
+        }
+    }
+
+    private const int PositionSpinAttempts = 64;
+    private const int PositionReadBudgetMs = 50;
+    private long _positionReadsUnverified;
+
+    /// <summary>Reads of <see cref="CurrentPosition"/> that ran out of time and returned an unverified (possibly mixed) position.</summary>
+    internal long PositionReadsUnverified => Interlocked.Read(ref _positionReadsUnverified);
+
+    internal void SetPosition(TickPhase phase, object? work, long since) // world thread only (the single writer); internal for tests
+    {
+        int version = Interlocked.Increment(ref _positionVersion); // odd: a write in progress (full fence: the stores below stay after it)
         _currentWork = work;
         Volatile.Write(ref _currentWorkSince, since);
         _phase = (int)phase;
+        Volatile.Write(ref _positionVersion, version + 1);
     }
 
     /// <summary>Keep the slowest <see cref="TickStats.TopFeatureCount"/> features of the tick in progress (no allocation).</summary>
