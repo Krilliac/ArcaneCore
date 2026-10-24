@@ -68,7 +68,7 @@ public sealed class InsightWatchTests
         Assert.Equal("script", published["origin"]!.GetValue<string>());
         Assert.Null(published["data"]!["omitted"]);
         JsonArray points = published["data"]!["overlay"]!["points"]!.AsArray();
-        Assert.Equal(1, points.Count);
+        Assert.Single(points);
         Assert.Equal([7.0, 8.0], points[0]!["at"]!.AsArray().Take(2).Select(n => n!.GetValue<double>()));
     }
 

@@ -41,7 +41,9 @@ public sealed class HeatmapTests
         Assert.Equal("#2C7BB6", Heatmap.Ramp(19, 100));
         Assert.Equal("#ABD9E9", Heatmap.Ramp(20, 100));
         Assert.Equal("#FFFFBF", Heatmap.Ramp(50, 100));
-        Assert.Equal("#FDAE61", Heatmap.Ramp(80, 100));
+        Assert.Equal("#FDAE61", Heatmap.Ramp(60, 100));
+        Assert.Equal("#FDAE61", Heatmap.Ramp(79, 100));
+        Assert.Equal("#D7191C", Heatmap.Ramp(80, 100));
         Assert.Equal("#D7191C", Heatmap.Ramp(100, 100));
         Assert.Equal("#D7191C", Heatmap.Ramp(1, 1));
     }

@@ -1,7 +1,7 @@
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Insight;
-using ArcaneCore.Atlas.Tests.Reference.Mpq;
 using Xunit;
+using WdbcTestBuilder = ArcaneCore.Atlas.Tests.Reference.Mpq.WdbcTestBuilder;
 
 namespace ArcaneCore.Atlas.Tests.Insight;
 

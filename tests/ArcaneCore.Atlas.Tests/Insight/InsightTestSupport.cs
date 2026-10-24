@@ -6,6 +6,7 @@ using ArcaneCore.Atlas.Insight;
 using ArcaneCore.Atlas.Live;
 using ArcaneCore.Atlas.Tests.Live;
 using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
 
 namespace ArcaneCore.Atlas.Tests.Insight;
 

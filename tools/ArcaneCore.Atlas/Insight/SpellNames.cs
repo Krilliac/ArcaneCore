@@ -5,7 +5,7 @@ namespace ArcaneCore.Atlas.Insight;
 /// <summary>Spell id to name from the client's Spell.dbc. Stub.</summary>
 internal sealed class SpellNames
 {
-    public const string TablePath = "DBFilesClient\Spell.dbc";
+    public const string TablePath = "DBFilesClient\\Spell.dbc";
 
     public int Count => throw new NotImplementedException();
 

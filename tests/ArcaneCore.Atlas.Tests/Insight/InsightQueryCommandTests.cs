@@ -2,8 +2,8 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Insight;
 using ArcaneCore.Atlas.Tests.Live;
-using ArcaneCore.Atlas.Tests.Reference.Mpq;
 using Xunit;
+using WdbcTestBuilder = ArcaneCore.Atlas.Tests.Reference.Mpq.WdbcTestBuilder;
 
 namespace ArcaneCore.Atlas.Tests.Insight;
 
