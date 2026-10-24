@@ -461,8 +461,10 @@ public sealed class PlayerbotGroupPlayerTests
         var healer = await world.AddBotAsync("Chatprie", Human, Priest, 10, [LesserHeal, Smite]);
         var mage = await world.AddBotAsync("Chatmage", Human, Mage, 10, [Fireball]);
         Assert.True(world.Options.Chat.Enabled);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
+        // A group that gave up (Disbanding) is also past Forming: wait for the one that completed, so a refused invitation fails with its reason.
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding) && g.Members.All(m => m.Joined))), await world.TraceAsync());
         Assert.Equal(3, await world.OnWorldAsync(() => world.GroupManager.GetGroup(world.Player(tank.Id).Guid)?.MemberCount ?? 0));
+        Assert.DoesNotContain(await world.OnWorldAsync(() => world.Coordinator.Events.ToArray()), e => e.Contains("gave up") || e.Contains("did not join"));
 
         await using WorldTestClient player = await world.World.EnterWorldAsync("CHATGROUPP", "Chatgroupp", AccountSecurity.Player);
         await player.CollectAsync();
