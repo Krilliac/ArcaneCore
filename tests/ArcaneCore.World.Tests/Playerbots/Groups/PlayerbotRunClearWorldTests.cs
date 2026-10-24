@@ -165,9 +165,17 @@ public sealed class PlayerbotRunClearWorldTests
         });
 
         // Well inside GatherCatchUpMs (60 s): everyone is outside the instance, alive and out of combat, and the run has not re-entered yet.
-        Assert.True(await world.RunUntilPacedAsync(() => bots.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat), 20_000, TimeSpan.FromSeconds(120)), await world.TraceAsync());
-        // The last member out completes the gathering, so the run may already have stepped on to Enter in that same tick; either way it has not cleared.
-        Assert.True(run.Step is PlayerbotRunStep.Retry or PlayerbotRunStep.Enter, $"run step {run.Step}");
+        // While the leader is still inside the group is not gathered (even once the members alive have come to it), so it never travels or re-enters from there.
+        bool leftEarly = false, stepOk = true;
+        Assert.True(await world.RunUntilAsync(20_000, () =>
+        {
+            if (world.Player(bots[0].Id).MapId == GroupRfcContent.Map) leftEarly |= group.State != PlayerbotGroupState.Gathering;
+            // The last member out completes the gathering, so the run may already have stepped on to Enter in that same tick; either way it has not cleared.
+            stepOk &= run.Step is PlayerbotRunStep.Retry or PlayerbotRunStep.Enter;
+            return bots.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat);
+        }), await world.TraceAsync());
+        Assert.False(leftEarly, "the group left Gathering while its leader was still inside the instance");
+        Assert.True(stepOk, "the run moved past Retry/Enter before the group was outside");
         Assert.True(await world.RunUntilAsync(180_000, () => run.Step == PlayerbotRunStep.Clear
             && bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map && world.Player(b.Id).IsAlive)), await world.TraceAsync());
         Assert.Equal(1, run.Wipes);

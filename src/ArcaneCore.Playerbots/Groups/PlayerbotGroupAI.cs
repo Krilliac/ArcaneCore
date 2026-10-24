@@ -432,13 +432,12 @@ internal sealed class PlayerbotGroupAI
         if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
-            case PlayerbotGroupState.Gathering when group.Run is { Step: PlayerbotRunStep.Retry }
-                && player.MapId == group.Goal.MapId
-                && WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
-                && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } retryExit:
+            case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
                 // A retry regroups at the entrance: a leader revived inside walks out rather than holding beside live trash with a half-health party
-                // (the members follow it out through Follow's exit branch).
-                Step = WalkTo(player, new Vector3(retryExit.X, retryExit.Y, retryExit.Z), interval, toward: true) ? "lead:walk-exit" : "lead:no-path-exit";
+                // (the coordinator does not count the group gathered until it is out). Members follow it on foot, and through Follow's exit
+                // branch once it is on another map.
+                if (WalkTo(player, new Vector3(retryExit.X, retryExit.Y, retryExit.Z), interval, toward: true)) Step = "lead:walk-exit";
+                else { Step = "lead:no-path-exit"; Hold(player); }
                 return;
             case PlayerbotGroupState.Forming:
             case PlayerbotGroupState.Gathering:
