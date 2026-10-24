@@ -165,12 +165,14 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
     public async Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
     {
         string normalized = username.ToUpperInvariant();
-        Account? account = await db.Accounts.AsNoTracking().FirstOrDefaultAsync(a => a.Username == normalized, cancellationToken)
-            .ConfigureAwait(false);
-        if (account is null) return null;
+        var row = await db.Accounts.AsNoTracking()
+            .Where(a => a.Username == normalized)
+            .Select(a => new { a.LastLoginUtc, a.LastOs, a.LastPlatform, a.LastLocale, a.LastBuild })
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        if (row is null) return null;
         // Providers hand back an Unspecified kind; the column always holds UTC.
-        DateTime? when = account.LastLoginUtc is { } t ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : null;
-        return new AccountLoginInfo(when, account.LastOs, account.LastPlatform, account.LastLocale, account.LastBuild);
+        DateTime? when = row.LastLoginUtc is { } t ? DateTime.SpecifyKind(t, DateTimeKind.Utc) : null;
+        return new AccountLoginInfo(when, row.LastOs, row.LastPlatform, row.LastLocale, row.LastBuild);
     }
 
     public async Task<bool> SetAsync(string username, AccountLockFlags flags, string securityInfo,
