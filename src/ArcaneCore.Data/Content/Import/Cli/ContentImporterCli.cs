@@ -834,6 +834,7 @@ public static partial class ContentImporterCli
         IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
         IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
         var kept = new List<string>();
+        var imported = new List<string>();
 
         o.WriteLine($"target: {target.Describe}");
         MapAreaDbcImportReport? mapReport = null;
@@ -855,44 +856,48 @@ public static partial class ContentImporterCli
                 }
             }
 
-            if (triggers is not null)
+            // One unit: a failed insert rolls all three back, so a half-filled table is never mistaken for a complete one on the next run.
+            await ImportTransaction.RunAsync(db, async token =>
             {
-                if (await db.Set<AreaTriggerTemplateRow>().AnyAsync(ct).ConfigureAwait(false))
+                if (triggers is not null)
                 {
-                    kept.Add("areatrigger_template");
+                    if (await db.Set<AreaTriggerTemplateRow>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("areatrigger_template");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, triggers, token).ConfigureAwait(false);
+                        imported.Add($"Imported {triggers.Count} area triggers (areatrigger_template) from AreaTrigger.dbc.");
+                    }
                 }
-                else
-                {
-                    await ImportBatch.InsertAsync(db, triggers, ct).ConfigureAwait(false);
-                    o.WriteLine($"Imported {triggers.Count} area triggers (areatrigger_template) from AreaTrigger.dbc.");
-                }
-            }
 
-            if (taxiNodes is not null)
-            {
-                if (await db.Set<TaxiNode>().AnyAsync(ct).ConfigureAwait(false))
+                if (taxiNodes is not null)
                 {
-                    kept.Add("taxi_nodes");
+                    if (await db.Set<TaxiNode>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("taxi_nodes");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, taxiNodes, token).ConfigureAwait(false);
+                        imported.Add($"Imported {taxiNodes.Count} taxi nodes (taxi_nodes) from TaxiNodes.dbc.");
+                    }
                 }
-                else
-                {
-                    await ImportBatch.InsertAsync(db, taxiNodes, ct).ConfigureAwait(false);
-                    o.WriteLine($"Imported {taxiNodes.Count} taxi nodes (taxi_nodes) from TaxiNodes.dbc.");
-                }
-            }
 
-            if (taxiPaths is not null)
-            {
-                if (await db.Set<TaxiPath>().AnyAsync(ct).ConfigureAwait(false))
+                if (taxiPaths is not null)
                 {
-                    kept.Add("taxi_path");
+                    if (await db.Set<TaxiPath>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("taxi_path");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                        imported.Add($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
+                    }
                 }
-                else
-                {
-                    await ImportBatch.InsertAsync(db, taxiPaths, ct).ConfigureAwait(false);
-                    o.WriteLine($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
-                }
-            }
+            }, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
         {
@@ -902,6 +907,10 @@ public static partial class ContentImporterCli
         o.WriteLine(
             $"Imported {content.Spells.Count} spells, {content.CastTimes.Count} cast times, {content.Durations.Count} durations, " +
             $"{content.Ranges.Count} ranges and {content.Radii.Count} radii.");
+        foreach (string line in imported)
+        {
+            o.WriteLine(line);
+        }
         if (mapReport is not null)
         {
             o.WriteLine($"Imported {mapReport.MappedMaps} maps and {mapReport.MappedAreas} areas (map_template, area_template) from Map.dbc and AreaTable.dbc.");

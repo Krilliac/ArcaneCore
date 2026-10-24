@@ -828,6 +828,34 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("areatrigger_template, taxi_nodes, taxi_path already have rows", rerun, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A TaxiPath.dbc with a duplicate id fails its insert; the area-trigger and taxi-node writes before it roll back too, so a rerun
+    /// does not mistake a half-filled table for a complete one.
+    /// </summary>
+    [Fact]
+    public async Task ImportDbc_FailedTaxiPathInsert_RollsBackEveryGeographyTable()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+        uint[] trigger = new uint[10];
+        trigger[0] = 45;
+        uint[] node = new uint[16];
+        node[0] = 1;
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTrigger.dbc"), Dbc(10, [trigger], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiNodes.dbc"), Dbc(16, [node], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [[1u, 1u, 2u, 100u], [1u, 2u, 1u, 100u]], " "));
+
+        (int code, _, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.NotEqual(ExitCodes.Ok, code);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(0, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+        Assert.Equal(0, await db.Set<TaxiNode>().CountAsync());
+        Assert.Equal(0, await db.Set<TaxiPath>().CountAsync());
+    }
+
     private static void WriteSpellDbcs(string dbc)
     {
         uint[] spell = new uint[SpellDbcImporter.SpellFieldCount];
