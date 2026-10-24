@@ -17,7 +17,7 @@ public static class CommandContextConsole
     public static bool IsTrueConsole(this CommandContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return context.IsConsole; // SEAM (old behaviour): the fix makes this IsConsole && !IsRemote
+        return context.IsConsole && !context.IsRemote;
     }
 
     /// <summary>True for the true console; otherwise fails the context with <see cref="ConsoleOnlyFailure"/>, replies and returns false (the handler returns true).</summary>

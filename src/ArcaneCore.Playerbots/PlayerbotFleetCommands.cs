@@ -191,7 +191,7 @@ public sealed partial class PlayerbotFleetCommands : ICommandExtension
     private static bool SecurityBlocks(Env env, Player bot) => SecurityBlocks(env.Context, bot);
 
     internal static bool SecurityBlocks(CommandContext context, Player bot)
-        => !context.IsConsole && !context.IsInvoker(bot)
+        => !context.IsTrueConsole() && !context.IsInvoker(bot)
             && GmSecurity.HasLowerSecurity(context.Security, bot.Security, false, context.Commands.Gm);
 
     /// <summary>One line of a bulk reply: a bot and what happened to it.</summary>

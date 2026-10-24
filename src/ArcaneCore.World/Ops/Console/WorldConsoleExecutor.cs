@@ -131,6 +131,14 @@ public sealed class WorldConsoleExecutor
         CommandContext context = _remoteName is { } name
             ? CommandContext.ForRemote(_session, _commands.Current, WriteLine, _remoteSecurity ?? AccountSecurity.Player, name, _lifetime)
             : CommandContext.ForConsole(_session, _commands.Current, WriteLine);
+        if (context.IsRemote && ConsoleOnlyCommands.IsConsoleOnly(context.Commands.Lookup(text, context.Security).Path))
+        {
+            context.Fail(CommandContextConsole.ConsoleOnlyFailure);
+            WriteLine(CommandContextConsole.ConsoleOnlyText);
+            context.Complete();
+            return context;
+        }
+
         try
         {
             context.Commands.Execute(context, text);
