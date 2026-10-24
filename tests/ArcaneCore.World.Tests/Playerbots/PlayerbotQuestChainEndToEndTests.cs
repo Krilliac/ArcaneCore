@@ -63,7 +63,8 @@ public sealed class PlayerbotQuestChainEndToEndTests
                     feature.Options.OrdinaryRewardQuestIds = [783, 7, 15];
                     // The starter search is gated by a wall-clock phase budget, so a stalled think (GC, preemption)
                     // may defer the accept to the next think. Bound by think count, not time.
-                    var state = feature.Services.StateOf(player)!;
+                    PlayerNpcState? state = feature.Services.StateOf(player);
+                    Assert.NotNull(state);
                     for (int think = 0; think < 6 && state.Quests.Get(15) is not { Status: QuestStatus.Incomplete }; think++)
                     {
                         session.ManagedBudget = new ManagedActionBudget(1);
@@ -83,7 +84,7 @@ public sealed class PlayerbotQuestChainEndToEndTests
                     return true;
                 });
                 await feature.WaitForSettlementAsync((int)session.Player!.Guid.Low);
-                await host.WaitForWorldAsync(() => feature.Services.StateOf(session.Player!)!.Quests.Get(15)?.Rewarded == true, "quest 15 reward");
+                await host.WaitForWorldAsync(() => session.Player is { } p && feature.Services.StateOf(p)?.Quests.Get(15)?.Rewarded == true, "quest 15 reward");
                 Assert.Equal(250u, session.Player!.GetUInt32(UpdateFields.PlayerXp));
                 Assert.Equal(40u, session.Player!.Money);
                 Assert.Equal(275, host.WorldServices.GetRequiredService<ReputationFeature>().Service.GetReputation(session.Player!, 72));
