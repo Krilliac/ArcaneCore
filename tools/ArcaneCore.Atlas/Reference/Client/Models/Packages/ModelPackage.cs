@@ -290,6 +290,7 @@ public sealed class M2PackageSource : IModelPackageSource
         }
 
         var submeshInfo = new JsonArray();
+        var submeshRanges = new List<(int First, int Count)>[view.Submeshes.Length];
         if (view.Units.Length == 0)
         {
             Material plain = new("generic", BlendMode.Opaque, MaterialFlags.None, []);
@@ -309,15 +310,36 @@ public sealed class M2PackageSource : IModelPackageSource
 
                 M2SubmeshEntry submesh = view.Submeshes[unit.Submesh];
                 Material material = MaterialFor(model, unit, Problem);
+                int first = builder.TriangleCount;
                 builder.BeginBatch(material, submesh.Id | ((uint)(ushort)(short)unit.Priority << 16));
                 AddTriangles(builder, model, view, submesh.StartIndex, submesh.IndexCount, Problem);
                 builder.EndBatch();
+                if (builder.TriangleCount > first)
+                {
+                    (submeshRanges[unit.Submesh] ??= []).Add((first, builder.TriangleCount - first));
+                }
             }
         }
 
-        foreach (M2SubmeshEntry submesh in view.Submeshes)
+        // Triangle positions in the chunk's own triangle array (what a geoset mask addresses), not index-space values of the M2: chunk
+        // triangles are emitted per texture unit, so a submesh drawn by two units appears twice (ranges lists every copy) and triangles
+        // skipped as invalid shift the later ones. firstTriangle/triangleCount are the first copy; a submesh no unit draws has 0/0.
+        for (int i = 0; i < view.Submeshes.Length; i++)
         {
-            submeshInfo.Add(new JsonObject { ["id"] = submesh.Id, ["firstTriangle"] = submesh.StartIndex / 3, ["triangleCount"] = submesh.IndexCount / 3 });
+            List<(int First, int Count)> ranges = submeshRanges[i] ?? [];
+            var rangeInfo = new JsonArray();
+            foreach ((int rangeFirst, int rangeCount) in ranges)
+            {
+                rangeInfo.Add(new JsonArray(rangeFirst, rangeCount));
+            }
+
+            submeshInfo.Add(new JsonObject
+            {
+                ["id"] = view.Submeshes[i].Id,
+                ["firstTriangle"] = ranges.Count > 0 ? ranges[0].First : 0,
+                ["triangleCount"] = ranges.Count > 0 ? ranges[0].Count : 0,
+                ["ranges"] = rangeInfo,
+            });
         }
 
         var textures = new JsonArray();

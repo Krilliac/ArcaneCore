@@ -7,7 +7,7 @@ namespace ArcaneCore.Atlas.Tests.Reference.Client.Models;
 internal readonly record struct PackageVertex(float X, float Y, float Z, float U, float V);
 
 /// <summary>One submesh: a range of the view's triangle-index array (vertex indices, three per triangle).</summary>
-internal readonly record struct PackageSubmesh(ushort Id, ushort StartIndex, ushort IndexCount);
+internal readonly record struct PackageSubmesh(ushort Id, ushort StartIndex, ushort IndexCount, ushort Level = 0);
 
 /// <summary>One texture unit (a batch): which submesh, which render-flags row, which texture-lookup row.</summary>
 internal readonly record struct PackageUnit(ushort Submesh, ushort RenderFlags, ushort TextureLookup, sbyte Priority = 0, ushort ShaderId = 0);
@@ -68,6 +68,7 @@ internal static class M2PackageFixtures
         {
             Span<byte> s = submeshBytes.AsSpan(32 * i);
             BinaryPrimitives.WriteUInt16LittleEndian(s, submeshes[i].Id);
+            BinaryPrimitives.WriteUInt16LittleEndian(s[2..], submeshes[i].Level);
             BinaryPrimitives.WriteUInt16LittleEndian(s[4..], 0);
             BinaryPrimitives.WriteUInt16LittleEndian(s[6..], (ushort)vertices.Count);
             BinaryPrimitives.WriteUInt16LittleEndian(s[8..], submeshes[i].StartIndex);

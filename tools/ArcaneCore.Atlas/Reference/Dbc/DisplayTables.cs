@@ -5,7 +5,8 @@ namespace ArcaneCore.Atlas.Reference.Display;
 
 /// <summary>
 /// The display-related DBC tables of the 1.12.1.5875 client, parsed once. A table the client does not have is tolerated (it is
-/// simply not <see cref="Has"/>); a table with another field count than the one measured on build 5875 is refused by name.
+/// simply not <see cref="Has"/>); a table with another field count or record size than the ones measured on build 5875 is refused
+/// by name.
 /// Immutable after <see cref="Load"/>; safe to share between threads.
 /// </summary>
 public sealed class DisplayTables
@@ -20,10 +21,30 @@ public sealed class DisplayTables
         ["GameObjectDisplayInfo"] = 12,
         ["CharSections"] = 10,
         ["ChrRaces"] = 29,
+        ["CharHairGeosets"] = 6,
+        ["CharacterFacialHairStyles"] = 9,
         ["AnimationData"] = 7,
         ["Emotes"] = 7,
-        ["EmotesText"] = 19,
-        ["CharHairGeosets"] = 6,
+    };
+
+    /// <summary>
+    /// Table name to the record size in bytes measured on the same files. Every field of these tables is four bytes, so each value
+    /// is four times the field count; it is listed separately so a client whose records are wider than their field count says
+    /// (packed or padded columns) is refused too.
+    /// </summary>
+    public static IReadOnlyDictionary<string, int> ExpectedRecordSizes { get; } = new Dictionary<string, int>(StringComparer.Ordinal)
+    {
+        ["CreatureDisplayInfo"] = 48,
+        ["CreatureModelData"] = 64,
+        ["CreatureDisplayInfoExtra"] = 76,
+        ["ItemDisplayInfo"] = 92,
+        ["GameObjectDisplayInfo"] = 48,
+        ["CharSections"] = 40,
+        ["ChrRaces"] = 116,
+        ["CharHairGeosets"] = 24,
+        ["CharacterFacialHairStyles"] = 36,
+        ["AnimationData"] = 28,
+        ["Emotes"] = 28,
     };
 
     private readonly Dictionary<string, WdbcFile> _tables;
@@ -75,6 +96,11 @@ public sealed class DisplayTables
                 throw new InvalidDataException($"{name} has {table.FieldCount} fields; the 1.12.1.5875 layout has {fields}.");
             }
 
+            if (table.RecordSize != ExpectedRecordSizes[name])
+            {
+                throw new InvalidDataException($"{name} has {table.RecordSize}-byte records; the 1.12.1.5875 layout has {ExpectedRecordSizes[name]}.");
+            }
+
             tables.Add(name, table);
         }
 
@@ -84,6 +110,8 @@ public sealed class DisplayTables
     public bool Has(string name) => _tables.ContainsKey(name);
 
     public int FieldCount(string name) => Table(name).FieldCount;
+
+    public int RecordSize(string name) => Table(name).RecordSize;
 
     public int RecordCount(string name) => Table(name).RecordCount;
 

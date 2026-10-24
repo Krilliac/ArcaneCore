@@ -4,7 +4,7 @@ using ArcaneCore.Atlas.Core.Commands;
 
 namespace ArcaneCore.Atlas.Reference.Display;
 
-/// <summary>The <c>display.resolve</c> command: creature or game object display id to model path and skins.</summary>
+/// <summary>The <c>display.resolve</c> command: creature, game object, item or race display to model path, textures and the data the chain carries.</summary>
 public sealed class DisplayModule : IAtlasModule
 {
     public string Name => "display";
@@ -18,10 +18,11 @@ public sealed class DisplayModule : IAtlasModule
         context.Services.Add(state);
         context.Commands.Register(new CommandDefinition(
             "display.resolve",
-            "Resolves a creature or game object display id through the client's display DBCs to the model path (.m2) and skin texture paths. A break in the chain is reported in problems (no-row, model-missing, texture-missing), not as an error.",
+"Resolves a creature, game object, item or race display through the client's display DBCs. Creature: model path (.m2), skin texture paths, scale and the humanoid extra row (race, sex, look, equipment, baked texture). Game object: model path. Item: model and texture paths, icon, geoset groups, helmet visibility and the eight armour region textures. Race: the Character\\<race>\\<sex> model for a gender. A break in the chain is reported in problems (no-row, model-missing, texture-missing, extra-missing), not as an error.",
             [
-                new CommandArg("kind", ArgType.String, "creature or gameobject.", Required: true, Choices: ["creature", "gameobject"]),
-                new CommandArg("id", ArgType.Integer, "The display id (CreatureDisplayInfo or GameObjectDisplayInfo).", Required: true),
+                new CommandArg("kind", ArgType.String, "creature, gameobject, item or race.", Required: true, Choices: [.. DisplayResolver.Kinds]),
+                new CommandArg("id", ArgType.Integer, "The display id (CreatureDisplayInfo, GameObjectDisplayInfo or ItemDisplayInfo) or, for kind race, the ChrRaces id.", Required: true),
+                new CommandArg("gender", ArgType.Integer, "Race only: 0 male (default) or 1 female.", Default: JsonValue.Create(0)),
             ],
             state.Resolve));
     }
@@ -58,9 +59,9 @@ public sealed class DisplayModule : IAtlasModule
         public Task<JsonNode?> Resolve(CommandInvocation invocation, CancellationToken cancellationToken)
         {
             string kind = invocation.OptionalString("kind") ?? "";
-            if (kind is not ("creature" or "gameobject"))
+            if (!DisplayResolver.Kinds.Contains(kind))
             {
-                throw new CommandException(CommandException.BadArguments, "display.resolve: kind must be creature or gameobject.");
+                throw new CommandException(CommandException.BadArguments, $"display.resolve: kind must be one of {string.Join(", ", DisplayResolver.Kinds)}.");
             }
 
             long id = invocation.GetInt("id");
@@ -69,22 +70,80 @@ public sealed class DisplayModule : IAtlasModule
                 throw new CommandException(CommandException.BadArguments, "display.resolve: id must be a non-negative 32-bit whole number.");
             }
 
+            long gender = invocation.OptionalInt("gender") ?? 0;
+            if (gender is < 0 or > 1)
+            {
+                throw new CommandException(CommandException.BadArguments, "display.resolve: gender must be 0 (male) or 1 (female).");
+            }
+
             DisplayResolver resolver = Resolver;
             return Task.Run<JsonNode?>(
                 () =>
                 {
-                    DisplayResolution r = kind == "creature" ? resolver.ResolveCreature(id) : resolver.ResolveGameObject(id);
-                    return new JsonObject
+                    DisplayResolution r = resolver.Resolve(kind, id, (int)gender);
+                    var result = new JsonObject
                     {
                         ["kind"] = kind,
                         ["id"] = id,
                         ["modelPath"] = r.ModelPath,
                         ["modelDataId"] = r.ModelDataId,
-                        ["textures"] = new JsonArray([.. r.Textures.Select(t => (JsonNode?)(t is null ? null : JsonValue.Create(t)))]),
-                        ["problems"] = new JsonArray([.. r.Problems.Select(p => (JsonNode?)JsonValue.Create(p))]),
+                        ["textures"] = Strings(r.Textures),
+                        ["problems"] = Strings(r.Problems),
                     };
+                    if (r.Scale is { } scale)
+                    {
+                        result["scale"] = scale;
+                        result["displayScale"] = r.DisplayScale;
+                        result["modelScale"] = r.ModelScale;
+                    }
+
+                    if (r.Extra is { } extra)
+                    {
+                        result["extra"] = new JsonObject
+                        {
+                            ["race"] = extra.Race,
+                            ["sex"] = extra.Sex,
+                            ["skin"] = extra.Skin,
+                            ["face"] = extra.Face,
+                            ["hairStyle"] = extra.HairStyle,
+                            ["hairColor"] = extra.HairColor,
+                            ["facialHair"] = extra.FacialHair,
+                            ["equipment"] = new JsonArray([.. extra.Equipment.Select(e => (JsonNode?)JsonValue.Create(e))]),
+                            ["bakedTexture"] = extra.BakedTexture,
+                        };
+                    }
+
+                    if (r.Item is { } item)
+                    {
+                        result["item"] = new JsonObject
+                        {
+                            ["models"] = Strings(item.Models),
+                            ["modelTextures"] = Strings(item.ModelTextures),
+                            ["icon"] = item.Icon,
+                            ["geosetGroups"] = new JsonArray([.. item.GeosetGroups.Select(e => (JsonNode?)JsonValue.Create(e))]),
+                            ["helmetGeosetVis"] = new JsonArray([.. item.HelmetGeosetVis.Select(e => (JsonNode?)JsonValue.Create(e))]),
+                            ["regionTextures"] = Strings(item.RegionTextures),
+                        };
+                    }
+
+                    if (r.Race is { } race)
+                    {
+                        result["race"] = new JsonObject
+                        {
+                            ["raceId"] = race.RaceId,
+                            ["gender"] = race.Gender,
+                            ["clientFile"] = race.ClientFile,
+                            ["maleDisplayId"] = race.MaleDisplayId,
+                            ["femaleDisplayId"] = race.FemaleDisplayId,
+                        };
+                    }
+
+                    return result;
                 },
                 cancellationToken);
         }
+
+        private static JsonArray Strings(IEnumerable<string?> values)
+            => new([.. values.Select(v => (JsonNode?)(v is null ? null : JsonValue.Create(v)))]);
     }
 }

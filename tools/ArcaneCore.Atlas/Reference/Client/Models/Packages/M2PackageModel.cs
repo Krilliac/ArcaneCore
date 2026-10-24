@@ -7,8 +7,11 @@ namespace ArcaneCore.Atlas.Reference.Client.Models;
 /// <summary>One texture entry of an M2: type 0 names a file, any other type is replaceable (resolved per display).</summary>
 internal readonly record struct M2TextureEntry(uint Type, uint Flags, string Name);
 
-/// <summary>One submesh: a range of its view's triangle-index array.</summary>
-internal readonly record struct M2SubmeshEntry(ushort Id, ushort StartIndex, ushort IndexCount);
+/// <summary>
+/// One submesh: a range of its view's triangle-index array. <see cref="StartIndex"/> is the 16-bit index start at +0x08 plus the
+/// submesh's level (+0x02) shifted left 16 bits, which is how a view with more than 65535 indices addresses its tail.
+/// </summary>
+internal readonly record struct M2SubmeshEntry(ushort Id, int StartIndex, ushort IndexCount);
 
 /// <summary>
 /// One texture unit (a batch): the submesh it draws, its priority plane (the signed byte at +0x01; +0x02 is the shader id, which this
@@ -152,7 +155,7 @@ internal sealed class M2PackageModel
             ReadOnlySpan<byte> s = data[(submeshAt + (i * SubmeshSize))..];
             submeshes[i] = new M2SubmeshEntry(
                 BinaryPrimitives.ReadUInt16LittleEndian(s),
-                BinaryPrimitives.ReadUInt16LittleEndian(s[8..]),
+                BinaryPrimitives.ReadUInt16LittleEndian(s[8..]) | (BinaryPrimitives.ReadUInt16LittleEndian(s[2..]) << 16),
                 BinaryPrimitives.ReadUInt16LittleEndian(s[10..]));
         }
 

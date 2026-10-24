@@ -92,6 +92,57 @@ public sealed class ModelPackageTests
     }
 
     [Fact]
+    public async Task SubmeshRanges_AddressTheChunksOwnTriangles_IncludingCopiesAndSkippedTriangles()
+    {
+        // Submesh 0 holds one valid and one invalid triangle (index 9 is outside the lookup) and is drawn by two units; submesh 1
+        // follows in the index array. The chunk emits unit A (submesh 0: 1 triangle), unit B (submesh 1: 1) and unit C (submesh 0 again).
+        byte[] m2 = M2PackageFixtures.Build(
+            [new(0, 0, 0, 0.25f, 0.75f), new(1, 0, 0, 1, 1), new(1, 1, 0, 1, 0), new(0, 1, 0, 0, 0)],
+            [0, 1, 2, 0, 2, 9, 0, 2, 3],
+            [new(0, 0, 6), new(1, 6, 3)],
+            [new(0, 0, 0), new(1, 0, 0), new(0, 0, 0)],
+            [new(0, "Creature\\Test\\Skin.blp")],
+            [(0, 0)],
+            [0]);
+        await using HostRig rig = await HostRig.StartAsync(register: Register(Files(m2)));
+
+        using HttpResponseMessage response = await rig.Http.GetAsync("api/bin/model?path=Creature%5CTest%5CThing.m2");
+
+        GeometryChunk chunk = GeometryWire.Read(await response.Content.ReadAsByteArrayAsync());
+        Assert.Equal(3, chunk.Batches.Length);
+        Assert.Equal(3, chunk.TriangleCount);
+        JsonArray submeshes = chunk.Model!["submeshes"]!.AsArray();
+        Assert.Equal(0, submeshes[0]!.Num("firstTriangle"));
+        Assert.Equal(1, submeshes[0]!.Num("triangleCount"));
+        Assert.Equal([(0, 1), (2, 1)], submeshes[0]!["ranges"]!.AsArray().Select(r => ((int)r![0]!, (int)r[1]!)));
+        Assert.Equal(1, submeshes[1]!.Num("firstTriangle"));
+        Assert.Equal(1, submeshes[1]!.Num("triangleCount"));
+        Assert.Equal([(1, 1)], submeshes[1]!["ranges"]!.AsArray().Select(r => ((int)r![0]!, (int)r[1]!)));
+        foreach (JsonNode? range in submeshes.SelectMany(s => s!["ranges"]!.AsArray()))
+        {
+            Assert.InRange((int)range![0]! + (int)range[1]!, 1, (int)chunk.TriangleCount);
+        }
+    }
+
+    [Fact]
+    public void ASubmeshStart_AddsItsLevelAsTheHigh16Bits()
+    {
+        byte[] m2 = M2PackageFixtures.Build(
+            [new(0, 0, 0, 0, 0), new(1, 0, 0, 1, 1), new(1, 1, 0, 1, 0)],
+            [0, 1, 2],
+            [new(0, 4, 3, Level: 1), new(1, 0, 3)],
+            [new(0, 0, 0)],
+            [new(0, "Creature\\Test\\Skin.blp")],
+            [(0, 0)],
+            [0]);
+
+        M2PackageModel model = M2PackageModel.Parse(m2);
+
+        Assert.Equal(65536 + 4, model.Views[0].Submeshes[0].StartIndex);
+        Assert.Equal(0, model.Views[0].Submeshes[1].StartIndex);
+    }
+
+    [Fact]
     public async Task TheBatchTag_CarriesThePriorityPlane_NotTheShaderId()
     {
         // Priority plane (+0x01, signed) and shader id (+0x02) are set to different values: the tag's high 16 bits must hold the plane.
