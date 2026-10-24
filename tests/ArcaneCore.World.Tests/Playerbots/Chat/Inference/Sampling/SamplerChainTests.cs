@@ -1,5 +1,6 @@
 // Ported from Krilliac/Sonder-Inference src/sampling/tests/test_chain.cpp @1c4c152 (Apache-2.0)
 
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots.Chat.Inference.Sampling;
 using Xunit;
 
@@ -322,6 +323,8 @@ public sealed class SamplerChainTests
     public void VocabularySizedStepsReuseTheCandidateBuffer()
     {
         // ArcaneCore: a Qwen-sized vocabulary (~152k) with the default chain; after warm-up a step allocates nothing.
+        // Measured through AllocationProbe, not a raw counter: other threads' gen0 collections and replacements of the runtime's
+        // process-wide caches (cast cache, GVM cache) land on the measuring thread under parallel load.
         var logits = new float[151_936];
         var rng = new SamplingRng(3);
         for (int i = 0; i < logits.Length; i++)
@@ -335,12 +338,15 @@ public sealed class SamplerChainTests
             chain.Accept(chain.Sample(logits).Token);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10; i++)
+        SampleResult last = default;
+        Action window = () =>
         {
-            chain.Sample(logits);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 2; i++)
+            {
+                last = chain.Sample(logits);
+            }
+        };
+        AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "SamplerChain.Sample (152k vocab) x2");
+        Assert.True(last.Ok);
     }
 }

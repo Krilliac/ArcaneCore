@@ -369,12 +369,15 @@ public sealed class RespawnPersistenceTests
         Assert.True(options.Respawn.SaveImmediately); // vmangos SaveRespawnTimeImmediately = 1 (mangosd.conf.dist.in:397, World.cpp:729)
     }
 
+    // Unique to this scenario: the ledger is process-wide and tests run in parallel, so the capture below must filter on a subject no other test uses.
+    private const uint ScenarioSpawnGuid = 377_001;
+
     [Fact]
     public void ADeadWanderingCreature_WhoseForeignGridUnloadsWhileHomeGridStaysLoaded_RespawnsOnScheduleWithoutRespawnStuck()
     {
         var options = new CreatureOptions { CorpseDecayNormalSeconds = 90 };
         var persistence = new FakePersistence();
-        CreatureContent content = Content([Template()], [Spawn(77, WolfEntry, 30, 0, respawnSeconds: 80)]);
+        CreatureContent content = Content([Template()], [Spawn(ScenarioSpawnGuid, WolfEntry, 30, 0, respawnSeconds: 80)]);
         using WorldRuntime world = TestWorld.CreateRuntime();
         Map map = world.GetMap(0);
         Assert.True(map.UpdatesActiveCellsOnly);
@@ -383,7 +386,8 @@ public sealed class RespawnPersistenceTests
         map.Grids.Options.GridCleanUpDelayMs = 60_000;
 
         using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture =
-            ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(n => n.Key == "respawn/stuck");
+            ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
+                n => n.Key == "respawn/stuck" && n.Subject == ArcaneCore.Game.Creatures.CreatureAnomalies.Subject(WolfEntry, ScenarioSpawnGuid));
 
         // Player 1 keeps the home grid (30, 0 -> grid 32, 32) loaded from an inactive cell at (400, 400);
         // Player 2 loads a distant foreign grid at (2000, 0 -> grid 35, 32).

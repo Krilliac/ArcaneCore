@@ -38,8 +38,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// <summary>The latency histogram of one successful character write (store call), microseconds.</summary>
     internal const string SaveLatencyName = LatencyNames.CharacterSave;
 
-    /// <summary>Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s.</summary>
-    private static readonly long[] BusyBackoffTicks = [Stopwatch.Frequency, 2 * Stopwatch.Frequency, 5 * Stopwatch.Frequency];
+    /// <summary>
+    /// Pause before the next write after consecutive "database is locked" failures: 1 s, 2 s, then 5 s. The last step repeats.
+    /// Settable (init) so a test can make the pause too long to end during the test; must be non-empty.
+    /// </summary>
+    internal IReadOnlyList<TimeSpan> BusyBackoff { get; init; } = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
 
     private static readonly long ReportGateTicks = Stopwatch.Frequency;
     private static readonly long ReportRepeatTicks = 30 * Stopwatch.Frequency;
@@ -735,7 +738,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex, Deferred: true);
-                    long ticks = BusyBackoffTicks[Math.Min(_busyStreak, BusyBackoffTicks.Length - 1)];
+                    long ticks = (long)(BusyBackoff[Math.Min(_busyStreak, BusyBackoff.Count - 1)].TotalSeconds * Stopwatch.Frequency);
                     streak = ++_busyStreak;
                     _busyUntil = Stopwatch.GetTimestamp() + ticks;
                     pause = Stopwatch.GetElapsedTime(0, ticks);
