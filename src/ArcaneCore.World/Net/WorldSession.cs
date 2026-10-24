@@ -122,6 +122,7 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly IOutboundPacketObserver? _outboundPacketObserver;
     private readonly NetGuard? _guard;
     private readonly UnhandledOpcodeTracker _unhandled;
+    private readonly DevOpcodeTracker _devOpcodes;
     private readonly NetProtectionOptions _protection;
     private readonly IpKey? _address;
     // The client build's wire protocol (multi-version design S0). Pre-auth framing uses ClientProtocols.PreAuth;
@@ -167,6 +168,7 @@ public sealed partial class WorldSession : IPlayerSession
         _logger = logger;
         _outboundPacketObserver = services.GetService<IOutboundPacketObserver>();
         _unhandled = services.GetService<UnhandledOpcodeTracker>() ?? UnhandledOpcodeTracker.Shared;
+        _devOpcodes = services.GetService<DevOpcodeTracker>() ?? DevOpcodeTracker.Shared;
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
@@ -772,6 +774,13 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 HeuristicsUnhandled(opcode, payload.Length);
                 ReportUnhandled(opcode, payload.Length);
+                return true;
+            }
+
+            if (handler.Stripped)
+            {
+                // A stripped developer opcode: the payload is never read, nothing is queued and nothing is answered (WorldSession.DevOpcodes.cs).
+                DropDevOpcode(opcode, payload.Length);
                 return true;
             }
 
