@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.OptionKeys;
@@ -82,9 +83,25 @@ internal static class OptionSources
             Func<OptionScope, object?> get = s => key.Read(ViewOf(s)) is { } v && TryCanonical(v, out object canonical, out _, out _) ? canonical : null;
             Func<OptionScope, object, OptionActor, string?>? set = key.Live ? (s, value, _) => ApplyReloadKey(s, key, clr, value) : null;
             keys.Add(new OptionKey(
-                key.Path, "reload-classified option", type, key.Live ? OptionApplyClass.Live : OptionApplyClass.Restart, group, get, set,
+                key.Path, DescribeReloadKey(key.Path), type, key.Live ? OptionApplyClass.Live : OptionApplyClass.Restart, group, get, set,
                 choices: choices, aliases: aliases));
         }
+    }
+
+    internal const string NoDescription = "(no description)";
+
+    /// <summary>The first sentence of the key's entry in the configuration catalog (the text the generated reference prints), without markup.</summary>
+    internal static string DescribeReloadKey(string path)
+    {
+        string meaning = ConfCatalog.Embedded.Find(path)?.Meaning.Replace("`", string.Empty, StringComparison.Ordinal).Trim() ?? string.Empty;
+        if (meaning.Length == 0)
+        {
+            return NoDescription;
+        }
+
+        int end = meaning.IndexOf(". ", StringComparison.Ordinal);
+        string sentence = end > 0 ? meaning[..(end + 1)] : meaning;
+        return sentence.Length > 160 ? sentence[..157] + "..." : sentence;
     }
 
     /// <summary>The <c>.movement set</c> field of a player speed rate key (<c>movement.run</c>), null for any other key.</summary>

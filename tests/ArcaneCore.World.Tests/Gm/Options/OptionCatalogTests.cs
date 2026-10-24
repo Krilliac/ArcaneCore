@@ -87,6 +87,22 @@ public sealed class OptionCatalogTests
     }
 
     [Fact]
+    public async Task ReloadKeys_CarryTheirConfigurationDescription_SoTheFilterAndGetCanUseIt()
+    {
+        await using var host = WorldTestHost.Start();
+        OptionCatalog catalog = await host.OnWorldAsync(() => OptionCatalog.Create(Scope(host)));
+
+        OptionKey grid = catalog.Find("World:Maps:GridUnload")!;
+        Assert.NotEqual("(no description)", grid.Description);
+        Assert.DoesNotContain('`', grid.Description);
+        Assert.True(grid.Description.Length <= 160);
+        Assert.Contains(grid, catalog.Match(grid.Description.Split(' ')[^1].Trim('.', ',', ')', '(')));
+
+        OptionKey[] reload = [.. catalog.Keys.Where(k => k.Group != "Rates" && k.Group != "AntiCheat" && k.Group != "PacketHeuristics" && k.Group != "Pack")];
+        Assert.True(reload.Count(k => k.Description == "(no description)") * 20 < reload.Length, "at most 5% of the reload keys may lack a catalog description");
+    }
+
+    [Fact]
     public async Task Set_ChangesALiveKey_TracksTheBaseline_AndDiffAndResetUseIt()
     {
         await using var host = WorldTestHost.Start();
