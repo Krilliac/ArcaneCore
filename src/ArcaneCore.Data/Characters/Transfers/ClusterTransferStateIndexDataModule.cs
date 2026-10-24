@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,7 +9,7 @@ namespace ArcaneCore.Data.Characters.Transfers;
 /// Characters schema 65: indexes <c>cluster_transfer_decision.state</c> (declared by <see cref="ClusterTransferDataModule"/>'s model) on
 /// databases created at schema 62, so <see cref="EfTransferDecisionStore.CountUnresolvedAsync"/> does not scan a table whose rows are never deleted.
 /// </summary>
-public sealed class ClusterTransferStateIndexDataModule : IDataModule
+public sealed class ClusterTransferStateIndexDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 65;
 
@@ -23,4 +24,8 @@ public sealed class ClusterTransferStateIndexDataModule : IDataModule
     public void AddServices(IServiceCollection services)
     {
     }
+
+    // The index belongs to the table whose rows ClusterTransferDataModule deletes.
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 }
