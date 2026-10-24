@@ -223,6 +223,154 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(5u, await ReceiverCountAsync(rig));
     }
 
+    [Fact]
+    public async Task AutoStoreBagItemOfAnotherStack_CannotTopUpTheOfferedStack()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte offeredSlot, Item offered, byte sourceSlot) = await StartTopUpAsync(rig);
+        await OpenAndOfferAsync(rig, offeredSlot);
+        await AcceptAsync(rig);
+
+        // The 5-stack is not offered, but the first stack with room is: storing it would raise the offered count from 17 to 20.
+        await RefusedAsync(rig, WorldOpcode.CmsgAutostoreBagItem, [InventorySlots.Bag0, sourceSlot, InventorySlots.Bag0], scored: false);
+
+        await AssertSenderAsync(rig, offered.Guid, expectedCount: 17, expectedTotal: 25);
+        await CompleteAsync(rig);
+        Assert.Equal(17u, await ReceiverCountAsync(rig));
+    }
+
+    [Fact]
+    public async Task SplitToAutomaticSlot_CannotTopUpTheOfferedStack()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte offeredSlot, Item offered, byte sourceSlot) = await StartTopUpAsync(rig);
+        await OpenAndOfferAsync(rig, offeredSlot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgSplitItem, [InventorySlots.Bag0, sourceSlot, InventorySlots.Bag0, InventorySlots.NullSlot, 2], scored: false);
+
+        await AssertSenderAsync(rig, offered.Guid, expectedCount: 17, expectedTotal: 25);
+        await CompleteAsync(rig);
+        Assert.Equal(17u, await ReceiverCountAsync(rig));
+    }
+
+    [Fact]
+    public async Task WrapWithOfferedPaper_AfterFirstAccept_IsRefusedAndKeepsThePaperCount()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Item paper, Item target) = await StartWrapAsync(rig, wrapFirst: false);
+        await OpenAndOfferAsync(rig, paper.Slot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgWrapItem, [InventorySlots.Bag0, paper.Slot, InventorySlots.Bag0, target.Slot], scored: false);
+
+        await AssertEntryAndCountAsync(rig, target.Guid, PlainEntry, 1);
+        await AssertEntryAndCountAsync(rig, paper.Guid, PaperEntry, 3);
+        await CompleteAsync(rig);
+        Assert.Equal(3u, await ReceiverCountAsync(rig, PaperEntry));
+    }
+
+    [Fact]
+    public async Task WrapOfOfferedItem_AfterFirstAccept_IsRefusedAndKeepsTheEntry()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Item paper, Item target) = await StartWrapAsync(rig, wrapFirst: false);
+        await OpenAndOfferAsync(rig, target.Slot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgWrapItem, [InventorySlots.Bag0, paper.Slot, InventorySlots.Bag0, target.Slot], scored: false);
+
+        await AssertEntryAndCountAsync(rig, target.Guid, PlainEntry, 1);
+        await AssertEntryAndCountAsync(rig, paper.Guid, PaperEntry, 3);
+        await CompleteAsync(rig);
+        Assert.Equal(1u, await ReceiverCountAsync(rig, PlainEntry));
+    }
+
+    [Fact]
+    public async Task OpenOfOfferedGift_AfterFirstAccept_IsRefusedAndStaysWrapped()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Item paper, Item gift) = await StartWrapAsync(rig, wrapFirst: true);
+        await OpenAndOfferAsync(rig, gift.Slot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgOpenItem, [InventorySlots.Bag0, gift.Slot], scored: false);
+
+        await AssertEntryAndCountAsync(rig, gift.Guid, GiftEntry, 1);
+        await CompleteAsync(rig);
+        Assert.Equal(1u, await ReceiverCountAsync(rig, GiftEntry));
+    }
+
+    /// <summary>
+    /// Stacks A (17, room for 3, offered later), B (5) and C (3): B is not offered and would top A up. Built straight on the
+    /// world thread before the trade opens.
+    /// </summary>
+    private static async Task<(byte OfferedSlot, Item Offered, byte SourceSlot)> StartTopUpAsync(Rig rig)
+    {
+        (byte slot, Item offered) = await StartOfferAsync(rig, [20, 5]);
+        byte free = await FreeSlotAsync(rig);
+        byte source = await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            sender.Inventory.SplitItem(InventorySlots.Bag0, slot, InventorySlots.Bag0, free, 3);
+            Assert.Equal(17u, offered.Count);
+            return Stacks(sender).Single(i => i.Count == 5).Slot;
+        }).WaitAsync(rig.Token);
+        return (slot, offered, source);
+    }
+
+    private const uint PaperEntry = 992811;
+    private const uint PlainEntry = 992812;
+    private const uint GiftEntry = 992813;
+
+    /// <summary>A stack of 3 wrapping paper and one plain item; with <paramref name="wrapFirst"/> the item is already wrapped (the returned item is then the gift).</summary>
+    private static async Task<(Item Paper, Item Target)> StartWrapAsync(Rig rig, bool wrapFirst)
+        => await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+            var templates = new ItemTemplateStore(
+            [
+                new ItemTemplate { Entry = PaperEntry, Class = 0, Stackable = 20, Flags = (uint)ItemTemplateFlags.Wrapper, WrappedGift = GiftEntry },
+                new ItemTemplate { Entry = PlainEntry, Class = 0, Stackable = 1 },
+                new ItemTemplate { Entry = GiftEntry, Class = 0, Stackable = 1 },
+            ], []);
+            sender.Inventory.Templates = templates;
+            receiver.Inventory.Templates = templates;
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(PaperEntry, 3, out _));
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(PlainEntry, 1, out _));
+            Item paper = FindByEntry(sender, PaperEntry);
+            Item target = FindByEntry(sender, PlainEntry);
+            if (wrapFirst)
+            {
+                Assert.Equal(InventoryResult.Ok, sender.Inventory.WrapItem(paper.BagSlot, paper.Slot, target.BagSlot, target.Slot));
+            }
+
+            return (paper, target);
+        }).WaitAsync(rig.Token);
+
+    private static Item FindByEntry(Player player, uint entry)
+    {
+        for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is { } item && item.Entry == entry)
+            {
+                return item;
+            }
+        }
+
+        throw new InvalidOperationException($"no item {entry}");
+    }
+
+    private static async Task AssertEntryAndCountAsync(Rig rig, ObjectGuid guid, uint entry, uint count)
+        => await rig.Server.World.InvokeAsync(() =>
+        {
+            Item item = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.Inventory.GetItemByGuid(guid)!;
+            Assert.Equal(entry, item.Entry);
+            Assert.Equal(count, item.Count);
+            return true;
+        }).WaitAsync(rig.Token);
+
     /// <summary>Give the sender stacks of <see cref="StackEntry"/> (one AddItem per count) and return the offered stack and its slot.</summary>
     private static async Task<(byte Slot, Item Offered)> StartOfferAsync(Rig rig, uint[] adds, bool offerLast = false)
         => await rig.Server.World.InvokeAsync(() =>
@@ -366,9 +514,9 @@ public sealed class TradeOfferedItemMoveTests
         await ReadStatusAsync(rig.Receiver!, TradeStatus.TradeComplete, rig.Token);
     }
 
-    private static async Task<uint> ReceiverCountAsync(Rig rig)
+    private static async Task<uint> ReceiverCountAsync(Rig rig, uint entry = StackEntry)
         => await rig.Server.World.InvokeAsync(() =>
-            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!.Inventory.GetItemCount(StackEntry)).WaitAsync(rig.Token);
+            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!.Inventory.GetItemCount(entry)).WaitAsync(rig.Token);
 
     private static async Task ReadStatusAsync(ScenarioConnection connection, TradeStatus status, CancellationToken token)
     {

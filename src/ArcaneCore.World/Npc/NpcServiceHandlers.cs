@@ -3,7 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
-using ArcaneCore.World.Items;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -123,9 +123,10 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
         byte count = reader.ReadByte();
 
         // A partial sale shrinks the stack and a full one removes it; either changes what a trade partner who
-        // already accepted receives (the trade settles from the live count). The 1.12 client never sells a locked
-        // item, so this is scored like the other offered-item moves.
-        if (player.Inventory.GetItemByGuid(item) is { } offered && ItemHandlers.IsOffered(session, player, offered))
+        // already accepted receives (the trade settles from the live count). The client greys out an offered item,
+        // so a sale of one is a crafted packet and is scored like the other offered-item moves.
+        if (player.Inventory.GetItemByGuid(item) is { } offered
+            && session.Services.GetService<EconomyFeature>()?.IsOffered(player, offered) == true)
         {
             session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "sale of an item offered in the trade window");
             session.Send(WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(vendor, item, SellResult.CantSellItem));

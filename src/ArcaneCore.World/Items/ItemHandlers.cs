@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -67,8 +68,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             // vmangos rejects a cast item that is currently offered in a trade. The economy
             // feature owns the trade table; keep this guard at the world boundary rather than
             // coupling the game spell system to a session-level trade service.
-            EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
-            if (economy?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid))
+            if (IsOffered(session, player, item))
             {
                 // vmangos "cheat way only": scored by the anticheat (docs/areas/anticheat.md).
                 session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "use of an item offered in the trade window");
@@ -225,7 +225,8 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (RefuseIfOffered(session, player, srcBag, srcSlot))
+        if (RefuseIfOffered(session, player, srcBag, srcSlot)
+            || (inventory.GetItem(srcBag, srcSlot) is { } moving && RefuseIfStoredOntoOffered(session, player, moving.Template, moving.Count, moving, dstBag, InventorySlots.NullSlot)))
         {
             return;
         }
@@ -282,7 +283,9 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         // here the client is also told ItemLocked. The destination is checked too because a split onto an offered
         // stack would merge into it, but unscored: vmangos never checks the destination, so a client that lets
         // the drop through must not be charged for it.
-        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot, score: false))
+        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot, score: false)
+            || (dstSlot == InventorySlots.NullSlot && InventorySlots.IsInventoryPos(dstBag, dstSlot)
+                && inventory.GetItem(srcBag, srcSlot) is { } splitting && RefuseIfStoredOntoOffered(session, player, splitting.Template, count, null, dstBag, dstSlot)))
         {
             return;
         }
@@ -319,8 +322,17 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static bool RefuseIfOffered(WorldSession session, Player player, byte bag, byte slot, bool score = true)
     {
-        Item? item = player.Inventory.GetItem(bag, slot);
-        if (item is null || !IsOffered(session, player, item))
+        return player.Inventory.GetItem(bag, slot) is { } item && RefuseIfOffered(session, player, item, score);
+    }
+
+    /// <summary>
+    /// <see cref="RefuseIfOffered(WorldSession, Player, byte, byte, bool)"/> for an item already resolved. Also used by the wrap and
+    /// open-gift handlers, which pass <paramref name="score"/> false: vmangos has no check there, so a client that lets one
+    /// through must not be charged.
+    /// </summary>
+    internal static bool RefuseIfOffered(WorldSession session, Player player, Item item, bool score = true)
+    {
+        if (!IsOffered(session, player, item))
         {
             return false;
         }
@@ -335,8 +347,39 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>Whether the item is in the player's own side of an open trade window.</summary>
-    internal static bool IsOffered(WorldSession session, Player player, Item item)
-        => session.Services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid);
+    private static bool IsOffered(WorldSession session, Player player, Item item)
+        => session.Services.GetService<EconomyFeature>()?.IsOffered(player, item) == true;
+
+    /// <summary>
+    /// True (after sending ItemLocked, unscored) when storing <paramref name="count"/> items automatically at (bag, slot) would top up
+    /// a stack offered in the player's open trade, which raises the count the partner accepted. A dry run of the same
+    /// <see cref="PlayerInventory.CanStoreItem(byte, byte, List{ItemPosCount}, ItemTemplate, uint, Item?, bool, out byte, out uint)"/>
+    /// the move itself uses; offered items are never in the bank (SetTradeItem refuses a bank position), so only inventory targets matter.
+    /// </summary>
+    private static bool RefuseIfStoredOntoOffered(WorldSession session, Player player, ItemTemplate template, uint count, Item? source, byte bag, byte slot)
+    {
+        if (session.Services.GetService<EconomyFeature>() is not { } economy || economy.TradeOf(player) is null)
+        {
+            return false;
+        }
+
+        var dest = new List<ItemPosCount>();
+        if (player.Inventory.CanStoreItem(bag, slot, dest, template, count, source, swap: false, out _, out _) != InventoryResult.Ok)
+        {
+            return false;
+        }
+
+        foreach (ItemPosCount pos in dest)
+        {
+            if (player.Inventory.GetItem(pos.Bag, pos.Slot) is { } target && economy.IsOffered(player, target))
+            {
+                player.Inventory.SendEquipError(InventoryResult.ItemLocked, target, null);
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// CMSG_ITEM_QUERY_SINGLE: u32 entry, u64 guid (unused) → SMSG_ITEM_QUERY_SINGLE_RESPONSE,
