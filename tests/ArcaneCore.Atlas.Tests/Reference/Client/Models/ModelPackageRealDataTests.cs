@@ -3,6 +3,7 @@ using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Materials;
 using ArcaneCore.Atlas.Reference.Client.Models;
 using ArcaneCore.Atlas.Tests.Host;
+using ArcaneCore.Atlas.Tests.Reference.Mpq;
 using ArcaneCore.Atlas.Tests.Textures;
 using Xunit;
 

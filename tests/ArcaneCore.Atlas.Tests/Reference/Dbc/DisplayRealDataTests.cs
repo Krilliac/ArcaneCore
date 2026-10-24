@@ -1,5 +1,6 @@
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Reference.Display;
+using ArcaneCore.Atlas.Tests.Reference.Mpq;
 using ArcaneCore.Atlas.Tests.Textures;
 using Xunit;
 
