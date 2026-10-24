@@ -329,6 +329,8 @@ public sealed partial class CreatureMapSystem
             creature,
             floor,
             $"Creature {creature.Guid} was {floor - creature.Z:F1} yd under a navmesh floor (z={creature.Z:F1}, floor={floor:F1}) at ({creature.X:F1}, {creature.Y:F1}) on map {Map.MapId}: lifted onto it");
+        // As in TryRecoverClippedUnderTerrain: the stop packet carries the old (under-floor) position and Relocate sends none,
+        // so clients see the corrected z once the movement generator launches its next spline.
         StopMoving(creature);
         if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
         {

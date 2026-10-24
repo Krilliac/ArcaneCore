@@ -290,7 +290,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
     [InlineData(1390f, 1470f, 7f, 1000u, true)]
     [InlineData(1390f, 1470f, 25f, 2000u, false)]
     [InlineData(1390f, 1470f, 25f, 2000u, true)]
-    public void APetFollowingItsOwnerAlongTheWsgTunnelRamp_StaysOnTheFloor_AndIsNeverLifted(float fromX, float toX, float ownerStep, uint tickMs, bool pathJobs)
+    public void ACreatureFollowingItsOwnerAlongTheWsgTunnelRamp_StaysOnTheFloor_AndIsNeverLifted(float fromX, float toX, float ownerStep, uint tickMs, bool pathJobs)
     {
         const uint Entry = 949211;
         using WorldRuntime world = TestWorld.CreateRuntime();
