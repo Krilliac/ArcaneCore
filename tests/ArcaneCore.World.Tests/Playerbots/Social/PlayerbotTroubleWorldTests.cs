@@ -151,6 +151,8 @@ public sealed class PlayerbotTroubleWorldTests
             Player enemy = HelpTestKit.Online(world, "Troubleorc");
             // The only attacker is now a hostile player's pet: a fight that would flag the bot.
             scene.Mob.SetUInt64(UpdateFields.UnitFieldSummonedby, enemy.Guid.Value);
+            // A pet that fights a player has flagged its owner; an unflagged owner's pet is not attackable at all.
+            enemy.UnitFlags |= UnitFlags.Pvp;
             Assert.True(PlayerbotHelpRules.WouldFlag(scene.Mob));
             Assert.False(PlayerbotHelpRules.MayFlag(self, warMode: false));
             Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false, groupSize: 1));
@@ -172,7 +174,12 @@ public sealed class PlayerbotTroubleWorldTests
         // With War Mode on the same scene is helped.
         await world.Host.OnWorldAsync(() => world.Options.Social.WarMode.Enabled = true);
         long warNow = HelpTestKit.NowWhere(t => t > now + 60_000 && PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
-        await ScanAsync(world, warNow);
+        // The world's ticks clear a flag set by hand, so the owner is flagged in the same world turn as the scan.
+        await world.Host.OnWorldAsync(() =>
+        {
+            HelpTestKit.Online(world, "Troubleorc").UnitFlags |= UnitFlags.Pvp;
+            SocialTestKit.Feature(world.Host).Help.Run(SocialTestKit.BotPass(world.Host, warNow));
+        });
         Assert.Equal(1, SocialTestKit.Feature(world.Host).Help.Helped);
     }
 

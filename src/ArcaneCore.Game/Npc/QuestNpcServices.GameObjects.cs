@@ -11,11 +11,11 @@ namespace ArcaneCore.Game.Npc;
 public sealed partial class QuestNpcServices
 {
     /// <summary>The quests <paramref name="source"/> starts: its game object relations when it is a game object.</summary>
-    private IReadOnlyList<uint> StartersOf(NpcInfo source)
+    public IReadOnlyList<uint> StartersOf(NpcInfo source)
         => source.IsGameObject ? Quests.GameObjectStartersOf(source.Entry) : Quests.StartersOf(source.Entry);
 
     /// <summary>The quests <paramref name="source"/> ends.</summary>
-    private IReadOnlyList<uint> EndersOf(NpcInfo source)
+    public IReadOnlyList<uint> EndersOf(NpcInfo source)
         => source.IsGameObject ? Quests.GameObjectEndersOf(source.Entry) : Quests.EndersOf(source.Entry);
 
     /// <summary>
