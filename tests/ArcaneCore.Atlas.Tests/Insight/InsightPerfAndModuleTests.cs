@@ -103,8 +103,7 @@ public sealed class InsightPerfAndModuleTests
         Assert.Equal(40, ui["textureMb"]!.GetValue<double>());
         Assert.Equal(2500, ui["ageMs"]!.GetValue<long>());
 
-        report["fps"] = 30;
-        await rig.RunAsync("perf.report", new JsonObject { ["stats"] = report }, CommandOrigin.Ui);
+        await rig.RunAsync("perf.report", new JsonObject { ["stats"] = new JsonObject { ["fps"] = 30 } }, CommandOrigin.Ui);
         Assert.Equal(30, (await rig.RunAsync("perf.stats")).Data!["ui"]!["fps"]!.GetValue<double>());
     }
 

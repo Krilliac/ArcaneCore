@@ -174,7 +174,7 @@ internal sealed class InsightRig : IAsyncDisposable
     {
         lock (_events)
         {
-            return [.. _events.Where(e => e.Topic == topic).Select(e => e.Data)];
+            return [.. _events.Where(e => e.Topic == topic).Select(e => e.Data is null ? null : JsonNode.Parse(e.Data.ToJsonString()))];
         }
     }
 

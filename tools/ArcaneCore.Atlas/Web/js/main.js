@@ -3,6 +3,8 @@
 import { adoptToken, forgetToken, rememberToken } from './api.js';
 import { createApp } from './app.js';
 import { installHotkeys, showShortcuts } from './hotkeys.js';
+import { InsightPanel } from './insight/panel.js';
+import { PerfHud } from './insight/perfhud.js';
 import { Inspector } from './ui/inspector.js';
 import { LayersRail } from './ui/layers.js';
 import { LivePanel } from './ui/livepanel.js';
@@ -74,6 +76,7 @@ const TABS = [
     { id: 'inspector', label: 'Inspector' },
     { id: 'probes', label: 'Probes' },
     { id: 'live', label: 'Live' },
+    { id: 'insight', label: 'Insight' },
 ];
 
 function start(token) {
@@ -87,11 +90,13 @@ function start(token) {
     const inspector = new Inspector(app, viewport);
     const probes = new ProbesPanel(app, viewport);
     const live = new LivePanel(app, viewport);
+    const hud = new PerfHud(app, viewport);
+    const insight = new InsightPanel(app, hud);
     const status = new StatusBar(app);
     const topbar = new TopBar(app, viewport, { onPalette: () => openPalette(app), onShortcuts: () => showShortcuts() });
 
     // Right rail with tabs.
-    const panels = { inspector: inspector.element, probes: probes.element, live: live.element };
+    const panels = { inspector: inspector.element, probes: probes.element, live: live.element, insight: insight.element };
     const tabButtons = new Map();
     const tabList = h('div', { class: 'tabs', role: 'tablist', aria: { label: 'Panels' } });
     const select = (id, focus = false) => {
@@ -131,7 +136,7 @@ function start(token) {
         panels[tab.id].setAttribute('role', 'tabpanel');
         panels[tab.id].setAttribute('aria-labelledby', `tab-${tab.id}`);
     });
-    const rightRail = h('aside', { class: 'rail rail-right', aria: { label: 'Inspector, probes and live data' } }, tabList, inspector.element, probes.element, live.element);
+    const rightRail = h('aside', { class: 'rail rail-right', aria: { label: 'Inspector, probes and live data' } }, tabList, inspector.element, probes.element, live.element, insight.element);
     select('inspector');
     app.events.on('focus-tab', (id) => panels[id] && select(id));
 
@@ -145,11 +150,11 @@ function start(token) {
     };
     const leftToggle = railToggle('left', () => toggleRail('left'));
     const rightToggle = railToggle('right', () => toggleRail('right'));
-    stage.append(leftToggle, rightToggle);
+    stage.append(leftToggle, rightToggle, hud.element);
 
     fill(root, shell);
     viewport.init();
-    const removeHotkeys = installHotkeys({ app, viewport, topbar, toggleRail });
+    const removeHotkeys = installHotkeys({ app, viewport, topbar, toggleRail, hud });
     app.captureHandler = (message) => viewport.handleCaptureRequest(message);
 
     const applyTheme = () => {
@@ -173,7 +178,7 @@ function start(token) {
     });
 
     if (new URLSearchParams(window.location.search).has('debug')) {
-        window.__atlas = { app, viewport };
+        window.__atlas = { app, viewport, hud };
     }
     app.start();
 }

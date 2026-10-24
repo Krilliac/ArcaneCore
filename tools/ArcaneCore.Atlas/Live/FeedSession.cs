@@ -73,6 +73,9 @@ internal sealed class FeedSession : IDisposable
     /// <summary>The server's hello reply; set once <see cref="OpenAsync"/> has returned.</summary>
     public HelloInfo? Hello { get; private set; }
 
+    /// <summary>Query kinds this connection's world answered "unknown query kind" to; they are not asked again on this connection.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, byte> UnsupportedKinds { get; } = new(StringComparer.Ordinal);
+
     /// <summary>What this connection has received and refused.</summary>
     public LiveStats Stats { get; } = new();
 
