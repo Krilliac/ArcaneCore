@@ -533,9 +533,8 @@ public static class GmTargetResolver
 
     private static GmTarget? ResolveDefault(CommandContext context, Player self, GmTargetRequest request)
     {
-        // The plan's chain is the selection, then self. The issuer's own target sits between them, so a command typed with nothing
-        // selected still reaches what the issuer is fighting.
-        ObjectGuid guid = self.Selection.IsEmpty ? self.Target : self.Selection;
+        // The chain is the selection, then self; the issuer's combat target is not part of it.
+        ObjectGuid guid = self.Selection;
         if (guid.IsEmpty)
         {
             // Nothing selected and no target: the issuer itself, when that is a valid kind for the command.

@@ -609,7 +609,7 @@ public sealed class GmTargetResolverTests
     }
 
     [Fact]
-    public async Task TheUnitTargetIsTheFallbackWhenNothingIsSelected()
+    public async Task TheCombatTargetIsNotAFallbackWhenNothingIsSelected()
     {
         await using WorldTestHost host = InspectCommandTests.StartWithWolf();
         await using WorldTestClient gm = await host.EnterWorldAsync("RSLVTGT", "Rslvtgt", AccountSecurity.GameMaster);
@@ -623,7 +623,8 @@ public sealed class GmTargetResolverTests
         });
 
         Resolved viaTarget = await ResolveAsync(host, gm, "Rslvtgt", "", GmTargetRequest.Reading);
-        Assert.Same(wolf, viaTarget.Target?.Creature);
+        Assert.Equal("Rslvtgt", viaTarget.Target?.Player?.Name);
+        Assert.Null(viaTarget.Target?.Creature);
 
         // A set selection wins over the target.
         Player self = await host.PlayerAsync("Rslvtgt");
