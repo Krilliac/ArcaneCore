@@ -276,7 +276,11 @@ export function localCsp() {
     return m[1];
 }
 
-/** The public listener's header: the meta policy plus worker-src and frame-ancestors (design 3, security headers). */
+/**
+ * The public listener's header as this harness assumes it: the meta policy plus worker-src and frame-ancestors (design 3, security headers).
+ * No public listener exists on this lane's base, so this is an assumed policy, not the real header; re-run the Worker tests against
+ * the real one when lane D2 lands.
+ */
 export function publicCsp() {
     return `${localCsp()}; worker-src 'self'; frame-ancestors 'none'`;
 }

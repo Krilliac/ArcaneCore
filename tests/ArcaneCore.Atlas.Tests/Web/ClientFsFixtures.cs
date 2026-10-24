@@ -174,6 +174,20 @@ internal static class ClientFsFixtures
             new("Text\\Gone.txt", []) { Delete = true },
         ]);
         AddArchive("patch-2.MPQ", [Text("Text\\Chain.txt", "patch two copy")]);
+        // A patch that replaces the first tile's ADT. It is not in the good tree: tests add it as Data/patch-3.MPQ and stage the folder in any order.
+        TileKey patchedTile = LiquidTiles[0];
+        BuiltAdt patchedBuilt = SyntheticTerrain.Adt(SyntheticTerrain.Plane(patchedTile, 300f, 0.03f, 0.04f));
+        GeometryChunk patchedTerrain = ClientTerrainGeometry.BuildTerrain(patchedTile, AdtFile.Parse(patchedBuilt.Bytes), directoryLookup, CancellationToken.None);
+        File.WriteAllBytes(Path.Combine(directory, "expected", "terrain-patched.bin"), GeometryWire.Write(patchedTerrain));
+        AddArchive("patch-3.MPQ", [new TestMpqFile(ClientMapPaths.AdtPath(MapDirectoryName, patchedTile), patchedBuilt.Bytes) { Zlib = true }]);
+        manifest["patchedTile"] = new JsonObject
+        {
+            ["map"] = patchedTile.MapId,
+            ["x"] = patchedTile.X,
+            ["y"] = patchedTile.Y,
+            ["archive"] = "archives/patch-3.MPQ",
+            ["terrain"] = "expected/terrain-patched.bin",
+        };
         manifest["archives"] = archives;
         manifest["chain"] = new JsonArray
         {

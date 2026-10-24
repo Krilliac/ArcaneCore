@@ -9,7 +9,7 @@
 
 import { buildTile } from './adt.js';
 import { ClientFsError } from './limits.js';
-import { createChain, openArchive, stats } from './mpq.js';
+import { createChain, loadOrder, openArchive, stats } from './mpq.js';
 import { validateClientFolder } from './validate.js';
 
 /** Opened archives, kept for the life of the Worker: tables are parsed once per (name, size, lastModified). */
@@ -17,11 +17,14 @@ const opened = new Map();
 const chains = new Map();
 
 async function chainOf(archives) {
-    const id = archives.map((a) => `${a.name}|${a.size}|${a.lastModified}`).join('&');
+    // The scan hands archives over in directory order; the chain needs MpqFileSystem load order (lowest priority first, backup.MPQ never mounted).
+    const byName = new Map(archives.map((a) => [a.name, a]));
+    const ordered = loadOrder(archives.map((a) => a.name)).map((name) => byName.get(name));
+    const id = ordered.map((a) => `${a.name}|${a.size}|${a.lastModified}`).join('&');
     let chain = chains.get(id);
     if (chain === undefined) {
         const list = [];
-        for (const entry of archives) {
+        for (const entry of ordered) {
             const key = `${entry.name}|${entry.size}|${entry.lastModified}`;
             let archive = opened.get(key);
             if (archive === undefined) {

@@ -118,13 +118,21 @@ function init() {
             return;
         }
         model.handle = handle;
-        if (await handle.queryPermission({ mode: 'read' }) === 'granted') {
+        // A handle that cannot even be queried (revoked, from another origin state) is treated like one that needs the user's click.
+        const permission = await Promise.resolve().then(() => handle.queryPermission({ mode: 'read' })).catch(() => 'prompt');
+        if (permission === 'granted') {
             await grant();
         } else {
             model.state = 'needs-permission';
         }
-    })();
-    return model.initialised;
+    })().catch(() => {
+        // Never cache a rejection: whatever IndexedDB or the quota estimate threw, the visitor falls back to the first-entry dialog.
+        if (model.state !== 'needs-permission' && model.state !== 'ready' && model.state !== 'error') {
+            model.state = 'none';
+        }
+        model.budget ||= defaultCacheBudget({ quota: model.quota });
+    });
+    return forgetting === null ? model.initialised : Promise.all([model.initialised, forgetting]).then(() => undefined);
 }
 
 // ---- picking and validating ----------------------------------------------------------------------------------------
@@ -264,20 +272,34 @@ export async function showFirstEntryDialogIfNeeded() {
 }
 
 // ---- settings ------------------------------------------------------------------------------------------------------
-async function forget() {
+let forgetting = null; // the running Forget folder, awaited by init() so a status read never sees the half-deleted store
+
+function forget() {
+    const run = forgetNow().finally(() => {
+        if (forgetting === run) {
+            forgetting = null;
+        }
+    });
+    forgetting = run;
+    return run;
+}
+
+async function forgetNow() {
+    // Everything that could still write to the cache is cut off before the first await: the generation bump makes a tile that is
+    // already in flight drop its result instead of caching it, the pool is closed and the model no longer names a folder.
     generation++;
     settings?.close();
     settings = null;
     closeDialog();
     resolveWaiters(false);
-    await dbDelete('handles', HANDLE_KEY);
-    await dbDelete('meta', META_KEY);
-    lru.clear();
-    await opfs.clear();
     pool?.close();
     pool = null;
     inflight.clear();
     Object.assign(model, { state: 'none', folderName: '', build: null, version: null, warnings: [], error: null, kind: null, handle: null, folder: null, archives: [], cacheHits: 0 });
+    await dbDelete('handles', HANDLE_KEY);
+    await dbDelete('meta', META_KEY);
+    lru.clear();
+    await opfs.clear();
 }
 
 export async function openClientFilesSettings() {
@@ -385,6 +407,8 @@ function waitForFiles() {
 }
 
 async function buildOrLoad(layer, map, x, y) {
+    const started = generation; // Forget folder bumps it; a result from before that must not be cached under the old folder's key
+    const forgotten = () => started !== generation;
     const logical = `${KEY_VERSION}/${layer}/${map}/${x}/${y}`;
     const key = chainKey(logical, model.folder?.archives ?? model.archives);
     const hot = lru.get(key);
@@ -393,6 +417,9 @@ async function buildOrLoad(layer, map, x, y) {
         return { state: hot.state, detail: hot.detail, body: hot.body.slice(0) };
     }
     const stored = await opfs.get(key).catch(() => null);
+    if (forgotten()) {
+        return emptyResult('NotApplicable', 'The client folder was forgotten.');
+    }
     if (stored !== null) {
         const result = decodeResult(stored);
         lru.set(key, result, result.body.byteLength);
@@ -409,10 +436,16 @@ async function buildOrLoad(layer, map, x, y) {
     try {
         tile = await getPool().run('tile', { archives: folder.archives, layer, map, x, y }, { kind: 'tile', key: liveKey });
     } catch (error) {
+        if (forgotten()) {
+            return emptyResult('NotApplicable', 'The client folder was forgotten.');
+        }
         if (error instanceof ClientFsError) {
             return emptyResult('Rejected', error.message);
         }
         throw error;
+    }
+    if (forgotten()) {
+        return emptyResult('NotApplicable', 'The client folder was forgotten.');
     }
     const result = { state: tile.state, detail: tile.detail, body: envelope(tile.parts) };
     if (CACHEABLE.has(result.state)) {

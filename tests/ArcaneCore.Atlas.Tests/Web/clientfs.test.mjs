@@ -1392,6 +1392,126 @@ test('the webkitdirectory fallback caches parsed results and asks again only whe
     }, { helpers: PAGE_HELPERS_NO_PICKER });
 });
 
+const sha256Page = `const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');`;
+
+test('the Worker mounts a tile chain in MpqFileSystem load order whatever order the archives arrive in', async () => {
+    await withBrowser(async ({ fx, page }) => {
+        const patched = fx.manifest.patchedTile;
+        const tree = { ...fx.manifest.tree, 'Data/patch-3.MPQ': patched.archive };
+        // Alphabetical-descending and reversed load order: the lowest-priority archive arrives last, patch-3 first.
+        const names = Object.keys(tree).filter((p) => p.startsWith('Data/')).map((p) => p.slice(5)).sort().reverse();
+        const expectedPatched = crypto.createHash('sha256').update(fx.read(patched.terrain)).digest('hex');
+        const original = fx.manifest.tiles.find((t) => t.x === patched.x && t.y === patched.y);
+        const expectedOriginal = crypto.createHash('sha256').update(fx.read(original.terrain)).digest('hex');
+        assert.notEqual(expectedPatched, expectedOriginal, 'the patch must change the tile or the test proves nothing');
+        const run = (order) => page.evaluate(`(async () => {
+            ${sha256Page}
+            const tree = ${JSON.stringify(tree)};
+            const archives = [];
+            for (const name of ${JSON.stringify(order)}) {
+                const blob = await (await fetch('/__fixtures/' + tree['Data/' + name])).blob();
+                archives.push({ name, size: blob.size, lastModified: 1700000000000, blob });
+            }
+            const worker = new Worker('/app/js/clientfs/worker.js', { type: 'module' });
+            try {
+                const reply = await new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => reject(new Error('the Worker never answered')), 20000);
+                    worker.onmessage = (e) => { clearTimeout(timer); resolve(e.data); };
+                    worker.onerror = (e) => { clearTimeout(timer); reject(new Error('worker error: ' + e.message)); };
+                    worker.postMessage({ id: 1, op: 'tile', archives, layer: ${JSON.stringify(fx.manifest.layers.terrain)}, map: ${patched.map}, x: ${patched.x}, y: ${patched.y} });
+                });
+                if (!reply.ok) { return { error: reply.error }; }
+                return { state: reply.result.state, parts: reply.result.parts.length, digest: await sha256(reply.result.parts[0]) };
+            } finally { worker.terminate(); }
+        })()`);
+        const loadOrdered = ['dbc.MPQ', 'model.MPQ', 'texture.MPQ', 'terrain.MPQ', 'wmo.MPQ', 'patch.MPQ', 'patch-2.MPQ', 'patch-3.MPQ'];
+        for (const [label, order] of [['reversed', names], ['load order', loadOrdered], ['patches first', [...loadOrdered.slice(5), ...loadOrdered.slice(0, 5)]]]) {
+            const r = await run(order);
+            assert.equal(r.error, undefined, `${label}: ${JSON.stringify(r.error)}`);
+            assert.equal(r.state, 'Ok', label);
+            assert.equal(r.parts, 1, label);
+            assert.equal(r.digest, expectedPatched, `${label}: the tile must come from patch-3.MPQ, the highest-priority archive`);
+        }
+        assert.deepEqual(problems(page), []);
+    });
+});
+
+test('localTileProvider resolves a patched tile from the patch when the FileList arrives in non-load order', async () => {
+    await withBrowser(async ({ fx, page }) => {
+        const patched = fx.manifest.patchedTile;
+        const base = { ...fx.manifest.tree, 'Data/patch-3.MPQ': patched.archive };
+        // Data archives alphabetically descending (patch-3 first, dbc last), everything else after them.
+        const dataNames = Object.keys(base).filter((p) => p.startsWith('Data/')).sort().reverse();
+        const tree = {};
+        for (const p of dataNames) {
+            tree[p] = base[p];
+        }
+        for (const p of Object.keys(base).filter((k) => !k.startsWith('Data/'))) {
+            tree[p] = base[p];
+        }
+        assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog');
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(tree)})`);
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "ready")()', 'the folder to validate', 60_000);
+        const digest = await page.evaluate(`(async () => {
+            ${sha256Page}
+            const r = await cf.localTileProvider().tile(${JSON.stringify(fx.manifest.layers.terrain)}, ${patched.map}, ${patched.x}, ${patched.y}, new AbortController().signal);
+            const view = new DataView(r.body);
+            const length = view.getUint32(4, true);
+            return { state: r.state, parts: view.getUint32(0, true), digest: await sha256(new Uint8Array(r.body, 8, length)) };
+        })()`);
+        assert.equal(digest.state, 'Ok');
+        assert.equal(digest.parts, 1);
+        assert.equal(digest.digest, crypto.createHash('sha256').update(fx.read(patched.terrain)).digest('hex'), 'the patched ADT must win over terrain.MPQ');
+        assert.deepEqual(problems(page), []);
+    }, { helpers: PAGE_HELPERS_NO_PICKER });
+});
+
+test('Forget folder while a tile is in flight leaves no cache entry behind', async () => {
+    await withBrowser(async ({ fx, page }) => {
+        await stageTree(page, fx);
+        // The pool keeps its Workers, so the holding Worker class must be in place before the first Worker is spawned.
+        await page.evaluate(`(() => {
+            window.__held = [];
+            window.__hold = false;
+            const Base = window.Worker;
+            window.Worker = class extends Base {
+                set onmessage(handler) {
+                    super.onmessage = (event) => { if (window.__hold && event.data?.ok && event.data.result?.parts) { window.__held.push(() => handler(event)); } else { handler(event); } };
+                }
+            };
+            return true;
+        })()`);
+        await pickAndWait(page);
+        const tile = fx.manifest.tiles[1];
+        await page.evaluate('cf.openClientFilesSettings()');
+        await page.waitFor('[...document.querySelectorAll(\'[data-clientfs] button\')].some((b) => b.textContent.trim() === "Forget folder")', 'the settings panel');
+        // Hold every Worker reply so the tile is provably in flight when Forget is clicked.
+        await page.evaluate(`(() => {
+            window.__hold = true;
+            window.__tile = cf.localTileProvider().tile(${JSON.stringify(fx.manifest.layers.terrain)}, 0, ${tile.x}, ${tile.y}, new AbortController().signal).then((r) => r.state, (e) => 'rejected ' + e.message);
+            return true;
+        })()`);
+        await page.waitFor('window.__held.length === 1', 'the Worker to answer the held tile');
+        // Click Forget and deliver the held reply in the same task: the reply resumes the tile while Forget is still deleting.
+        await page.evaluate(`(() => {
+            [...document.querySelectorAll('[data-clientfs] button')].find((b) => b.textContent.trim() === 'Forget folder').click();
+            for (const release of window.__held.splice(0)) { release(); }
+            return true;
+        })()`);
+        const settled = await page.evaluate('window.__tile');
+        assert.notEqual(settled, 'Ok', 'a tile built for a forgotten folder must not be handed out as if the folder were still there');
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "none")()', 'the folder to be forgotten');
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assert.deepEqual(await page.evaluate('window.__t.opfsNames()'), [], 'no OPFS cache entry may appear after Forget');
+        assert.equal((await status(page)).cacheBytes, 0);
+        assert.equal((await page.evaluate('window.__t.handleRecords()')).count, 0);
+        assert.deepEqual(problems(page), []);
+    });
+});
+
 test('settings show folder, build and cache size; Forget folder deletes the handle and the cache; the budget slider is capped', async () => {
     await withBrowser(async ({ fx, page }) => {
         await stageTree(page, fx);

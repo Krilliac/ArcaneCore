@@ -4,6 +4,14 @@ Atlas can draw the world from the visitor's own World of Warcraft 1.12.1 (build 
 
 Code: `tools/ArcaneCore.Atlas/Web/js/clientfs/`. Tests: `tests/ArcaneCore.Atlas.Tests/Web/clientfs.test.mjs` (run by `ClientFsFixtureTests`).
 
+## Integration status
+
+The reader is complete but not yet reachable from a page: nothing outside `js/clientfs/` imports `clientfs/index.js`, so no visitor sees the dialog until two later lanes land. Lane D2 (`PublicApi.tile` / public boot) must call `showFirstEntryDialogIfNeeded()` and `localTileProvider()`, and lane D3 (Local's settings entry) must call `openClientFilesSettings()`; both feature-detect the module until then. Merge order is D4, D1, D2, D3. Open follow-ups:
+
+- D2 and D3 wire the first-entry dialog into the public and Local pages (this is what makes the dialog appear on first entry).
+- `WebAssetsTests.EntryModule_ReachesEveryJavaScriptFile` carries an extra `js/clientfs/index.js` root added by D4; that test is owned by A1/D2, so D2 should take the root over (or drop it once `index.js` is imported) when it lands.
+- The "module Worker under the public CSP" test uses a header the test harness assembles (`localCsp()` plus `worker-src 'self'; frame-ancestors 'none'`) because no public listener exists on this base. Re-run it against the real header when D2 lands.
+
 ## What the visitor sees
 
 - First entry: a dialog explains the feature and offers **Choose folder**, **Skip** and **Why?**. Skip is remembered; the map stays untextured.

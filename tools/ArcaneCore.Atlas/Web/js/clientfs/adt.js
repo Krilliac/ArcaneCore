@@ -573,6 +573,7 @@ async function loadDirectory(chain) {
         loaded = (async () => {
             const maps = new Map();
             const areas = new Map();
+            const seenAreas = new Set(); // every AreaTable id, named or not: a repeated id refuses the table like ClientMapDirectory.FromTables
             const read = async (path, fields) => {
                 const bytes = await chain.read(path);
                 if (bytes === null) {
@@ -594,15 +595,24 @@ async function loadDirectory(chain) {
             const map = await read(MAP_TABLE, MAP_FIELD_COUNT);
             if (map.table) {
                 for (let r = 0; r < map.table.recordCount; r++) {
-                    maps.set(map.table.cell(r, 0), map.table.string(map.table.cell(r, 1)));
+                    const id = map.table.cell(r, 0);
+                    if (maps.has(id)) {
+                        return { maps, areas, problem: `${MAP_TABLE} lists map id ${id} twice.`, rejected: true };
+                    }
+                    maps.set(id, map.table.string(map.table.cell(r, 1)));
                 }
             }
             const area = await read(AREA_TABLE, AREA_FIELD_COUNT);
             if (area.table) {
                 for (let r = 0; r < area.table.recordCount; r++) {
+                    const id = area.table.cell(r, 0);
+                    if (seenAreas.has(id)) {
+                        return { maps, areas, problem: `${AREA_TABLE} lists area id ${id} twice.`, rejected: true };
+                    }
+                    seenAreas.add(id);
                     const name = area.table.localized(r, 11);
                     if (name.length > 0) {
-                        areas.set(area.table.cell(r, 0), name);
+                        areas.set(id, name);
                     }
                 }
             }
