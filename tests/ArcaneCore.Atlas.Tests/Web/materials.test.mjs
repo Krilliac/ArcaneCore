@@ -251,6 +251,7 @@ test('TextureStore returns a placeholder at once, then the texture when it arriv
     store.endFrame();
     assert.equal(first.ready, false);
     assert.ok(first.texture, 'a placeholder texture must be usable immediately');
+    const standIn = first.texture; // the entry is live: it is updated in place when the texture arrives
     assert.equal(fetchTexture.calls.length, 1);
 
     fetchTexture.calls[0].resolve(rgba(4, 4));
@@ -259,7 +260,7 @@ test('TextureStore returns a placeholder at once, then the texture when it arriv
     const second = store.get('client:a');
     store.endFrame();
     assert.equal(second.ready, true);
-    assert.notEqual(second.texture, first.texture);
+    assert.notEqual(second.texture, standIn);
     assert.equal(gl.uploads.at(-1).width, 4);
     store.dispose();
 });

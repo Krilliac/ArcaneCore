@@ -10,7 +10,7 @@
 //     evicted and fetched again every frame. Starved keys are retried when the working set shrinks or the budget grows.
 //   Memory is counted as the bytes the levels occupy on the wire (compressed size for DXT): what the host sent is what is resident.
 //
-// Nothing here touches IndexedDB, localStorage or the Cache API: textures live in GPU memory for the page's lifetime only.
+// Nothing here writes to browser storage of any kind: textures live in GPU memory for the page's lifetime only.
 
 import { FORMAT, decodeTexture } from './atx1.js';
 

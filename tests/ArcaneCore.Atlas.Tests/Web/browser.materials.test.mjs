@@ -68,7 +68,8 @@ function configure(key) {
         for (const entry of Object.values(host.view.layers)) {
             entry.visible = false;
         }
-        host.view.layers['ref.m2.tex'].visible = true;
+        Object.assign(host.view.layers['ref.m2.tex'], { visible: true, mode: 'fill' }); // layers default to wire; textures need a fill
+        host.view.compare = 'reference'; // the textured layers are Reference-view layers: the server view hides them
         host.view.camera = { target: [INN[0], INN[1], 57], distance: VIEW_HALF, yaw: 90, pitch: 90, fov: 55, mode: 'top' };
     };
 }

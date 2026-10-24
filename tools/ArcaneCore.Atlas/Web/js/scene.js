@@ -60,9 +60,10 @@ export class Scene extends Emitter {
 
     /**
      * Declares the window: `map`, the focus tile centre (world x, y or null), the radius in tiles and the layer ids whose
-     * tiles are wanted. Cheap when nothing changed.
+     * tiles are wanted. `layerRadius` ({layerId: tiles}) narrows the window of single layers (the textured layers load fewer
+     * tiles than the plain ones). Cheap when nothing changed.
      */
-    update({ map, focusTile, radius, layers }) {
+    update({ map, focusTile, radius, layers, layerRadius = null }) {
         if (this.map !== map) {
             this.reset();
             this.map = map;
@@ -71,10 +72,17 @@ export class Scene extends Emitter {
         this.focus = focusTile;
         this.radius = radius;
         const wanted = new Map();
-        const tiles = focusTile ? wantedTiles(focusTile, radius) : [];
+        const windows = new Map();
+        const tilesOf = (layer) => {
+            const r = Math.min(radius, layerRadius?.[layer] ?? radius);
+            if (!windows.has(r)) {
+                windows.set(r, focusTile ? wantedTiles(focusTile, r) : []);
+            }
+            return windows.get(r);
+        };
         for (const layer of layers) {
             wanted.set(tileKey(layer, map, GLOBAL_INDEX, GLOBAL_INDEX), { layer, x: GLOBAL_INDEX, y: GLOBAL_INDEX, priority: -1 });
-            for (const t of tiles) {
+            for (const t of tilesOf(layer)) {
                 wanted.set(tileKey(layer, map, t.x, t.y), { layer, x: t.x, y: t.y, priority: t.d2 });
             }
         }
