@@ -599,4 +599,45 @@ public sealed class OptionCatalogEdgeTests
         Assert.Contains("Edge:Pack:Level", conflicts);
         Assert.Equal("a level", description);
     }
+
+    // --- bounds of the reload keys -----------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TheReloadKeys_ShowTheBoundsTheirOwnCheckEnforces_AndStillRefuseWithTheCheckMessage()
+    {
+        await using var host = WorldTestHost.Start();
+        (string speed, string autosave, OptionSetResult result, string error, bool enforced) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey run = catalog.Find("Locomotion:PlayerRunSpeedRate")!;
+            OptionKey save = catalog.Find("World:AutosaveIntervalMs")!;
+            OptionSetResult r = catalog.TrySet(scope, run, "11", Tester, out string message, out _, out _);
+            return (run.BoundsText, save.BoundsText, r, message, run.BoundsEnforced);
+        });
+
+        Assert.Equal("0.1..10", speed);
+        Assert.Equal(">= 0", autosave);
+        Assert.Equal(OptionSetResult.Invalid, result);
+        Assert.Contains("must be between", error, StringComparison.Ordinal);
+        Assert.False(enforced);
+    }
+
+    [Fact]
+    public void ProbeBounds_FindsTheEdgesOfARange_AndGivesNothingForACheckThatIsNotARange()
+    {
+        Func<object?, string?> range = v => (int)v! is >= 3 and <= 40 ? null : "no";
+        Func<object?, string?> even = v => (int)v! % 2 == 0 ? null : "odd";
+        Func<object?, string?> positive = v => (float)v! > 0f ? null : "no";
+        Func<object?, string?> rate = v => (float)v! is >= 0.1f and <= 10f ? null : "no";
+
+        Assert.Equal((3d, 40d), WorldConfigKeySource.ProbeBounds(range, typeof(int), OptionType.Integer, 10));
+        Assert.Equal((double.NaN, double.NaN), WorldConfigKeySource.ProbeBounds(even, typeof(int), OptionType.Integer, 10));
+        Assert.Equal((double.NaN, double.NaN), WorldConfigKeySource.ProbeBounds(null, typeof(int), OptionType.Integer, 10));
+        Assert.Equal((double.NaN, double.NaN), WorldConfigKeySource.ProbeBounds(range, typeof(int), OptionType.Integer, 99)); // the seed is refused
+        Assert.Equal((0.1d, 10d), WorldConfigKeySource.ProbeBounds(rate, typeof(float), OptionType.Number, 1));
+        (double min, double max) = WorldConfigKeySource.ProbeBounds(positive, typeof(float), OptionType.Number, 1);
+        Assert.InRange(min, 0d, 1e-6);
+        Assert.True(double.IsNaN(max));
+    }
 }

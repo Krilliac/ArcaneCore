@@ -44,9 +44,10 @@ public sealed class OptionKey
     internal OptionKey(
         string path, string description, OptionType type, OptionApplyClass apply, string group, Func<OptionScope, object?> get,
         Func<OptionScope, object, OptionActor, string?>? set, double min = double.NaN, double max = double.NaN, bool secret = false,
-        IReadOnlyList<string>? choices = null, IReadOnlyList<string>? aliases = null, OptionTracking? tracking = null, string? configPath = null)
+        IReadOnlyList<string>? choices = null, IReadOnlyList<string>? aliases = null, OptionTracking? tracking = null, string? configPath = null, bool informationalBounds = false)
     {
         ConfigPath = configPath ?? path;
+        BoundsEnforced = !informationalBounds;
         Path = path;
         Description = description;
         Type = type;
@@ -89,6 +90,12 @@ public sealed class OptionKey
     /// <summary>Highest accepted value of a number, NaN when only the type bounds it.</summary>
     public double Max { get; }
 
+    /// <summary>
+    /// False when <see cref="Min"/> and <see cref="Max"/> are only shown (the reload keys, whose own Check enforces them and refuses with
+    /// its own message); true when <see cref="TryParse"/> refuses a value outside them.
+    /// </summary>
+    public bool BoundsEnforced { get; }
+
     /// <summary>True when the value is never printed (a password, token or connection string).</summary>
     public bool Secret { get; }
 
@@ -119,6 +126,8 @@ public sealed class OptionKey
     public string BoundsText => Type switch
     {
         OptionType.Integer or OptionType.Number when !double.IsNaN(Min) && !double.IsNaN(Max) => $"{Number(Min)}..{Number(Max)}",
+        OptionType.Integer or OptionType.Number when !double.IsNaN(Min) => $">= {Number(Min)}",
+        OptionType.Integer or OptionType.Number when !double.IsNaN(Max) => $"<= {Number(Max)}",
         OptionType.Choice => string.Join('|', Choices),
         OptionType.Bool => "true|false",
         _ => string.Empty,
@@ -204,7 +213,7 @@ public sealed class OptionKey
         }
 
         double asDouble = Convert.ToDouble(value, CultureInfo.InvariantCulture);
-        if ((!double.IsNaN(Min) && asDouble < Min) || (!double.IsNaN(Max) && asDouble > Max))
+        if (BoundsEnforced && ((!double.IsNaN(Min) && asDouble < Min) || (!double.IsNaN(Max) && asDouble > Max)))
         {
             error = $"{Number(asDouble)} is out of range; {Path} must be between {Number(Min)} and {Number(Max)}";
             return false;
