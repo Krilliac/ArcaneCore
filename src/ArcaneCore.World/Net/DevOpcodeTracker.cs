@@ -13,7 +13,7 @@ public readonly record struct DevOpcodeCount(string Opcode, long Count);
 /// Counts the stripped developer, GM, cheat and debug opcodes (<see cref="ArcaneCore.World.Handlers.StrippedDevOpcodes"/>) that sessions dropped, per opcode and per
 /// traffic kind. They are deliberately not in <see cref="UnhandledOpcodeTracker"/>, so that one shows only real gaps. Exposed as the observable
 /// counter <see cref="MetricName"/> (tags <c>protocol=world</c>, <c>opcode</c>, <c>traffic</c>; non-zero slots only; docs/ops/metrics.md) and read by
-/// <c>WiringAudit</c> / <c>.server wiring</c>. Also owns the two <see cref="LogGate"/>s that keep a flooding client to one log line per interval.
+/// <c>WiringAudit</c> / <c>.server wiring</c>. Also makes the per-session <see cref="LogGate"/>s that keep a flooding client to one log line per interval.
 /// <para>
 /// Bounded by the opcode space: one counter per named <see cref="WorldOpcode"/> and traffic kind. Thread affinity: any thread; <see cref="Record"/> is
 /// one <see cref="Interlocked.Increment(ref long)"/>, no allocation, no lock.
@@ -37,11 +37,13 @@ public sealed class DevOpcodeTracker
 
     private readonly long[] _counts = new long[Labels.Length * Kinds];
 
-    /// <summary>At most one log line per interval for a non-staff session's dev opcodes (process wide).</summary>
-    internal LogGate PlayerGate { get; } = new(TimeSpan.FromSeconds(10));
+    private readonly Func<long>? _gateClock;
 
-    /// <summary>At most one log line per interval for staff audit lines (the audit tail still holds every one).</summary>
-    internal LogGate StaffGate { get; } = new(TimeSpan.FromSeconds(10));
+    /// <summary>Creates a tracker; <paramref name="gateClock"/> (milliseconds, monotonic) drives the per-session log gates and defaults to the shared protection clock.</summary>
+    public DevOpcodeTracker(Func<long>? gateClock = null) => _gateClock = gateClock;
+
+    /// <summary>A new gate that admits one log line (or one staff audit entry) per interval; each session owns its own, so one client cannot hide another's attribution.</summary>
+    internal LogGate NewGate() => new(TimeSpan.FromSeconds(10), _gateClock);
 
     /// <summary>Total dev opcodes counted.</summary>
     public long Total

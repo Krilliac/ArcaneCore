@@ -329,7 +329,7 @@ public sealed class DevOpcodeTests
     public async Task AFloodOfOneDevOpcode_IsCountedInFull_ButReportedAndLoggedOncePerInterval()
     {
         long now = 1_000_000;
-        var dev = new DevOpcodeTracker();
+        var dev = new DevOpcodeTracker(() => Volatile.Read(ref now));
         var log = new LevelLogger();
         await using var host = WorldTestHost.Start(configureServices: c => c.AddSingleton(dev), sessionLogger: log);
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVFLOOD", "Devfloodone");
@@ -350,7 +350,7 @@ public sealed class DevOpcodeTests
             AnomalyNotice first = Assert.Single(capture.Notices, n => n.Key == Key);
             Assert.StartsWith("CMSG_BOOTME", first.Detail, StringComparison.Ordinal);
             Assert.DoesNotContain("more since the last report", first.Detail, StringComparison.Ordinal);
-            Assert.True(log.Warnings.Count(m => m.Contains("CMSG_BOOTME", StringComparison.Ordinal)) <= 1, "at most one log line per interval, however many packets");
+            Assert.Equal(1, log.Warnings.Count(m => m.Contains("CMSG_BOOTME", StringComparison.Ordinal) && m.Contains($"account {session.AccountId}", StringComparison.Ordinal)));
 
             Interlocked.Add(ref now, 11_000); // past the default ReportIntervalSeconds (10)
             await client.SendAsync(WorldOpcode.CmsgBootme, []);
@@ -360,6 +360,41 @@ public sealed class DevOpcodeTests
             AnomalyNotice second = Assert.Single(capture.Notices, n => n.Key == Key && n.Detail.Contains("(+199 more since the last report)", StringComparison.Ordinal));
             Assert.StartsWith("CMSG_BOOTME", second.Detail, StringComparison.Ordinal);
             Assert.Equal(2, capture.Notices.Count(n => n.Key == Key));
+            Assert.Equal(2, log.Warnings.Count(m => m.Contains("CMSG_BOOTME", StringComparison.Ordinal)));
+            Assert.Contains(log.Warnings, m => m.Contains("(199 more since the last line", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task AFloodOfStaffDevOpcodes_IsCoalescedInTheAuditTail_PerOpcode()
+    {
+        long now = 1_000_000;
+        var dev = new DevOpcodeTracker(() => Volatile.Read(ref now));
+        await using var host = WorldTestHost.Start(configureServices: c => c.AddSingleton(dev));
+        _ = PacketHeuristicsTestKit.Enable(host);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVGMF", "Devgmflood", AccountSecurity.GameMaster);
+        await using (client)
+        {
+            GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+            for (int i = 0; i < 50; i++)
+            {
+                await client.SendAsync(WorldOpcode.CmsgGodmode, Junk);
+            }
+
+            await client.SendAsync(WorldOpcode.CmsgBootme, Junk);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            Assert.Equal(51, dev.Total);
+            Assert.Equal(1, audit.Tail(1000).Count(e => e.Command == "dev-opcode CMSG_GODMODE"));
+            Assert.Equal(1, audit.Tail(1000).Count(e => e.Command == "dev-opcode CMSG_BOOTME"));
+
+            Interlocked.Add(ref now, 11_000);
+            await client.SendAsync(WorldOpcode.CmsgGodmode, Junk);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            GmAuditEntry[] godmode = [.. audit.Tail(1000).Where(e => e.Command == "dev-opcode CMSG_GODMODE")];
+            Assert.Equal(2, godmode.Length);
+            Assert.Contains(godmode, e => e.Line.Contains("(+49 more coalesced)", StringComparison.Ordinal));
         }
     }
 
@@ -457,6 +492,33 @@ public sealed class DevOpcodeTests
             Assert.Single(capture.Notices, n => n.Key == Key);
             Assert.Equal(1, dev.Total);
             Assert.Empty(unhandled.Snapshot());
+        }
+        finally
+        {
+            bot.Kick("test over");
+            await bot.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task AToolInjectedDevOpcode_IntoAManagedSession_IsDroppedAndReportedUnderTheTool()
+    {
+        var permit = new PacketToolsPermit(
+            Options.Create(new WorldPacketToolsOptions { Enabled = true }),
+            Options.Create(new WorldMapFeedOptions { Enabled = true }),
+            new DevelopmentEnvironment(),
+            liveServer: false);
+        var dev = new DevOpcodeTracker();
+        await using var host = WorldTestHost.Start(configureServices: s => { s.AddSingleton(permit); s.AddSingleton(dev); });
+        (PacketHeuristicsFeature feature, AnomalyLedger _) = PacketHeuristicsTestKit.Enable(host);
+        WorldSession bot = await PacketHeuristicsTestKit.EnterBotAsync(host, "DEVBOTI", "Devbotinj");
+        try
+        {
+            InjectVerdict verdict = await bot.InjectAsync(WorldOpcode.CmsgGodmode, [], TimeSpan.FromSeconds(5), CancellationToken.None);
+
+            Assert.Equal(InjectVerdict.Handled, verdict);
+            Assert.Equal(1, dev.Total);
+            Assert.Equal(1, feature.Count(PacketCheck.DevOpcode, PacketTraffic.Tool));
         }
         finally
         {
