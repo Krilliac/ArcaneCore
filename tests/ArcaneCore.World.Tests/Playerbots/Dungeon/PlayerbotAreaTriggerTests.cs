@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -190,11 +191,12 @@ public sealed class PlayerbotAreaTriggerTests
         var inside = new Vector3(100f, 100f, 10f);
         tracker.Observe(Map, 0, outside, index.Near(outside), fire: true);
         Assert.Equal([1u], tracker.Observe(Map, 0, inside, index.Near(inside), fire: true)); // an entry may allocate
-        for (int i = 0; i < 100; i++) Step(); // warm up
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++) Step();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+        Action window = () =>
+        {
+            for (int i = 0; i < 10_000; i++) Step();
+        };
+        // AllocationProbe runs one unmeasured window first (tiered-JIT and other one-off runtime work stays out) and holds every GC-free window to 0.
+        AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "Observe/WouldEnter without an entry");
 
         void Step()
         {
