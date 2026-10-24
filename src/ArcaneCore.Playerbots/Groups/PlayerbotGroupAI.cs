@@ -44,7 +44,7 @@ namespace ArcaneCore.World.Playerbots.Groups;
 /// died inside). A wiping group retreats (<see cref="PlayerbotRetreat"/>) and regroups.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotGroupAI : PlayerbotMotion.IRouteHolder
+internal sealed class PlayerbotGroupAI
 {
     /// <summary>The leader waits while a living member on its map is farther than this.</summary>
     internal const float WaitForMembersYards = 30f;
@@ -74,10 +74,20 @@ internal sealed class PlayerbotGroupAI : PlayerbotMotion.IRouteHolder
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
     private readonly Random _random;
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
 
-    /// <inheritdoc/>
-    public bool Holds(PlayerbotRoute route) => ReferenceEquals(_route, route);
+    /// <summary>The route this driver walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
 
     private Vector3 _routeGoal;
     private Unit? _target;

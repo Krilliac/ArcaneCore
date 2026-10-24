@@ -2540,7 +2540,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             PlayerbotThinkProbe.Phase("battleground");
                             uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, battlegrounds.Find(active.Record.BotId)?.AI, renewals, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, renewals, sinceLast);
                         }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -2570,7 +2570,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                             PlayerbotThinkProbe.Phase("group");
                             uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, coordinator.FindAI(active.Record.BotId), renewals, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, renewals, sinceLast);
                         }
                     }
                     else
@@ -2685,7 +2685,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotThinkProbe.Phase("party");
             uint partyRenewals = PlayerbotMotion.RenewalsOf(driven);
             active.Party.Update(driven, sinceLast);
-            PlayerbotMotion.SettleAfterDriver(active.Session, driven, active.Party, partyRenewals, sinceLast);
+            PlayerbotMotion.SettleAfterDriver(active.Session, driven, partyRenewals, sinceLast);
             return "party AI";
         }
         else

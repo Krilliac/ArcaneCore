@@ -358,7 +358,20 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
     public ElevatorStage Stage { get; set; } = ElevatorStage.ToStop;
     public uint StageMs { get; set; } = nowMs;
     public string? Failure { get; set; }
-    public PlayerbotRoute? Route { get; set; }
+    private PlayerbotRoute? _route;
+
+    /// <summary>The route the trip walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    public PlayerbotRoute? Route
+    {
+        get => _route;
+        set
+        {
+            if (ReferenceEquals(_route, value)) return;
+            if (_route is { } old) old.Released = true;
+            _route = value;
+        }
+    }
     public float Best { get; set; } = float.PositiveInfinity;
     public float LegBest { get; set; } = float.PositiveInfinity;
     public uint BestMs { get; set; } = nowMs;

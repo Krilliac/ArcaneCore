@@ -247,7 +247,7 @@ internal static class PlayerbotMotionAnomalies
             : "no think seen";
         Emit(player, Code.LeaseExpired,
             string.Create(CultureInfo.InvariantCulture,
-                $"no think renewed the route for {AgeOf(now, state.RenewedMs)} ms (lease {state.LeaseMs} ms, think gap {state.GapMs} ms, {lastThink}); {yards:F0} yd were left"),
+                $"no think renewed the route for {AgeOf(now, state.RenewedMs)} ms (lease {state.LeaseMs} ms, think gap {state.GapMs} ms, {lastThink}); {yards:F0} yd were left, settle renewals {state.UnfollowedRenewals}, route released {route.Released}"),
             AnomalySeverity.Info);
     }
 

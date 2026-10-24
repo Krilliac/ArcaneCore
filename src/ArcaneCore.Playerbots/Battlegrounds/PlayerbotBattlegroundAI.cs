@@ -47,7 +47,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// (vmangos CombatBotBaseAI::BeginChasing keeps the 25-yard caster distance only above 10% mana or with a ranged weapon).
 /// </para>
 /// </summary>
-internal sealed partial class PlayerbotBattlegroundAI : PlayerbotMotion.IRouteHolder
+internal sealed partial class PlayerbotBattlegroundAI
 {
     /// <summary>vmangos INTERACTION_DISTANCE (5 yards), less a margin: a flag or a battlemaster is used from this close.</summary>
     internal const float InteractYards = 4f;
@@ -74,10 +74,20 @@ internal sealed partial class PlayerbotBattlegroundAI : PlayerbotMotion.IRouteHo
     private readonly PlayerbotBattlegroundBuffs _buffs = new();
     private readonly float _followAngle;
     private readonly float _followDistance;
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
 
-    /// <inheritdoc/>
-    public bool Holds(PlayerbotRoute route) => ReferenceEquals(_route, route);
+    /// <summary>The route this driver walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
 
     private Vector3 _routeGoal;
     private readonly PlayerbotPvpFight _pvp;
@@ -821,8 +831,9 @@ internal sealed partial class PlayerbotBattlegroundAI : PlayerbotMotion.IRouteHo
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
         {
             PlanOutcome planned = toward
-                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? plannedRoute)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out plannedRoute, chase: chase);
+            _route = plannedRoute;
             if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;
@@ -840,8 +851,9 @@ internal sealed partial class PlayerbotBattlegroundAI : PlayerbotMotion.IRouteHo
         {
             _route = null;
             PlanOutcome replanned = toward
-                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? replannedRoute)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out replannedRoute, chase: chase);
+            _route = replannedRoute;
             if (replanned != PlanOutcome.Route || _route is null)
             {
                 _route = null;

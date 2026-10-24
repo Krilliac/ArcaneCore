@@ -40,6 +40,12 @@ internal static class PlayerbotMotion
     /// <summary>A real client heartbeats about every 500 ms while moving.</summary>
     internal const uint HeartbeatIntervalMs = 500;
 
+    /// <summary>
+    /// Driver settles that may renew a route without a <see cref="Follow"/> in between. A legitimate unfollowed chain (a gate-only tick,
+    /// an instant cast or buff on the way) is 1-3 thinks; past this the owner is assumed not to release its slot and the route dies at its lease.
+    /// </summary>
+    internal const uint MaxUnfollowedRenewals = 8;
+
     /// <summary>A route turn sharper than this (about 11.5 degrees) is reported at once with the new orientation.</summary>
     internal const float TurnRadians = 0.20f;
 
@@ -85,6 +91,8 @@ internal static class PlayerbotMotion
         internal uint RenewedMs;
         /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
         internal uint Renewals;
+        /// <summary>Driver settles that renewed the route since <see cref="Follow"/> last did (<see cref="SettleAfterDriver"/>), bounded by <see cref="MaxUnfollowedRenewals"/>.</summary>
+        internal uint UnfollowedRenewals;
         /// <summary>The bot's think gap in ms, smoothed (<see cref="NoteThinkGap"/>); 0 until the first measured gap.</summary>
         internal uint GapMs;
         /// <summary>The scheduler's measured main-lane full-pass time in ms (<see cref="NoteSchedulerPass"/>); 0 until the feature has one.</summary>
@@ -126,27 +134,22 @@ internal static class PlayerbotMotion
     internal static bool TryGetState(Player player, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MotionState? state)
         => States.TryGetValue(player, out state);
 
-    /// <summary>A driver (battleground, bot-led group, party AI) that owns the routes it hands to <see cref="Follow"/>.</summary>
-    internal interface IRouteHolder
-    {
-        /// <summary>Whether <paramref name="route"/> is a route the driver still holds (a dropped or replaced one is not).</summary>
-        bool Holds(PlayerbotRoute route);
-    }
-
     /// <summary>The route the bot is moving along now, or null when its motion is idle.</summary>
     internal static PlayerbotRoute? RouteOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.Route : null;
 
-    /// <summary>
-    /// After a driver's think (battleground, bot-led group, party AI): when the motion still follows a route the driver no longer holds
-    /// (it dropped, replaced or lost it without stopping the bot), that is a give-up and <see cref="SettleAfterThink"/> stops the bot now
-    /// unless the think started another route; otherwise the think kept its route and it is renewed. <paramref name="renewalsBefore"/> is
-    /// <see cref="RenewalsOf"/> before the think. A null <paramref name="driver"/> holds nothing. True when it stopped the bot.
-    /// </summary>
-    internal static bool SettleAfterDriver<THolder>(WorldSession session, Player player, THolder? driver, uint renewalsBefore, uint sinceLast)
-        where THolder : class, IRouteHolder
+    /// <summary>After a driver's think (battleground, bot-led group, party AI). The driver and its helpers hand their routes to Follow
+    /// every decided think; a think that did not (a gate-only tick, an instant cast or buff on the way) kept the route unless its owner
+    /// let go of it (PlayerbotRoute.Released, set by the owner's route slot): a released route is stopped now, a kept one is renewed.
+    /// Renewal without a Follow is bounded by MaxUnfollowedRenewals so a route of an owner without a releasing slot still dies at its
+    /// lease. renewalsBefore is RenewalsOf before the think. True when it stopped the bot.</summary>
+    internal static bool SettleAfterDriver(WorldSession session, Player player, uint renewalsBefore, uint sinceLast)
     {
-        bool dropped = RouteOf(player) is { } route && (driver is null || !driver.Holds(route));
-        return SettleAfterThink(session, player, dropped, renewalsBefore, sinceLast);
+        if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || state.Route is not { } route) return false;
+        if (state.Renewals != renewalsBefore) return false;
+        if (route.Released) return SettleAfterThink(session, player, gaveUp: true, renewalsBefore, sinceLast);
+        if (state.UnfollowedRenewals >= MaxUnfollowedRenewals) return false;
+        state.UnfollowedRenewals++;
+        return SettleAfterThink(session, player, gaveUp: false, renewalsBefore, sinceLast);
     }
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
@@ -286,6 +289,8 @@ internal static class PlayerbotMotion
             state.RenewedMs = now;
             state.LeaseMs = Lease(options, state);
             state.Renewals++;
+            route.Released = false;
+            state.UnfollowedRenewals = 0;
             Pump(session, player, now);
             return state.Active || route.Complete;
         }
@@ -413,6 +418,8 @@ internal static class PlayerbotMotion
             state.LastRejectedDestination = default;
         }
         state.Route = route;
+        route.Released = false;
+        state.UnfollowedRenewals = 0;
         state.Map = map;
         state.Anchor = current;
         state.AnchorMs = now;
