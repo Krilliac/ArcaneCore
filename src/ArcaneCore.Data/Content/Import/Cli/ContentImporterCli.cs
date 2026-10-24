@@ -59,8 +59,8 @@ public static partial class ContentImporterCli
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory; Map.dbc and
                                 AreaTable.dbc (and WMOAreaTable.dbc) there also fill map_template, area_template and
-                                wmo_area_template when those are empty (as import-map-dbc would). areatrigger_template,
-                                taxi_nodes and taxi_path still need refresh <dump> --dbc-dir <dir>
+                                wmo_area_template when those are empty (as import-map-dbc would); AreaTrigger.dbc,
+                                TaxiNodes.dbc and TaxiPath.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path
           import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
@@ -828,6 +828,13 @@ public static partial class ContentImporterCli
             }
         }
 
+        // AreaTrigger.dbc, TaxiNodes.dbc and TaxiPath.dbc fill areatrigger_template, taxi_nodes and taxi_path the same way (refresh reads them too).
+        var dbcWarnings = new List<string>();
+        IReadOnlyList<AreaTriggerTemplateRow>? triggers = ReadOptionalDbc(directory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, dbcWarnings);
+        IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
+        IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
+        var kept = new List<string>();
+
         o.WriteLine($"target: {target.Describe}");
         MapAreaDbcImportReport? mapReport = null;
         bool mapsAlreadyThere = false;
@@ -845,6 +852,45 @@ public static partial class ContentImporterCli
                 if (!mapsAlreadyThere)
                 {
                     mapReport = await MapAreaDbcImporter.ImportSnapshotAsync(db, mapSnapshot, false, ct).ConfigureAwait(false);
+                }
+            }
+
+            if (triggers is not null)
+            {
+                if (await db.Set<AreaTriggerTemplateRow>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    kept.Add("areatrigger_template");
+                }
+                else
+                {
+                    await ImportBatch.InsertAsync(db, triggers, ct).ConfigureAwait(false);
+                    o.WriteLine($"Imported {triggers.Count} area triggers (areatrigger_template) from AreaTrigger.dbc.");
+                }
+            }
+
+            if (taxiNodes is not null)
+            {
+                if (await db.Set<TaxiNode>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    kept.Add("taxi_nodes");
+                }
+                else
+                {
+                    await ImportBatch.InsertAsync(db, taxiNodes, ct).ConfigureAwait(false);
+                    o.WriteLine($"Imported {taxiNodes.Count} taxi nodes (taxi_nodes) from TaxiNodes.dbc.");
+                }
+            }
+
+            if (taxiPaths is not null)
+            {
+                if (await db.Set<TaxiPath>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    kept.Add("taxi_path");
+                }
+                else
+                {
+                    await ImportBatch.InsertAsync(db, taxiPaths, ct).ConfigureAwait(false);
+                    o.WriteLine($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
                 }
             }
         }
@@ -875,7 +921,12 @@ public static partial class ContentImporterCli
             o.WriteLine($"no {(haveMaps ? "AreaTable.dbc" : haveAreas ? "Map.dbc" : "Map.dbc and AreaTable.dbc")} in '{directory}': map_template and area_template were not filled (import-map-dbc or refresh --dbc-dir fills them)");
         }
 
-        o.WriteLine("areatrigger_template, taxi_nodes and taxi_path come from the dump-based step: run refresh <dump> --dbc-dir <DBFilesClient>");
+        if (kept.Count > 0)
+        {
+            o.WriteLine($"{string.Join(", ", kept)} already have rows: left as they are (refresh <dump> --dbc-dir <DBFilesClient> rewrites them)");
+        }
+
+        PrintWarnings(o, dbcWarnings);
         return ExitCodes.Ok;
     }
 
@@ -954,7 +1005,7 @@ public static partial class ContentImporterCli
 
     private const string MapFill = "run import-dbc <DBFilesClient> with Map.dbc and AreaTable.dbc there, import-map-dbc, or refresh <dump> --dbc-dir <DBFilesClient>";
 
-    private const string RefreshFill = "run refresh <dump> --dbc-dir <DBFilesClient>";
+    private const string RefreshFill = "run import-dbc <DBFilesClient> with AreaTrigger.dbc, TaxiNodes.dbc and TaxiPath.dbc there, or refresh <dump> --dbc-dir <DBFilesClient>";
 
     private static async Task<int> VerifyAsync(CliArguments a, TextWriter o, CancellationToken ct)
     {

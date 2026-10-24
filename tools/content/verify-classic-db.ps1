@@ -20,6 +20,10 @@
 .PARAMETER WorkDir
   Scratch directory for world.db and the reports (created if missing; an existing world.db is replaced).
 
+.PARAMETER DbcDir
+  Optional client DBFilesClient directory. When given, import-dbc fills the map, area, area-trigger and taxi tables and verify must exit 0;
+  otherwise only the five empty-table problems are tolerated.
+
 .PARAMETER Importer
   Path to arcane-content-importer(.exe). Default: the Release build under tools/ArcaneCore.ContentImporter.
 
@@ -30,7 +34,8 @@
 param(
     [Parameter(Mandatory)][string]$Dump,
     [Parameter(Mandatory)][string]$WorkDir,
-    [string]$Importer
+    [string]$Importer,
+    [string]$DbcDir
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,10 +109,23 @@ $lootImported = [long]$import.imported.loot_template_rows
 $lootStatus = if ($lootSource -eq $lootImported) { 'ok' } else { $failures++; 'MISMATCH' }
 '{0,-30} source {1,9}  imported {2,9}  {3}' -f 'loot templates (5 tables)', $lootSource, $lootImported, $lootStatus
 
-# This script imports the dump only, so verify (exit 6) rightly reports the DBC-fed tables (map_template, area_template,
-# areatrigger_template, taxi_nodes, taxi_path) as empty; its problem lines are printed, and only other exit codes fail here.
-& $Importer verify --database $database
-if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 6) { throw "arcane-content-importer verify exited $LASTEXITCODE" }
+# With -DbcDir the DBC-fed tables (map_template, area_template, areatrigger_template, taxi_nodes, taxi_path) are filled by import-dbc
+# and verify must exit 0. Without it the dump-only import leaves exactly those five tables empty, so verify's exit 6 is accepted
+# only when every problem line is one of those five "<table> is empty" lines; any other problem fails the script.
+if ($DbcDir) {
+    Invoke-Importer @('import-dbc', $DbcDir, '--database', $database)
+    Invoke-Importer @('verify', '--database', $database)
+} else {
+    $verifyOutput = & $Importer verify --database $database
+    $verifyExit = $LASTEXITCODE
+    $verifyOutput | ForEach-Object { "$_" }
+    if ($verifyExit -ne 0) {
+        $geography = 'map_template', 'area_template', 'areatrigger_template', 'taxi_nodes', 'taxi_path'
+        $problems = @($verifyOutput | ForEach-Object { "$_" } | Where-Object { $_ -match '^problem:' })
+        $other = @($problems | Where-Object { $line = $_; -not ($geography | Where-Object { $line -match "^problem: $_ is empty" }) })
+        if ($verifyExit -ne 6 -or $problems.Count -eq 0 -or $other.Count -gt 0) { throw "arcane-content-importer verify exited $verifyExit" }
+    }
+}
 
 if ($failures -gt 0) { throw "$failures table(s) did not import every source row" }
 'verify-classic-db: every source row of the imported tables arrived'

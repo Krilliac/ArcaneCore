@@ -776,6 +776,58 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Equal(0, await db.Set<MapTemplateRow>().CountAsync());
     }
 
+    /// <summary>
+    /// The documented setup (import, import-dbc, verify) must end with a clean verify: import-dbc fills the five geography tables from the
+    /// client directory, and a rerun keeps the rows the world already has.
+    /// </summary>
+    [Fact]
+    public async Task DocumentedSetup_ImportThenImportDbcThenVerify_ExitsOk()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+        uint[] map = new uint[42];
+        map[4] = 1;
+        uint[] mapOne = new uint[42];
+        mapOne[0] = 1;
+        mapOne[4] = 1;
+        uint[] area = new uint[25];
+        area[0] = 12;
+        area[3] = 12;
+        area[11] = 1;
+        uint[] trigger = new uint[10];
+        trigger[0] = 45;
+        uint[] node = new uint[16];
+        node[0] = 1;
+        uint[] path = [1u, 1u, 2u, 100u];
+        File.WriteAllBytes(Path.Combine(dbc, "Map.dbc"), Dbc(42, [map, mapOne], " fixture "));
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTable.dbc"), Dbc(25, [area], " fixture "));
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTrigger.dbc"), Dbc(10, [trigger], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiNodes.dbc"), Dbc(16, [node], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [path], " "));
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
+
+        (int importCode, string importOutput, string importError) = await RunAsync("import-dbc", dbc, "--database", database);
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.True(importCode == ExitCodes.Ok, importError);
+        Assert.Contains("Imported 1 area triggers", importOutput, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("no missing references", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(database))
+        {
+            Assert.Equal(1, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+            Assert.Equal(1, await db.Set<TaxiNode>().CountAsync());
+            Assert.Equal(1, await db.Set<TaxiPath>().CountAsync());
+        }
+
+        (int again, string rerun, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, again);
+        Assert.Contains("areatrigger_template, taxi_nodes, taxi_path already have rows", rerun, StringComparison.Ordinal);
+    }
+
     private static void WriteSpellDbcs(string dbc)
     {
         uint[] spell = new uint[SpellDbcImporter.SpellFieldCount];
