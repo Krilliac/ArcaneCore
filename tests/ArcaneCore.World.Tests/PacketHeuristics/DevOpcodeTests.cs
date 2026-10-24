@@ -284,6 +284,65 @@ public sealed class DevOpcodeTests
     }
 
     [Fact]
+    public async Task WithTheHeuristicsOff_TheShippedDefault_AStrippedOpcodeIsStillCountedLoggedDroppedAndNeverAnswered()
+    {
+        var dev = new DevOpcodeTracker();
+        var unhandled = new UnhandledOpcodeTracker();
+        var log = new LevelLogger();
+        await using var host = WorldTestHost.Start(configureServices: c => { c.AddSingleton(dev); c.AddSingleton(unhandled); }, sessionLogger: log);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVOFF", "Devoffone");
+        await using (client)
+        {
+            PacketHeuristicsFeature feature = host.WorldServices.GetRequiredService<PacketHeuristicsFeature>();
+            Player player = await host.PlayerAsync("Devoffone");
+            (uint money, uint level) = await host.OnWorldAsync(() => (player.Money, player.Level));
+            await client.CollectAsync();
+
+            await client.SendAsync(WorldOpcode.CmsgCheatSetmoney, Junk);
+            await client.SendAsync(WorldOpcode.CmsgCheatSetmoney, Junk);
+            await client.SendAsync(WorldOpcode.CmsgLevelCheat, Junk);
+            List<(WorldOpcode Opcode, byte[] Payload)> received = await PingAsync(client);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            Assert.Equal([WorldOpcode.SmsgPong], received.Select(r => r.Opcode));
+            Assert.Equal(3, dev.Total);
+            Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.DevOpcode)); // no ledger finding without the heuristics
+            Assert.Empty(unhandled.Snapshot());
+            Assert.Equal(1, log.Warnings.Count(m => m.Contains("CMSG_CHEAT_SETMONEY", StringComparison.Ordinal) && m.Contains($"account {session.AccountId}", StringComparison.Ordinal)));
+            Assert.Single(log.Warnings, m => m.Contains("stripped developer opcode", StringComparison.Ordinal)); // one line per session per interval: the other two are coalesced, not lost
+            Assert.Equal((money, level), await host.OnWorldAsync(() => (player.Money, player.Level)));
+            Assert.Equal(SessionState.InWorld, session.State);
+        }
+    }
+
+    [Fact]
+    public async Task WithTheDevOpcodeCheckSwitchedOff_NoFindingIsRaised_ButTheDropTheCountAndTheLogRemain()
+    {
+        var dev = new DevOpcodeTracker();
+        var unhandled = new UnhandledOpcodeTracker();
+        var log = new LevelLogger();
+        await using var host = WorldTestHost.Start(configureServices: c => { c.AddSingleton(dev); c.AddSingleton(unhandled); }, sessionLogger: log);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVSWOFF", "Devswoffone");
+        await using (client)
+        {
+            (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host, o => o.DevOpcode = false);
+            using AnomalyCapture capture = ledger.Capture();
+            await client.CollectAsync();
+
+            await client.SendAsync(WorldOpcode.CmsgGodmode, Junk);
+            List<(WorldOpcode Opcode, byte[] Payload)> received = await PingAsync(client);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            Assert.Equal([WorldOpcode.SmsgPong], received.Select(r => r.Opcode));
+            Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.DevOpcode));
+            Assert.DoesNotContain(capture.Notices, n => n.Key == Key);
+            Assert.Equal(1, dev.Total);
+            Assert.Empty(unhandled.Snapshot());
+            Assert.Single(log.Warnings, m => m.Contains("CMSG_GODMODE", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public async Task AStaffSession_IsAuditedForADevOpcode_WithNoFindingNoReplyAndNoEffect()
     {
         var dev = new DevOpcodeTracker();
