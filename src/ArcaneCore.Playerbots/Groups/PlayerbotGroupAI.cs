@@ -434,7 +434,8 @@ internal sealed class PlayerbotGroupAI
         {
             case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
                 // A retry regroups at the entrance: a leader revived inside walks out rather than holding beside live trash with a half-health party
-                // (the coordinator does not count the group gathered until it is out). Members follow it on foot, and through Follow's exit
+                // (Gathered is false while it is inside, so the group does not go on from there on its own; only the GatherCatchUpMs fallback in
+                // CatchUpGathering can, 60 s on, when the leader found no path out). Members follow it on foot, and through Follow's exit
                 // branch once it is on another map.
                 if (WalkTo(player, new Vector3(retryExit.X, retryExit.Y, retryExit.Z), interval, toward: true)) Step = "lead:walk-exit";
                 else { Step = "lead:no-path-exit"; Hold(player); }

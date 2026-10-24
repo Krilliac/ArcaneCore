@@ -14,6 +14,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 /// <summary>A five-Horde-bot RFC run on the manual world clock, from formation through trash and a retry.</summary>
 public sealed class PlayerbotRunClearWorldTests
 {
+    private const uint KalimdorMap = 1;
     private const byte Orc = 2, Undead = 5;
     private const byte Warrior = 1, Priest = 5, Mage = 8;
     private const uint Taunt = GroupTestWorld.Taunt, Resurrection = GroupTestWorld.Resurrection;
@@ -156,7 +157,7 @@ public sealed class PlayerbotRunClearWorldTests
         // The group regroups on the Retry step with the leader revived back inside: the moment the run's own state says so, the surviving trash
         // hits one of the revived members, as it does when they come back within its reach.
         Assert.True(await world.RunUntilAsync(180_000, () => group.State == PlayerbotGroupState.Gathering && run.Step == PlayerbotRunStep.Retry
-            && world.Player(bots[0].Id) is { IsAlive: true, MapId: GroupRfcContent.Map }), await world.TraceAsync());
+            && bots.Take(2).All(b => world.Player(b.Id) is { IsAlive: true, MapId: GroupRfcContent.Map })), await world.TraceAsync());
         await world.OnWorldAsync(() =>
         {
             Player member = world.Player(bots[1].Id);
@@ -172,7 +173,7 @@ public sealed class PlayerbotRunClearWorldTests
             if (world.Player(bots[0].Id).MapId == GroupRfcContent.Map) leftEarly |= group.State != PlayerbotGroupState.Gathering;
             // The last member out completes the gathering, so the run may already have stepped on to Enter in that same tick; either way it has not cleared.
             stepOk &= run.Step is PlayerbotRunStep.Retry or PlayerbotRunStep.Enter;
-            return bots.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat);
+            return bots.All(b => world.Player(b.Id) is { IsAlive: true, MapId: KalimdorMap } p && !p.Combat.IsInCombat);
         }), await world.TraceAsync());
         Assert.False(leftEarly, "the group left Gathering while its leader was still inside the instance");
         Assert.True(stepOk, "the run moved past Retry/Enter before the group was outside");
