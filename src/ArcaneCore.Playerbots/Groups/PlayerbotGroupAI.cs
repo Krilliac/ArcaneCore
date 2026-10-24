@@ -405,7 +405,12 @@ internal sealed class PlayerbotGroupAI
                 // The chase out and the walk back are an A, B, A pattern to the loop watch; the waypoint's own refusal is lifted as LeadSiege does (only that place).
                 if (PlayerbotMotion.IsBlacklisted(player, waiting.MoveTo)) PlayerbotMotion.Unblacklist(player, waiting.MoveTo);
             }
-            Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+            // A rallying leader holds its retreat point: it fights back what reaches it there and chases nothing farther than RallyYards from
+            // the point (the commander's own "at the rally point"), or the chase takes it off the point and the raid flaps back into a retreat.
+            // A rally where the leader stands only because it found no path (RetreatNoPath) has no point to hold.
+            PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
+            if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards);
+            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
             if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
@@ -1139,8 +1144,8 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The last <see cref="Fight"/> could plan no way to its target.</summary>
     private bool _noPathToTarget;
 
-    /// <param name="leashCentre">The waypoint of a waiting siege leader: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
-    /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent.</param>
+    /// <param name="leashCentre">The waypoint of a waiting siege leader, or the retreat point of a rallying one: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
+    /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent; <see cref="PlayerbotSiegeCommander.RallyYards"/> at a rally.</param>
     private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
     {
         _noPathToTarget = false;
