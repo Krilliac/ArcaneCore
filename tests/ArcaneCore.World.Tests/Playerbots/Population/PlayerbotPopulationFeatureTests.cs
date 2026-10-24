@@ -1266,6 +1266,8 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal("under-budget-confirming", status.State);
         Assert.Contains("moved 1", status.Reason);
 
+        // The move is a teleport the bot acknowledges on its own think; until then it counts as busy and the next pass skips it.
+        await world.WaitForSettledAsync(1);
         await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn); // a misfit again
         world.Ticks.Set(200, 10);
         status = await world.PassAsync();
