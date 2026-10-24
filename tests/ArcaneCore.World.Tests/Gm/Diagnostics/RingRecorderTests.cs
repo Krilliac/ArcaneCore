@@ -315,4 +315,129 @@ public sealed class RingRecorderTests
         Assert.False(ring.IsActive);
         Assert.Equal(0, ring.TargetCount);
     }
+    [Fact]
+    public void AlwaysOnRing_KeepsTheNewestEntries_OldestFirst_AndCountsTheOverwritten()
+    {
+        var ring = new RingRecorder<int>(3);
+
+        for (int i = 1; i <= 5; i++)
+        {
+            ring.Add(i);
+        }
+
+        Assert.Equal([3, 4, 5], ring.Snapshot());
+        Assert.Equal(3, ring.Count);
+        Assert.Equal(3, ring.Capacity);
+        Assert.Equal(2, ring.Overwritten);
+
+        ring.Clear();
+
+        Assert.Empty(ring.Snapshot());
+        Assert.Equal(0, ring.Overwritten);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RingRecorder<int>(0));
+    }
+
+    [Fact]
+    public void AlwaysOnRing_Resize_KeepsTheNewestEntriesThatFit_AndCanGrow()
+    {
+        var ring = new RingRecorder<int>(4);
+        for (int i = 1; i <= 6; i++)
+        {
+            ring.Add(i); // holds 3,4,5,6; 2 overwritten
+        }
+
+        ring.Resize(2);
+        Assert.Equal([5, 6], ring.Snapshot());
+        Assert.Equal(4, ring.Overwritten);
+
+        ring.Resize(5);
+        ring.Add(7);
+        Assert.Equal([5, 6, 7], ring.Snapshot());
+        Assert.Equal(5, ring.Capacity);
+    }
+
+    [Fact]
+    public async Task AlwaysOnRing_TakesWritesFromSeveralThreads_WhileAReaderCopiesOut()
+    {
+        var ring = new RingRecorder<long>(64);
+        using var stop = new CancellationTokenSource();
+        Task reader = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                long[] copy = ring.Snapshot();
+                Assert.True(copy.Length <= 64);
+            }
+        });
+
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(t => Task.Run(() =>
+        {
+            for (int i = 0; i < 5000; i++)
+            {
+                ring.Add(((long)t << 32) | (uint)i);
+            }
+        })));
+        await stop.CancelAsync();
+        await reader;
+
+        Assert.Equal(64, ring.Count);
+        Assert.Equal((4 * 5000) - 64, ring.Overwritten);
+    }
+
+    [Fact]
+    public void OptInRing_IsOffByDefault_RecordsOnlyWhileEnabled_AndFreesOnDisable()
+    {
+        var ring = new OptInRing<int>(maxCapacity: 4);
+
+        ring.Add(1);
+        Assert.False(ring.IsEnabled);
+        Assert.Empty(ring.Snapshot());
+        Assert.Null(ring.Status());
+        Assert.False(ring.Clear());
+        Assert.False(ring.Disable());
+
+        ring.Enable(100); // clamped to MaxCapacity
+        for (int i = 1; i <= 6; i++)
+        {
+            ring.Add(i);
+        }
+
+        Assert.True(ring.IsEnabled);
+        Assert.Equal([3, 4, 5, 6], ring.Snapshot());
+        Assert.Equal(2, ring.Overwritten);
+        Assert.Equal((4, 4), ring.Status());
+
+        ring.Enable(2); // resize keeps the newest
+        Assert.Equal([5, 6], ring.Snapshot());
+
+        Assert.True(ring.Clear());
+        Assert.Empty(ring.Snapshot());
+        Assert.True(ring.Disable());
+        ring.Add(9);
+        Assert.Empty(ring.Snapshot());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ring.Enable(0));
+    }
+
+    [Fact]
+    public async Task KeyedRecorder_RecordsSeveralKeysFromSeveralThreads_WithoutLosingEntries()
+    {
+        var recorder = new RingRecorder<int, int>(maxTargets: 4, maxCapacity: 10_000);
+        recorder.Enable(1, 10_000);
+        recorder.Enable(2, 10_000);
+
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(t => Task.Run(() =>
+        {
+            for (int i = 0; i < 2000; i++)
+            {
+                recorder.Record(1 + (t % 2), i);
+                recorder.Record(3, i); // not enabled: dropped without a ring
+            }
+        })));
+
+        Assert.Equal(4000, recorder.Snapshot(1).Length);
+        Assert.Equal(4000, recorder.Snapshot(2).Length);
+        Assert.Empty(recorder.Snapshot(3));
+        Assert.Equal(2, recorder.TargetCount);
+        Assert.Equal([(1, 10_000, 4000), (2, 10_000, 4000)], recorder.Targets().OrderBy(t => t.Key));
+    }
 }
