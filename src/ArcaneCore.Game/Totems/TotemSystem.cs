@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
@@ -304,9 +305,11 @@ public sealed partial class TotemSystem
         Creature totem = creatures.SpawnTemporary(
             template with { AIName = "NullAI", MovementType = 0 },
             caster.X + (provisional * MathF.Cos(angle)), caster.Y + (provisional * MathF.Sin(angle)), caster.Z, caster.Orientation);
-        (float x, float y) = PlacementPoint(caster, totem.BoundingRadius, Options.PlacementDistance, angle);
-        totem.SetPosition(x, y, caster.Z, caster.Orientation);
-        totem.SetHome(new CreatureHome(x, y, caster.Z, caster.Orientation));
+        // Ground z, line of sight and the under-map guard as for pets (GetNearPointAroundPosition, Object.cpp:2742-2840); a point
+        // behind a wall or off the floor falls back to the caster's own position, so the totem never lands in rock.
+        (float x, float y, float z) = SummonService.SafeClosePoint(caster, creatures, totem.BoundingRadius, Options.PlacementDistance, angle);
+        totem.SetPosition(x, y, z, caster.Orientation);
+        totem.SetHome(new CreatureHome(x, y, z, caster.Orientation));
         totem.AddMovementFlags(MovementFlags.Root);
 
         // Totem::SetOwner and the rest of EffectSummonTotem.

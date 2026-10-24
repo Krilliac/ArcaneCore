@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Totems;
 using ArcaneCore.Protocol;
@@ -53,6 +54,52 @@ public sealed class TotemSummonTests
         // Driven by this system, not by creature AI: the TotemAI name falls to NullAI instead of AggressorAI.
         Assert.IsType<NullCreatureAI>(totem.AI);
         Assert.Equal(CreatureMovementTypeIdle, (byte)totem.MovementType);
+    }
+
+    [Fact]
+    public void Summon_WhenPlacementPointCrossesAWall_PutsTheTotemAtTheCaster()
+    {
+        using var kit = new TotemTestKit();
+        (Player shaman, _) = kit.AddPlayer(1, 100, 100);
+        shaman.Orientation = 0f;
+        shaman.Relocate(100f, 100f, 50f, 0f, 0);
+        WorldCollision.Of(kit.World).Install(lineOfSight: new FakeFloor(50f, wallX: 101f));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(shaman, TotemTestKit.FireTotemSummon));
+
+        Creature totem = Assert.IsType<Creature>(kit.Totems.GetTotem(shaman, TotemSlot.Fire));
+        Assert.Equal(shaman.X, totem.X, 2);
+        Assert.Equal(shaman.Y, totem.Y, 2);
+        Assert.Equal(shaman.Z, totem.Z, 2);
+    }
+
+    [Fact]
+    public void Summon_SnapsTheTotemToTheFloorNearTheCaster()
+    {
+        using var kit = new TotemTestKit();
+        (Player shaman, _) = kit.AddPlayer(1, 100, 100);
+        shaman.Orientation = 0f;
+        shaman.Relocate(100f, 100f, 50f, 0f, 0);
+        WorldCollision.Of(kit.World).Install(lineOfSight: new FakeFloor(48.5f, wallX: null));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(shaman, TotemTestKit.FireTotemSummon));
+
+        Creature totem = Assert.IsType<Creature>(kit.Totems.GetTotem(shaman, TotemSlot.Fire));
+        Assert.Equal(48.55f, totem.Z, 2);
+        Assert.Equal(48.55f, totem.Home.Z, 2);
+        Assert.NotEqual(shaman.X, totem.X);
+    }
+
+    private sealed class FakeFloor(float floor, float? wallX) : ArcaneCore.Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true)
+            => wallX is not { } w || !((from.X <= w && to.X > w) || (from.X > w && to.X <= w));
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit)
+        { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => floor;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info)
+        { info = default; return false; }
     }
 
     private const byte CreatureMovementTypeIdle = 0;
