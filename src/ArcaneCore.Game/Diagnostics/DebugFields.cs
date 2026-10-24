@@ -30,8 +30,12 @@ public sealed class DebugWriter
     /// <summary>Default cap on the number of fields one writer keeps.</summary>
     public const int DefaultMaxFields = 256;
 
+    /// <summary>How deep <see cref="AddObject"/> may nest; deeper (or cyclic) objects are skipped and <see cref="Truncated"/> is set.</summary>
+    public const int MaxDepth = 8;
+
     private readonly List<DebugField> _fields = [];
     private string _section = string.Empty;
+    private int _depth;
 
     public DebugWriter(int maxFields = DefaultMaxFields)
     {
@@ -122,6 +126,13 @@ public sealed class DebugWriter
     public DebugWriter AddObject(string section, IDebugDescribable? value)
     {
         ArgumentNullException.ThrowIfNull(section);
+        if (_depth >= MaxDepth)
+        {
+            Truncated = true;
+            return this;
+        }
+
+        _depth++;
         string previous = _section;
         _section = section;
         if (value is null)
@@ -133,6 +144,7 @@ public sealed class DebugWriter
             value.Describe(this);
         }
 
+        _depth--;
         _section = previous;
         return this;
     }
@@ -171,17 +183,19 @@ public sealed class DebugWriter
         using (var json = new Utf8JsonWriter(stream))
         {
             json.WriteStartObject();
+            var used = new HashSet<string>(StringComparer.Ordinal) { "truncated" }; // reserved, so a field of that name is renamed
             foreach (DebugField field in _fields.Where(f => f.Section.Length == 0))
             {
-                json.WriteString(field.Name, field.Value);
+                json.WriteString(UniqueName(used, field.Name), field.Value);
             }
 
             foreach (IGrouping<string, DebugField> section in _fields.Where(f => f.Section.Length > 0).GroupBy(f => f.Section, StringComparer.Ordinal))
             {
-                json.WriteStartObject(section.Key);
+                json.WriteStartObject(UniqueName(used, section.Key));
+                var usedInSection = new HashSet<string>(StringComparer.Ordinal);
                 foreach (DebugField field in section)
                 {
-                    json.WriteString(field.Name, field.Value);
+                    json.WriteString(UniqueName(usedInSection, field.Name), field.Value);
                 }
 
                 json.WriteEndObject();
@@ -196,6 +210,18 @@ public sealed class DebugWriter
         }
 
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    // JSON objects must not repeat a property name: the second use of a name becomes name_2, then name_3.
+    private static string UniqueName(HashSet<string> used, string name)
+    {
+        string candidate = name;
+        for (int n = 2; !used.Add(candidate); n++)
+        {
+            candidate = name + "_" + n.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return candidate;
     }
 
     private DebugWriter Append(string name, string value)

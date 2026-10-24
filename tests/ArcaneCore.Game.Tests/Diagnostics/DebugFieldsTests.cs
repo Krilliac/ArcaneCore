@@ -237,4 +237,38 @@ public sealed class DebugFieldsTests
         Assert.Throws<ArgumentException>(() => new DebugWriter().Add("", 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => new DebugWriter(0));
     }
+    private sealed class Cyclic : IDebugDescribable
+    {
+        public void Describe(DebugWriter writer)
+        {
+            writer.Add("tick", 1);
+            writer.AddObject("self", this);
+        }
+    }
+
+    [Fact]
+    public void ACyclicDescribe_StopsAtTheDepthLimit_InsteadOfOverflowingTheStack()
+    {
+        DebugWriter writer = DebugFields.Snapshot(new Cyclic());
+
+        Assert.True(writer.Truncated);
+        Assert.Equal(DebugWriter.MaxDepth + 1, writer.Fields.Count);
+        Assert.Contains("\"truncated\":true", writer.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToJson_NeverRepeatsAPropertyName()
+    {
+        var writer = new DebugWriter();
+        writer.Add("hp", 1).Add("hp", 2).Add("truncated", "x").Add("combat", "top");
+        writer.Section("combat").Add("a", 1).Add("a", 2);
+        writer.Section("truncated").Add("b", 1);
+
+        using JsonDocument doc = JsonDocument.Parse(writer.ToJson()); // a repeated name would still parse, so list the names
+        string[] top = [.. doc.RootElement.EnumerateObject().Select(p => p.Name)];
+
+        Assert.Equal(top.Length, top.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(["hp", "hp_2", "truncated_2", "combat", "combat_2", "truncated_3"], top);
+        Assert.Equal(["a", "a_2"], doc.RootElement.GetProperty("combat_2").EnumerateObject().Select(p => p.Name));
+    }
 }
