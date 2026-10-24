@@ -148,7 +148,7 @@ public sealed class BotSelectorTests
         Assert.Equal(["Alice", "Bob", "Bobby"], Names("where:state=running", out _));
         Assert.Equal(["Bob", "Carol"], Names("where:goal=grind", out _));
         Assert.Equal(["Bob", "Bobby"], Names("where:name=ob", out _));
-        Assert.Equal(["Alice"], Names("$where:map=0&goal=quest", out _));
+        Assert.Equal(["Alice"], Names("where:map=0&goal=quest", out _));
     }
 
     [Fact]
@@ -201,13 +201,27 @@ public sealed class BotSelectorTests
         => Assert.StartsWith("no-match", Error(selector), StringComparison.Ordinal);
 
     [Fact]
-    public void FilterKeysAndKeywordsIgnoreCaseButAreNotRequiredToHaveTheDollar()
+    public void FilterKeysAndKeywordsIgnoreCase()
     {
         Assert.Equal(["Bob"], Names("WHERE:CLASS=Warrior&Map=0", out BotSelection where));
         Assert.True(where.Broad);
         Assert.Equal(["Bob"], Names("CONTROLLED", out _));
-        Assert.Equal(["Alice", "Bob", "Bobby"], Names("$RUNNING", out _));
+        Assert.Equal(["Alice", "Bob", "Bobby"], Names("RUNNING", out _));
         Assert.Equal(["Alice", "Bob"], Names("@PAIR", out _));
+    }
+
+    [Fact]
+    public void ADollarPartIsAlwaysANameNeverAKeywordAliasOrFilter()
+    {
+        foreach (string keyword in new[] { "$all", "$running", "$controlled", "$mine", "$where:map=0", "$@pair" })
+        {
+            Assert.StartsWith("no-match", Error(keyword), StringComparison.Ordinal);
+        }
+
+        Assert.Equal(["Alice"], Names("$alice", out BotSelection byName));
+        Assert.False(byName.Broad);
+        Assert.Equal(["Bob", "Bobby"], Names("$bo*", out BotSelection byPrefix));
+        Assert.True(byPrefix.Broad);
     }
 
     [Fact]

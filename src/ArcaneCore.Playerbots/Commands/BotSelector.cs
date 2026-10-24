@@ -97,13 +97,33 @@ public static class BotSelector
 
         foreach (string raw in selector.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            string part = raw.StartsWith('$') ? raw[1..] : raw;
+            // A '$' part is a name (plan 1.3): it never means a keyword, an alias or a filter, only an id, a name or a prefix*.
+            bool literal = raw.StartsWith('$');
+            string part = literal ? raw[1..] : raw;
             if (part.Length == 0)
             {
                 return "bad-selector: '$' needs a bot name or id after it";
             }
 
-            if (part.Equals("all", StringComparison.OrdinalIgnoreCase))
+            if (literal)
+            {
+                if (part.EndsWith('*'))
+                {
+                    broad = true;
+                    string namePrefix = part[..^1];
+                    if (namePrefix.Length == 0) return "bad-selector: a prefix needs at least one letter before '*'";
+                    foreach (PlayerbotStatus s in ByName().Where(s => s.Name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase))) Add(s.BotId, s.Name);
+                }
+                else if (source.TryResolve(part, out Guid literalId, out string literalName))
+                {
+                    Add(literalId, literalName);
+                }
+                else
+                {
+                    return "no-match: no playerbot '" + part + "'";
+                }
+            }
+            else if (part.Equals("all", StringComparison.OrdinalIgnoreCase))
             {
                 broad = true;
                 foreach (PlayerbotStatus s in ByName()) Add(s.BotId, s.Name);
