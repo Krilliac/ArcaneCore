@@ -58,8 +58,9 @@ public sealed class SqliteWriteGateTests : IDisposable
             {
                 try
                 {
-                    // The live write bound (5 s): the gate's wait is bounded by it, and a loaded test host (parallel test classes, Windows' 15.6 ms timer) must not time out.
-                    await using GateDb db = Create(connection, gate, writeTimeoutMs: 5000);
+                    // A generous write bound: this test proves the queue never fails as locked, not the live 5 s bound, and a loaded test host (parallel test classes,
+                    // a BelowNormal slot runner, Windows' 15.6 ms timer) can stall the holder for hundreds of ms while 14 writers wait.
+                    await using GateDb db = Create(connection, gate, writeTimeoutMs: 60000);
                     await using var transaction = await db.Database.BeginTransactionAsync();
                     db.Rows.Add(new GateRow { Writer = writer, Seq = seq });
                     await db.SaveChangesAsync();
