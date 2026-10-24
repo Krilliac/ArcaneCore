@@ -687,6 +687,58 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>
+    /// A health pool no test guard can empty. The guard fight is melee between two level-1 units with the real hit table
+    /// (<see cref="SharedCombatRandom"/>), a coin flip the test is not about: a bot that lost it died at the start cave and the wait for the
+    /// guard's death ran out its game budget in a fraction of a second of wall time.
+    /// </summary>
+    private static Task FortifyAsync(ScenarioContext context, ScenarioBot bot) => context.ReadAsync(() =>
+    {
+        Player player = bot.RequirePlayer();
+        player.MaxHealth = 5000;
+        player.Health = 5000;
+        return true;
+    });
+
+    /// <summary>
+    /// The bot's side of the guard fight must not depend on the dice: the fixture's guard hits for 3 to 4 every 2 s and the bot, hitting for
+    /// 1 to 7, needs about as long to kill it as the guard needs to kill a level-1 bot, so the unprotected bot lost the duel now and then
+    /// (CI saw it die 37 s after the gates opened). With the guard hitting for 90 to 100, which empties an unprotected bot in one swing, the
+    /// protected bot still wins within the 90 s the test allows (at most 45 swings, under 5000 damage), stays alive and the guard dies.
+    /// </summary>
+    [Fact]
+    public async Task Av_AutonomousBot_KillsTheGuard_WithoutDying_EvenWhenTheGuardHitsFarHarderThanTheFixture()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync(null, BattlegroundType.AlteracValley);
+        await RunAsync(world, "bg-av-guard-duel", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bgavduel", race: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bgavduelh", BattlegroundType.AlteracValley, Content.HordeAvMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 30, (-100f, 300f, Content.AvFloor));
+            await context.StepAsync("the Alliance bot is in the match", () => context.WaitUntilAsync("in the match",
+                () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60)));
+            var av = (AlteracValley)(await context.BattlegroundOfAsync(ally))!;
+            coordinator.Options.QueueChancePerMinute = 0f;
+            await FortifyAsync(context, ally);
+            await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => av.Status == BattlegroundStatus.InProgress, StartWait));
+
+            Game.Creatures.Creature guard = await context.ReadAsync(() =>
+            {
+                Game.Creatures.Creature found = ally.RequirePlayer().Map!.FindUpdater<Game.Creatures.CreatureMapSystem>()!
+                    .Creatures.Single(c => c.Entry == Content.AvGuardEntry);
+                found.SetFloat(UpdateFields.UnitFieldMindamage, 90f);
+                found.SetFloat(UpdateFields.UnitFieldMaxdamage, 100f);
+                return found;
+            });
+            await context.StepAsync("the bot kills the hard-hitting guard and lives", async () =>
+            {
+                await WaitExplainedAsync(context, "the guard is dead", () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally);
+                ScenarioContext.Expect(await context.ReadAsync(() => ally.RequirePlayer().IsAlive), "the bot died in the guard fight");
+            });
+        });
+    }
+
+    /// <summary>
     /// The Alterac Valley objective flow through the real paths: the Alliance bot leaves its start cave for the Horde-held Iceblood graveyard
     /// (node 4, the first actionable step of its lane), kills the hostile guard before the banner, casts 21651 at the Horde banner (178364) and
     /// the match turns the opened banner into the assault (node 4 Alliance-owned and assaulted, its graveyards-assaulted score 1). Killed
@@ -707,6 +759,7 @@ public sealed class PlayerbotBattlegroundWorldTests
                 () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60)));
             var av = (AlteracValley)(await context.BattlegroundOfAsync(ally))!;
             coordinator.Options.QueueChancePerMinute = 0f;
+            await FortifyAsync(context, ally);
             await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => av.Status == BattlegroundStatus.InProgress, StartWait));
 
             Game.Creatures.Creature guard = await context.ReadAsync(() => ally.RequirePlayer().Map!.FindUpdater<Game.Creatures.CreatureMapSystem>()!

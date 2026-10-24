@@ -186,15 +186,32 @@ public sealed class EventScenarioFeatureWiringTests
             => Task.FromException<GameEventPlayerbotContent>(new InvalidOperationException(message));
     }
 
+    /// <summary>
+    /// Whether <paramref name="ledger"/> recorded a fault whose message carries <paramref name="marker"/>. The shared ledger is process-wide and
+    /// bounded, so a count read at a site is not proof: parallel tests move it, and once its signature cap is reached a new signature is counted in
+    /// the overflow bucket, under no site at all. The newest messages of every entry, the overflow bucket included, hold the marker either way.
+    /// </summary>
+    private static bool HoldsMarker(FaultLedger ledger, string marker) => ledger.Snapshot().Any(s =>
+        s.RecentMessages.Any(m => m.Contains(marker, StringComparison.Ordinal)) || s.TopMessages.Any(t => t.Subject.Contains(marker, StringComparison.Ordinal)));
+
+    [Fact]
+    public void ALedgerAtItsSignatureCap_CountsANewFaultUnderNoSite_ButItsMarkerIsStillFound()
+    {
+        var ledger = new FaultLedger(new FaultLedgerLimits(MaxSignatures: 1), TimeProvider.System);
+        ledger.Record("some.other-site", new InvalidOperationException("fills the only signature"));
+        string marker = "evscenario-capped-" + Guid.NewGuid().ToString("N");
+
+        ledger.Record("playerbot.event-scenarios", new InvalidOperationException(marker));
+
+        Assert.Equal(0, ledger.Snapshot().Where(s => s.Site == "playerbot.event-scenarios").Sum(s => s.Count)); // what the old assertion read
+        Assert.True(HoldsMarker(ledger, marker));
+        Assert.False(HoldsMarker(ledger, marker + "-never-recorded"));
+    }
+
     [Fact]
     public async Task FailingStore_RecordsFaultAndAnomaly_AndSubscribesToNothing()
     {
-        static long SiteCount() => FaultLedger.Shared.Snapshot()
-            .Where(s => s.Site == "playerbot.event-scenarios")
-            .Sum(s => s.Count);
-
         string marker = "evscenario-store-fault-" + Guid.NewGuid().ToString("N");
-        long before = SiteCount();
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
             n => n.Key == "bot-event/scenario-fault" && n.Detail.Contains(marker, StringComparison.Ordinal));
 
@@ -207,7 +224,7 @@ public sealed class EventScenarioFeatureWiringTests
 
         PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
         Assert.False(feature.Listening);
-        Assert.True(SiteCount() > before);
+        Assert.True(HoldsMarker(FaultLedger.Shared, marker));
         Assert.Equal(1, capture.Count("bot-event/scenario-fault"));
     }
 }
