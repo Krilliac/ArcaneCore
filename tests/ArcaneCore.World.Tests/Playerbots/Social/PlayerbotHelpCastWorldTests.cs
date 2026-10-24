@@ -90,15 +90,42 @@ public sealed class PlayerbotHelpCastWorldTests
     /// Scans until the buff lane has made one more offer than it had. A scan that finds the bot not free (a goal change, a vital, a sight or range
     /// check that has not settled since <see cref="SetUpAsync"/> looked) offers nothing and records nothing, so it is safe to take again.
     /// </summary>
-    private static async Task ScanUntilBuffedAsync(SocialWorld world, long nowMs)
+    private static async Task ScanUntilBuffedAsync(SocialWorld world, Guid bot, long nowMs)
     {
         PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
         int before = lane.Buffs;
-        await HelpTestKit.UntilAsync(() =>
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (true)
         {
-            ScanAsync(world, nowMs).GetAwaiter().GetResult();
-            return lane.Buffs > before;
-        }, "the scan to offer the buff");
+            await ScanIfFreeAsync(world, bot, nowMs);
+            if (lane.Buffs > before) return;
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("timed out waiting for the scan to offer the buff");
+            await Task.Delay(20);
+        }
+    }
+
+    /// <summary>
+    /// One world post: takes a pass only when the bot is free at that very moment, so a scan that offers nothing means the lane declined (a cooldown, a roll),
+    /// never that the bot was busy. Returns whether the bot was free and the pass ran.
+    /// </summary>
+    private static Task<bool> ScanIfFreeAsync(SocialWorld world, Guid bot, long nowMs)
+        => world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialPass pass = SocialTestKit.BotPass(world.Host, nowMs);
+            if (!pass.Bots.Any(b => b.Id == bot && PlayerbotHelpLane.IsFree(b))) return false;
+            SocialTestKit.Feature(world.Host).Help.Run(pass);
+            return true;
+        });
+
+    /// <summary>Takes a pass in a world post where the bot is free, retrying until one is, so the caller can assert on what the lane itself declined.</summary>
+    private static async Task ScanWhileFreeAsync(SocialWorld world, Guid bot, long nowMs)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!await ScanIfFreeAsync(world, bot, nowMs))
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("timed out waiting for the bot to be free for a pass");
+            await Task.Delay(20);
+        }
     }
 
     [Fact]
@@ -216,7 +243,7 @@ public sealed class PlayerbotHelpCastWorldTests
         float helpfulness = PlayerbotTraits.For(botGuid.Value).Helpfulness;
         long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
 
-        await ScanUntilBuffedAsync(world, now);
+        await ScanUntilBuffedAsync(world, bot, now);
 
         PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
         Assert.Equal(1, lane.Buffs);
@@ -239,12 +266,12 @@ public sealed class PlayerbotHelpCastWorldTests
         });
         await HelpTestKit.UntilAsync(() => brain.PendingHelp == PlayerbotHelpKind.None, "the bot to be free again");
         long later = HelpTestKit.NowWhere(t => t > now + 60_000 && t < now + 20 * 60_000L && PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
-        await ScanAsync(world, later);
+        await ScanWhileFreeAsync(world, bot, later); // the bot is free in this very pass, so only the cooldown can decline the offer
         Assert.Equal(1, lane.Buffs);
 
         // ...and once the cooldown is over, a pass whose roll says yes offers it again.
         long after = HelpTestKit.NowWhere(t => t > now + 31 * 60_000L && PlayerbotHelpRules.Offers(botGuid.Value, otherGuid.Value, t, helpfulness, PlayerbotHelpLane.BuffRate));
-        await ScanUntilBuffedAsync(world, after);
+        await ScanUntilBuffedAsync(world, bot, after);
         Assert.Equal(2, lane.Buffs);
     }
 
