@@ -226,6 +226,14 @@ internal sealed class PopulationRush
                 return false;
             }
 
+            // A build that failed leaves the data missing until its retry: a rush does not wait on a build that keeps failing.
+            if (note is not null && note.StartsWith(PopulationProvisioner.WaitingReason, StringComparison.Ordinal)
+                && note.EndsWith(PopulationProvisioner.BuildFailedSuffix, StringComparison.Ordinal))
+            {
+                (_state, _reason, _endedMs) = ("halted", note, nowMs);
+                return true;
+            }
+
             // The placement safety data is built in the background on first need (also after a content, area or atlas reload): a hold, not a halt.
             if (note is not null && note != PausedNote && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal)
                 && !note.StartsWith(PopulationProvisioner.WaitingReason, StringComparison.Ordinal))

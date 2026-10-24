@@ -34,7 +34,7 @@ public sealed class PopulationPlacementWarmTests
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        world.Feature.Provisioner.WarmGate = _ => gate.Task;
+        world.Feature.Provisioner.WarmGate = ct => gate.Task.WaitAsync(ct);
         world.Feature.TerrainLocator = _ => (PopulationTestHost.Elwynn, PopulationTestHost.Elwynn);
 
         // Locating the graveyards also runs in the background and holds creation first; wait it out, with the facts build still held.

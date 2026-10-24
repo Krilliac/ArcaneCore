@@ -36,6 +36,9 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
     /// <summary>The pass hold while the facts are not ready.</summary>
     internal const string WaitingReason = "waiting for the placement safety data";
 
+    /// <summary>The suffix of <see cref="WaitingReason"/> while a failed build waits for its retry; a rush halts on it instead of holding.</summary>
+    internal const string BuildFailedSuffix = " (the last build failed; retrying)";
+
     /// <summary>Passes between the retries of a failed facts build.</summary>
     internal const int WarmRetryPasses = 10;
 
@@ -231,7 +234,7 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
         if (ReferenceEquals(_warmContent, content) && ReferenceEquals(_warmAreas, areas) && ReferenceEquals(_warmAtlas, atlas))
         {
             if (_warmRunning) return WaitingReason;
-            if (_warmFailed && ++_warmFailedPasses < WarmRetryPasses) return WaitingReason + " (the last build failed; retrying)";
+            if (_warmFailed && ++_warmFailedPasses < WarmRetryPasses) return WaitingReason + BuildFailedSuffix;
         }
 
         _ = CancelWarm();
@@ -278,7 +281,7 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
         return WaitingReason;
     }
 
-    /// <summary>World thread: stop the build in flight (its late result is ignored); the task to wait for.</summary>
+    /// <summary>Stop the build in flight (its late result is ignored); the task to wait for. Runs on the world thread; shutdown also calls it from another thread once the world has stopped and nothing else touches these fields.</summary>
     internal Task CancelWarm()
     {
         _warmToken = null;

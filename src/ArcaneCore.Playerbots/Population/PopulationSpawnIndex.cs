@@ -12,6 +12,7 @@ internal sealed class PopulationSpawnIndex
     private readonly Dictionary<(uint Map, int X, int Y), CreatureSpawn[]> _cells;
     private readonly Dictionary<uint, float> _maxWanderByMap;
 
+    // Test seam kept in release builds too (the tests run in either): one thread-local increment per index build, which is rare.
     [ThreadStatic]
     private static int _builtOnThisThread;
 
@@ -21,7 +22,7 @@ internal sealed class PopulationSpawnIndex
     internal PopulationSpawnIndex(CreatureContent content)
     {
         _builtOnThisThread++;
-        Content =content ?? throw new ArgumentNullException(nameof(content));
+        Content = content ?? throw new ArgumentNullException(nameof(content));
         var buckets = new Dictionary<(uint Map, int X, int Y), List<CreatureSpawn>>();
         _maxWanderByMap = [];
         foreach (uint map in content.MapsWithSpawns)

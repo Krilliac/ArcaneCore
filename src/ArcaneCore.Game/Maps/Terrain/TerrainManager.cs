@@ -217,6 +217,7 @@ public sealed class TerrainManager
         }
     }
 
+    // Test seam kept in release builds too (the tests run in either): one thread-local increment per tile read, next to a file read.
     [ThreadStatic]
     private static int _detachedReadsOnThisThread;
 
