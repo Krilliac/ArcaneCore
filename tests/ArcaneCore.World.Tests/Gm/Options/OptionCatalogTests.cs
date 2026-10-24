@@ -2,9 +2,7 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Gm.ServerConfig;
-using ArcaneCore.World.OptionKeys;
 using ArcaneCore.World.Playerbots;
-using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,19 +24,6 @@ public sealed class OptionCatalogTests
     private static readonly OptionActor Tester = new("Tester", "unit test");
 
     private static OptionScope Scope(WorldTestHost host) => new(host.WorldServices, host.World, NullLogger.Instance);
-
-    private sealed class RecordingRegistry : IOptionRegistry
-    {
-        public List<(string Path, OptionApplyClass Apply, bool Settable, bool Secret, object? Value)> Keys { get; } = [];
-
-        public void AddBool(string path, string description, OptionApplyClass apply, Func<bool?> get, Action<bool>? set = null) => Keys.Add((path, apply, set is not null, false, get()));
-
-        public void AddInteger(string path, string description, OptionApplyClass apply, long min, long max, Func<long?> get, Action<long>? set = null) => Keys.Add((path, apply, set is not null, false, get()));
-
-        public void AddNumber(string path, string description, OptionApplyClass apply, double min, double max, Func<double?> get, Action<double>? set = null) => Keys.Add((path, apply, set is not null, false, get()));
-
-        public void AddText(string path, string description, OptionApplyClass apply, Func<string?> get, Action<string>? set = null, bool secret = false) => Keys.Add((path, apply, set is not null, secret, get()));
-    }
 
     [Fact]
     public async Task Catalog_ListsEverySource_WithUniquePaths_AndClassifiesTheApplyClass()
@@ -309,7 +294,7 @@ public sealed class OptionCatalogTests
     public async Task ASecretKey_IsNeverWritableThroughTheEditor()
     {
         var provider = new SecretProvider();
-        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IOptionKeyProvider>(provider));
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IOptionSource>(provider));
         (bool writable, OptionSetResult result, string error, string shown) = await host.OnWorldAsync(() =>
         {
             OptionScope scope = Scope(host);
@@ -326,7 +311,7 @@ public sealed class OptionCatalogTests
         Assert.Equal("original", provider.Value);
     }
 
-    private sealed class SecretProvider : IOptionKeyProvider
+    private sealed class SecretProvider : IOptionSource
     {
         public string Value { get; private set; } = "original";
 
@@ -390,42 +375,12 @@ public sealed class OptionCatalogTests
         Assert.False(key.TryParse("1e999", out _, out _));
     }
 
-    [Fact]
-    public void PlayerbotRegistration_ListsTheQaKeys_AsRestartOnlyReadOnly()
+    private sealed class ProviderOverlay(IServiceProvider inner, IOptionSource extra) : IServiceProvider
     {
-        var registry = new RecordingRegistry();
-        var qa = new PlayerbotQaOptions { MaxFindings = 1234 };
-
-        new PlayerbotOptionRegistration(Microsoft.Extensions.Options.Options.Create(qa)).RegisterOptions(registry);
-
-        Assert.NotEmpty(registry.Keys);
-        Assert.All(registry.Keys, k =>
-        {
-            Assert.StartsWith(PlayerbotQaOptions.SectionName + ":", k.Path, StringComparison.Ordinal);
-            Assert.Equal(OptionApplyClass.Restart, k.Apply);
-            Assert.False(k.Settable);
-            Assert.NotNull(k.Value);
-        });
-        Assert.Contains(registry.Keys, k => k.Path.EndsWith(":MaxFindings", StringComparison.Ordinal) && Equals(k.Value, (long)qa.MaxFindings));
+        public object? GetService(Type serviceType) => serviceType == typeof(IEnumerable<IOptionSource>) ? new[] { extra } : inner.GetService(serviceType);
     }
 
-    [Fact]
-    public void ThePlayerbotModule_RegistersItsOptionProvider()
-    {
-        var services = new ServiceCollection();
-        new PlayerbotServiceModule().Register(services, new ConfigurationBuilder().Build());
-
-        using ServiceProvider provider = services.BuildServiceProvider();
-
-        Assert.IsType<PlayerbotOptionRegistration>(Assert.Single(provider.GetServices<IOptionKeyProvider>()));
-    }
-
-    private sealed class ProviderOverlay(IServiceProvider inner, IOptionKeyProvider extra) : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => serviceType == typeof(IEnumerable<IOptionKeyProvider>) ? new[] { extra } : inner.GetService(serviceType);
-    }
-
-    private sealed class FakePack : IOptionKeyProvider
+    private sealed class FakePack : IOptionSource
     {
         public bool Flag { get; set; }
 
@@ -466,5 +421,35 @@ public sealed class OptionCatalogTests
         Assert.Equal(OptionSetResult.ReadOnly, fixedKey);
         Assert.False(restartWritable);
         Assert.Equal("********", shown);
+    }
+
+    private sealed class CheckedPack : IOptionSource
+    {
+        public long Low { get; private set; } = 2;
+
+        public void RegisterOptions(IOptionRegistry registry)
+            => registry.AddInteger("Checked:Pack:Low", "must stay below 8", OptionApplyClass.Live, 0, 100, () => Low, v => Low = v, v => v >= 8 ? "Checked:Pack:Low must stay below 8" : null);
+    }
+
+    [Fact]
+    public async Task APackKey_CanRefuseAValueWithItsOwnCheckMessage_BeforeItsSetterRuns()
+    {
+        await using var host = WorldTestHost.Start();
+        var pack = new CheckedPack();
+        (OptionSetResult refused, string message, long unchanged, OptionSetResult accepted) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = new(new ProviderOverlay(host.WorldServices, pack), host.World, NullLogger.Instance);
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey key = catalog.Find("Checked:Pack:Low")!;
+            OptionSetResult no = catalog.TrySet(scope, key, "9", Tester, out string error, out _, out _);
+            long kept = pack.Low;
+            return (no, error, kept, catalog.TrySet(scope, key, "5", Tester, out _, out _, out _));
+        });
+
+        Assert.Equal(OptionSetResult.Invalid, refused);
+        Assert.Equal("Checked:Pack:Low must stay below 8", message);
+        Assert.Equal(2, unchanged);
+        Assert.Equal(OptionSetResult.Ok, accepted);
+        Assert.Equal(5, pack.Low);
     }
 }

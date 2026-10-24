@@ -5,7 +5,6 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Gm.ServerConfig;
-using ArcaneCore.World.OptionKeys;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -472,12 +471,12 @@ public sealed class OptionCatalogEdgeTests
 
     // --- packs -------------------------------------------------------------------------------------------------------
 
-    private sealed class ProviderOverlay(IServiceProvider inner, params IOptionKeyProvider[] extra) : IServiceProvider
+    private sealed class ProviderOverlay(IServiceProvider inner, params IOptionSource[] extra) : IServiceProvider
     {
-        public object? GetService(Type serviceType) => serviceType == typeof(IEnumerable<IOptionKeyProvider>) ? extra : inner.GetService(serviceType);
+        public object? GetService(Type serviceType) => serviceType == typeof(IEnumerable<IOptionSource>) ? extra : inner.GetService(serviceType);
     }
 
-    private sealed class CountingPack : IOptionKeyProvider
+    private sealed class CountingPack : IOptionSource
     {
         public int Writes { get; private set; }
 
@@ -496,7 +495,7 @@ public sealed class OptionCatalogEdgeTests
         }
     }
 
-    private sealed class ThrowingPack : IOptionKeyProvider
+    private sealed class ThrowingPack : IOptionSource
     {
         public void RegisterOptions(IOptionRegistry registry) => throw new InvalidOperationException("bad pack");
     }

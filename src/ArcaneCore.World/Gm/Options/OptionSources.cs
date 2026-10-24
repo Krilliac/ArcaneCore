@@ -5,7 +5,6 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
-using ArcaneCore.World.OptionKeys;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Rates;
 using ArcaneCore.World.Reload;
@@ -20,7 +19,7 @@ namespace ArcaneCore.World.Gm.ServerConfig;
 /// Where <see cref="OptionCatalog"/> gets its keys: adapters over the existing, already classified sources, so no option is declared twice.
 /// The reload keys keep their Read/Apply/Check delegates (<see cref="WorldConfigKeys"/>); the rates keep <see cref="ServerRates"/> as their
 /// own baseline tracker; the anticheat and packet-heuristics settings go through the owners' own apply paths; packs add theirs through
-/// <see cref="IOptionKeyProvider"/>. All run on the world thread.
+/// <see cref="IOptionSource"/>. All run on the world thread.
 /// </summary>
 internal static class OptionSources
 {
@@ -422,7 +421,7 @@ internal static class OptionSources
 
     private static void AddProviders(OptionScope scope, List<OptionKey> keys)
     {
-        foreach (IOptionKeyProvider provider in scope.Services.GetServices<IOptionKeyProvider>())
+        foreach (IOptionSource provider in scope.Services.GetServices<IOptionSource>())
         {
             try
             {
@@ -439,20 +438,32 @@ internal static class OptionSources
     {
         private const string Group = "Pack";
 
-        public void AddBool(string path, string description, OptionApplyClass apply, Func<bool?> get, Action<bool>? set = null)
-            => keys.Add(new OptionKey(path, description, OptionType.Bool, apply, Group, _ => get(),
-                set is null ? null : (_, v, _) => { set((bool)v); return null; }));
+        public void AddBool(string path, string description, OptionApplyClass apply, Func<bool?> get, Action<bool>? set = null, Func<bool, string?>? check = null)
+            => keys.Add(new OptionKey(path, description, OptionType.Bool, apply, Group, _ => get(), Setter(set, check)));
 
-        public void AddInteger(string path, string description, OptionApplyClass apply, long min, long max, Func<long?> get, Action<long>? set = null)
-            => keys.Add(new OptionKey(path, description, OptionType.Integer, apply, Group, _ => get(),
-                set is null ? null : (_, v, _) => { set((long)v); return null; }, min: min, max: max));
+        public void AddInteger(string path, string description, OptionApplyClass apply, long min, long max, Func<long?> get, Action<long>? set = null, Func<long, string?>? check = null)
+            => keys.Add(new OptionKey(path, description, OptionType.Integer, apply, Group, _ => get(), Setter(set, check), min: min, max: max));
 
-        public void AddNumber(string path, string description, OptionApplyClass apply, double min, double max, Func<double?> get, Action<double>? set = null)
-            => keys.Add(new OptionKey(path, description, OptionType.Number, apply, Group, _ => get(),
-                set is null ? null : (_, v, _) => { set((double)v); return null; }, min: min, max: max));
+        public void AddNumber(string path, string description, OptionApplyClass apply, double min, double max, Func<double?> get, Action<double>? set = null, Func<double, string?>? check = null)
+            => keys.Add(new OptionKey(path, description, OptionType.Number, apply, Group, _ => get(), Setter(set, check), min: min, max: max));
 
-        public void AddText(string path, string description, OptionApplyClass apply, Func<string?> get, Action<string>? set = null, bool secret = false)
-            => keys.Add(new OptionKey(path, description, OptionType.Text, apply, Group, _ => get(),
-                set is null ? null : (_, v, _) => { set((string)v); return null; }, secret: secret));
+        public void AddText(string path, string description, OptionApplyClass apply, Func<string?> get, Action<string>? set = null, bool secret = false, Func<string, string?>? check = null)
+            => keys.Add(new OptionKey(path, description, OptionType.Text, apply, Group, _ => get(), Setter(set, check), secret: secret));
+
+        // The key's own cross-check refuses with its own text before the setter runs.
+        private static Func<OptionScope, object, OptionActor, string?>? Setter<T>(Action<T>? set, Func<T, string?>? check)
+            => set is null
+                ? null
+                : (_, v, _) =>
+                {
+                    T value = (T)v;
+                    if (check?.Invoke(value) is { } problem)
+                    {
+                        return problem;
+                    }
+
+                    set(value);
+                    return null;
+                };
     }
 }

@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration.Conf;
-using ArcaneCore.World.OptionKeys;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Gm.ServerConfig;
@@ -306,7 +305,7 @@ public sealed class OptionOverrides
 /// <summary>
 /// The one registry of server options: the reload keys (<see cref="Reload.WorldConfigKeys"/>), the live rates
 /// (<see cref="Rates.RateCatalog"/>), the anticheat and packet-heuristics settings, and whatever packs register through
-/// <see cref="IOptionKeyProvider"/>. Built per use from the running services (<see cref="Create"/>), so it only lists what is running.
+/// <see cref="IOptionSource"/>. Built per use from the running services (<see cref="Create"/>), so it only lists what is running.
 /// A key is Live, NextLoad or Restart; a Restart key is read-only. A change is validated (type, bounds, the key's own cross-check), applied
 /// through the owner's own path, and remembered with its baseline in <see cref="OptionOverrides"/> so <c>diff</c> and <c>reset</c> work.
 /// Thread affinity: world thread only.

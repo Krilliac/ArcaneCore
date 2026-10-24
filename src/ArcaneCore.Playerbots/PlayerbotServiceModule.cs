@@ -1,6 +1,5 @@
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Features;
-using ArcaneCore.World.OptionKeys;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,7 +25,6 @@ public sealed class PlayerbotServiceModule : IWorldServiceModule
         // The home progression's travel seam answered by it: a town home across the sea is reachable by boat or zeppelin.
         services.AddSingleton<IPlayerbotHomeTravel>(sp => new PlayerbotTravelHomeTravel(sp.GetRequiredService<IOptions<PlayerbotOptions>>().Value));
         services.AddPlayerbotQa(configuration); // bot QA: findings from the bots' warnings (docs/areas/playbots-qa.md)
-        services.AddSingleton<IOptionKeyProvider, PlayerbotOptionRegistration>(); // the pack's own keys for .server config
         // The bot anomaly history subscribes to the process anomaly ledger when first touched: as early as the core used to.
         _ = PlayerbotAnomalyHistory.Shared;
     }
