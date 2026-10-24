@@ -377,6 +377,15 @@ public sealed class LiveFeed : IDisposable
     }
 
     /// <summary>
+    /// Sends a generic id-correlated query (<c>{"op":"query","kind":...}</c>) and returns the result fields. Stub.
+    /// </summary>
+    public Task<JsonObject> RequestAsync(JsonObject query, CancellationToken cancellationToken)
+        => throw new NotImplementedException();
+
+    /// <summary>The connected feed's revision (hello <c>rev</c>, 1 when absent). Stub.</summary>
+    public int FeedRevision => throw new NotImplementedException();
+
+    /// <summary>
     /// Sends one packet-tools request (docs/areas/map-feed.md, "Packet tools") and returns its result fields. Unavailable when not connected
     /// or when the daemon's hello did not offer the tools; a refusal by the daemon fails with its code in the message (BadArguments for a
     /// malformed request, Unavailable when the tools are off, Failed otherwise).
