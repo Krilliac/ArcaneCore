@@ -203,8 +203,8 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
 - `CONDITION_ACTIVE_GAME_EVENT` and `CONDITION_ACTIVE_HOLIDAY` read the live state (`GameEventFeature`, read at every evaluation so
   attach order and a reload do not matter), in the same tick an event starts or stops (cmangos Conditions.cpp:245-248 and :318-321,
   vmangos :245 and :350). `Conditions:ActiveGameEvents` and `Conditions:ActiveHolidays` stay as an operator override added to the
-  live state (default none). Holiday 0 is never active. The battleground weekend rotation (vmangos BattleGroundMgr.cpp:1613) can ask
-  `GameEventFeature.IsActiveHoliday(283..285)` (Call to Arms events 18-20 in classic-db) when that lane lands.
+  live state (default none). Holiday 0 is never active. The battleground weekend rotation (vmangos BattleGroundMgr.cpp:1613) asks
+  `GameEventFeature.IsActiveHoliday(283..285)` (Call to Arms events 18-20 in classic-db) through `GameEventBattlegroundCalendar`.
 - `.event` (`GameEventCommands`, vmangos Chat.cpp:373-382, ServerCommands.cpp:639-883): `.event list [all]`, `.event <id>` (info),
   `.event start|stop|enable|disable <id>`. The id is a number or a `|Hgameevent:<id>|` link. Account levels are the vmangos
   ones through `ChatCommand.RetailLevel` (list and info 3, start and stop 4, enable and disable 5), so with the default map a

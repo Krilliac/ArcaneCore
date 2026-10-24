@@ -285,12 +285,16 @@ public sealed class BotControlConsoleTests
         await world.AddBotAsync("Botlooter", 10);
         await ExecAsync(world, ".botctl take Botlooter");
 
+        ObjectGuid corpseGuid = default;
         await world.Host.OnWorldAsync(() =>
         {
             Player player = world.Host.World.FindOnlinePlayer("Botlooter")!;
             CreatureMapSystem creatures = PartyTestHost.GoldCreatures(player);
-            PartyTestHost.KillGoldCreature(creatures, player, 2f, player);
+            corpseGuid = PartyTestHost.KillGoldCreature(creatures, player, 2f, player).Guid;
         });
+
+        // .botctl loot looks through bot.VisibleObjects, which the visibility update fills a tick after the kill.
+        await world.Host.WaitForWorldAsync(() => world.Host.World.FindOnlinePlayer("Botlooter")?.VisibleObjects.Contains(corpseGuid) == true, "the corpse visible to Botlooter");
 
         (string[] lootLines, string? lootErr) = await ExecAsync(world, ".botctl loot Botlooter corpse --json");
         Assert.True(lootErr is null, string.Join(" | ", lootLines));

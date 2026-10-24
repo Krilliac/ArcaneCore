@@ -121,7 +121,12 @@ the way (Player.cpp:1953-1966). The Molten Core special case of patches up to 1.
 ### GM commands
 
 `.revive [name]` (half health and mana, corpse gone), `.gocorpse [name]`, `.neargrave [alliance|horde]`, at the vmangos levels. `.neargrave`
-reproduces vmangos' lookup of the link in the player's **zone** (a graveyard linked only to an area answers with the "fix your DB" text, 454).
+asks the same chooser as a real repop (`GraveyardRepopService.ChooseNearest`: battleground override, area then zone links, the optional default
+fallback, run-time links) and names where the answer came from. A zone or area link answers with the vmangos text (459, the link's team); a
+battleground graveyard, the default fallback (names the team used: the argument, else the player's own) and a run-time link (outdoor PvP tower)
+have ArcaneCore's own replies, since no zone link names them; text 454 remains only for a link-sourced graveyard that cannot be found among the
+links. The team argument applies to the zone and area links and the default fallback; on a battleground map and for run-time links the player's own
+team still applies (the override and link-source interfaces take the player).
 Texts are mangos_string 164 and 454-461 from classic-db; the text of `.revive` (vmangos string 5031) is not in the reference tree and is ArcaneCore's
 own wording.
 
