@@ -135,17 +135,23 @@ public sealed class DebugWriter
         _depth++;
         string previous = _section;
         _section = section;
-        if (value is null)
+        try
         {
-            Append("value", "-");
+            if (value is null)
+            {
+                Append("value", "-");
+            }
+            else
+            {
+                value.Describe(this);
+            }
         }
-        else
+        finally
         {
-            value.Describe(this);
+            _depth--;
+            _section = previous;
         }
 
-        _depth--;
-        _section = previous;
         return this;
     }
 
@@ -159,10 +165,8 @@ public sealed class DebugWriter
             if (!string.Equals(field.Section, current, StringComparison.Ordinal))
             {
                 current = field.Section;
-                if (current.Length > 0)
-                {
-                    lines.Add("[" + current + "]");
-                }
+                // A top-level field after a section gets an empty header, so it does not read as part of that section.
+                lines.Add(current.Length > 0 ? "[" + current + "]" : "[]");
             }
 
             lines.Add(field.Name + ": " + field.Value);

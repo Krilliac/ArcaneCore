@@ -44,7 +44,7 @@ public sealed class DebugFieldsTests
     {
         IReadOnlyList<string> lines = DebugFields.Snapshot(new Outer()).ToLines();
 
-        Assert.Equal(["name: Boar", "mode: Chase", "[combat]", "hp: 42", "alive: true", "after: 1"], lines);
+        Assert.Equal(["name: Boar", "mode: Chase", "[combat]", "hp: 42", "alive: true", "[]", "after: 1"], lines);
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public sealed class DebugFieldsTests
         writer.Section("s").Add("in", 1).Section("").Add("out", 2);
 
         Assert.Equal([new DebugField("s", "in", "1"), new DebugField("", "out", "2")], writer.Fields);
-        Assert.Equal(["[s]", "in: 1", "out: 2"], writer.ToLines());
+        Assert.Equal(["[s]", "in: 1", "[]", "out: 2"], writer.ToLines());
         Assert.Throws<ArgumentNullException>(() => writer.Section(null!));
         Assert.Throws<ArgumentNullException>(() => writer.AddObject(null!, new Inner()));
     }
@@ -270,5 +270,40 @@ public sealed class DebugFieldsTests
         Assert.Equal(top.Length, top.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(["hp", "hp_2", "truncated_2", "combat", "combat_2", "truncated_3"], top);
         Assert.Equal(["a", "a_2"], doc.RootElement.GetProperty("combat_2").EnumerateObject().Select(p => p.Name));
+    }
+
+    private sealed class Throwing : IDebugDescribable
+    {
+        public void Describe(DebugWriter writer)
+        {
+            writer.Add("before", 1);
+            throw new InvalidOperationException("describe failed");
+        }
+    }
+
+    [Fact]
+    public void ADescribeThatThrows_LeavesTheWriterInItsOwnSectionAndDepth()
+    {
+        var writer = new DebugWriter();
+        writer.Section("top");
+
+        Assert.Throws<InvalidOperationException>(() => writer.AddObject("child", new Throwing()));
+        writer.Add("after", 1);
+        for (int i = 0; i < DebugWriter.MaxDepth; i++)
+        {
+            writer.AddObject("again", new Inner()); // a leaked depth would start truncating after a few of these
+        }
+
+        Assert.False(writer.Truncated);
+        Assert.Equal(new DebugField("top", "after", "1"), writer.Fields[1]);
+    }
+
+    [Fact]
+    public void ToLines_MarksATopLevelFieldThatFollowsASection_WithAnEmptyHeader()
+    {
+        var writer = new DebugWriter();
+        writer.Add("first", 1).Section("s").Add("in", 2).Section("").Add("last", 3);
+
+        Assert.Equal(["first: 1", "[s]", "in: 2", "[]", "last: 3"], writer.ToLines());
     }
 }
