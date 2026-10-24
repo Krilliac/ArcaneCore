@@ -127,18 +127,6 @@ public sealed class PlayerbotGroupPlayerTests
         await player.ReadUntilAsync(WorldOpcode.SmsgGroupList);
     }
 
-    /// <summary>Advances the world clock in small steps, pausing in real time between them, so that a packet sent just before is read and handled well inside the budget.</summary>
-    private static async Task<bool> PatientlyAsync(GroupTestWorld world, uint budgetMs, Func<bool> condition)
-    {
-        for (uint spent = 0; spent < budgetMs; spent += 200)
-        {
-            if (await world.RunUntilAsync(200, condition)) return true;
-            await Task.Delay(50);
-        }
-
-        return false;
-    }
-
     /// <summary>A one-bot, one-player group that has moved on from forming (the player accepted the bot's invitation).</summary>
     private static async Task<WorldTestClient> FormPairAsync(GroupTestWorld world, string accountName, string playerName, string botName)
     {
@@ -219,9 +207,22 @@ public sealed class PlayerbotGroupPlayerTests
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
         await using WorldTestClient player = await FormPairAsync(world, "GROUPLEAVE", "Groupleave", "Askerleave");
 
+        ObjectGuid guid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer("Groupleave")!.Guid);
+
         await player.SendAsync(WorldOpcode.CmsgGroupDisband, []);
 
-        Assert.True(await PatientlyAsync(world, 15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        // The server reads the packet from the socket in real time, which the manual clock does not wait for: poll for its handling in real
+        // time (the world thread keeps ticking without game time moving), and only then give the coordinator its original game budget.
+        System.Diagnostics.Stopwatch wall = System.Diagnostics.Stopwatch.StartNew();
+        bool handled = false;
+        while (!handled && wall.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            handled = await world.OnWorldAsync(() => world.GroupManager.GetGroup(guid) is null);
+            if (!handled) await Task.Delay(20);
+        }
+
+        Assert.True(handled, "the server handled the disband" + Environment.NewLine + await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
         Assert.Contains(world.Coordinator.Events, e => e.Contains("Groupleave left", StringComparison.Ordinal));
         Assert.Contains(world.Coordinator.Events, e => e.Contains("too-few", StringComparison.Ordinal));
     }
