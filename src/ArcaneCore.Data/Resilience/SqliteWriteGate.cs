@@ -129,14 +129,26 @@ public sealed class SqliteWriteGate
         {
             if (ReleaseIfStuck(maxHoldMs) && _semaphore.Wait(0)) return Granted(start, owner, contended: true);
             int remaining = Remaining(start, timeoutMs);
-            while (remaining > 0)
+            if (remaining <= 0) return TimedOut();
+
+            // One queued wait for the whole bound: re-queueing every second (as the blocking Enter does) sends the waiter to the back of the semaphore's FIFO queue,
+            // so a queue deeper than a second of holds starves its oldest writers until they time out. A side tick wakes us to release a stuck hold meanwhile.
+            Task<bool> wait = _semaphore.WaitAsync(remaining, cancellationToken);
+            using var tick = new CancellationTokenSource();
+            try
             {
-                if (await _semaphore.WaitAsync(Math.Min(remaining, 1000), cancellationToken).ConfigureAwait(false)) return Granted(start, owner, contended: true);
-                ReleaseIfStuck(maxHoldMs);
-                remaining = Remaining(start, timeoutMs);
+                while (!wait.IsCompleted)
+                {
+                    if (await Task.WhenAny(wait, Task.Delay(1000, tick.Token)).ConfigureAwait(false) == wait) break;
+                    ReleaseIfStuck(maxHoldMs);
+                }
+            }
+            finally
+            {
+                tick.Cancel();
             }
 
-            return TimedOut();
+            return await wait.ConfigureAwait(false) ? Granted(start, owner, contended: true) : TimedOut();
         }
         finally
         {
