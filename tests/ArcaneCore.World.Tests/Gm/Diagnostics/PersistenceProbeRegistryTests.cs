@@ -84,6 +84,118 @@ public sealed class PersistenceProbeRegistryTests
     }
 
     [Fact]
+    public void Register_RejectsABlankName_ANullResolver_AndANullProbe()
+    {
+        var registry = new PersistenceProbeRegistry();
+
+        Assert.Throws<ArgumentException>(() => registry.Register(" ", () => null));
+        Assert.Throws<ArgumentNullException>(() => registry.Register("q", null!));
+        Assert.Throws<ArgumentNullException>(() => registry.Register((IPersistenceQueueProbe)null!));
+        Assert.Equal(0, registry.Count);
+    }
+
+    [Fact]
+    public void ReRegistering_KeepsTheEntrysPlaceInTheOrder()
+    {
+        var registry = new PersistenceProbeRegistry();
+        registry.Register(Probe("a", 1));
+        registry.Register(Probe("b", 2));
+
+        registry.Register(Probe("A", 9));
+
+        Assert.Equal(["A", "b"], registry.Snapshot().Select(s => s.Name));
+        Assert.Equal(9, registry.Snapshot()[0].Pending);
+    }
+
+    [Fact]
+    public void TheResolver_RunsOnEverySnapshot_SoAQueueThatGoesAwayDisappears()
+    {
+        var registry = new PersistenceProbeRegistry();
+        IPersistenceQueueProbe? queue = Probe("q", 1);
+        int calls = 0;
+        registry.Register("q", () =>
+        {
+            calls++;
+            return queue;
+        });
+
+        Assert.Single(registry.Snapshot());
+        queue = null;
+        Assert.Empty(registry.Snapshot());
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public void ASnapshot_IsAPointInTimeCopy()
+    {
+        int pending = 3;
+        var registry = new PersistenceProbeRegistry();
+        registry.Register(new DelegatePersistenceQueueProbe("q", () => pending));
+
+        PersistenceQueueSnapshot snapshot = registry.Snapshot().Single();
+        pending = 40;
+
+        Assert.Equal(3, snapshot.Pending);
+        Assert.Equal(40, registry.Snapshot().Single().Pending);
+    }
+
+    [Fact]
+    public void AProbeWhoseCounterThrows_IsReportedUnderTheRegisteredName_AsHalted()
+    {
+        var registry = new PersistenceProbeRegistry();
+        registry.Register("flaky", () => new DelegatePersistenceQueueProbe("flaky", () => throw new InvalidOperationException("counter broke")));
+
+        PersistenceQueueSnapshot snapshot = registry.Snapshot().Single();
+
+        Assert.Equal("flaky: 0 pending, HALTED: InvalidOperationException: counter broke", snapshot.Format());
+        Assert.False(snapshot.IsHealthy);
+    }
+
+    [Fact]
+    public void Format_JoinsSeveralRetainedKeys_AndAHaltedQueueSkipsTheSeparateFailureLine()
+    {
+        var failure = new IOException("disk full");
+
+        var retained = new PersistenceQueueSnapshot("q", 0, ["a", "b", "c"], null, failure);
+        var both = new PersistenceQueueSnapshot("q", 0, ["a"], failure, failure);
+
+        Assert.Equal("q: 0 pending, RETAINED after failed writes: a, b, c", retained.Format());
+        Assert.NotNull(retained.FormatFailure());
+        Assert.Null(both.FormatFailure());
+        Assert.Contains("RETAINED", both.Format(), StringComparison.Ordinal);
+        Assert.Contains("HALTED", both.Format(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnExplicitLastFailure_WinsOverTheTerminalFailure()
+    {
+        var terminal = new InvalidOperationException("halted");
+        var last = new IOException("retained write");
+        var probe = new DelegatePersistenceQueueProbe("q", () => 0, terminalFailure: () => terminal, lastFailure: () => last);
+
+        Assert.Same(last, probe.LastFailure);
+        Assert.Same(terminal, probe.TerminalFailure);
+        Assert.Null(new DelegatePersistenceQueueProbe("q", () => 0).LastFailure);
+    }
+
+    [Fact]
+    public async Task ConcurrentRegisterAndSnapshot_NeverThrows()
+    {
+        var registry = new PersistenceProbeRegistry();
+
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(t => Task.Run(() =>
+        {
+            for (int i = 0; i < 500; i++)
+            {
+                registry.Register(Probe("q" + ((t * 7) + (i % 7)), i));
+                _ = registry.Snapshot();
+            }
+        })));
+
+        Assert.Equal(registry.Count, registry.Snapshot().Count);
+    }
+
+    [Fact]
     public void LastFailure_FallsBackToTheTerminalFailure()
     {
         var terminal = new InvalidOperationException("ownership lost");

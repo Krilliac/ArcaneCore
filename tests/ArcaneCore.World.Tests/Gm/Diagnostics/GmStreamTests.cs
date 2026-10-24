@@ -162,6 +162,197 @@ public sealed class GmStreamTests
     }
 
     [Fact]
+    public void Subscribe_RejectsABlankChannel_AndPublishRejectsANullLine()
+    {
+        var stream = new GmStream();
+
+        Assert.Throws<ArgumentException>(() => stream.Subscribe(GmA, " "));
+        Assert.Throws<ArgumentNullException>(() => stream.Subscribe(GmA, null!));
+        stream.Subscribe(GmA, "moves");
+        Assert.Throws<ArgumentNullException>(() => stream.Publish("moves", null!));
+        Assert.Throws<ArgumentNullException>(() => stream.Drain(null!));
+    }
+
+    [Fact]
+    public void TheOptions_MustBePositive_AndDefaultToFivePerSecondEightChannelsTenMinutes()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GmStream(new GmStreamOptions { MaxLinesPerSecond = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GmStream(new GmStreamOptions { MaxChannelsPerGm = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GmStream(new GmStreamOptions { AutoOffAfter = TimeSpan.Zero }));
+        var defaults = new GmStreamOptions();
+        Assert.Equal(5, defaults.MaxLinesPerSecond);
+        Assert.Equal(8, defaults.MaxChannelsPerGm);
+        Assert.Equal(TimeSpan.FromMinutes(10), defaults.AutoOffAfter);
+    }
+
+    [Fact]
+    public void ChannelNames_AreCaseInsensitive_ForUnsubscribeAndHasSubscribers()
+    {
+        var stream = new GmStream();
+        stream.Subscribe(GmA, "DamageLog");
+
+        Assert.True(stream.HasSubscribers("damagelog"));
+        Assert.True(stream.Unsubscribe(GmA, "DAMAGELOG"));
+        Assert.False(stream.HasSubscribers("damagelog"));
+        Assert.False(stream.IsActive);
+    }
+
+    [Fact]
+    public void RateLimit_AllowsExactlyTheLimit_ThenARefreshAtTheNextSecondBoundary()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 3 }, clock);
+        stream.Subscribe(GmA, "moves");
+
+        int accepted = Enumerable.Range(0, 3).Sum(i => stream.Publish("moves", "m" + i));
+        Assert.Equal(3, accepted);
+        Assert.Equal(0, stream.Publish("moves", "over")); // the fourth in the same second is dropped
+
+        clock.Advance(1); // exactly one second later opens a new window
+        Assert.Equal(1, stream.Publish("moves", "fresh"));
+    }
+
+    [Fact]
+    public void TheSuppressedNotice_IsSentOnceBeforeTheNextBatch_ThenForgotten()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 1 }, clock);
+        stream.Subscribe(GmA, "moves");
+        stream.Publish("moves", "a");
+        stream.Publish("moves", "b");
+        stream.Publish("moves", "c");
+        Drain(stream);
+
+        clock.Advance(1);
+        stream.Publish("moves", "d");
+        clock.Advance(1);
+        stream.Publish("moves", "e");
+
+        Assert.Equal(
+            [
+                new GmStreamLine(GmA, "[stream] 2 lines suppressed (limit 1/s)"),
+                new GmStreamLine(GmA, "[moves] d"),
+                new GmStreamLine(GmA, "[moves] e"),
+            ],
+            Drain(stream));
+    }
+
+    [Fact]
+    public void Sweep_EndsASubscription_ExactlyAtItsExpiry_NotBefore()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { AutoOffAfter = TimeSpan.FromSeconds(60) }, clock);
+        stream.Subscribe(GmA, "moves");
+
+        clock.Advance(59);
+        Assert.Equal(0, stream.Sweep());
+        clock.Advance(1);
+        Assert.Equal(1, stream.Sweep());
+        Assert.Empty(stream.Subscriptions(GmA));
+    }
+
+    [Fact]
+    public void Subscribing_Again_PushesTheExpiryOut()
+    {
+        var clock = new ManualTimeProvider(1_000_000);
+        var stream = new GmStream(new GmStreamOptions { AutoOffAfter = TimeSpan.FromMinutes(10) }, clock);
+        stream.Subscribe(GmA, "moves");
+        DateTimeOffset first = stream.Subscriptions(GmA).Single().ExpiresAt;
+
+        clock.Advance(120);
+        stream.Subscribe(GmA, "moves");
+
+        Assert.Equal(first.AddSeconds(120), stream.Subscriptions(GmA).Single().ExpiresAt);
+    }
+
+    [Fact]
+    public void ARefusedSubscribe_LeavesTheGmsExistingSubscriptionsUntouched()
+    {
+        var stream = new GmStream(new GmStreamOptions { MaxChannelsPerGm = 1 });
+        stream.Subscribe(GmA, "a");
+
+        Assert.False(stream.Subscribe(GmA, "b"));
+
+        Assert.Equal(["a"], stream.Subscriptions(GmA).Select(s => s.Channel));
+        Assert.True(stream.IsActive);
+        Assert.True(stream.Subscribe(GmB, "b")); // the cap is per GM
+    }
+
+    [Fact]
+    public void Publish_ToAChannelNobodyFollows_QueuesNothing_WhileAnotherIsActive()
+    {
+        var stream = new GmStream();
+        stream.Subscribe(GmA, "moves");
+
+        Assert.Equal(0, stream.Publish("proc", "x"));
+        Assert.Empty(Drain(stream));
+    }
+
+    [Fact]
+    public void Drain_HandsOverTheLinesOnce_AndAConsumerMayPublishWithoutDeadlock()
+    {
+        var stream = new GmStream();
+        stream.Subscribe(GmA, "moves");
+        stream.Publish("moves", "first");
+        var seen = new List<string>();
+
+        int delivered = stream.Drain(line =>
+        {
+            seen.Add(line.Text);
+            stream.Publish("moves", "from-consumer"); // runs outside the lock
+        });
+
+        Assert.Equal(1, delivered);
+        Assert.Equal(["[moves] first"], seen);
+        Assert.Equal(1, stream.Drain(_ => { })); // the consumer's line waits for the next drain
+        Assert.Equal(0, stream.Drain(_ => { }));
+    }
+
+    [Fact]
+    public async Task ConcurrentSubscribeAndUnsubscribe_LeavesTheStreamInactive()
+    {
+        var stream = new GmStream(new GmStreamOptions { MaxChannelsPerGm = 64 });
+
+        await Task.WhenAll(Enumerable.Range(1, 4).Select(g => Task.Run(() =>
+        {
+            var gm = new ObjectGuid((ulong)g);
+            for (int i = 0; i < 500; i++)
+            {
+                stream.Subscribe(gm, "c" + (i % 8));
+                stream.Publish("c" + (i % 8), "x");
+                stream.Unsubscribe(gm, "c" + (i % 8));
+            }
+        })));
+
+        Assert.False(stream.IsActive);
+        Assert.Equal(0, stream.UnsubscribeAll(new ObjectGuid(1)));
+    }
+
+    [Fact]
+    public async Task Feature_SendsOnlyToTheSubscribedGm()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldTestClient gmA = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        WorldTestClient gmB = await host.EnterWorldAsync("GMB", "Gmbbb", AccountSecurity.GameMaster);
+        await gmA.CollectAsync();
+        await gmB.CollectAsync();
+        GmStream stream = host.WorldServices.GetRequiredService<GmStreamFeature>().Stream;
+        ObjectGuid guidA = (await host.PlayerAsync("Gmaaa")).Guid;
+        ObjectGuid guidB = (await host.PlayerAsync("Gmbbb")).Guid;
+        stream.Subscribe(guidA, "alpha");
+        stream.Subscribe(guidB, "beta");
+        stream.Subscribe(new ObjectGuid(987654321), "alpha"); // nobody online: delivery must skip it, not throw
+
+        stream.Publish("alpha", "for A");
+        stream.Publish("beta", "for B");
+
+        Assert.Equal(["[alpha] for A"], await gmA.CollectChatLinesAsync(1));
+        Assert.Equal(["[beta] for B"], await gmB.CollectChatLinesAsync(1));
+        await gmA.DisposeAsync();
+        await gmB.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Feature_SendsQueuedLinesToTheGm_AndLogoutEndsTheSubscription()
     {
         await using WorldTestHost host = WorldTestHost.Start();

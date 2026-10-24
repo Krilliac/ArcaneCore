@@ -159,4 +159,160 @@ public sealed class RingRecorderTests
     [Fact]
     public void Enable_RejectsANonPositiveCapacity()
         => Assert.Throws<ArgumentOutOfRangeException>(() => new RingRecorder<string, int>().Enable("a", 0));
+
+    [Fact]
+    public void Enable_RejectsANegativeCapacity()
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new RingRecorder<string, int>().Enable("a", -1));
+
+    [Fact]
+    public void TheCaps_MustBePositive_AndDefaultTo64Targets4096Entries()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RingRecorder<string, int>(maxTargets: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RingRecorder<string, int>(maxCapacity: 0));
+        var defaults = new RingRecorder<string, int>();
+        Assert.Equal(64, defaults.MaxTargets);
+        Assert.Equal(4096, defaults.MaxCapacity);
+    }
+
+    [Fact]
+    public void ReEnablingWithTheSameCapacity_KeepsTheRecordedEntries()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 3);
+        ring.Record("a", 1);
+        ring.Record("a", 2);
+
+        Assert.True(ring.Enable("a", 3));
+
+        Assert.Equal([1, 2], ring.Snapshot("a"));
+        Assert.Equal(1, ring.TargetCount);
+    }
+
+    [Fact]
+    public void ADisabledTarget_StartsEmptyWhenEnabledAgain()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 2);
+        ring.Record("a", 1);
+        ring.Disable("a");
+
+        ring.Enable("a", 2);
+
+        Assert.Empty(ring.Snapshot("a"));
+        Assert.Equal(0, ring.Overwritten("a"));
+    }
+
+    [Fact]
+    public void Shrinking_CountsTheEntriesItDropped_AsOverwritten()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 4);
+        for (int i = 1; i <= 6; i++)
+        {
+            ring.Record("a", i); // 1 and 2 already overwritten
+        }
+
+        ring.Enable("a", 2);
+
+        Assert.Equal([5, 6], ring.Snapshot("a"));
+        Assert.Equal(4, ring.Overwritten("a")); // 2 by wrapping + 2 by shrinking
+    }
+
+    [Fact]
+    public void Clear_ResetsTheOverwrittenCount()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 1);
+        ring.Record("a", 1);
+        ring.Record("a", 2);
+        Assert.Equal(1, ring.Overwritten("a"));
+
+        ring.Clear("a");
+
+        Assert.Equal(0, ring.Overwritten("a"));
+        Assert.Equal(0, ring.Overwritten("never-enabled"));
+    }
+
+    [Fact]
+    public void RecordingADisabledKey_WhileAnotherIsEnabled_NeverCreatesARing()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 2);
+
+        ring.Record("b", 5);
+
+        Assert.False(ring.IsRecording("b"));
+        Assert.Equal(1, ring.TargetCount);
+        Assert.Equal([("a", 2, 0)], ring.Targets());
+    }
+
+    [Fact]
+    public void ACapacityOfOne_KeepsOnlyTheNewest()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 1);
+
+        ring.Record("a", 1);
+        ring.Record("a", 2);
+
+        Assert.Equal([2], ring.Snapshot("a"));
+    }
+
+    [Fact]
+    public void StructEntries_AreCopiedIn_NotAliased()
+    {
+        var ring = new RingRecorder<string, (int Id, string Tag)>();
+        ring.Enable("a", 2);
+        var entry = (Id: 1, Tag: "x");
+
+        ring.Record("a", entry);
+        entry.Id = 99;
+
+        Assert.Equal([(1, "x")], ring.Snapshot("a"));
+    }
+
+    [Fact]
+    public void ASnapshot_IsACopy_ThatLaterRecordsDoNotChange()
+    {
+        var ring = new RingRecorder<string, int>();
+        ring.Enable("a", 3);
+        ring.Record("a", 1);
+        int[] taken = ring.Snapshot("a");
+
+        ring.Record("a", 2);
+
+        Assert.Equal([1], taken);
+    }
+
+    [Fact]
+    public async Task ConcurrentEnableDisableAndRecord_StaysConsistent()
+    {
+        var ring = new RingRecorder<int, int>(maxTargets: 4, maxCapacity: 8);
+
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(t => Task.Run(() =>
+        {
+            for (int i = 0; i < 2000; i++)
+            {
+                switch (i % 4)
+                {
+                    case 0:
+                        ring.Enable(t, 8);
+                        break;
+                    case 1:
+                        ring.Record(t, i);
+                        break;
+                    case 2:
+                        _ = ring.Snapshot(t);
+                        break;
+                    default:
+                        ring.Disable(t);
+                        break;
+                }
+            }
+        })));
+
+        ring.DisableAll();
+        Assert.False(ring.IsActive);
+        Assert.Equal(0, ring.TargetCount);
+    }
 }
