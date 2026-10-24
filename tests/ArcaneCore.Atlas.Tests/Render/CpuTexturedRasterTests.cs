@@ -4,6 +4,7 @@ using ArcaneCore.Atlas.Core.Materials;
 using ArcaneCore.Atlas.Render;
 using ArcaneCore.Atlas.Tests.Textures;
 using ArcaneCore.Atlas.Textures;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.Atlas.Tests.Render;
@@ -127,6 +128,46 @@ public sealed class CpuTexturedRasterTests
         RenderedFrame frame = Draw(rig);
 
         Assert.Equal(Red, At(frame, -7.5, 7.5));
+    }
+
+    [Fact]
+    public void AKindRegisteredByALaneModule_InTheSharedService_IsDrawnByTheRendererTheRenderModuleBuilt()
+    {
+        var source = new FakeSource().Add(LayerIds.RefM2Tex, Views.TileOf(Camera), Quad(new Material("probe", BlendMode.Opaque, MaterialFlags.Unlit, [])));
+        using AtlasContext context = AtlasModules.Compose(
+            new AtlasPaths(null, null),
+            NullLoggerFactory.Instance,
+            headless: true,
+            [new LaneModule("layers", ModuleOrder.Foundation, c => c.Layers.Add(source)), new TexturesModule(), new LaneModule("lane-a2", ModuleOrder.Foundation + 60, c => c.Services.Get<CpuMaterials>()!.Register("probe", new SolidMaterial(Green))), new RenderModule()]);
+        Assert.Empty(context.Problems);
+
+        RenderedFrame frame = ((CpuRenderer)context.Services.Get<IHeadlessRenderer>()!).Rasterize(ReferenceView(), Size, Size, CancellationToken.None);
+
+        Assert.Equal(Green, At(frame, 0, 0));
+    }
+
+    private sealed class LaneModule(string name, int order, Action<AtlasContext> register) : IAtlasModule
+    {
+        public string Name { get; } = name;
+
+        public int Order { get; } = order;
+
+        public void Register(AtlasContext context) => register(context);
+    }
+
+    private sealed class SolidMaterial(Rgb colour) : ICpuMaterial
+    {
+        public BatchShader Prepare(Material material, CpuTextureSet textures, Rgb flat) => new SolidShader(colour);
+    }
+
+    private sealed class SolidShader(Rgb colour) : BatchShader(BlendMode.Opaque)
+    {
+        public override bool Shade(double u, double v, out Rgb shaded, out double alpha)
+        {
+            shaded = colour;
+            alpha = 1.0;
+            return true;
+        }
     }
 
     private static IEnumerable<(double Dx, double Dy, Rgb Colour)> Quadrants()

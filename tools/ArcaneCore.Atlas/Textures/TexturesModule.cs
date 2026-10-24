@@ -25,6 +25,8 @@ public sealed class TexturesModule : IAtlasModule
         var cache = new TextureCache(files ?? new EmptyClientFiles(), generated);
         context.Services.Add(generated);
         context.Services.Add(cache);
+        // The CPU renderer's material kinds: A2 registers terrain (and A3 may register wmo/m2) from their own modules, which run after this one.
+        context.Services.Add(new CpuMaterials());
         context.CacheParticipants.Add(cache);
         context.BinaryEndpoints.Add(new TextureEndpoint(cache));
         context.OnComposed(generated.Freeze);
