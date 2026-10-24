@@ -325,8 +325,11 @@ internal sealed class PlayerbotGroupAI
             _target = null;
             _attacking = false;
             Goal = PlayerbotGoalKind.Retreat;
-            bool walking = WalkTo(player, new Vector3(wipeExit.X, wipeExit.Y, wipeExit.Z), interval, toward: true);
-            _wipeExitFails = walking ? 0 : _wipeExitFails + 1;
+            var exitPoint = new Vector3(wipeExit.X, wipeExit.Y, wipeExit.Z);
+            bool walking = WalkTo(player, exitPoint, interval, toward: true);
+            // Standing on the exit point and still in the instance means its trigger did not fire: that counts as a failure too, or the hold would reset the give-up for good.
+            bool atExit = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), exitPoint) <= 1.5f;
+            _wipeExitFails = walking && !atExit ? 0 : _wipeExitFails + 1;
             Step = walking ? "wipe:run-exit" : "wipe:no-path-exit";
             return;
         }
