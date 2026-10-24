@@ -306,8 +306,10 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// A creature already convicted of being under the map that has a navmesh floor straight above within 10 yd and none below within
     /// 60 yd (a tunnel or cellar ceiling sits between it and the terrain, which <see cref="TryRecoverClippedUnderTerrain"/> declines):
-    /// it is put on that floor (when it is more than a yard below it). Reported once. This heals a stranded creature; it does not prevent
-    /// whatever put it there, so the report recurs per episode.
+    /// it is put on that floor (when it is more than a yard below it). Reported once per episode: the episode stays open until a later sample
+    /// finds the creature on the floor, so a mover that keeps putting it back under is lifted again without a new report.
+    /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a
+    /// stranded creature; it does not prevent whatever put it there.
     /// </summary>
     private bool TryLiftOntoFloorAbove(Creature creature)
     {
@@ -326,13 +328,13 @@ public sealed partial class CreatureMapSystem
             creature,
             floor,
             $"Creature {creature.Guid} was {floor - creature.Z:F1} yd under a navmesh floor (z={creature.Z:F1}, floor={floor:F1}) at ({creature.X:F1}, {creature.Y:F1}) on map {Map.MapId}: lifted onto it");
+        StopMoving(creature);
         if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
         {
             creature.SetHome(creature.Home with { Z = standZ });
         }
 
         creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
-        creature.ClearUnderMapEpisode();
         return true;
     }
 

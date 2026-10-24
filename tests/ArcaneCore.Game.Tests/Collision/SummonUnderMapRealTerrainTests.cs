@@ -245,12 +245,52 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         Assert.Single(capture.Notices);
     }
 
+    [RealTerrainFact]
+    public void AnImpThatAMoverKeepsPuttingBackUnderTheTunnelFloor_IsLiftedEachTime_AndReportedOnce()
+    {
+        // Whatever put the imp under the floor may do it again: every re-placement is healed at the next sample, but the episode stays
+        // open until a sample sees the creature on the floor, so a mover that undoes every lift does not turn one report into one per sample.
+        const uint Entry = 949202;
+        const float X = 1448.2f;
+        const float Z = 335.9f;
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        InstallRealCollision(world, Wsg, X, WsgTunnelY);
+        Map map = world.GetMap(Wsg);
+        float floor = TunnelFloor(map.Collision, X, WsgTunnelY);
+
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "creature/under-map" && n.Subject.StartsWith($"creature entry {Entry} ", StringComparison.Ordinal));
+        var system = new CreatureMapSystem(map, Content([Template(Entry)], [Spawn(1, Entry, X, WsgTunnelY, Z, Wsg)]), random: new Random(1));
+        map.AddUpdater(system);
+        world.AddPlayer(TestWorld.CreatePlayer(1, X, WsgTunnelY, new FakeSession(1), Wsg));
+        world.RunTick(0);
+        Creature imp = Assert.Single(system.Creatures);
+
+        int lifts = 0;
+        for (int i = 0; i < 240; i++)
+        {
+            world.RunTick(100);
+            if (imp.Z > floor - 0.5f)
+            {
+                lifts++;
+                imp.Relocate(X, WsgTunnelY, Z, imp.Orientation, 0);
+            }
+        }
+
+        output.WriteLine($"lifts {lifts}, notices {capture.Notices.Count}");
+        Assert.True(lifts >= 4, "the imp was put back under the floor and lifted again several times");
+        Assert.Single(capture.Notices);
+    }
+
     [RealTerrainTheory]
-    [InlineData(1390f, 1470f, 0.7f, 100u)]
-    [InlineData(1470f, 1390f, 0.7f, 100u)]
-    [InlineData(1390f, 1470f, 7f, 1000u)]
-    [InlineData(1390f, 1470f, 25f, 2000u)]
-    public void APetFollowingItsOwnerAlongTheWsgTunnelRamp_StaysOnTheFloor_AndIsNeverLifted(float fromX, float toX, float ownerStep, uint tickMs)
+    [InlineData(1390f, 1470f, 0.7f, 100u, false)]
+    [InlineData(1390f, 1470f, 0.7f, 100u, true)]
+    [InlineData(1470f, 1390f, 0.7f, 100u, false)]
+    [InlineData(1470f, 1390f, 0.7f, 100u, true)]
+    [InlineData(1390f, 1470f, 7f, 1000u, false)]
+    [InlineData(1390f, 1470f, 7f, 1000u, true)]
+    [InlineData(1390f, 1470f, 25f, 2000u, false)]
+    [InlineData(1390f, 1470f, 25f, 2000u, true)]
+    public void APetFollowingItsOwnerAlongTheWsgTunnelRamp_StaysOnTheFloor_AndIsNeverLifted(float fromX, float toX, float ownerStep, uint tickMs, bool pathJobs)
     {
         const uint Entry = 949203;
         using WorldRuntime world = TestWorld.CreateRuntime();
@@ -260,11 +300,11 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
 
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "creature/under-map" && n.Subject.StartsWith($"creature entry {Entry} ", StringComparison.Ordinal));
         var options = new CreatureOptions();
-        options.Movement.PathJobs = true;
-        options.Movement.PathJobsFollow = true;
+        options.Movement.PathJobs = pathJobs;
+        options.Movement.PathJobsFollow = pathJobs;
         float startZ = TunnelFloor(collision, fromX - 3f, WsgTunnelY);
         var system = new CreatureMapSystem(map, Content([Template(Entry) with { InhabitType = 1 }], [Spawn(1, Entry, fromX - 3f, WsgTunnelY, startZ, Wsg)]), options, random: new Random(1), aiServices: new CreatureAiServices());
-        using var jobs = new NavJobSystem(threads: 2);
+        using NavJobSystem? jobs = pathJobs ? new NavJobSystem(threads: 2) : null;
         system.PathJobs = jobs;
         map.AddUpdater(system);
         Player owner = TestWorld.CreatePlayer(1, fromX, WsgTunnelY, new FakeSession(1), Wsg);
@@ -293,7 +333,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
             }
         }
 
-        output.WriteLine($"owner {fromX}->{toX} step {ownerStep} tick {tickMs}: pet ended ({pet.X:F1}, {pet.Y:F1}, {pet.Z:F2}), worst |z - tunnel floor| {worst:F2}");
+        output.WriteLine($"owner {fromX}->{toX} step {ownerStep} tick {tickMs} pathJobs {pathJobs}: pet ended ({pet.X:F1}, {pet.Y:F1}, {pet.Z:F2}), worst |z - tunnel floor| {worst:F2}");
         Assert.InRange(worst, 0f, 1.25f);
         Assert.Empty(capture.Notices);
     }
