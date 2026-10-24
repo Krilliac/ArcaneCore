@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
@@ -282,7 +283,7 @@ internal static partial class MapFeedAnomalies
         return (false, 0, 0, default);
     }
 
-    /// <summary>The guid a ledger subject names, in the forms the reporters write: <c>creature 3100 spawn 812</c>, <c>gameobject 2843 spawn 77001</c>, <c>bot Thrall (guid 1234)</c>.</summary>
+    /// <summary>The guid a ledger subject names, in the forms the reporters write: <c>creature 3100 spawn 812</c>, <c>gameobject 2843 spawn 77001</c>, <c>bot Thrall (guid 4D2)</c> (hex), <c>player Thrall (guid 1234)</c> (decimal).</summary>
     internal static bool TryGuid(string subject, out ulong guid)
     {
         guid = 0;
@@ -299,10 +300,15 @@ internal static partial class MapFeedAnomalies
             return true;
         }
 
-        if (PlayerSubject().Match(subject) is { Success: true } player && uint.TryParse(player.Groups[1].ValueSpan, out uint low) && low != 0)
+        if (PlayerSubject().Match(subject) is { Success: true } player)
         {
-            guid = ObjectGuid.Player(low).Value;
-            return true;
+            // The bot reporters write the guid in hex (PlayerbotAnomalies.SubjectOf); the Game observers and ServerAnomalies write the decimal low part.
+            NumberStyles style = player.Groups[1].Value == "bot" ? NumberStyles.AllowHexSpecifier : NumberStyles.None;
+            if (uint.TryParse(player.Groups[2].ValueSpan, style, CultureInfo.InvariantCulture, out uint low) && low != 0)
+            {
+                guid = ObjectGuid.Player(low).Value;
+                return true;
+            }
         }
 
         return false;
@@ -311,6 +317,6 @@ internal static partial class MapFeedAnomalies
     [GeneratedRegex(@"^(creature|gameobject) (?:entry )?(\d+) spawn (\d+)", RegexOptions.CultureInvariant)]
     private static partial Regex SpawnSubject();
 
-    [GeneratedRegex(@"^(?:bot|player) .*\(guid (\d+)\)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(bot|player) .*\(guid ([0-9A-Fa-f]+)\)", RegexOptions.CultureInvariant)]
     private static partial Regex PlayerSubject();
 }

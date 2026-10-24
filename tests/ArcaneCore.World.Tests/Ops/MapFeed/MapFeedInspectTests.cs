@@ -251,13 +251,13 @@ public sealed class MapFeedInspectTests
         await using FeedWorld world = await FeedWorld.StartAsync(Content());
         await using FeedWorld other = await FeedWorld.StartAsync(Content());
         await world.AddPlayerAsync("Anomalyone");
-        uint playerLow = (await world.Host.PlayerAsync("Anomalyone")).Guid.Low;
+        var player = await world.Host.PlayerAsync("Anomalyone");
         FeedClient client = await world.ConnectAsync();
         object mine = world.Host.World.Identity;
         string tag = "insight" + Guid.NewGuid().ToString("N")[..8];
 
         AnomalyLedger.Shared.Report(tag, "stuck", $"creature {FeedWorld.WolfEntry} spawn {FeedWorld.WolfSpawn}", "wolf is stuck", AnomalySeverity.Warning, mine);
-        AnomalyLedger.Shared.Report(tag, "lost", $"bot Anomalyone (guid {playerLow})", "bot lost", AnomalySeverity.Error, mine);
+        AnomalyLedger.Shared.Report(tag, "lost", ArcaneCore.World.Playerbots.PlayerbotAnomalies.SubjectOf(player), "bot lost", AnomalySeverity.Error, mine);
         AnomalyLedger.Shared.Report(tag, "gone", "creature 299 spawn 999999", "no such spawn", AnomalySeverity.Info, mine);
         AnomalyLedger.Shared.Report(tag, "real", ArcaneCore.Game.Creatures.CreatureAnomalies.Subject(FeedWorld.WolfEntry, FeedWorld.WolfSpawn), "evade loop", AnomalySeverity.Warning, mine);
         AnomalyLedger.Shared.Report(tag, "other", $"creature {FeedWorld.WolfEntry} spawn {FeedWorld.WolfSpawn}", "other world's notice", AnomalySeverity.Warning, other.Host.World.Identity);

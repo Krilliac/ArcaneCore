@@ -33,7 +33,7 @@ public static class ServerAnomalies
     public static string SubjectOf(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        return string.Create(CultureInfo.InvariantCulture, $"player {player.Name} (guid {player.Guid.Value:X})");
+        return string.Create(CultureInfo.InvariantCulture, $"player {player.Name} (guid {player.Guid.Low})");
     }
 
     /// <summary>Report a failed check about <paramref name="player"/>.</summary>
