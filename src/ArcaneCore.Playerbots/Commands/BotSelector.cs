@@ -28,6 +28,9 @@ public interface IBotSelectorSource
     /// <summary>Whether the bot is under <c>.botctl</c> control.</summary>
     bool IsControlled(Guid botId);
 
+    /// <summary>The bots under <c>.botctl</c> control, by the controllers (so a controlled bot missing from <see cref="Snapshot"/> is still named).</summary>
+    IReadOnlyList<BotPick> Controlled();
+
     /// <summary>The members of the named bot alias (<c>@alias</c>), or null when there is none.</summary>
     IReadOnlyList<string>? Alias(string name);
 
@@ -108,7 +111,7 @@ public static class BotSelector
             else if (part.Equals("controlled", StringComparison.OrdinalIgnoreCase) || part.Equals("mine", StringComparison.OrdinalIgnoreCase))
             {
                 broad = true;
-                foreach (PlayerbotStatus s in ByName().Where(s => source.IsControlled(s.BotId))) Add(s.BotId, s.Name);
+                foreach (BotPick c in source.Controlled().OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)) Add(c.BotId, c.Name);
             }
             else if (part.Equals("running", StringComparison.OrdinalIgnoreCase))
             {
@@ -226,6 +229,8 @@ internal sealed class FeatureBotSelectorSource(ManagedPlayerbotFeature feature, 
     public bool IsRunning(Guid botId) => feature.IsActive(botId);
 
     public bool IsControlled(Guid botId) => hub?.Find(botId) is not null;
+
+    public IReadOnlyList<BotPick> Controlled() => hub is null ? [] : [.. hub.Controlled.Select(c => new BotPick(c.BotId, c.Name))];
 
     public IReadOnlyList<string>? Alias(string name) => hub?.Group(name);
 

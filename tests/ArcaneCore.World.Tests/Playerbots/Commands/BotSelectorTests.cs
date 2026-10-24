@@ -1,6 +1,8 @@
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Playerbots.Commands;
+using ArcaneCore.World.Playerbots.Control;
+using ArcaneCore.World.Tests.Playerbots.Party;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Commands;
@@ -47,6 +49,12 @@ public sealed class BotSelectorTests
         public bool IsRunning(Guid botId) => _bots.First(b => b.BotId == botId).State == ManagedPlayerbotState.Running;
 
         public bool IsControlled(Guid botId) => Controlled.Contains(botId);
+
+        /// <summary>Controllers whose bot is not in <see cref="Snapshot"/> (the hub names them anyway).</summary>
+        public List<BotPick> Orphans { get; } = [];
+
+        IReadOnlyList<BotPick> IBotSelectorSource.Controlled()
+            => [.. _bots.Where(b => Controlled.Contains(b.BotId)).Select(b => new BotPick(b.BotId, b.Name)), .. Orphans];
 
         public IReadOnlyList<string>? Alias(string name) => Aliases.GetValueOrDefault(name);
 
@@ -283,9 +291,71 @@ public sealed class BotSelectorTests
 
         public bool IsControlled(Guid botId) => false;
 
+        public IReadOnlyList<BotPick> Controlled() => [];
+
         public IReadOnlyList<string>? Alias(string name) => null;
 
         public BotAttributes Attributes(PlayerbotStatus bot) => new(0, null, null, null, null);
+    }
+
+    [Fact]
+    public void ControlledNamesTheControllersEvenForABotMissingFromTheSnapshot()
+    {
+        var source = new FakeSource();
+        var ghost = new BotPick(Guid.Parse("00000000-0000-0000-0000-0000000000ee"), "Ghost");
+        source.Orphans.Add(ghost);
+
+        Assert.Null(BotSelector.TryResolve("controlled", source, out BotSelection selection));
+
+        // By controller, sorted by name: the .botctl behaviour from before the selector was shared.
+        Assert.Equal(["Bob", "Ghost"], selection.Bots.Select(b => b.Name));
+        Assert.True(selection.Broad);
+        Assert.Equal(ghost, selection.Bots[1]);
+    }
+
+    [Fact]
+    public async Task TheFeatureSourceResolvesTheSameSetsAsTheOldBotctlCodeAgainstARealHubAndFeature()
+    {
+        await using FleetWorld world = await FleetWorld.StartAsync();
+        Guid first = await world.AddBotAsync("Selfaaa", 10);
+        Guid second = await world.AddBotAsync("Selfaab", 12);
+        await world.AddBotAsync("Selfbba", 14);
+        await world.CreateStoppedBotAsync("Selfcca");
+        BotControlHub hub = BotControlHub.For(world.Bots);
+        (BotController? controller, string? takeError) = await hub.TakeAsync(second, "Selfaab", "test", start: false, force: false);
+        Assert.Null(takeError);
+        Assert.NotNull(controller);
+
+        async Task<string[]> Resolve(string selector) => (await ResolveSelection(selector)).Names;
+
+        async Task<(string[] Names, bool Broad)> ResolveSelection(string selector)
+            => await world.Host.OnWorldAsync<(string[] Names, bool Broad)>(() =>
+            {
+                string? error = BotSelector.TryResolve(selector, new FeatureBotSelectorSource(world.Bots, hub), out BotSelection selection);
+                Assert.Null(error);
+                return ([.. selection.Bots.Select(b => b.Name)], selection.Broad);
+            });
+
+        (string[] allNames, bool broad) = await ResolveSelection("all");
+        Assert.Equal(["Selfaaa", "Selfaab", "Selfbba", "Selfcca"], allNames);
+        Assert.True(broad);
+        Assert.Equal(["Selfaaa", "Selfaab", "Selfbba"], await Resolve("running"));
+        Assert.Equal(["Selfaab"], await Resolve("controlled"));
+        Assert.Equal(["Selfaab"], await Resolve("mine"));
+        Assert.Equal(["Selfaaa", "Selfaab"], await Resolve("selfaa*"));
+        Assert.Equal(["Selfaaa", "Selfaab"], await Resolve("$SELFAA*"));
+        Assert.Equal(["Selfaab"], await Resolve("where:controlled=1"));
+        Assert.Equal(["Selfcca"], await Resolve("where:running=0"));
+        Assert.Equal(["Selfbba"], await Resolve("where:name=bb"));
+        (string[] oneName, bool single) = await ResolveSelection(first.ToString("D"));
+        Assert.Equal(["Selfaaa"], oneName);
+        Assert.False(single);
+        Assert.Equal(["Selfbba", "Selfaab"], await Resolve("Selfbba,$selfaab,selfbba"));
+        uint mapId = await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer("Selfaaa")!.MapId);
+        Assert.Equal(["Selfaaa", "Selfaab", "Selfbba"], await Resolve($"where:map={mapId}&running=1"));
+
+        hub.SetGroup("duo", ["Selfaaa", "Selfbba"]);
+        Assert.Equal(["Selfaaa", "Selfbba"], await Resolve("@duo"));
     }
 
     [Fact]
