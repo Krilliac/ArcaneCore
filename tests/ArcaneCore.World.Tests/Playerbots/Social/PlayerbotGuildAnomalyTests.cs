@@ -91,11 +91,18 @@ public sealed class PlayerbotGuildAnomalyTests
         await world.Host.OnWorldAsync(() => guild.Ranks[Guild.GuildMasterRank].Rights = GuildRights.Empty);
         await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 10);
         await world.Host.WaitForWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildPromote) >= 1, "the master to try a promotion");
+        // Switching guilds off does not stop promotions (the guilds that exist go on), so stop them for a reason the bot honours: the member drops below the promotion level.
+        // Then both counts are read on the world thread, where no pass can sit between the packet being logged and the anomaly being reported.
         await SwitchAsync(world, false);
+        await world.Host.OnWorldAsync(() => world.Host.World.FindOnlinePlayer(member)!.Level = 1);
+        int settled = await world.Host.OnWorldAsync(() => world.Log.Count(WorldOpcode.CmsgGuildPromote));
         await SocialTestKit.WaitPassesAsync(world.Host, 5);
+        (int promotes, int reported) = await world.Host.OnWorldAsync(() => (world.Log.Count(WorldOpcode.CmsgGuildPromote), capture.Count(GuildFailed)));
 
         Assert.Equal(PlayerbotGuildMembership.RankInitiate, await world.Host.OnWorldAsync(() => guild.Find(memberId)!.Rank));
-        Assert.Equal(world.Log.Count(WorldOpcode.CmsgGuildPromote), capture.Count(GuildFailed));
+        Assert.Equal(settled, promotes);
+        Assert.True(promotes >= 1);
+        Assert.Equal(promotes, reported);
         AnomalyNotice notice = capture.Notices.First(n => n.Key == GuildFailed);
         Assert.Contains($"guild promotion of {member}", notice.Detail, StringComparison.Ordinal);
         Assert.Contains($"before={PlayerbotGuildMembership.RankInitiate}", notice.Detail, StringComparison.Ordinal);
