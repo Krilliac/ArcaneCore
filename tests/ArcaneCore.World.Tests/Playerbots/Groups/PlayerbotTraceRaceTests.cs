@@ -20,6 +20,7 @@ public sealed class PlayerbotTraceRaceTests
     [Fact]
     public async Task TraceBuiltWhileTheWorldRuns_NeverThrows_OverManyIterations()
     {
+        using SemaphoreSlim flipped = new(0); // declared before the world so it outlives any advance still running when an assert throws
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);
         var tank = await world.AddBotAsync("Racetank", Human, Warrior, 10, [Taunt]);
         var healer = await world.AddBotAsync("Raceheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
@@ -32,8 +33,7 @@ public sealed class PlayerbotTraceRaceTests
         const int Target = 300;
         const int AdvanceMs = 240_000;
         bool attacking = false;
-        int toggles = 0, built = 0, interleaved = 0, lastSeen = -1, restarts = 0;
-        using SemaphoreSlim flipped = new(0);
+        int toggles = 0, built = 0, lastSeen = -1, restarts = 0;
         Func<bool> flip = () =>
         {
             Player victim = world.Player(tank.Id);
@@ -59,25 +59,23 @@ public sealed class PlayerbotTraceRaceTests
                 running = world.RunUntilAsync(AdvanceMs, flip);
             }
 
-            // Lockstep: a trace is requested only once the world has flipped the attacker set since the previous request, so every trace
-            // is built in a different tick from the last, with a flip between them, whatever the relative speed of the two threads.
-            int before = Volatile.Read(ref toggles);
-            if (before == lastSeen)
+            // Lockstep: a trace is requested only once a flip has happened after the previous trace ran. lastSeen is the toggle count read on
+            // the world thread inside that trace's command, and the flip runs after the tick's commands, so the next trace runs in a later tick.
+            if (Volatile.Read(ref toggles) == lastSeen)
             {
                 await flipped.WaitAsync(TimeSpan.FromMilliseconds(250)); // bounded; the loop re-checks the advance and the real-time cap
                 continue;
             }
 
-            string trace = await world.TraceAsync();
+            (string trace, int seen) = await world.OnWorldAsync(() => (world.Trace(), toggles));
             Assert.False(string.IsNullOrEmpty(trace));
-            interleaved++;
-            lastSeen = before;
+            Assert.True(seen > lastSeen, $"trace {built} was built in the same tick as the previous one (world-side flips {seen}, previous {lastSeen}, {restarts} advance restarts)");
+            lastSeen = seen;
             Interlocked.Increment(ref built);
         }
 
         // Fails only if the real-time cap was hit, i.e. the world is stuck.
         Assert.Equal(Target, built);
-        Assert.True(interleaved == built, $"only {interleaved} of {built} traces saw the attacker set change ({toggles} flips, {restarts} advance restarts)");
         await running;
     }
 }
