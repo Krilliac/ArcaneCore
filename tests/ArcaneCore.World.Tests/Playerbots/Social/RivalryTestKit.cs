@@ -51,6 +51,7 @@ internal static class RivalryKit
                 options.Chat.Speech.BotGapSeconds = 0;
                 options.Chat.Speech.TargetGapSeconds = 0;
                 options.Chat.Speech.BotLinesPerMinute = 60;
+                options.Chat.Speech.DedupeSeconds = 0; // the same emote twice to one target is two hearings in these tests, not a repeat
             }
 
             configure?.Invoke(options);

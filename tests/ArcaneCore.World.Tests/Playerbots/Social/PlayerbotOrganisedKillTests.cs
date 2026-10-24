@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Characters;
@@ -140,7 +141,7 @@ public sealed class PlayerbotOrganisedKillTests
         Assert.Null(bySlayer);
 
         world.Options.Social.Memory.OrganisedPvpKills = true;
-        (byVictim, bySlayer) = await KillAsync(world, "sgk2", seam: (recorder, _, slayer) => recorder.InSiegeGroup = guid => guid == slayer, botSlayer: true);
+        (byVictim, bySlayer) = await KillAsync(world, "sgkb", seam: (recorder, _, slayer) => recorder.InSiegeGroup = guid => guid == slayer, botSlayer: true);
         Assert.Equal((short)Defaults.AffinityPerKilledBy, byVictim!.Affinity);
         Assert.Equal((short)Defaults.AffinityPerKilledThem, bySlayer!.Affinity);
     }

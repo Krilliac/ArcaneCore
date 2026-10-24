@@ -436,6 +436,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             groupCoordinator.ChatSafety = _chat?.Safety;
         }
 
+        // A kill with either side in a siege group is organised PvP, not a grudge; the "rivals off" choices live in the social feature (one store for all bots).
+        Social.InSiegeGroup = coordinator is null ? null : coordinator.IsInSiegeGroup;
+        Social.RivalryOptOut = services.GetService<BotSocial.PlayerbotSocialFeature>()?.RivalryOptOut;
+
         _world = world;
         _sharedSetAsides.World = world;
         // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this

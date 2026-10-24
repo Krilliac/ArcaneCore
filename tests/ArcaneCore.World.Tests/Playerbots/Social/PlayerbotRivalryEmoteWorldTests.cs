@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Social;
 /// the per-target rude cap, the opt-out, the ignore list, combat, capitals and unknown zones (fail closed, with positive controls), the
 /// bot-to-bot visibility rule, the range clamp, the master switches and the War Mode layer rules (7.1).
 /// <para>
-/// The lane is driven by hand at a chosen world time (<see cref="RivalryKit.RunAsync(SocialWorld, long, uint)"/>) in a frozen world; the
+/// The lane is driven by hand at a chosen world time (<see cref="RivalryKit.RunAsync(SocialWorld, long, uint, Action)"/>) in a frozen world; the
 /// tests read what it sent from <c>PlayerbotRivalryLane.Sends</c> (a snapshot of <c>PlayerbotRivalrySend(Bot, Target, TargetIsBot, Emote, Rude)</c>,
 /// the last few hundred sends) and, in the first ones, from the real player's client.
 /// </para>
@@ -567,10 +567,10 @@ public sealed class PlayerbotRivalryEmoteWorldTests
     public async Task WithRudeRequiresOptIn_ARivalIsTauntedOnlyAfterItWhispersRivalsOn()
     {
         await using SocialWorld world = await RivalryKit.StartAsync(o => o.Social.Rivalry.Emotes.RudeRequiresOptIn = true);
-        (_, _, WorldTestClient player, ulong playerGuid) = await PairAsync(world, "Rvoptinbot", "Rvoptinplayer");
+        (_, _, WorldTestClient player, ulong playerGuid) = await PairAsync(world, "Rvoptinbot", "Rvoptinplay");
         await using WorldTestClient keep = player;
-        await RivalryKit.SeedAsync(world, "Rvoptinbot", "Rvoptinplayer", killerIsBot: false);
-        int account = await world.Host.PlayerStateAsync("Rvoptinplayer", p => p.AccountId);
+        await RivalryKit.SeedAsync(world, "Rvoptinbot", "Rvoptinplay", killerIsBot: false);
+        int account = await world.Host.PlayerStateAsync("Rvoptinplay", p => p.AccountId);
 
         await RivalryKit.RunAsync(world, 3_600_000);
         Assert.Empty(Sends(world));

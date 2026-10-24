@@ -27,7 +27,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
 
     private sealed record Outcome(
         long StartMs, SortedDictionary<string, string> SeededRows, SortedDictionary<string, string> FinalRows,
-        List<PlayerbotRivalrySend> Sends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids);
+        List<PlayerbotRivalrySend> Sends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids, Dictionary<string, Guid> Bots);
 
     private static SortedDictionary<string, string> NormalRows(SocialWorld world, Dictionary<string, ulong> guids)
     {
@@ -78,7 +78,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         var heard = new List<(ulong Emoter, uint Emote, string Target)>();
         await Task.Delay(1500);
         heard.AddRange((await RivalryKit.ListenAsync(player)).Emotes);
-        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], heard, guids);
+        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], heard, guids, new Dictionary<string, Guid>(world.Bots));
     }
 
     [Theory]
@@ -100,10 +100,11 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         // Non-vacuity, both worlds: B greeted C, and C emoted at B more often than the lane sent C's own greetings: a reply happened.
         foreach ((string label, Outcome world) in new[] { ("war", war), ("calm", calm) })
         {
-            ulong b = world.Guids["Rvparb"], c = world.Guids["Rvparc"];
-            Assert.True(world.Sends.Any(s => s.Bot == b && s.Target == c && s.TargetIsBot && !s.Rude), $"{label}: B never greeted C");
-            int heardFromC = world.Heard.Count(e => e.Emoter == c && e.Target == "Rvparb");
-            int sentByC = world.Sends.Count(s => s.Bot == c && s.Target == b);
+            ulong bTarget = world.Guids["Rvparb"], cTarget = world.Guids["Rvparc"];
+            Guid b = world.Bots["Rvparb"], c = world.Bots["Rvparc"];
+            Assert.True(world.Sends.Any(s => s.Bot == b && s.Target == cTarget && s.TargetIsBot && !s.Rude), $"{label}: B never greeted C");
+            int heardFromC = world.Heard.Count(e => e.Emoter == cTarget && e.Target == "Rvparb");
+            int sentByC = world.Sends.Count(s => s.Bot == c && s.Target == bTarget);
             Assert.True(heardFromC > sentByC, $"{label}: C emoted at B {heardFromC} times and the lane sent {sentByC}: no bot answered");
         }
 

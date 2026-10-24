@@ -1,6 +1,6 @@
 # Playerbots: social, cooperative and learning behaviour (design proposal)
 
-Status: approved 2026-10-23; P1 implemented in this change. File references are to the code on the w43 integration branch (`src/ArcaneCore.Playerbots`, options in `src/ArcaneCore.World.Contracts/Playerbots`).
+Status: approved 2026-10-23; P1 implemented; P6a (cross-faction emotes and the rival stance, no combat) implemented, see docs/areas/playbots-social.md, Rivalry. File references are to the code on the w43 integration branch (`src/ArcaneCore.Playerbots`, options in `src/ArcaneCore.World.Contracts/Playerbots`).
 
 ## 1. What bots already do (so we build on it, not beside it)
 
@@ -176,7 +176,7 @@ Today bots play battlegrounds (`Battlegrounds/`) and GM-run event scenarios (`Ev
 | P2 Initiative & help | proactive openings, follow-ups, trouble scan, rez/buff strangers, surroundings comments | `Social/PlayerbotSocialInitiative.cs`, `PlayerbotBrain` help lane |
 | P3 Cooperation | recruitment of non-goal bots, bot LFG answering, guild grouping, affinity invite policy, raid escalation for world elites | `Groups/PlayerbotGroupCoordinator.cs`, `Party/PlayerbotGroupInvites.cs` |
 | P4 Trading | group gifts, bot↔bot swaps/loans, WTS completion, AH reagents | new `Economy/PlayerbotTrades.cs` |
-| P6 Rivalry & world PvP | cross-faction emotes, rival flag, hunting parties, defence groups, escalation to raids, safeguards | `Social/PlayerbotRivalry.cs`, `Groups/PlayerbotGroupCoordinator.cs` (rivalry/defence goals), `Risk/` |
+| P6 Rivalry & world PvP (P6a emotes and stance done; hunting and defence not started) | cross-faction emotes, rival flag, hunting parties, defence groups, escalation to raids, safeguards | `Social/PlayerbotRivalry.cs`, `Groups/PlayerbotGroupCoordinator.cs` (rivalry/defence goals), `Risk/` |
 | P7 World events | holidays and seasonal events; Ahn'Qiraj war effort; world PvP objectives (EPL towers, Silithyst); world-boss raids; social layer for battlegrounds | new `Events/PlayerbotWorldEventGoals.cs`, `Events/PlayerbotWarEffort.cs`, `Events/PlayerbotWorldPvpObjectives.cs`, `Groups/PlayerbotGroupCoordinator.cs` (world-boss raid goal) |
 | P5 Questions & learning | people-questions (a); curiosity mode (b) with claims, verification, trust, rumour spread | `Social/PlayerbotQuestions.cs`, `playerbot_knowledge` (schema 61) |
 

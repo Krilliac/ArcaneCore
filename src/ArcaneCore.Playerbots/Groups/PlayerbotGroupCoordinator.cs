@@ -312,6 +312,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         finally
         {
             _siege = null;
+            _siegeMembers = [];
             _siegeWaypoints.Clear();
             _siegeWaypointMap = 0;
             _siegeViews.Clear();

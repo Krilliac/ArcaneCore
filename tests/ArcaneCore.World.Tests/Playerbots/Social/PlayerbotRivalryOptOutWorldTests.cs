@@ -87,7 +87,7 @@ public sealed class PlayerbotRivalryOptOutWorldTests
         // The choice is made directly, long before the party AI's clock starts, so the whispered answer is not inside the ten second gap.
         RivalryKit.OptOut(world).Handle(playerGuid, account, "rivals off", -100_000, world.Options.Social.Rivalry);
         await RivalryKit.RunAsync(world, 3_600_000);
-        Assert.Empty(RivalryKit.Lane(world).Sends);
+        Assert.DoesNotContain(RivalryKit.Lane(world).Sends, s => s.Target == playerGuid); // the two bots may greet each other in front of the player; nothing is aimed at the player
 
         await player.SendChatAsync(ChatType.Whisper, Language.Common, "rivals on", "Rvonhuman");
         ChatMessage answer = await player.ReadSystemChatAsync();
@@ -96,7 +96,7 @@ public sealed class PlayerbotRivalryOptOutWorldTests
         Assert.NotEqual(OffAnswer, answer.Text);
         Assert.False(RivalryKit.OptOut(world).IsOptedOut(playerGuid, account));
         await RivalryKit.RunAsync(world, 3_700_000);
-        Assert.Single(RivalryKit.Lane(world).Sends);
+        Assert.Single(RivalryKit.Lane(world).Sends, s => s.Rude && s.Target == playerGuid);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public sealed class PlayerbotRivalryOptOutWorldTests
     {
         await using SocialWorld world = await RivalryKit.StartAsync();
         await world.AddBotAsync("Rvwrongbot", race: RivalryKit.Undead);
-        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvwrongplayer", "Rvwrongbot");
+        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvwrongplay", "Rvwrongbot");
         await using WorldTestClient player = client;
         Assert.False(world.Host.World.Options.AllowTwoSideChat);
 
@@ -138,7 +138,7 @@ public sealed class PlayerbotRivalryOptOutWorldTests
     {
         await using SocialWorld world = await RivalryKit.StartAsync(chat: true);
         await world.AddBotAsync("Rvheardbot");
-        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvheardplayer", "Rvheardbot");
+        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvheardplay", "Rvheardbot");
         await using WorldTestClient player = client;
         ConcurrentQueue<string> heard = await ListenToChatAsync(world);
 
@@ -159,7 +159,7 @@ public sealed class PlayerbotRivalryOptOutWorldTests
     {
         await using SocialWorld world = await RivalryKit.StartAsync(o => o.Social.Rivalry.AllowOptOut = false, chat: true);
         await world.AddBotAsync("Rvnoparsebot");
-        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvnoparseplayer", "Rvnoparsebot");
+        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvnoparsepl", "Rvnoparsebot");
         await using WorldTestClient player = client;
         ConcurrentQueue<string> heard = await ListenToChatAsync(world);
 

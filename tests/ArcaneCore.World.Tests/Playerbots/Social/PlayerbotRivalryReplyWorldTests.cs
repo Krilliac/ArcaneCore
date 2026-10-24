@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -163,8 +164,8 @@ public sealed class PlayerbotRivalryReplyWorldTests
         string[] others = ["Rvasymba", "Rvasymbb", "Rvasymbc", "Rvasymbd", "Rvasymbe", "Rvasymbf"];
         var botIds = new Dictionary<string, Guid>();
         foreach (string name in others) botIds[name] = await world.AddBotAsync(name, race: RivalryKit.Undead);
-        await using WorldTestClient watcher = await world.AddPlayerAsync("Rvasymwatcher");
-        await HelpTestKit.StandAsync(world, "Rvasyma", [.. others.Select((n, i) => (n, 2f + i)), ("Rvasymwatcher", 1f)]);
+        await using WorldTestClient watcher = await world.AddPlayerAsync("Rvasymwatch");
+        await HelpTestKit.StandAsync(world, "Rvasyma", [.. others.Select((n, i) => (n, 2f + i)), ("Rvasymwatch", 1f)]);
         ulong aGuid = (await RivalryKit.GuidAsync(world, "Rvasyma")).Value;
         var guids = new Dictionary<string, ulong>();
         foreach (string name in others) guids[name] = (await RivalryKit.GuidAsync(world, name)).Value;
