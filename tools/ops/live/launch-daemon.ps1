@@ -7,10 +7,20 @@ param(
     [string]$LiveHome,
     [Alias('Profile')][string]$LiveProfile,
     # World only: the machine memory load (percent) at which the GC turns aggressive. See below.
-    [ValidateRange(50, 99)][int]$GCHighMemPercent = 97
+    [ValidateRange(50, 99)][int]$GCHighMemPercent = 97,
+    # Max: crash dump, hang stacks, counters CSV and the repo's diagnostic options at their most informative safe values
+    # (docs/ops/live-diagnostics.md); Standard adds nothing. A variable already set in the environment is kept.
+    [ValidateSet('Standard', 'Max')][string]$Diagnostics = 'Max',
+    [ValidateSet('Full', 'Heap')][string]$DumpType = 'Full',
+    [ValidateRange(10, 86400)][int]$HangStackIntervalSeconds = 60,
+    # Disk caps: the oldest files beyond a cap are deleted at launch and every counters segment.
+    [int]$MaxDumpFiles = 3, [int]$MaxDumpGB = 30,
+    [int]$MaxHangStackFiles = 500, [int]$MaxHangStackMB = 200,
+    [int]$MaxCountersFiles = 48, [int]$MaxCountersMB = 2048
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
+. (Join-Path $PSScriptRoot 'LiveDiagnostics.ps1')
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
 $exe = Join-Path $LiveHome "bin\ArcaneCore.$Role.exe"
@@ -52,5 +62,24 @@ if ($Role -eq 'World') {
 }
 # A launcher's NO_COLOR (agent shells set it) would turn off the console logger's level colours.
 Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
+$diagPlan = Get-LiveDiagnosticsPlan -Role $Role -LiveHome $LiveHome -Level $Diagnostics -DotnetRoot $env:DOTNET_ROOT -DumpType $DumpType -HangStackIntervalSeconds $HangStackIntervalSeconds
+[void](Set-LiveDiagnosticsEnvironment -Plan $diagPlan)
+foreach ($line in $diagPlan.Active) { Write-Host "[diagnostics] $line" }
+foreach ($line in $diagPlan.Warnings) { Write-Warning "[diagnostics] $line" }
+if ($Diagnostics -eq 'Max') {
+    $rules = Get-DiagnosticsRetentionRules -LiveHome $LiveHome -MaxDumpFiles $MaxDumpFiles -MaxDumpGB $MaxDumpGB -MaxHangStackFiles $MaxHangStackFiles `
+        -MaxHangStackMB $MaxHangStackMB -MaxCountersFiles $MaxCountersFiles -MaxCountersMB $MaxCountersMB
+    foreach ($removed in Invoke-DiagnosticsRetentionRules -Rules $rules) { Write-Host "[diagnostics] retention removed $removed" }
+    # The sidecar (hidden) trims the capture directories each counters segment and collects the counters; it ends when the daemon,
+    # a child of this console, ends. Failing to start it must not stop the daemon.
+    try {
+        $sidecarArgs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'diagnostics-sidecar.ps1'), '-Role', $Role, '-LiveHome', $LiveHome, '-ParentPid', $PID,
+            '-MaxDumpFiles', $MaxDumpFiles, '-MaxDumpGB', $MaxDumpGB, '-MaxHangStackFiles', $MaxHangStackFiles, '-MaxHangStackMB', $MaxHangStackMB,
+            '-MaxCountersFiles', $MaxCountersFiles, '-MaxCountersMB', $MaxCountersMB)
+        if ($diagPlan.CountersTool) { $sidecarArgs += @('-CountersTool', $diagPlan.CountersTool) }
+        $sidecar = Start-Process pwsh -ArgumentList $sidecarArgs -WindowStyle Hidden -PassThru
+        Write-Host "[diagnostics] sidecar pid $($sidecar.Id) (ends with the daemon)"
+    } catch { Write-Warning "[diagnostics] the sidecar did not start: $($_.Exception.Message)" }
+}
 Set-Location -LiteralPath $LiveProfile
 & $exe
