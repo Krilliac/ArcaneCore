@@ -14,9 +14,10 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 namespace ArcaneCore.Game.Tests.Creatures;
 
 /// <summary>
-/// Live 2026-10-22: Firemane mobs (4328/4329/4331) looped "SelectHostileTarget(no victim, 0 att, Idle)" every 2-3 s. Their out-of-combat Fire Shield pulse
-/// damages a unit in range; the hit flagged the creature in combat but it never attacked, so it had no victim or threat and evaded. vmangos
-/// Unit::SetInCombatState calls Creature::OnEnterCombat -> AttackedBy for a creature entering combat (Unit.cpp:5942-5946, Creature.cpp:3652-3653).
+/// vmangos parity: Unit::SetInCombatState calls Creature::OnEnterCombat -> AttackedBy for a creature entering combat (Unit.cpp:5942-5946,
+/// Creature.cpp:3652-3653), so a creature whose own hit puts it in combat attacks the unit it hit instead of sitting in combat with no victim
+/// and evading. The scenarios use a synthetic direct school-damage spell, not a periodic aura. Live 2026-10-22 Firemane mobs (4328/4329/4331)
+/// showed this evade loop, but the link is a hypothesis: the logs carry no flagged-by text and the auras those entries carry are unconfirmed.
 /// Each scenario owns an entry (the anomaly ledger is process-wide).
 /// </summary>
 public sealed class CreatureAttackerCombatEntryTests
@@ -56,7 +57,6 @@ public sealed class CreatureAttackerCombatEntryTests
 
         Pulse(s, s.Player);
 
-        // AttackStart re-enters combat after the hit's link, so LastCombatSetBy now names AttackStart, not the hit.
         Assert.True(s.Mob.Combat.IsInCombat);
         Assert.Same(s.Player, s.Mob.Combat.Victim);
         Assert.True(s.Mob.Combat.Threat.Contains(s.Player));

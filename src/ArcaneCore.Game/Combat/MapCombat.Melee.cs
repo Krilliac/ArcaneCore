@@ -1184,8 +1184,10 @@ public sealed partial class MapCombat
         SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithVictim));
 
         // vmangos Unit::SetInCombatState (Unit.cpp:5942-5946) -> Creature::OnEnterCombat (Creature.cpp:3652-3653): a creature entering combat
-        // through its own hit (an out-of-combat area aura such as Fire Shield) runs AttackedBy, so it attacks and lists the unit it hit
-        // instead of sitting in combat with no victim and evading at its next update.
+        // through its own hit runs AttackedBy, so it attacks and lists the unit it hit instead of sitting in combat with no victim and
+        // evading at its next update. Partial port: vmangos does this inside SetInCombatState for every entrant; here only this attacker-side
+        // path does (DealDamage already runs AttackedBy for the victim), so other direct SetInCombatState callers do not get it.
+        // vmangos gates on UNIT_STATE_CONFUSED|FLEEING (unit states); the Confused/Fleeing unit flags below mirror them (CcState keeps both in sync).
         if (!wasInCombat && attacker is ICombatCreature creature && IsAliveState(attacker)
             && (attacker.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
         {
