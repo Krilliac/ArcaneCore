@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Honor;
@@ -23,7 +26,7 @@ public sealed class WorldPersistenceProbesTests
     private static readonly string[] LiveQueueNames =
     [
         "character saves", "social", "reputation", "instances", "honor", "quests and taxi mask", "spell state", "rest",
-        "explored zones", "taxi routes", "spellbook", "talents", "skills", "gm audit",
+        "explored zones", "taxi routes", "spellbook", "talents", "skills", "pets", "gm audit",
     ];
 
     [Fact]
@@ -85,6 +88,27 @@ public sealed class WorldPersistenceProbesTests
     }
 
     [Fact]
+    public async Task EveryQueueTheBarrierFlushes_HasAProbe()
+    {
+        // The barrier and the probes each look their queues up through the service provider, so recording what each asks for
+        // derives the barrier's queue set from the barrier itself: a flush step added without a probe fails here.
+        var barrierLookups = new RecordingServices();
+        CharacterPersistenceFlushResult flushed = await new CharacterPersistenceBarrier(barrierLookups).TryFlushCharacterAsync(1);
+        Assert.True(flushed.IsDurable);
+
+        var probeLookups = new RecordingServices();
+        Assert.Empty(WorldPersistenceProbes.CreateRegistry(probeLookups).Snapshot());
+
+        // Not queues: the sets of economy-style settlement barriers and of externally registered participants.
+        HashSet<Type> notQueues = [typeof(IEnumerable<ICharacterSettlementBarrier>), typeof(IEnumerable<ICharacterPersistenceParticipant>)];
+        Type[] queueLookups = [.. barrierLookups.Requested.Where(t => !notQueues.Contains(t))];
+
+        Assert.True(queueLookups.Length >= 13, "the barrier looked up " + queueLookups.Length + " types; it should name the world's queues");
+        Assert.Contains(typeof(SummonService), queueLookups);
+        Assert.Empty(queueLookups.Where(t => !probeLookups.Requested.Contains(t)).Select(t => t.Name));
+    }
+
+    [Fact]
     public async Task TheLiveQueuesThatCannotReportAField_PrintNaForIt_InsteadOfLookingHealthy()
     {
         await using WorldTestHost host = WorldTestHost.Start();
@@ -124,6 +148,20 @@ public sealed class WorldPersistenceProbesTests
         string[] healthy = await LinesAsync(admin, ".arcane queues", LiveQueueNames.Length);
         Assert.DoesNotContain(healthy, l => l.Contains("retained failure", StringComparison.Ordinal) || l.Contains("RETAINED", StringComparison.Ordinal));
         Assert.Contains("gm audit: 0 pending, halted n/a", healthy);
+    }
+
+    /// <summary>A provider that has nothing registered and remembers every type asked for (collections come back empty, as the DI container returns them).</summary>
+    private sealed class RecordingServices : IServiceProvider
+    {
+        public HashSet<Type> Requested { get; } = [];
+
+        public object? GetService(Type serviceType)
+        {
+            Requested.Add(serviceType);
+            return serviceType.IsGenericType && serviceType.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+                ? Array.CreateInstance(serviceType.GetGenericArguments()[0], 0)
+                : null;
+        }
     }
 
     private sealed class RejectingInstanceStore : IInstanceStore

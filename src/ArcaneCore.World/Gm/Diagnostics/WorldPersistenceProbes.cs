@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.World.Bans;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Audit;
@@ -6,6 +7,7 @@ using ArcaneCore.World.Honor;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Pets;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Skills;
@@ -53,9 +55,10 @@ public static class WorldPersistenceProbes
         Queue(registry, "spellbook", () => sp.GetService<SpellbookCache>() ?? sp.GetService<SpellFeature>()?.Spellbook, q => q.PendingWrites, terminal: q => q.TerminalFailure);
         Queue(registry, "talents", () => sp.GetService<TalentPersistence>() ?? sp.GetService<TalentFeature>()?.Persistence, q => q.PendingWrites, terminal: q => q.TerminalFailure);
         Queue(registry, "skills", () => sp.GetService<SkillSaveCoordinator>() ?? sp.GetService<SkillsFeature>()?.Saves, q => q.Pending, terminal: q => q.TerminalFailure);
+        Queue(registry, "pets", () => sp.GetService<SummonService>() ?? sp.GetService<PetsFeature>()?.Service, q => q.PendingPersistenceWrites, q => Characters(q.RetainedPersistenceCharacters));
 
         // World queues
-        Queue(registry, "creature respawns", () => sp.GetService<CreatureRespawnFeature>()?.Persistence as CreatureRespawnQueue, q => q.Pending, q => q.RetainedCount > 0 ? [string.Create(CultureInfo.InvariantCulture, $"{q.RetainedCount} writes")] : []);
+        Queue(registry, "creature respawns", () => sp.GetService<CreatureRespawnFeature>()?.Persistence as CreatureRespawnQueue, q => q.Pending, q => q.RetainedKeys);
 
         // Keyed store queues
         Queue(registry, "gm audit", () => sp.GetService<GmAuditFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
