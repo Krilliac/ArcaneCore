@@ -72,7 +72,7 @@ public sealed class PlayerbotHelpCastWorldTests
             _ = HelpTestKit.BrainOf(world, bot).CombatSpells.Abilities(priest);
             world.Host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.GiveLevel(priest, 20);
             // Through the spell system, not the book: only it sends SMSG_LEARNED_SPELL, which is what makes the bot rebuild the abilities it already resolved.
-            foreach (SpellInfo spell in spells) feature.System.LearnSpell(priest, spell.Id);
+            foreach (SpellInfo spell in spells) Assert.True(feature.System.LearnSpell(priest, spell.Id), $"learning spell {spell.Id}");
             priest.Health = priest.MaxHealth;
             SpellSystem.SetPower(priest, PowerType.Mana, priest.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // a healer helps only with mana to spare
         });

@@ -61,6 +61,7 @@ public sealed class WorldRuntimePositionTests
         }
 
         Assert.True(sawIdle > 0 && sawFeatures > 0, $"vacuous run: {reads} reads, {sawIdle} Idle, {sawFeatures} Features");
+        Assert.True(unverifiedReads * 100 < reads, $"{unverifiedReads} of {reads} reads ran out the read budget");
         Assert.True(torn == 0, $"{torn} of {reads - unverifiedReads} verified reads were torn ({unverifiedReads} unverified reads excluded); first: {firstTorn}");
     }
 }
