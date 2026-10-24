@@ -230,8 +230,8 @@ public sealed class DisplayTablesTests
 
         ItemDisplay armour = Assert.IsType<ItemDisplay>(robe.Item);
         Assert.Null(robe.ModelPath);
-        Assert.Equal([1, 2, 3], armour.GeosetGroups);
-        Assert.Equal([4, 5], armour.HelmetGeosetVis);
+        Assert.Equal([5, 2, 1], armour.GeosetGroups);
+        Assert.Equal([245, 368], armour.HelmetGeosetVis);
         Assert.Equal(8, armour.RegionTextures.Count);
         Assert.Equal("Sleeve_AU", armour.RegionTextures[0]);
         Assert.Null(armour.RegionTextures[2]);
@@ -300,7 +300,7 @@ public sealed class DisplayTablesTests
     /// <summary>
     /// Rows measured on the real client, written with this layout: CreatureDisplayInfo [3] extra id and [4] scale, CreatureModelData [4]
     /// scale, CreatureDisplayInfoExtra [1..7] look and [8..17] equipment and [18] bake name, ItemDisplayInfo [1] model, [3] texture,
-    /// [5] icon, [6..8] geosets, [12..13] helmet visibility, [14..21] regions, ChrRaces [4]/[5] display ids and [15] client file.
+    /// [5] icon, [6..8] geosets (integers, the real maxima are 5, 2 and 1), [9] flags, [12..13] helmet visibility (real range 245..368), [14..21] regions, ChrRaces [4]/[5] display ids and [15] client file.
     /// </summary>
     private static MemoryClientFiles HumanoidFiles(bool bakedPresent = true)
     {
@@ -323,7 +323,7 @@ public sealed class DisplayTablesTests
         var items = new WdbcTestBuilder(23);
         items.Row((0, 883), (1, items.String("Stave_2H_Long_A_01.mdx")), (3, items.String("Stave_2H_Long_A_01Teal")), (5, items.String("INV_Staff_06")));
         items.Row(
-            (0, 220), (5, items.String("INV_Robe_02")), (6, 1), (7, 2), (8, 3), (12, 4), (13, 5),
+            (0, 220), (5, items.String("INV_Robe_02")), (6, 5), (7, 2), (8, 1), (12, 245), (13, 368),
             (14, items.String("Sleeve_AU")), (15, items.String("Sleeve_AL")), (17, items.String("Chest_TU")), (18, items.String("Chest_TL")),
             (19, items.String("Pants_LU")), (20, items.String("Pant_LL")), (21, items.String("Boot_FO")));
         items.Row((0, 900), (1, items.String("Nowhere_01.mdx")));

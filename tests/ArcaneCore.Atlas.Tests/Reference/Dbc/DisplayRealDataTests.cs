@@ -150,4 +150,83 @@ public sealed class DisplayRealDataTests
         Assert.Equal("World\\Generic\\ActiveDoodads\\Chest02\\Chest02.m2", chest.ModelPath);
         Assert.Empty(chest.Problems);
     }
+
+    [ClientArchiveFact]
+    public void ItemDisplayInfo_GeosetColumns6To8_AreIntegersNotStringOffsets_AndHelmetVisIs12And13()
+    {
+        using var files = RealTextureData.Open();
+        DisplayTables tables = DisplayTables.Load(files);
+        WdbcFile items = tables.Table("ItemDisplayInfo");
+        var resolver = new DisplayResolver(tables, files);
+
+        // Known rows: the staff has no geosets; display 220 (a robe) sets columns 6 and 8, 365 only column 7, 1867 only column 8.
+        Assert.Equal([0, 0, 0], resolver.ResolveItem(883).Item!.GeosetGroups);
+        Assert.Equal([1, 0, 1], resolver.ResolveItem(220).Item!.GeosetGroups);
+        Assert.Equal([0, 1, 0], resolver.ResolveItem(365).Item!.GeosetGroups);
+        Assert.Equal([0, 0, 1], resolver.ResolveItem(1867).Item!.GeosetGroups);
+        // Helmet visibility lives at 12 and 13 (HelmetGeosetVisData ids); a helmet row pins it.
+        Assert.Equal([249, 305], resolver.ResolveItem(14903).Item!.HelmetGeosetVis);
+        Assert.Equal([247, 247], resolver.ResolveItem(14904).Item!.HelmetGeosetVis);
+
+        // Over every row: columns 6..8 never hold a string offset (all are tiny: a ground-model string would be >= 1 and point into the
+        // string block, and the icon string offsets in this table are in the thousands), column 12 and 13 are 0 or 245..368, and 14..21
+        // are string offsets that resolve.
+        uint maxCol6 = 0, maxCol7 = 0, maxCol8 = 0;
+        for (int row = 0; row < items.RecordCount; row++)
+        {
+            maxCol6 = Math.Max(maxCol6, items.GetUInt32(row, 6));
+            maxCol7 = Math.Max(maxCol7, items.GetUInt32(row, 7));
+            maxCol8 = Math.Max(maxCol8, items.GetUInt32(row, 8));
+            foreach (int col in new[] { 12, 13 })
+            {
+                uint vis = items.GetUInt32(row, col);
+                Assert.True(vis == 0 || vis is >= 245 and <= 368, $"row {row} col {col} = {vis}");
+            }
+
+            for (int col = 14; col <= 21; col++)
+            {
+                _ = items.GetString(row, col);
+            }
+        }
+
+        Assert.Equal(29604, items.RecordCount);
+        Assert.Equal((5u, 2u, 1u), (maxCol6, maxCol7, maxCol8));
+    }
+
+    [ClientArchiveFact]
+    public void ChrRaces_Columns4_5_And15_PinEveryRace()
+    {
+        using var files = RealTextureData.Open();
+        DisplayTables tables = DisplayTables.Load(files);
+        WdbcFile races = tables.Table("ChrRaces");
+
+        (int Id, uint Male, uint Female, string File)[] expected =
+        [
+            (1, 49, 50, "Human"), (2, 51, 52, "Orc"), (3, 53, 54, "Dwarf"), (4, 55, 56, "NightElf"), (5, 57, 58, "Scourge"),
+            (6, 59, 60, "Tauren"), (7, 1563, 1564, "Gnome"), (8, 1478, 1479, "Troll"), (9, 1140, 1140, "Goblin"),
+        ];
+        Assert.Equal(expected.Length, races.RecordCount);
+        foreach ((int id, uint male, uint female, string file) in expected)
+        {
+            int row = tables.FindRow("ChrRaces", (uint)id);
+            Assert.True(row >= 0, $"race {id}");
+            Assert.Equal(male, races.GetUInt32(row, 4));
+            Assert.Equal(female, races.GetUInt32(row, 5));
+            Assert.Equal(file, races.GetString(row, 15));
+        }
+    }
+
+    [ClientArchiveFact]
+    public void CreatureDisplayInfoExtra23_IsADwarfMan_WithItsLookFieldsAndBakedName()
+    {
+        using var files = RealTextureData.Open();
+        var resolver = new DisplayResolver(DisplayTables.Load(files), files);
+
+        // Measured: race 3 (Dwarf), sex 0, skin 1, face 1, hair style 6, hair colour 3, facial hair 2; the bake name is a
+        // 32-hex-digit file name ending in ".blp", resolved under Textures\BakedNpcTextures.
+        DisplayExtra extra = Assert.IsType<DisplayExtra>(resolver.ResolveCreature(115).Extra);
+        Assert.Equal((3, 0, 1, 1, 6, 3, 2), (extra.Race, extra.Sex, extra.Skin, extra.Face, extra.HairStyle, extra.HairColor, extra.FacialHair));
+        Assert.Equal(@"Textures\BakedNpcTextures\973e54e79012eea3f2658f2897e681d9.blp", extra.BakedTexture);
+        Assert.True(files.Exists(extra.BakedTexture!));
+    }
 }

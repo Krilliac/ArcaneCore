@@ -20,8 +20,10 @@ public sealed record DisplayExtra(
     string? BakedTexture);
 
 /// <summary>
-/// An ItemDisplayInfo row (columns measured on build 5875: [1] and [2] model names, [3] and [4] their texture names, [5] icon, [6..8]
-/// geoset groups, [12] and [13] helmet geoset visibility ids, [14..21] the eight armour region textures).
+/// An ItemDisplayInfo row (23 fields on build 5875, confirmed against the real client's 29604 rows: [1] and [2] model names, [3] and [4]
+/// their texture names, [5] icon, [6..8] geoset groups (plain integers, 0..5, never string offsets: the later-build ground model string
+/// is not in this layout), [9] flags, [10] spell visual, [11] group sound, [12] and [13] helmet geoset visibility ids (245..368),
+/// [14..21] the eight armour region textures, [22] item visual).
 /// </summary>
 /// <param name="Models">Up to two models as in-archive paths (<c>.m2</c>) found under <c>Item\ObjectComponents</c>; null where the row names none or no folder holds it.</param>
 /// <param name="ModelTextures">The texture of each model as an in-archive path next to it; null where there is none.</param>
