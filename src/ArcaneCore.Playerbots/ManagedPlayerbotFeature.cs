@@ -793,18 +793,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         if (_world?.IsWorldThread == true)
         {
-            // Two marks, as a start can land between a tick's capture of the active set (_orderedVersion) and its publish, which then
-            // records the newer version (_builtActiveVersion) without writing that bot's row (PublishSnapshot).
+            // Two marks, as a start can land between a tick's capture of the active set (the version it captured with it) and its
+            // publish, which then records the newer version (_builtActiveVersion) without writing that bot's row (PublishSnapshot).
             int version = Volatile.Read(ref _activeVersion);
             if (_snapshotElapsedMs > 0 || version != _orderedVersion || version != _builtActiveVersion)
-                PublishSnapshot(RefreshOrdered(), 0, force: true);
+            {
+                (ActiveBot[] ordered, int orderedVersion) = RefreshOrdered();
+                PublishSnapshot(ordered, orderedVersion, 0, force: true);
+            }
         }
 
         return Volatile.Read(ref _snapshot).ToArray();
     }
 
-    /// <summary>The active set in bot-id order, rebuilt when it changed since the last build (world thread).</summary>
-    private ActiveBot[] RefreshOrdered()
+    /// <summary>The active set in bot-id order, rebuilt when it changed since the last build, with the version it was built from (world thread).</summary>
+    private (ActiveBot[] Bots, int Version) RefreshOrdered()
     {
         int version = Volatile.Read(ref _activeVersion);
         if (version != _orderedVersion)
@@ -817,7 +820,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _orderedVersion = version;
         }
 
-        return _ordered;
+        return (_ordered, _orderedVersion);
     }
 
     internal void GatherSocialBots(PlayerbotGroupCoordinator? groups, List<BotSocial.PlayerbotSocialBot> destination)
@@ -2248,7 +2251,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _thinkBudget.Observe((lastTick.CommandsMicros + lastTick.MapsMicros + lastTick.FeaturesMicros) / 1000.0, _lastOwnMs);
         _thinkBudget.ObserveTickInterval(elapsedMs);
         Interlocked.Add(ref _clockMs, elapsedMs);
-        ActiveBot[] bots = RefreshOrdered();
+        (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
         uint now = world.NowMs;
         // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
@@ -2367,7 +2370,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks, budget {AvgBudgetMs:F1} ms; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
                 cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapP99Ms, cadence.GapMaxMs, cadence.CombatThinks, cadence.CombatGapP50Ms, cadence.CombatGapP95Ms,
                 cadence.ThinksPerTick, cadence.Ticks, cadence.AvgBudgetMs, cadence.TimeLimitedPct, cadence.ActionLimitedPct);
-        PublishSnapshot(bots, elapsedMs);
+        PublishSnapshot(bots, botsVersion, elapsedMs);
         _lastOwnMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
@@ -2738,19 +2741,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>
     /// The running bots' status lines (StatusOf), the snapshot rebuilt only when one of them changed, the running set changed or
-    /// PublishStopped touched it (_snapshotEpoch). <paramref name="bots"/> is the active set captured at the start of the tick. A
-    /// start can enter <see cref="_active"/> after that capture and before this rebuild: its login check is a command at the start
-    /// of a tick, and the rest of the start runs off the world thread, so the active-set add can land while this tick is already
-    /// inside <see cref="Update"/>. Dropping that bot because it is already active, and not writing a fresh row because it is not
-    /// in <paramref name="bots"/>, omits it from <see cref="Snapshot"/> until the next tick. The wait posted as soon as start
-    /// returns runs at the beginning of that next tick and then finds no row. Such a bot's previous (stopped) row stays published
-    /// until the next tick; a world-thread <see cref="Snapshot"/> republishes first, so only off-thread readers can see it.
+    /// PublishStopped touched it (_snapshotEpoch). <paramref name="bots"/> is the active set captured at the start of the tick, with
+    /// <paramref name="botsVersion"/>, the version it was built from. A start or a drop can change <see cref="_active"/> after that
+    /// capture and before this rebuild: a start's login check is a command at the start of a tick and the rest of it runs off the
+    /// world thread, so the active-set add can land while this tick is already inside <see cref="Update"/>. Such a change is detected
+    /// against <paramref name="botsVersion"/>, not the shared cache mark (_orderedVersion): a world-thread <see cref="Snapshot"/>
+    /// inside the tick can rebuild the cache and republish before this publish, which would make the stale set look current. A bot
+    /// that joined after the capture is not in <paramref name="bots"/>, so this publish writes no row for it and keeps whatever row
+    /// is already published: its stopped row from its creation, or its running row if a world-thread Snapshot republished it. The
+    /// next tick writes it.
     /// </summary>
-    private void PublishSnapshot(ActiveBot[] bots, uint elapsedMs, bool force = false)
+    private void PublishSnapshot(ActiveBot[] bots, int botsVersion, uint elapsedMs, bool force = false)
     {
         _snapshotElapsedMs = unchecked(_snapshotElapsedMs + elapsedMs);
         int currentVersion = Volatile.Read(ref _activeVersion);
-        bool sameActiveSet = currentVersion == _orderedVersion;
+        bool sameActiveSet = currentVersion == botsVersion;
         if (!force
             && bots.Length > 64
             && sameActiveSet
@@ -2795,7 +2800,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 else
                 {
                     // Rows this tick republishes are replaced. Every other row stays, including a bot that became active after
-                    // `bots` was captured: its previous (stopped) row remains until the next tick publishes the running one.
+                    // `bots` was captured: its existing row remains (the stopped row from its creation, or the running one a world-thread
+                    // Snapshot() published) until the next tick writes it.
                     // Membership is re-checked here, under the gate, not taken from `sameActiveSet`: a drop off the world thread
                     // (checkpoint conflict, delete, stop) removes the bot from _active and then, under this gate, its row. When that
                     // drop lands between the version read above and this lock, `sameActiveSet` is stale and the dropped bot's
@@ -3037,6 +3043,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
     }
+
+    /// <summary>Drops one active bot as an out-of-band row conflict would, without the row writes (tests only; completes when the drop has).</summary>
+    internal Task DropFromActiveForTestsAsync(Guid botId)
+        => _active.TryGetValue(botId, out ActiveBot? active)
+            ? DropFromActiveAsync(active, active.Record, writeSetAsides: false, announce: false)
+            : Task.CompletedTask;
 
     /// <summary>Latches the split brain as a checkpoint would (tests only).</summary>
     internal async Task ForceSplitBrainForTests()
