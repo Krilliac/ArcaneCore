@@ -28,6 +28,9 @@ public enum PacketCheck
 
     /// <summary>An action opcode received while the player cannot act.</summary>
     IncapacitatedAction = 7,
+
+    /// <summary>A stripped developer, GM, cheat or debug opcode the release client never sends (dropped unread).</summary>
+    DevOpcode = 8,
 }
 
 /// <summary>Whose traffic a finding is counted under.</summary>
@@ -53,7 +56,7 @@ public static class PacketChecks
     public const string Subsystem = "packet";
 
     /// <summary>Number of checks.</summary>
-    public const int Count = 8;
+    public const int Count = 9;
 
     /// <summary>Number of traffic kinds.</summary>
     public const int TrafficKinds = 4;
@@ -69,6 +72,7 @@ public static class PacketChecks
         PacketCheck.Replay => "replay",
         PacketCheck.OrphanAck => "orphan-ack",
         PacketCheck.IncapacitatedAction => "incapacitated-action",
+        PacketCheck.DevOpcode => "dev-opcode",
         _ => throw new ArgumentOutOfRangeException(nameof(check)),
     };
 
@@ -97,6 +101,7 @@ internal sealed class PacketHeuristicsSettings
         _check[(int)PacketCheck.Replay] = options.Replay;
         _check[(int)PacketCheck.OrphanAck] = options.OrphanAck;
         _check[(int)PacketCheck.IncapacitatedAction] = options.IncapacitatedAction;
+        _check[(int)PacketCheck.DevOpcode] = options.DevOpcode;
         _ceilings[(int)CadenceClass.Cast] = options.CadenceLimits.CastPerSecond;
         _ceilings[(int)CadenceClass.Use] = options.CadenceLimits.UsePerSecond;
         _ceilings[(int)CadenceClass.Query] = options.CadenceLimits.QueryPerSecond;

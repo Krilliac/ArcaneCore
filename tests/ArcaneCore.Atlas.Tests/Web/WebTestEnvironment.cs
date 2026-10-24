@@ -71,7 +71,7 @@ internal sealed record NodeRun(int ExitCode, string Output, string Error)
 
     /// <summary>True when a test of this exact name finished <c>ok</c> and was not skipped, at any nesting depth.</summary>
     public bool Passed(string name)
-        => Regex.IsMatch(Output, @"^\s*ok \d+ - " + Regex.Escape(name) + @"\s*$", RegexOptions.Multiline);
+        => Regex.IsMatch(Output, @"^\s*ok \d+ - " + Regex.Escape(name).Replace(@"\#", @"\\?#") + @"\s*$", RegexOptions.Multiline);
 
     /// <summary>The run's text for an assertion message: the summary and any failing test blocks.</summary>
     public string Digest()
