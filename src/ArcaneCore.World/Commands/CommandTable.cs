@@ -24,6 +24,11 @@ public delegate bool CommandHandler(CommandContext context, string args);
 /// needs; when null the level of <paramref name="Security"/> under <see cref="GmOptions.SecurityMap"/>
 /// is used, so a command declared only with an <see cref="AccountSecurity"/> behaves as before.
 /// </para>
+/// <para>
+/// <paramref name="IsWrite"/> marks a command that changes state, sends a client-visible packet or starts or stops a process
+/// (debug-commands plan 1.5): its handler must call <c>DebugWrite.Record</c> once per changed target, and Record refuses (strict mode)
+/// or complains (production) when the running command does not carry the flag.
+/// </para>
 /// </summary>
 public sealed record ChatCommand(
     string Name,
@@ -31,7 +36,8 @@ public sealed record ChatCommand(
     string Help,
     CommandHandler? Handler = null,
     IReadOnlyList<ChatCommand>? Children = null,
-    byte? RetailLevel = null)
+    byte? RetailLevel = null,
+    bool IsWrite = false)
 {
     public IReadOnlyList<ChatCommand> SubCommands => Children ?? [];
 
@@ -128,6 +134,19 @@ public sealed class CommandContext
     /// table (unknown command, security, syntax) and by handlers that report a machine-readable outcome (<see cref="Fail"/>).
     /// </summary>
     public string? Failure { get; private set; }
+
+    /// <summary>The command the table is running for this context (set by <see cref="CommandTable.Execute"/> before the handler), or null outside a table run.</summary>
+    public ChatCommand? Command { get; private set; }
+
+    /// <summary>The words of <see cref="Command"/> as resolved ("alter speed"), or empty outside a table run.</summary>
+    public string CommandPath { get; private set; } = string.Empty;
+
+    /// <summary>Record the command that is about to run (the table, and tests that call a handler directly).</summary>
+    internal void Bind(ChatCommand command, string path)
+    {
+        Command = command;
+        CommandPath = path;
+    }
 
     /// <summary>Mark the command failed (the first reason wins); the reply text is still the handler's.</summary>
     public void Fail(string reason) => Failure ??= string.IsNullOrWhiteSpace(reason) ? "failed" : reason.Trim();
@@ -385,6 +404,7 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
             }
         }
 
+        context.Bind(command, found.Path);
         if (!command.Handler!(context, found.Rest))
         {
             context.Fail("syntax");

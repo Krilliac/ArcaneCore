@@ -38,10 +38,10 @@ public sealed class DebugWriteLogEdgeTests
     }
 
     [Fact]
-    public void Hash_OfAbc_IsTheFirstTwelveHexDigitsOfTheFips180Vector()
+    public void Hash_OfAbc_IsTheFirstEightHexDigitsOfTheFips180Vector()
     {
         // FIPS 180-2 appendix B.1: SHA-256("abc") = ba7816bf 8f01cfea 414140de 5dae2223 b00361a3 96177a9c b410ff61 f20015ad.
-        Assert.Equal("sha256:ba7816bf8f01", DebugWrite.Hash("abc"));
+        Assert.Equal("sha256:ba7816bf", DebugWrite.Hash("abc"));
     }
 
     [Theory]
@@ -52,12 +52,12 @@ public sealed class DebugWriteLogEdgeTests
     {
         var log = new DebugWriteLog(2);
         string text = new('y', length);
-        DebugWriteEntry entry = log.Record(1, "G", "cmd", "t", "f", text, text, DebugWriteScope.Live, text, text);
+        DebugWriteEntry entry = log.Record(1, "G", "cmd", "t", "f", text, text, DebugWriteScope.Live, text, true);
 
         Assert.Equal(cut ? DebugWriteLog.MaxValueLength : length, entry.NewValue.Length);
         Assert.Equal(cut, entry.OldValue.EndsWith("...", StringComparison.Ordinal));
         Assert.Equal(entry.OldValue, entry.Reason);
-        Assert.Equal(entry.OldValue, entry.ConfirmToken);
+        Assert.True(entry.Confirmed);
     }
 
     [Fact]
@@ -112,6 +112,7 @@ public sealed class DebugWriteLogEdgeTests
     [InlineData(DebugWriteScope.Live)]
     [InlineData(DebugWriteScope.UntilReload)]
     [InlineData(DebugWriteScope.Persisted)]
+    [InlineData(DebugWriteScope.Action)]
     public void EveryScope_IsStored(DebugWriteScope scope)
     {
         var log = new DebugWriteLog(2);
@@ -129,9 +130,10 @@ public sealed class DebugWriteLogEdgeTests
 
         await host.OnWorldAsync(() =>
         {
-            CommandContext context = new(session, session.Player!, ChatCommands.CreateTable());
-            DebugWrite.Record(context, "alter speed", "self", "speed", "1", "2", DebugWriteScope.Live, "plain", "TOK234");
-            DebugWrite.Record(context, "session kick", "session 4", "endpoint", "203.0.113.9:8085", "198.51.100.7:1", DebugWriteScope.Live, personal: true);
+            CommandContext speed = WriteTestCommands.Bind(new CommandContext(session, session.Player!, ChatCommands.CreateTable()), "alter speed");
+            DebugWrite.Record(speed, "self", "speed", "1", "2", DebugWriteScope.Live, "plain", confirmed: true);
+            CommandContext kick = WriteTestCommands.Bind(new CommandContext(session, session.Player!, ChatCommands.CreateTable()), "session kick");
+            DebugWrite.Record(kick, "session 4", "endpoint", "203.0.113.9:8085", "198.51.100.7:1", DebugWriteScope.Live, sensitive: true);
         });
 
         var lines = factory.Lines.Where(l => l.Category == DebugWrite.Category).ToArray();
@@ -139,7 +141,7 @@ public sealed class DebugWriteLogEdgeTests
         Assert.All(lines, l => Assert.Equal(LogLevel.Information, l.Level));
         Assert.Contains("alter speed", lines[0].Message, StringComparison.Ordinal);
         Assert.Contains("Dweone", lines[0].Message, StringComparison.Ordinal);
-        Assert.Contains("TOK234", lines[0].Message, StringComparison.Ordinal);
+        Assert.Contains("confirmed True", lines[0].Message, StringComparison.Ordinal);
         Assert.Contains(DebugWrite.Hash("203.0.113.9:8085"), lines[1].Message, StringComparison.Ordinal);
         Assert.DoesNotContain("203.0.113.9", lines[1].Message, StringComparison.Ordinal);
         Assert.DoesNotContain("198.51.100.7", lines[1].Message, StringComparison.Ordinal);
@@ -155,9 +157,10 @@ public sealed class DebugWriteLogEdgeTests
 
         await host.OnWorldAsync(() =>
         {
-            CommandContext context = new(session, session.Player!, ChatCommands.CreateTable());
-            DebugWrite.Record(context, "a set", "t1", "f", "plain-old", "plain-new", DebugWriteScope.Persisted);
-            DebugWrite.Record(context, "b set", "t2", "f", null, null, DebugWriteScope.UntilReload);
+            CommandContext a = WriteTestCommands.Bind(new CommandContext(session, session.Player!, ChatCommands.CreateTable()), "a set");
+            DebugWrite.Record(a, "t1", "f", "plain-old", "plain-new", DebugWriteScope.Persisted);
+            CommandContext b = WriteTestCommands.Bind(new CommandContext(session, session.Player!, ChatCommands.CreateTable()), "b set");
+            DebugWrite.Record(b, "t2", "f", null, null, DebugWriteScope.UntilReload);
         });
 
         DebugWriteEntry[] entries = [.. audit.DebugWrites.Tail(10)];
@@ -167,22 +170,51 @@ public sealed class DebugWriteLogEdgeTests
     }
 
     [Fact]
-    public async Task Record_RejectsANullContext_AndAnEmptyCommandPath()
+    public async Task Record_RejectsANullContext()
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("DWETHR", "Dwethr", AccountSecurity.Administrator);
         WorldSession session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DWETHR"))!.Id)!;
         Exception? nullContext = null;
-        Exception? empty = null;
 
         await host.OnWorldAsync(() =>
         {
-            nullContext = Record.Exception(() => DebugWrite.Record(null!, "a set", "t", "f", "a", "b", DebugWriteScope.Live));
-            CommandContext context = CommandContext.ForConsole(session, ChatCommands.CreateTable(), _ => { });
-            empty = Record.Exception(() => DebugWrite.Record(context, string.Empty, "t", "f", "a", "b", DebugWriteScope.Live));
+            nullContext = Record.Exception(() => DebugWrite.Record(null!, "t", "f", "a", "b", DebugWriteScope.Live));
         });
 
         Assert.IsType<ArgumentNullException>(nullContext);
-        Assert.IsAssignableFrom<ArgumentException>(empty);
     }
+
+    [Fact]
+    public async Task Record_ByAnUnflaggedCommand_OutsideStrictMode_LogsOneErrorPerCommand_AndStillRecords()
+    {
+        var factory = new CapturingFactory();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<ILoggerFactory>(factory));
+        await using WorldTestClient client = await host.EnterWorldAsync("DWEFLG", "Dweflg", AccountSecurity.Administrator);
+        WorldSession session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DWEFLG"))!.Id)!;
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        audit.DebugWrites.Strict = false;
+
+        await host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                DebugWrite.Record(WriteTestCommands.Bind(CommandContext.ForConsole(session, ChatCommands.CreateTable(), _ => { }), "alter speed", isWrite: false),
+                    "t", "f", "a", "b", DebugWriteScope.Live);
+            }
+
+            DebugWrite.Record(WriteTestCommands.Bind(CommandContext.ForConsole(session, ChatCommands.CreateTable(), _ => { }), "alter scale", isWrite: false),
+                "t", "f", "a", "b", DebugWriteScope.Live);
+        });
+
+        var errors = factory.Lines.Where(l => l.Category == DebugWrite.Category && l.Level == LogLevel.Error).ToArray();
+        Assert.Equal(2, errors.Length);
+        Assert.Contains("alter speed", errors[0].Message, StringComparison.Ordinal);
+        Assert.Contains("alter scale", errors[1].Message, StringComparison.Ordinal);
+        Assert.Equal(4, audit.DebugWrites.Total);
+    }
+
+    [Fact]
+    public void TheWriteCategory_IsTheOneThePlanNames()
+        => Assert.Equal("ArcaneCore.Gm.Write", DebugWrite.Category);
 }
