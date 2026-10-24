@@ -1609,11 +1609,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         if (services.CanTakeQuest(player, questId) == false)
             return (packetCode ?? "CannotTakeQuest", packetCode is not null ? $"player cannot take quest ({packetCode})" : "player does not meet quest requirements");
+        // A drained server failure code is the server's own reason and wins over the inferred one below.
+        if (packetCode is not null)
+            return (packetCode, $"quest accept refused ({packetCode})");
         // The server looks the quest up in this giver's own relation table (creature or game object) and drops the query silently when it is absent.
         if (!services.StartersOf(giver).Contains(questId) && !services.EndersOf(giver).Contains(questId))
             return ("GiverDoesNotOffer", $"giver {giver.Entry} neither starts nor ends quest {questId}");
-        if (packetCode is not null)
-            return (packetCode, $"quest accept refused ({packetCode})");
         return (fallbackCode, fallbackReason);
     }
 

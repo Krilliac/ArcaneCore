@@ -132,6 +132,8 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - `CombatHooks.CanAttack` tests the flag on the controlling player of each side (`DuelRules.ControllingPlayer`, vmangos
   `WorldObject::IsValidAttackTarget`): a pet, guardian or totem follows its owner, so it cannot be hit by, and cannot
   hit, an unflagged enemy player outside a duel.
+- Known gap: FFA PvP (both players flagged FFA, e.g. the Gurubashi arena) is not handled for player versus player
+  and now refuses pets and totems the same way; tracked here until an FFA rule is ported.
 
 ### Aura states and reactive abilities (warrior-mechanics S07)
 `AuraStateService` and `ReactiveService` (`Combat/Reactive/`, installed by `ReactiveFeature`), after vmangos

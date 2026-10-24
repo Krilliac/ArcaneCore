@@ -1,24 +1,24 @@
-using ArcaneCore.Game.GameObjects;
-using ArcaneCore.Kernel.WorldData.GameObjects;
-using ArcaneCore.Kernel.WorldData.Loot;
-using ArcaneCore.World.Tests.GameObjects;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
-using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Tests.GameObjects;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Npc;
 using Microsoft.Extensions.Configuration;
@@ -499,7 +499,7 @@ public sealed class PlayerbotQuestAnomalyTests
         Assert.False(AnyQuestAnomaly(capture), capture.Describe());
     }
 
-    // The diagnosis names a giver that does not offer the quest, ahead of any drained server failure code (which it replaces).
+    // The diagnosis names a giver that does not offer the quest when no server failure code was drained (a drained code wins).
     [Fact]
     public async Task AnAcceptTimedOutOnAGiverThatDoesNotOfferTheQuest_IsDiagnosedAsGiverDoesNotOffer()
     {
