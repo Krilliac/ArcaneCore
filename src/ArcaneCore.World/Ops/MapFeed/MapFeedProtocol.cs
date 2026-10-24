@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
 using ArcaneCore.Game.Maps.Grid;
@@ -448,7 +449,7 @@ internal static class MapFeedProtocol
 
         if (!root.TryGetProperty("kind"u8, out JsonElement kind) || kind.ValueKind != JsonValueKind.String)
         {
-            error = new FeedError(BadArgs, "a query needs a \"kind\": los, height, path or undermap");
+            error = new FeedError(BadArgs, "a query needs a \"kind\": los, height, path, undermap, inspect or anomalies");
             return false;
         }
 
@@ -468,15 +469,33 @@ internal static class MapFeedProtocol
         {
             request.Kind = QueryKind.UnderMap;
         }
+        else if (kind.ValueEquals("inspect"u8))
+        {
+            request.Kind = QueryKind.Inspect;
+        }
+        else if (kind.ValueEquals("anomalies"u8))
+        {
+            request.Kind = QueryKind.Anomalies;
+        }
         else
         {
-            error = new FeedError(BadArgs, "unknown query kind; the kinds are los, height, path and undermap");
+            error = new FeedError(BadArgs, "unknown query kind; the kinds are los, height, path, undermap, inspect and anomalies");
             return false;
+        }
+
+        if (request.Kind == QueryKind.Anomalies)
+        {
+            return TryAnomalyArgs(root, ref request, out error);
         }
 
         if (!TryMap(root, ref request, out error))
         {
             return false;
+        }
+
+        if (request.Kind == QueryKind.Inspect)
+        {
+            return TryGuid(root, out request.InspectGuid, out error);
         }
 
         if (!TryPoint(root, "a"u8, "a", out request.A, out error))
@@ -490,6 +509,62 @@ internal static class MapFeedProtocol
         }
 
         return true;
+    }
+
+    /// <summary><c>since</c> (a sequence number, default 0) and <c>max</c> (1 to <see cref="MaxAnomalyResults"/>, default <see cref="DefaultAnomalyResults"/>) of an anomalies query.</summary>
+    private static bool TryAnomalyArgs(JsonElement root, ref FeedRequest request, out FeedError error)
+    {
+        error = default;
+        request.Since = 0;
+        request.MaxResults = DefaultAnomalyResults;
+        if (root.TryGetProperty("since"u8, out JsonElement since))
+        {
+            if (since.ValueKind != JsonValueKind.Number || !since.TryGetInt64(out long sinceValue) || sinceValue < 0)
+            {
+                error = new FeedError(BadArgs, "\"since\" must be a sequence number (a non-negative integer)");
+                return false;
+            }
+
+            request.Since = sinceValue;
+        }
+
+        if (root.TryGetProperty("max"u8, out JsonElement max))
+        {
+            if (max.ValueKind != JsonValueKind.Number || !max.TryGetInt32(out int maxValue) || maxValue < 1 || maxValue > MaxAnomalyResults)
+            {
+                error = new FeedError(BadArgs, string.Create(CultureInfo.InvariantCulture, $"\"max\" must be 1 to {MaxAnomalyResults}"));
+                return false;
+            }
+
+            request.MaxResults = maxValue;
+        }
+
+        return true;
+    }
+
+    /// <summary>A <c>guid</c> of an inspect query: 1 to 16 hex digits (an optional 0x), not zero.</summary>
+    private static bool TryGuid(JsonElement root, out ulong guid, out FeedError error)
+    {
+        guid = 0;
+        error = default;
+        if (root.TryGetProperty("guid"u8, out JsonElement element) && element.ValueKind == JsonValueKind.String)
+        {
+            string? text = element.GetString();
+            if (text is not null && text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text[2..];
+            }
+
+            if (!string.IsNullOrEmpty(text) && text.Length <= 16
+                && ulong.TryParse(text, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out guid) && guid != 0)
+            {
+                return true;
+            }
+        }
+
+        guid = 0;
+        error = new FeedError(BadArgs, "\"guid\" must be a non-zero GUID as 1 to 16 hex digits");
+        return false;
     }
 
     private static bool TryToolOp(JsonElement op, out FeedOp toolOp)

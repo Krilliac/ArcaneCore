@@ -150,7 +150,7 @@ public sealed class MapFeedInspectTests
     }
 
     [WindowsFact]
-    public async Task Inspect_AnUnknownGuid_AWrongMap_AndAnInstanceThatDoesNotExist_AreNotFound_AndLoadNothing()
+    public async Task Inspect_AnUnknownGuid_IsNotFound_AMapThatIsNotRunning_IsRefused_AndNothingIsLoaded()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -163,9 +163,9 @@ public sealed class MapFeedInspectTests
         ulong nobody = 0x00F1300000FFFFFFul;
 
         AssertRefused(await AskAsync(client, InspectLine(1, nobody)), 1, MapFeedProtocol.NotFound);
-        AssertRefused(await AskAsync(client, InspectLine(2, FeedWorld.WolfGuid, map: 1)), 2, MapFeedProtocol.NotFound);
-        AssertRefused(await AskAsync(client, InspectLine(3, FeedWorld.WolfGuid, map: 0, instance: 9)), 3, MapFeedProtocol.NotFound);
-        AssertRefused(await AskAsync(client, InspectLine(4, 0)), 4, MapFeedProtocol.NotFound);
+        AssertRefused(await AskAsync(client, InspectLine(2, FeedWorld.WolfGuid, map: 1)), 2, MapFeedProtocol.MapNotLoaded);
+        AssertRefused(await AskAsync(client, InspectLine(3, FeedWorld.WolfGuid, map: 0, instance: 9)), 3, MapFeedProtocol.MapNotLoaded);
+        AssertRefused(await AskAsync(client, InspectLine(4, 0)), 4, MapFeedProtocol.BadArgs);
 
         // The wrong-map and wrong-instance questions loaded no map: a query is a read, never a reason to build anything.
         bool created = await world.Host.OnWorldAsync(() => world.Host.World.FindMap(1, 0) is not null || world.Host.World.FindMap(0, 9) is not null);

@@ -277,6 +277,12 @@ internal sealed partial class MapFeedConnection
 
     private async Task QueryAsync(FeedRequest request)
     {
+        if (request.Kind is QueryKind.Inspect or QueryKind.Anomalies)
+        {
+            await InsightQueryAsync(request).ConfigureAwait(false);
+            return;
+        }
+
         (QueryAnswer? answer, FeedError? failure) = await InvokeWorldAsync(() => MapFeedQueries.Run(_feed.World, request)).ConfigureAwait(false);
         answer ??= QueryAnswer.Refused(request, failure!.Value.Code, failure.Value.Message);
         if (answer.Ok)
@@ -293,6 +299,27 @@ internal sealed partial class MapFeedConnection
         }
 
         await QueueAsync(MapFeedJson.ResultLine(answer)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The live-insight queries (docs/areas/atlas-insight.md): run on the world thread like every query, written by
+    /// <see cref="MapFeedInsightJson"/> (never by <see cref="MapFeedJson.WriteResult"/>, which would call an unknown kind an under-map answer).
+    /// </summary>
+    private async Task InsightQueryAsync(FeedRequest request)
+    {
+        (InsightAnswer? answer, FeedError? failure) = await InvokeWorldAsync(
+            () => request.Kind == QueryKind.Inspect ? MapFeedInspect.Run(_feed, request) : MapFeedAnomalies.Run(_feed, request)).ConfigureAwait(false);
+        answer ??= InsightAnswer.Refused(request, failure!.Value.Code, failure.Value.Message);
+        if (answer.Ok)
+        {
+            _logger.LogDebug("map feed: {Kind} query {Id} answered ({Client})", request.Kind, request.Id, Client);
+        }
+        else
+        {
+            _logger.LogDebug("map feed: {Kind} query {Id} refused ({Client}): {Code} {Message}", request.Kind, request.Id, Client, answer.Code, answer.Message);
+        }
+
+        await QueueAsync(MapFeedInsightJson.ResultLine(answer)).ConfigureAwait(false);
     }
 
     private async Task<Outcome> RefuseAsync(FeedRequest request, FeedError error)
