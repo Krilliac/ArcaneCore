@@ -70,18 +70,47 @@ public sealed class DebugToolsCommandTests
     }
 
     [Fact]
-    public async Task SlowTicks_ClampsTheWindowToTheRetainedSixtySeconds_AndSaysSo()
+    public async Task SlowTicks_ShowsAnEntryOlderThanSixtySeconds_WhenTheWindowReachesIt_AndExplainsTheRing()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("DBGSLOW", "Dbgslow", AccountSecurity.GameMaster);
         await gm.CollectAsync();
 
-        string[] longWindow = await RunAsync(gm, ".debug slowticks 600");
-        Assert.Contains(longWindow, l => l.Contains("within the last 60 s (requested 600 s; only the last 60 s are retained)", StringComparison.Ordinal));
+        // A hitch recorded 4 minutes ago on a quiet server: the ring never evicts by age, so a 300 s window must still list it.
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long fakeNow = now - (4 * 60 * System.Diagnostics.Stopwatch.Frequency);
+        await host.OnWorldAsync(() =>
+        {
+            host.World.Stats.Clock = () => fakeNow;
+            host.World.Stats.RecordSlowTick(default, new string?[] { "Old" }, new long[] { 1 }, 1, 987_000);
+            host.World.Stats.Clock = () => now;
+        });
 
-        string[] withinRetention = await RunAsync(gm, ".debug slowticks 30");
-        Assert.Contains(withinRetention, l => l.Contains("within the last 30 s", StringComparison.Ordinal));
-        Assert.DoesNotContain(withinRetention, l => l.Contains("requested", StringComparison.Ordinal));
+        string[] wide = await RunAsync(gm, ".debug slowticks 300");
+        Assert.Contains(wide, l => l.Contains("1 slow tick(s) within the last 300 s", StringComparison.Ordinal) && l.Contains("replaced first", StringComparison.Ordinal));
+        Assert.Contains(wide, l => l.Contains("987 ms", StringComparison.Ordinal) && l.Contains("240 s ago", StringComparison.Ordinal));
+        Assert.DoesNotContain(wide, l => l.Contains("requested", StringComparison.Ordinal));
+
+        string[] narrow = await RunAsync(gm, ".debug slowticks 60");
+        Assert.DoesNotContain(narrow, l => l.Contains("987 ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SlowTicks_WarnsWhenTheRingIsFull()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("DBGSLOW2", "Dbgslowtwo", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        await host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < ArcaneCore.Game.Maps.TickStats.SlowTickCapacity; i++)
+            {
+                host.World.Stats.RecordSlowTick(default, new string?[] { "F" }, new long[] { 1 }, 1, 500_000 + i);
+            }
+        });
+
+        string[] lines = await RunAsync(gm, ".debug slowticks");
+        Assert.Contains(lines, l => l.Contains("the ring is full (8)", StringComparison.Ordinal));
     }
 
     [Fact]
