@@ -703,13 +703,35 @@ public sealed class PlayerbotBattlegroundWorldTests
         return true;
     });
 
-    /// <summary>Every melee hit the bot took since <paramref name="since"/> came from the guard: no stray hostile in the test world.</summary>
-    private static void ExpectOnlyTheGuardHurtTheBot(ScenarioBot bot, Game.Creatures.Creature guard, long since)
+    /// <summary>
+    /// Every damage packet the bot took since <paramref name="since"/> came from the guard: no stray hostile in the test world. Melee hits
+    /// (SMSG_ATTACKERSTATEUPDATE) and spell damage (SMSG_SPELLNONMELEEDAMAGELOG) are both checked. The check cannot pass vacuously: it fails if
+    /// the bot's bounded packet log (4096 packets, movement and updates included) evicted packets newer than <paramref name="since"/>, and if the
+    /// guard landed no damaging hit. Returns the damage the guard's melee did and its largest single hit.
+    /// </summary>
+    private static (uint Total, uint Largest) ExpectOnlyTheGuardHurtTheBot(ScenarioBot bot, Game.Creatures.Creature guard, long since)
     {
-        ulong[] attackers = bot.Received(WorldOpcode.SmsgAttackerstateupdate, ScenarioDecoders.AttackerState, since)
-            .Where(h => h.Victim == bot.Guid.Value).Select(h => h.Attacker).Distinct().ToArray();
+        const int PacketLogCapacity = 4096; // the ScenarioPacketLog default the bot is built with
+        IReadOnlyList<ScenarioPacket> log = bot.Log.Snapshot();
+        ScenarioContext.Expect(log.Count < PacketLogCapacity || log[0].Sequence <= since,
+            $"the bot's packet log evicted packets since the mark (oldest #{(log.Count > 0 ? log[0].Sequence : -1)}, mark #{since}): the attacker check would be blind");
+
+        AttackerStateView[] melee = [.. bot.Received(WorldOpcode.SmsgAttackerstateupdate, ScenarioDecoders.AttackerState, since)
+            .Where(h => h.Victim == bot.Guid.Value)];
+        SpellDamageView[] spells = [.. bot.Received(WorldOpcode.SmsgSpellnonmeleedamagelog, ScenarioClassDecoders.SpellDamage, since)
+            .Where(h => h.Target == bot.Guid.Value)];
+        ulong[] attackers = [.. melee.Select(h => h.Attacker).Concat(spells.Select(h => h.Caster)).Distinct()];
         ScenarioContext.Expect(attackers.All(a => a == guard.Guid.Value),
-            $"something other than the guard hit the bot (attacker guids: {string.Join(", ", attackers.Select(a => a.ToString("X")))})");
+            $"something other than the guard hurt the bot (attacker guids: {string.Join(", ", attackers.Select(a => a.ToString("X")))})");
+        uint total = 0, largest = 0;
+        foreach (AttackerStateView hit in melee)
+        {
+            total += hit.TotalDamage;
+            largest = Math.Max(largest, hit.TotalDamage);
+        }
+
+        ScenarioContext.Expect(total > 0, "the guard never damaged the bot: the attacker check proved nothing");
+        return (total, largest);
     }
 
     /// <summary>
@@ -748,7 +770,9 @@ public sealed class PlayerbotBattlegroundWorldTests
                 await WaitExplainedAsync(context, "the guard is dead", () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally);
                 ScenarioContext.Expect(await context.ReadAsync(() => ally.RequirePlayer().IsAlive), "the bot died in the guard fight");
                 ScenarioContext.ExpectEqual(5000u, await context.ReadAsync(() => ally.RequirePlayer().MaxHealth), "the bot's max health was reset after the fortification");
-                ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
+                (uint total, uint largest) = ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
+                ScenarioContext.Expect(total >= 90 && largest > 5,
+                    $"the 90 to 100 damage override did not take effect (the guard did {total} damage, largest hit {largest}; the fixture's guard hits for at most 5)");
             });
         });
     }
@@ -780,9 +804,11 @@ public sealed class PlayerbotBattlegroundWorldTests
 
             Game.Creatures.Creature guard = await context.ReadAsync(() => ally.RequirePlayer().Map!.FindUpdater<Game.Creatures.CreatureMapSystem>()!
                 .Creatures.Single(c => c.Entry == Content.AvGuardEntry));
-            await context.StepAsync("the bot fights and kills the hostile guard on its way", () => WaitExplainedAsync(context, "the guard is dead",
-                () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally));
-            ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
+            await context.StepAsync("the bot fights and kills the hostile guard on its way", async () =>
+            {
+                await WaitExplainedAsync(context, "the guard is dead", () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally);
+                _ = ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
+            });
 
             long mark = ally.Mark();
             await context.StepAsync("the bot casts 21651 at the Horde banner and Iceblood is assaulted by the Alliance", async () =>
