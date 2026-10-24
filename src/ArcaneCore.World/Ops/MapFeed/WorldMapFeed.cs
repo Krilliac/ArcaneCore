@@ -696,6 +696,7 @@ public sealed class WorldMapFeed : IHostedService
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
         AnomalyRing?.Dispose();
+        AnomalyRing = null;
         lock (_gate)
         {
             Volatile.Write(ref _subscriptions, []);
