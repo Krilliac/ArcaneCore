@@ -126,8 +126,7 @@ internal sealed class PlayerbotThinkBudget
     /// <c>CoverageFraction * boundMs / tickMs</c> of them) plus <paramref name="priorityMs"/>, the time the combat lane takes of the budget first.
     /// The combat lane is measured rather than guessed from its share, so the floor does not depend on the starvation feedback
     /// (<see cref="PlayerbotThinkStarvation.PriorityScale"/>) to give time back. 1000 bots, 50 ms ticks, a 10 s bound, 1.6 ms a visit: 16 ms plus the
-    /// combat lane; the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Twice as long a tick needs twice the budget:
-    /// the bots then take up to 30 ms of every tick, more than half of a 50 ms one. Pure.
+    /// combat lane; the fixed 8 ms floor of the first release (sized at 300 bots) walked them in 8 to 13 s. Pure.
     /// </summary>
     internal static double CoverageMs(int bots, double tickMs, double boundMs, double visitMs, double priorityMs = 0)
     {
@@ -150,6 +149,47 @@ internal sealed class PlayerbotThinkBudget
 }
 
 /// <summary>
+/// An estimate of the time the main think lane needs for a full pass over the bots: a smoothed value of the gaps between two main-lane thinks of
+/// one bot (every bot is visited once a pass, so a typical gap is the pass). It is not a mean: it moves up quickly (weight 1/<see cref="RiseWindow"/>)
+/// and down slowly (1/<see cref="Window"/>), so it sits above the mean when the gaps vary, which is the safe side for both users. It sizes the
+/// motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>) and the fairness bound of the think-starved report; neither may feed back into
+/// the think budget. A gap over <see cref="MaxSampleMs"/> counts as <see cref="MaxSampleMs"/> (it is capped, not dropped), so the estimate
+/// still follows a pass that really is longer (up to 5000 bots); the report bound at 1.5 x that cap, 180 s, is the intended absolute backstop.
+/// World thread only.
+/// </summary>
+internal sealed class PlayerbotMainPass
+{
+    /// <summary>Weight of one sample is 1/this when the estimate falls: a pass of a thousand bots is a thousand samples.</summary>
+    internal const int Window = 64;
+
+    /// <summary>Weight of one sample is 1/this when the estimate rises (bots joining, a slower world): the lease and the bound catch up within a few thinks, not a pass.</summary>
+    internal const int RiseWindow = 8;
+
+    /// <summary>The longest gap one sample counts for (ms); a longer gap is taken as this.</summary>
+    internal const uint MaxSampleMs = PlayerbotMotion.HardMaxGapLeaseMs;
+
+    private uint _ms;
+
+    /// <summary>Test seam: while set, <see cref="Note"/> changes nothing, so a test can hold the estimate below the gaps it sees.</summary>
+    internal bool Pinned { get; set; }
+
+    /// <summary>The estimated full-pass time in ms; 0 until the first sample.</summary>
+    internal uint Ms => _ms;
+
+    /// <summary>Sets the estimate (a hot reload handing it over, tests), capped at <see cref="MaxSampleMs"/>.</summary>
+    internal void Seed(uint ms) => _ms = Math.Min(ms, MaxSampleMs);
+
+    /// <summary>One bot's main-lane think came <paramref name="gapMs"/> ms after its previous one (0 is no gap). The first sample is taken as is.</summary>
+    internal void Note(uint gapMs)
+    {
+        if (gapMs == 0 || Pinned) return;
+        gapMs = Math.Min(gapMs, MaxSampleMs);
+        int window = gapMs > _ms ? RiseWindow : Window;
+        _ms = _ms == 0 ? gapMs : (uint)(((long)_ms * (window - 1) + gapMs + window / 2) / window);
+    }
+}
+
+/// <summary>
 /// The "a bot went too long without a think" check (<see cref="PlayerbotOptions.ThinkStarvedGapMs"/>), one episode per bot: the report is
 /// made once when the silence passes the bound and not again until the bot has thought and gone quiet again. Pure; the feature owns the flag.
 /// </summary>
@@ -161,6 +201,25 @@ internal static class PlayerbotThinkStarvation
     /// </summary>
     internal static uint EffectiveBoundMs(uint boundMs, int bots)
         => boundMs == 0 || bots <= 1000 ? boundMs : (uint)Math.Min(int.MaxValue, Math.Ceiling(boundMs * (bots / 1000.0)));
+
+    /// <summary>The report bound while no full pass has been measured yet: this many times the bound, so a cold start reports nothing a pass would explain.</summary>
+    internal const int ColdStartFactor = 3;
+
+    /// <summary>The report bound is at least this many full passes: a bot is behind the rotation, not merely slow with everyone else.</summary>
+    internal const double PassFactor = 1.5;
+
+    /// <summary>
+    /// The silence (ms) past which a bot is reported as starved: <paramref name="effectiveBoundMs"/> (<see cref="EffectiveBoundMs"/>; 0 = off),
+    /// raised to 1.5 x the measured full pass (<paramref name="passMs"/>) so the report fires when one bot falls behind the rotation and
+    /// not when every bot is equally slow. Unmeasured (0), <see cref="ColdStartFactor"/> x the bound. Pure. The think budget and the first
+    /// lane's yield keep the unraised bound: raising that one would shrink the budget and slow the pass further.
+    /// </summary>
+    internal static uint ReportBoundMs(uint effectiveBoundMs, uint passMs)
+    {
+        if (effectiveBoundMs == 0) return 0;
+        if (passMs == 0) return (uint)Math.Min(int.MaxValue, (long)effectiveBoundMs * ColdStartFactor);
+        return Math.Max(effectiveBoundMs, (uint)Math.Min(int.MaxValue, Math.Ceiling(passMs * PassFactor)));
+    }
 
     /// <summary>Whether to report now: the bot has been silent for more than <paramref name="boundMs"/> (0 = off) and this episode is not reported yet. Marks it reported.</summary>
     internal static bool ShouldReport(uint nowMs, uint lastThinkMs, uint boundMs, ref bool reported)

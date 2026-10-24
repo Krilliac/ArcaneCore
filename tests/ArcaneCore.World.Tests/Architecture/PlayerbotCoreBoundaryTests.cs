@@ -63,6 +63,7 @@ public sealed class PlayerbotCoreBoundaryTests
         // Contracts: the playerbot options' internal helpers. Public, the computed properties would become documented configuration keys; tier 2c makes them methods or keeps this list.
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions.EffectiveProviders"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions.HasModelProvider"] = "computed view",
+        ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.ClassifierReasoningEffort"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.Clone"] = "copy for a reload",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.EffectiveKeyVariable"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.EffectiveModel"] = "computed view",
@@ -72,6 +73,7 @@ public sealed class PlayerbotCoreBoundaryTests
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.Label"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.ModerationEndpoint"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.Price"] = "computed view",
+        ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.ReasoningEffortToSend"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatProviderOptions.Signature"] = "computed view",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions.PatternTimeout"] = "a test hook, not a configuration key",
         ["ArcaneCore.World.Playerbots.PlayerbotOptions.ApplyConfiguration"] = "binds the section (the pack's service module and the core's reload)",

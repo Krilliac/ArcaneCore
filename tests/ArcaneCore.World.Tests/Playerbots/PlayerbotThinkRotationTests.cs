@@ -76,4 +76,88 @@ public sealed class PlayerbotThinkRotationTests
         Assert.Equal(0, rotation.Tick(0, _ => true));
         Assert.Equal(0, rotation.Cursor);
     }
+
+    private static Guid[] Ids(params int[] values) => values.Select(v => new Guid(v, 0, 0, new byte[8])).ToArray();
+
+    /// <summary>One <see cref="PlayerbotThinkRotation.TickLanes"/> over <paramref name="bots"/> that thinks for <paramref name="perTick"/> bots; returns the ids it thought for.</summary>
+    private static List<Guid> LaneTick(PlayerbotThinkRotation rotation, Guid[] bots, int perTick)
+    {
+        rotation.Track(bots, id => id);
+        var thought = new List<Guid>();
+        int budget = perTick;
+        rotation.TickLanes(bots.Length, 100, 0.5, _ => PlayerbotThinkRotation.ThinkLane.Normal, (index, _) =>
+        {
+            if (budget == 0) return false;
+            budget--;
+            thought.Add(bots[index]);
+            return true;
+        }, () => 0);
+        return thought;
+    }
+
+    [Fact]
+    public void ABotLeavingBeforeTheCursor_DoesNotMakeTheBotAtTheCursorSkipAPass()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        Guid[] bots = Ids(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        Assert.Equal(Ids(1, 2, 3), LaneTick(rotation, bots, 3));
+        Assert.Equal(3, rotation.Cursor); // bot 4 is next
+
+        // Bot 1 (index 0) leaves between ticks; the population is rebuilt in id order.
+        Guid[] rebuilt = bots[1..];
+        List<Guid> next = LaneTick(rotation, rebuilt, 3);
+        Assert.True(next.Contains(bots[3]) && next[0] == bots[3], $"bot 4 was skipped; the tick thought for {string.Join(",", next.Select(g => g.ToString()[..8]))}");
+    }
+
+    [Fact]
+    public void ThePriorityCursor_AlsoFollowsTheLastVisitedId_AcrossARebuild()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        Guid[] bots = Ids(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+
+        // The even ids are in the first lane (due); that lane has two thinks a tick, the main lane none.
+        List<Guid> Tick(Guid[] population)
+        {
+            rotation.Track(population, id => id);
+            var thought = new List<Guid>();
+            int priorityBudget = 2;
+            rotation.TickLanes(population.Length, 100, 0.5,
+                index => BitConverter.ToInt32(population[index].ToByteArray()) % 2 == 0 ? PlayerbotThinkRotation.ThinkLane.Priority : PlayerbotThinkRotation.ThinkLane.Normal,
+                (index, lane) =>
+                {
+                    if (lane != PlayerbotThinkRotation.ThinkLane.Priority || priorityBudget == 0) return false;
+                    priorityBudget--;
+                    thought.Add(population[index]);
+                    return true;
+                }, () => 0);
+            return thought;
+        }
+
+        Assert.Equal(Ids(2, 4), Tick(bots));
+        // Bot 1 leaves: every index moves down one. The first lane resumes at bot 6, the next due bot after the last one it did (4).
+        Assert.Equal(Ids(6, 8), Tick(bots[1..]));
+    }
+
+    [Fact]
+    public void ABotJoiningBeforeTheCursor_DoesNotMakeABotThinkTwiceInAPass()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        Guid[] bots = Ids(10, 20, 30, 40, 50, 60);
+        Assert.Equal(Ids(10, 20, 30), LaneTick(rotation, bots, 3));
+        Guid[] joined = Ids(5, 10, 20, 30, 40, 50, 60);
+        Assert.Equal(Ids(40, 50, 60), LaneTick(rotation, joined, 3));
+        Assert.Equal(Ids(5, 10, 20), LaneTick(rotation, joined, 3));
+    }
+
+    [Fact]
+    public void WhenTheLastBotVisitedLeavesAndNoneIsAfterIt_TheRotationWrapsToTheFirst()
+    {
+        var rotation = new PlayerbotThinkRotation();
+        Guid[] bots = Ids(1, 2, 3, 4);
+        Assert.Equal(Ids(1, 2, 3, 4), LaneTick(rotation, bots, 4));
+        Assert.Equal(Ids(1, 2, 3), LaneTick(rotation, Ids(1, 2, 3), 3));
+        Assert.Equal(Ids(1, 2), LaneTick(rotation, Ids(1, 2), 2));
+        Assert.Empty(LaneTick(rotation, [], 2));
+        Assert.Equal(Ids(7), LaneTick(rotation, Ids(7), 2));
+    }
 }

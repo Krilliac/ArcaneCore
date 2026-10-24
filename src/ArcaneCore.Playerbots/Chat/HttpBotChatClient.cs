@@ -169,13 +169,15 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
         var messages = new JsonArray { new JsonObject { ["role"] = "system", ["content"] = prompt.StaticSystem + "\n\n" + prompt.DynamicSystem } };
         foreach (BotChatTurn turn in prompt.Messages)
             messages.Add(new JsonObject { ["role"] = turn.FromPlayer ? "user" : "assistant", ["content"] = turn.Text });
-        return new JsonObject
+        var body = new JsonObject
         {
             ["model"] = provider.EffectiveModel,
             [provider.TokenLimitParameter] = provider.MaxTokens,
             ["messages"] = messages,
             ["stream"] = false,
         };
+        if (provider.ReasoningEffortToSend is { } effort) body["reasoning_effort"] = effort;
+        return body;
     }
 
     internal static BotChatOutcome Classify(HttpStatusCode status) => (int)status switch
@@ -272,12 +274,19 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
             if (first.ValueKind != JsonValueKind.Object) return BotChatResult.Fail(BotChatOutcome.BadResponse);
             if (first.TryGetProperty("finish_reason", out JsonElement finish) && finish.ValueKind == JsonValueKind.String && finish.GetString() == "content_filter")
                 return new BotChatResult(BotChatOutcome.Refused, null, input, output);
-            if (!first.TryGetProperty("message", out JsonElement message) || message.ValueKind != JsonValueKind.Object
-                || !message.TryGetProperty("content", out JsonElement content) || content.ValueKind != JsonValueKind.String
-                || string.IsNullOrWhiteSpace(content.GetString()))
+            if (!first.TryGetProperty("message", out JsonElement message) || message.ValueKind != JsonValueKind.Object)
                 return new BotChatResult(BotChatOutcome.BadResponse, null, input, output);
+            string? text = message.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.String ? content.GetString() : null;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                // A thinking model that spent its tokens reasoning: empty content next to a reasoning string, or a reply cut at the limit.
+                bool cutAtLimit = finish.ValueKind == JsonValueKind.String && finish.GetString() == "length";
+                return new BotChatResult(cutAtLimit || HasText(message, "reasoning") || HasText(message, "reasoning_content")
+                    ? BotChatOutcome.ReasoningOnly : BotChatOutcome.BadResponse, null, input, output);
+            }
+
             // Cached prompt tokens are part of prompt_tokens here; the estimate prices them as plain input (an upper bound).
-            return new BotChatResult(BotChatOutcome.Ok, content.GetString(), input, output);
+            return new BotChatResult(BotChatOutcome.Ok, text, input, output);
         }
         catch (JsonException error)
         {
@@ -286,6 +295,9 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
             return BotChatResult.Fail(BotChatOutcome.BadResponse);
         }
     }
+
+    private static bool HasText(JsonElement parent, string name)
+        => parent.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString());
 
     private static int Int(JsonElement parent, string name)
         => parent.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int number) && number > 0 ? number : 0;

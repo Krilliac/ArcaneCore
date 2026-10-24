@@ -31,8 +31,13 @@ world spent on everything but the bots) - what the bots already used this tick, 
 not thought for `CombatThinkIntervalMs` (300) is thought for first, for at most `CombatLaneShare` (0.7) of the budget; then every bot from
 the fair cursor (the rest of the budget, so a crowd of fights cannot starve the others). The actions split in two hard budgets as well (the combat lane has `floor(CombatLaneShare x MaxActionsPerTick)` of its own, the rest is the other bots'), and the main lane thinks for at least one bot every tick. With room for everyone every bot still thinks
 every tick. `.playerbot cadence` prints the last minute's think gap p50/p95/p99/max (all bots and the combat/dead lane), thinks per tick,
-the budget and the share of ticks that ended on the time or action budget (the same line is logged once a minute). A bot silent for
-longer than `ThinkStarvedGapMs` (10 s, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly.
+the budget and the share of ticks that ended on the time or action budget (the same line is logged once a minute). The coverage floor is sized from the *configured* tick interval (`World:TickIntervalMs`), not the real one (`PlayerbotThinkBudget.RealTickMs` is not used by the budget): a tick that overruns does not raise the bots' share, so with 1000 bots (about 10 thinks a tick) a full pass of the main lane takes 1000 x real tick / 10, 8 to 30 s at live ticks of 80 to 260 ms.
+
+**Pass-derived bounds.** The feature measures that pass (`PlayerbotMainPass`: a smoothed estimate, quick to rise and slow to fall and so biased above the mean, of the gaps between two main-lane thinks of one bot; combat-lane gaps are not counted; a gap over 120 s counts as 120 s, so the report bound tops out at 180 s, the intended absolute backstop) and two things follow it, neither feeding back into the budget:
+- *Motion lease.* A route is walked for `max(4 s, 8 x ThinkIntervalMs, 3 x the bot's smoothed think gap)`, the gap term capped at `PlayerbotMotion.LeaseCapMs(pass) = clamp(1.5 x pass, 15 s, 120 s)`. A bot with no gap of its own yet (fresh login or re-add: its first think skips the gap measure) is taken to wait one full pass, so its gap term is `min(3 x pass, cap)`: the cap itself once the pass is over 5 s (a 15 s lease at an 8 s pass, 30 s at 20 s). Before this the cap was a fixed 15 s, under the real gap, and bots stopped mid-road (`bot-motion/lease-expired-midroute`).
+- *think-starved.* A bot silent for longer than `max(ThinkStarvedGapMs, 1.5 x pass)` (`PlayerbotThinkStarvation.ReportBoundMs`; 3 x `ThinkStarvedGapMs` until a pass is measured; 10 s default, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly, so it flags a bot that fell behind the rotation, not a rotation that is slow for every bot. The budget floor and the combat lane's yield (`PriorityScale`) keep the unraised bound.
+
+The rotation cursors follow bot ids, not list indexes: the list is sorted by id and rebuilt when a bot joins or leaves, and the cursor resumes at the first id after the last one visited (`PlayerbotThinkRotation.Track`), so a change before the cursor skips nobody.
 
 **Caps.** `MaxBots` (0..5000, `PlayerbotOptions.MaxBotsCeiling`) bounds the bots **running** at once: a stopped, faulted or quarantined bot holds no slot, and a
 start beyond it is refused with `playerbot-capacity` (a startup restore or quarantine retry waits for a slot). `MaxRegisteredBots`
@@ -1487,7 +1492,7 @@ no cost. Language-model providers are opt-in additions in front of it.
 - **GM.** `.playerbot chat status` (GameMaster): on/off, channels, queued, answered, unanswered, the spend estimate and cap, and
   per provider its kind, model, key variable and whether it is set (`key=ANTHROPIC_API_KEY:present`), replies this hour against
   the cap, errors, the last error class (`rate-limited`, `unavailable`, `unauthorized`, `rejected`, `refused`, `timeout`,
-  `network`, `empty-reply`, `moderation-failed`) and the remaining cooldown, then a `Bot chat safety:` line (below).
+  `network`, `bad-response`, `reasoning-only`, `empty-reply`, `moderation-failed`) and the remaining cooldown, then a `Bot chat safety:` line (below).
   `.playerbot chat flags [player]` and `.playerbot chat pardon <player>` (GameMaster) are described under Safety and provider
   policies.
 
@@ -1514,8 +1519,22 @@ itself and plain game mechanics, never invented lore.
 | `MaxRepliesPerHour` | 1..100000 (120). |
 | `MaxTokens` | The reply limit, 16..1024 (150). |
 | `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
+| `ReasoningEffort` | OpenAICompatible: sent as `reasoning_effort` when set: `none`, `minimal`, `low`, `medium`, `high` or `xhigh` (any case); empty (default) sends nothing. Set `none` for a thinking model (below). The `Classify` moderation call inherits it, and defaults to `none` for a server on this machine when it is empty. `omit` never sends the field, to the reply or to the classifier call (for a server that rejects it). |
 | `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
 | `Moderation`, `ModerationBaseUrl`, `ModerationModel`, `ModerationApiKeyEnvironmentVariable` | The optional moderation step before a line is sent to this provider: `None` (default), `Endpoint` or `Classify` (see Safety and provider policies). |
+
+A thinking model (qwen3.5 on Ollama, for one) puts every generated token in `message.reasoning` and answers with
+`content: ""` and `finish_reason: "length"`, even at `MaxTokens` 1024. That is not a reply: it is reported as `reasoning-only` (not
+`bad-response`), the log says "the model spent its tokens thinking; set ReasoningEffort=none for this provider", and a second one in
+a row backs the provider off (15 s, doubling to 5 min) instead of asking the model on every line; the same holds when the `Classify`
+moderation call is the one that only thinks. Only an HTTP provider (`OpenAICompatible`, `Anthropic`) is backed off for unreadable
+answers: an `InProcess` model's bad answer is about the content, never the provider. Fix it by turning reasoning off for
+that provider:
+
+```json
+{ "Kind": "OpenAICompatible", "BaseUrl": "http://localhost:11434/v1", "Model": "qwen3.5:4b",
+  "ApiKeyEnvironmentVariable": "", "ReasoningEffort": "none" }
+```
 
 The prompt's system part comes in two pieces: the rules (1.12 setting, short in-game chat style, nothing outside the game, no
 claim of being an AI unless asked directly, a brush-off for abuse, the JSON answer format), identical for every bot and request,

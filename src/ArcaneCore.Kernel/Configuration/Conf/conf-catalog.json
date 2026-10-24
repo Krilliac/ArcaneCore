@@ -15117,7 +15117,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation, ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).",
+      "meaning": "The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation, ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).",
       "allowed": "a list: numbered keys 0, 1, 2, ...; each entry is a group of keys",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": true
@@ -20529,7 +20529,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The least wall time (ms, 1..200) a world tick spends on the bots' thinks, however loaded the tick is: the guarantee that a busy server still thinks (`PlayerbotThinkBudget`). At least one bot always thinks per tick. Equal to `ThinkBudgetMaxMs` it is a fixed budget. Raised, up to `ThinkBudgetMaxMs`, to what walking every bot within `ThinkStarvedGapMs` takes at the measured cost of a think (`PlayerbotThinkBudget.CoverageMs`): 8 ms covers about 400 bots (1.3 ms a visit, 50 ms ticks, 3 ms of fights), 1000 bots need about 16 ms, and twice as long a real tick twice that, up to the ceiling: the bots then take more of each tick.",
+      "meaning": "The least wall time (ms, 1..200) a world tick spends on the bots' thinks, however loaded the tick is: the guarantee that a busy server still thinks (`PlayerbotThinkBudget`). At least one bot always thinks per tick. Equal to `ThinkBudgetMaxMs` it is a fixed budget. Raised, up to `ThinkBudgetMaxMs`, to what walking every bot within `ThinkStarvedGapMs` takes at the measured cost of a think (`PlayerbotThinkBudget.CoverageMs`): 8 ms covers about 400 bots (1.3 ms a visit, 50 ms ticks, 3 ms of fights) and 1000 bots need about 16 ms, up to the ceiling: the bots then take more of each tick. The walk is sized from the configured tick interval, not the real one: a real tick longer than the configured one does not raise the budget (that would slow the ticks further), so a full pass of the bots then takes longer than the bound it was sized for (1000 bots at about 10 bots a tick: 8 to 30 s at 80 to 260 ms ticks). The motion lease and the think-starved report follow the measured pass instead (`ThinkStarvedGapMs`).",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -20577,7 +20577,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "A bot that goes longer than this many milliseconds (1000..3600000) of world time without a think is reported once per episode as a \"cadence think-starved\" anomaly (`PlayerbotAnomalies`); 0 turns the report off. The default is the ghost walk's stuck bound (`PlayerbotRecovery.StuckMs`).",
+      "meaning": "A bot that goes longer than this many milliseconds (1000..3600000) of world time without a think is reported once per episode as a \"cadence think-starved\" anomaly (`PlayerbotAnomalies`); 0 turns the report off. The default is the ghost walk's stuck bound (`PlayerbotRecovery.StuckMs`). The report fires only for a bot that falls behind the rotation: its bound is the larger of this value and 1.5 times the measured time of a full pass of the main think lane (three times this value until a pass is measured), so a rotation that is slow for every bot alike raises nothing. The think budget is still sized from this value unraised.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

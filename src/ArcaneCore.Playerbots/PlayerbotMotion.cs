@@ -87,6 +87,8 @@ internal static class PlayerbotMotion
         internal uint Renewals;
         /// <summary>The bot's think gap in ms, smoothed (<see cref="NoteThinkGap"/>); 0 until the first measured gap.</summary>
         internal uint GapMs;
+        /// <summary>The scheduler's measured main-lane full-pass time in ms (<see cref="NoteSchedulerPass"/>); 0 until the feature has one.</summary>
+        internal uint PassMs;
         internal readonly PlayerbotLoopDetector Loops = new();
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
@@ -1141,9 +1143,21 @@ internal static class PlayerbotMotion
     /// <summary>The longest lease a measured think gap can ask for (<see cref="Lease"/>).</summary>
     internal const uint MaxGapLeaseMs = 15_000;
 
+    /// <summary>The longest lease the scheduler's pass can raise the cap to (<see cref="LeaseCapMs"/>).</summary>
+    internal const uint HardMaxGapLeaseMs = 120_000;
+
+    /// <summary>
+    /// The cap on a lease for a scheduler whose main lane needs <paramref name="passMs"/> for a full pass (0 = not measured):
+    /// 1.5 x the pass, at least <see cref="MaxGapLeaseMs"/> and at most <see cref="HardMaxGapLeaseMs"/>. With a thousand bots the pass is
+    /// 8 to 30 s, so a fixed 15 s cap sat under the real think gap and stopped bots mid-road (lease-expired-midroute).
+    /// </summary>
+    internal static uint LeaseCapMs(uint passMs)
+        => (uint)Math.Clamp(passMs * 3L / 2, MaxGapLeaseMs, HardMaxGapLeaseMs);
+
     /// <summary>
     /// How long a route stays walked after the think that last followed it: <c>max(4000, 8 × ThinkIntervalMs, 3 × smoothed think gap)</c>,
-    /// the gap term held to <see cref="MaxGapLeaseMs"/>. Only a think that follows the route again renews it, and with a thousand bots the
+    /// the gap term held to <see cref="LeaseCapMs"/> (<see cref="MaxGapLeaseMs"/> or 1.5 x the scheduler's measured full pass, at most
+    /// <see cref="HardMaxGapLeaseMs"/>; a gap not yet measured counts as one full pass). Only a think that follows the route again renews it, and with a thousand bots the
     /// rotation (<see cref="PlayerbotThinkRotation"/>) thinks for a bot every few seconds, not every <c>ThinkIntervalMs</c>: a fixed
     /// lease of 2 s stopped every bot well before its next think and it stood until then (live 2026-10-12: walk 5 s, stop, wait, walk),
     /// and <c>max(2000, 4 × ThinkIntervalMs, 2 × gap)</c> still ran out mid-route (lease-expired-midroute, raised 2026-10-17).
@@ -1152,7 +1166,9 @@ internal static class PlayerbotMotion
     private static uint Lease(PlayerbotOptions options, MotionState state)
     {
         uint floor = (uint)Math.Max(4000, options.ThinkIntervalMs * 8);
-        uint gap = Math.Min(state.GapMs, MaxGapLeaseMs / 3) * 3;
+        // A bot with no measured gap yet (a fresh login or re-add: its first think skips NoteThinkGap) is taken to wait a full pass.
+        long gapMs = state.GapMs != 0 ? state.GapMs : state.PassMs;
+        uint gap = (uint)Math.Min(gapMs * 3, LeaseCapMs(state.PassMs));
         return Math.Max(floor, gap);
     }
 
@@ -1168,12 +1184,12 @@ internal static class PlayerbotMotion
     {
         if (sinceLast == 0 || sinceLast > int.MaxValue) return;
         MotionState state = Of(player);
-        uint sample = Math.Min(sinceLast, MaxGapLeaseMs);
+        uint sample = Math.Min(sinceLast, HardMaxGapLeaseMs);
         if (combatLane && state.GapMs != 0 && sample <= state.GapMs) return;
         state.GapMs = state.GapMs == 0 ? sample : (uint)((state.GapMs * 3L + sample + 2) / 4);
         if (state.Active && state.Options is { } opts)
         {
-            state.LeaseMs = Math.Max(state.LeaseMs, Math.Max(Lease(opts, state), Math.Min(sample * 3u, MaxGapLeaseMs)));
+            state.LeaseMs = Math.Max(state.LeaseMs, Math.Max(Lease(opts, state), Math.Min(sample * 3u, LeaseCapMs(state.PassMs))));
         }
     }
 
@@ -1203,6 +1219,16 @@ internal static class PlayerbotMotion
         Stop(session, player);
         return true;
     }
+
+    /// <summary>The scheduler's measured main-lane full-pass time (ms; 0 = none yet) as this bot's motion should see it.</summary>
+    internal static void NoteSchedulerPass(Player player, uint passMs)
+    {
+        // 0 is "not measured" (a fresh feature after a reload): it never wipes a pass the bot's motion already knows.
+        if (passMs != 0) Of(player).PassMs = passMs;
+    }
+
+    /// <summary>The scheduler pass the bot's motion last saw (<see cref="NoteSchedulerPass"/>), or 0 when none.</summary>
+    internal static uint SchedulerPassMsOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.PassMs : 0;
 
     /// <summary>The bot's smoothed think gap in ms (<see cref="NoteThinkGap"/>), or 0 when none was measured.</summary>
     internal static uint ThinkGapMs(Player player) => States.TryGetValue(player, out MotionState? state) ? state.GapMs : 0;

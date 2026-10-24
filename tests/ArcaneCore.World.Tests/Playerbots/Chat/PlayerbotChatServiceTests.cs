@@ -154,6 +154,80 @@ public sealed class PlayerbotChatServiceTests
         Assert.Equal(1, status.Providers[2].Replies);
     }
 
+    [Theory]
+    [InlineData(BotChatOutcome.BadResponse, "bad-response")]
+    [InlineData(BotChatOutcome.ReasoningOnly, "reasoning-only")]
+    public async Task RepeatedBadResponses_BackOff_SoTheModelIsNotAskedEveryTime(BotChatOutcome outcome, string error)
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("one")))!.Provider);
+        Assert.Equal(error, rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds); // a single bad answer is not punished
+
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("two")))!.Provider);
+        Assert.Equal(2, rig.Client.Calls.Count);
+        Assert.True(rig.Chat.Status().Providers[0].CooldownSeconds > 0);
+
+        // Cooling down: the model is not asked, the fallback answers.
+        Assert.Equal("Builtin", (await rig.AskAsync(ChatSamples.Ask("three")))!.Provider);
+        Assert.Equal(2, rig.Client.Calls.Count);
+
+        // Past the cooldown it is asked again, and a good answer clears the streak.
+        rig.Time.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal("OpenAICompatible qwen3:0.6b", (await rig.AskAsync(ChatSamples.Ask("four")))!.Provider);
+        Assert.Equal(3, rig.Client.Calls.Count);
+        rig.Client.ThenReturn(BotChatResult.Fail(outcome));
+        await rig.AskAsync(ChatSamples.Ask("five"));
+        Assert.Equal(4, rig.Client.Calls.Count); // the last request did reach the client
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
+    }
+
+    [Fact]
+    public async Task ADifferentFailureInBetween_ResetsTheBadStreak()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.Refused));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        await rig.AskAsync(ChatSamples.Ask("two"));
+        await rig.AskAsync(ChatSamples.Ask("three"));
+        Assert.Equal(3, rig.Client.Calls.Count);
+        Assert.Equal("bad-response", rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds); // two bad answers, but not in a row
+    }
+
+    [Fact]
+    public async Task InProcessBadResponses_AreAboutTheContent_NotTheProvider_SoTheyNeverBackOff()
+    {
+        PlayerbotChatProviderOptions inProcess = new() { Kind = PlayerbotChatProviderKind.InProcess, Model = "tiny" };
+        await using var rig = new Rig(chat =>
+        {
+            chat.Providers = [inProcess];
+            chat.InProcess.ModelPath = "model.gguf";
+            chat.TimeoutSeconds = 5;
+            chat.InProcess.BudgetMs = 2000;
+        });
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.BadResponse));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        await rig.AskAsync(ChatSamples.Ask("two"));
+        Assert.Equal(2, rig.Client.Calls.Count);
+        Assert.Equal("bad-response", rig.Chat.Status().Providers[0].LastError);
+        Assert.Equal(0, rig.Chat.Status().Providers[0].CooldownSeconds);
+    }
+
+    [Fact]
+    public async Task TheFirstReasoningOnlyAnswer_LogsTheHint()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.ReasoningOnly));
+        await rig.AskAsync(ChatSamples.Ask("one"));
+        Assert.Contains(rig.Log.Lines, line => line.Contains("set ReasoningEffort=none for this provider"));
+    }
+
     [Fact]
     public async Task AHungRequest_TimesOut_AndTheNextProviderAnswers()
     {
