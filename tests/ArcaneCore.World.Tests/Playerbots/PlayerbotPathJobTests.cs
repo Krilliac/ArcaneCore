@@ -138,7 +138,9 @@ public sealed class PlayerbotPathJobTests
             Assert.True(IsPending(h.Ask(h.Far())));
             h.Runner.CompleteAll();
 
-            Assert.True(IsPending(h.Ask(h.Far(), from: h.Origin + new Vector3(1.5f, 0, 0))));
+            Vector3 moved = h.Origin + new Vector3(1.5f, 0, 0);
+            h.Player.Relocate(moved.X, moved.Y, moved.Z);
+            Assert.True(IsPending(h.Ask(h.Far(), from: moved)));
             PlayerbotPathJobTotals totals = h.Jobs.Totals;
             Assert.Equal(0, totals.Applied);
             Assert.Equal(1, totals.Stale);
@@ -456,7 +458,7 @@ public sealed class PlayerbotPathJobTests
     // ---- 12. the world-thread deadline ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task ASearchCutAtTheDeadline_InAWaitingPlan_IsPending_NotARefusal_AndOutsideOneIsACappedAnswerWithAnAnomaly()
+    public async Task ASearchCutAtTheDeadline_IsACappedAnswerWithAnAnomaly_NeverAPendingOne_AndAFarPlanStillRoutes()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         await world.OnWorldAsync(() =>
@@ -466,13 +468,70 @@ public sealed class PlayerbotPathJobTests
             using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
             var wait = new TileWait();
 
-            Assert.Equal(PlanOutcome.Pending, h.Plan(h.Far(60), ref wait, 1_000, out PlayerbotRoute? route));
-            Assert.Null(route);
+            // Jobs are off, so asking again would repeat the same search: the capped corridor is the answer, in a waiting plan or not.
+            Assert.Equal(PlanOutcome.Route, h.Plan(h.Far(250), ref wait, 1_000, out PlayerbotRoute? route));
+            Assert.NotNull(route);
             Assert.Equal(100, nav.OwnerOptions[0].MaxSearchMs);
-            Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "sync-deadline")));
+            Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("nav", "sync-deadline")));
+            Assert.Equal(1, nav.OwnerCalls);
+            Assert.False(wait.Active);
 
             Assert.True(h.Think(() => PlayerbotNavigation.TryPlan(h.Player, h.Far(60), h.Options, out _)));
-            Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("nav", "sync-deadline")));
+            return true;
+        });
+    }
+
+    // ---- 13. fallback queries and moving destinations never wait forever ------------------------------------------------------------
+
+    [Fact]
+    public async Task AFallbackQueryFromAnotherStart_LeavesTheMainAnswerAlone_AndBothAreAppliedOnceDone()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotOptions options = Options();
+            options.PathJobsMaxPerBot = 2;
+            using var h = new Harness(world, options);
+            Vector3 far = h.Far();
+            Vector3 beside = h.Origin + new Vector3(0, 3, 0);
+
+            Assert.True(IsPending(h.Ask(far)));
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(far))); // the main answer is applied (and unusable to the caller)
+            Assert.True(IsPending(h.Ask(far, from: beside))); // the fallback from beside the bot: a second job
+            Assert.Equal(2, h.Runner.Submitted.Count);
+
+            Assert.False(IsPending(h.Ask(far))); // the main entry survived the fallback's query
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(far, from: beside)));
+            Assert.Equal(2, h.Runner.Submitted.Count);
+            Assert.Equal(0, h.Jobs.Totals.Stale);
+            Assert.Equal(0, h.Jobs.Totals.Escalations);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ADestinationThatMovesEveryThink_StillEndsItsWait_WithOneBoundedSynchronousSearch()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            bool answered = false;
+            for (int step = 0; step < 40 && !answered; step++)
+            {
+                PathResult result = h.Ask(h.Far(250 + step));
+                answered = !IsPending(result);
+                h.Runner.CompleteAll();
+                h.Wall += 2_000;
+                h.Clock += 500;
+            }
+
+            Assert.True(answered, "the wait must end");
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            Assert.Equal(1, h.Nav.OwnerCalls);
+            Assert.True(h.Wall - 1_000_000 <= (h.Options.PathJobWaitMaxMs + 4_000));
             return true;
         });
     }

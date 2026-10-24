@@ -128,20 +128,13 @@ internal sealed class PlayerbotPathJobs
     /// <summary>The service the running think is bound to (<see cref="Bind"/>), if any.</summary>
     internal static PlayerbotPathJobs? Bound => t_bound;
 
-    /// <summary>Path-job answers of "pending" given on this thread so far (a query waiting for its job, or cut at the search deadline inside a <see cref="Deferrable"/> scope).</summary>
+    /// <summary>Path-job answers of "pending" given on this thread so far (a query waiting for its job).</summary>
     internal static long PendingAnswers => t_pendingAnswers;
 
     /// <summary>Whether the latest pending answer on this thread was for a path job, not a navigation tile read (<see cref="TileWait.Hold"/>).</summary>
     internal static bool LastPendingWasJob => t_lastPendingWasJob;
 
     internal static void NoteTilePending() => t_lastPendingWasJob = false;
-
-    /// <summary>A search past its deadline inside a <see cref="Deferrable"/> scope: the plan answers pending (counted like a job wait, but a retry that <see cref="TileWait"/> bounds).</summary>
-    internal static void NoteDeadlinePending()
-    {
-        t_pendingAnswers++;
-        t_lastPendingWasJob = false;
-    }
 
     /// <summary>Whether the running query may be answered pending (a <see cref="Deferrable"/> scope, not inside <see cref="NoDefer"/>).</summary>
     internal static bool InDeferrableScope => t_deferDepth > 0 && t_noDeferDepth == 0;
@@ -299,55 +292,64 @@ internal sealed class PlayerbotPathJobs
                 _bots[botId] = state = new BotState();
             }
 
+            if (state.PendingSinceWallMs != 0 && unchecked(nowMs - state.LastAskMs) > UnaskedAbandonMs()) state.PendingSinceWallMs = 0; // an old episode
             state.LastAskMs = nowMs;
-            DropMovedAway(state, from);
-            Entry? entry = state.Find(key, to, options.MaxSearchNodes);
+            DropStale(state, new Vector3(player.X, player.Y, player.Z));
+            Entry? entry = state.Find(key, to, from, options.MaxSearchNodes);
             Carry carry = default;
+            JobAnswer settled = JobAnswer.Submitted;
             if (entry is not null)
             {
                 entry.LastAskMs = nowMs;
-                carry = new Carry(entry.Failures, entry.WaitStartWallMs);
-                if (!entry.Job.IsDone)
+                carry = new Carry(entry.Failures);
+                if (entry.Job.IsDone)
                 {
-                    if (wallMs - entry.WaitStartWallMs > _options.PathJobWaitMaxMs)
+                    PathResult? applied = TryApply(shared, map, player, entry, wallMs, state, ref carry, out how, out settled);
+                    if (applied is not null)
                     {
-                        return Escalate(state, entry, "waited too long", player, from, to, out how);
+                        state.PendingSinceWallMs = 0;
+                        job = entry.Job;
+                        return applied;
                     }
 
-                    ReportLongWait(entry, wallMs, player);
-                    return Pending(from, JobAnswer.Waiting, out how);
+                    if (settled == JobAnswer.Escalated)
+                    {
+                        state.PendingSinceWallMs = 0;
+                        return Escalate(state, null, carry.Failures >= EscalateAfterFailures ? "repeatedly canceled" : "faulted", player, from, to, out how);
+                    }
                 }
-
-                PathResult? applied = TryApply(shared, map, player, entry, from, to, wallMs, state, ref carry, out how, out JobAnswer settled);
-                if (applied is not null)
-                {
-                    job = entry.Job;
-                    return applied;
-                }
-
-                if (settled == JobAnswer.Escalated)
-                {
-                    return Escalate(state, null, carry.Failures >= EscalateAfterFailures ? "repeatedly canceled" : "faulted", player, from, to, out how);
-                }
-
-                if (settled == JobAnswer.Waiting)
-                {
-                    return Pending(from, JobAnswer.Waiting, out how); // a missed tile is still being read
-                }
-
-                // settled == Submitted: the old answer is dropped; a fresh job replaces it below, carrying the failure count.
             }
 
-            if (carry.WaitStartWallMs == 0) carry = carry with { WaitStartWallMs = wallMs };
+            // The wait is the bot's, not the entry's: a destination that moves every think, or a fallback query that replaces the
+            // main one, starts a new entry each time but the clock goes on, so the wait always ends (one bounded synchronous search).
+            if (state.PendingSinceWallMs != 0 && wallMs - state.PendingSinceWallMs > _options.PathJobWaitMaxMs)
+            {
+                state.PendingSinceWallMs = 0;
+                return Escalate(state, entry, "waited too long", player, from, to, out how);
+            }
+
+            if (entry is not null && !entry.Job.IsDone)
+            {
+                ReportLongWait(entry, state, wallMs, player);
+                return Pending(state, wallMs, from, JobAnswer.Waiting, out how);
+            }
+
+            if (settled == JobAnswer.Waiting)
+            {
+                return Pending(state, wallMs, from, JobAnswer.Waiting, out how); // a missed tile is still being read
+            }
+
+            // The old answer (if any) is dropped; a fresh job replaces it below, carrying the failure count.
             return Submit(shared, map, player, botId, state, from, to, options, key, carry, nowMs, wallMs, out how);
         }
     }
 
-    private readonly record struct Carry(int Failures, long WaitStartWallMs);
+    private readonly record struct Carry(int Failures);
 
-    private PathResult Pending(Vector3 from, JobAnswer how, out JobAnswer answer)
+    private PathResult Pending(BotState state, long wallMs, Vector3 from, JobAnswer how, out JobAnswer answer)
     {
         answer = how;
+        if (state.PendingSinceWallMs == 0) state.PendingSinceWallMs = wallMs;
         if (how == JobAnswer.Waiting) _totals = _totals with { Waits = _totals.Waits + 1 };
         t_pendingAnswers++;
         t_lastPendingWasJob = true;
@@ -375,17 +377,17 @@ internal sealed class PlayerbotPathJobs
         return new PathResult(PathType.TilesPending, [from]); // not used: the caller searches itself
     }
 
-    private void ReportLongWait(Entry entry, long wallMs, Player player)
+    private void ReportLongWait(Entry entry, BotState state, long wallMs, Player player)
     {
-        if (entry.LongWaitReported || wallMs - entry.WaitStartWallMs <= WaitLongMs || !player.IsInWorld) return;
+        if (entry.LongWaitReported || wallMs - state.PendingSinceWallMs <= WaitLongMs || !player.IsInWorld) return;
         entry.LongWaitReported = true;
         PlayerbotAnomalies.Report(player, "nav", "job-wait-long",
-            string.Create(CultureInfo.InvariantCulture, $"a path job has been pending for {wallMs - entry.WaitStartWallMs} ms ({entry.Job.Status}, {entry.MaxNodes} nodes)"),
+            string.Create(CultureInfo.InvariantCulture, $"a path job has been pending for {wallMs - state.PendingSinceWallMs} ms ({entry.Job.Status}, {entry.MaxNodes} nodes)"),
             AnomalySeverity.Info);
     }
 
     /// <summary>The applied answer of a finished job; null when it was dropped (<paramref name="settled"/> says what the caller does next).</summary>
-    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, Vector3 from, Vector3 to, long wallMs,
+    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, long wallMs,
         BotState state, ref Carry carry, out JobAnswer how, out JobAnswer settled)
     {
         how = JobAnswer.Applied;
@@ -466,14 +468,14 @@ internal sealed class PlayerbotPathJobs
 
         if (mine >= _options.PathJobsMaxPerBot)
         {
-            return Pending(from, JobAnswer.Waiting, out how); // the bot's own job is still running: its next ask comes after it
+            return Pending(state, wallMs, from, JobAnswer.Waiting, out how); // the bot's own job is still running: its next ask comes after it
         }
 
         if (!Admitted(botId, options.MaxSearchNodes))
         {
             JoinLine(botId);
             _totals = _totals with { BudgetRefused = _totals.BudgetRefused + 1 };
-            return Pending(from, JobAnswer.BudgetRefused, out how);
+            return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
         }
 
         PathOptions jobOptions = options with
@@ -488,20 +490,20 @@ internal sealed class PlayerbotPathJobs
         {
             JoinLine(botId);
             _totals = _totals with { BudgetRefused = _totals.BudgetRefused + 1 };
-            return Pending(from, JobAnswer.BudgetRefused, out how);
+            return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
         }
 
         LeaveLine(botId);
         _active.Add(job);
         _activeNodes += options.MaxSearchNodes;
         _totals = _totals with { Submitted = _totals.Submitted + 1 };
-        state.Add(new Entry(job, key, to, from, options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs, carry.WaitStartWallMs)
+        state.Add(new Entry(job, key, to, from, new Vector3(player.X, player.Y, player.Z), options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs)
         {
             Failures = carry.Failures,
             LastAskMs = nowMs,
         });
         TrimEntries(state);
-        return Pending(from, JobAnswer.Submitted, out how);
+        return Pending(state, wallMs, from, JobAnswer.Submitted, out how);
     }
 
     private void TrimEntries(BotState state)
@@ -569,25 +571,19 @@ internal sealed class PlayerbotPathJobs
 
     // ---- staleness, lifecycle ----------------------------------------------------------------------------------------------
 
-    /// <summary>The bot moved more than a yard from where its answers were asked: every one of them is out of date at once.</summary>
-    private void DropMovedAway(BotState state, Vector3 from)
+    /// <summary>
+    /// Drops the entries asked while the bot stood more than a yard from <paramref name="position"/>: each is out of date. Judged by where the
+    /// bot was, not where the query started, so a fallback query that starts beside the bot or at a detour point leaves the others alone.
+    /// </summary>
+    private void DropStale(BotState state, Vector3 position)
     {
-        bool moved = false;
-        foreach (Entry e in state.Entries)
+        for (int i = state.Entries.Count - 1; i >= 0; i--)
         {
-            if (Vector3.DistanceSquared(e.Start, from) > 1f)
-            {
-                moved = true;
-                break;
-            }
-        }
-
-        if (!moved) return;
-        foreach (Entry e in state.Entries.ToArray())
-        {
+            Entry e = state.Entries[i];
+            if (Vector3.DistanceSquared(e.BotPosition, position) <= 1f) continue;
             if (!e.Job.IsDone) e.Job.Abandon();
             _totals = _totals with { Stale = _totals.Stale + 1 };
-            state.Remove(e);
+            state.Entries.RemoveAt(i);
         }
     }
 
@@ -603,6 +599,7 @@ internal sealed class PlayerbotPathJobs
             }
 
             _line.Remove(botId);
+            _deadlineReported.Remove(botId);
         }
     }
 
@@ -616,6 +613,7 @@ internal sealed class PlayerbotPathJobs
                     if (!e.Job.IsDone) e.Job.Abandon();
             _bots.Clear();
             _line.Clear();
+            _deadlineReported.Clear();
         }
     }
 
@@ -681,7 +679,7 @@ internal sealed class PlayerbotPathJobs
 
     private readonly Dictionary<Guid, uint> _deadlineReported = [];
 
-    /// <summary>A world-thread search outside any deferrable plan ended at the deadline: reported (once a minute per bot) so the callers still to migrate are listed.</summary>
+    /// <summary>A world-thread search ended at the deadline: its capped answer stands and it is reported (once a minute per bot).</summary>
     internal void ReportSyncDeadline(string phase, Vector3 from, Vector3 to, long nodes)
     {
         if (t_player is not { IsInWorld: true } player) return;
@@ -705,6 +703,9 @@ internal sealed class PlayerbotPathJobs
         internal readonly List<Entry> Entries = [];
         internal uint LastAskMs;
 
+        /// <summary>Wall ms when the bot's current run of pending answers began (0 = not waiting); ended by an applied answer or an escalation.</summary>
+        internal long PendingSinceWallMs;
+
         internal int RetainedBytes
         {
             get
@@ -716,11 +717,11 @@ internal sealed class PlayerbotPathJobs
             }
         }
 
-        internal Entry? Find(PathOptions key, Vector3 to, int nodes)
+        internal Entry? Find(PathOptions key, Vector3 to, Vector3 from, int nodes)
         {
             foreach (Entry e in Entries)
             {
-                if (e.To == to && e.MaxNodes >= nodes - NodeTolerance && e.Key.Equals(key)) return e;
+                if (e.To == to && Vector3.DistanceSquared(e.Start, from) <= 1f && e.MaxNodes >= nodes - NodeTolerance && e.Key.Equals(key)) return e;
             }
 
             return null;
@@ -731,8 +732,8 @@ internal sealed class PlayerbotPathJobs
         internal void Remove(Entry entry) => Entries.Remove(entry);
     }
 
-    private sealed class Entry(NavJob job, PathOptions key, Vector3 to, Vector3 start, int maxNodes, Player player, Map map,
-        ISharedTiledPathSearch pathfinder, object? dataset, long submittedWallMs, long waitStartWallMs)
+    private sealed class Entry(NavJob job, PathOptions key, Vector3 to, Vector3 start, Vector3 botPosition, int maxNodes, Player player, Map map,
+        ISharedTiledPathSearch pathfinder, object? dataset, long submittedWallMs)
     {
         internal readonly NavJob Job = job;
         internal readonly PathOptions Key = key;
@@ -744,7 +745,7 @@ internal sealed class PlayerbotPathJobs
         internal readonly ISharedTiledPathSearch Pathfinder = pathfinder;
         internal readonly object? Dataset = dataset;
         internal readonly long SubmittedWallMs = submittedWallMs;
-        internal readonly long WaitStartWallMs = waitStartWallMs;
+        internal readonly Vector3 BotPosition = botPosition;
         internal int Failures;
         internal uint LastAskMs;
         internal bool LongWaitReported;

@@ -332,13 +332,7 @@ internal sealed class PlayerbotThinkProbe
         if (PathSearchCounters.DeadlineHits != deadlinesBefore)
         {
             t_lastCachedCapped = true;
-            if (PlayerbotPathJobs.InDeferrableScope)
-            {
-                // A plan that can wait asks again on a later think (with jobs on, as a job): the cut-short corridor is no verdict.
-                PlayerbotPathJobs.NoteDeadlinePending();
-                return new PathResult(PathType.TilesPending, [from]);
-            }
-
+            // No retry would do anything different (a job was not possible, or its wait was spent): the capped corridor stands as the answer.
             PlayerbotPathJobs.Bound?.ReportSyncDeadline(probe._phase, from, to, nodes);
         }
 
