@@ -75,9 +75,33 @@ public sealed class PopulationRushTests
             o.Population.RushBrakeWindowSeconds = 1;
             configure?.Invoke(o);
         }, dataStore: store);
-        // A rush started on a cold world halts at once ("waiting for the placement safety data"); these tests are about a warm one.
-        await world.Feature.WarmNowAsync();
         return world;
+    }
+
+    [Fact]
+    public async Task Rush_StartedOnAColdWorld_WaitsForThePlacementSafetyData_InsteadOfHalting_AndThenCompletes()
+    {
+        await using PopulationTestHost world = await StartAsync();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        world.Feature.Provisioner.WarmGate = _ => gate.Task; // the facts build is held open: the world is cold
+
+        Assert.Null(world.Feature.StartRush(2, 50));
+        PopulationRushStatus held = await WaitRushAsync(world, _ => world.Feature.PassesStarted >= 3, "passes to run against the cold world");
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(20);
+            held = world.Feature.RushStatus;
+            Assert.NotEqual("halted", held.State);
+        }
+
+        Assert.Equal("running", held.State);
+        Assert.Equal(0, held.Created);
+        Assert.Empty(world.Members.Snapshot);
+
+        gate.SetResult();
+        PopulationRushStatus done = await WaitRushAsync(world, r => r.State != "running", "the rush to finish once the data is ready");
+        Assert.Equal(("done", 2), (done.State, done.Created));
+        await world.WaitForSettledAsync(2);
     }
 
     private static async Task<PopulationRushStatus> WaitRushAsync(PopulationTestHost world, Func<PopulationRushStatus, bool> done, string what, int seconds = 20)

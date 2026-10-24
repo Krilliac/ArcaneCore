@@ -226,7 +226,9 @@ internal sealed class PopulationRush
                 return false;
             }
 
-            if (note is not null && note != PausedNote && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal))
+            // The placement safety data is built in the background on first need (also after a content, area or atlas reload): a hold, not a halt.
+            if (note is not null && note != PausedNote && !note.StartsWith("waiting for the graveyard", StringComparison.Ordinal)
+                && !note.StartsWith(PopulationProvisioner.WaitingReason, StringComparison.Ordinal))
             {
                 (_state, _reason, _endedMs) = ("halted", note, nowMs);
                 return true;
