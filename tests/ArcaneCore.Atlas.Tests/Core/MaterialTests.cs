@@ -55,6 +55,18 @@ public sealed class MaterialTests
     }
 
     [Fact]
+    public void JsonRoundTrip_KeepsFlagBitsAtOrAboveBit31()
+    {
+        var material = new Material("generic", BlendMode.Opaque, (MaterialFlags)0x8000_0201u, []);
+
+        JsonObject json = material.ToJson();
+        Material back = Material.FromJson(json);
+
+        Assert.Equal(0x8000_0201L, json["flags"]!.GetValue<long>());
+        Assert.Equal(material.Flags, back.Flags);
+    }
+
+    [Fact]
     public void JsonRoundTrip_KeepsEveryField()
     {
         Material original = GeometryV2Fixtures.Alpha();

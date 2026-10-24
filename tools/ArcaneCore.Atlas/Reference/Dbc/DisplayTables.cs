@@ -1,7 +1,6 @@
 using ArcaneCore.Atlas.Core;
-using ArcaneCore.Atlas.Reference.Dbc;
 
-namespace ArcaneCore.Atlas.Reference.Display;
+namespace ArcaneCore.Atlas.Reference.Dbc;
 
 /// <summary>
 /// The display-related DBC tables of the 1.12.1.5875 client, parsed once. A table the client does not have is tolerated (it is

@@ -69,6 +69,7 @@ public sealed class ModelPackageCache : ICacheParticipant
     private readonly IClientFileSource _files;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, IModelPackageSource> _sources = new(StringComparer.Ordinal);
+    private bool _frozen;
     private readonly CostBoundedLazyCache<(string Key, int View), ModelPackage> _packages;
 
     public ModelPackageCache(IClientFileSource files, long budgetBytes = DefaultBudgetBytes)
@@ -86,11 +87,17 @@ public sealed class ModelPackageCache : ICacheParticipant
 
     /// <summary>Adds the source of another model kind (for example WMO).</summary>
     /// <exception cref="ArgumentException">The kind already has a source.</exception>
+    /// <exception cref="InvalidOperationException">The registry was frozen (all modules have registered).</exception>
     public void Register(IModelPackageSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
         lock (_gate)
         {
+            if (_frozen)
+            {
+                throw new InvalidOperationException("The model package sources are frozen; register them while the modules register.");
+            }
+
             if (!_sources.TryAdd(source.Kind, source))
             {
                 throw new ArgumentException($"Model kind '{source.Kind}' already has a package source.");
@@ -99,6 +106,15 @@ public sealed class ModelPackageCache : ICacheParticipant
     }
 
     public void Clear() => _packages.Clear();
+
+    /// <summary>Refuses further <see cref="Register"/> calls; the host calls it once every module has registered.</summary>
+    public void Freeze()
+    {
+        lock (_gate)
+        {
+            _frozen = true;
+        }
+    }
 
     /// <summary>
     /// The package of a model given as <c>m2:&lt;path&gt;</c> or a bare archive path. Only <c>.m2</c> (and the <c>.mdx</c>/<c>.mdl</c>
@@ -165,16 +181,17 @@ public sealed class ModelPackageCache : ICacheParticipant
         }
 
         IModelPackageSource? source;
+        string supported;
         lock (_gate)
         {
             source = kind is not null
                 ? _sources.GetValueOrDefault(kind)
                 : _sources.Values.FirstOrDefault(s => s.Accepts(path));
+            supported = string.Join(", ", _sources.Keys.Order(StringComparer.Ordinal));
         }
 
         if (source is null || !source.Accepts(path))
         {
-            string supported = string.Join(", ", _sources.Keys.Order(StringComparer.Ordinal));
             throw new ModelPackageException(ModelPackageException.BadArguments, $"{path} is not a model this build packages (supported kinds: {supported}).");
         }
 

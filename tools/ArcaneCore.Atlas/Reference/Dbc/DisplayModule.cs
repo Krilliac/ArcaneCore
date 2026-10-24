@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
 
-namespace ArcaneCore.Atlas.Reference.Display;
+namespace ArcaneCore.Atlas.Reference.Dbc;
 
 /// <summary>The <c>display.resolve</c> command: creature, game object, item or race display to model path, textures and the data the chain carries.</summary>
 public sealed class DisplayModule : IAtlasModule

@@ -1,7 +1,6 @@
 using ArcaneCore.Atlas.Core;
-using ArcaneCore.Atlas.Reference.Dbc;
 
-namespace ArcaneCore.Atlas.Reference.Display;
+namespace ArcaneCore.Atlas.Reference.Dbc;
 
 /// <summary>
 /// The CreatureDisplayInfoExtra row of a humanoid creature display (columns measured on build 5875: [1] race, [2] sex, [3] skin,

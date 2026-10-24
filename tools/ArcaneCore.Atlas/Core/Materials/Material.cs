@@ -97,7 +97,7 @@ public sealed record Material(
         {
             ["kind"] = Kind,
             ["blend"] = (int)Blend,
-            ["flags"] = (int)(uint)Flags,
+            ["flags"] = (long)(uint)Flags,
             ["textures"] = textures,
             ["alphaRef"] = AlphaRef,
         };

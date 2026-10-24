@@ -2,7 +2,6 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Reference.Dbc;
-using ArcaneCore.Atlas.Reference.Display;
 using ArcaneCore.Atlas.Tests.Host;
 using ArcaneCore.Atlas.Tests.Reference.Mpq;
 using Xunit;

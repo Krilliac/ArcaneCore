@@ -92,6 +92,29 @@ public sealed class ModelPackageTests
     }
 
     [Fact]
+    public void TheSourceRegistry_RefusesNewKinds_OnceFrozen()
+    {
+        var cache = new ModelPackageCache(new MemoryClientFiles());
+        cache.Register(new NoSource("wmo"));
+
+        cache.Freeze();
+
+        Assert.Throws<InvalidOperationException>(() => cache.Register(new NoSource("other")));
+        ModelPackageException refused = Assert.Throws<ModelPackageException>(() => cache.Locate("nothing.txt"));
+        Assert.Contains("m2, wmo", refused.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class NoSource(string kind) : IModelPackageSource
+    {
+        public string Kind { get; } = kind;
+
+        public bool Accepts(string path) => false;
+
+        public ModelPackage Build(IClientFileSource files, string canonicalPath, int view, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task SubmeshRanges_AddressTheChunksOwnTriangles_IncludingCopiesAndSkippedTriangles()
     {
         // Submesh 0 holds one valid and one invalid triangle (index 9 is outside the lookup) and is drawn by two units; submesh 1

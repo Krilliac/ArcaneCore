@@ -3,7 +3,7 @@ using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Host.Cli;
 using ArcaneCore.Atlas.Reference.Client.Models;
-using ArcaneCore.Atlas.Reference.Display;
+using ArcaneCore.Atlas.Reference.Dbc;
 using ArcaneCore.Atlas.Textures;
 using Xunit;
 

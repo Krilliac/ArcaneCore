@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
-using ArcaneCore.Atlas.Reference.Display;
+using ArcaneCore.Atlas.Reference.Dbc;
 using ArcaneCore.Atlas.Render;
 
 namespace ArcaneCore.Atlas.Reference.Client.Models;
@@ -27,13 +27,14 @@ public sealed class ModelPackagesModule : IAtlasModule
         {
             context.Services.Add(cache);
             context.CacheParticipants.Add(cache);
+            context.OnComposed(cache.Freeze);
         }
 
         context.BinaryEndpoints.Add(new ModelEndpoint(cache));
         var handlers = new Handlers(context.Services, files, cache);
         context.Commands.Register(new CommandDefinition(
             "model.info",
-            "Describes a client M2 model: version, vertex count, bounds, every view (triangles, submeshes, texture units), every texture entry (type, flags, path, whether the file exists) and the submesh ids. Give path, or kind and id to go through the display DBCs.",
+            "Describes a client M2 model for packaging: version, vertex count, bounds, every view (triangles, submeshes, texture units), every texture entry (type, flags, path, whether the file exists) and the submesh ids. Give path, or kind and id to go through the display DBCs. ref.model.info describes the same file for collision (WMO groups, doodad sets, bounding hull).",
             [
                 new CommandArg("path", ArgType.String, "In-archive path of an .m2 (or .mdx) model, for example Creature\\Wolf\\Wolf.m2."),
                 new CommandArg("kind", ArgType.String, "creature or gameobject; with id, resolves the model through the display DBCs.", Choices: ["creature", "gameobject"]),
