@@ -86,7 +86,7 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
             extraServices: services => services.AddSingleton<IPlayerbotTradeRecordStore>(store));
         var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
-        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Deletedledger", 1, 1)).BotId);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Goneledger", 1, 1)).BotId);
         Guid kept = Assert.IsType<Guid>((await feature.CreateAsync("Keptledger", 1, 1)).BotId);
         int goneCharacter = (await owners.FindAsync(gone))!.CharacterId, keptCharacter = (await owners.FindAsync(kept))!.CharacterId;
         PlayerbotTradeLedger ledger = Assert.IsType<PlayerbotTradeLedger>(feature.Social.Ledger);

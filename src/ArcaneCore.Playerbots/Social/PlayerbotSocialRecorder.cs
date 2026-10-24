@@ -65,8 +65,23 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Guarded(() =>
         {
             Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction);
+            FeedLedger(botId, characterId, other.Value, e);
             Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
         });
+    }
+
+    // The events that belong in the trade ledger as well as in the memory. A gift's once-a-day rule is the ledger's: the caller that counts gifts asks it (NoteGiftReceived)
+    // before recording, and this stamp then finds the day already taken. A flake stays a memory event only.
+    private void FeedLedger(Guid botId, int characterId, ulong other, PlayerbotSocialEvent e)
+    {
+        if (Ledger is not { } ledger) return;
+        switch (e)
+        {
+            case PlayerbotSocialEvent.FairDeal: ledger.NoteFairDeal(botId, characterId, other); break;
+            case PlayerbotSocialEvent.TradeScam: ledger.NoteScam(botId, characterId, other); break;
+            case PlayerbotSocialEvent.NinjaLoot: ledger.NoteNinja(botId, characterId, other); break;
+            case PlayerbotSocialEvent.GiftReceived: ledger.NoteGiftReceived(botId, characterId, other); break;
+        }
     }
 
     /// <summary>Record <paramref name="e"/> for a bot whose id is already known (chat, the party AI).</summary>
@@ -76,6 +91,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Guarded(() =>
         {
             Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction);
+            FeedLedger(botId, (int)botGuid.Low, other.Value, e);
             Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
         });
     }

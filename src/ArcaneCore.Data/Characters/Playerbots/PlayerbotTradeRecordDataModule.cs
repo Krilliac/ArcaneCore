@@ -25,27 +25,62 @@ public sealed class PlayerbotTradeRecordDataModule : IDataModule, ICharacterData
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
     public int SchemaVersion => Version;
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
+    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [new CreateTableChange(Table)];
 
-    // TEST-AUTHOR STUB: the model, the table change, the store and the cleanup are the implementer's (P4 S2).
     public void ConfigureModel(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<PlayerbotTradeRecordRow>(entity =>
+        {
+            entity.ToTable(Table);
+            entity.HasKey(row => new { row.BotId, row.OtherGuid });
+            entity.Property(row => row.BotId).ValueGeneratedNever();
+            entity.Property(row => row.OtherGuid).ValueGeneratedNever();
+            entity.HasIndex(row => row.CharacterId);
+        });
     }
 
     public void AddServices(IServiceCollection services)
         => services.AddScoped<IPlayerbotTradeRecordStore, EfPlayerbotTradeRecordStore>();
 
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
-        => Task.CompletedTask;
+        => db.Set<PlayerbotTradeRecordRow>().Where(row => row.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken);
 }
 
 public sealed class EfPlayerbotTradeRecordStore(CharacterDbContext db) : IPlayerbotTradeRecordStore
 {
     internal CharacterDbContext Db => db;
 
-    public Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default)
-        => throw new NotImplementedException("P4 S2: load playerbot_trade_record");
+    public async Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default)
+        => (await db.Set<PlayerbotTradeRecordRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
+            .Select(row => new PlayerbotTradeRecord(row.BotId, row.CharacterId, row.OtherGuid, row.FairDeals, row.Scams,
+                row.LastScamUnixMs, row.LastNinjaUnixMs, row.LastGiftDay)).ToArray();
 
-    public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException("P4 S2: replace playerbot_trade_record rows");
+    public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (rows.Count > PlayerbotTradeRecord.MaxRowsPerBot
+            || rows.Any(row => row is null || row.BotId != botId || botId == Guid.Empty || row.CharacterId <= 0
+                || row.FairDeals < 0 || row.Scams < 0 || row.LastScamUnixMs < 0 || row.LastNinjaUnixMs < 0 || row.LastGiftDay < 0))
+            throw new ArgumentException("Invalid or unbounded playerbot trade record snapshot.", nameof(rows));
+        if (rows.Select(row => row.OtherGuid).Distinct().Count() != rows.Count)
+            throw new ArgumentException("Duplicate playerbot trade record targets.", nameof(rows));
+
+        // Same shape as the relation store: track the inserts first so the write lock covers only the delete and the inserts.
+        db.Set<PlayerbotTradeRecordRow>().AddRange(rows.Select(row => new PlayerbotTradeRecordRow
+        {
+            BotId = row.BotId, CharacterId = row.CharacterId, OtherGuid = row.OtherGuid, FairDeals = row.FairDeals, Scams = row.Scams,
+            LastScamUnixMs = row.LastScamUnixMs, LastNinjaUnixMs = row.LastNinjaUnixMs, LastGiftDay = row.LastGiftDay,
+        }));
+        db.ChangeTracker.DetectChanges();
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await db.Set<PlayerbotTradeRecordRow>().Where(row => row.BotId == botId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally { db.ChangeTracker.Clear(); }
+    }
 }

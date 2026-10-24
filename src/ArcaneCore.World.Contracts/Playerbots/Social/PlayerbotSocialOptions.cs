@@ -72,6 +72,8 @@ public sealed class PlayerbotSocialOptions
         Mood.Validate();
         if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
         Initiative.Validate();
+        if (Trading is null) throw new InvalidOperationException($"{section}:Trading is missing.");
+        Trading.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();
