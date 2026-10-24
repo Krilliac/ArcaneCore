@@ -129,6 +129,9 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>Whether this is the live server (null: read <see cref="WorldPacketToolsOptions.LiveServerVariable"/>); tests set it instead of the process environment.</summary>
     internal bool? LiveServer { get; init; }
 
+    /// <summary>The ring of this world's anomalies (docs/areas/atlas-insight.md): attached while the feed listens, null before and after. Not yet implemented.</summary>
+    internal MapFeedAnomalyRing? AnomalyRing { get; private set; }
+
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
 

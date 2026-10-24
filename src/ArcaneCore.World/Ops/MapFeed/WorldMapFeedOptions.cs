@@ -55,6 +55,14 @@ public sealed class WorldMapFeedOptions
     /// </summary>
     public int MaxConnections { get; set; } = 2;
 
+    /// <summary>
+    /// Whether the anomaly ring keeps notices that carry no owner identity (<c>AnomalyNotice.Origin</c> null). The ledger is process-wide,
+    /// and a notice with an owner is kept only when the owner is this world; a reporter that passes none cannot be told apart, so it
+    /// is kept only when this is true. Default true, because the daemon runs one world per process; tests that run several worlds in one
+    /// process set it false.
+    /// </summary>
+    public bool AnomaliesUnowned { get; set; } = true;
+
     /// <summary>Everything wrong with the values (empty when valid). Pure; any thread.</summary>
     public IReadOnlyList<string> Problems()
     {

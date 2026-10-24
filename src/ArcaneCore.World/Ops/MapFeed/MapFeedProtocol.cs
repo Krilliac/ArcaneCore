@@ -50,6 +50,12 @@ internal enum QueryKind : byte
     Height,
     Path,
     UnderMap,
+
+    /// <summary>Live insight: everything the server knows about one unit (docs/areas/atlas-insight.md).</summary>
+    Inspect,
+
+    /// <summary>Live insight: the anomalies the ledger reported for this world since a sequence number.</summary>
+    Anomalies,
 }
 
 /// <summary>A refusal: a stable machine code and a sentence for a person.</summary>
@@ -115,6 +121,15 @@ internal struct FeedRequest
 
     /// <summary>tap: the most payload bytes each packet line carries as hex.</summary>
     public int MaxBytes;
+
+    /// <summary>inspect: the object guid to describe.</summary>
+    public ulong InspectGuid;
+
+    /// <summary>anomalies: only notices with a sequence number above this are returned (0: from the oldest the ring holds).</summary>
+    public long Since;
+
+    /// <summary>anomalies: the most notices returned.</summary>
+    public int MaxResults;
 }
 
 /// <summary>
@@ -237,6 +252,21 @@ internal static class MapFeedProtocol
 
     /// <summary>The session's dispatcher stayed busy.</summary>
     public const string Busy = "busy";
+
+    /// <summary>The most notices one <c>anomalies</c> answer carries (the ring's capacity).</summary>
+    public const int MaxAnomalyResults = 4096;
+
+    /// <summary>The notices an <c>anomalies</c> query returns when it gives no <c>max</c>.</summary>
+    public const int DefaultAnomalyResults = 256;
+
+    /// <summary>The most threat entries an <c>inspect</c> answer lists.</summary>
+    public const int MaxInspectThreat = 10;
+
+    /// <summary>An <c>inspect</c> names no object this world holds on that map (nothing is loaded to look for it).</summary>
+    public const string NotFound = "not-found";
+
+    /// <summary>An <c>inspect</c> names an object that is not a unit (a game object has no level, health or auras).</summary>
+    public const string NotAUnit = "not-a-unit";
 
     /// <summary>The connection already has a tap.</summary>
     public const string TapBusy = "tap-busy";
