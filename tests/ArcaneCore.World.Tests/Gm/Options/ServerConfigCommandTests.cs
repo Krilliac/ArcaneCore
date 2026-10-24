@@ -18,8 +18,11 @@ public sealed class ServerConfigCommandTests
     private static async Task<string> RunAsync(WorldTestClient client, string line)
     {
         await SayAsync(client, line);
+        // Wait for the first reply line (a loaded machine can take longer than any quiet window to answer at all), then collect the rest.
+        var lines = new List<string> { (await client.ReadSystemChatAsync()).Text };
         var packets = await client.CollectAsync(TimeSpan.FromMilliseconds(600));
-        return string.Join('\n', packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload)).Where(m => m.Type == ChatType.System).Select(m => m.Text));
+        lines.AddRange(packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload)).Where(m => m.Type == ChatType.System).Select(m => m.Text));
+        return string.Join('\n', lines);
     }
 
     [Fact]
