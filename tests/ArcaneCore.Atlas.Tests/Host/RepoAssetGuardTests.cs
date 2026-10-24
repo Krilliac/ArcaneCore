@@ -10,7 +10,9 @@ namespace ArcaneCore.Atlas.Tests.Host;
 /// screenshots and fixtures included). This guard fails the build when a tracked file has a client-asset extension or starts with a
 /// client-asset magic. It lists files with <c>git ls-files</c> in a checkout and walks the directory in a source archive, and it
 /// proves itself: a planted BLP2 must be caught, and a listing of 1000 files or fewer fails, because a guard that scanned nothing
-/// would look exactly like a clean repository.
+/// would look exactly like a clean repository. Both modes must also sniff at least one binary file (the committed
+/// <c>Fixtures/sniff-probe.bin</c>, which is not a client asset), and the REVM check is stricter than the design (a bare REVM at the
+/// start, not REVM followed by DHOM/PGOM/RDHM).
 /// </summary>
 public sealed class RepoAssetGuardTests
 {
@@ -38,6 +40,19 @@ public sealed class RepoAssetGuardTests
         IReadOnlyList<string> files = ListFiles(root);
 
         Assert.True(files.Count > 1000, $"only {files.Count} files listed: the guard is not looking at the repository");
+        Assert.True(CountBinary(root, files) >= 1, "no binary file was sniffed: the guard is not reading file contents");
+        Assert.Empty(Violations(root, files));
+    }
+
+    [Fact]
+    public void TheSourceArchiveWalk_CoversTheRepository_AndSniffsBinaryFiles()
+    {
+        string root = RepositoryRoot();
+
+        string[] files = [.. Walk(root)];
+
+        Assert.True(files.Length > 1000, $"only {files.Length} files walked: the archive mode is not looking at the repository");
+        Assert.True(CountBinary(root, files) >= 1, "no binary file was sniffed in the archive walk");
         Assert.Empty(Violations(root, files));
     }
 
@@ -119,6 +134,63 @@ public sealed class RepoAssetGuardTests
         Assert.Equal(["tests/x.blp"], walked);
     }
 
+    [Fact]
+    public void TheWalk_SkipsTestResults()
+    {
+        using var directory = new TestDirectory();
+        directory.Write("TestResults\\run\\x.blp", []);
+        directory.Write("tests\\y.txt", "y"u8.ToArray());
+
+        Assert.Equal(["tests/y.txt"], Walk(directory.Path).ToArray());
+    }
+
+    [Fact]
+    public void TheBinaryCount_SeesANulInTheHead_AndAnImageExtension()
+    {
+        using var directory = new TestDirectory();
+        directory.Write("a.dat", [1, 2, 0, 3]);
+        directory.Write("b.png", [1, 2, 3]);
+        directory.Write("c.txt", "text"u8.ToArray());
+
+        Assert.Equal(2, CountBinary(directory.Path, Walk(directory.Path)));
+    }
+
+    private static readonly string[] BinaryExtensions = [".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".7z", ".gz", ".dll", ".exe"];
+
+    /// <summary>How many files are binary (an image or archive extension, or a NUL in the first 8 KiB): proof the guard read file contents.</summary>
+    private static int CountBinary(string root, IEnumerable<string> files)
+    {
+        int count = 0;
+        byte[] head = new byte[8192];
+        foreach (string relative in files)
+        {
+            string full = System.IO.Path.Combine(root, relative);
+            if (!File.Exists(full))
+            {
+                continue;
+            }
+
+            if (BinaryExtensions.Contains(System.IO.Path.GetExtension(relative), StringComparer.OrdinalIgnoreCase))
+            {
+                count++;
+                continue;
+            }
+
+            int read;
+            using (FileStream stream = File.OpenRead(full))
+            {
+                read = stream.Read(head, 0, head.Length);
+            }
+
+            if (head.AsSpan(0, read).IndexOf((byte)0) >= 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     private static IEnumerable<string> Violations(string root, IEnumerable<string> files)
     {
         foreach (string relative in files)
@@ -184,7 +256,7 @@ public sealed class RepoAssetGuardTests
 
     private static IEnumerable<string> Walk(string root)
     {
-        string[] skipped = ["bin", "obj", "node_modules", ".git"];
+        string[] skipped = ["bin", "obj", "node_modules", ".git", "TestResults"];
         foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             string relative = System.IO.Path.GetRelativePath(root, file).Replace('\\', '/');
