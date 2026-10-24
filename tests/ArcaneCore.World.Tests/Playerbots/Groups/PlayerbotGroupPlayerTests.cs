@@ -462,12 +462,12 @@ public sealed class PlayerbotGroupPlayerTests
         var mage = await world.AddBotAsync("Chatmage", Human, Mage, 10, [Fireball]);
         Assert.True(world.Options.Chat.Enabled);
         // Forming ends either with every member joined or with the group giving up (an invitation refused or unanswered, or a member not online,
-        // for InviteTimeoutMs of game time; it then disbands). The bots' acceptances are tick-driven (PlayerbotPartyAI.Intake every tick, answered
-        // through a synchronous managed action), so the manual clock cannot outrun them. What the old wait did was also pass for a group that had
-        // given up ("state is not Forming"), and the test then failed later on the member count with no reason. Wait for the group that completed
-        // instead, so a group that gave up fails with the trace and the coordinator's events. Game time stays paced against real time, as in
-        // production, so work outside the world thread is not outrun by the game-time windows.
-        Assert.True(await world.RunUntilPacedAsync(() => world.Coordinator.Groups.Any(g => g.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding) && g.Members.All(m => m.Joined)), 120_000), await world.TraceAsync());
+        // for InviteTimeoutMs of game time; it then disbands). The bots' acceptances are game-time driven (PlayerbotPartyAI.Intake runs once per
+        // think interval of game time for an ungrouped invitee, and the answer goes through a synchronous managed action), so the manual clock
+        // cannot outrun them. A group that gave up would have passed the old wait ("state is not Forming") and failed later on the member count
+        // without a reason (hypothesis: the failing run was not reproduced). Wait for the group that completed instead, so a group that gave up
+        // fails with the trace and the coordinator's events. Why a 3-bot group would give up is still unknown.
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding) && g.Members.All(m => m.Joined))), await world.TraceAsync());
         Assert.Equal(3, await world.OnWorldAsync(() => world.GroupManager.GetGroup(world.Player(tank.Id).Guid)?.MemberCount ?? 0));
         Assert.DoesNotContain(await world.OnWorldAsync(() => world.Coordinator.Events.ToArray()), e => e.Contains("gave up") || e.Contains("did not join"));
 
