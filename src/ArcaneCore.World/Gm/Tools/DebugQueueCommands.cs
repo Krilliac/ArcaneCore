@@ -191,7 +191,7 @@ public sealed class DebugQueueCommands : ICommandExtension
 
         AnomalySnapshot? slowThink = AnomalyLedger.Shared.Find("bot-brain/think-slow");
         long slowCount = slowThink?.Count ?? 0;
-        int slowSubjects = slowThink?.DistinctSubjects ?? 0;
+        string slowSubjects = slowThink?.SubjectsCountText ?? "0";
 
         context.Reply(string.Create(C,
             $"Playerbot think: {running} running ({loggedIn} logged in, {snapshot.Count} registered), split-brain {(splitBrain ? "YES" : "no")}, feature tick {featureCost}"));

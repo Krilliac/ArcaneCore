@@ -128,7 +128,7 @@ public sealed partial class WorldSession
             return InjectVerdict.NoHandler;
         }
 
-        if (handler.World is null && _managed)
+        if (handler.World is null && _managed && !handler.Stripped)
         {
             return InjectVerdict.NotInjectable;
         }

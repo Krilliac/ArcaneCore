@@ -18,7 +18,8 @@ public sealed class OpcodeReferenceTests
         OpcodeTable table = WorldServiceCollectionExtensions.BuildOpcodeTable();
         Assert.Equal("handled", Status(WorldOpcode.CmsgPing, table));
         Assert.Equal("handled", Status(WorldOpcode.CmsgAuthSession, table));
-        Assert.Equal("unhandled", Status(WorldOpcode.CmsgBootme, table));
+        Assert.Equal("dropped (dev)", Status(WorldOpcode.CmsgBootme, table));
+        Assert.Equal("unhandled", Status(WorldOpcode.CmsgNewSpellSlot, table));
         Assert.Equal("handled", Status(WorldOpcode.MsgMoveWorldportAck, table));
     }
 
@@ -46,7 +47,7 @@ public sealed class OpcodeReferenceTests
         var builder = new StringBuilder();
         builder.AppendLine("# World opcode coverage (build 5875)").AppendLine();
         builder.AppendLine("Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-oracle histogram](../integration/wire-oracle-histogram-20261008.tsv). Regenerate with `ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`.").AppendLine();
-        builder.AppendLine("`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.").AppendLine();
+        builder.AppendLine("`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `dropped (dev)` means a stripped developer, GM, cheat or debug opcode that the release client never sends: it is registered as a stripped entry (`StrippedDevOpcodes`), dropped unread with no reply, flagged `packet/dev-opcode` for a player (audited for staff) and kept out of the unhandled-opcode counters. `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.").AppendLine();
         builder.AppendLine("| Opcode | ID | CMSG status | SMSG emitted | Oracle |").AppendLine("| --- | ---: | --- | ---: | --- |");
         foreach (WorldOpcode opcode in Enum.GetValues<WorldOpcode>().OrderBy(o => (ushort)o))
         {
@@ -66,5 +67,6 @@ public sealed class OpcodeReferenceTests
     }
 
     private static string Status(WorldOpcode opcode, OpcodeTable table) =>
-        opcode is WorldOpcode.CmsgPing or WorldOpcode.CmsgAuthSession || table.TryGet(opcode, out _) ? "handled" : "unhandled";
+        opcode is WorldOpcode.CmsgPing or WorldOpcode.CmsgAuthSession ? "handled"
+            : table.TryGet(opcode, out OpcodeHandler? handler) ? (handler.Stripped ? "dropped (dev)" : "handled") : "unhandled";
 }
