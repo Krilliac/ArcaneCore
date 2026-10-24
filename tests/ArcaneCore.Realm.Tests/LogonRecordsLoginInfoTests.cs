@@ -5,12 +5,19 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Data;
+using ArcaneCore.Data.Auth;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.Realm.Tests;
@@ -147,9 +154,10 @@ public sealed class LogonRecordsLoginInfoTests
     {
         var accounts = new InMemoryAccountStore();
         byte[] salt = await SeedAsync(accounts);
-        var cancelling = new CancellingLoginInfoStore();
+        using var shutdown = new CancellationTokenSource();
+        var cancelling = new CancellingLoginInfoStore(shutdown);
 
-        await using NetworkStream client = await StartSessionAsync(accounts, cancelling);
+        await using NetworkStream client = await StartSessionAsync(accounts, cancelling, sessionToken: shutdown.Token);
         await client.WriteAsync(BuildChallenge(Username));
         (_, byte[] b, _) = await ReadChallengeAsync(client);
         await client.WriteAsync(BuildProof(ComputeClient(salt, b)));
@@ -160,6 +168,109 @@ public sealed class LogonRecordsLoginInfoTests
         int read = await client.ReadAsync(buffer, timeout.Token);
         Assert.Equal(0, read);
         Assert.Equal(1, cancelling.Calls);
+    }
+
+    [Fact]
+    public async Task StoreTimeoutSurfacingAsCancellation_WhileTheSessionIsLive_StillLetsTheLogonSucceed()
+    {
+        var accounts = new InMemoryAccountStore();
+        byte[] salt = await SeedAsync(accounts);
+        var timingOut = new TimingOutLoginInfoStore();
+
+        await using NetworkStream client = await StartSessionAsync(accounts, timingOut);
+        Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt));
+        Assert.Equal(1, timingOut.Calls);
+    }
+
+    [Fact]
+    public async Task LogonServer_ComposedAsProgramComposesIt_RecordsTheLoginInfoThroughTheGuardedStore()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-logininfo-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string file = Path.Combine(directory, "auth.db");
+        try
+        {
+            IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Database:Provider"] = "Sqlite",
+                ["Database:ConnectionString"] = $"Data Source={file}",
+            }).Build();
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddAuthDatabase(config);
+            services.AddRealmResilience(config);
+            await using ServiceProvider provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<AuthDbInitializer>().InitializeAsync();
+
+            byte[] salt = WowSrp6.GenerateSalt();
+            await using (AsyncServiceScope scope = provider.CreateAsyncScope())
+            {
+                Assert.Equal("GuardedAccountLoginInfoStore", scope.ServiceProvider.GetRequiredService<IAccountLoginInfoStore>().GetType().Name);
+                await scope.ServiceProvider.GetRequiredService<IAccountStore>().CreateAsync(new Account
+                {
+                    Username = Username,
+                    Salt = salt,
+                    Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+                });
+            }
+
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            var options = new AuthOptions { BindAddress = "127.0.0.1", Port = port, MaxSessionDurationSeconds = 0 };
+            var server = new LogonServer(
+                provider.GetRequiredService<IServiceScopeFactory>(), Options.Create(options),
+                provider.GetRequiredService<ILoggerFactory>(), provider.GetRequiredService<ILogger<LogonServer>>());
+            await server.StartAsync(CancellationToken.None);
+            try
+            {
+                using var tcp = new TcpClient();
+                await tcp.ConnectAsync(IPAddress.Loopback, port);
+                NetworkStream client = tcp.GetStream();
+                Assert.Equal((byte)AuthResult.Success, await LogOnAsync(client, salt).WaitAsync(TimeSpan.FromSeconds(30)));
+            }
+            finally
+            {
+                await server.StopAsync(CancellationToken.None);
+            }
+
+            await using AsyncServiceScope check = provider.CreateAsyncScope();
+            AccountLoginInfo? info = await check.ServiceProvider.GetRequiredService<IAccountLoginInfoStore>().GetLoginInfoAsync(Username);
+            Assert.NotNull(info);
+            Assert.Equal("Win", info!.Os);
+            Assert.Equal("x86", info.Platform);
+            Assert.Equal("enUS", info.Locale);
+            Assert.Equal(ClientBuild.Vanilla1121, info.Build);
+            Assert.NotNull(info.LastLoginUtc);
+        }
+        finally
+        {
+            using (var own = new SqliteConnection($"Data Source={file}")) SqliteConnection.ClearPool(own);
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 100)
+                {
+                    await Task.Delay(100);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void ClientTags_KeepOnlyPrintableAscii()
+    {
+        byte[] packet = BuildChallenge(Username);
+        byte[] body = packet[4..]; // command, error, u16 size
+        "\0\u0001iW"u8.CopyTo(body.AsSpan(13, 4)); // os tag with a leading NUL and a control byte, reversed on the wire
+        Assert.True(LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request));
+        Assert.Equal("Wi", request!.Os);
+        Assert.Equal("x86", request.Platform);
     }
 
     private static async Task<byte[]> SeedAsync(InMemoryAccountStore accounts)
@@ -185,7 +296,8 @@ public sealed class LogonRecordsLoginInfoTests
     }
 
     private static async Task<NetworkStream> StartSessionAsync(
-        IAccountStore accounts, IAccountLoginInfoStore? loginInfo, bool autocreate = false, TimeProvider? time = null)
+        IAccountStore accounts, IAccountLoginInfoStore? loginInfo, bool autocreate = false, TimeProvider? time = null,
+        CancellationToken sessionToken = default)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -199,7 +311,7 @@ public sealed class LogonRecordsLoginInfoTests
             var session = new LogonSession(
                 stream, accounts, new InMemoryRealmStore([]), new AuthOptions { AutocreateAccounts = autocreate },
                 NullLogger.Instance, "test", timeProvider: time, loginInfoStore: loginInfo);
-            await session.RunAsync(CancellationToken.None);
+            await session.RunAsync(sessionToken);
         });
 
         var client = new TcpClient();
@@ -290,7 +402,7 @@ public sealed class LogonRecordsLoginInfoTests
         public override DateTimeOffset GetUtcNow() => _now;
     }
 
-    private sealed class CancellingLoginInfoStore : IAccountLoginInfoStore
+    private sealed class CancellingLoginInfoStore(CancellationTokenSource shutdown) : IAccountLoginInfoStore
     {
         private int _calls;
         public int Calls => Volatile.Read(ref _calls);
@@ -298,7 +410,8 @@ public sealed class LogonRecordsLoginInfoTests
         public Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _calls);
-            throw new OperationCanceledException("shutdown");
+            shutdown.Cancel();
+            throw new OperationCanceledException("shutdown", shutdown.Token);
         }
 
         public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
@@ -306,6 +419,22 @@ public sealed class LogonRecordsLoginInfoTests
     }
 
     private sealed record ClientProof(byte[] PublicKey, byte[] Proof);
+
+    private sealed class TimingOutLoginInfoStore : IAccountLoginInfoStore
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _calls);
+            // The session token is not cancelled: this is a command timeout, not a shutdown.
+            throw new TaskCanceledException("command timeout");
+        }
+
+        public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+            => Task.FromResult<AccountLoginInfo?>(null);
+    }
 
     private sealed class ThrowingLoginInfoStore : IAccountLoginInfoStore
     {

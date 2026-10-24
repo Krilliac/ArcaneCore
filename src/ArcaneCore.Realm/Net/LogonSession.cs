@@ -780,8 +780,9 @@ public sealed class LogonSession(
                 new AccountLoginInfo(_time.GetUtcNow().UtcDateTime, os, platform, locale, build),
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
+            // A provider or command timeout can surface as an OperationCanceledException while the session is still live.
             logger.LogWarning(ex, "[{Endpoint}] could not record the login info of '{Account}'", remoteEndpoint, LogSafe.Escape(username));
         }
     }
