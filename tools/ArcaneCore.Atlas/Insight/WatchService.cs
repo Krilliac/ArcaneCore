@@ -72,7 +72,7 @@ internal sealed class WatchService : IDisposable
     {
         registry.Register(new CommandDefinition(
             "insight.watch",
-            $"Re-run live commands on every live frame (at most {MaxHz:0} times a second) so their overlays follow the world. start takes commands: each is a command name optionally followed by a JSON object of its arguments, for example 'live.highlight {{\"hpBelow\":30}}'; only {string.Join(", ", Watchable)} can be watched. Watched results are capped (1,500 rows, under 16,000 JSON nodes) and say so with truncated and total. list shows the watches; stop ends one by id, or all.",
+            $"Re-run live commands on every live frame (at most {MaxHz:0} times a second) so their overlays follow the world. start takes commands: each is a command name optionally followed by a JSON object of its arguments, for example 'live.highlight {{\"hpBelow\":30}}'; only {string.Join(", ", Watchable)} can be watched. Watched results are capped (1,500 rows, at most 15,000 JSON nodes) and say so with truncated and total. list shows the watches; stop ends one by id, or all.",
             [
                 new CommandArg("action", ArgType.String, "start, stop or list.", Required: true, Choices: ["start", "stop", "list"]),
                 new CommandArg("commands", ArgType.StringList, $"For start: 1 to {MaxCommands} commands, each 'name' or 'name {{json arguments}}'."),

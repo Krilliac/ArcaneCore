@@ -208,6 +208,8 @@ internal sealed class InsightHub : IDisposable
             return;
         }
 
+        // Cost: every frame is parsed here on the publisher thread into the always-on tail, so the deaths heatmap and live.highlight have history
+        // and a current frame without a prior opt-in. It is bounded (TailBytes, TailAge) and eviction is O(1).
         Tail.AddJson(data, out _);
         InsightRecorder? record;
         lock (_gate)
@@ -231,7 +233,7 @@ internal static class InsightArgs
 
     /// <summary>
     /// JSON nodes a watched result may use. The host replaces event data over 20,000 nodes with a placeholder and the overlay then silently
-    /// disappears, so results stay 25 % under it.
+    /// disappears, so results stay at 15,000 (a quarter below it).
     /// </summary>
     public const int NodeBudget = 15_000;
 

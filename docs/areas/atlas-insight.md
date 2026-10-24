@@ -39,9 +39,12 @@ The subject forms that resolve to a guid:
 | Subject | Guid |
 |---|---|
 | `creature [entry ]E spawn S` / `gameobject [entry ]E spawn S` | `ObjectGuid.WithEntry(High, E, S)`; the creature reporters write the `entry ` form (`CreatureAnomalies.Subject`) |
-| `bot|player NAME (guid G)` | `ObjectGuid.Player(G)` |
+| `bot NAME (guid H)` | `ObjectGuid.Player(H)`, H in hex (`PlayerbotAnomalies.SubjectOf`, `PlayerbotGroupAnomalies.ReportNamed`) |
+| `player NAME (guid D)` | `ObjectGuid.Player(D)`, D in decimal (`ServerAnomalies.SubjectOf`, `MapCombat.SubjectOf`, the falling, under-map, flag, instance and loot observers); `SpellSystem.FormatUnitSubject` writes the player counter, which equals the decimal low part |
 
-Any other subject has no position.
+Reporter forms with no position: `creature E (guid C)` and `creature entry E (guid C)` (`SpellSystem`, `ShipTransport`; they name an entry
+and a counter, not a spawn), `unit ...`, `spell N`, `instance ...` and every free-text subject. The two player forms differ only in
+the prefix, so a new reporter must write `bot` with a hex guid or `player` with a decimal one.
 
 ### The ring
 
@@ -76,9 +79,10 @@ describe what that page held, not the whole history.
 `live.record` keeps live frames in a bounded ring: a byte budget (default 256 MB, at most 1,024) and an age bound on the recording
 clock (default 15 minutes, at most 120); the oldest frames go first. Changing the size while recording keeps what was recorded.
 Stopping keeps the recording for replay. A 16 MB tail of recent frames is always kept (it feeds `deaths` and `combat` heatmaps
-when nothing was recorded).
+when nothing was recorded). The tail is filled on the feed reader thread for every frame (one parse of the frame, bounded by its
+size and a 30 second age); it is not lazy because `deaths` needs the frames from before the first call.
 
-What replays: positions (interpolated between recorded frames), hp, kind, motion flags and the display id `d`. What does not
+What replays: positions (interpolated between recorded frames), hp, kind, the combat flag, the motion generator type (`mt`, interned; the rev-2 `mf` movement flags field is not recorded) and the display id `d`. What does not
 replay: spline paths, routes, targets and animation state. While a replay is on, the UI ignores live frames and shows a "replay"
 badge. Playback speed is above 0 and at most 60.
 
