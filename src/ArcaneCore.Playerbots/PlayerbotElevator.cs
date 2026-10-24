@@ -704,6 +704,7 @@ internal static class PlayerbotElevator
             NextPlanMs = session.World.NowMs,
             StartPosition = new Vector3(player.X, player.Y, player.Z),
         };
+        if (Trips.TryGetValue(player, out ElevatorTrip? replaced)) replaced.Route = null;
         Trips.AddOrUpdate(player, trip);
         PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return trip;
@@ -1014,6 +1015,7 @@ internal static class PlayerbotElevator
             LastBeatMs = now,
             StartPosition = at,
         };
+        if (Trips.TryGetValue(player, out ElevatorTrip? replaced)) replaced.Route = null;
         Trips.AddOrUpdate(player, trip);
         PlayerbotMotion.Of(player).ElevatorTrip = trip;
         return true;
@@ -1861,6 +1863,7 @@ internal static class PlayerbotElevator
     private static ElevatorStep Fail(ElevatorTrip trip, string why)
     {
         trip.Failure ??= why;
+        trip.Route = null;
         return ElevatorStep.Failed;
     }
 

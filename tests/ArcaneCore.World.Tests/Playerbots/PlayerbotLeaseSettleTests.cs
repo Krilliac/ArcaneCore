@@ -470,63 +470,79 @@ public sealed class PlayerbotLeaseSettleTests
 
     // --- the time bound ------------------------------------------------------------------------------------------------------
 
+    private static uint BoundOf(Player bot)
+    {
+        Assert.True(PlayerbotMotion.TryGetState(bot, out PlayerbotMotion.MotionState? state));
+        return (uint)PlayerbotMotion.SettleBoundMs(state!);
+    }
+
+    private static bool RenewedNow(WorldSession session, Player bot)
+    {
+        Assert.True(PlayerbotMotion.TryGetState(bot, out PlayerbotMotion.MotionState? state));
+        return state!.RenewedMs == session.World.NowMs;
+    }
+
     /// <summary>
     /// Test 5. A route that nobody follows and nobody releases (an owner whose slot never lets go) is renewed by the settle only while less
-    /// than its lease has passed since its last Follow, then left to die: a route nobody re-asserts lives about two leases. A gate-only settle
-    /// half a lease after the Follow is renewed; one more than half a lease later (past the lease measured from the Follow) is not, and the
-    /// walk has run out half a lease and 200 ms after that. Fails with the bound removed (the second settle renews and the bot walks on).
+    /// than <see cref="PlayerbotMotion.SettleBoundMs"/> (its lease plus two think gaps) has passed since its last Follow, then left to die. A
+    /// gate-only settle half the bound after the Follow is renewed; one more than half the bound later is not, and the walk has run out of
+    /// lease by the time it is checked. Fails with the bound removed (the second settle renews and the bot walks on).
     /// </summary>
     [Fact]
-    public Task TheSettleRenewsAnUnfollowedRouteOnlyWhileLessThanItsLeaseHasPassedSinceTheLastFollow() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
+    public Task TheSettleRenewsAnUnfollowedRouteOnlyWhileLessThanItsBoundHasPassedSinceTheLastFollow() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
     {
         Player bot = rig.BotPlayer;
         PlayerbotRoute route = StartFollowWalk(rig, 90f);
         uint lease = PlayerbotMotion.LeaseMsOf(bot);
         Assert.InRange(lease, 2000u, 8000u);
+        uint bound = BoundOf(bot);
+        Assert.True(bound >= lease);
         uint gate = Gate(rig.Options);
 
-        // Inside the lease measured from the Follow: renewed.
-        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        // Inside the bound measured from the Follow: renewed.
+        PlayerbotMotion.ElapseForTests(bot, bound / 2);
         uint renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
         Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot));
         Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // nothing is released: never stops the bot itself
         Assert.True(PlayerbotMotion.IsActive(bot));
+        Assert.True(RenewedNow(rig.Bot, bot));
 
-        // Past it: not renewed, so the walk is past the lease of the first settle's renewal by the time it is checked.
-        PlayerbotMotion.ElapseForTests(bot, lease / 2 + 100);
+        // Past it: not renewed, so the walk is past the lease of the first settle's renewal once that much more time has passed.
+        PlayerbotMotion.ElapseForTests(bot, bound / 2 + 100);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
         Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
         Assert.False(route.Released);
-        Assert.False(WalksAfter(rig.Bot, lease / 2 + 200), "a settle renewed a route that had gone a whole lease without a Follow");
+        Assert.False(RenewedNow(rig.Bot, bot), "a settle renewed a route that had gone its whole bound without a Follow");
+        uint lease2 = PlayerbotMotion.LeaseMsOf(bot);
+        Assert.False(WalksAfter(rig.Bot, lease2 + 100), "the unrenewed route outlived its lease");
         Assert.False(PlayerbotMotion.IsActive(bot));
         return true;
     }));
 
     /// <summary>
-    /// Test 5b. A Follow (a decided think that re-asserts the route) starts the bound over: after one, a settle half a lease later
-    /// renews again and the walk is alive past the lease measured from the old Follow. Fails when Follow does not record its time (the settle then
-    /// measures from the first Follow, refuses, and the walk has run out of lease).
+    /// Test 5b. A Follow (a decided think that re-asserts the route) starts the bound over: after one, a settle half the bound later
+    /// renews again. Fails when Follow does not record its time (the settle then measures from the first Follow and refuses).
     /// </summary>
     [Fact]
     public Task AFollowStartsTheTimeBoundOver_SoTheNextSettleRenewsAgain() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
     {
         Player bot = rig.BotPlayer;
         PlayerbotRoute route = StartFollowWalk(rig, 90f);
-        uint lease = PlayerbotMotion.LeaseMsOf(bot);
-        Assert.InRange(lease, 2000u, 8000u);
+        uint bound = BoundOf(bot);
         uint gate = Gate(rig.Options);
 
-        // Let the bound pass: a settle past the lease since the Follow does not renew.
-        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        // Let the bound pass: a settle past the bound since the Follow does not renew.
+        PlayerbotMotion.ElapseForTests(bot, bound / 2);
         uint renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
         Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
-        PlayerbotMotion.ElapseForTests(bot, lease / 2 + 100);
+        PlayerbotMotion.ElapseForTests(bot, bound / 2 + 100);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
-        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // past the lease since the Follow: not renewed
+        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
+        Assert.False(RenewedNow(rig.Bot, bot), "the settle renewed past the bound");
 
         // One decided think re-asserts the route through Follow (the leader has not moved: the same route).
         uint followed = PlayerbotMotion.RenewalsOf(bot);
@@ -534,12 +550,43 @@ public sealed class PlayerbotLeaseSettleTests
         Assert.NotEqual(followed, PlayerbotMotion.RenewalsOf(bot));
         Assert.Same(route, PlayerbotMotion.RouteOf(bot));
 
-        PlayerbotMotion.ElapseForTests(bot, lease / 2);
+        PlayerbotMotion.ElapseForTests(bot, BoundOf(bot) / 2);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
         Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
-        Assert.True(WalksAfter(rig.Bot, lease / 2 + 200), "the time bound was not started over by a Follow");
+        Assert.True(RenewedNow(rig.Bot, bot), "the time bound was not started over by a Follow");
         Assert.Same(route, PlayerbotMotion.RouteOf(bot));
+        return true;
+    }));
+
+    /// <summary>
+    /// Test 5c. Under a heavy rotation (think gap 8 s) the bound is the lease plus two gaps: two unfollowed keep-thinks in a row (two instant
+    /// buffs, one gap and a half apart each) both renew, and a third past the bound does not. Fails with the bound at one lease (the second
+    /// settle, about 21 s after the Follow, is refused) and with no bound (the third renews).
+    /// </summary>
+    [Fact]
+    public Task WithALargeThinkGap_TwoUnfollowedSettlesInARowRenew_AndAThirdPastTheBoundDoesNot() => RunGroup(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        PlayerbotRoute route = StartFollowWalk(rig, 90f);
+        PlayerbotMotion.NoteThinkGap(bot, 8000);
+        uint lease = PlayerbotMotion.LeaseMsOf(bot);
+        uint bound = BoundOf(bot);
+        Assert.Equal(lease + 16_000u, bound);
+        uint gate = Gate(rig.Options);
+        uint step = (bound / 3) + 1; // 3 steps: age step and 2 x step are inside the bound, 3 x step is not
+
+        for (int i = 1; i <= 3; i++)
+        {
+            PlayerbotMotion.ElapseForTests(bot, step);
+            uint renewals = PlayerbotMotion.RenewalsOf(bot);
+            rig.Think(gate);
+            Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
+            if (i < 3) Assert.True(RenewedNow(rig.Bot, bot), $"unfollowed settle {i} was not renewed (bound {bound} ms)");
+            else Assert.False(RenewedNow(rig.Bot, bot), $"the settle past the bound ({bound} ms) renewed");
+        }
+
+        Assert.False(route.Released);
         return true;
     }));
 

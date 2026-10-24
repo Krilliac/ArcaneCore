@@ -85,7 +85,7 @@ internal static class PlayerbotMotion
         internal uint RenewedMs;
         /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
         internal uint Renewals;
-        /// <summary>The motion-clock time of the route's last <see cref="Follow"/> (adopted or renewed); <see cref="SettleAfterDriver"/> renews an unreleased route only for one lease after it.</summary>
+        /// <summary>The motion-clock time of the route's last <see cref="Follow"/> (adopted or renewed); <see cref="SettleAfterDriver"/> renews an unreleased route only for <see cref="SettleBoundMs"/> after it.</summary>
         internal uint FollowedMs;
         /// <summary>The bot's think gap in ms, smoothed (<see cref="NoteThinkGap"/>); 0 until the first measured gap.</summary>
         internal uint GapMs;
@@ -134,17 +134,24 @@ internal static class PlayerbotMotion
     /// <summary>After a driver's think (battleground, bot-led group, party AI). The driver and its helpers hand their routes to Follow
     /// every decided think; a think that did not (a gate-only tick, an instant cast or buff on the way) kept the route unless its owner
     /// let go of it (PlayerbotRoute.Released, set by the owner's route slot): a released route is stopped now, a kept one is renewed.
-    /// A kept route is renewed only while less than its current lease has passed since its last Follow (MotionState.FollowedMs), so a
-    /// route nobody re-asserts, e.g. one of an owner without a releasing slot, lives at most about two leases. renewalsBefore is
+    /// A kept route is renewed only while less than SettleBoundMs (its lease plus two of the bot's smoothed think gaps) has passed since
+    /// its last Follow (MotionState.FollowedMs): two keep-thinks in a row (two instant buffs) under a heavy rotation still renew, while a
+    /// route nobody re-asserts, e.g. one of an owner without a releasing slot, lives a bounded time. renewalsBefore is
     /// RenewalsOf before the think. True when it stopped the bot.</summary>
     internal static bool SettleAfterDriver(WorldSession session, Player player, uint renewalsBefore, uint sinceLast)
     {
         if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || !state.Active || state.Route is not { } route) return false;
         if (state.Renewals != renewalsBefore) return false;
         if (route.Released) return SettleAfterThink(session, player, gaveUp: true, renewalsBefore, sinceLast);
-        if (Age(session.World.NowMs, state.FollowedMs) >= state.LeaseMs) return false;
+        if (Age(session.World.NowMs, state.FollowedMs) >= SettleBoundMs(state)) return false;
         return SettleAfterThink(session, player, gaveUp: false, renewalsBefore, sinceLast);
     }
+
+    /// <summary>How long after its last Follow an unreleased route may still be renewed by <see cref="SettleAfterDriver"/>: the lease plus two
+    /// of the bot's smoothed think gaps (the scheduler's pass while none is measured, as <see cref="Lease"/> takes it), so a long rotation
+    /// gap does not stop the bot after a single keep-think.</summary>
+    internal static long SettleBoundMs(MotionState state)
+        => state.LeaseMs + 2L * (state.GapMs != 0 ? state.GapMs : state.PassMs);
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;

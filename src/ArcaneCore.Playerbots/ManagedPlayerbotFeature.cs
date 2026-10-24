@@ -2610,9 +2610,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// The party AI takes the bot or gives it back, or a controller attaches or detaches: the route of the one before is not the next
     /// one's, and the motion would walk it for its lease, seconds long (<see cref="PlayerbotMotion"/>). Stops the bot if it moves along
-    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator are not stopped at takeover (stopping there
-    /// broke group formation); their drivers stop the bot themselves when they have nothing to walk: the group leader's Hold states
-    /// (PlayerbotGroupAI.Hold), a member whose leader is missing, Release, and the battleground coordinator's idle phases.
+    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator do not stop the bot at takeover (stopping
+    /// there broke group formation); <see cref="ReleaseBrainRoute"/> marks the brain's route released instead, and the driver's first
+    /// settle (<see cref="PlayerbotMotion.SettleAfterDriver"/>) stops the bot unless that think followed a route of its own. The drivers
+    /// also stop the bot themselves when they have nothing to walk: the group leader's Hold states (PlayerbotGroupAI.Hold), a member
+    /// whose leader is missing, Release, and the battleground coordinator's idle phases.
     /// </summary>
     private static void ReleaseMotion(WorldSession session, Player player)
     {
