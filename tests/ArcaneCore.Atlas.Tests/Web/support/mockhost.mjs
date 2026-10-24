@@ -57,6 +57,7 @@ export class MockHost {
         this.failedCaptures = new Map();
         this.requests = [];
         this.handlers = new Map();
+        this.binaries = new Map();
         this.bookmarks = [{ name: 'Goldshire inn', map: 0, at: [-9462.66, 16.1915, 57.0459], builtIn: true }];
         this.server = http.createServer((req, res) => this.#http(req, res));
         this.server.on('upgrade', (req, socket) => this.#upgrade(req, socket));
@@ -87,6 +88,11 @@ export class MockHost {
     /** Registers the tile served for (layer, map, x, y). */
     setTile(layer, map, x, y, { state = 'Ok', detail = '', parts = [] }) {
         this.tiles.set(`${layer}|${map}|${x}|${y}`, { state, detail, parts });
+    }
+
+    /** Serves GET /api/bin/<name>: handler(searchParams) returns {status?, type?, body} (body a Uint8Array or string). */
+    setBinary(name, handler) {
+        this.binaries.set(name, handler);
     }
 
     /** Overrides a command: handler(args, ctx) returns data or throws {code, message}. */
@@ -180,6 +186,14 @@ export class MockHost {
             }
             if (!this.#authorised(req)) {
                 return send(401, 'unauthorised', 'text/plain');
+            }
+            if (req.method === 'GET' && url.pathname.startsWith('/api/bin/')) {
+                const handler = this.binaries.get(url.pathname.slice('/api/bin/'.length));
+                if (!handler) {
+                    return json(404, { error: { code: 'not-found', message: 'No such binary endpoint.' } });
+                }
+                const answer = handler(url.searchParams);
+                return send(answer.status ?? 200, answer.body, answer.type ?? 'application/octet-stream');
             }
             if (url.pathname === '/api/status') {
                 return json(200, this.run('status', {}, 'http').data);
