@@ -480,7 +480,7 @@ public sealed class GmTargetResolverTests
     }
 
     [Fact]
-    public async Task AWriteToAnotherMapIsPostedAndAReadIsNot()
+    public async Task AReadOrWriteOfAnotherMapsPlayerIsPosted()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("RSLVMAPA", "Rslvmapa", AccountSecurity.GameMaster);
@@ -493,7 +493,14 @@ public sealed class GmTargetResolverTests
 
         Resolved read = await ResolveAsync(host, gm, "Rslvmapa", "$rslvmapb", GmTargetRequest.Reading);
         Assert.Equal("Rslvmapb", read.Target?.Player?.Name);
-        Assert.False(read.Posted);
+        Assert.True(read.Posted, "a read of an object on another map must be queued with World.Post too (plan 3.2 rule 7)");
+        Assert.True(read.RanOnWorldThread);
+        Assert.Null(read.Failure);
+
+        Resolved readByGuid = await ResolveAsync(host, gm, "Rslvmapa", $"0x{farPlayer.Guid.Value:X16}", GmTargetRequest.Reading);
+        Assert.Equal("Rslvmapb", readByGuid.Target?.Player?.Name);
+        Assert.True(readByGuid.Posted);
+        Assert.True(readByGuid.RanOnWorldThread);
 
         Resolved write = await ResolveAsync(host, gm, "Rslvmapa", "$rslvmapb", GmTargetRequest.Writing);
         Assert.Equal("Rslvmapb", write.Target?.Player?.Name);

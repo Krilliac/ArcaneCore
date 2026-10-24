@@ -363,9 +363,9 @@ public static class GmTargetResolver
 
     /// <summary>
     /// Resolve a parsed selector and call <paramref name="use"/> with the target. Failures reply instead (and <paramref name="use"/> never runs).
-    /// <paramref name="use"/> runs inline when the target was found on the issuer's own map, else at the start of the next tick on the world
-    /// thread. With <see cref="GmTargetRequest.Write"/> an inline call still goes through <see cref="GmTarget.RunOnOwningMap"/>, so a write
-    /// to another map's object, and every write from the console, is posted.
+    /// <paramref name="use"/> runs inline when the target was found on the issuer's own map, else (a search of other maps, or a target
+    /// on another map, read or write) at the start of the next tick on the world thread. With <see cref="GmTargetRequest.Write"/> an
+    /// inline call still goes through <see cref="GmTarget.RunOnOwningMap"/>, so every write from the console is posted too.
     /// </summary>
     public static void ResolveThen(CommandContext context, GmSelector selector, GmTargetRequest request, Action<GmTarget> use)
     {
@@ -410,7 +410,8 @@ public static class GmTargetResolver
             return;
         }
 
-        if (request.Write)
+        // Plan 3.2 rule 7: reads of another map's object are posted too, since that map's ungated stages may be mutating it right now.
+        if (request.Write || (!context.IsConsole && found.Object is { } obj && !ReferenceEquals(obj.Map, context.Player.Map)))
         {
             found.RunOnOwningMap(context, use);
         }
