@@ -1,8 +1,10 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Xunit;
