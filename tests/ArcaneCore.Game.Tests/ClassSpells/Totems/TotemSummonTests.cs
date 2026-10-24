@@ -90,6 +90,50 @@ public sealed class TotemSummonTests
         Assert.NotEqual(shaman.X, totem.X);
     }
 
+    [Fact]
+    public void Summon_WhenThePlacementPointIsUnderTheMap_PutsTheTotemAtTheCaster()
+    {
+        // One real terrain tile around (30, -30) with ground at 20; the caster stands 30 yd below it and no model explains that.
+        const float X = 30f;
+        const float Y = -30f;
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-totem-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(directory, "maps"));
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(directory, "maps", ArcaneCore.Game.Maps.Terrain.TerrainTile.FileName(0, 31, 32)),
+                new ArcaneCore.Game.Tests.GridTerrain.MapFileBuilder { GridHeight = 20f }.Build());
+            using var kit = new TotemTestKit(terrainDirectory: directory);
+            (Player shaman, _) = kit.AddPlayer(1, X, Y);
+            shaman.Orientation = 0f;
+            shaman.Relocate(X, Y, -10f, 0f, 0);
+            WorldCollision.Of(kit.World).Install(lineOfSight: new EmptyModels());
+
+            Assert.Equal(SpellCastResult.CastOk, kit.Cast(shaman, TotemTestKit.FireTotemSummon));
+
+            Creature totem = Assert.IsType<Creature>(kit.Totems.GetTotem(shaman, TotemSlot.Fire));
+            Assert.Equal(X, totem.X, 2);
+            Assert.Equal(Y, totem.Y, 2);
+            Assert.Equal(-10f, totem.Z, 2);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>A model service with open line of sight and no model floor or area anywhere.</summary>
+    private sealed class EmptyModels : ArcaneCore.Game.Maps.Collision.ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit)
+        { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
     private sealed class FakeFloor(float floor, float? wallX) : ArcaneCore.Game.Maps.Collision.ILineOfSight
     {
         public bool Enabled => true;

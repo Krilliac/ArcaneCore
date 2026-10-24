@@ -46,9 +46,14 @@ internal static class CreatureTestKit
         IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null)
         => new(templates, spawns, waypoints ?? [], models ?? [], addons ?? [], entryWaypoints: entryWaypoints, spawnEntries: spawnEntries);
 
-    public static (WorldRuntime World, Map Map, CreatureMapSystem System) CreateSystem(CreatureContent content, CreatureOptions? options = null, int seed = 1)
+    public static (WorldRuntime World, Map Map, CreatureMapSystem System) CreateSystem(CreatureContent content, CreatureOptions? options = null, int seed = 1, string? terrainDirectory = null)
     {
         WorldRuntime world = TestWorld.CreateRuntime();
+        if (terrainDirectory is not null)
+        {
+            world.Options.Maps.DataDirectory = terrainDirectory;
+        }
+
         Map map = world.GetMap(0);
         var system = new CreatureMapSystem(map, content, options, random: new Random(seed));
         map.AddUpdater(system);

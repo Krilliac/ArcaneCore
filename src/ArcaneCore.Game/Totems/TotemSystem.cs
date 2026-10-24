@@ -258,18 +258,6 @@ public sealed partial class TotemSystem
     internal static float AngleOf(TotemSlot slot)
         => slot < TotemSlot.None ? (MathF.PI / SlotCount) - ((int)slot * 2 * MathF.PI / SlotCount) : 0f;
 
-    /// <summary>
-    /// CreatureCreatePos::SelectFinalPoint (Creature.cpp:232) calls <c>caster.GetClosePoint(..., totem radius, distance, angle)</c>:
-    /// GetNearPointAroundPosition (Object.cpp:2748) passes <c>distance + totem radius</c> to GetNearPoint2DAroundPosition,
-    /// which adds the caster's own bounding radius again (Object.cpp:2728-2729). The reach is therefore
-    /// <c>distance + caster radius + totem radius</c>.
-    /// </summary>
-    internal static (float X, float Y) PlacementPoint(Unit caster, float totemRadius, float distance, float angle)
-    {
-        float reach = distance + totemRadius + caster.BoundingRadius;
-        return (caster.X + (reach * MathF.Cos(angle)), caster.Y + (reach * MathF.Sin(angle)));
-    }
-
     // vmangos Spell::EffectSummonTotem.
     private void EffectSummonTotem(SpellEffectContext context)
     {
@@ -305,8 +293,10 @@ public sealed partial class TotemSystem
         Creature totem = creatures.SpawnTemporary(
             template with { AIName = "NullAI", MovementType = 0 },
             caster.X + (provisional * MathF.Cos(angle)), caster.Y + (provisional * MathF.Sin(angle)), caster.Z, caster.Orientation);
-        // Ground z, line of sight and the under-map guard as for pets (GetNearPointAroundPosition, Object.cpp:2742-2840); a point
-        // behind a wall or off the floor falls back to the caster's own position, so the totem never lands in rock.
+        // CreatureCreatePos::SelectFinalPoint (Creature.cpp:232) calls caster.GetClosePoint(..., totem radius, distance, angle); the
+        // reach is distance + caster radius + totem radius (Object.cpp:2728-2729, 2748). Ground z, line of sight and the under-map
+        // guard are as for pets (Object.cpp:2742-2840): a point behind a wall or under the map falls back to the caster's own
+        // position, and with no floor within 4 yd the slot keeps the caster's z.
         (float x, float y, float z) = SummonService.SafeClosePoint(caster, creatures, totem.BoundingRadius, Options.PlacementDistance, angle);
         totem.SetPosition(x, y, z, caster.Orientation);
         totem.SetHome(new CreatureHome(x, y, z, caster.Orientation));
