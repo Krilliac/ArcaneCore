@@ -1,3 +1,7 @@
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.World.Tests.GameObjects;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Game;
@@ -380,6 +384,118 @@ public sealed class PlayerbotQuestAnomalyTests
             Assert.Contains($"quest={QuestInteractionFixture.QuestId} entry=90 progress=0 reason=all-spawns-visited", notice.Detail, StringComparison.Ordinal);
             return true;
         });
+    }
+
+    private const uint ObjectQuestId = 900003;
+    private const uint ObjectSpawnGuid = 900030;
+
+    /// <summary>
+    /// The synthetic quest world plus a quest-giver game object that shares the creature giver's entry (the game object and creature
+    /// tables are separate, so the same number can be both). The object starts <see cref="ObjectQuestId"/> when asked to, else nothing.
+    /// </summary>
+    private static async Task<QuestHost> StartWithObjectGiverAsync(bool objectStartsQuest)
+    {
+        uint[] data = new uint[GameObjectTemplate.DataCount];
+        var template = new GameObjectTemplate { Entry = QuestInteractionFixture.Entry, Type = (uint)GameObjectType.QuestGiver, DisplayId = 5, Name = "Synthetic board", Data = data };
+        // Human start is (-8949.95, -132.49, 83.53): the object is 2 yd away, as the creature giver is.
+        var spawn = new GameObjectSpawn { Guid = ObjectSpawnGuid, Entry = QuestInteractionFixture.Entry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };
+        (uint, uint)[] starters = objectStartsQuest ? [(QuestInteractionFixture.Entry, ObjectQuestId)] : [];
+        GameObjectTestStore.Current.Value = new GameObjectTestContext(new GameObjectContent([template], [spawn], [], starters, []), LootContent.Empty);
+        QuestHost quest;
+        try
+        {
+            quest = await QuestHost.StartAsync(manualClock: true);
+        }
+        finally { GameObjectTestStore.Current.Value = null; }
+
+        ObjectGuid objectGuid = ObjectGuid.WithEntry(HighGuid.GameObject, QuestInteractionFixture.Entry, ObjectSpawnGuid);
+        await quest.Host.WaitForWorldAsync(() => quest.Session.Player!.VisibleObjects.Contains(objectGuid), "quest giver object visibility");
+        if (objectStartsQuest)
+        {
+            await quest.Host.OnWorldAsync(() =>
+            {
+                QuestTemplate Kill(uint entry) => new()
+                {
+                    Entry = entry, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Synthetic quest " + entry,
+                    Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
+                    ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1u,
+                };
+                var relation = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId };
+                quest.Feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                    [Kill(QuestInteractionFixture.QuestId), Kill(ObjectQuestId)], [relation], [relation])
+                {
+                    GameObjectStarters = [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = ObjectQuestId }],
+                }));
+                return true;
+            });
+        }
+
+        return quest;
+    }
+
+    // Live bot-quest/accept-refused code=StageTimeout in AcceptDetails: a quest-giver game object whose entry equals a creature starter's
+    // was read through the creature relation tables, so the bot asked the object for a quest it does not start and the server dropped the query.
+    [Fact]
+    public async Task AGameObjectGiver_IsNotAskedForTheQuestOfACreatureWithTheSameEntry()
+    {
+        await using QuestHost quest = await StartWithObjectGiverAsync(objectStartsQuest: false);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            Kill(player); // the creature giver is gone: the object is the only living quest giver in sight
+            return PlayerbotAnomalies.CaptureFor(player);
+        });
+
+        for (int second = 0; second < 30; second++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1_000);
+            await quest.Host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Assert.False(goals.HasCandidate(player));
+                Think(session, goals);
+                return true;
+            });
+        }
+
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Assert.Null(quest.Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.QuestId));
+            return true;
+        });
+        Assert.False(AnyQuestAnomaly(capture), capture.Describe());
+    }
+
+    [Fact]
+    public async Task AGameObjectGiver_IsAskedForTheQuestItStarts_AndTheBotAcceptsIt()
+    {
+        await using QuestHost quest = await StartWithObjectGiverAsync(objectStartsQuest: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        using AnomalyCapture capture = await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            Kill(player);
+            return PlayerbotAnomalies.CaptureFor(player);
+        });
+
+        for (int second = 0; second < 30; second++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1_000);
+            await quest.Host.OnWorldAsync(() => { Think(session, goals); return true; });
+        }
+
+        await quest.Host.OnWorldAsync(() =>
+        {
+            QuestStatusData? accepted = quest.Feature.Services.StateOf(session.Player!)!.Quests.Get(ObjectQuestId);
+            Assert.NotNull(accepted);
+            Assert.Equal(QuestStatus.Incomplete, accepted.Status);
+            Assert.Null(quest.Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.QuestId)); // the creature's quest was not taken from the object
+            return true;
+        });
+        Assert.False(AnyQuestAnomaly(capture), capture.Describe());
     }
 
     // GitHub #786: with the bags already full the giver of a source-item quest is not asked at all (no query, no 15 s stage, no report).
