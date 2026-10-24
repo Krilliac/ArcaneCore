@@ -286,6 +286,302 @@ public sealed class LiveDiagnosticsTests : IDisposable
         Assert.Contains("ended; sidecar exits", log, StringComparison.Ordinal);
     }
 
+    /// <summary>The Realm has no tick monitor, so a missing dotnet-stack is not worth a warning there; a missing dotnet-counters still is.</summary>
+    [PwshFact]
+    public void Realm_WithoutTools_WarnsOnlyAboutCounters()
+    {
+        Plan plan = GetPlan("Realm", "Max");
+
+        Assert.DoesNotContain(plan.Warnings, w => w.Contains("dotnet-stack", StringComparison.Ordinal));
+        Assert.Contains(plan.Warnings, w => w.Contains("dotnet-counters not found", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Active, l => l.Contains("hang stacks", StringComparison.Ordinal));
+    }
+
+    /// <summary>Tool lookup order: DOTNET_ROOT first, then the user profile; an extensionless file counts; nothing found is null.</summary>
+    [PwshFact]
+    public void FindDotnetTool_PrefersDotnetRoot_AcceptsExtensionless_AndReturnsNullWhenAbsent()
+    {
+        string userTools = Path.Combine(_userHome, ".dotnet", "tools");
+        Directory.CreateDirectory(userTools);
+        File.WriteAllText(Path.Combine(userTools, "dotnet-stack.exe"), "x");
+        InstallTools("dotnet-stack");
+        File.WriteAllText(Path.Combine(_dotnet, "tools", "dotnet-counters"), "x");
+
+        string output = RunPwsh($$"""
+            [pscustomobject]@{
+                Stack = Find-DotnetTool -Name dotnet-stack -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}'
+                Counters = Find-DotnetTool -Name dotnet-counters -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}'
+                Missing = Find-DotnetTool -Name dotnet-trace -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}'
+                NoRoots = Find-DotnetTool -Name dotnet-stack -DotnetRoot '' -UserHome ''
+            } | ConvertTo-Json -Compress
+            """);
+        using JsonDocument json = JsonDocument.Parse(output.Trim());
+        JsonElement r = json.RootElement;
+        Assert.Equal(Path.Combine(_dotnet, "tools", "dotnet-stack.exe"), r.GetProperty("Stack").GetString());
+        Assert.Equal(Path.Combine(_dotnet, "tools", "dotnet-counters"), r.GetProperty("Counters").GetString());
+        Assert.Equal(JsonValueKind.Null, r.GetProperty("Missing").ValueKind);
+        Assert.Equal(JsonValueKind.Null, r.GetProperty("NoRoots").ValueKind);
+    }
+
+    /// <summary>Operator-set stack-capture variables win over the resolved tool and the default interval, and the plan lists them as kept.</summary>
+    [PwshFact]
+    public void PresetHangStackVariables_AreKept_AndListedInTheActiveLines()
+    {
+        InstallTools("dotnet-stack", "dotnet-counters");
+        string output = RunPwsh($$"""
+            $plan = Get-LiveDiagnosticsPlan -Role World -LiveHome '{{Quote(_home)}}' -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}' -Environment @{
+                Ops__Watchdog__TickMonitor__StackCaptureTool = 'custom-tool'; Ops__Watchdog__TickMonitor__StackCaptureIntervalSeconds = '300' }
+            $set = Set-LiveDiagnosticsEnvironment -Plan $plan
+            [pscustomobject]@{
+                Set = @($set); Kept = @($plan.Settings | Where-Object Kept | ForEach-Object Name); Active = @($plan.Active)
+            } | ConvertTo-Json -Compress
+            """);
+        using JsonDocument json = JsonDocument.Parse(output.Trim());
+        JsonElement r = json.RootElement;
+        string[] kept = r.GetProperty("Kept").EnumerateArray().Select(e => e.GetString()!).Order().ToArray();
+        Assert.Equal(["Ops__Watchdog__TickMonitor__StackCaptureIntervalSeconds", "Ops__Watchdog__TickMonitor__StackCaptureTool"], kept);
+        string[] set = r.GetProperty("Set").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.DoesNotContain("Ops__Watchdog__TickMonitor__StackCaptureTool", set);
+        Assert.DoesNotContain("Ops__Watchdog__TickMonitor__StackCaptureIntervalSeconds", set);
+        Assert.Contains("Ops__Watchdog__TickMonitor__StackCaptureDirectory", set);
+        Assert.Contains(r.GetProperty("Active").EnumerateArray().Select(e => e.GetString()!), l => l == "kept from the environment: Ops__Watchdog__TickMonitor__StackCaptureTool=custom-tool");
+    }
+
+    /// <summary>A whitespace-only variable counts as unset, so the plan's value is applied.</summary>
+    [PwshFact]
+    public void WhitespaceVariable_CountsAsUnset()
+    {
+        string output = RunPwsh($$"""
+            $plan = Get-LiveDiagnosticsPlan -Role Realm -LiveHome '{{Quote(_home)}}' -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}' -Environment @{ DOTNET_DbgMiniDumpType = '  ' }
+            @($plan.Settings | Where-Object Kept).Count
+            """);
+        Assert.Equal("0", output.Trim());
+    }
+
+    /// <summary>The Full-dump free-space threshold is inclusive: exactly 16 GB stays Full, one byte less drops to Heap; a smaller custom threshold is honoured.</summary>
+    [PwshFact]
+    public void FullDump_FreeSpaceThreshold_IsInclusive()
+    {
+        long threshold = 16L * 1024 * 1024 * 1024;
+        Assert.Equal("4", GetPlan("World", "Max", extra: $"-DumpFreeBytes {threshold}").Value("DOTNET_DbgMiniDumpType"));
+        Plan below = GetPlan("World", "Max", extra: $"-DumpFreeBytes {threshold - 1}");
+        Assert.Equal("2", below.Value("DOTNET_DbgMiniDumpType"));
+        Assert.Contains(below.Warnings, w => w.Contains("Heap dump, not Full", StringComparison.Ordinal));
+        Assert.Equal("4", GetPlan("World", "Max", extra: "-DumpFreeBytes 1GB -FullDumpMinFreeBytes 1GB").Value("DOTNET_DbgMiniDumpType"));
+        Assert.Contains(GetPlan("World", "Max", extra: "-DumpFreeBytes 0").Active, l => l.StartsWith("crash dump: Heap", StringComparison.Ordinal));
+    }
+
+    /// <summary>Planning is read-only (no directories); applying creates the three capture directories for Max and nothing for Standard.</summary>
+    [PwshFact]
+    public void Plan_CreatesNothing_ApplyCreatesDirectories_StandardApplyDoesNothing()
+    {
+        string output = RunPwsh($$"""
+            $live = '{{Quote(Path.Combine(_root, "fresh"))}}'
+            $std = Get-LiveDiagnosticsPlan -Role World -LiveHome $live -Level Standard
+            $stdSet = @(Set-LiveDiagnosticsEnvironment -Plan $std)
+            $afterStandard = Test-Path $live
+            $plan = Get-LiveDiagnosticsPlan -Role World -LiveHome $live -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}' -Environment @{}
+            $afterPlan = Test-Path $live
+            [void](Set-LiveDiagnosticsEnvironment -Plan $plan)
+            [pscustomobject]@{
+                StdSet = $stdSet.Count; AfterStandard = $afterStandard; AfterPlan = $afterPlan
+                Dumps = Test-Path (Join-Path $live 'dumps'); Hang = Test-Path (Join-Path $live 'logs\hangstacks'); Counters = Test-Path (Join-Path $live 'logs\counters')
+            } | ConvertTo-Json -Compress
+            """);
+        using JsonDocument json = JsonDocument.Parse(output.Trim());
+        JsonElement r = json.RootElement;
+        Assert.Equal(0, r.GetProperty("StdSet").GetInt32());
+        Assert.False(r.GetProperty("AfterStandard").GetBoolean());
+        Assert.False(r.GetProperty("AfterPlan").GetBoolean());
+        Assert.True(r.GetProperty("Dumps").GetBoolean());
+        Assert.True(r.GetProperty("Hang").GetBoolean());
+        Assert.True(r.GetProperty("Counters").GetBoolean());
+    }
+
+    /// <summary>The hang-stack interval is range-checked (10 s to a day), so a typo cannot turn capture into a per-second stack dump.</summary>
+    [PwshFact]
+    public void HangStackInterval_BelowTenSeconds_IsRejected()
+    {
+        var (exit, text) = RunPwshRaw($"Get-LiveDiagnosticsPlan -Role World -LiveHome '{Quote(_home)}' -HangStackIntervalSeconds 9");
+        Assert.NotEqual(0, exit);
+        Assert.Contains("HangStackIntervalSeconds", text, StringComparison.Ordinal);
+        Assert.Equal(0, RunPwshRaw($"Get-LiveDiagnosticsPlan -Role World -LiveHome '{Quote(_home)}' -HangStackIntervalSeconds 10").ExitCode);
+    }
+
+    /// <summary>Retention edge cases: a missing directory, an empty one, no caps, ties on timestamp and both caps at once.</summary>
+    [PwshFact]
+    public void Retention_EdgeCases()
+    {
+        Assert.Equal("[]", RunPwsh($"ConvertTo-Json -InputObject @(Invoke-DiagnosticsRetention -Directory '{Quote(Path.Combine(_home, "nope"))}' -MaxFiles 1) -Compress").Trim());
+
+        string dir = Path.Combine(_home, "ret");
+        Directory.CreateDirectory(dir);
+        Assert.Equal("[]", RunPwsh($"ConvertTo-Json -InputObject @(Invoke-DiagnosticsRetention -Directory '{Quote(dir)}' -MaxFiles 1) -Compress").Trim());
+
+        DateTime stamp = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        foreach (string name in new[] { "a.dmp", "b.dmp", "c.dmp", "d.dmp" })
+        {
+            string path = Path.Combine(dir, name);
+            File.WriteAllBytes(path, new byte[100]);
+            File.SetLastWriteTimeUtc(path, stamp);
+        }
+
+        // 0 = no limit: nothing is deleted.
+        Assert.Equal("[]", RunPwsh($"ConvertTo-Json -InputObject @(Invoke-DiagnosticsRetention -Directory '{Quote(dir)}' -Filter '*.dmp') -Compress").Trim());
+        Assert.Equal(4, Directory.GetFiles(dir).Length);
+
+        // Equal timestamps: the name breaks the tie, so the same files go every time (the highest names are the newest).
+        string byCount = RunPwsh($"Invoke-DiagnosticsRetention -Directory '{Quote(dir)}' -Filter '*.dmp' -MaxFiles 2 | Sort-Object | ConvertTo-Json -Compress -AsArray");
+        Assert.Equal(["a.dmp", "b.dmp"], JsonSerializer.Deserialize<string[]>(byCount.Trim())!);
+
+        // Both caps: the count cap allows 2 (c, d) but the byte cap allows 1.
+        string both = RunPwsh($"Invoke-DiagnosticsRetention -Directory '{Quote(dir)}' -Filter '*.dmp' -MaxFiles 2 -MaxBytes 150 | ConvertTo-Json -Compress -AsArray");
+        Assert.Equal(["c.dmp"], JsonSerializer.Deserialize<string[]>(both.Trim())!);
+        Assert.Equal(["d.dmp"], Directory.GetFiles(dir).Select(path => Path.GetFileName(path)!).ToArray());
+    }
+
+    /// <summary>The rules apply each directory's own filter: an old non-matching file is never touched, and deleted names carry the rule name.</summary>
+    [PwshFact]
+    public void RetentionRules_ApplyPerDirectoryFilters_AndReportRuleNames()
+    {
+        string hang = Path.Combine(_home, "logs", "hangstacks");
+        string counters = Path.Combine(_home, "logs", "counters");
+        Directory.CreateDirectory(hang);
+        Directory.CreateDirectory(counters);
+        DateTime t0 = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        Touch(Path.Combine(hang, "hang-stacks-1.txt"), t0);
+        Touch(Path.Combine(hang, "hang-stacks-2.txt"), t0.AddMinutes(1));
+        Touch(Path.Combine(hang, "notes.txt"), t0.AddMinutes(-5));
+        Touch(Path.Combine(counters, "world-1.csv"), t0);
+        Touch(Path.Combine(counters, "world-2.csv"), t0.AddMinutes(1));
+        Touch(Path.Combine(counters, "world-sidecar.log"), t0.AddMinutes(-5));
+
+        string output = RunPwsh($"Invoke-DiagnosticsRetentionRules -Rules (Get-DiagnosticsRetentionRules -LiveHome '{Quote(_home)}' -MaxHangStackFiles 1 -MaxCountersFiles 1) | Sort-Object | ConvertTo-Json -Compress -AsArray");
+        Assert.Equal(["counters/world-1.csv", "hangstacks/hang-stacks-1.txt"], JsonSerializer.Deserialize<string[]>(output.Trim())!);
+        Assert.True(File.Exists(Path.Combine(hang, "notes.txt")));
+        Assert.True(File.Exists(Path.Combine(counters, "world-sidecar.log")));
+    }
+
+    /// <summary>The counters segment duration is d:hh:mm:ss, and the series counts are bounded.</summary>
+    [PwshFact]
+    public void CountersArguments_DurationFormatsSegmentLengths()
+    {
+        foreach ((int minutes, string expected) in new[] { (60, "00:01:00:00"), (45, "00:00:45:00"), (1, "00:00:01:00"), (1440, "00:24:00:00") })
+        {
+            string output = RunPwsh($"Get-CountersCollectArguments -ProcessId 1 -OutputPath 'x.csv' -SegmentMinutes {minutes} | ConvertTo-Json -Compress -AsArray");
+            string[] args = JsonSerializer.Deserialize<string[]>(output.Trim())!;
+            Assert.Equal(expected, args[Array.IndexOf(args, "--duration") + 1]);
+            Assert.Equal("2000", args[Array.IndexOf(args, "--maxTimeSeries") + 1]);
+            Assert.Equal("50", args[Array.IndexOf(args, "--maxHistograms") + 1]);
+        }
+    }
+
+    /// <summary>The sidecar needs a daemon to follow: with neither pid it fails fast; with a pid that is already gone it exits cleanly without trimming anything.</summary>
+    [PwshFact]
+    public void Sidecar_RejectsMissingPid_AndExitsCleanlyForADeadDaemon()
+    {
+        string sidecar = Path.Combine(LiveDir, "diagnostics-sidecar.ps1");
+        var (noPidExit, noPidText) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", sidecar, "-Role", "World", "-LiveHome", _home);
+        Assert.NotEqual(0, noPidExit);
+        Assert.Contains("-ParentPid", noPidText, StringComparison.Ordinal);
+
+        using Process gone = StartPwsh("-NoProfile", "-NonInteractive", "-Command", "exit 0");
+        gone.WaitForExit();
+        string dumps = Path.Combine(_home, "dumps");
+        Directory.CreateDirectory(dumps);
+        Touch(Path.Combine(dumps, "world-1.dmp"), DateTime.UtcNow.AddDays(-2));
+        Touch(Path.Combine(dumps, "world-2.dmp"), DateTime.UtcNow.AddDays(-1));
+        var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", sidecar, "-Role", "World", "-LiveHome", _home,
+            "-DaemonPid", gone.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), "-MaxDumpFiles", "1");
+        Assert.True(exit == 0, text);
+        Assert.Equal(2, Directory.GetFiles(dumps).Length);
+        Assert.Contains("sidecar exits", File.ReadAllText(Path.Combine(_home, "logs", "counters", "world-sidecar.log")), StringComparison.Ordinal);
+    }
+
+    /// <summary>A counters tool that cannot start is logged and the sidecar still follows the daemon and trims dumps.</summary>
+    [PwshFact]
+    public void Sidecar_WithAnUnstartableCountersTool_LogsAndStillTrims()
+    {
+        string dumps = Path.Combine(_home, "dumps");
+        Directory.CreateDirectory(dumps);
+        DateTime t0 = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        Touch(Path.Combine(dumps, "realm-1.dmp"), t0);
+        Touch(Path.Combine(dumps, "realm-2.dmp"), t0.AddHours(1));
+
+        using Process daemon = StartPwsh("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 4");
+        var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "diagnostics-sidecar.ps1"), "-Role", "Realm",
+            "-LiveHome", _home, "-DaemonPid", daemon.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), "-PollSeconds", "1", "-MaxDumpFiles", "1",
+            "-CountersTool", Path.Combine(_root, "no-such-dotnet-counters.exe"));
+        Assert.True(exit == 0, text);
+        Assert.Equal(["realm-2.dmp"], Directory.GetFiles(dumps).Select(path => Path.GetFileName(path)!).ToArray());
+        string log = File.ReadAllText(Path.Combine(_home, "logs", "counters", "realm-sidecar.log"));
+        Assert.Contains("counters collector did not start", log, StringComparison.Ordinal);
+        Assert.Contains("retention removed dumps/realm-1.dmp", log, StringComparison.Ordinal);
+        Assert.Contains("ended; sidecar exits", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>The launcher rejects an unknown level or an out-of-range interval at parameter binding, before it looks for the executable or starts anything.</summary>
+    [PwshFact]
+    public void LaunchDaemon_RejectsInvalidParameters_BeforeStartingAnything()
+    {
+        string launch = Path.Combine(LiveDir, "launch-daemon.ps1");
+        var (levelExit, levelText) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", launch, "-Role", "World", "-LiveHome", _home, "-Diagnostics", "Bogus");
+        Assert.NotEqual(0, levelExit);
+        Assert.Contains("Bogus", levelText, StringComparison.Ordinal);
+
+        var (intervalExit, intervalText) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", launch, "-Role", "World", "-LiveHome", _home, "-HangStackIntervalSeconds", "1");
+        Assert.NotEqual(0, intervalExit);
+        Assert.Contains("HangStackIntervalSeconds", intervalText, StringComparison.Ordinal);
+
+        Assert.False(Directory.Exists(Path.Combine(_home, "dumps")));
+    }
+
+    /// <summary>With valid parameters but no executable under the live home the launcher stops with "not found" before the plan creates any directory.</summary>
+    [PwshFact]
+    public void LaunchDaemon_WithoutAnExecutable_StopsBeforeApplyingTheDiagnosticsPlan()
+    {
+        string profile = Path.Combine(_root, "profile");
+        Directory.CreateDirectory(profile);
+        var (exit, text) = RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", Path.Combine(LiveDir, "launch-daemon.ps1"), "-Role", "Realm",
+            "-LiveHome", _home, "-Profile", profile);
+        Assert.NotEqual(0, exit);
+        Assert.Contains("not found", text, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(_home, "dumps")));
+    }
+
+    private static void Touch(string path, DateTime utc)
+    {
+        File.WriteAllText(path, "x");
+        File.SetLastWriteTimeUtc(path, utc);
+    }
+
+    private static (int ExitCode, string Text) RunProcess(string file, params string[] arguments)
+    {
+        var start = new ProcessStartInfo(file) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (string a in arguments)
+        {
+            start.ArgumentList.Add(a);
+        }
+
+        using Process process = Process.Start(start)!;
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(90_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException(file + " did not finish within 90 s");
+        }
+
+        return (process.ExitCode, stdout.Result + stderr.Result);
+    }
+
+    private (int ExitCode, string Text) RunPwshRaw(string body)
+    {
+        string script = Path.Combine(_root, "raw-" + Guid.NewGuid().ToString("N") + ".ps1");
+        File.WriteAllText(script, $"$ErrorActionPreference = 'Stop'{Environment.NewLine}. '{Quote(Path.Combine(LiveDir, "LiveDiagnostics.ps1"))}'{Environment.NewLine}{body}", new UTF8Encoding(false));
+        return RunProcess("pwsh", "-NoProfile", "-NonInteractive", "-File", script);
+    }
+
     private static Process StartPwsh(params string[] arguments)
     {
         var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true };
