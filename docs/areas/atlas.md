@@ -6,7 +6,8 @@ export, and screenshot works identically from the browser UI, the command line (
 Model Context Protocol server (`mcp`).
 
 Code: `tools/ArcaneCore.Atlas`. Tests: `tests/ArcaneCore.Atlas.Tests`. Live world-daemon feed:
-[map-feed](map-feed.md) (`src/ArcaneCore.World/Ops/MapFeed`).
+[map-feed](map-feed.md) (`src/ArcaneCore.World/Ops/MapFeed`). Browser-side reader for a local game folder:
+[atlas-client-files](atlas-client-files.md).
 
 ## Delivered
 
