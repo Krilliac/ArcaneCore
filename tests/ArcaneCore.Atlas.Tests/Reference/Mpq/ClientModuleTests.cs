@@ -98,13 +98,14 @@ public sealed class ClientModuleTests : IDisposable
         string overwrite = new JsonObject { ["path"] = "World/Maps/Azeroth/Azeroth.wdt", ["out"] = outPath, ["overwrite"] = true }.ToJsonString();
         Assert.True((await Run(context, "client.read", overwrite)).Ok);
 
-        // Relative paths, the client folder and any git working tree (this test runs from inside one) are refused.
+        // Relative paths, the client folder and any git working tree (a fake checkout is made here) are refused.
         string relative = new JsonObject { ["path"] = "World/Maps/Azeroth/Azeroth.wdt", ["out"] = "x.wdt" }.ToJsonString();
         Assert.Equal(CommandException.BadArguments, (await Run(context, "client.read", relative)).ErrorCode);
         string intoClient = new JsonObject { ["path"] = "World/Maps/Azeroth/Azeroth.wdt", ["out"] = Path.Combine(_dir.Path, "client", "copy.wdt") }.ToJsonString();
         Assert.Equal(CommandException.BadArguments, (await Run(context, "client.read", intoClient)).ErrorCode);
-        string repoTree = ClientOutputPath.FindWorkingTree(AppContext.BaseDirectory)
-            ?? throw new InvalidOperationException("the test assembly is expected to run from inside the repository");
+        string repoTree = Path.Combine(_dir.Path, "checkout");
+        Directory.CreateDirectory(Path.Combine(repoTree, ".git"));
+        Assert.Equal(repoTree, ClientOutputPath.FindWorkingTree(Path.Combine(repoTree, "artifacts", "Azeroth.wdt")));
         string intoRepo = new JsonObject { ["path"] = "World/Maps/Azeroth/Azeroth.wdt", ["out"] = Path.Combine(repoTree, "artifacts", "Azeroth.wdt") }.ToJsonString();
         CommandResult refused = await Run(context, "client.read", intoRepo);
         Assert.Equal(CommandException.BadArguments, refused.ErrorCode);
