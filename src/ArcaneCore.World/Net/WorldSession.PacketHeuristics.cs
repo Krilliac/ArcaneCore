@@ -11,7 +11,7 @@ namespace ArcaneCore.World.Net;
 /// The session's hooks into the packet heuristics (docs/areas/packet-heuristics.md). Report only: every hook is a call that returns nothing, never
 /// throws and never changes what the dispatcher does next, so a packet that dispatched before still dispatches and one that was dropped is still
 /// dropped. Resolved once from the connection's services; with the feature absent or off each hook is a null check and one volatile read, and no
-/// per-session state exists.
+/// per-session state exists. The one exception is the world-packet hook, which also refreshes the GM-mode snapshot when off (one flag read, a write only on change).
 /// </summary>
 public sealed partial class WorldSession
 {
@@ -30,7 +30,7 @@ public sealed partial class WorldSession
         Transfer = 2,
     }
 
-    /// <summary>The player was in GM mode when the world thread last dispatched one of this session's world packets (read by the network path to classify the session as staff).</summary>
+    /// <summary>The player was in GM mode when the world thread last dispatched one of this session's world packets, regardless of whether the heuristics are on (read by the network path to classify the session as staff).</summary>
     internal bool HeuristicsGmMode => _heuristicsGm;
 
     /// <summary>
@@ -130,12 +130,18 @@ public sealed partial class WorldSession
         }
     }
 
-    /// <summary>A world packet about to run its handler on the world thread (client path): the incapacitated-action check.</summary>
+    /// <summary>A world packet about to run its handler on the world thread (client path): keeps the GM-mode snapshot current (with the heuristics off too), then the incapacitated-action check.</summary>
     private void HeuristicsWorldPacket(Player player, WorldOpcode opcode)
     {
+        // Refreshed with the heuristics off too: the dev-opcode staff audit (DropDevOpcode -> IsHeuristicsStaff) runs regardless of the toggle.
+        bool gm = player.IsGameMaster;
+        if (_heuristicsGm != gm)
+        {
+            _heuristicsGm = gm;
+        }
+
         if (_heuristics is { Active: true } heuristics)
         {
-            _heuristicsGm = player.IsGameMaster;
             heuristics.OnWorldPacket(this, player, opcode);
         }
     }

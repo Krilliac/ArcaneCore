@@ -24,7 +24,7 @@ managed hook is what makes bot traffic visible at all. A chaos-engine probe a bo
 
 ## Switching it on and off
 
-Off: a packet costs one volatile read and no per-session state exists (a test pushes a burst of bad packets and asserts zero findings and
+Off: a packet costs one volatile read and no per-session state exists, apart from the world-packet hook refreshing the session's GM-mode snapshot (one flag read, a write only on change) so the dev-opcode staff audit still sees GM mode (a test pushes a burst of bad packets and asserts zero findings and
 no state). **Exemptions**: managed bots (`ExemptBots`, default true) and staff (`ExemptStaff`, default true: Moderator and above, or a
 player in GM mode, refreshed from every world packet the session dispatches, so a player who turns GM mode on or off is reclassified at the next packet) are not checked at all. With an exemption lifted their traffic is checked and counted under its own column (player,
 bot, staff) of the status table. **A packet a packet tool injected** (`InjectAsync`, which goes through the same dispatcher) is never attributed to the
