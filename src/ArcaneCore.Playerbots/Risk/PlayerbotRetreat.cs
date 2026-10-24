@@ -75,7 +75,20 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     private readonly List<(Vector3 Anchor, float Safe)> _zones = [];
     private readonly List<string> _used = [];
     private readonly List<Creature> _enemies = [];
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
+
+    /// <summary>The route this retreat walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
     private uint _startedMs;
     private int _extensions;
     private int _failedReplans;

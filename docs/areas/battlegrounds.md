@@ -226,7 +226,7 @@ inert default.
   released first) turns it into bones holding the insignia money and the battleground's player skin reference loot, which anyone may take
   (`InsigniaLoot`, vmangos EffectSkinPlayerCorpse / RemovedInsignia / SendLoot HIGHGUID_CORPSE); bones leave the world after an hour.
 - **Not delivered in wave 2.** The battleground raid group (slice S7), the BG chat channel (lane ops-social), the vmangos debug "testing"
-  mode, the queue announcer, and the honor weekend calendar (the `IBattlegroundCalendar` port stays inert).
+  mode, and the queue announcer. The honor weekend calendar is wired: `GameEventBattlegroundCalendar` answers `IBattlegroundCalendar` from the live game-event state (holiday 283 Alterac Valley, 284 Warsong Gulch, 285 Arathi Basin, the Call to Arms events 18-20).
 
 ## Open questions
 

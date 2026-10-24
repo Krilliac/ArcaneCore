@@ -24,6 +24,13 @@ internal static class GmGameObjectTarget
 
     /// <summary>The object with guid number <paramref name="counter"/> (0 = nearest within <see cref="NearestRadius"/>), or null after replying.</summary>
     public static GameObject? Find(CommandContext context, uint counter, out GameObjectMapSystem? system)
+        => Find(context, counter, out system, null, NearestRadius);
+
+    /// <summary>
+    /// <see cref="Find(CommandContext, uint, out GameObjectMapSystem?)"/> limited to objects of <paramref name="type"/> (null: any), looking
+    /// <paramref name="radius"/> yards around the invoker when no guid is given.
+    /// </summary>
+    public static GameObject? Find(CommandContext context, uint counter, out GameObjectMapSystem? system, GameObjectType? type, float radius)
     {
         system = context.IsConsole ? null : GmObjectCommands.SystemOf(context);
         if (system is null)
@@ -34,17 +41,19 @@ internal static class GmGameObjectTarget
 
         Player me = context.Player;
         GameObject? go = counter != 0
-            ? system.GameObjects.FirstOrDefault(g => g.Guid.Counter == counter)
+            ? system.GameObjects.FirstOrDefault(g => g.Guid.Counter == counter && (type is null || g.Type == type))
             : system.GameObjects
+                .Where(g => type is null || g.Type == type)
                 .Select(g => (Go: g, Distance: GmDistance.Between(me, g)))
-                .Where(t => float.IsFinite(t.Distance) && t.Distance <= NearestRadius)
+                .Where(t => float.IsFinite(t.Distance) && t.Distance <= radius)
                 .OrderBy(t => t.Distance).ThenBy(t => t.Go.Guid.Counter)
                 .Select(t => t.Go).FirstOrDefault();
         if (go is null)
         {
+            string what = type is null ? "game object" : type.ToString()!.ToLowerInvariant() + " game object";
             context.Reply(counter != 0
-                ? GmObjectCommands.NotFound(counter)
-                : string.Create(CultureInfo.InvariantCulture, $"No game object within {NearestRadius:F0} yards."));
+                ? (type is null ? GmObjectCommands.NotFound(counter) : string.Create(CultureInfo.InvariantCulture, $"No {what} with guid {counter} on this map."))
+                : string.Create(CultureInfo.InvariantCulture, $"No {what} within {radius:F0} yards."));
         }
 
         return go;
