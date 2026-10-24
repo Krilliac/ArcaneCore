@@ -34,6 +34,15 @@ public sealed class WebScriptTests(ITestOutputHelper output)
         "corrupt ATG1 v2 and ATX1 files are refused by the browser decoders",
     ];
 
+    /// <summary>The browser material tests (browser.materials.test.mjs); when ARCANECORE_TEST_BROWSER is set each must report <c>ok</c>, not skip.</summary>
+    private static readonly string[] BrowserMaterialTests =
+    [
+        "a textured quad in a real browser, RGBA path",
+        "a textured quad in a real browser, S3TC path",
+        "an opaque DXT1 texture is uploaded as RGB: index 3 stays black under alpha-key, S3TC path",
+        "a missing texture draws the placeholder once and is counted",
+    ];
+
     private static readonly TimeSpan NodeTimeout = TimeSpan.FromMinutes(5);
 
     [NodeFact]
@@ -68,6 +77,15 @@ public sealed class WebScriptTests(ITestOutputHelper output)
             }
 
             Assert.Contains(files, f => f.EndsWith("materials.test.mjs", StringComparison.Ordinal));
+
+            if (Environment.GetEnvironmentVariable("ARCANECORE_TEST_BROWSER") is { Length: > 0 })
+            {
+                // A browser was asked for: a skip here (bad path, variable not reaching node) would read as a pass.
+                foreach (string name in BrowserMaterialTests)
+                {
+                    Assert.True(run.Passed(name), $"browser material test '{name}' did not report ok although ARCANECORE_TEST_BROWSER is set. {run.Digest()}");
+                }
+            }
         }
         finally
         {
