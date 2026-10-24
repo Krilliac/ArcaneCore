@@ -68,7 +68,15 @@ public sealed class DisplayRealDataTests
         DisplayExtra extra = Assert.IsType<DisplayExtra>(humanoid.Extra);
         Assert.InRange(extra.Race, 1, 8);
         Assert.InRange(extra.Sex, 0, 1);
-        Assert.Equal(10, extra.Equipment.Count);
+        // The 1.12.1 row 23 has 19 fields: id, race, sex, five look fields, ten equipment slots at 8..17 (head, shoulder, shirt, chest,
+        // belt, legs, boots, wrist, gloves, tabard) and the baked name at 18. Known non-zero item display ids pin the slot columns, and
+        // each must be an ItemDisplayInfo row (a 9-items-plus-flags layout would put a flag where a display id belongs).
+        Assert.Equal([8815, 8815, 3900, 0, 8328, 5848, 8816, 0, 3052, 0], extra.Equipment);
+        foreach (int itemDisplay in extra.Equipment.Where(id => id != 0))
+        {
+            Assert.DoesNotContain("no-row", resolver.ResolveItem(itemDisplay).Problems);
+        }
+
         Assert.StartsWith("Textures\\BakedNpcTextures\\", extra.BakedTexture, StringComparison.Ordinal);
         Assert.True(files.Exists(extra.BakedTexture!));
         Assert.True(files.Exists(humanoid.ModelPath!));
