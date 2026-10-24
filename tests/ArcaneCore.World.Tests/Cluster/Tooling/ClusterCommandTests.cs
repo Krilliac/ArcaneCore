@@ -1,6 +1,8 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Cluster.Tooling;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.World.Cluster.Social;
@@ -132,6 +134,29 @@ public sealed class ClusterCommandTests
         Assert.Single(adminDiag);
         Assert.StartsWith("cluster-diag realm=1 node=world-node-alpha", adminDiag[0], StringComparison.Ordinal);
         Assert.Contains("fleetCompat=fleet_compatible", adminDiag[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClusterDiag_RollbackSnapshot_UsesTheSchemaVersionsOfThisBuild()
+    {
+        ClusterCommands.DiagSchemaVersions schema = ClusterCommands.DiagSchemaVersions.Current;
+        Assert.Equal(ArcaneCore.Data.Auth.AuthDbContext.Schema.CurrentVersion, schema.Auth);
+        Assert.Equal(ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, schema.Characters);
+        Assert.Equal(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion, schema.World);
+
+        var drained = new ClusterNodeDescriptor("n", nameof(ClusterRole.Combined), Guid.NewGuid(), ClusterNodeLifecycleState.Drained,
+            ClusterNodeManifest.CurrentContractVersion, schema.Auth, schema.Characters, schema.World, "rev", IsFencedWriter: true);
+        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
+
+        Assert.Equal(schema.Auth, snapshot.AuthSchemaVersion);
+        Assert.Equal(schema.Characters, snapshot.CharactersSchemaVersion);
+        Assert.Equal(schema.World, snapshot.WorldSchemaVersion);
+        Assert.Equal(schema.Characters, snapshot.MaximumLocalCharactersSchemaVersion);
+        Assert.True(snapshot.MinimumLocalCharactersSchemaVersion <= snapshot.CharactersSchemaVersion);
+
+        // A drained, fenced, write-free realm at this build's own schema must read as safe to roll back.
+        ClusterRollbackVerdict verdict = new ClusterRollbackCoordinator().VerifySafeRollbackToLocal(snapshot);
+        Assert.True(verdict.SafeToRollback, string.Join(" | ", verdict.BlockingReasons));
     }
 
     [Fact]
