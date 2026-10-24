@@ -126,9 +126,7 @@ and say so.
   security without loading the account); mailing a ticket answer to an offline owner; `ticket assign/comment/escalate/togglesystem`,
   `SMSG_GMTICKET_SYSTEMSTATUS` and the survey opcodes (one core each); `chatfilter`, `rbac`, `kick account|ip`, `ban playeraccount`
   (not in scope of this lane or in the ban lane's files).
-* `.arcane queues` reads the pending counts that the existing queues expose (character saves, social, reputation, instances, creature
-  respawns, explored zones) and the retained keys of the GM audit queue only; the others expose retained state per character, not as a
-  list. The honor queue is left out because its files belong to another lane.
+* `.arcane queues` (Administrator) lists every write-behind queue that exists on this world, one line each, from `WorldPersistenceProbes` (17 on a full host: character saves, quests and taxi mask, spell state, social, reputation, instances, honor, rest, explored zones, taxi routes, spellbook, talents, skills, creature respawns, gm audit, groups, account addresses). Each line shows the pending writes, then the retained keys (`char:ID` for per-character queues) and, for a halted queue, `HALTED` with the cause. A field a queue cannot report prints `n/a` rather than 0 (the keyed GM audit queue reports retained keys; most per-character queues report no terminal state). A queue whose feature is not loaded yet is left out rather than shown as 0 pending. A retained write adds a second `retained failure` line with the exception type and a truncated message. `.cluster leases` and its queue-depth summary still list the original seven queues.
 
 ## Tests
 

@@ -19,10 +19,11 @@ public sealed class WorldPersistenceProbesTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
 
-    private static readonly string[] AllQueueNames =
+    /// <summary>The queues the live test host resolves, in registration order (creature respawns, groups and account addresses belong to features the test host does not load): a new persistence queue must be added here, and to WorldPersistenceProbes, on purpose.</summary>
+    private static readonly string[] LiveQueueNames =
     [
-        "character saves", "social", "reputation", "instances", "honor", "rest", "explored zones", "taxi routes",
-        "spellbook", "talents", "skills", "creature respawns", "gm audit", "groups", "account addresses",
+        "character saves", "social", "reputation", "instances", "honor", "quests and taxi mask", "spell state", "rest",
+        "explored zones", "taxi routes", "spellbook", "talents", "skills", "gm audit",
     ];
 
     [Fact]
@@ -67,24 +68,39 @@ public sealed class WorldPersistenceProbesTests
         Assert.Equal("instances", snapshot.Name);
         Assert.StartsWith("instances: ", snapshot.Format(), StringComparison.Ordinal);
         Assert.Contains(", HALTED: CharacterOwnershipRejectedException: ", snapshot.Format(), StringComparison.Ordinal);
-        Assert.NotNull(snapshot.LastFailure);
+        Assert.NotNull(snapshot.RetainedFailure);
         Assert.Null(snapshot.FormatFailure()); // the halt text already names the cause
         Assert.False(snapshot.IsHealthy);
         await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync()); // a halted queue reports its undrained writes on stop
     }
 
     [Fact]
-    public async Task TheLiveWorld_ResolvesOnlyBuiltInQueueNames_EachOnce_AndMoreThanTheOriginalSeven()
+    public async Task TheLiveWorld_ResolvesExactlyTheListedQueues_InOrder()
     {
         await using WorldTestHost host = WorldTestHost.Start();
 
         string[] names = [.. WorldPersistenceProbes.CreateRegistry(host.WorldServices).Snapshot().Select(s => s.Name)];
 
-        Assert.Equal(names.Distinct(StringComparer.OrdinalIgnoreCase).Count(), names.Length);
-        Assert.All(names, n => Assert.Contains(n, AllQueueNames));
-        Assert.Contains("character saves", names);
-        Assert.Contains("gm audit", names);
-        Assert.True(names.Length > 7, $"only {names.Length} queues resolved: {string.Join(", ", names)}");
+        Assert.Equal(LiveQueueNames, names);
+    }
+
+    [Fact]
+    public async Task TheLiveQueuesThatCannotReportAField_PrintNaForIt_InsteadOfLookingHealthy()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+
+        Dictionary<string, PersistenceQueueSnapshot> byName = WorldPersistenceProbes.CreateRegistry(host.WorldServices).Snapshot().ToDictionary(s => s.Name);
+
+        Assert.All(new[] { "character saves", "quests and taxi mask", "spell state", "social" }, n =>
+        {
+            Assert.NotNull(byName[n].RetainedKeys);
+            Assert.True(byName[n].TerminalKnown, n);
+        });
+        Assert.Contains(", halted n/a", byName["reputation"].Format(), StringComparison.Ordinal);
+        Assert.Contains(", retained n/a", byName["rest"].Format(), StringComparison.Ordinal);
+        Assert.Contains(", retained n/a", byName["skills"].Format(), StringComparison.Ordinal);
+        Assert.False(byName["reputation"].IsHealthy);
+        Assert.False(byName["rest"].IsHealthy);
     }
 
     [Fact]
@@ -96,23 +112,19 @@ public sealed class WorldPersistenceProbesTests
         StoreOf(host).FailNext(3);
         AuditOf(host).Mute(2, 600, "Staffer", AccountSecurity.Administrator, "r");
         await AuditOf(host).Writes.FlushAsync();
-        string[] expected = ExpectedQueueLines(host);
 
-        string[] lines = await LinesAsync(admin, ".arcane queues", expected.Length);
+        string[] lines = await LinesAsync(admin, ".arcane queues", LiveQueueNames.Length + 1);
 
-        Assert.Equal(expected, lines);
-        int queueLine = Array.IndexOf(lines, "gm audit: 0 pending, RETAINED after failed writes: mute:2");
+        Assert.Equal(LiveQueueNames, lines.Where(l => !l.StartsWith("  ", StringComparison.Ordinal)).Select(l => l[..l.IndexOf(':', StringComparison.Ordinal)]));
+        int queueLine = Array.IndexOf(lines, "gm audit: 0 pending, RETAINED after failed writes: mute:2, halted n/a");
         Assert.True(queueLine >= 0, string.Join(" | ", lines));
-        Assert.StartsWith("  gm audit last failure: InvalidOperationException: injected GM audit store failure", lines[queueLine + 1], StringComparison.Ordinal);
+        Assert.StartsWith("  gm audit retained failure: InvalidOperationException: injected GM audit store failure", lines[queueLine + 1], StringComparison.Ordinal);
 
         await AuditOf(host).Writes.RetryRetainedAsync();
-        string[] healthy = ExpectedQueueLines(host);
-        Assert.DoesNotContain(healthy, l => l.Contains("last failure", StringComparison.Ordinal));
-        Assert.Equal(healthy, await LinesAsync(admin, ".arcane queues", healthy.Length));
+        string[] healthy = await LinesAsync(admin, ".arcane queues", LiveQueueNames.Length);
+        Assert.DoesNotContain(healthy, l => l.Contains("retained failure", StringComparison.Ordinal) || l.Contains("RETAINED", StringComparison.Ordinal));
+        Assert.Contains("gm audit: 0 pending, halted n/a", healthy);
     }
-
-    private static string[] ExpectedQueueLines(WorldTestHost host)
-        => [.. WorldPersistenceProbes.CreateRegistry(host.WorldServices).Snapshot().SelectMany(s => s.FormatFailure() is { } failure ? new[] { s.Format(), failure } : new[] { s.Format() })];
 
     private sealed class RejectingInstanceStore : IInstanceStore
     {

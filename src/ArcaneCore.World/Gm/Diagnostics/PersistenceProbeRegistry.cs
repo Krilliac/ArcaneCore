@@ -12,14 +12,17 @@ public interface IPersistenceQueueProbe
     /// <summary>Writes queued or in progress.</summary>
     int Pending { get; }
 
-    /// <summary>Keys (or character ids, as <c>char:ID</c>) whose last write failed and is still retained; empty when everything is durable.</summary>
-    IReadOnlyList<string> RetainedKeys { get; }
+    /// <summary>Keys (or character ids, as <c>char:ID</c>) whose last write failed and is still retained; empty when everything is durable, null when the queue cannot report it (unknown is not the same as empty).</summary>
+    IReadOnlyList<string>? RetainedKeys { get; }
 
-    /// <summary>The failure that halted the queue for good (such as a rejected character ownership), or null while it is running.</summary>
+    /// <summary>True when <see cref="TerminalFailure"/> is meaningful; false when the queue has no halt state to report (a null <see cref="TerminalFailure"/> then means unknown, not running).</summary>
+    bool ReportsTerminalFailure { get; }
+
+    /// <summary>The failure that halted the queue for good (such as a rejected character ownership), or null while it is running (only meaningful when <see cref="ReportsTerminalFailure"/>).</summary>
     Exception? TerminalFailure { get; }
 
-    /// <summary>The most recent failure the queue still holds (a retained write's, else the terminal one), or null.</summary>
-    Exception? LastFailure { get; }
+    /// <summary>The failure behind a retained write (which retained write is up to the queue; the keyed queues give the first key in ordinal order), else the terminal one, or null. Not necessarily the newest failure.</summary>
+    Exception? RetainedFailure { get; }
 }
 
 /// <summary>An <see cref="IPersistenceQueueProbe"/> over delegates read on demand.</summary>
@@ -28,40 +31,57 @@ public sealed class DelegatePersistenceQueueProbe(
     Func<int> pending,
     Func<IReadOnlyList<string>>? retainedKeys = null,
     Func<Exception?>? terminalFailure = null,
-    Func<Exception?>? lastFailure = null) : IPersistenceQueueProbe
+    Func<Exception?>? retainedFailure = null) : IPersistenceQueueProbe
 {
     public string Name { get; } = name;
 
     public int Pending => pending();
 
-    public IReadOnlyList<string> RetainedKeys => retainedKeys?.Invoke() ?? [];
+    public IReadOnlyList<string>? RetainedKeys => retainedKeys?.Invoke();
+
+    public bool ReportsTerminalFailure => terminalFailure is not null;
 
     public Exception? TerminalFailure => terminalFailure?.Invoke();
 
-    public Exception? LastFailure => lastFailure?.Invoke() ?? TerminalFailure;
+    public Exception? RetainedFailure => retainedFailure?.Invoke() ?? TerminalFailure;
 }
 
-/// <summary>A point-in-time copy of one probe, safe to format after the queue moves on.</summary>
+/// <summary>
+/// A point-in-time copy of one probe, safe to format after the queue moves on. A null <paramref name="RetainedKeys"/> or a false
+/// <paramref name="TerminalKnown"/> means the queue cannot report that field: it prints <c>n/a</c> and never counts as healthy.
+/// </summary>
 public sealed record PersistenceQueueSnapshot(
     string Name,
     int Pending,
-    IReadOnlyList<string> RetainedKeys,
+    IReadOnlyList<string>? RetainedKeys,
     Exception? TerminalFailure,
-    Exception? LastFailure)
+    Exception? RetainedFailure,
+    bool TerminalKnown = true)
 {
-    /// <summary>True when the queue holds nothing that is not durable and has not halted.</summary>
-    public bool IsHealthy => RetainedKeys.Count == 0 && TerminalFailure is null;
+    /// <summary>The longest exception message the report shows; database messages can carry host or file detail.</summary>
+    private const int MaxMessageLength = 120;
 
-    /// <summary>The one-line report: <c>name: N pending</c>, then the retained keys and the terminal failure.</summary>
+    /// <summary>True only when the queue reported both fields and holds nothing that is not durable and has not halted.</summary>
+    public bool IsHealthy => RetainedKeys is { Count: 0 } && TerminalKnown && TerminalFailure is null;
+
+    /// <summary>The one-line report: <c>name: N pending</c>, then the retained keys and the terminal failure; a field the queue cannot report prints <c>n/a</c>.</summary>
     public string Format()
     {
         string line = $"{Name}: {Pending} pending";
-        if (RetainedKeys.Count > 0)
+        if (RetainedKeys is null)
+        {
+            line += ", retained n/a";
+        }
+        else if (RetainedKeys.Count > 0)
         {
             line += $", RETAINED after failed writes: {string.Join(", ", RetainedKeys)}";
         }
 
-        if (TerminalFailure is not null)
+        if (!TerminalKnown && TerminalFailure is null)
+        {
+            line += ", halted n/a";
+        }
+        else if (TerminalFailure is not null)
         {
             line += $", HALTED: {Describe(TerminalFailure)}";
         }
@@ -71,9 +91,18 @@ public sealed record PersistenceQueueSnapshot(
 
     /// <summary>A second line naming the failure behind a retained write, or null when the queue holds none (a halted queue already names its failure in <see cref="Format"/>).</summary>
     public string? FormatFailure()
-        => LastFailure is not null && TerminalFailure is null ? $"  {Name} last failure: {Describe(LastFailure)}" : null;
+        => RetainedFailure is not null && TerminalFailure is null ? $"  {Name} retained failure: {Describe(RetainedFailure)}" : null;
 
-    private static string Describe(Exception ex) => ex.GetType().Name + ": " + ex.Message;
+    private static string Describe(Exception ex)
+    {
+        string message = ex.Message;
+        if (message.Length > MaxMessageLength)
+        {
+            message = message[..MaxMessageLength] + "...";
+        }
+
+        return ex.GetType().Name + ": " + message;
+    }
 }
 
 /// <summary>
@@ -142,12 +171,12 @@ public sealed class PersistenceProbeRegistry
             {
                 if (resolve() is { } probe)
                 {
-                    result.Add(new PersistenceQueueSnapshot(probe.Name, probe.Pending, probe.RetainedKeys, probe.TerminalFailure, probe.LastFailure));
+                    result.Add(new PersistenceQueueSnapshot(probe.Name, probe.Pending, probe.RetainedKeys, probe.TerminalFailure, probe.RetainedFailure, probe.ReportsTerminalFailure));
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                result.Add(new PersistenceQueueSnapshot(name, 0, [], ex, ex));
+                result.Add(new PersistenceQueueSnapshot(name, 0, null, ex, ex));
             }
         }
 

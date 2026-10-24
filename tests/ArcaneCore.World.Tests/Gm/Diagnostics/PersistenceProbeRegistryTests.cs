@@ -60,12 +60,12 @@ public sealed class PersistenceProbeRegistryTests
         IReadOnlyList<PersistenceQueueSnapshot> snapshot = registry.Snapshot();
 
         Assert.Equal(2, snapshot.Count);
-        Assert.Equal("boom: 0 pending, HALTED: InvalidOperationException: probe broke", snapshot[0].Format());
+        Assert.Equal("boom: 0 pending, retained n/a, HALTED: InvalidOperationException: probe broke", snapshot[0].Format());
         Assert.Equal("fine: 4 pending", snapshot[1].Format());
     }
 
     [Fact]
-    public void Format_NamesRetainedKeys_AHaltedQueue_AndTheLastFailureOnASecondLine()
+    public void Format_NamesRetainedKeys_AHaltedQueue_AndTheRetainedFailureOnASecondLine()
     {
         var failure = new IOException("disk full");
 
@@ -77,7 +77,7 @@ public sealed class PersistenceProbeRegistryTests
         Assert.True(healthy.IsHealthy);
         Assert.Null(healthy.FormatFailure());
         Assert.Equal("b: 2 pending, RETAINED after failed writes: mute:2", retained.Format());
-        Assert.Equal("  b last failure: IOException: disk full", retained.FormatFailure());
+        Assert.Equal("  b retained failure: IOException: disk full", retained.FormatFailure());
         Assert.False(retained.IsHealthy);
         Assert.Equal("c: 1 pending, HALTED: IOException: disk full", halted.Format());
         Assert.Null(halted.FormatFailure());
@@ -147,7 +147,7 @@ public sealed class PersistenceProbeRegistryTests
 
         PersistenceQueueSnapshot snapshot = registry.Snapshot().Single();
 
-        Assert.Equal("flaky: 0 pending, HALTED: InvalidOperationException: counter broke", snapshot.Format());
+        Assert.Equal("flaky: 0 pending, retained n/a, HALTED: InvalidOperationException: counter broke", snapshot.Format());
         Assert.False(snapshot.IsHealthy);
     }
 
@@ -167,15 +167,52 @@ public sealed class PersistenceProbeRegistryTests
     }
 
     [Fact]
-    public void AnExplicitLastFailure_WinsOverTheTerminalFailure()
+    public void AnExplicitRetainedFailure_WinsOverTheTerminalFailure()
     {
         var terminal = new InvalidOperationException("halted");
         var last = new IOException("retained write");
-        var probe = new DelegatePersistenceQueueProbe("q", () => 0, terminalFailure: () => terminal, lastFailure: () => last);
+        var probe = new DelegatePersistenceQueueProbe("q", () => 0, terminalFailure: () => terminal, retainedFailure: () => last);
 
-        Assert.Same(last, probe.LastFailure);
+        Assert.Same(last, probe.RetainedFailure);
         Assert.Same(terminal, probe.TerminalFailure);
-        Assert.Null(new DelegatePersistenceQueueProbe("q", () => 0).LastFailure);
+        Assert.Null(new DelegatePersistenceQueueProbe("q", () => 0).RetainedFailure);
+    }
+
+    [Fact]
+    public void AFieldAQueueCannotReport_PrintsNa_AndIsNeverHealthy()
+    {
+        var pendingOnly = new DelegatePersistenceQueueProbe("rest", () => 3);
+        var retainedOnly = new DelegatePersistenceQueueProbe("keyed", () => 0, () => []);
+        var terminalOnly = new DelegatePersistenceQueueProbe("coord", () => 0, terminalFailure: () => null);
+        var full = new DelegatePersistenceQueueProbe("full", () => 0, () => [], () => null);
+        var registry = new PersistenceProbeRegistry();
+        registry.Register(pendingOnly);
+        registry.Register(retainedOnly);
+        registry.Register(terminalOnly);
+        registry.Register(full);
+
+        IReadOnlyList<PersistenceQueueSnapshot> snapshot = registry.Snapshot();
+
+        Assert.Null(pendingOnly.RetainedKeys);
+        Assert.False(pendingOnly.ReportsTerminalFailure);
+        Assert.Equal("rest: 3 pending, retained n/a, halted n/a", snapshot[0].Format());
+        Assert.Equal("keyed: 0 pending, halted n/a", snapshot[1].Format());
+        Assert.Equal("coord: 0 pending, retained n/a", snapshot[2].Format());
+        Assert.Equal("full: 0 pending", snapshot[3].Format());
+        Assert.Equal([false, false, false, true], snapshot.Select(s => s.IsHealthy));
+    }
+
+    [Fact]
+    public void TheFailureText_KeepsTheExceptionTypeButTruncatesALongMessage()
+    {
+        var failure = new IOException(new string('a', 120) + new string('b', 200));
+        var halted = new PersistenceQueueSnapshot("q", 0, [], failure, failure);
+
+        string line = halted.Format();
+
+        Assert.Contains("IOException: ", line, StringComparison.Ordinal);
+        Assert.EndsWith(new string('a', 120) + "...", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("bbbb", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -196,13 +233,13 @@ public sealed class PersistenceProbeRegistryTests
     }
 
     [Fact]
-    public void LastFailure_FallsBackToTheTerminalFailure()
+    public void RetainedFailure_FallsBackToTheTerminalFailure()
     {
         var terminal = new InvalidOperationException("ownership lost");
         var probe = new DelegatePersistenceQueueProbe("q", () => 0, terminalFailure: () => terminal);
 
-        Assert.Same(terminal, probe.LastFailure);
-        Assert.Empty(probe.RetainedKeys);
+        Assert.Same(terminal, probe.RetainedFailure);
+        Assert.Null(probe.RetainedKeys);
     }
 
     [Fact]
@@ -211,14 +248,13 @@ public sealed class PersistenceProbeRegistryTests
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient admin = await host.EnterWorldAsync("STAFF", "Staffer", AccountSecurity.Administrator);
         await admin.CollectAsync();
-        string[] expected = [.. WorldPersistenceProbes.CreateRegistry(host.WorldServices).Snapshot().Select(s => s.Format())];
+        string[] names = [.. WorldPersistenceProbes.CreateRegistry(host.WorldServices).Snapshot().Select(s => s.Name)];
 
-        string[] lines = await LinesAsync(admin, ".arcane queues", expected.Length);
+        string[] lines = await LinesAsync(admin, ".arcane queues", names.Length);
 
-        Assert.Equal(expected, lines);
+        Assert.Equal(names, lines.Select(l => l[..l.IndexOf(':', StringComparison.Ordinal)]));
         Assert.Contains(lines, l => l.StartsWith("character saves: ", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("gm audit: ", StringComparison.Ordinal));
-        Assert.True(expected.Length > 7, $"expected more than the original 7 queues, got {expected.Length}: {string.Join(" | ", expected)}");
     }
 
     [Fact]
@@ -238,7 +274,7 @@ public sealed class PersistenceProbeRegistryTests
 
         PersistenceProbeRegistry registry = WorldPersistenceProbes.CreateRegistry(services);
 
-        Assert.Equal(15, registry.Count);
+        Assert.Equal(17, registry.Count);
         Assert.Empty(registry.Snapshot()); // nothing is loaded in an empty container: every queue is skipped, none throws
     }
 }

@@ -40,11 +40,13 @@ public static class WorldPersistenceProbes
         ArgumentNullException.ThrowIfNull(sp);
 
         // Per-character queues
-        Queue(registry, "character saves", () => sp.GetService<CharacterSaveQueue>(), q => q.Pending);
+        Queue(registry, "character saves", () => sp.GetService<CharacterSaveQueue>(), q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
         Queue(registry, "social", () => sp.GetService<SocialWriteQueue>() ?? sp.GetService<SocialFeature>()?.Writes, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
         Queue(registry, "reputation", () => sp.GetService<ReputationWriteQueue>() ?? sp.GetService<ReputationFeature>()?.Writes, q => q.Pending, q => Characters(q.RetainedCharacters));
         Queue(registry, "instances", () => sp.GetService<InstanceWriteQueue>() ?? sp.GetService<InstanceFeature>()?.Writes, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
         Queue(registry, "honor", () => sp.GetService<HonorWriteQueue>() ?? sp.GetService<HonorFeature>()?.Writes, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
+        Queue(registry, "quests and taxi mask", () => sp.GetService<QuestNpcPersistence>() ?? sp.GetService<QuestNpcFeature>()?.Persistence, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
+        Queue(registry, "spell state", () => sp.GetService<SpellStatePersistence>() ?? sp.GetService<SpellFeature>()?.State, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
         Queue(registry, "rest", () => sp.GetService<RestWriteQueue>() ?? sp.GetService<RestFeature>()?.Writes, q => q.Pending, terminal: q => q.TerminalFailure);
         Queue(registry, "explored zones", () => sp.GetService<ExploredZonesWriteQueue>() ?? sp.GetService<ExploredZonesPersistence>()?.Writes, q => q.Pending, terminal: q => q.TerminalFailure);
         Queue(registry, "taxi routes", () => sp.GetService<TaxiFlightWriteQueue>() ?? sp.GetService<NpcServicesFeature>()?.RouteWrites, q => q.Pending, q => Characters(q.RetainedCharacters), q => q.TerminalFailure);
@@ -56,9 +58,9 @@ public static class WorldPersistenceProbes
         Queue(registry, "creature respawns", () => sp.GetService<CreatureRespawnFeature>()?.Persistence as CreatureRespawnQueue, q => q.Pending, q => q.RetainedCount > 0 ? [string.Create(CultureInfo.InvariantCulture, $"{q.RetainedCount} writes")] : []);
 
         // Keyed store queues
-        Queue(registry, "gm audit", () => sp.GetService<GmAuditFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, last: q => q.LastFailure);
-        Queue(registry, "groups", () => sp.GetService<SocialGroupPersistenceFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, last: q => q.LastFailure);
-        Queue(registry, "account addresses", () => sp.GetService<AccountAddressFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, last: q => q.LastFailure);
+        Queue(registry, "gm audit", () => sp.GetService<GmAuditFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
+        Queue(registry, "groups", () => sp.GetService<SocialGroupPersistenceFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
+        Queue(registry, "account addresses", () => sp.GetService<AccountAddressFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
     }
 
     private static void Queue<T>(
@@ -68,7 +70,7 @@ public static class WorldPersistenceProbes
         Func<T, int> pending,
         Func<T, IReadOnlyList<string>>? retained = null,
         Func<T, Exception?>? terminal = null,
-        Func<T, Exception?>? last = null)
+        Func<T, Exception?>? retainedFailure = null)
         where T : class
         => registry.Register(name, () => find() is { } queue
             ? new DelegatePersistenceQueueProbe(
@@ -76,7 +78,7 @@ public static class WorldPersistenceProbes
                 () => pending(queue),
                 retained is null ? null : () => retained(queue),
                 terminal is null ? null : () => terminal(queue),
-                last is null ? null : () => last(queue))
+                retainedFailure is null ? null : () => retainedFailure(queue))
             : null);
 
     private static IReadOnlyList<string> Characters(IReadOnlyList<int> ids)
