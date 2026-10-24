@@ -4,6 +4,7 @@ using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Host.Cli;
 using ArcaneCore.Atlas.Reference.Client.Models;
 using ArcaneCore.Atlas.Reference.Dbc;
+using ArcaneCore.Atlas.Render;
 using ArcaneCore.Atlas.Textures;
 using Xunit;
 
@@ -96,7 +97,7 @@ public sealed class ModelFoundationSurfaceTests
     {
         IAtlasModule[] discovered = [.. AtlasModules.Discover(typeof(AtlasModules).Assembly)];
 
-        foreach (Type type in new[] { typeof(TexturesModule), typeof(ModelPackagesModule), typeof(DisplayModule) })
+        foreach (Type type in new[] { typeof(TexturesModule), typeof(RenderMaterialsModule), typeof(ModelPackagesModule), typeof(DisplayModule) })
         {
             Assert.Contains(discovered, m => m.GetType() == type);
         }

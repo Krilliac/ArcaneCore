@@ -79,7 +79,7 @@ layers; when the textures in use exceed the budget the radius also drops by one 
 
 The CPU renderer draws the same chunks through `CpuMaterials` (`generic` registered), with perspective-correct interpolation, alpha key and
 blending, deterministically, so `render.png` and `capture` show textured quads headless. `CpuMaterials` is a service (published by the
-textures module, before the layer modules), so a lane registers a kind from its own module with
+`RenderMaterialsModule` at foundation order, before the layer modules), so a lane registers a kind from its own module with
 `context.Services.Get<CpuMaterials>()!.Register(kind, material)` and `RenderModule` hands the same instance to the renderer. `CpuMaterials`,
 `ICpuMaterial` and `BatchShader` are `internal`: that works because every lane's code lives in the Atlas assembly and the test assembly
 sees them through `InternalsVisibleTo`; make them public before any lane puts code in another assembly.

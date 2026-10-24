@@ -138,7 +138,7 @@ public sealed class CpuTexturedRasterTests
             new AtlasPaths(null, null),
             NullLoggerFactory.Instance,
             headless: true,
-            [new LaneModule("layers", ModuleOrder.Foundation, c => c.Layers.Add(source)), new TexturesModule(), new LaneModule("lane-a2", ModuleOrder.Foundation + 60, c => c.Services.Get<CpuMaterials>()!.Register("probe", new SolidMaterial(Green))), new RenderModule()]);
+            [new LaneModule("layers", ModuleOrder.Foundation, c => c.Layers.Add(source)), new TexturesModule(), new RenderMaterialsModule(), new LaneModule("lane-a2", ModuleOrder.Foundation + 60, c => c.Services.Get<CpuMaterials>()!.Register("probe", new SolidMaterial(Green))), new RenderModule()]);
         Assert.Empty(context.Problems);
 
         RenderedFrame frame = ((CpuRenderer)context.Services.Get<IHeadlessRenderer>()!).Rasterize(ReferenceView(), Size, Size, CancellationToken.None);
