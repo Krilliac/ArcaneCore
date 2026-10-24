@@ -1180,7 +1180,17 @@ public sealed partial class MapCombat
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }
 
+        bool wasInCombat = (attacker.UnitFlags & UnitFlags.InCombat) != 0;
         SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithVictim));
+
+        // vmangos Unit::SetInCombatState (Unit.cpp:5942-5946) -> Creature::OnEnterCombat (Creature.cpp:3652-3653): a creature entering combat
+        // through its own hit (an out-of-combat area aura such as Fire Shield) runs AttackedBy, so it attacks and lists the unit it hit
+        // instead of sitting in combat with no victim and evading at its next update.
+        if (!wasInCombat && attacker is ICombatCreature creature && IsAliveState(attacker)
+            && (attacker.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
+        {
+            creature.OnAttackedBy(victim);
+        }
     }
 
     /// <summary>vmangos Unit::ClearInCombat.</summary>

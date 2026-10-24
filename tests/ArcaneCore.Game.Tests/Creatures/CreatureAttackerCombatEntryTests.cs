@@ -56,8 +56,8 @@ public sealed class CreatureAttackerCombatEntryTests
 
         Pulse(s, s.Player);
 
-        Assert.Equal("DealSpellDamage", s.Mob.Combat.LastCombatSetBy);
-        Assert.Equal("SetInCombatWithVictim", s.Mob.Combat.LastCombatSetVia);
+        // AttackStart re-enters combat after the hit's link, so LastCombatSetBy now names AttackStart, not the hit.
+        Assert.True(s.Mob.Combat.IsInCombat);
         Assert.Same(s.Player, s.Mob.Combat.Victim);
         Assert.True(s.Mob.Combat.Threat.Contains(s.Player));
     }
