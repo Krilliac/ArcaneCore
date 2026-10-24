@@ -43,7 +43,8 @@ public sealed class LogonSession(
     RealmIpBanCache? ipBanCache = null,
     TimeProvider? timeProvider = null,
     PatchCatalog? patches = null,
-    OpcodeTable? traffic = null)
+    OpcodeTable? traffic = null,
+    IAccountLoginInfoStore? loginInfoStore = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
 
@@ -66,6 +67,8 @@ public sealed class LogonSession(
     private byte[]? _pinSalt;
     private string _clientOs = string.Empty;
     private string _clientPlatform = string.Empty;
+    private string _clientLocale = string.Empty;
+    private ushort _clientBuild;
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private bool _isAutocreate;
     private byte[]? _autocreateVerifier;
@@ -613,6 +616,8 @@ public sealed class LogonSession(
         _username = username;
         _clientOs = request.Os;
         _clientPlatform = request.Platform;
+        _clientLocale = ReadLocale(body);
+        _clientBuild = request.Build;
         if (_promptPin)
         {
             Span<byte> seedBytes = stackalloc byte[4];
@@ -650,6 +655,8 @@ public sealed class LogonSession(
         byte[]? pinSalt = _pinSalt;
         string clientOs = _clientOs;
         string clientPlatform = _clientPlatform;
+        string clientLocale = _clientLocale;
+        ushort clientBuild = _clientBuild;
         ClientPatch? offeredPatch = _offeredPatch;
         ResetChallengeState();
 
@@ -746,10 +753,37 @@ public sealed class LogonSession(
                 .ConfigureAwait(false);
         }
 
+        await RecordLoginInfoAsync(username, clientOs, clientPlatform, clientLocale, clientBuild, cancellationToken).ConfigureAwait(false);
+
         _authenticated = true;
         _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, LogSafe.Escape(username));
         await SendProofSuccessAsync(srp.ServerProof, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stores the client details of a proven logon. Informational only: a failure is logged and never fails the logon
+    /// (the shutdown of the session still propagates).
+    /// </summary>
+    private async Task RecordLoginInfoAsync(
+        string username, string os, string platform, string locale, ushort build, CancellationToken cancellationToken)
+    {
+        if (loginInfoStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await loginInfoStore.RecordLoginAsync(
+                username,
+                new AccountLoginInfo(_time.GetUtcNow().UtcDateTime, os, platform, locale, build),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            logger.LogWarning(ex, "[{Endpoint}] could not record the login info of '{Account}'", remoteEndpoint, LogSafe.Escape(username));
+        }
     }
 
     private async Task HandleReconnectChallengeAsync(CancellationToken cancellationToken)
@@ -1169,6 +1203,8 @@ public sealed class LogonSession(
         _pinSalt = null;
         _clientOs = string.Empty;
         _clientPlatform = string.Empty;
+        _clientLocale = string.Empty;
+        _clientBuild = 0;
         _isAutocreate = false;
         _autocreateVerifier = null;
         _username = string.Empty;

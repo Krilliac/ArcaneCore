@@ -29,6 +29,7 @@ public static class RealmResilienceServiceCollectionExtensions
         Decorate<IAccountStore>(services, static calls => new GuardedAccountStore(calls), required: true);
         Decorate<IRealmStore>(services, static calls => new GuardedRealmStore(calls), required: true);
         Decorate<IBanStore>(services, static calls => new GuardedBanStore(calls), required: false);
+        Decorate<IAccountLoginInfoStore>(services, static calls => new GuardedAccountLoginInfoStore(calls), required: false);
         return services;
     }
 

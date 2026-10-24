@@ -161,25 +161,26 @@ public sealed class SqlUpdateGoldenTests
         UpdateSet set = await UpdateScriptWriter.GenerateAsync(component, snapshot);
 
         Assert.Equal(3, set.Files.Count);
-        Assert.Equal(6, set.Snapshot.Version);
-        Assert.All(set.Files, f => Assert.Contains("0006_InlineStep.sql", f.Path));
+        int prior = AuthDbContext.Schema.CurrentVersion;
+        Assert.Equal(prior + 1, set.Snapshot.Version);
+        Assert.All(set.Files, f => Assert.Contains($"{prior + 1:0000}_InlineStep.sql", f.Path));
         string sqlite = set.Files.Single(f => f.Path.Contains("/sqlite/")).Content;
         string postgres = set.Files.Single(f => f.Path.Contains("/postgresql/")).Content;
         string maria = set.Files.Single(f => f.Path.Contains("/mariadb/")).Content;
         Assert.Contains("CREATE UNIQUE INDEX \"IX_account_Username\"", sqlite);
-        Assert.Contains("CHECK (\"requires_auth_schema_version_5\" = 1)", sqlite);
+        Assert.Contains($"CHECK (\"requires_auth_schema_version_{prior}\" = 1)", sqlite);
         Assert.Contains("RAISE EXCEPTION", postgres);
         Assert.Contains("BEGIN NOT ATOMIC", maria);
         Assert.Contains("SIGNAL SQLSTATE '45000'", maria);
         foreach (string text in new[] { sqlite, postgres, maria })
         {
             Assert.Contains("UPDATE", text);
-            Assert.Contains("= 6 WHERE", text);
+            Assert.Contains($"= {prior + 1} WHERE", text);
             // the version row is written last
-            Assert.True(text.LastIndexOf("= 6 WHERE", StringComparison.Ordinal) > text.LastIndexOf("INDEX", StringComparison.Ordinal));
+            Assert.True(text.LastIndexOf($"= {prior + 1} WHERE", StringComparison.Ordinal) > text.LastIndexOf("INDEX", StringComparison.Ordinal));
             UpdateFileHeader header = UpdateFileHeader.Parse(text);
-            Assert.Equal(5, header.From);
-            Assert.Equal(6, header.To);
+            Assert.Equal(prior, header.From);
+            Assert.Equal(prior + 1, header.To);
             Assert.Equal(header.BodySha256, header.ActualBodySha256);
         }
 

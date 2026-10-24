@@ -68,4 +68,19 @@ public sealed class Account
 
     /// <summary>Last successful realm logon address, for vmangos IP_LOCK semantics.</summary>
     public string LastIp { get; set; } = string.Empty;
+
+    /// <summary>When the last successful realm logon happened, UTC; null until recorded (auth schema v6).</summary>
+    public DateTime? LastLoginUtc { get; set; }
+
+    /// <summary>Client OS tag of the last successful logon, for example <c>Win</c> (auth schema v6).</summary>
+    public string LastOs { get; set; } = string.Empty;
+
+    /// <summary>Client platform tag of the last successful logon, for example <c>x86</c> (auth schema v6).</summary>
+    public string LastPlatform { get; set; } = string.Empty;
+
+    /// <summary>Client locale tag of the last successful logon, for example <c>enUS</c> (auth schema v6).</summary>
+    public string LastLocale { get; set; } = string.Empty;
+
+    /// <summary>Client build of the last successful logon; 0 until recorded (auth schema v6).</summary>
+    public ushort LastBuild { get; set; }
 }
