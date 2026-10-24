@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Locomotion;
 /// A stack-amount change is an un-apply followed by an apply of the same <see cref="SpellAura"/>, so the
 /// ledger always holds the current amounts.
 /// </summary>
-public sealed class AuraLedger
+public sealed partial class AuraLedger
 {
     private readonly Dictionary<AuraType, List<SpellAura>> _auras = [];
 

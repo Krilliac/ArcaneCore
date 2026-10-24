@@ -18,7 +18,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <c>bot-nav/no-path-connected</c>).
 /// </para>
 /// </summary>
-internal static class PlayerbotRoutePlanWatch
+internal static partial class PlayerbotRoutePlanWatch
 {
     /// <summary>Two goals within this flat distance (yards) count as the same goal.</summary>
     internal const float SameGoalYards = 10f;

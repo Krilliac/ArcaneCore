@@ -34,7 +34,7 @@ public readonly record struct WsgFlagObject(uint Entry, byte Event1, bool Within
 /// nothing is shown (docs/areas/battlegrounds.md).
 /// </para>
 /// </summary>
-public sealed class WarsongGulch : Battleground
+public sealed partial class WarsongGulch : Battleground
 {
     /// <summary>Captures that win the match (vmangos <c>BG_WS_MAX_TEAM_SCORE</c>).</summary>
     public const int MaxTeamScore = 3;

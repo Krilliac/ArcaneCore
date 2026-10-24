@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Playerbots;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-internal sealed class PlayerbotStallWatch
+internal sealed partial class PlayerbotStallWatch
 {
     /// <summary>Moving this far from where the watch last saw progress is progress.</summary>
     internal const float ProgressYards = 10f;

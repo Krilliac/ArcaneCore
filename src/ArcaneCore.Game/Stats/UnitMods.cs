@@ -113,7 +113,7 @@ public struct PercentFactor
 /// lives on <see cref="PlayerStatState.Mods"/>, any other unit's is created on its first percent aura.
 /// </para>
 /// </summary>
-public sealed class UnitModLedger
+public sealed partial class UnitModLedger
 {
     private static readonly ConditionalWeakTable<Unit, UnitModLedger> s_others = new();
 

@@ -46,7 +46,7 @@ public enum TeleportStage
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class TeleportService
+public sealed partial class TeleportService
 {
     private readonly WorldRuntime _world;
     private readonly Action<Player> _beforeAddToMap;
