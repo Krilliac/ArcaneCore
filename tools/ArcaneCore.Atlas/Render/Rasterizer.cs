@@ -70,8 +70,12 @@ internal sealed class Rasterizer
         _scissorMax = Math.Clamp(maxXExclusive, _scissorMin, _frame.Width);
     }
 
-    /// <summary>Rasterizes a camera-space triangle, clipped to the near plane.</summary>
-    public void FillTriangle(in ViewVertex a, in ViewVertex b, in ViewVertex c, in TriangleFill fill)
+    /// <summary>
+    /// Rasterizes a camera-space triangle, clipped to the near plane. With a <paramref name="shader"/> the colour (and opacity) of each
+    /// pixel comes from it at the perspective-correct interpolated <see cref="ViewVertex.U"/>, <see cref="ViewVertex.V"/>; a pixel it
+    /// discards writes neither colour nor depth. Without one the triangle is the flat fill of <paramref name="fill"/>.
+    /// </summary>
+    public void FillTriangle(in ViewVertex a, in ViewVertex b, in ViewVertex c, in TriangleFill fill, BatchShader? shader = null)
     {
         double near = _view.Near;
         double far = _view.Far;
@@ -90,7 +94,7 @@ internal sealed class Rasterizer
 
         if (inA && inB && inC)
         {
-            Raster(a, b, c, fill);
+            Raster(a, b, c, fill, shader);
             return;
         }
 
@@ -117,7 +121,7 @@ internal sealed class Rasterizer
 
         for (int i = 1; i + 1 < count; i++)
         {
-            Raster(polygon[0], polygon[i], polygon[i + 1], fill);
+            Raster(polygon[0], polygon[i], polygon[i + 1], fill, shader);
         }
     }
 
@@ -242,10 +246,12 @@ internal sealed class Rasterizer
         return new ViewVertex(
             inside.X + (t * (outside.X - inside.X)),
             inside.Y + (t * (outside.Y - inside.Y)),
-            near);
+            near,
+            inside.U + (t * (outside.U - inside.U)),
+            inside.V + (t * (outside.V - inside.V)));
     }
 
-    private void Raster(in ViewVertex va, in ViewVertex vb, in ViewVertex vc, in TriangleFill fill)
+    private void Raster(in ViewVertex va, in ViewVertex vb, in ViewVertex vc, in TriangleFill fill, BatchShader? shader)
     {
         (double ax, double ay) = _view.ToScreen(va);
         (double bx, double by) = _view.ToScreen(vb);
@@ -260,11 +266,19 @@ internal sealed class Rasterizer
             return;
         }
 
+        double ua = va.U;
+        double uvA = va.V;
+        double ub = vb.U;
+        double uvB = vb.V;
+        double uc = vc.U;
+        double uvC = vc.V;
         if (area < 0)
         {
             (bx, cx) = (cx, bx);
             (by, cy) = (cy, by);
             (qb, qc) = (qc, qb);
+            (ub, uc) = (uc, ub);
+            (uvB, uvC) = (uvC, uvB);
             area = -area;
         }
 
@@ -294,6 +308,9 @@ internal sealed class Rasterizer
         float[] occluderDepth = _frame.OccluderDepth;
         byte[] pixels = _frame.Pixels;
         bool opaque = fill.Alpha >= 1.0;
+        double sa = perspective ? qa : 1.0;
+        double sb = perspective ? qb : 1.0;
+        double sc = perspective ? qc : 1.0;
         for (int j = (int)rowFirst; j <= (int)rowLast; j++)
         {
             double py = j + 0.5;
@@ -326,6 +343,34 @@ internal sealed class Rasterizer
                 }
 
                 int index = (j * width) + i;
+                Rgb colour = fill.Colour;
+                double alpha = fill.Alpha;
+                bool solid = opaque;
+                if (shader is not null)
+                {
+                    if (fill.Paint && !fill.Occlude && (float)d >= fillDepth[index])
+                    {
+                        continue;
+                    }
+
+                    // Perspective-correct: interpolate u/depth and 1/depth in screen space (weights of 1 for the orthographic camera).
+                    double wa = w0 * sa;
+                    double wb = w1 * sb;
+                    double wc = w2 * sc;
+                    double inverse = 1.0 / (wa + wb + wc);
+                    if (!shader.Shade(
+                            ((wa * ua) + (wb * ub) + (wc * uc)) * inverse,
+                            ((wa * uvA) + (wb * uvB) + (wc * uvC)) * inverse,
+                            out colour,
+                            out double shaded))
+                    {
+                        continue;
+                    }
+
+                    alpha = fill.Alpha * shaded;
+                    solid = fill.Alpha >= 1.0 && shader.WritesDepth;
+                }
+
                 if (fill.Occlude)
                 {
                     double slope = BiasSlope * (perspective ? d * d * gradient : gradient);
@@ -342,17 +387,21 @@ internal sealed class Rasterizer
                     float depth = (float)d;
                     if (depth < fillDepth[index])
                     {
-                        if (opaque)
+                        if (solid)
                         {
                             fillDepth[index] = depth;
                             int offset = index * 4;
-                            pixels[offset] = fill.Colour.R;
-                            pixels[offset + 1] = fill.Colour.G;
-                            pixels[offset + 2] = fill.Colour.B;
+                            pixels[offset] = colour.R;
+                            pixels[offset + 1] = colour.G;
+                            pixels[offset + 2] = colour.B;
+                        }
+                        else if (shader is null)
+                        {
+                            _frame.BlendAt(index * 4, colour, alpha);
                         }
                         else
                         {
-                            _frame.BlendAt(index * 4, fill.Colour, fill.Alpha);
+                            _frame.Combine(index * 4, colour, alpha, shader.Blend);
                         }
                     }
                 }

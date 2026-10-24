@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
+using ArcaneCore.Atlas.Core.Materials;
+using ArcaneCore.Atlas.Textures;
 
 namespace ArcaneCore.Atlas.Render;
 
@@ -37,6 +39,20 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
 {
     private readonly LayerRegistry _layers = layers ?? throw new ArgumentNullException(nameof(layers));
     private readonly LayerCache _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+    private readonly TextureCache? _textures;
+    private readonly CpuMaterials _materials = new();
+
+    /// <summary>
+    /// A renderer that also draws textured batches (design section 2.7): chunks with batches are sampled through
+    /// <paramref name="textures"/> and <paramref name="materials"/>. Without a texture cache such chunks are drawn flat in the
+    /// layer colour, as before.
+    /// </summary>
+    internal CpuRenderer(LayerRegistry layers, LayerCache cache, TextureCache? textures, CpuMaterials? materials)
+        : this(layers, cache)
+    {
+        _textures = textures;
+        _materials = materials ?? _materials;
+    }
 
     /// <summary>Smallest image edge, pixels.</summary>
     public const int MinDimension = 16;
@@ -73,6 +89,15 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
     internal static Rgb ShadeTriangle(Rgb baseColor, WorldPoint v0, WorldPoint v1, WorldPoint v2, string? layerId = null, bool both = false)
     {
         _ = layerId;
+        return baseColor.Scaled(TriangleIntensity(v0, v1, v2, both));
+    }
+
+    /// <summary>
+    /// The lighting factor <see cref="ShadeTriangle(Rgb, WorldPoint, WorldPoint, WorldPoint, string?, bool)"/> applies to a colour; a
+    /// textured triangle scales each texel by it, so a flat quad shades its texture exactly as it would shade a flat colour.
+    /// </summary>
+    internal static double TriangleIntensity(WorldPoint v0, WorldPoint v1, WorldPoint v2, bool both)
+    {
         double ux = v1.X - v0.X;
         double uy = v1.Y - v0.Y;
         double uz = v1.Z - v0.Z;
@@ -128,7 +153,7 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
         }
 
         intensity = Math.Clamp(intensity, Shading.Ambient, 1.0);
-        return baseColor.Scaled(intensity * (both ? Shading.BothFillScale : 1.0));
+        return intensity * (both ? Shading.BothFillScale : 1.0);
     }
 
     /// <inheritdoc />
@@ -170,7 +195,8 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
         var transform = new ViewTransform(view.Camera, width, height);
         var raster = new Rasterizer(buffer, transform);
         int splitX = Math.Clamp((int)Math.Round(view.SplitPosition * width), 0, width);
-        new ScenePass(scene, raster, transform, width, splitX, cancellationToken).Paint();
+        CpuTextureSet? textures = _textures is null ? null : new CpuTextureSet(_textures, cancellationToken);
+        new ScenePass(scene, raster, transform, width, splitX, textures, _materials, cancellationToken).Paint();
         if (view.ShowHud)
         {
             raster.SetScissor(0, width);
@@ -248,11 +274,20 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
     }
 
     /// <summary>One translucent triangle waiting for the back-to-front pass.</summary>
-    private readonly record struct TranslucentTriangle(float Depth, int Layer, int Chunk, int Triangle);
+    private readonly record struct TranslucentTriangle(float Depth, int Layer, int Chunk, int Triangle, int Batch = -1);
 
     /// <summary>The three passes over one scene. Single-use, single-threaded.</summary>
-    private sealed class ScenePass(Scene scene, Rasterizer raster, ViewTransform transform, int width, int splitX, CancellationToken cancellationToken)
+    private sealed class ScenePass(
+        Scene scene,
+        Rasterizer raster,
+        ViewTransform transform,
+        int width,
+        int splitX,
+        CpuTextureSet? textures,
+        CpuMaterials materials,
+        CancellationToken cancellationToken)
     {
+        private readonly Dictionary<(int Layer, int Chunk), BatchShader[]> _shaders = [];
         private ViewVertex[] _scratch = [];
 
         public void Paint()
@@ -316,6 +351,12 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
                 return;
             }
 
+            if (textures is not null && chunk.Batches.Length > 0 && chunk.Uv0 is not null)
+            {
+                TexturedSurfaces(layer, layerIndex, chunkIndex, textures, translucent);
+                return;
+            }
+
             ViewVertex[] vertices = Project(chunk);
             bool paint = layer.Mode is RenderMode.Fill or RenderMode.Both;
             bool opaque = layer.Opacity >= 1.0;
@@ -334,6 +375,56 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
                     if (paint)
                     {
                         translucent.Add(new TranslucentTriangle((float)((a.D + b.D + c.D) / 3.0), layerIndex, chunkIndex, t));
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A chunk with batches: each batch's material makes the pixel shader of its triangles. Opaque and alpha-key batches of an opaque
+        /// layer paint directly (alpha-key texels that fail the test write nothing); every other batch joins the back-to-front pass.
+        /// </summary>
+        private void TexturedSurfaces(SceneLayer layer, int layerIndex, int chunkIndex, CpuTextureSet textureSet, List<TranslucentTriangle> translucent)
+        {
+            GeometryChunk chunk = layer.Chunks[chunkIndex].Chunk;
+            ViewVertex[] vertices = Project(chunk);
+            bool paint = layer.Mode is RenderMode.Fill or RenderMode.Both;
+            bool both = layer.Mode == RenderMode.Both;
+            bool layerOpaque = layer.Opacity >= 1.0;
+            var shaders = new BatchShader[chunk.Batches.Length];
+            _shaders[(layerIndex, chunkIndex)] = shaders;
+            for (int batchIndex = 0; batchIndex < shaders.Length; batchIndex++)
+            {
+                GeometryBatch batch = chunk.Batches[batchIndex];
+                Material material = chunk.Materials[batch.Material];
+                BatchShader shader = materials.For(material.Kind).Prepare(material, textureSet, layer.Colour);
+                shaders[batchIndex] = shader;
+                int first = (int)batch.FirstTriangle;
+                int end = first + (int)batch.TriangleCount;
+                for (int t = first; t < end; t++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    uint ia = chunk.Triangles[(3 * t) + 0];
+                    uint ib = chunk.Triangles[(3 * t) + 1];
+                    uint ic = chunk.Triangles[(3 * t) + 2];
+                    ViewVertex a = vertices[ia];
+                    ViewVertex b = vertices[ib];
+                    ViewVertex c = vertices[ic];
+                    shader.Intensity = TriangleIntensity(chunk.Vertex(ia), chunk.Vertex(ib), chunk.Vertex(ic), both);
+                    if (paint && layerOpaque && shader.WritesDepth)
+                    {
+                        raster.FillTriangle(a, b, c, new TriangleFill(true, true, default, 1.0), shader);
+                        continue;
+                    }
+
+                    if (shader.WritesDepth)
+                    {
+                        raster.FillTriangle(a, b, c, new TriangleFill(true, false, default, 1.0), shader);
+                    }
+
+                    if (paint)
+                    {
+                        translucent.Add(new TranslucentTriangle((float)((a.D + b.D + c.D) / 3.0), layerIndex, chunkIndex, t, batchIndex));
                     }
                 }
             }
@@ -372,10 +463,26 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
                 SceneChunk sceneChunk = layer.Chunks[item.Chunk];
                 SetScissor(layer);
                 GeometryChunk chunk = sceneChunk.Chunk;
+                uint ia = chunk.Triangles[(3 * item.Triangle) + 0];
+                uint ib = chunk.Triangles[(3 * item.Triangle) + 1];
+                uint ic = chunk.Triangles[(3 * item.Triangle) + 2];
+                if (item.Batch >= 0)
+                {
+                    BatchShader shader = _shaders[(item.Layer, item.Chunk)][item.Batch];
+                    shader.Intensity = TriangleIntensity(chunk.Vertex(ia), chunk.Vertex(ib), chunk.Vertex(ic), layer.Mode == RenderMode.Both);
+                    raster.FillTriangle(
+                        ViewVertexOf(chunk, ia),
+                        ViewVertexOf(chunk, ib),
+                        ViewVertexOf(chunk, ic),
+                        new TriangleFill(false, true, default, layer.Opacity),
+                        shader);
+                    continue;
+                }
+
                 raster.FillTriangle(
-                    ViewVertexOf(chunk, chunk.Triangles[(3 * item.Triangle) + 0]),
-                    ViewVertexOf(chunk, chunk.Triangles[(3 * item.Triangle) + 1]),
-                    ViewVertexOf(chunk, chunk.Triangles[(3 * item.Triangle) + 2]),
+                    ViewVertexOf(chunk, ia),
+                    ViewVertexOf(chunk, ib),
+                    ViewVertexOf(chunk, ic),
                     new TriangleFill(false, true, FillColour(layer, sceneChunk, item.Triangle), layer.Opacity));
             }
         }
@@ -428,6 +535,15 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
                 _scratch[i] = transform.ToView(relative.X + p[3 * i], relative.Y + p[(3 * i) + 1], relative.Z + p[(3 * i) + 2]);
             }
 
+            Vector2[]? uv = chunk.Uv0;
+            if (uv is not null)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    _scratch[i] = _scratch[i] with { U = uv[i].X, V = uv[i].Y };
+                }
+            }
+
             return _scratch;
         }
 
@@ -436,7 +552,8 @@ public sealed class CpuRenderer(LayerRegistry layers, LayerCache cache) : IHeadl
             WorldPoint relative = chunk.Origin - transform.Eye;
             int i = (int)index * 3;
             float[] p = chunk.Positions;
-            return transform.ToView(relative.X + p[i], relative.Y + p[i + 1], relative.Z + p[i + 2]);
+            ViewVertex vertex = transform.ToView(relative.X + p[i], relative.Y + p[i + 1], relative.Z + p[i + 2]);
+            return chunk.Uv0 is { } uv ? vertex with { U = uv[index].X, V = uv[index].Y } : vertex;
         }
     }
 }

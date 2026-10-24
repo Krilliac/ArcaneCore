@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Atlas.Host.Cli;
 using ArcaneCore.Atlas.Reference.Client.Models;
 using ArcaneCore.Atlas.Reference.Display;
 using ArcaneCore.Atlas.Textures;

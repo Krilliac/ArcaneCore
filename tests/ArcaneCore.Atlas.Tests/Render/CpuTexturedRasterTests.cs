@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Materials;
 using ArcaneCore.Atlas.Render;
+using ArcaneCore.Atlas.Tests.Textures;
 using ArcaneCore.Atlas.Textures;
 using Xunit;
 

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
+using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Reference.Dbc;
 using ArcaneCore.Atlas.Reference.Display;
 using ArcaneCore.Atlas.Tests.Host;
@@ -121,7 +122,7 @@ public sealed class DisplayTablesTests
         CommandResult negative = await rig.InvokeAsync("display.resolve", new JsonObject { ["kind"] = "creature", ["id"] = -1 });
 
         Assert.Equal(WolfModel, wolf.Str("modelPath"));
-        Assert.Equal(0, wolf["problems"]!.AsArray().Count);
+        Assert.Empty(wolf["problems"]!.AsArray());
         Assert.Equal(WolfSkin, wolf["textures"]![0]!.GetValue<string>());
         Assert.Equal("bad-args", noKind.ErrorCode);
         Assert.Equal("bad-args", badKind.ErrorCode);

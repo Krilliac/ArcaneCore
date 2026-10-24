@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
+using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Core.Materials;
 using ArcaneCore.Atlas.Reference.Client.Models;
 using ArcaneCore.Atlas.Tests.Host;
@@ -82,8 +83,8 @@ public sealed class ModelPackageTests
         GeometryChunk chunk = GeometryWire.Read(await response.Content.ReadAsByteArrayAsync());
         Assert.True(chunk.IsV2);
         Assert.Equal(4, chunk.VertexCount);
-        Assert.Equal(2, chunk.Batches!.Count);
-        Assert.Equal(2, chunk.Materials!.Count);
+        Assert.Equal(2, chunk.Batches.Length);
+        Assert.Equal(2, chunk.Materials.Length);
         Assert.Equal((0.25f, 0.75f), (chunk.Uv0![0].X, chunk.Uv0[0].Y));
         Assert.Equal("m2:creature\\test\\thing.m2", chunk.Model!["key"]!.GetValue<string>());
         Assert.Equal("m2", chunk.Model["kind"]!.GetValue<string>());

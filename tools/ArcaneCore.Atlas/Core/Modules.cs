@@ -37,6 +37,7 @@ public static class ModuleOrder
 public sealed class AtlasContext : IDisposable
 {
     private readonly List<string> _problems = [];
+    private readonly List<Action> _composed = [];
 
     public AtlasContext(AtlasPaths paths, ILoggerFactory loggers, bool headless)
     {
@@ -50,6 +51,8 @@ public sealed class AtlasContext : IDisposable
         Services.Add(Cache);
         Services.Add(Events);
         Services.Add(View);
+        Services.Add(BinaryEndpoints);
+        Services.Add(CacheParticipants);
         Services.Add(this);
     }
 
@@ -73,6 +76,12 @@ public sealed class AtlasContext : IDisposable
 
     public LayerRegistry Layers { get; } = new();
 
+    /// <summary>The <c>GET /api/bin/{name}</c> routes (textures, model packages, ...).</summary>
+    public BinaryEndpoints BinaryEndpoints { get; } = new();
+
+    /// <summary>Caches besides the tile cache, reported by <c>status</c> and emptied by <c>cache.clear</c>.</summary>
+    public CacheParticipants CacheParticipants { get; } = new();
+
     public AtlasServices Services { get; } = new();
 
     /// <summary>Modules that failed to register, with the reason (shown by <c>status</c>).</summary>
@@ -82,6 +91,33 @@ public sealed class AtlasContext : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(problem);
         _problems.Add(problem);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> once, after every module has registered and the command, layer, endpoint and cache registries
+    /// are frozen. A module uses it to freeze a registry of its own (for example the generated texture schemes) at the same moment.
+    /// </summary>
+    public void OnComposed(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        _composed.Add(action);
+    }
+
+    internal void RunComposedHooks()
+    {
+        foreach (Action action in _composed)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+            {
+                ReportProblem($"A post-composition hook failed: {e.GetType().Name}: {e.Message}");
+            }
+        }
+
+        _composed.Clear();
     }
 
     public void Dispose() => Services.Dispose();
@@ -267,6 +303,9 @@ public static class AtlasModules
 
         context.Commands.Freeze();
         context.Layers.Freeze();
+        context.BinaryEndpoints.Freeze();
+        context.CacheParticipants.Freeze();
+        context.RunComposedHooks();
         return context;
     }
 }

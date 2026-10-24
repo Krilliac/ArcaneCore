@@ -333,6 +333,13 @@ public sealed partial class AtlasServer : IAsyncDisposable
                 }
 
                 break;
+            case "bin" when segments.Length == 2:
+                if (await RequireMethodAsync(http, HttpMethods.Get).ConfigureAwait(false))
+                {
+                    await BinaryAsync(http, segments[1], ct).ConfigureAwait(false);
+                }
+
+                break;
             case "capture" when segments.Length == 2:
                 if (await RequireMethodAsync(http, HttpMethods.Post).ConfigureAwait(false))
                 {
@@ -510,6 +517,35 @@ public sealed partial class AtlasServer : IAsyncDisposable
             await http.Response.Body.WriteAsync(word, ct).ConfigureAwait(false);
             await http.Response.Body.WriteAsync(part, ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary><c>GET /api/bin/{name}?...</c>: runs the registered binary endpoint and serves its body as octet-stream.</summary>
+    private async Task BinaryAsync(HttpContext http, string name, CancellationToken ct)
+    {
+        if (!_context.BinaryEndpoints.TryGet(name, out IBinaryEndpoint? endpoint))
+        {
+            await WriteErrorAsync(http, StatusCodes.Status404NotFound, "not-found", $"No binary endpoint named '{name}'.").ConfigureAwait(false);
+            return;
+        }
+
+        var query = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach ((string key, Microsoft.Extensions.Primitives.StringValues values) in http.Request.Query)
+        {
+            query[key] = values.Count > 0 ? values[0] ?? string.Empty : string.Empty;
+        }
+
+        BinaryReply reply = await endpoint.HandleAsync(query, ct).ConfigureAwait(false);
+        if (!reply.IsOk)
+        {
+            await WriteErrorAsync(http, reply.Status, reply.ErrorCode, reply.ErrorMessage).ConfigureAwait(false);
+            return;
+        }
+
+        http.Response.StatusCode = StatusCodes.Status200OK;
+        http.Response.ContentType = "application/octet-stream";
+        http.Response.ContentLength = reply.Body.Length;
+        http.Response.Headers["X-Atlas-Format"] = reply.Format;
+        await http.Response.Body.WriteAsync(reply.Body, ct).ConfigureAwait(false);
     }
 
     private async Task CaptureAnswerAsync(HttpContext http, string id, CancellationToken ct)

@@ -31,12 +31,18 @@ public sealed class GeometryWireV2Tests
             Positions = new float[12],
             Triangles = [0, 1, 2, 0, 2, 3],
             TriangleAttributes = [0, 0],
-            Normals = normals,
-            Uv0 = uv0,
+            Normals = normals is null ? null : Vectors3(normals),
+            Uv0 = uv0 is null ? null : Vectors2(uv0),
             Submesh = submesh,
             Batches = batches ?? [],
             Materials = materials ?? [],
         };
+
+    private static Vector3[] Vectors3(float[] values)
+        => [.. Enumerable.Range(0, values.Length / 3).Select(i => new Vector3(values[3 * i], values[(3 * i) + 1], values[(3 * i) + 2]))];
+
+    private static Vector2[] Vectors2(float[] values)
+        => [.. Enumerable.Range(0, values.Length / 2).Select(i => new Vector2(values[2 * i], values[(2 * i) + 1]))];
 
     private static float F(byte[] wire, int at) => BinaryPrimitives.ReadSingleLittleEndian(wire.AsSpan(at));
 
@@ -225,7 +231,7 @@ public sealed class GeometryWireV2Tests
         Assert.Equal(chunk.Submesh, back.Submesh);
         Assert.Equal(chunk.Batches, back.Batches);
         Assert.Equal(chunk.Materials.Select(m => m.ToJson().ToJsonString()), back.Materials.Select(m => m.ToJson().ToJsonString()));
-        Assert.Equal(1, back.TriangleAttributes[0]);
+        Assert.Equal(1u, back.TriangleAttributes[0]);
         Assert.Equal("one", back.Attributes[1]["name"]!.GetValue<string>());
     }
 
@@ -244,7 +250,7 @@ public sealed class GeometryWireV2Tests
         Assert.Equal(chunk.BoneIndices, back.BoneIndices);
         Assert.Equal(chunk.BoneWeights, back.BoneWeights);
         Assert.Equal(chunk.Submesh, back.Submesh);
-        Assert.Equal([(ushort)0x1234, (ushort)0, (ushort)5], back.Submesh);
+        Assert.Equal([(ushort)0x1234, (ushort)0, (ushort)5], back.Submesh!);
     }
 
     [Fact]

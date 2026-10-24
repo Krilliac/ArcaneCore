@@ -70,6 +70,9 @@ public static class LayerIds
     public const string RefWmo = "ref.wmo";
     public const string RefM2Collision = "ref.m2.collision";
     public const string RefM2Render = "ref.m2.render";
+    public const string RefTerrainTex = "ref.terrain.tex";
+    public const string RefWmoTex = "ref.wmo.tex";
+    public const string RefM2Tex = "ref.m2.tex";
     public const string RefNavPoly = "ref.nav.poly";
     public const string RefNavLinks = "ref.nav.links";
     public const string DiffTerrain = "diff.terrain";
@@ -213,6 +216,12 @@ public static class LayerCatalog
             "M2 bounding (collision) triangles from the client.", "#FFC97A", false),
         new(LayerIds.RefM2Render, LayerGroup.Reference, LayerView.Client, "Client M2 meshes",
             "M2 render meshes from the client, for seeing what has no collision.", "#B07AD8", false),
+        new(LayerIds.RefTerrainTex, LayerGroup.Reference, LayerView.Client, "Client terrain (textured)",
+            "Client terrain with its ground textures. Reserved: the source arrives with the terrain texture lane.", "#8FA9B8", false),
+        new(LayerIds.RefWmoTex, LayerGroup.Reference, LayerView.Client, "Client WMOs (textured)",
+            "Client WMO groups with their materials. Reserved: the source arrives with the model material lane.", "#C6B8FF", false),
+        new(LayerIds.RefM2Tex, LayerGroup.Reference, LayerView.Client, "Client M2 models (textured)",
+            "Client M2 doodads with their textures. Reserved: the source arrives with the model material lane.", "#B07AD8", false),
         new(LayerIds.RefNavPoly, LayerGroup.Reference, LayerView.DotRecast, "DotRecast polygons",
             "The same navmesh tiles read by DotRecast.", "#FFD34D", false),
         new(LayerIds.RefNavLinks, LayerGroup.Reference, LayerView.DotRecast, "DotRecast links",
