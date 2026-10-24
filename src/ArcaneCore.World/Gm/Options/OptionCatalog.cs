@@ -100,8 +100,8 @@ public sealed class OptionKey
     /// <summary>Other names that select the key (matched case-insensitively).</summary>
     public IReadOnlyList<string> Aliases { get; }
 
-    /// <summary>Whether <c>.server config set</c> may change it: not a restart-only key, and it has a writer.</summary>
-    public bool Writable => Apply != OptionApplyClass.Restart && Set is not null;
+    /// <summary>Whether <c>.server config set</c> may change it: not a restart-only key, not a secret (the typed command line is audited), and it has a writer.</summary>
+    public bool Writable => Apply != OptionApplyClass.Restart && Set is not null && !Secret;
 
     internal Func<OptionScope, object?> Get { get; }
 
@@ -430,6 +430,13 @@ public sealed class OptionCatalog
         if (key.Apply == OptionApplyClass.Restart)
         {
             error = $"{key.Path} is read from the configuration at start; edit the configuration file and restart";
+            return OptionSetResult.ReadOnly;
+        }
+
+        if (key.Secret)
+        {
+            // The command line is in the GM audit and the log as typed, so a secret value must never travel through it.
+            error = $"{key.Path} is a secret and is not written through a command; edit the configuration file";
             return OptionSetResult.ReadOnly;
         }
 

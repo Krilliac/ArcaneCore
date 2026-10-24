@@ -542,29 +542,29 @@ public sealed class OptionCatalogEdgeTests
     }
 
     [Fact]
-    public async Task ASecretSet_NeverPutsTheOldOrNewValueInTheLogOrTheReplyStrings()
+    public async Task ASecretSet_IsRefused_AndTheValueIsNeverPrintedOrLogged()
     {
+        // A writable secret would reach the GM audit as typed (the command line is logged), so the editor refuses to write one.
         await using var host = WorldTestHost.Start();
         var pack = new CountingPack();
         var logger = new CapturingLogger();
-        (OptionSetResult result, string before, string after, string diffBaseline) = await host.OnWorldAsync(() =>
+        (OptionSetResult result, string error, string shown, string described, bool writable) = await host.OnWorldAsync(() =>
         {
             OptionScope scope = new(new ProviderOverlay(host.WorldServices, pack), host.World, logger);
             var catalog = OptionCatalog.Create(scope);
             OptionKey key = catalog.Find("Edge:Pack:ApiToken")!;
-            OptionSetResult r = catalog.TrySet(scope, key, "brand-new-secret-value", Tester, out _, out string b, out string a);
+            OptionSetResult r = catalog.TrySet(scope, key, "brand-new-secret-value", Tester, out string e, out _, out _);
             OptionStatus status = catalog.Describe(scope, key);
-            string baseline = key.Format(status.Baseline);
-            catalog.Reset(scope, key, "Tester");
-            return (r, b, a, baseline);
+            return (r, e, key.Format(status.Current), key.Format(status.Baseline), key.Writable);
         });
 
-        Assert.Equal(OptionSetResult.Ok, result);
-        Assert.Equal("old-secret-value", pack.Token); // the reset put the old one back
-        Assert.Equal("********", before);
-        Assert.Equal("********", after);
-        Assert.Equal("********", diffBaseline);
-        Assert.NotEmpty(logger.Lines);
+        Assert.Equal(OptionSetResult.ReadOnly, result);
+        Assert.False(writable);
+        Assert.Contains("secret", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-value", error, StringComparison.Ordinal);
+        Assert.Equal("old-secret-value", pack.Token);
+        Assert.Equal("********", shown);
+        Assert.Equal("********", described);
         Assert.DoesNotContain(logger.Lines, l => l.Contains("secret-value", StringComparison.Ordinal));
     }
 

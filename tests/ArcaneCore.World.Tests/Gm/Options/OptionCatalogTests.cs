@@ -306,6 +306,35 @@ public sealed class OptionCatalogTests
     }
 
     [Fact]
+    public async Task ASecretKey_IsNeverWritableThroughTheEditor()
+    {
+        var provider = new SecretProvider();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IOptionKeyProvider>(provider));
+        (bool writable, OptionSetResult result, string error, string shown) = await host.OnWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            var catalog = OptionCatalog.Create(scope);
+            OptionKey key = catalog.Find("Pack:Test:Token")!;
+            OptionSetResult r = catalog.TrySet(scope, key, "hunter2", Tester, out string message, out _, out _);
+            return (key.Writable, r, message, key.Format("hunter2"));
+        });
+
+        Assert.False(writable);
+        Assert.Equal(OptionSetResult.ReadOnly, result);
+        Assert.Contains("secret", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", shown, StringComparison.Ordinal);
+        Assert.Equal("original", provider.Value);
+    }
+
+    private sealed class SecretProvider : IOptionKeyProvider
+    {
+        public string Value { get; private set; } = "original";
+
+        public void RegisterOptions(IOptionRegistry registry)
+            => registry.AddText("Pack:Test:Token", "a secret test token", OptionApplyClass.Live, () => Value, v => Value = v, secret: true);
+    }
+
+    [Fact]
     public async Task ExternalChanges_OfTheAliasCommands_AreTrackedAndResettable()
     {
         await using var host = WorldTestHost.Start();
