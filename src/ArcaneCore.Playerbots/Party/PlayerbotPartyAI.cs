@@ -4,6 +4,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
+using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
@@ -21,6 +22,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
@@ -93,6 +95,7 @@ internal sealed class PlayerbotPartyAI
 
     /// <summary>Who the bot is trading with, from the begin-trade packet or the bot's own request; empty when no trade is open.</summary>
     private ObjectGuid _tradePartner;
+    private bool _tradeCounts; // the window with _tradePartner is worth a TradeCompleted note (set on the partner's accept, read on completion)
     private readonly PlayerbotCombatSpells _combatSpells;
     private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
@@ -664,6 +667,7 @@ internal sealed class PlayerbotPartyAI
                 if (trusted)
                 {
                     _tradePartner = speaker.Guid;
+                    _tradeCounts = false;
                     Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false);
                 }
                 return;
@@ -860,25 +864,53 @@ internal sealed class PlayerbotPartyAI
             {
                 var trader = new ObjectGuid(BitConverter.ToUInt64(payload, 4));
                 if (trader.IsEmpty || trader == player.Guid) return;
-                _tradePartner = trader;
                 ObjectGuid master = ResolveMaster(player);
                 bool trusted = trader == _master || trader == master
                     || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
-                if (trusted) Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
+                if (!trusted) return; // a stranger's request is not answered here, and never takes over the partner an open window is credited to
+                _tradePartner = trader;
+                _tradeCounts = false;
+                Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
                 break;
             }
             case 4:
-                Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
+                AnswerPartnerAccept(player);
                 UpdateEquipment(player);
                 break;
             case 8:
                 UpdateEquipment(player);
                 Social?.NoteTradeDone(_botId);
-                if (!_tradePartner.IsEmpty) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
+                if (!_tradePartner.IsEmpty && _tradeCounts) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
+                _tradeCounts = false;
                 break;
         }
+    }
+
+    /// <summary>
+    /// The vendor value (copper, summed over the stack) from which a gift counts as a trade for the bot's memory. P4 S1 turns it into
+    /// <c>GiftMinValueCopper</c>; until then it is that option's default.
+    /// </summary>
+    private const long GiftMinValueCopper = 100;
+
+    /// <summary>
+    /// The partner accepted (status 4). The bot accepts only a window it opened or answered for <see cref="_tradePartner"/> (trusted, or the
+    /// bot-initiated "trade me" partner) in which its own side is empty, read from the live window in this same world-thread step, so a
+    /// partner cannot talk it into giving something it did not check. Notes whether the window counts as a trade for the memory (it received
+    /// at least <see cref="GiftMinValueCopper"/> of vendor value, or the bot gave something).
+    /// </summary>
+    private void AnswerPartnerAccept(Player player)
+    {
+        if (_tradePartner.IsEmpty || _session.Services.GetService<EconomyFeature>()?.TradeOf(player) is not { Opened: true, Settling: false } trade) return;
+        TradeSide mine = trade.SideOf(player), theirs = trade.OtherSide(player);
+        if (theirs.Player.Guid != _tradePartner) return;
+        bool gave = mine.Gold != 0 || mine.TradedItems.Any();
+        long received = 0;
+        foreach (ObjectGuid guid in theirs.TradedItems)
+            if (theirs.Player.Inventory.GetItemByGuid(guid) is { } item) received += (long)item.Template.SellPrice * item.Count;
+        _tradeCounts = gave || received >= GiftMinValueCopper;
+        if (!gave) Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
     }
 
     private void Execute(Player player, Player master, PlayerbotPartyCommand command, bool acknowledge = true)
