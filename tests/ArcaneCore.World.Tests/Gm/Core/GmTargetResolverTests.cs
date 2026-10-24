@@ -1,11 +1,14 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Tests.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Gm.Inspect;
@@ -37,24 +40,41 @@ public sealed class GmTargetResolverTests
     }
 
     [Theory]
-    [InlineData("#123", 123UL)]
-    [InlineData("123", 0UL)]
     [InlineData("0xF130000123000001", 0xF130000123000001UL)]
     [InlineData("0Xff", 0xFFUL)]
-    [InlineData("#0x10", 0x10UL)]
-    public void AGuidIsDecimalAfterAHashOrHexAfter0x(string text, ulong expected)
+    [InlineData("0x10", 0x10UL)]
+    public void AFullGuidIsHexAfter0x(string text, ulong expected)
     {
-        bool parsed = GmSelector.TryParse(text, out GmSelector selector, out _);
-        if (expected == 0)
-        {
-            // A bare number is no selector: it is an argument (the default chain), so a whole-text parse refuses the leftover.
-            Assert.False(parsed);
-            return;
-        }
-
-        Assert.True(parsed);
+        Assert.True(GmSelector.TryParse(text, out GmSelector selector, out _));
         Assert.Equal(GmSelectorKind.Guid, selector.Kind);
         Assert.Equal(expected, selector.Value);
+    }
+
+    [Theory]
+    [InlineData("#123")]
+    [InlineData("123")]
+    [InlineData("#0x10")]
+    public void ABareNumberIsNoSelectorSoItStaysAnArgument(string text)
+    {
+        // The plan writes numeric arguments as #n, so a leading #n must never be taken for a guid.
+        Assert.False(GmSelector.TryParse(text, out _, out _));
+        Assert.True(GmSelector.TryTakeLeading(text + " fast", out GmSelector selector, out string rest, out _));
+        Assert.Equal(GmSelectorKind.Default, selector.Kind);
+        Assert.Equal(text + " fast", rest);
+    }
+
+    [Theory]
+    [InlineData("guid #77", 77UL, null)]
+    [InlineData("GUID 77", 77UL, null)]
+    [InlineData("guid #0xFFFFFF", 0xFFFFFFUL, null)]
+    [InlineData("guid #77 map #1", 77UL, 1u)]
+    [InlineData("guid #77 MAP 530", 77UL, 530u)]
+    public void AGuidCounterTakesAnOptionalMap(string text, ulong low, uint? map)
+    {
+        Assert.True(GmSelector.TryParse(text, out GmSelector selector, out _));
+        Assert.Equal(GmSelectorKind.Counter, selector.Kind);
+        Assert.Equal(low, selector.Value);
+        Assert.Equal(map, selector.MapId);
     }
 
     [Theory]
@@ -75,9 +95,12 @@ public sealed class GmTargetResolverTests
         Assert.Equal(299u, plain.Entry);
         Assert.Null(plain.MapId);
 
-        Assert.True(GmSelector.TryParse("entry #299 #1", out GmSelector withMap, out _));
+        Assert.True(GmSelector.TryParse("entry #299 map #1", out GmSelector withMap, out _));
         Assert.Equal(299u, withMap.Entry);
         Assert.Equal(1u, withMap.MapId);
+
+        // The old "entry #n #m" shape is not the grammar: the second number is a leftover argument.
+        Assert.False(GmSelector.TryParse("entry #299 #1", out _, out _));
     }
 
     [Fact]
@@ -117,6 +140,13 @@ public sealed class GmTargetResolverTests
     [InlineData("spawn x")]
     [InlineData("entry")]
     [InlineData("entry #5000000000")]
+    [InlineData("entry #5 map")]
+    [InlineData("entry #5 map #x")]
+    [InlineData("entry #5 map #4294967296")]
+    [InlineData("guid")]
+    [InlineData("guid #0")]
+    [InlineData("guid #16777216")]
+    [InlineData("guid #5 map")]
     [InlineData("nearest #0")]
     [InlineData("nearest #501")]
     [InlineData("offline")]
@@ -135,7 +165,7 @@ public sealed class GmTargetResolverTests
         Assert.Equal("Bob", selector.Name);
         Assert.Equal("5 fast", rest);
 
-        Assert.True(GmSelector.TryTakeLeading("entry #299 #1 page #2", out selector, out rest, out _));
+        Assert.True(GmSelector.TryTakeLeading("entry #299 map #1 page #2", out selector, out rest, out _));
         Assert.Equal(1u, selector.MapId);
         Assert.Equal("page #2", rest);
 
@@ -162,10 +192,15 @@ public sealed class GmTargetResolverTests
     [InlineData("nearest #-5", GmSelectorKind.Nearest, "#-5")]
     [InlineData("nearest gobject 3", GmSelectorKind.Nearest, "3")]
     [InlineData("entry #299 abc", GmSelectorKind.Entry, "abc")]
-    [InlineData("entry #299 #1 #2", GmSelectorKind.Entry, "#2")]
+    [InlineData("entry #299 #1", GmSelectorKind.Entry, "#1")]
+    [InlineData("entry #299 map #1 #2", GmSelectorKind.Entry, "#2")]
+    [InlineData("guid #7 map #1 fast", GmSelectorKind.Counter, "fast")]
+    [InlineData("guid #7 #1", GmSelectorKind.Counter, "#1")]
     [InlineData("spawn #7 #8", GmSelectorKind.Spawn, "#8")]
     [InlineData("offline $bob 5", GmSelectorKind.Offline, "5")]
-    [InlineData("#5 spawn #7", GmSelectorKind.Guid, "spawn #7")]
+    [InlineData("#5 spawn #7", GmSelectorKind.Default, "#5 spawn #7")]
+    [InlineData("#5", GmSelectorKind.Default, "#5")]
+    [InlineData("0x10 #5", GmSelectorKind.Guid, "#5")]
     public void ALeadingSelectorTakesOnlyTheWordsTheGrammarGivesIt(string text, GmSelectorKind kind, string expectedRest)
     {
         Assert.True(GmSelector.TryTakeLeading(text, out GmSelector selector, out string rest, out _));
@@ -178,7 +213,6 @@ public sealed class GmTargetResolverTests
     [InlineData("nearest #NaN1")]
     [InlineData("spawn #4294967296")]
     [InlineData("entry #0")]
-    [InlineData("#18446744073709551616")]
     [InlineData("0x10000000000000000")]
     [InlineData("offline $")]
     public void AnOutOfRangeNumberIsABadSelectorNotAnException(string text)
@@ -276,7 +310,11 @@ public sealed class GmTargetResolverTests
         Creature wolf = await WolfAsync(host);
         await host.PlaceAsync("Rslvfind", wolf.X + 3, wolf.Y, wolf.Z);
 
-        foreach (string selector in new[] { $"#{wolf.Guid.Value}", $"0x{wolf.Guid.Value:X16}", $"spawn #{WolfSpawn}", $"entry #{WolfEntry}", "nearest", "nearest #10 creature", $"entry #{WolfEntry} #0"})
+        foreach (string selector in new[]
+        {
+            $"0x{wolf.Guid.Value:X16}", $"guid #{wolf.Guid.Counter}", $"guid #{wolf.Guid.Counter} map #0", $"spawn #{WolfSpawn}",
+            $"entry #{WolfEntry}", "nearest", "nearest #10 creature", $"entry #{WolfEntry} map #0",
+        })
         {
             Resolved found = await ResolveAsync(host, gm, "Rslvfind", selector, GmTargetRequest.Writing);
             Assert.Same(wolf, found.Target?.Creature);
@@ -293,6 +331,96 @@ public sealed class GmTargetResolverTests
         Resolved wrongSpawn = await ResolveAsync(host, gm, "Rslvfind", "spawn #1", GmTargetRequest.Reading);
         Assert.Null(wrongSpawn.Target);
         Assert.Equal("no-target", wrongSpawn.Failure);
+
+        Resolved wrongCounter = await ResolveAsync(host, gm, "Rslvfind", $"guid #{wolf.Guid.Counter + 1}", GmTargetRequest.Reading);
+        Assert.Null(wrongCounter.Target);
+        Assert.Equal([GmTargetResolver.NotFound($"guid #{wolf.Guid.Counter + 1}")], wrongCounter.Replies);
+
+        // A map with no such creature, and a map that is not loaded.
+        Assert.Null((await ResolveAsync(host, gm, "Rslvfind", $"entry #{WolfEntry} map #1", GmTargetRequest.Reading)).Target);
+        Assert.Null((await ResolveAsync(host, gm, "Rslvfind", $"entry #{WolfEntry} map #9999", GmTargetRequest.Reading)).Target);
+    }
+
+    [Fact]
+    public async Task APlayerOnAnotherMapSearchesTheWolfsMapFromAPostedAction()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient far = await host.EnterWorldAsync("RSLVFARA", "Rslvfara");
+        await far.CollectAsync();
+        Creature wolf = await WolfAsync(host);
+        Player farPlayer = await host.PlayerAsync("Rslvfara");
+        await MoveToKalimdorAsync(host, far, farPlayer);
+
+        // Every one of these needs another map's collections: none may run inline on the issuer's map thread.
+        foreach (string selector in new[] { $"spawn #{WolfSpawn}", $"entry #{WolfEntry} map #0", $"guid #{wolf.Guid.Counter} map #0", $"0x{wolf.Guid.Value:X16}" })
+        {
+            Resolved found = await ResolveAsync(host, far, "Rslvfara", selector, GmTargetRequest.Reading);
+            Assert.True(found.Posted, selector + " was resolved inline");
+            Assert.Same(wolf, found.Target?.Creature);
+            Assert.Empty(found.Replies);
+        }
+
+        Resolved missing = await ResolveAsync(host, far, "Rslvfara", "spawn #1", GmTargetRequest.Reading);
+        Assert.True(missing.Posted);
+        Assert.Null(missing.Target);
+        Assert.Equal([GmTargetResolver.NotFound("spawn #1")], missing.Replies);
+
+        // A write to that creature goes through the owning map's rule too: it is delivered from a posted action.
+        Resolved write = await ResolveAsync(host, far, "Rslvfara", $"spawn #{WolfSpawn}", GmTargetRequest.Writing);
+        Assert.True(write.Posted);
+        Assert.Same(wolf, write.Target?.Creature);
+    }
+
+    [Fact]
+    public async Task ALowestGuidIsThePickOnAnotherMapWhenGuidsShareTheirHighBits()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = WolfEntry, Name = "Young Wolf", MinLevel = 2, MaxLevel = 2,
+            DisplayIds = [903], Faction = 32, CreatureType = 1, Family = 1,
+            MinLevelHealth = 55, MaxLevelHealth = 55,
+        };
+        CreatureSpawn[] spawns =
+        [
+            new() { Guid = 4242, Entry = WolfEntry, MapId = 0, X = -8940f, Y = -132f, Z = 83.5f },
+            new() { Guid = 4243, Entry = WolfEntry, MapId = 0, X = -8930f, Y = -132f, Z = 83.5f },
+            new() { Guid = 4244, Entry = WolfEntry, MapId = 0, X = -8920f, Y = -132f, Z = 83.5f },
+        ];
+        CreatureTestStore.Current.Value = new CreatureTestContext(new CreatureContent([template], spawns, [], [], []));
+        WorldTestHost host;
+        try
+        {
+            host = WorldTestHost.Start();
+        }
+        finally
+        {
+            CreatureTestStore.Current.Value = null;
+        }
+
+        await using WorldTestHost _ = host;
+        await using WorldTestClient far = await host.EnterWorldAsync("RSLVLOWG", "Rslvlowg");
+        await far.CollectAsync();
+        Player farPlayer = await host.PlayerAsync("Rslvlowg");
+        Creature[] wolves = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!.Creatures.Where(c => c.Entry == WolfEntry).ToArray());
+        Assert.Equal(3, wolves.Length);
+        // The guids differ only in the low counter bits, which a float cannot tell apart.
+        Assert.Single(wolves.Select(w => (float)w.Guid.Value).Distinct());
+        await MoveToKalimdorAsync(host, far, farPlayer);
+
+        Resolved found = await ResolveAsync(host, far, "Rslvlowg", $"entry #{WolfEntry} map #0", GmTargetRequest.Reading);
+
+        Assert.Equal(wolves.Min(w => w.Guid.Value), found.Target?.Creature?.Guid.Value);
+    }
+
+    private static async Task MoveToKalimdorAsync(WorldTestHost host, WorldTestClient client, Player player)
+    {
+        await host.OnWorldAsync(() => Assert.True(((WorldSession)player.Session).Services.GetRequiredService<TeleportFeature>()
+            .Teleports.TeleportTo(player, 1, -441.8f, -2596f, 96f, 0)));
+        await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates);
+        await host.WaitForWorldAsync(() => player.Map?.MapId == 1, "player on map 1");
+        await client.CollectAsync();
     }
 
     [Fact]
@@ -352,7 +480,7 @@ public sealed class GmTargetResolverTests
     }
 
     [Fact]
-    public async Task AWriteRefusesATargetOnAnotherMapButAReadAllowsIt()
+    public async Task AWriteToAnotherMapIsPostedAndAReadIsNot()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("RSLVMAPA", "Rslvmapa", AccountSecurity.GameMaster);
@@ -360,33 +488,82 @@ public sealed class GmTargetResolverTests
         await gm.CollectAsync();
         await far.CollectAsync();
         Player farPlayer = await host.PlayerAsync("Rslvmapb");
-        await host.OnWorldAsync(() => Assert.True(((WorldSession)farPlayer.Session).Services.GetRequiredService<TeleportFeature>()
-            .Teleports.TeleportTo(farPlayer, 1, -441.8f, -2596f, 96f, 0)));
-        await far.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
-        await far.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
-        await far.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates);
-        await host.WaitForWorldAsync(() => farPlayer.Map?.MapId == 1, "far player on map 1");
+        await MoveToKalimdorAsync(host, far, farPlayer);
         await gm.CollectAsync();
 
         Resolved read = await ResolveAsync(host, gm, "Rslvmapa", "$rslvmapb", GmTargetRequest.Reading);
         Assert.Equal("Rslvmapb", read.Target?.Player?.Name);
+        Assert.False(read.Posted);
 
         Resolved write = await ResolveAsync(host, gm, "Rslvmapa", "$rslvmapb", GmTargetRequest.Writing);
-        Assert.Null(write.Target);
-        Assert.Equal([GmTargetResolver.OtherMap], write.Replies);
-        Assert.Equal("other-map", write.Failure);
+        Assert.Equal("Rslvmapb", write.Target?.Player?.Name);
+        Assert.True(write.Posted, "a write to an object on another map must be queued with World.Post");
+        Assert.True(write.RanOnWorldThread);
+        Assert.Null(write.Failure);
+        Assert.Empty(write.Replies);
+    }
 
-        // A console issuer has no map, so the same-map rule does not apply to it.
-        var consoleOutput = new List<string>();
-        (GmTarget? viaConsole, string? consoleFailure) = await host.OnWorldAsync(() =>
+    [Fact]
+    public async Task AWriteOnTheIssuersOwnMapRunsInline()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RSLVOWNA", "Rslvowna", AccountSecurity.GameMaster);
+        await using WorldTestClient other = await host.EnterWorldAsync("RSLVOWNB", "Rslvownb");
+        await gm.CollectAsync();
+        await other.CollectAsync();
+
+        Resolved self = await ResolveAsync(host, gm, "Rslvowna", "", GmTargetRequest.Writing);
+        Resolved named = await ResolveAsync(host, gm, "Rslvowna", "$rslvownb", GmTargetRequest.Writing);
+
+        Assert.False(self.Posted);
+        Assert.Equal("Rslvowna", self.Target?.Player?.Name);
+        Assert.False(named.Posted);
+        Assert.Equal("Rslvownb", named.Target?.Player?.Name);
+    }
+
+    [Fact]
+    public async Task EveryConsoleWriteIsPostedAndRunsAtTheNextTickStart()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("RSLVCWRT", "Rslvcwrt");
+        await player.CollectAsync();
+        var output = new List<string>();
+        var ran = new List<string>();
+        TickPhase? phaseAtRun = null;
+        bool? onWorldThread = null;
+        CommandContext? console = null;
+
+        bool ranInline = await host.OnWorldAsync(() =>
         {
-            Player any = host.World.FindOnlinePlayer("Rslvmapa")!;
-            CommandContext console = CommandContext.ForConsole((WorldSession)any.Session, ChatCommands.CreateTable(), consoleOutput.Add);
-            return (GmTargetResolver.Resolve(console, "$rslvmapb", GmTargetRequest.Writing), console.Failure);
+            console = ConsoleOf(host, output, "Rslvcwrt");
+            GmTargetResolver.ResolveThen(console, "$rslvcwrt", GmTargetRequest.Writing, target =>
+            {
+                phaseAtRun = host.World.CurrentPosition.Phase;
+                onWorldThread = host.World.IsMainWorldThread;
+                ran.Add(target.Player!.Name);
+            });
+            console.Complete();
+            return ran.Count != 0;
         });
-        Assert.Equal("Rslvmapb", viaConsole?.Player?.Name);
-        Assert.Null(consoleFailure);
-        Assert.Empty(consoleOutput);
+
+        Assert.False(ranInline, "a console write must not run inside the resolve call");
+        await console!.WhenSettled.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.Equal(["Rslvcwrt"], ran);
+        Assert.True(onWorldThread);
+        Assert.Equal(TickPhase.Commands, phaseAtRun); // the start of a tick: the posted commands run before any map updates
+        Assert.Null(console.Failure);
+        Assert.Empty(output);
+
+        // A read from the console needs no hop for a name.
+        ran.Clear();
+        bool readInline = await host.OnWorldAsync(() =>
+        {
+            CommandContext reader = ConsoleOf(host, output, "Rslvcwrt");
+            GmTargetResolver.ResolveThen(reader, "$rslvcwrt", GmTargetRequest.Reading, target => ran.Add(target.Player!.Name));
+            reader.Complete();
+            return ran.Count != 0;
+        });
+        Assert.True(readInline);
     }
 
     [Fact]
@@ -402,7 +579,7 @@ public sealed class GmTargetResolverTests
         await host.PlaceAsync("Rslvrkh", -8938f, -132f, 83.5f);
 
         // By guid, by hex guid, by nearest, and through the selection: each read is refused with the standard reply.
-        foreach (string selector in new[] { $"#{high.Guid.Value}", $"0x{high.Guid.Value:X16}", "nearest #10 player" })
+        foreach (string selector in new[] { $"0x{high.Guid.Value:X16}", "nearest #10 player" })
         {
             Resolved refused = await ResolveAsync(host, gm, "Rslvrkl", selector, GmTargetRequest.Reading);
             Assert.Null(refused.Target);
@@ -420,7 +597,7 @@ public sealed class GmTargetResolverTests
         Resolved self = await ResolveAsync(host, gm, "Rslvrkl", "$rslvrkl", GmTargetRequest.Writing);
         Assert.Equal("Rslvrkl", self.Target?.Player?.Name);
         Player low = await host.PlayerAsync("Rslvrkl");
-        Resolved down = await ResolveAsync(host, boss, "Rslvrkh", $"#{low.Guid.Value}", GmTargetRequest.Writing);
+        Resolved down = await ResolveAsync(host, boss, "Rslvrkh", $"0x{low.Guid.Value:X16}", GmTargetRequest.Writing);
         Assert.Equal("Rslvrkl", down.Target?.Player?.Name);
     }
 
@@ -467,11 +644,11 @@ public sealed class GmTargetResolverTests
 
         // The creature selectors cannot reach a command that only takes players.
         // A guid names the object outright, so its kind is refused; the searching selectors only look at accepted kinds.
-        Resolved byGuid = await ResolveAsync(host, gm, "Rslvknds", $"#{wolf.Guid.Value}", playersOnly);
+        Resolved byGuid = await ResolveAsync(host, gm, "Rslvknds", $"0x{wolf.Guid.Value:X16}", playersOnly);
         Assert.Null(byGuid.Target);
         Assert.Equal("wrong-kind", byGuid.Failure);
 
-        foreach (string selector in new[] { $"spawn #{WolfSpawn}", $"entry #{WolfEntry}", "nearest #10", "nearest #10 creature" })
+        foreach (string selector in new[] { $"spawn #{WolfSpawn}", $"entry #{WolfEntry}", $"guid #{wolf.Guid.Counter}", "nearest #10", "nearest #10 creature" })
         {
             Resolved none = await ResolveAsync(host, gm, "Rslvknds", selector, playersOnly);
             Assert.Null(none.Target);
@@ -503,36 +680,51 @@ public sealed class GmTargetResolverTests
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient player = await host.EnterWorldAsync("RSLVCONS", "Rslvcons");
         await player.CollectAsync();
-        var output = new List<string>();
 
-        (GmTarget? named, string? failure, string[] replies) = await host.OnWorldAsync(() =>
-        {
-            CommandContext console = ConsoleOf(host, output);
-            GmTarget? found = GmTargetResolver.Resolve(console, "$rslvcons", GmTargetRequest.Writing);
-            return (found, console.Failure, output.ToArray());
-        });
-        Assert.Equal("Rslvcons", named?.Player?.Name);
-        Assert.Null(failure);
-        Assert.Empty(replies);
+        ConsoleResult named = await ResolveConsoleAsync(host, "$rslvcons", GmTargetRequest.Writing);
+        Assert.Equal("Rslvcons", named.Target?.Player?.Name);
+        Assert.Null(named.Failure);
+        Assert.Empty(named.Replies);
 
-        foreach (string selector in new[] { "#1", "spawn #1", "entry #1", "nearest" })
+        // No position and no map: the console cannot say "near me", nor pick an entry or counter without map #m.
+        foreach (string selector in new[] { "nearest", "entry #1", "guid #1" })
         {
-            output.Clear();
-            string[] answer = await host.OnWorldAsync(() =>
-            {
-                Assert.Null(GmTargetResolver.Resolve(ConsoleOf(host, output), selector, GmTargetRequest.Reading));
-                return output.ToArray();
-            });
-            Assert.Equal([GmTargetResolver.NeedsMap], answer);
+            ConsoleResult answer = await ResolveConsoleAsync(host, selector, GmTargetRequest.Reading);
+            Assert.Null(answer.Target);
+            Assert.Equal([GmTargetResolver.NeedsMap], answer.Replies);
+            Assert.Equal("needs-map", answer.Failure);
         }
 
-        output.Clear();
-        string[] none = await host.OnWorldAsync(() =>
+        // These search maps, so they are answered from a posted action.
+        foreach (string selector in new[] { "spawn #1", "0x1234", "entry #1 map #0", "guid #1 map #0", "entry #1 map #9999" })
         {
-            Assert.Null(GmTargetResolver.Resolve(ConsoleOf(host, output), "", GmTargetRequest.Reading));
-            return output.ToArray();
-        });
-        Assert.Equal([GmTargetResolver.NoTarget], none);
+            ConsoleResult answer = await ResolveConsoleAsync(host, selector, GmTargetRequest.Reading);
+            Assert.Null(answer.Target);
+            Assert.Equal([GmTargetResolver.NotFound(selector)], answer.Replies);
+            Assert.Equal("no-target", answer.Failure);
+            Assert.True(answer.Posted, selector + " searched maps inline");
+        }
+
+        ConsoleResult none = await ResolveConsoleAsync(host, "", GmTargetRequest.Reading);
+        Assert.Equal([GmTargetResolver.NoTarget], none.Replies);
+    }
+
+    [Fact]
+    public async Task TheConsoleCanNameACreatureByEntryOrCounterOnAMap()
+    {
+        await using WorldTestHost host = InspectCommandTests.StartWithWolf();
+        await using WorldTestClient player = await host.EnterWorldAsync("RSLVCONW", "Rslvconw");
+        await player.CollectAsync();
+        Creature wolf = await WolfAsync(host);
+
+        foreach (string selector in new[] { $"entry #{WolfEntry} map #0", $"guid #{wolf.Guid.Counter} map #0", $"spawn #{WolfSpawn}", $"0x{wolf.Guid.Value:X16}" })
+        {
+            ConsoleResult found = await ResolveConsoleAsync(host, selector, GmTargetRequest.Writing, "Rslvconw");
+            Assert.Same(wolf, found.Target?.Creature);
+            Assert.True(found.Posted, selector + " was resolved inline");
+            Assert.Null(found.Failure);
+            Assert.Empty(found.Replies);
+        }
     }
 
     [Fact]
@@ -558,25 +750,55 @@ public sealed class GmTargetResolverTests
         await gm.CollectAsync();
         await other.CollectAsync();
 
-        (bool ok, string? name, string rest) = await host.OnWorldAsync(() =>
+        (bool started, string? name, string? rest) = await host.OnWorldAsync(() =>
         {
             Player issuer = host.World.FindOnlinePlayer("Rslvlead")!;
             CommandContext context = new((WorldSession)issuer.Session, issuer, ChatCommands.CreateTable());
-            bool resolved = GmTargetResolver.TryResolveLeading(context, "$rslvleadb 5 fast", GmTargetRequest.Writing, out GmTarget target, out string remainder);
-            return (resolved, target?.Player?.Name, remainder);
+            string? seenName = null;
+            string? seenRest = null;
+            bool began = GmTargetResolver.ResolveLeadingThen(context, "$rslvleadb 5 fast", GmTargetRequest.Writing, (target, remainder) =>
+            {
+                seenName = target.Player?.Name;
+                seenRest = remainder;
+            });
+            return (began, seenName, seenRest);
         });
-        Assert.True(ok);
+        Assert.True(started);
         Assert.Equal("Rslvleadb", name);
         Assert.Equal("5 fast", rest);
 
-        bool failed = await host.OnWorldAsync(() =>
+        bool startedMissing = await host.OnWorldAsync(() =>
         {
             Player issuer = host.World.FindOnlinePlayer("Rslvlead")!;
             CommandContext context = new((WorldSession)issuer.Session, issuer, ChatCommands.CreateTable());
-            return GmTargetResolver.TryResolveLeading(context, "$nobody 5", GmTargetRequest.Writing, out _, out _);
+            return GmTargetResolver.ResolveLeadingThen(context, "$nobody 5", GmTargetRequest.Writing, (_, _) => throw new InvalidOperationException("must not run"));
         });
-        Assert.False(failed);
+        Assert.True(startedMissing);
         Assert.Equal([GmTargetResolver.NotFound("$nobody")], await gm.CollectChatLinesAsync());
+
+        // A malformed selector is refused before any resolution; a plain #n count is not a selector and stays in the rest.
+        bool startedBad = await host.OnWorldAsync(() =>
+        {
+            Player issuer = host.World.FindOnlinePlayer("Rslvlead")!;
+            CommandContext context = new((WorldSession)issuer.Session, issuer, ChatCommands.CreateTable());
+            return GmTargetResolver.ResolveLeadingThen(context, "guid #0", GmTargetRequest.Writing, (_, _) => throw new InvalidOperationException("must not run"));
+        });
+        Assert.False(startedBad);
+        Assert.StartsWith("guid needs", Assert.Single(await gm.CollectChatLinesAsync()), StringComparison.Ordinal);
+
+        string? countRest = await host.OnWorldAsync(() =>
+        {
+            Player issuer = host.World.FindOnlinePlayer("Rslvlead")!;
+            CommandContext context = new((WorldSession)issuer.Session, issuer, ChatCommands.CreateTable());
+            string? seen = null;
+            GmTargetResolver.ResolveLeadingThen(context, "#5 fast", GmTargetRequest.Reading, (target, remainder) =>
+            {
+                Assert.Equal("Rslvlead", target.Player?.Name); // no selector: the default chain, here the issuer itself
+                seen = remainder;
+            });
+            return seen;
+        });
+        Assert.Equal("#5 fast", countRest);
     }
 
     [Fact]
@@ -588,35 +810,71 @@ public sealed class GmTargetResolverTests
         Player player = await host.PlayerAsync("Rslvthrd");
         CommandContext context = new((WorldSession)player.Session, player, ChatCommands.CreateTable());
 
-        Assert.Throws<InvalidOperationException>(() => GmTargetResolver.Resolve(context, "", GmTargetRequest.Reading));
+        Assert.Throws<InvalidOperationException>(() => GmTargetResolver.ResolveThen(context, "", GmTargetRequest.Reading, _ => { }));
     }
 
-    private static CommandContext ConsoleOf(WorldTestHost host, List<string> output)
+    private static CommandContext ConsoleOf(WorldTestHost host, List<string> output, string sessionPlayer = "Rslvcons")
     {
-        Player any = host.World.FindOnlinePlayer("Rslvcons")!;
+        Player any = host.World.FindOnlinePlayer(sessionPlayer)!;
         return CommandContext.ForConsole((WorldSession)any.Session, ChatCommands.CreateTable(), output.Add);
     }
 
     private static Task<Creature> WolfAsync(WorldTestHost host)
         => host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().FindSystem(0)!.Creatures.Last());
 
-    private sealed record Resolved(GmTarget? Target, string? Failure, string[] Replies);
+    /// <summary>The outcome of one resolution. <c>Posted</c>: the target was delivered from a posted action, not inside the resolve call.</summary>
+    private sealed record Resolved(GmTarget? Target, string? Failure, string[] Replies, bool Posted, bool RanOnWorldThread);
 
-    /// <summary>Resolve <paramref name="selector"/> for the player <paramref name="issuer"/> on the world thread; the replies are read from its client.</summary>
+    private sealed record ConsoleResult(GmTarget? Target, string? Failure, string[] Replies, bool Posted);
+
+    /// <summary>
+    /// Resolve <paramref name="selector"/> for the player <paramref name="issuer"/> on the world thread, then wait until the command settled
+    /// (a posted search holds it open); the replies are read from its client.
+    /// </summary>
     private static async Task<Resolved> ResolveAsync(WorldTestHost host, WorldTestClient client, string issuer, string selector, GmTargetRequest request)
     {
         await client.CollectAsync();
-        (GmTarget? target, string? failure) = await host.OnWorldAsync(() =>
+        GmTarget? target = null;
+        bool onWorldThread = false;
+        bool posted = false;
+        CommandContext? context = null;
+        await host.OnWorldAsync(() =>
         {
             Player player = host.World.FindOnlinePlayer(issuer)!;
-            var context = new CommandContext((WorldSession)player.Session, player, ChatCommands.CreateTable());
-            GmTarget? found = GmTargetResolver.Resolve(context, selector, request);
-            return (found, context.Failure);
+            context = new CommandContext((WorldSession)player.Session, player, ChatCommands.CreateTable());
+            GmTargetResolver.ResolveThen(context, selector, request, found =>
+            {
+                target = found;
+                onWorldThread = host.World.IsMainWorldThread;
+            });
+            context.Complete();
+            posted = !context.WhenSettled.IsCompleted;
         });
+        await context!.WhenSettled.WaitAsync(TimeSpan.FromSeconds(20));
         // A failed resolution always replies, so wait for that line; a successful one is silent.
-        string[] replies = failure is not null
+        string[] replies = context.Failure is not null
             ? await client.CollectChatLinesAsync()
             : [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
-        return new Resolved(target, failure, replies);
+        return new Resolved(target, context.Failure, replies, posted, onWorldThread);
+    }
+
+    private static async Task<ConsoleResult> ResolveConsoleAsync(WorldTestHost host, string selector, GmTargetRequest request, string sessionPlayer = "Rslvcons")
+    {
+        var output = new List<string>();
+        GmTarget? target = null;
+        bool posted = false;
+        CommandContext? context = null;
+        await host.OnWorldAsync(() =>
+        {
+            context = ConsoleOf(host, output, sessionPlayer);
+            GmTargetResolver.ResolveThen(context, selector, request, found =>
+            {
+                target = found;
+            });
+            context.Complete();
+            posted = !context.WhenSettled.IsCompleted;
+        });
+        await context!.WhenSettled.WaitAsync(TimeSpan.FromSeconds(20));
+        return new ConsoleResult(target, context.Failure, [.. output], posted);
     }
 }

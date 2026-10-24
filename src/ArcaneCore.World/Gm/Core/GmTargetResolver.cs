@@ -12,22 +12,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Core;
 
-/// <summary>The kinds of world object a command accepts as its target (a flag set).</summary>
-[Flags]
-public enum GmTargetKinds
-{
-    None = 0,
-    Player = 1,
-    Creature = 2,
-    GameObject = 4,
-    Transport = 8,
-
-    /// <summary>Players and creatures (bots, pets and totems included).</summary>
-    Unit = Player | Creature,
-
-    Any = Player | Creature | GameObject | Transport,
-}
-
 /// <summary>The form of a target selector (docs: debug-commands plan, section 1.3).</summary>
 public enum GmSelectorKind
 {
@@ -37,13 +21,16 @@ public enum GmSelectorKind
     /// <summary><c>$name</c>: an online player or bot.</summary>
     Name,
 
-    /// <summary><c>#guid</c> / <c>0xHEX</c>: any object of the issuer's map by full guid.</summary>
+    /// <summary><c>0xHEX</c>: any world object by full guid.</summary>
     Guid,
 
-    /// <summary><c>spawn #n</c>: a creature or game object by database spawn guid.</summary>
+    /// <summary><c>guid #low [map #m]</c>: a creature by guid counter on the issuer's map (or map #m).</summary>
+    Counter,
+
+    /// <summary><c>spawn #n</c>: a creature or game object by database spawn guid, searched across loaded maps.</summary>
     Spawn,
 
-    /// <summary><c>entry #n [#map]</c>: the nearest instance of a template entry.</summary>
+    /// <summary><c>entry #n [map #m]</c>: the nearest instance of a template entry (to the issuer, or the first one on map #m from the console).</summary>
     Entry,
 
     /// <summary><c>nearest [#yards] [creature|gobject|player|transport]</c>.</summary>
@@ -57,9 +44,9 @@ public enum GmSelectorKind
 /// <param name="Kind">The selector form.</param>
 /// <param name="Text">The selector as typed (for replies), empty for <see cref="GmSelectorKind.Default"/>.</param>
 /// <param name="Name">The normalised player name of <see cref="GmSelectorKind.Name"/> / <see cref="GmSelectorKind.Offline"/>.</param>
-/// <param name="Value">The full guid (<see cref="GmSelectorKind.Guid"/>) or spawn guid (<see cref="GmSelectorKind.Spawn"/>).</param>
+/// <param name="Value">The full guid (<see cref="GmSelectorKind.Guid"/>), the guid counter (<see cref="GmSelectorKind.Counter"/>) or the spawn guid (<see cref="GmSelectorKind.Spawn"/>).</param>
 /// <param name="Entry">The template entry of <see cref="GmSelectorKind.Entry"/>.</param>
-/// <param name="MapId">The optional map of <see cref="GmSelectorKind.Entry"/>.</param>
+/// <param name="MapId">The optional <c>map #m</c> of <see cref="GmSelectorKind.Counter"/> and <see cref="GmSelectorKind.Entry"/>.</param>
 /// <param name="Yards">The search radius of <see cref="GmSelectorKind.Nearest"/>.</param>
 /// <param name="Kinds">The kinds <see cref="GmSelectorKind.Nearest"/> was limited to (<see cref="GmTargetKinds.Any"/> when not).</param>
 public sealed record GmSelector(
@@ -99,8 +86,9 @@ public sealed record GmSelector(
     /// <summary>
     /// Parse the selector that starts <paramref name="args"/>. When the first word is no selector form the result is <see cref="Default"/>
     /// and <paramref name="rest"/> is all of <paramref name="args"/> (trimmed), so a command with a leading optional target can hand the
-    /// remainder to its own parser. Optional parts of a selector (<c>#map</c>, <c>#yards</c>, a kind word) are taken only when they have
-    /// the shape the grammar gives them, so a plain number after a selector stays an argument.
+    /// remainder to its own parser. Optional parts of a selector (<c>map #m</c>, <c>#yards</c>, a kind word) are taken only when they have
+    /// the shape the grammar gives them, so a plain number after a selector stays an argument. A leading <c>#n</c> is never a selector
+    /// (the plan uses <c>#n</c> for numeric arguments), so it stays in <paramref name="rest"/>.
     /// </summary>
     public static bool TryTakeLeading(string? args, out GmSelector selector, out string rest, out string error)
     {
@@ -129,19 +117,33 @@ public sealed record GmSelector(
                 used = 2;
                 break;
 
-            case "entry":
-                if (words.Count < 2 || !TryNumber(Word(text, words, 1), out ulong entry) || entry == 0 || entry > uint.MaxValue)
+            case "guid":
+                if (words.Count < 2 || !TryNumber(Word(text, words, 1), out ulong low) || low == 0 || low > MaxCounter)
                 {
-                    error = "entry needs a template entry: entry #123 [#map]";
+                    error = "guid needs a guid counter: guid #123 [map #1]";
                     return false;
                 }
 
                 used = 2;
-                uint? mapId = null;
-                if (words.Count > 2 && Word(text, words, 2) is { Length: > 1 } mapWord && mapWord[0] == '#' && TryNumber(mapWord, out ulong map) && map <= uint.MaxValue)
+                if (!TryTakeMap(text, words, ref used, out uint? counterMap, out error))
                 {
-                    mapId = (uint)map;
-                    used = 3;
+                    return false;
+                }
+
+                selector = new GmSelector(GmSelectorKind.Counter, Join(text, words, used), Value: low, MapId: counterMap);
+                break;
+
+            case "entry":
+                if (words.Count < 2 || !TryNumber(Word(text, words, 1), out ulong entry) || entry == 0 || entry > uint.MaxValue)
+                {
+                    error = "entry needs a template entry: entry #123 [map #1]";
+                    return false;
+                }
+
+                used = 2;
+                if (!TryTakeMap(text, words, ref used, out uint? mapId, out error))
+                {
+                    return false;
                 }
 
                 selector = new GmSelector(GmSelectorKind.Entry, Join(text, words, used), Entry: (uint)entry, MapId: mapId);
@@ -203,11 +205,11 @@ public sealed record GmSelector(
                     selector = new GmSelector(GmSelectorKind.Name, first, Name: name);
                     used = 1;
                 }
-                else if (first[0] == '#' || first.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                else if (first.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!TryNumber(first, out ulong guid) || guid == 0)
                     {
-                        error = $"'{first}' is not a guid: #123 or 0xF130000123000001";
+                        error = $"'{first}' is not a guid: 0xF130000123000001";
                         return false;
                     }
 
@@ -223,6 +225,30 @@ public sealed record GmSelector(
         }
 
         rest = used >= words.Count ? string.Empty : text[words[used].Start..].TrimEnd();
+        return true;
+    }
+
+    /// <summary>The largest guid counter of an entry-carrying guid (24 bits).</summary>
+    private const ulong MaxCounter = 0x00FFFFFF;
+
+    /// <summary>The optional <c>map #m</c> at word <paramref name="used"/>; a <c>map</c> word without a map id is an error.</summary>
+    private static bool TryTakeMap(string text, List<(int Start, int End)> words, ref int used, out uint? mapId, out string error)
+    {
+        mapId = null;
+        error = string.Empty;
+        if (used >= words.Count || !Word(text, words, used).Equals("map", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (used + 1 >= words.Count || !TryNumber(Word(text, words, used + 1), out ulong map) || map > uint.MaxValue)
+        {
+            error = "map needs a map id: map #1";
+            return false;
+        }
+
+        mapId = (uint)map;
+        used += 2;
         return true;
     }
 
@@ -274,44 +300,23 @@ public sealed record GmSelector(
     }
 }
 
-/// <summary>What a command needs from its target.</summary>
-/// <param name="Accepted">The object kinds it can act on (a target of another kind is refused).</param>
-/// <param name="Write">The command changes the target: it must be on the issuer's own map (a console issuer has no map and is exempt).</param>
-/// <param name="AllowOffline">The command handles <see cref="GmSelectorKind.Offline"/> (the resolver returns the name; the command reads the character record off the world thread).</param>
-public readonly record struct GmTargetRequest(GmTargetKinds Accepted = GmTargetKinds.Any, bool Write = false, bool AllowOffline = false)
-{
-    public static GmTargetRequest Reading { get; } = new(GmTargetKinds.Any);
-
-    public static GmTargetRequest Writing { get; } = new(GmTargetKinds.Any, Write: true);
-}
-
-/// <summary>A resolved target: a live object, or the name of an offline character.</summary>
-public sealed record GmTarget(WorldObject? Object, string? OfflineName = null)
-{
-    public bool IsOffline => OfflineName is not null;
-
-    public Unit? Unit => Object as Unit;
-
-    public Player? Player => Object as Player;
-
-    public Creature? Creature => Object as Creature;
-
-    public GameObject? GameObject => Object as GameObject;
-}
-
 /// <summary>
 /// The one target resolver of the debug commands (I1): the selector grammar of the plan (<see cref="GmSelector"/>), the target-rank refusal
-/// (<see cref="CommandContext.CanActOn"/>, applied here so a command cannot skip it), the same-map rule for writes and one reply when
-/// nothing matches. World thread only (it reads live maps and players; <see cref="InvalidOperationException"/> from any other). Every failure
-/// replies, calls <see cref="CommandContext.Fail"/> and returns null/false, so a handler just returns true.
+/// (<see cref="CommandContext.CanActOn"/>, applied here so a command cannot skip it), the <c>World.Post</c> rule and one reply when nothing
+/// matches. World thread only (it reads live maps and players; <see cref="InvalidOperationException"/> from any other).
+/// <para>
+/// Results are handed to a continuation (<see cref="ResolveThen(CommandContext, GmSelector, GmTargetRequest, Action{GmTarget})"/>) because
+/// two things must not run inline: a search of a map the issuer's thread does not own (other maps may be updating in parallel on map
+/// threads), and a write to a target on another map. Both are queued with <c>World.Post</c> and run at the start of the next tick on the
+/// world thread, when no map updates; the command stays open (<see cref="CommandContext.Defer"/>) until then. The issuer's own map is searched
+/// inline. Every failure replies and calls <see cref="CommandContext.Fail"/>, so a handler just returns true.
+/// </para>
 /// </summary>
 public static class GmTargetResolver
 {
-    public const string NoTarget = "No target. Select one, or name it: $name, #guid, 0xHEX, spawn #n, entry #n, nearest.";
+    public const string NoTarget = "No target. Select one, or name it: $name, 0xHEX, guid #n, spawn #n, entry #n, nearest.";
 
-    public const string NeedsMap = "That selector needs a position on a map; name a player with $name.";
-
-    public const string OtherMap = "The target is on another map; writes act only on your own map.";
+    public const string NeedsMap = "That selector needs a position on a map; name a player with $name, or add 'map #m' to guid and entry.";
 
     public const string OfflineNeedsAdministrator = "Offline characters need Administrator.";
 
@@ -319,51 +324,54 @@ public static class GmTargetResolver
 
     public const string SelectionGone = "Your selected target is not on this map.";
 
+    public const string TargetGone = "The target is no longer in the world.";
+
     public static string NotFound(string selector) => $"No target matches '{selector}'.";
 
     public static string WrongKind(GmTargetKinds accepted) => $"That target is not valid here; this command takes: {Describe(accepted)}.";
 
-    /// <summary>Resolve the whole of <paramref name="selector"/> (empty: the default chain). Null after replying.</summary>
-    public static GmTarget? Resolve(CommandContext context, string? selector, GmTargetRequest request)
+    /// <summary>Resolve the whole of <paramref name="selector"/> (empty: the default chain) and call <paramref name="use"/> with the target. See the class remarks for when <paramref name="use"/> runs.</summary>
+    public static void ResolveThen(CommandContext context, string? selector, GmTargetRequest request, Action<GmTarget> use)
     {
         ArgumentNullException.ThrowIfNull(context);
         if (!GmSelector.TryParse(selector, out GmSelector parsed, out string error))
         {
-            return Refuse(context, "bad-selector", error);
+            Refuse(context, "bad-selector", error);
+            return;
         }
 
-        return Resolve(context, parsed, request);
+        ResolveThen(context, parsed, request, use);
     }
 
     /// <summary>
-    /// Resolve the selector that starts <paramref name="args"/>; <paramref name="rest"/> is what follows it. False after replying (a command
-    /// then returns true).
+    /// Resolve the selector that starts <paramref name="args"/> and call <paramref name="use"/> with the target and what follows the selector.
+    /// False after replying when the selector is malformed (a command then returns true); true once resolution started (<paramref name="use"/> may run later).
     /// </summary>
-    public static bool TryResolveLeading(CommandContext context, string? args, GmTargetRequest request, out GmTarget target, out string rest)
+    public static bool ResolveLeadingThen(CommandContext context, string? args, GmTargetRequest request, Action<GmTarget, string> use)
     {
         ArgumentNullException.ThrowIfNull(context);
-        target = null!;
-        if (!GmSelector.TryTakeLeading(args, out GmSelector parsed, out rest, out string error))
+        ArgumentNullException.ThrowIfNull(use);
+        if (!GmSelector.TryTakeLeading(args, out GmSelector parsed, out string rest, out string error))
         {
             Refuse(context, "bad-selector", error);
             return false;
         }
 
-        GmTarget? found = Resolve(context, parsed, request);
-        if (found is null)
-        {
-            return false;
-        }
-
-        target = found;
+        ResolveThen(context, parsed, request, target => use(target, rest));
         return true;
     }
 
-    /// <summary>Resolve a parsed selector. Null after replying.</summary>
-    public static GmTarget? Resolve(CommandContext context, GmSelector selector, GmTargetRequest request)
+    /// <summary>
+    /// Resolve a parsed selector and call <paramref name="use"/> with the target. Failures reply instead (and <paramref name="use"/> never runs).
+    /// <paramref name="use"/> runs inline when the target was found on the issuer's own map, else at the start of the next tick on the world
+    /// thread. With <see cref="GmTargetRequest.Write"/> an inline call still goes through <see cref="GmTarget.RunOnOwningMap"/>, so a write
+    /// to another map's object, and every write from the console, is posted.
+    /// </summary>
+    public static void ResolveThen(CommandContext context, GmSelector selector, GmTargetRequest request, Action<GmTarget> use)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(use);
         if (request.Accepted == GmTargetKinds.None)
         {
             // default(GmTargetRequest) and "new GmTargetRequest()" skip the optional-parameter defaults: no kinds named means any.
@@ -375,6 +383,59 @@ public static class GmTargetResolver
             throw new InvalidOperationException("targets are resolved on the world thread");
         }
 
+        GmTarget? found = Search(context, selector, request, posted: false, out bool deferred);
+        if (deferred)
+        {
+            IDisposable hold = context.Defer();
+            context.World.Post(() =>
+            {
+                try
+                {
+                    // Start of a tick: no map is updating, so every map may be read and the write needs no further hop.
+                    if (context.CanReplyLater && Search(context, selector, request, posted: true, out _) is { } later)
+                    {
+                        use(later);
+                    }
+                }
+                finally
+                {
+                    hold.Dispose();
+                }
+            });
+            return;
+        }
+
+        if (found is null)
+        {
+            return;
+        }
+
+        if (request.Write)
+        {
+            found.RunOnOwningMap(context, use);
+        }
+        else
+        {
+            use(found);
+        }
+    }
+
+    /// <summary>The kind of <paramref name="obj"/>; <see cref="GmTargetKinds.None"/> for objects no command targets (items, corpses...).</summary>
+    public static GmTargetKinds KindOf(WorldObject obj) => obj switch
+    {
+        Player => GmTargetKinds.Player,
+        Creature => GmTargetKinds.Creature,
+        GameObject go => go.Guid.High == HighGuid.Transport ? GmTargetKinds.Transport : GmTargetKinds.GameObject,
+        _ => GmTargetKinds.None,
+    };
+
+    /// <summary>
+    /// One resolution attempt. Null with <paramref name="deferred"/> set means "search other maps in a posted action" (only when
+    /// <paramref name="posted"/> is false); null otherwise means the failure was already replied.
+    /// </summary>
+    private static GmTarget? Search(CommandContext context, GmSelector selector, GmTargetRequest request, bool posted, out bool deferred)
+    {
+        deferred = false;
         if (selector.Kind == GmSelectorKind.Offline)
         {
             if (!request.AllowOffline)
@@ -393,57 +454,86 @@ public static class GmTargetResolver
             return named is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, named, request);
         }
 
-        if (context.IsConsole)
-        {
-            return Refuse(context, selector.Kind == GmSelectorKind.Default ? "no-target" : "needs-map", selector.Kind == GmSelectorKind.Default ? NoTarget : NeedsMap);
-        }
-
-        Player self = context.Player;
+        Player? self = context.IsConsole ? null : context.Player;
         switch (selector.Kind)
         {
             case GmSelectorKind.Default:
-                return ResolveDefault(context, self, request);
+                return self is null ? Refuse(context, "no-target", NoTarget) : ResolveDefault(context, self, request);
 
             case GmSelectorKind.Guid:
             {
-                WorldObject? found = Find(context, self, new ObjectGuid(selector.Value));
-                return found is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, found, request);
+                var guid = new ObjectGuid(selector.Value);
+                WorldObject? found = self is null ? context.World.FindOnlinePlayer(guid) : Find(context, self, guid);
+                if (found is null && !posted)
+                {
+                    deferred = true;
+                    return null;
+                }
+
+                found ??= OnAnyMap(context, map => map.FindObject(guid));
+                return Finish(context, found, selector, request);
             }
 
             case GmSelectorKind.Spawn:
             {
-                WorldObject? found = BySpawn(context, self.Map, (uint)selector.Value, request.Accepted);
-                return found is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, found, request);
+                uint spawn = (uint)selector.Value;
+                WorldObject? found = self?.Map is { } home ? BySpawn(context, home, spawn, request.Accepted) : null;
+                if (found is null && !posted)
+                {
+                    deferred = true;
+                    return null;
+                }
+
+                found ??= OnAnyMap(context, map => BySpawn(context, map, spawn, request.Accepted));
+                return Finish(context, found, selector, request);
             }
 
+            case GmSelectorKind.Counter:
             case GmSelectorKind.Entry:
             {
-                WorldObject? found = ByEntry(context, self, selector.Entry, selector.MapId, request.Accepted);
-                return found is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, found, request);
+                if (self is null && selector.MapId is null)
+                {
+                    return Refuse(context, "needs-map", NeedsMap);
+                }
+
+                Map? map;
+                if (self is not null && (selector.MapId is null || selector.MapId == self.MapId))
+                {
+                    map = self.Map;
+                }
+                else if (!posted)
+                {
+                    deferred = true;
+                    return null;
+                }
+                else
+                {
+                    map = selector.MapId is { } wanted ? context.World.FindMap(wanted) : null;
+                }
+
+                WorldObject? found = map is null ? null
+                    : selector.Kind == GmSelectorKind.Counter ? ByCounter(context, map, (uint)selector.Value, request.Accepted)
+                    : ByEntry(context, map, ReferenceEquals(map, self?.Map) ? self : null, selector.Entry, request.Accepted);
+                return Finish(context, found, selector, request);
             }
 
             case GmSelectorKind.Nearest:
-            {
-                WorldObject? found = Nearest(context, self, selector.Yards, selector.Kinds & request.Accepted);
-                return found is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, found, request);
-            }
+                return self is null
+                    ? Refuse(context, "needs-map", NeedsMap)
+                    : Finish(context, Nearest(context, self, selector.Yards, selector.Kinds & request.Accepted), selector, request);
 
             default:
                 return Refuse(context, "bad-selector", NotFound(selector.Text));
         }
     }
 
-    /// <summary>The kind of <paramref name="obj"/>; <see cref="GmTargetKinds.None"/> for objects no command targets (items, corpses...).</summary>
-    public static GmTargetKinds KindOf(WorldObject obj) => obj switch
-    {
-        Player => GmTargetKinds.Player,
-        Creature => GmTargetKinds.Creature,
-        GameObject go => go.Guid.High == HighGuid.Transport ? GmTargetKinds.Transport : GmTargetKinds.GameObject,
-        _ => GmTargetKinds.None,
-    };
+    private static GmTarget? Finish(CommandContext context, WorldObject? found, GmSelector selector, GmTargetRequest request)
+        => found is null ? Refuse(context, "no-target", NotFound(selector.Text)) : Accept(context, found, request);
 
     private static GmTarget? ResolveDefault(CommandContext context, Player self, GmTargetRequest request)
     {
+        // The plan's chain is the selection, then self. The issuer's own target sits between them, so a command typed with nothing
+        // selected still reaches what the issuer is fighting.
         ObjectGuid guid = self.Selection.IsEmpty ? self.Target : self.Selection;
         if (guid.IsEmpty)
         {
@@ -472,21 +562,25 @@ public static class GmTargetResolver
             return null;
         }
 
-        if (request.Write && !context.IsConsole && !ReferenceEquals(found.Map, context.Player.Map))
-        {
-            return Refuse(context, "other-map", OtherMap);
-        }
-
         return new GmTarget(found);
     }
 
-    private static WorldObject? BySpawn(CommandContext context, Map? map, uint spawn, GmTargetKinds accepted)
+    /// <summary>The first hit of <paramref name="search"/> over every map in map-id then instance order. Only from a posted action (no map is updating).</summary>
+    private static WorldObject? OnAnyMap(CommandContext context, Func<Map, WorldObject?> search)
     {
-        if (map is null)
+        foreach (Map map in context.World.Maps.OrderBy(m => m.MapId).ThenBy(m => m.InstanceId))
         {
-            return null;
+            if (search(map) is { } found)
+            {
+                return found;
+            }
         }
 
+        return null;
+    }
+
+    private static WorldObject? BySpawn(CommandContext context, Map map, uint spawn, GmTargetKinds accepted)
+    {
         if ((accepted & GmTargetKinds.Creature) != 0 && CreaturesOf(context, map)?.FindBySpawnGuid(spawn) is { } creature)
         {
             return creature;
@@ -506,30 +600,48 @@ public static class GmTargetResolver
         return null;
     }
 
-    private static WorldObject? ByEntry(CommandContext context, Player self, uint entry, uint? mapId, GmTargetKinds accepted)
+    /// <summary>The creature of <paramref name="map"/> whose guid counter is <paramref name="counter"/> (the lowest full guid when several entries share it).</summary>
+    private static WorldObject? ByCounter(CommandContext context, Map map, uint counter, GmTargetKinds accepted)
     {
-        Map? map = self.Map;
-        if (mapId is { } wanted && wanted != self.MapId)
-        {
-            map = context.World.FindMap(wanted);
-        }
-
-        if (map is null)
+        if ((accepted & GmTargetKinds.Creature) == 0 || CreaturesOf(context, map) is not { } creatures)
         {
             return null;
         }
 
-        bool sameMap = ReferenceEquals(map, self.Map);
+        Creature? best = null;
+        foreach (Creature creature in creatures.Creatures)
+        {
+            if (creature.Guid.High == HighGuid.Unit && creature.Guid.Counter == counter && (best is null || creature.Guid.Value < best.Guid.Value))
+            {
+                best = creature;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// The instance of <paramref name="entry"/> on <paramref name="map"/>: the nearest to <paramref name="from"/> when it stands on that map,
+    /// else (the console, another map) the lowest full guid, compared as integers so the pick is stable.
+    /// </summary>
+    private static WorldObject? ByEntry(CommandContext context, Map map, Player? from, uint entry, GmTargetKinds accepted)
+    {
         WorldObject? best = null;
         float bestDistance = float.MaxValue;
         void Consider(WorldObject candidate)
         {
-            // On another map there is no meaningful distance: the lowest guid is the stable pick.
-            float distance = sameMap ? Distance(self, candidate) : candidate.Guid.Value;
-            if (distance < bestDistance)
+            if (from is not null)
+            {
+                float distance = Distance(from, candidate);
+                if (distance < bestDistance)
+                {
+                    best = candidate;
+                    bestDistance = distance;
+                }
+            }
+            else if (best is null || candidate.Guid.Value < best.Guid.Value)
             {
                 best = candidate;
-                bestDistance = distance;
             }
         }
 
