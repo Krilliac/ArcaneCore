@@ -98,6 +98,36 @@ public sealed partial class Map
         _observers.TryGetValue(obj.Guid, out HashSet<Player>? observers) ? observers : [];
 
     /// <summary>
+    /// Send <paramref name="obj"/> again to every player that has it: an out-of-range entry and a fresh create block in the same update
+    /// (the packet writes the out-of-range list first), so the client rebuilds the object from its current state. The visible sets do not
+    /// change. Players whose session reads no update objects (bots) are skipped. Returns the players it was sent to, in join order.
+    /// World thread only.
+    /// </summary>
+    internal List<Player> ResendToObservers(WorldObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        EnsureWorldThread();
+        var sent = new List<Player>();
+        if (!ReferenceEquals(obj.Map, this) || !_observers.TryGetValue(obj.Guid, out HashSet<Player>? observers))
+        {
+            return sent;
+        }
+
+        sent.AddRange(observers);
+        SortByJoinOrderDistinct(sent);
+        sent.RemoveAll(viewer => !viewer.Session.WantsUpdateObjects);
+        foreach (Player viewer in sent)
+        {
+            viewer.PendingUpdates.AddOutOfRange(obj.Guid);
+            PacketWriter block = viewer.PendingUpdates.BeginBlock();
+            UpdateBlockWriter.WriteCreateBlock(block, obj, viewer, _newObjects.Contains(obj.Guid), _world.NowMs);
+            viewer.PendingUpdates.EndBlock();
+        }
+
+        return sent;
+    }
+
+    /// <summary>
     /// Sort candidates into map-join order and drop repeats. <see cref="WorldObject.MapSequence"/> is unique per
     /// object of a map (a fresh number on every join), so equal entries are adjacent after the sort.
     /// </summary>
