@@ -628,6 +628,166 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    public void TheMainPass_IsASmoothedEstimateBiasedHigh_AndCapsLongGapsInsteadOfDroppingThem()
+    {
+        var pass = new PlayerbotMainPass();
+        Assert.Equal(0u, pass.Ms);
+        pass.Note(0);
+        Assert.Equal(0u, pass.Ms);
+        pass.Note(8000);
+        Assert.Equal(8000u, pass.Ms);
+        for (int i = 0; i < 1000; i++) pass.Note(12_000);
+        Assert.InRange(pass.Ms, 11_900u, 12_000u);
+
+        // Biased high: alternating 1 s and 3 s gaps (mean 2 s) rise quickly and fall slowly, so the estimate sits above the mean.
+        var alternating = new PlayerbotMainPass();
+        for (int i = 0; i < 2000; i++) alternating.Note(i % 2 == 0 ? 1000u : 3000u);
+        Assert.True(alternating.Ms > 2000, $"estimate {alternating.Ms} ms is not above the 2000 ms mean");
+
+        // A gap over the cap counts as the cap: a pass that really is longer (5000 bots) is still followed, not frozen.
+        var slow = new PlayerbotMainPass();
+        slow.Note(100_000);
+        for (int i = 0; i < 200; i++) slow.Note(150_000);
+        Assert.InRange(slow.Ms, 119_900u, PlayerbotMainPass.MaxSampleMs);
+        Assert.InRange(PlayerbotThinkStarvation.ReportBoundMs(10_000, slow.Ms), 179_800u, 180_000u); // the intended absolute backstop
+        slow.Note(uint.MaxValue);
+        Assert.InRange(slow.Ms, 119_900u, PlayerbotMainPass.MaxSampleMs);
+        slow.Seed(uint.MaxValue);
+        Assert.Equal(PlayerbotMainPass.MaxSampleMs, slow.Ms);
+    }
+
+    [Fact]
+    public async Task TheMainPass_IsHandedOverByAHotReload()
+    {
+        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 0, "Handbot");
+        try
+        {
+            uint written = await host.World.InvokeAsync(() =>
+            {
+                feature.SeedMainPassForTests(20_000, pin: true);
+                var handover = new ArcaneCore.World.Features.FeatureHandover();
+                feature.Detach(handover);
+                return handover.TryGet("playerbots.mainPassMs", out uint ms) ? ms : 0u;
+            });
+            Assert.Equal(20_000u, written);
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ARestoredHandover_SeedsTheMainPassOfTheNewFeature()
+    {
+        var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 0, burnMs: 0, "Restbot");
+        try
+        {
+            uint restored = await host.World.InvokeAsync(() =>
+            {
+                feature.SeedMainPassForTests(0, pin: true);
+                var handover = new ArcaneCore.World.Features.FeatureHandover();
+                handover.Set("playerbots.mainPassMs", 20_000u);
+                feature.RestoreMainPassForTests(handover);
+                return feature.MainPassMs;
+            });
+            Assert.Equal(20_000u, restored);
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AFeatureWithNoPassYet_DoesNotWipeThePassABotsMotionKnows()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 8000);
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 0);
+                Assert.Equal(8000u, PlayerbotMotion.SchedulerPassMsOf(session.Player!));
+                PlayerbotMotion.NoteSchedulerPass(session.Player!, 9000);
+                Assert.Equal(9000u, PlayerbotMotion.SchedulerPassMsOf(session.Player!));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task AStarvedBot_IsReportedOncePerEpisode_WhenItFallsBehindThePass()
+    {
+        // The pass estimate is pinned at 100 ms while each of the three bots waits about 2.1 s between thinks (budget 0: one bot per tick,
+        // 700 ms a think): every bot is far behind the pass the feature believes in, so the report must fire, once per silence, as a Warning.
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 1000, burnMs: 700, "Behindbot");
+        try
+        {
+            await host.World.InvokeAsync(() => { feature.SeedMainPassForTests(100, pin: true); return true; });
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < 12) await Task.Delay(100);
+            (Dictionary<string, int> thinksNow, List<AnomalyNotice> pinned) = await host.World.InvokeAsync(() => (
+                new Dictionary<string, int>(thinks),
+                capture.Notices.Where(n => n.Detail.Contains("full pass 100 ms", StringComparison.Ordinal)).ToList()));
+            Assert.True(thinksNow.Values.Sum() >= 12, "the bots did not think four cycles");
+            Assert.NotEmpty(pinned);
+            Assert.All(pinned, n => Assert.Equal(AnomalySeverity.Warning, n.Severity));
+            Assert.Contains("bound 1000 ms, configured 1000 ms, full pass 100 ms", pinned[0].Detail, StringComparison.Ordinal);
+            foreach (IGrouping<string, AnomalyNotice> bot in pinned.GroupBy(n => n.Subject.Split(' ')[1]))
+                Assert.True(bot.Count() <= thinksNow.GetValueOrDefault(bot.Key) + 1,
+                    $"{bot.Key}: {bot.Count()} reports for {thinksNow.GetValueOrDefault(bot.Key)} thinks (more than one per episode)");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TheFeature_MeasuresTheMainLanePass_AndHandsItToTheBotsMotion()
+    {
+        // A zero budget thinks one bot per tick and each think takes 100 ms: a bot waits about 300 ms between thinks.
+        var (host, feature, capture, _) = await StartAsync(budgetMs: 0, boundMs: 0, burnMs: 100, "Passbot");
+        try
+        {
+            Guid first = Guid.Empty;
+            Action<Guid, PlayerbotThinkProbe>? inner = feature.ThinkObserver;
+            feature.ThinkObserver = (id, probe) =>
+            {
+                if (first == Guid.Empty) first = id; // world thread only
+                inner?.Invoke(id, probe);
+            };
+            (uint pass, uint seen) = (0, 0);
+            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && (pass == 0 || seen == 0))
+            {
+                await Task.Delay(50);
+                (pass, seen) = await host.World.InvokeAsync(() => (feature.MainPassMs,
+                    first != Guid.Empty && feature.FindSession(first)?.Player is { } player ? PlayerbotMotion.SchedulerPassMsOf(player) : 0u));
+            }
+
+            Assert.InRange(pass, 100u, 5000u);
+            Assert.True(seen > 0, "the bot's motion never saw the scheduler's pass");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task AHealthyServer_ReportsNoStarvedBot()
     {
         var (host, feature, capture, _) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 1000, burnMs: 0, "Okbot");
@@ -645,28 +805,43 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
-    public async Task AStarvedBot_IsReportedOncePerEpisode_NotOncePerTick()
+    public void TheStarvedBound_IsFairness_NotAbsoluteSlowness()
+    {
+        // Off stays off; unmeasured is a cold start (3 x the bound).
+        Assert.Equal(0u, PlayerbotThinkStarvation.ReportBoundMs(0, 8000));
+        Assert.Equal(30_000u, PlayerbotThinkStarvation.ReportBoundMs(10_000, 0));
+        // An 8 s pass keeps the 10 s bound under 12 s; a 20 s pass moves it to 30 s; a short pass leaves the configured bound alone.
+        Assert.Equal(12_000u, PlayerbotThinkStarvation.ReportBoundMs(10_000, 8000));
+        Assert.Equal(30_000u, PlayerbotThinkStarvation.ReportBoundMs(10_000, 20_000));
+        Assert.Equal(10_000u, PlayerbotThinkStarvation.ReportBoundMs(10_000, 3000));
+        Assert.Equal(int.MaxValue, (long)PlayerbotThinkStarvation.ReportBoundMs(uint.MaxValue / 2, uint.MaxValue));
+
+        // Every bot equally slow (a 20 s pass, each silent up to a pass): none is reported. One skipped past 1.5 x the pass: reported, once.
+        uint bound = PlayerbotThinkStarvation.ReportBoundMs(10_000, 20_000);
+        bool reported = false;
+        Assert.False(PlayerbotThinkStarvation.ShouldReport(120_000, 100_000, bound, ref reported));
+        Assert.False(PlayerbotThinkStarvation.ShouldReport(130_000, 100_000, bound, ref reported));
+        Assert.True(PlayerbotThinkStarvation.ShouldReport(130_001, 100_000, bound, ref reported));
+        Assert.False(PlayerbotThinkStarvation.ShouldReport(140_000, 100_000, bound, ref reported));
+    }
+
+    [Fact]
+    public async Task AUniformlySlowRotation_ReportsNoStarvedBot_OnceThePassIsMeasured()
     {
         // A zero budget thinks one bot per tick and each think takes 1.2 s, so each of the three bots waits about 3.6 s between thinks:
-        // over the 1 s bound every cycle. The two that sit out a tick are silent for the next tick's whole run: one report each, not one per tick.
-        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 1000, burnMs: 1200, "Hitbot");
+        // over the 2 s bound every cycle, but every bot equally. That is slowness, not a bot behind the rotation (cadence/think-starved).
+        // The bots start one after the other, so the pass is measured while the rotation grows: reports in that warm-up are not judged.
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 2000, burnMs: 1200, "Slowbot");
         try
         {
-            // Three full cycles of thinks (about 11 s), then compare in one world-thread call so nothing moves meanwhile.
-            DateTime deadline = DateTime.UtcNow.AddSeconds(60);
-            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < 9) await Task.Delay(100);
-            (Dictionary<string, int> thinksNow, Dictionary<string, int> reports) = await host.World.InvokeAsync(() => (
-                new Dictionary<string, int>(thinks),
-                capture.Notices.GroupBy(n => n.Subject.Split(' ')[1]).ToDictionary(g => g.Key, g => g.Count())));
-            Assert.True(thinksNow.Values.Sum() >= 9, "the bots did not think three cycles");
-            Assert.Equal(3, reports.Count); // every bot was starved and reported
-            // One report per silence: a bot's reports never exceed its thinks (+1 for the silence in progress). Reported every tick, the two bots
-            // that sit out a tick would each report once per tick of the cycle, about twice per think.
-            foreach ((string name, int count) in reports)
-                Assert.True(count <= thinksNow.GetValueOrDefault(name) + 1,
-                    $"{name}: {count} reports for {thinksNow.GetValueOrDefault(name)} thinks (more than one per episode)");
-            Assert.Contains("bound 1000 ms", capture.Notices.First().Detail, StringComparison.Ordinal);
-            Assert.Equal(AnomalySeverity.Warning, capture.Notices.First().Severity);
+            DateTime deadline = DateTime.UtcNow.AddSeconds(90);
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => feature.MainPassMs) < 3000) await Task.Delay(100);
+            (uint pass, int reportsAtWarm, int thinksAtWarm) = await host.World.InvokeAsync(() => (feature.MainPassMs, capture.Notices.Count, thinks.Values.Sum()));
+            Assert.True(pass >= 3000, $"the pass was measured as {pass} ms");
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() => thinks.Values.Sum()) < thinksAtWarm + 9) await Task.Delay(100);
+            (int thinksNow, int reportsNow, string described) = await host.World.InvokeAsync(() => (thinks.Values.Sum(), capture.Notices.Count, capture.Describe()));
+            Assert.True(thinksNow >= thinksAtWarm + 9, "the bots did not think three more cycles");
+            Assert.True(reportsNow == reportsAtWarm, $"{reportsNow - reportsAtWarm} bots were reported starved though every bot waited the same: {described}");
         }
         finally
         {

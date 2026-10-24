@@ -31,6 +31,35 @@ public sealed class AnomalySummaryFeatureTests
     }
 
     [Fact]
+    public void RunSummaryPass_PrintsASaturatedSubjectCountAsAFloor()
+    {
+        var ledger = new AnomalyLedger();
+        var logger = new CapturingLogger<AnomalySummaryFeature>();
+        var feature = new AnomalySummaryFeature(logger, ledger);
+
+        // More distinct bots than the ledger tracks: its count stops at MaxTrackedSubjects, so it is "at least" that, not exactly that.
+        for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects + 50; i++)
+            ledger.Report("bot-cadence", "think-starved", $"bot {i}", "late", AnomalySeverity.Warning);
+        // One short of the cap is still exact, and so is a handful.
+        for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects - 1; i++)
+            ledger.Report("bot-cadence", "almost", $"bot {i}", "late", AnomalySeverity.Warning);
+        for (int i = 0; i < 3; i++)
+            ledger.Report("bot-cadence", "few", $"bot {i}", "late", AnomalySeverity.Warning);
+        for (int i = 0; i < AnomalyLedger.MaxTrackedSubjects + 1; i++)
+            ledger.Report("bot-nav", "stuck-everywhere", $"bot {i}", "stuck", AnomalySeverity.Error);
+
+        feature.RunSummaryPass();
+
+        string summary = logger.Entries.Single(e => e.Level == LogLevel.Information).Message;
+        Assert.Contains($"subjects>={AnomalyLedger.MaxTrackedSubjects},", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain($"subjects={AnomalyLedger.MaxTrackedSubjects},", summary, StringComparison.Ordinal);
+        Assert.Contains($"subjects={AnomalyLedger.MaxTrackedSubjects - 1},", summary, StringComparison.Ordinal);
+        Assert.Contains("subjects=3,", summary, StringComparison.Ordinal);
+        string error = logger.Entries.Single(e => e.Level == LogLevel.Warning).Message;
+        Assert.Contains($"subjects>={AnomalyLedger.MaxTrackedSubjects},", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunSummaryPass_LogsTopTenKeysByCountDelta()
     {
         var ledger = new AnomalyLedger();

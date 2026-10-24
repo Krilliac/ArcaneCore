@@ -217,10 +217,10 @@ public sealed class AnomalySummaryFeature : IWorldFeature
         {
             string subject = err.LastSubject.Length == 0 ? "(none)" : err.LastSubject;
             _logger.LogWarning(
-                "Anomaly error key {AnomalyKey} first observed (count={Count}, subjects={DistinctSubjects}, subject={LastSubject}): {LastDetail}",
+                "Anomaly error key {AnomalyKey} first observed (count={Count}, {Subjects}, subject={LastSubject}): {LastDetail}",
                 err.Key,
                 err.Count,
-                err.DistinctSubjects,
+                err.SubjectsText,
                 subject,
                 err.LastDetail);
         }
@@ -237,7 +237,7 @@ public sealed class AnomalySummaryFeature : IWorldFeature
             .Take(take)
             .Select(d => string.Create(
                 CultureInfo.InvariantCulture,
-                $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, subjects={d.Snapshot.DistinctSubjects}, severity={d.Snapshot.Severity}, rate={d.Snapshot.Timing.RatePerHour15Min:F1}/h 15 min {d.Snapshot.Timing.RatePerHour1Hour:F1}/h 1 h)"))
+                $"{d.Snapshot.Key}=+{d.Delta} (total={d.Snapshot.Count}, {d.Snapshot.SubjectsText}, severity={d.Snapshot.Severity}, rate={d.Snapshot.Timing.RatePerHour15Min:F1}/h 15 min {d.Snapshot.Timing.RatePerHour1Hour:F1}/h 1 h)"))
             .ToArray();
 
         string subsystemSummary = subsystemDeltas.Count == 0

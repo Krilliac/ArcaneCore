@@ -42,6 +42,39 @@ internal sealed class PlayerbotThinkRotation
     private int[] _stamp = [];
     private int _tickNumber;
 
+    private object? _tracked;
+    private Guid[] _trackedIds = [];
+
+    /// <summary>
+    /// Keeps both cursors on the same bot across a rebuild of the population. The cursors are indexes, and the caller's list is sorted by id
+    /// and rebuilt whenever a bot joins or leaves: a bot leaving before the cursor moved every later bot one index down, so the bot that was
+    /// next was skipped for a whole pass (and a join before it made the bot just visited think twice). Called every tick before
+    /// <see cref="TickLanes{TDriver}"/> with the list in id order: when it is not the one seen last (by reference), each cursor resumes at the
+    /// first id after the last one visited (<c>cursor - 1</c> in the old list), wrapping to the start when none is after it. Costs one reference
+    /// compare per tick; the rebuild itself allocates one id array. World thread only.
+    /// </summary>
+    internal void Track<T>(T[] bots, Func<T, Guid> key)
+    {
+        if (ReferenceEquals(bots, _tracked)) return;
+        Guid[] old = _trackedIds;
+        var ids = new Guid[bots.Length];
+        for (int i = 0; i < ids.Length; i++) ids[i] = key(bots[i]);
+        _cursor = Resume(old, _cursor, ids);
+        _priorityCursor = Resume(old, _priorityCursor, ids);
+        _trackedIds = ids;
+        _tracked = bots;
+    }
+
+    private static int Resume(Guid[] old, int cursor, Guid[] ids)
+    {
+        if (ids.Length == 0) return 0;
+        if (old.Length == 0) return cursor;
+        Guid last = old[((cursor % old.Length) + old.Length - 1) % old.Length];
+        int found = Array.BinarySearch(ids, last);
+        int next = found >= 0 ? found + 1 : ~found;
+        return next >= ids.Length ? 0 : next;
+    }
+
     /// <summary>The first bot the next tick visits (tests).</summary>
     internal int Cursor => _cursor;
 
