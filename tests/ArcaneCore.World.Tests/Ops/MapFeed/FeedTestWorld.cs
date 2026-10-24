@@ -85,6 +85,9 @@ internal sealed class FeedWorldSetup
     /// <summary>The web ticket service lane auth implements (<see cref="IFeedActorTickets"/>); a test fake here.</summary>
     internal IFeedActorTickets? Tickets { get; init; }
 
+    /// <summary>Use the build's own true-console probe instead of the stand-in registered with <see cref="Tickets"/>.</summary>
+    public bool RealPredicateProbe { get; init; }
+
     /// <summary>The clock the channel's caches and rate limits read (registered as the <see cref="TimeProvider"/>); null leaves the system clock.</summary>
     public TimeProvider? Time { get; init; }
 
@@ -266,6 +269,11 @@ internal sealed class FeedWorld : IAsyncDisposable
                     if (setup.Tickets is { } tickets)
                     {
                         services.AddSingleton(tickets);
+                        if (!setup.RealPredicateProbe)
+                        {
+                            // The remote-console fix is not on every base; web-actor tests stand in for it unless the test is about the probe.
+                            services.AddSingleton(new TrueConsolePredicateProbe(true));
+                        }
                     }
 
                     if (setup.Time is { } time)

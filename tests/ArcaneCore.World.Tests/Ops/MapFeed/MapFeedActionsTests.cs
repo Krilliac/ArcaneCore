@@ -44,7 +44,7 @@ public sealed class MapFeedActionsTests
         };
 
     private static FeedWorldSetup WebWorld(
-        FakeFeedTickets tickets, Action<MapFeedActionsOptions>? options = null, TimeProvider? time = null, bool content = false, int extraCreatures = 0)
+        FakeFeedTickets tickets, Action<MapFeedActionsOptions>? options = null, TimeProvider? time = null, bool content = false, int extraCreatures = 0, bool realProbe = false)
         => new()
         {
             Terrain = true,
@@ -52,6 +52,7 @@ public sealed class MapFeedActionsTests
             ExtraCreatures = extraCreatures,
             Time = time,
             Tickets = tickets,
+            RealPredicateProbe = realProbe,
             Actions = o =>
             {
                 o.Enabled = true;
@@ -940,7 +941,7 @@ public sealed class MapFeedActionsTests
 
     // ---- remote bypasses (design 1.7), through the channel ---------------------------------------------------------------
 
-    [Theory]
+    [RemoteConsoleFixTheory]
     [InlineData("web")]
     [InlineData("local")]
     public async Task AGameMasterActor_CannotActOnAnOfflineAdministratorsCharacter(string tier)
@@ -972,7 +973,7 @@ public sealed class MapFeedActionsTests
         Assert.Equal(1, spies.OfflineRan);
     }
 
-    [Theory]
+    [RemoteConsoleFixTheory]
     [InlineData("web")]
     [InlineData("local")]
     public async Task AGameMasterActor_CannotBanAnAdministratorAccount_ButCanBanAPlayerAccount(string tier)
@@ -1039,7 +1040,7 @@ public sealed class MapFeedActionsTests
 
         // The probe the channel itself uses (design acceptance): the IsTrueConsole type present in the world assembly.
         bool predicatePresent = typeof(WorldMapFeed).Assembly.GetType("ArcaneCore.World.Commands.CommandContextConsole") is not null;
-        await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(new FakeFeedTickets()));
+        await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(new FakeFeedTickets(), realProbe: true));
         FeedClient client = await world.ConnectAsync();
 
         JsonElement caps = await ActionWire.RequestAsync(client, """{"op":"caps","id":1}""", 1);

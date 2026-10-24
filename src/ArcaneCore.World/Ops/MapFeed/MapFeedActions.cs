@@ -117,7 +117,8 @@ internal sealed class MapFeedActions : IFeedExtension
 
     /// <inheritdoc />
     public void FeedStarted(WorldMapFeed feed)
-        => _gate = ActionsGate.Decide(_options, feed.IsLiveServer, _tickets is not null, ActionsGate.PredicatePresent, _loggers.CreateLogger(WorldMapFeed.LogCategory));
+        => _gate = ActionsGate.Decide(_options, feed.IsLiveServer, _tickets is not null,
+            _services.GetService<TrueConsolePredicateProbe>()?.Present ?? ActionsGate.PredicatePresent, _loggers.CreateLogger(WorldMapFeed.LogCategory));
 
     /// <inheritdoc />
     public Task<bool> HandleAsync(MapFeedConnection connection, string op, ReadOnlyMemory<byte> line)

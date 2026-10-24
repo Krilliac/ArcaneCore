@@ -315,3 +315,18 @@ internal static class WebAuditFile
         }
     }
 }
+
+/// <summary>
+/// A theory that needs the remote-console fix (design 1.7, <c>claude/fix-remote-console-bypass</c>): commands must tell a true console from a
+/// remote context. Skipped, visibly, while the world assembly lacks the true-console predicate type; it runs as soon as the fix is on the base.
+/// </summary>
+internal sealed class RemoteConsoleFixTheoryAttribute : TheoryAttribute
+{
+    public RemoteConsoleFixTheoryAttribute()
+    {
+        if (!ActionsGate.PredicatePresent)
+        {
+            Skip = $"needs the true-console predicate ({ActionsGate.TrueConsolePredicateType}) from claude/fix-remote-console-bypass, which is not on this base";
+        }
+    }
+}
