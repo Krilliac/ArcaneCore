@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
+using ArcaneCore.Game;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Gm.Inspect;
@@ -31,7 +32,11 @@ public sealed class GmPagerTests
     [InlineData("PAGE #12", "", 12, false)]
     [InlineData("--json", "", 1, true)]
     [InlineData("--JSON page #2", "", 2, true)]
-    [InlineData("foo --json bar", "foo bar", 1, true)]
+    [InlineData("foo --json bar", "foo --json bar", 1, false)]
+    [InlineData("foo --json", "foo", 1, true)]
+    [InlineData("foo page #2 --json", "foo", 2, true)]
+    [InlineData("foo --json page #2", "foo", 2, true)]
+    [InlineData("the --json flag is --json", "the --json flag is", 1, true)]
     [InlineData("wolf  page   #2 --json", "wolf", 2, true)]
     [InlineData("page #2 wolf", "page #2 wolf", 1, false)]
     public void TryParseStripsTheFlagAndTheTrailingPage(string args, string rest, int page, bool json)
@@ -67,7 +72,7 @@ public sealed class GmPagerTests
         Assert.Equal("bad-page", context.Failure);
 
         output.Clear();
-        Assert.False(GmPager.TryParse(context, "--json page", out _, out _));
+        Assert.False(GmPager.TryParse(context, "page --json", out _, out _));
         JsonNode error = JsonNode.Parse(Assert.Single(output))!;
         Assert.Equal("bad-page", (string?)error["error"]);
     }
@@ -137,24 +142,35 @@ public sealed class GmPagerTests
     }
 
     [Fact]
-    public void TheJsonListHasAStableOneLineShape()
+    public void TheJsonListIsJsonLinesAHeaderThenOneObjectPerRow()
     {
         var output = new List<string>();
         GmPager.Reply(Console(output), "Bots", Rows(60), new GmOutputOptions(2, true));
 
-        string line = Assert.Single(output);
-        Assert.StartsWith("{\"title\":\"Bots\",\"total\":60,\"page\":2,\"pages\":3,\"rows\":[{\"n\":26,\"name\":\"row26\"},", line, StringComparison.Ordinal);
-        JsonNode json = JsonNode.Parse(line)!;
-        Assert.Equal(25, json["rows"]!.AsArray().Count);
-        Assert.Equal(50, (int)json["rows"]![24]!["n"]!);
+        Assert.Equal(1 + 25, output.Count);
+        Assert.Equal("{\"command\":\"Bots\",\"page\":2,\"pages\":3,\"rows\":25}", output[0]);
+        Assert.Equal("{\"n\":26,\"name\":\"row26\"}", output[1]);
+        Assert.Equal("{\"n\":50,\"name\":\"row50\"}", output[25]);
+        Assert.All(output, line => Assert.DoesNotContain('\n', line));
+        Assert.All(output, line => Assert.NotNull(JsonNode.Parse(line)));
     }
 
     [Fact]
-    public void TheJsonListOfNothingIsAnEmptyArray()
+    public void TheJsonHeaderCountsTheRowsOfTheLastPage()
+    {
+        var output = new List<string>();
+        GmPager.Reply(Console(output), "Bots", Rows(60), new GmOutputOptions(3, true));
+
+        Assert.Equal("{\"command\":\"Bots\",\"page\":3,\"pages\":3,\"rows\":10}", output[0]);
+        Assert.Equal(11, output.Count);
+    }
+
+    [Fact]
+    public void TheJsonListOfNothingIsJustAHeader()
     {
         var output = new List<string>();
         GmPager.Reply(Console(output), "Bots", [], new GmOutputOptions(1, true));
-        Assert.Equal(["{\"title\":\"Bots\",\"total\":0,\"page\":1,\"pages\":1,\"rows\":[]}"], output);
+        Assert.Equal(["{\"command\":\"Bots\",\"page\":1,\"pages\":1,\"rows\":0}"], output);
     }
 
     [Fact]
@@ -168,10 +184,10 @@ public sealed class GmPagerTests
 
         GmPager.ReplyRow(Console(output), "One", row, new GmOutputOptions(1, true));
 
-        string line = Assert.Single(output);
-        JsonNode json = JsonNode.Parse(line)!;
-        Assert.Equal("One", (string?)json["title"]);
-        JsonNode r = json["row"]!;
+        Assert.Equal(2, output.Count);
+        Assert.Equal("{\"command\":\"One\",\"page\":1,\"pages\":1,\"rows\":1}", output[0]);
+        string line = output[1];
+        JsonNode r = JsonNode.Parse(line)!;
         Assert.Equal("a \"quoted\" <b>", (string?)r["s"]);
         Assert.Equal(-5, (int)r["i"]!);
         Assert.Equal(uint.MaxValue, (uint)r["u"]!);
@@ -210,10 +226,8 @@ public sealed class GmPagerTests
 
         output.Clear();
         GmPager.Reply(Console(output), "Bots", Rows(26), new GmOutputOptions(1, true));
-        JsonNode json = JsonNode.Parse(Assert.Single(output))!;
-        Assert.Equal(25, json["rows"]!.AsArray().Count);
-        Assert.Equal(2, (int)json["pages"]!);
-        Assert.Equal(26, (int)json["total"]!);
+        Assert.Equal(26, output.Count);
+        Assert.Equal("{\"command\":\"Bots\",\"page\":1,\"pages\":2,\"rows\":25}", output[0]);
     }
 
     [Fact]
@@ -235,11 +249,22 @@ public sealed class GmPagerTests
         GmRow row = new GmRow().Add("a", 1).Add("b", "x").WithText("custom line");
 
         GmPager.Reply(Console(output), "T", [row], new GmOutputOptions(1, true));
-        Assert.Equal(["{\"title\":\"T\",\"total\":1,\"page\":1,\"pages\":1,\"rows\":[{\"a\":1,\"b\":\"x\"}]}"], output);
+        Assert.Equal(["{\"command\":\"T\",\"page\":1,\"pages\":1,\"rows\":1}", "{\"a\":1,\"b\":\"x\"}"], output);
 
         output.Clear();
         GmPager.ReplyRow(Console(output), "T", row, new GmOutputOptions(1, true));
-        Assert.Equal(["{\"title\":\"T\",\"row\":{\"a\":1,\"b\":\"x\"}}"], output);
+        Assert.Equal(["{\"command\":\"T\",\"page\":1,\"pages\":1,\"rows\":1}", "{\"a\":1,\"b\":\"x\"}"], output);
+    }
+
+    [Fact]
+    public void AGuidIsWrittenAsAHexStringInBothFormats()
+    {
+        var output = new List<string>();
+        GmRow row = new GmRow().Add("guid", new ObjectGuid(0xF130_0001_2B00_0001UL));
+
+        Assert.Equal("guid=0xF13000012B000001", row.ToLine());
+        GmPager.ReplyRow(Console(output), "G", row, new GmOutputOptions(1, true));
+        Assert.Equal("{\"guid\":\"0xF13000012B000001\"}", output[1]);
     }
 
     [Fact]
@@ -250,10 +275,10 @@ public sealed class GmPagerTests
     }
 
     [Fact]
-    public void ABadPageErrorIsJsonOnlyWhenTheFlagWasGivenAnywhere()
+    public void ABadPageErrorIsJsonOnlyWhenTheFlagWasGivenAtTheEnd()
     {
         var output = new List<string>();
-        Assert.False(GmPager.TryParse(Console(output), "--json wolf page #x", out _, out _));
+        Assert.False(GmPager.TryParse(Console(output), "wolf page #x --json", out _, out _));
         Assert.Equal("{\"error\":\"bad-page\",\"message\":\"" + GmPager.PageNeedsNumber + "\"}", Assert.Single(output));
 
         output.Clear();
