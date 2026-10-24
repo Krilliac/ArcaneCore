@@ -58,7 +58,7 @@ namespace ArcaneCore.World.Playerbots.Party;
 /// <see cref="PlayerbotPartyOptions.MasterTimeoutSeconds"/> the bot leaves the group and the brain takes over again.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotPartyAI
+internal sealed class PlayerbotPartyAI : PlayerbotMotion.IRouteHolder
 {
     /// <summary>The only packets the party AI takes from the bot's capture queue (never an unfiltered drain).</summary>
     internal static readonly WorldOpcode[] IntakeOpcodes =
@@ -115,6 +115,9 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The targets this bot found no path to, skipped for <see cref="UnreachableTargetMs"/> in <see cref="SelectTarget"/>; the leader's explicit choices are exempt. One thread (the bot's think).</summary>
     private readonly PlayerbotUnreachableTargets _unreachable = new();
     private PlayerbotRoute? _route;
+
+    /// <summary>The party AI has two route owners: its own route and its follower's (<see cref="PlayerbotFollower.Holds"/>).</summary>
+    public bool Holds(PlayerbotRoute route) => ReferenceEquals(_route, route) || _follower.Holds(route);
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
     private TileWait _tileWait;

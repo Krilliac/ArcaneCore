@@ -2538,8 +2538,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         {
                             driver = "battleground";
                             PlayerbotThinkProbe.Phase("battleground");
+                            uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, battlegrounds.Find(active.Record.BotId)?.AI, renewals, sinceLast);
                         }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -2567,8 +2568,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         {
                             driver = "group";
                             PlayerbotThinkProbe.Phase("group");
+                            uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, coordinator.FindAI(active.Record.BotId), renewals, sinceLast);
                         }
                     }
                     else
@@ -2681,8 +2683,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (party)
         {
             PlayerbotThinkProbe.Phase("party");
+            uint partyRenewals = PlayerbotMotion.RenewalsOf(driven);
             active.Party.Update(driven, sinceLast);
-            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+            PlayerbotMotion.SettleAfterDriver(active.Session, driven, active.Party, partyRenewals, sinceLast);
             return "party AI";
         }
         else

@@ -47,7 +47,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// (vmangos CombatBotBaseAI::BeginChasing keeps the 25-yard caster distance only above 10% mana or with a ranged weapon).
 /// </para>
 /// </summary>
-internal sealed partial class PlayerbotBattlegroundAI
+internal sealed partial class PlayerbotBattlegroundAI : PlayerbotMotion.IRouteHolder
 {
     /// <summary>vmangos INTERACTION_DISTANCE (5 yards), less a margin: a flag or a battlemaster is used from this close.</summary>
     internal const float InteractYards = 4f;
@@ -75,6 +75,10 @@ internal sealed partial class PlayerbotBattlegroundAI
     private readonly float _followAngle;
     private readonly float _followDistance;
     private PlayerbotRoute? _route;
+
+    /// <inheritdoc/>
+    public bool Holds(PlayerbotRoute route) => ReferenceEquals(_route, route);
+
     private Vector3 _routeGoal;
     private readonly PlayerbotPvpFight _pvp;
     private readonly Func<Vector3, uint, bool, bool> _chase;

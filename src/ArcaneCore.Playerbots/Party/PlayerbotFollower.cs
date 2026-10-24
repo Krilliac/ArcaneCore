@@ -109,6 +109,10 @@ internal sealed class PlayerbotFollower
     /// <summary>Whether the follower is in the air of a drop: its thinks belong to the fall until it lands.</summary>
     internal bool Airborne => _phase == DropPhase.Falling;
 
+    /// <summary>Whether <paramref name="route"/> is the follower's route, or its drop's walk to the edge.</summary>
+    internal bool Holds(PlayerbotRoute route)
+        => ReferenceEquals(_route, route) || (_drop is { ToEdge: { } toEdge } && ReferenceEquals(toEdge, route));
+
     /// <summary>Whether the follower walks its route, or to the edge of a drop, now.</summary>
     internal bool Walking => _route is not null || _phase == DropPhase.ToEdge;
 

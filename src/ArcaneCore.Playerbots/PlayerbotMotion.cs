@@ -93,6 +93,7 @@ internal static class PlayerbotMotion
         internal uint LastThinkMs;
         /// <summary>Which driver made the last think (a static string: no allocation per think).</summary>
         internal string LastThinkDriver = "";
+        /// <summary>Whether the bot has thought since its motion state was made: <see cref="LastThinkMs"/> and <see cref="LastThinkDriver"/> mean nothing until then.</summary>
         internal bool Thought;
         internal readonly PlayerbotLoopDetector Loops = new();
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
@@ -124,6 +125,29 @@ internal static class PlayerbotMotion
 
     internal static bool TryGetState(Player player, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MotionState? state)
         => States.TryGetValue(player, out state);
+
+    /// <summary>A driver (battleground, bot-led group, party AI) that owns the routes it hands to <see cref="Follow"/>.</summary>
+    internal interface IRouteHolder
+    {
+        /// <summary>Whether <paramref name="route"/> is a route the driver still holds (a dropped or replaced one is not).</summary>
+        bool Holds(PlayerbotRoute route);
+    }
+
+    /// <summary>The route the bot is moving along now, or null when its motion is idle.</summary>
+    internal static PlayerbotRoute? RouteOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.Route : null;
+
+    /// <summary>
+    /// After a driver's think (battleground, bot-led group, party AI): when the motion still follows a route the driver no longer holds
+    /// (it dropped, replaced or lost it without stopping the bot), that is a give-up and <see cref="SettleAfterThink"/> stops the bot now
+    /// unless the think started another route; otherwise the think kept its route and it is renewed. <paramref name="renewalsBefore"/> is
+    /// <see cref="RenewalsOf"/> before the think. A null <paramref name="driver"/> holds nothing. True when it stopped the bot.
+    /// </summary>
+    internal static bool SettleAfterDriver<THolder>(WorldSession session, Player player, THolder? driver, uint renewalsBefore, uint sinceLast)
+        where THolder : class, IRouteHolder
+    {
+        bool dropped = RouteOf(player) is { } route && (driver is null || !driver.Holds(route));
+        return SettleAfterThink(session, player, dropped, renewalsBefore, sinceLast);
+    }
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;
@@ -1209,10 +1233,9 @@ internal static class PlayerbotMotion
     internal static bool SettleAfterThink(WorldSession session, Player player, bool gaveUp, uint renewalsBefore, uint sinceLast)
     {
         if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || !state.Active) return false;
+        if (state.Renewals != renewalsBefore) return false;
         if (!gaveUp)
         {
-            // A think that gave nothing up keeps the route it has, whether or not it called Follow (a Follow already renewed; doing it
-            // again is harmless). The drivers that cannot snapshot Renewals pass renewalsBefore 0, which must not skip this.
             state.RenewedMs = session.World.NowMs;
             if (state.Options is { } opts)
             {
@@ -1222,7 +1245,6 @@ internal static class PlayerbotMotion
             return false;
         }
 
-        if (state.Renewals != renewalsBefore) return false;
         Stop(session, player);
         return true;
     }

@@ -521,8 +521,14 @@ public sealed class PlayerbotCadenceTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>A driver's route ownership, the way the battleground, bot-led group and party AIs report it (<see cref="PlayerbotMotion.IRouteHolder"/>).</summary>
+    private sealed class FakeDriver(PlayerbotRoute? held) : PlayerbotMotion.IRouteHolder
+    {
+        public bool Holds(PlayerbotRoute route) => ReferenceEquals(held, route);
+    }
+
     [Fact]
-    public async Task SettleAfterThink_WhenDriverThinkPassesNoRenewalSnapshot_StillRenewsTheLeaseTheThinkGapRaised()
+    public async Task SettleAfterDriver_WhenDriverKeptItsRouteWithoutCallingFollow_RenewsTheLeaseTheThinkGapRaised()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -531,18 +537,46 @@ public sealed class PlayerbotCadenceTests
             await host.World.InvokeAsync(() =>
             {
                 Player player = session.Player!;
-                StartWalk(host, session, 1000, 4);
-                Assert.True(PlayerbotMotion.RenewalsOf(player) >= 1u, "a started route has been granted at least one renewal");
+                PlayerbotRoute route = StartWalk(host, session, 1000, 4);
 
                 Assert.True(Walking(session, 3000));
-                // The battleground, bot-led group and party drivers pass renewalsBefore 0 (they take no snapshot).
+                uint renewals = PlayerbotMotion.RenewalsOf(player);
                 PlayerbotMotion.NoteThinkGap(player, 10_000);
                 uint lease = PlayerbotMotion.LeaseMsOf(player);
                 Assert.True(lease > 4000u && lease < 20_000u, $"lease {lease}");
-                Assert.False(PlayerbotMotion.SettleAfterThink(session, player, gaveUp: false, renewalsBefore: 0, 10_000));
+                Assert.False(PlayerbotMotion.SettleAfterDriver(session, player, new FakeDriver(route), renewals, 10_000));
 
                 // Past the lease measured from the start (3000 + lease - 1000), but inside it measured from the think.
-                Assert.True(Walking(session, lease - 1000), "driver think with renewalsBefore 0 did not renew the route; motion lease expired midroute");
+                Assert.True(Walking(session, lease - 1000), "a driver that kept its route was not renewed; motion lease expired midroute");
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Theory]
+    [InlineData(false)] // the driver dropped its route (new target, refused TryAdvance) and holds none
+    [InlineData(true)]  // the driver planned another route but the motion kept the old one (a rejected route switch)
+    public async Task SettleAfterDriver_WhenDriverNoLongerHoldsTheMotionsRoute_StopsTheBotNowInsteadOfRenewingAStaleRoute(bool holdsAnotherRoute)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                PlayerbotRoute route = StartWalk(host, session, 1000, 4);
+                Assert.True(Walking(session, 3000));
+                uint renewals = PlayerbotMotion.RenewalsOf(player);
+                PlayerbotRoute? other = null;
+                if (holdsAnotherRoute) { Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X, player.Y + 100, player.Z), Options, out other)); }
+
+                Assert.True(PlayerbotMotion.SettleAfterDriver(session, player, new FakeDriver(other), renewals, 3000),
+                    "the bot kept walking a route its driver dropped");
+                Assert.False(PlayerbotMotion.IsActive(player));
+                Assert.False(player.Movement.HasFlag(MovementFlags.Forward));
+                Assert.NotNull(route);
                 return true;
             });
         }
@@ -550,7 +584,7 @@ public sealed class PlayerbotCadenceTests
     }
 
     [Fact]
-    public async Task SettleAfterThink_WhenThinkGaveUpWithoutFollow_StopsTheBot()
+    public async Task SettleAfterDriver_WhenDriverDroppedTheRouteButStartedAnotherThisThink_DoesNotStopTheBot()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -559,10 +593,18 @@ public sealed class PlayerbotCadenceTests
             await host.World.InvokeAsync(() =>
             {
                 Player player = session.Player!;
-                StartWalk(host, session, 1000, 4);
+                PlayerbotRoute route = StartWalk(host, session, 1000, 4);
+                Assert.True(Walking(session, 3000));
                 uint renewals = PlayerbotMotion.RenewalsOf(player);
-                Assert.True(PlayerbotMotion.SettleAfterThink(session, player, gaveUp: true, renewals, 3000));
-                Assert.False(PlayerbotMotion.IsActive(player));
+                // The think replanned: Follow started the new route (Renewals moved on); the driver holds that one, not the old one.
+                PlayerbotMotion.NoteThinkGap(player, 1000);
+                Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X, player.Y + 100, player.Z), Options, out PlayerbotRoute? next));
+                Assert.True(PlayerbotNavigation.TryAdvance(session, next!, Options, 500, host.World.NowMs));
+                Assert.NotEqual(renewals, PlayerbotMotion.RenewalsOf(player));
+
+                Assert.False(PlayerbotMotion.SettleAfterDriver(session, player, new FakeDriver(next), renewals, 3000));
+                Assert.True(PlayerbotMotion.IsActive(player));
+                Assert.NotSame(route, PlayerbotMotion.RouteOf(player));
                 return true;
             });
         }
