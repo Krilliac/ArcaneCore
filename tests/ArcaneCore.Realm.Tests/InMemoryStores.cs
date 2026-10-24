@@ -4,7 +4,7 @@ using ArcaneCore.Kernel.Realms;
 
 namespace ArcaneCore.Realm.Tests;
 
-internal sealed class InMemoryAccountStore : IAccountStore
+internal sealed class InMemoryAccountStore : IAccountStore, IAccountLoginInfoStore
 {
     private readonly ConcurrentDictionary<string, Account> _accounts = new(StringComparer.Ordinal);
 
@@ -54,6 +54,25 @@ internal sealed class InMemoryAccountStore : IAccountStore
         account.Security = security;
         return Task.FromResult(true);
     }
+
+    public Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+    {
+        if (_accounts.TryGetValue(username.ToUpperInvariant(), out Account? account))
+        {
+            account.LastLoginUtc = info.LastLoginUtc;
+            account.LastOs = info.Os;
+            account.LastPlatform = info.Platform;
+            account.LastLocale = info.Locale;
+            account.LastBuild = info.Build;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+        => Task.FromResult(_accounts.TryGetValue(username.ToUpperInvariant(), out Account? a)
+            ? new AccountLoginInfo(a.LastLoginUtc, a.LastOs, a.LastPlatform, a.LastLocale, a.LastBuild)
+            : null);
 }
 
 internal sealed class InMemoryRealmStore(IReadOnlyList<RealmEntry> realms) : IRealmStore
