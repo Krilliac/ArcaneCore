@@ -33,8 +33,8 @@ public enum ConfirmResult
 
 /// <summary>
 /// Confirm tokens for destructive or broad commands (plan I7), the general form of the playerbot fleet reset's code: the first call
-/// <see cref="Issue"/>s a short random code bound to the invoker, the action and the arguments the operator was shown; the same
-/// invoker echoes it within <see cref="Lifetime"/> and <see cref="TryRedeem"/> spends it once. One preview is pending per
+/// <see cref="Issue"/>s a short random code bound to the invoker, the action and the arguments the operator was shown (compared in
+/// lower case with blanks collapsed, see <see cref="NormalizeBinding"/>); the same invoker echoes it within <see cref="Lifetime"/> and <see cref="TryRedeem"/> spends it once. One preview is pending per
 /// invoker and action (a new one replaces it); at most <see cref="MaxPending"/> are kept. The code alphabet leaves out characters
 /// that are easy to misread.
 /// <para>Thread affinity: any thread (one lock). Time comes from the <see cref="TimeProvider"/> so a test moves it without sleeping.</para>
@@ -42,7 +42,7 @@ public enum ConfirmResult
 public sealed class ConfirmTokenStore(TimeProvider? clock = null)
 {
     /// <summary>How long a code is valid after it is issued.</summary>
-    public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
 
     /// <summary>The wrong codes a preview survives.</summary>
     public const int MaxWrongAttempts = 3;
@@ -72,6 +72,10 @@ public sealed class ConfirmTokenStore(TimeProvider? clock = null)
 
         public int Wrong { get; set; }
     }
+
+    /// <summary>The text a code is bound to: lower case, words separated by a single space (the plan's "normalized command text").</summary>
+    public static string NormalizeBinding(string text)
+        => string.Join(' ', (text ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
     /// <summary>How many previews are pending and not expired (a diagnostic; it spends nothing).</summary>
     public int PendingCount
@@ -104,7 +108,7 @@ public sealed class ConfirmTokenStore(TimeProvider? clock = null)
                 _pending.Remove(key);
             }
 
-            _pending[(invoker, action)] = new Pending(text, binding, expires);
+            _pending[(invoker, action)] = new Pending(text, NormalizeBinding(binding), expires);
             while (_pending.Count > MaxPending)
             {
                 _pending.Remove(_pending.MinBy(p => p.Value.Expires).Key);
@@ -130,7 +134,7 @@ public sealed class ConfirmTokenStore(TimeProvider? clock = null)
                 return ConfirmResult.Expired;
             }
 
-            if (!string.Equals(pending.Binding, binding, StringComparison.Ordinal)) return ConfirmResult.Mismatch;
+            if (!string.Equals(pending.Binding, NormalizeBinding(binding), StringComparison.Ordinal)) return ConfirmResult.Mismatch;
             byte[] given = Encoding.ASCII.GetBytes((code ?? string.Empty).Trim().ToUpperInvariant());
             byte[] expected = Encoding.ASCII.GetBytes(pending.Code);
             if (given.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(given, expected))
@@ -207,7 +211,7 @@ public sealed class ConfirmTokenStore(TimeProvider? clock = null)
             return false;
         }
 
-        string invoker = context.InvokerName;
+        string invoker = GmConfirm.InvokerKey(context);
         if (code is null)
         {
             ConfirmToken issued = store.Issue(invoker, action, effectiveArgs);

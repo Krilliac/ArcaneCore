@@ -151,12 +151,14 @@ public sealed class ConfirmTokenFlowTests
     }
 
     [Fact]
-    public void TheBinding_IsCaseSensitive()
+    public void TheBinding_IgnoresCaseAndBlanks_ButNotTheWords()
     {
         var store = new ConfirmTokenStore(new ManualClock());
         string code = store.Issue("Gm", "a", "Map 1").Code;
 
-        Assert.Equal(ConfirmResult.Mismatch, store.TryRedeem("Gm", "a", "map 1", code));
+        Assert.Equal(ConfirmResult.Mismatch, store.TryRedeem("Gm", "a", "map 2", code));
+        Assert.Equal(ConfirmResult.Accepted, store.TryRedeem("Gm", "a", "  MAP    1 ", code));
+        Assert.Equal("foo bar", ConfirmTokenStore.NormalizeBinding("  Foo 	 BAR "));
     }
 
     [Fact]
@@ -176,9 +178,9 @@ public sealed class ConfirmTokenFlowTests
         var clock = new ManualClock();
         var store = new ConfirmTokenStore(clock);
         store.Issue("Gm", "a", "x");
-        clock.Advance(TimeSpan.FromSeconds(31));
+        clock.Advance(TimeSpan.FromSeconds(61));
         string fresh = store.Issue("Gm", "a", "x").Code;
-        clock.Advance(TimeSpan.FromSeconds(29));
+        clock.Advance(TimeSpan.FromSeconds(59));
 
         Assert.Equal(ConfirmResult.Accepted, store.TryRedeem("Gm", "a", "x", fresh));
     }

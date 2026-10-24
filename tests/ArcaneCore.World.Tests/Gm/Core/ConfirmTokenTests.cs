@@ -5,7 +5,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm.Core;
 
-/// <summary>The confirm tokens of destructive commands (plan I7): short, random, single use, 30 seconds, bound to the invoker, action and arguments.</summary>
+/// <summary>The confirm tokens of destructive commands (plan I7): short, random, single use, 60 seconds, bound to the invoker, action and arguments.</summary>
 public sealed class ConfirmTokenTests
 {
     private sealed class ManualClock : TimeProvider
@@ -34,14 +34,14 @@ public sealed class ConfirmTokenTests
     }
 
     [Fact]
-    public void TheLifetime_IsThirtySeconds()
+    public void TheLifetime_IsSixtySeconds()
     {
         var clock = new ManualClock();
         var store = new ConfirmTokenStore(clock);
         ConfirmToken token = store.Issue("Gm", "a", "x");
 
-        Assert.Equal(TimeSpan.FromSeconds(30), ConfirmTokenStore.Lifetime);
-        Assert.Equal(new DateTimeOffset(2026, 10, 24, 12, 0, 30, TimeSpan.Zero), token.Expires);
+        Assert.Equal(TimeSpan.FromSeconds(60), ConfirmTokenStore.Lifetime);
+        Assert.Equal(new DateTimeOffset(2026, 10, 24, 12, 1, 0, TimeSpan.Zero), token.Expires);
     }
 
     [Fact]
@@ -55,12 +55,12 @@ public sealed class ConfirmTokenTests
     }
 
     [Fact]
-    public void ACode_ExpiresAfterThirtySeconds_AndIsGone()
+    public void ACode_ExpiresAfterSixtySeconds_AndIsGone()
     {
         var clock = new ManualClock();
         var store = new ConfirmTokenStore(clock);
         string code = store.Issue("Gm", "a", "x").Code;
-        clock.Advance(TimeSpan.FromSeconds(29));
+        clock.Advance(TimeSpan.FromSeconds(59));
         Assert.Equal(1, store.PendingCount);
         clock.Advance(TimeSpan.FromSeconds(1));
 
@@ -147,7 +147,7 @@ public sealed class ConfirmTokenTests
         }
 
         Assert.Equal(ConfirmTokenStore.MaxPending, store.PendingCount);
-        clock.Advance(TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromMinutes(2));
         store.Issue("Late", "a", "x");
         Assert.Equal(1, store.PendingCount);
     }
@@ -178,7 +178,7 @@ public sealed class ConfirmTokenTests
         }
 
         Assert.Equal(string.Empty, ConfirmTokenStore.Describe(ConfirmResult.Accepted));
-        Assert.Contains("30 s", ConfirmTokenStore.Describe(ConfirmResult.Expired), StringComparison.Ordinal);
+        Assert.Contains("60 s", ConfirmTokenStore.Describe(ConfirmResult.Expired), StringComparison.Ordinal);
     }
 
     [Fact]

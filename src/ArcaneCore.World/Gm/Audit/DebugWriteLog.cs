@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -125,7 +126,7 @@ public static class DebugWrite
     /// Record one write by <paramref name="context"/>'s invoker, once per changed target, for the command the table is running
     /// (<see cref="CommandContext.CommandPath"/>). <paramref name="target"/> is a short description of what was changed (never a chat
     /// body). <paramref name="sensitive"/> stores and logs both values as a hash (addresses, endpoints, account data: plan 1.4).
-    /// <paramref name="confirmed"/> says a confirm code was echoed (<c>GmConfirm</c>). When the running command is not marked
+    /// <paramref name="confirmed"/> says a confirm code was echoed (<see cref="GmConfirm"/>). When the running command is not marked
     /// <see cref="ChatCommand.IsWrite"/> this throws in strict mode (<see cref="DebugWriteLog.Strict"/>, tests) and otherwise logs an
     /// error once per command and records the write anyway. Returns false when the host has no <see cref="GmAuditFeature"/> (nothing
     /// recorded). World thread (command handlers).
