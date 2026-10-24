@@ -19,12 +19,15 @@ internal static partial class LocalPipeServer
     private const uint PipeAccessDuplex = 0x00000003;
     private const uint FileFlagFirstPipeInstance = 0x00080000;
     private const uint FileFlagOverlapped = 0x40000000;
+
+    /// <summary><c>WRITE_DAC</c> in the open mode: the creator's handle may replace the pipe's DACL later (<c>SetAccessControl</c>).</summary>
+    private const uint WriteDacRight = 0x00040000;
     private const uint PipeTypeByte = 0x00000000;
     private const uint PipeReadModeByte = 0x00000000;
     private const uint PipeWait = 0x00000000;
     private const uint PipeRejectRemoteClients = 0x00000008;
 
-    /// <summary>The most instances <see cref="Create(string, PipeSecurity, uint, bool)"/> accepts (255 is PIPE_UNLIMITED_INSTANCES, which no caller here wants).</summary>
+    /// <summary>The most instances <see cref="Create(string, PipeSecurity, uint, bool, bool)"/> accepts (255 is PIPE_UNLIMITED_INSTANCES, which no caller here wants).</summary>
     public const uint MaxFiniteInstances = 254;
 
     /// <summary><c>FILE_PIPE_REJECT_REMOTE_CLIENTS</c> in <c>FILE_PIPE_LOCAL_INFORMATION.NamedPipeType</c> (ntifs.h).</summary>
@@ -50,9 +53,11 @@ internal static partial class LocalPipeServer
     /// is not reached (otherwise the call fails with <see cref="UnauthorizedAccessException"/> or <see cref="IOException"/>). A caller
     /// that creates all <paramref name="maxInstances"/> itself, before it serves any client, therefore holds every slot of the name: nobody
     /// else can add an instance, and a client beyond the limit finds the pipe busy. The map feed uses this for its connection limit
-    /// (<c>World:Control:MapFeed</c>); the control pipe stays one instance.
+    /// (<c>World:Control:MapFeed</c>); the control pipe stays one instance. With <paramref name="writeDac"/> the handle is also opened with
+    /// <c>WRITE_DAC</c>, so the creator can swap the descriptor after all instances exist (the web pipe, whose final access list does not
+    /// name the daemon and so could not create the further instances).
     /// </summary>
-    public static NamedPipeServerStream Create(string name, PipeSecurity security, uint maxInstances, bool firstInstance)
+    public static NamedPipeServerStream Create(string name, PipeSecurity security, uint maxInstances, bool firstInstance, bool writeDac = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(security);
@@ -72,7 +77,7 @@ internal static partial class LocalPipeServer
                 };
                 handle = CreateNamedPipeW(
                     @"\\.\pipe\" + name,
-                    PipeAccessDuplex | (firstInstance ? FileFlagFirstPipeInstance : 0) | FileFlagOverlapped,
+                    PipeAccessDuplex | (firstInstance ? FileFlagFirstPipeInstance : 0) | FileFlagOverlapped | (writeDac ? WriteDacRight : 0),
                     PipeTypeByte | PipeReadModeByte | PipeWait | PipeRejectRemoteClients,
                     maxInstances,
                     outBufferSize: 0,

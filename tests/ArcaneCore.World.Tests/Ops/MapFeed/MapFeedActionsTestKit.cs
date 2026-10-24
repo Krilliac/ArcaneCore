@@ -52,7 +52,7 @@ internal static class ActionWire
         long id, JsonObject actor, string? command = null, string? template = null, JsonObject? args = null,
         IEnumerable<string>? targets = null, JsonObject? point = null, string? confirm = null)
     {
-        var line = new JsonObject { ["op"] = "action", ["id"] = id, ["actor"] = actor };
+        var line = new JsonObject { ["op"] = "action", ["id"] = id, ["actor"] = actor.DeepClone() };
         if (command is not null)
         {
             line["command"] = command;
@@ -65,7 +65,7 @@ internal static class ActionWire
 
         if (args is not null)
         {
-            line["args"] = args;
+            line["args"] = args.DeepClone();
         }
 
         if (targets is not null)
@@ -75,7 +75,7 @@ internal static class ActionWire
 
         if (point is not null)
         {
-            line["point"] = point;
+            line["point"] = point.DeepClone();
         }
 
         if (confirm is not null)
