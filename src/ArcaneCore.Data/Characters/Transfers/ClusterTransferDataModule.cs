@@ -126,6 +126,7 @@ public sealed class ClusterTransferDataModule : IDataModule, ICharacterDataClean
             entity.Property(r => r.UpdatedAtUtcMs).HasColumnName("updated_at_ms");
             entity.HasIndex(r => r.CharacterGuid);
             entity.HasIndex(r => r.HandoffId);
+            entity.HasIndex(r => r.State);
         });
 
         modelBuilder.Entity<ClusterTransferOwnerRow>(entity =>

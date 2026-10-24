@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Characters.Transfers;
+using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
@@ -44,6 +45,19 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         EfTransferDecisionStore store = services.GetRequiredService<EfTransferDecisionStore>();
         Assert.Same(store, services.GetRequiredService<ITransferDecisionStore>());
         Assert.Same(store, services.GetRequiredService<IWorldHandoffStore>());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheDecisionTable_IndexesState_SoTheAggregateCountDoesNotScan(DatabaseProvider provider)
+    {
+        (ServiceProvider services, _) = await OpenAsync(await _databases.CreateAsync(provider));
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        var entity = db.Model.FindEntityType(typeof(ClusterTransferDecisionRow));
+        Assert.NotNull(entity);
+        Assert.Contains(entity!.GetIndexes(), i => i.Properties.Count == 1 && i.Properties[0].Name == nameof(ClusterTransferDecisionRow.State));
+        Assert.Contains(ClusterTransferStateIndexDataModule.Version, DataModules.For(DatabaseComponent.Characters).Select(m => m.SchemaVersion));
     }
 
     [Theory]
