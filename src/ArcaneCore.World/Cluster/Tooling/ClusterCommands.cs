@@ -82,7 +82,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "diag",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm.",
+                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0.",
                     Diag),
             ]),
     ];
@@ -610,8 +610,9 @@ public sealed class ClusterCommands : ICommandGroup
     }
 
     /// <summary>
-    /// The rollback-readiness input of <c>.cluster diag</c>: the schema versions are the ones this build's databases are composed at
-    /// (<see cref="DiagSchemaVersions.Current"/>), not literals that go stale when a schema module is added.
+    /// The rollback-readiness input of <c>.cluster diag</c>: the schema versions are this build's (the versions its databases are
+    /// composed at, <see cref="DiagSchemaVersions.Current"/>), not literals that go stale when a schema module is added and not the
+    /// version rows of the live databases, which the command cannot read cheaply.
     /// </summary>
     internal static ClusterRollbackSnapshot BuildRollbackSnapshot(
         int realmId,
@@ -637,7 +638,7 @@ public sealed class ClusterCommands : ICommandGroup
             MaximumLocalCharactersSchemaVersion: schema.Characters,
             ExpectedWorldSchemaVersion: schema.World);
 
-    /// <summary>The schema versions this build requires of the auth, characters and world databases.</summary>
+    /// <summary>This build's schema versions of the auth, characters and world databases (what it requires, not what the databases record).</summary>
     internal readonly record struct DiagSchemaVersions(int Auth, int Characters, int World)
     {
         /// <summary>

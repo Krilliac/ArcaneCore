@@ -377,7 +377,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cluster nodes` | 3 | GameMaster | stored level through the map | Syntax: .cluster nodes List the active cluster worker and authority nodes, their readiness, drain state, and player/instance load. |
 | `.cluster leases` | 3 | GameMaster | stored level through the map | Syntax: .cluster leases Show durable character ownership fencing, realm singleton authority leases (economy, social, instances), and write-behind queue depths. |
 | `.cluster social` | 3 | GameMaster | stored level through the map | Syntax: .cluster social Show cross-worker social presence counts by continent/worker, active groups, guilds, and social router state. |
-| `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. |
+| `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |

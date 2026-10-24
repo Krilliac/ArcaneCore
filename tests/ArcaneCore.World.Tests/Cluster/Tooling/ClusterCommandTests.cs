@@ -159,6 +159,21 @@ public sealed class ClusterCommandTests
         Assert.True(verdict.SafeToRollback, string.Join(" | ", verdict.BlockingReasons));
     }
 
+    [Theory]
+    [InlineData(true, "fleet_compatible", "rollbackReady=false")]
+    [InlineData(false, "fleet_incompatible", "rollbackReady=false")]
+    public async Task ClusterDiag_MarksTheLocalWriterFencedOnlyWhenFencingIsEnabled(bool fencingEnabled, string fleetCode, string rollback)
+    {
+        await using WorldTestHost host = StartWithClusterServices(fencingEnabled: fencingEnabled);
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMF", "Admfence");
+
+        string[] diag = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Single(diag);
+        Assert.Contains("fleetCompat=" + fleetCode, diag[0], StringComparison.Ordinal);
+        Assert.Contains(rollback, diag[0], StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ClusterStatus_AndNode_ReportCurrentPlayerPlacementAndOwnershipToken()
     {
