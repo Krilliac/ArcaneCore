@@ -661,6 +661,9 @@ public static class LatencyNames
     /// <summary>One navigation path query (<c>NavMeshPathfinder.FindPath</c>).</summary>
     public const string PathQuery = "nav.path_query";
 
+    /// <summary>A bot path job, from its submission to the answer being applied on the world thread (wall time).</summary>
+    public const string BotPathJobWait = "nav.bot_path_job_wait";
+
     /// <summary>From the client's CMSG_PLAYER_LOGIN to the player being in the world.</summary>
     public const string LoginToWorld = "login.to_world";
 

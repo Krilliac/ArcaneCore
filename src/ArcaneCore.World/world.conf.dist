@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       728 keys
+#   WORLD                       736 keys
 #
 ###############################################################################
 
@@ -14402,6 +14402,95 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 World.Playerbots.Party.TeleportToLeader = true
 
 #
+#    World.Playerbots.PathJobSyncNodeThreshold
+#        Description: A path query of at most this many nodes stays on the world thread even with
+#                     PathJobs (2048, vmangos' own budget, is a goal within about 100 yards;
+#                     0..32768).
+#        Type: int
+#        Default: 2048
+#        Allowed: a whole number from 0 to 32768
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobSyncNodeThreshold = 2048
+
+#
+#    World.Playerbots.PathJobWaitMaxMs
+#        Description: How long one query may wait for its path job (wall ms) before it runs once on
+#                     the world thread, held to SyncPathQueryMaxMs (1000..600000).
+#        Type: int
+#        Default: 30000
+#        Allowed: a whole number from 1000 to 600000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobWaitMaxMs = 30000
+
+#
+#    World.Playerbots.PathJobWorkerMaxMs
+#        Description: The longest wall time in milliseconds a path job may hold a pool thread (a
+#                     search past it ends as one that ran out of nodes; 10..60000).
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number from 10 to 60000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobWorkerMaxMs = 1000
+
+#
+#    World.Playerbots.PathJobs
+#        Description: Whether a bot plan's far navigation-mesh search (more than
+#                     PathJobSyncNodeThreshold nodes) runs on the shared path-job pool instead of
+#                     the world thread: the bot answers "pending" for the think and the finished
+#                     answer is applied on a later one, as it waits for a navigation tile still
+#                     being read. Off by default (rollout). Live: .reload config (jobs in flight
+#                     finish and are dropped or applied by the same checks).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobs = false
+
+#
+#    World.Playerbots.PathJobsMaxInFlight
+#        Description: The most bot path jobs in flight together (1..1024); a bot past it waits in
+#                     line, oldest first, and never searches on the world thread instead.
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number from 1 to 1024
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxInFlight = 64
+
+#
+#    World.Playerbots.PathJobsMaxInFlightNodes
+#        Description: The most search nodes (the sum of the jobs' MaxSearchNodes) the bot path jobs
+#                     in flight may hold together: it bounds pool time, not only the job count
+#                     (4096..100000000).
+#        Type: long
+#        Default: 262144
+#        Allowed: a whole number from 4096 to 100000000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxInFlightNodes = 262144
+
+#
+#    World.Playerbots.PathJobsMaxPerBot
+#        Description: The most path jobs one bot may have in flight (1..8).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number from 1 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxPerBot = 1
+
+#
 #    World.Playerbots.Policy.AbPolicyShare
 #        Description: The share of bots (0..1) in the policy arm of an A/B comparison; the rest are
 #                     in the ladder arm, which takes snapshots and scores them but never promotes or
@@ -16388,6 +16477,20 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.StallSeconds = 120
+
+#
+#    World.Playerbots.SyncPathQueryMaxMs
+#        Description: The longest wall time in milliseconds one navigation-mesh search may take on
+#                     the world thread (0 = no bound, else 10..60000): a search past it stops as one
+#                     that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2
+#                     168 ms in a single 32 768-node search. Live: .reload config.
+#        Type: int
+#        Default: 100
+#        Allowed: 0 (no bound), or a whole number from 10 to 60000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.SyncPathQueryMaxMs = 100
 
 #
 #    World.Playerbots.Taxi.BackoffMinutes

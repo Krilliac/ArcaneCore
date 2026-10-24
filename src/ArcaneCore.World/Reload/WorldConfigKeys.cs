@@ -172,6 +172,22 @@ public static class WorldConfigKeys
             v => double.IsFinite(v) && v is >= 0 and <= 60_000 ? null : "must be 0..60000"),
         LivePlayerbotsValue("MaxThinkSearchNodes", o => o.MaxThinkSearchNodes, (o, v) => o.MaxThinkSearchNodes = v,
             v => v == 0 || v is >= Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes and <= 10_000_000 ? null : $"must be 0 or {Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000"),
+        // Not vmangos keys: bot path jobs (PlayerbotPathJobs) and the world-thread search deadline; read at each query and think.
+        LivePlayerbots("PathJobs", o => o.PathJobs, (o, v) => o.PathJobs = v),
+        LivePlayerbotsValue("PathJobsMaxPerBot", o => o.PathJobsMaxPerBot, (o, v) => o.PathJobsMaxPerBot = v,
+            v => v is >= 1 and <= 8 ? null : "must be 1..8"),
+        LivePlayerbotsValue("PathJobsMaxInFlight", o => o.PathJobsMaxInFlight, (o, v) => o.PathJobsMaxInFlight = v,
+            v => v is >= 1 and <= 1024 ? null : "must be 1..1024"),
+        LivePlayerbotsValue("PathJobsMaxInFlightNodes", o => o.PathJobsMaxInFlightNodes, (o, v) => o.PathJobsMaxInFlightNodes = v,
+            v => v is >= 4096 and <= 100_000_000 ? null : "must be 4096..100000000"),
+        LivePlayerbotsValue("PathJobSyncNodeThreshold", o => o.PathJobSyncNodeThreshold, (o, v) => o.PathJobSyncNodeThreshold = v,
+            v => v is >= 0 and <= 32_768 ? null : "must be 0..32768"),
+        LivePlayerbotsValue("PathJobWorkerMaxMs", o => o.PathJobWorkerMaxMs, (o, v) => o.PathJobWorkerMaxMs = v,
+            v => v is >= 10 and <= 60_000 ? null : "must be 10..60000"),
+        LivePlayerbotsValue("PathJobWaitMaxMs", o => o.PathJobWaitMaxMs, (o, v) => o.PathJobWaitMaxMs = v,
+            v => v is >= 1000 and <= 600_000 ? null : "must be 1000..600000"),
+        LivePlayerbotsValue("SyncPathQueryMaxMs", o => o.SyncPathQueryMaxMs, (o, v) => o.SyncPathQueryMaxMs = v,
+            v => v == 0 || v is >= 10 and <= 60_000 ? null : "must be 0 or 10..60000"),
 
         // Not vmangos keys: risk against reward and retreat (docs/areas/playbots-risk.md). PlayerbotRisk, PlayerbotRiskModel and the
         // party AI read the shared PlayerbotOptions.Risk at every decision.

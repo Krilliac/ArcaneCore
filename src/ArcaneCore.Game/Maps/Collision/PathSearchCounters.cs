@@ -17,6 +17,7 @@ public static class PathSearchCounters
     [ThreadStatic] private static long t_tileLoads;
     [ThreadStatic] private static long t_tileLoadTicks;
     [ThreadStatic] private static long t_capped;
+    [ThreadStatic] private static long t_deadlineHits;
     [ThreadStatic] private static long t_tilesPending;
     [ThreadStatic] private static bool t_lastPendingWasRealRead;
     [ThreadStatic] private static long t_gridTileLoads;
@@ -43,12 +44,18 @@ public static class PathSearchCounters
     /// <summary>Searches on this thread so far that hit their node cap (<see cref="PathOptions.MaxSearchNodes"/>).</summary>
     public static long CappedSearches => t_capped;
 
+    /// <summary>Searches on this thread so far that stopped at their wall-time bound (<see cref="PathOptions.MaxSearchMs"/>); each is also counted in <see cref="CappedSearches"/>.</summary>
+    public static long DeadlineHits => t_deadlineHits;
+
+    /// <summary>A search stopped at its wall-time bound.</summary>
+    internal static void RecordDeadline() => t_deadlineHits++;
+
     /// <summary>A* nodes created on this thread so far.</summary>
     public static long NodesCreated => t_nodes;
 
     /// <summary>This thread's totals so far.</summary>
     public static PathSearchTotals Current => new(t_searches, t_nodes, t_expansions, t_tileLoads, t_tileLoadTicks, t_capped, t_tilesPending,
-        t_gridTileLoads, t_gridTileLoadTicks, t_tileFailures);
+        t_gridTileLoads, t_gridTileLoadTicks, t_tileFailures, t_deadlineHits);
 
     /// <summary>
     /// The slowest navigation tile installation (an on-demand read or a grid's tile load) on this thread since
@@ -145,12 +152,13 @@ public readonly record struct TileLoadDetail(uint MapId, int X, int Y, long Tick
 
 /// <summary>A snapshot of <see cref="PathSearchCounters"/>; the difference of two is the work between them.</summary>
 public readonly record struct PathSearchTotals(long Searches, long Nodes, long Expansions, long TileLoads, long TileLoadTicks, long Capped, long TilesPending = 0,
-    long GridTileLoads = 0, long GridTileLoadTicks = 0, long TileLoadFailures = 0)
+    long GridTileLoads = 0, long GridTileLoadTicks = 0, long TileLoadFailures = 0, long DeadlineHits = 0)
 {
     public static PathSearchTotals operator -(PathSearchTotals a, PathSearchTotals b)
         => new(a.Searches - b.Searches, a.Nodes - b.Nodes, a.Expansions - b.Expansions, a.TileLoads - b.TileLoads,
             a.TileLoadTicks - b.TileLoadTicks, a.Capped - b.Capped, a.TilesPending - b.TilesPending,
-            a.GridTileLoads - b.GridTileLoads, a.GridTileLoadTicks - b.GridTileLoadTicks, a.TileLoadFailures - b.TileLoadFailures);
+            a.GridTileLoads - b.GridTileLoads, a.GridTileLoadTicks - b.GridTileLoadTicks, a.TileLoadFailures - b.TileLoadFailures,
+            a.DeadlineHits - b.DeadlineHits);
 
     /// <summary>The tile reads' time in milliseconds.</summary>
     public double TileLoadMs => TileLoadTicks * 1000.0 / Stopwatch.Frequency;

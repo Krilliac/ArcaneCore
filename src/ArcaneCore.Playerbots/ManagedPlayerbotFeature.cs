@@ -132,6 +132,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private uint _oldestSilentMs;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
+    private PlayerbotPathJobs? _pathJobs;
+    private uint _lastPathJobSweepMs;
+
+    /// <summary>The bots' far path searches as pool jobs (<see cref="PlayerbotPathJobs"/>); created on first use, world thread.</summary>
+    private PlayerbotPathJobs PathJobs => _pathJobs ??= new PlayerbotPathJobs(_options,
+        new NavJobSystemRunner(() => NavJobSystem.SharedIfStarted ?? NavJobSystem.Shared(PathJobDefaultThreads, logger)),
+        () => unchecked((uint)ClockMs), logger);
+
+    /// <summary>The pool's size when this feature is the first to start it (the creatures' <c>Creatures:Movement:PathJobThreads</c> default; a pool the creatures started keeps its own).</summary>
+    private const int PathJobDefaultThreads = 4;
+
+    /// <summary>The bots' path-job service; null until a think or a test created it.</summary>
+    internal PlayerbotPathJobs? PathJobsForTests => _pathJobs;
     private PlayerbotSlowThinkLog? _slowThinks;
 
     /// <summary>
@@ -539,6 +552,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>The body of <see cref="Detach"/>, with the operation lock held.</summary>
     private void DetachHeld(FeatureHandover handover)
     {
+        _pathJobs?.ForgetAll();
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         var setAsides = new Dictionary<Guid, PlayerbotSetAside[]>();
         var controllers = new Dictionary<Guid, IPlayerbotController>();
@@ -1132,7 +1146,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (controller is not null && active.GroupDriven)
             {
                 // A controller takes over a member of a bot-led group: it leaves the group (and the brain resumes when it detaches).
-                coordinator?.Forget(botId);
+                coordinator?.Forget(botId); _pathJobs?.Forget(botId);
                 active.GroupDriven = false;
                 active.Brain.ResumeAfterGroup();
             }
@@ -1480,7 +1494,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // The coordinator may already hold the bot without a group-driven think yet (matched in this very tick): it lets go either way.
         if (bot.GroupDriven || coordinator?.Drives(botId) == true)
         {
-            coordinator?.Forget(botId);
+            coordinator?.Forget(botId); _pathJobs?.Forget(botId);
             if (bot.GroupDriven)
             {
                 bot.GroupDriven = false;
@@ -1852,6 +1866,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task ShutdownBeforeWorldStopAsync()
     {
         Volatile.Write(ref _stopping, true);
+        _pathJobs?.ForgetAll();
         coordinator?.BeginShutdown();
         await _checkpoint.ConfigureAwait(false);
         try { await _warWipeTask.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); } // the war layer wipe (no new one starts once stopping)
@@ -2098,7 +2113,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
             void Quiesce()
             {
-                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
+                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
                 _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
@@ -2276,6 +2291,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
         uint now = world.NowMs;
+        if (_pathJobs is { } pathJobs && unchecked(now - _lastPathJobSweepMs) >= 1_000)
+        {
+            _lastPathJobSweepMs = now;
+            pathJobs.Sweep();
+        }
         // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
@@ -2445,10 +2465,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private void Think(ActiveBot active, ManagedActionBudget budget, int botOrdinal = 0)
     {
         _probe.NodeBudget = _options.MaxThinkSearchNodes;
+        _probe.SyncQueryMaxMs = _options.SyncPathQueryMaxMs;
         _probe.Begin();
         string driver;
+        // The think's far path searches are the pool's (PlayerbotPathJobs): bound to this bot for the think.
+        PlayerbotPathJobs.BindScope bound = active.Session.Player is { } thinker0 ? PathJobs.Bind(active.Record.BotId, thinker0) : default;
         try { driver = ThinkCore(active, budget, botOrdinal); }
-        finally { _probe.End(); }
+        finally
+        {
+            bound.Dispose();
+            _probe.End();
+        }
         // The decision telemetry, outside the think's probe: what it costs is not the brain's.
         if (driver == "brain" && _policy?.Telemetry is { } telemetry && active.Session.Player is { } thinker && _world is { } thinkWorld)
         {
@@ -3166,7 +3193,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
-        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
+        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
         Social.Untrack(active.Record.CharacterId);
