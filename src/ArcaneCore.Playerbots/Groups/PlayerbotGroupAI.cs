@@ -1194,7 +1194,7 @@ internal sealed class PlayerbotGroupAI
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false))
+                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false, chase: true))
                 {
                     Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:no-path");
                     _target = null;
@@ -1520,7 +1520,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>Walk towards <paramref name="goal"/>, planning again when it moved more than 2 yards since the last plan.</summary>
     /// <param name="toward">A far goal: a partial route towards it is fine (<see cref="PlayerbotNavigation.TryPlanToward"/>).</param>
-    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward)
+    /// <param name="chase">The goal is an enemy the bot closes on (<see cref="PlayerbotRoute.Chase"/>), planned as the brain plans its chase: the loop watch does not count its ends. Without it a waiting leader's walks to its waypoint and its fight chases to guards and attackers near it read as a back-and-forth (A, B, A) and the loop watch blacklisted the waypoint.</param>
+    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward, bool chase = false)
     {
         if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal) <= 1.5f)
         {
@@ -1541,7 +1542,7 @@ internal sealed class PlayerbotGroupAI
             PlanOutcome planned = direct is not null ? PlanOutcome.Route
                 : toward
                     ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct)
-                    : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct);
+                    : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out direct, chase: chase);
             _route = direct;
             if (planned != PlanOutcome.Route || _route is null)
             {
