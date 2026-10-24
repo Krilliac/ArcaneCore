@@ -1,5 +1,4 @@
 using ArcaneCore.World.Gm.Core;
-using ArcaneCore.World.Ops.MapFeed;
 
 namespace ArcaneCore.World.Gm.Audit;
 
@@ -15,5 +14,5 @@ public sealed partial class GmAuditFeature
     /// The <c>AllowDangerousDebug</c> decision, taken once when the feature is built (the option is Restart-only) from the host's
     /// configuration and the live-server marker.
     /// </summary>
-    public DangerousDebugGate DangerousDebug { get; } = DangerousDebugGate.Create(configuration, WorldPacketToolsOptions.IsLiveServer());
+    public DangerousDebugGate DangerousDebug { get; } = DangerousDebugGate.Create(configuration, DangerousDebugGate.LiveServerProbe());
 }

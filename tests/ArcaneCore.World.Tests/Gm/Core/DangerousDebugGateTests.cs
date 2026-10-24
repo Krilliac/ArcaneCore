@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,19 +123,54 @@ public sealed class DangerousDebugProbeCollection
 public sealed class DangerousDebugGateProbeTests
 {
     [Fact]
+    public async Task TheFeature_ReadsTheConfiguredValue_AndAllowPasses_ForConsoleAndPlayer()
+    {
+        // The probe is pinned to "not live" for the whole test, so the outcome never depends on the test process's own environment.
+        Func<bool> original = DangerousDebugGate.LiveServerProbe;
+        DangerousDebugGate.LiveServerProbe = () => false;
+        try
+        {
+            await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string?>(DangerousDebugGate.OptionPath, "true")]).Build()));
+            await using WorldTestClient client = await host.EnterWorldAsync("DDHONE", "Ddhone", AccountSecurity.Administrator);
+            var session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DDHONE"))!.Id)!;
+            var replies = new List<string>();
+            List<(bool Allowed, string? Failure)> results = [];
+
+            await host.OnWorldAsync(() =>
+            {
+                CommandContext console = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Add);
+                results.Add((DangerousDebugGate.Allow(console, "inject"), console.Failure));
+                CommandContext player = new(session, session.Player!, ChatCommands.CreateTable());
+                results.Add((DangerousDebugGate.Allow(player, "inject"), player.Failure));
+            });
+
+            Assert.True(host.WorldServices.GetRequiredService<GmAuditFeature>().DangerousDebug.Allowed);
+            Assert.Equal([(true, (string?)null), (true, (string?)null)], results);
+            Assert.Empty(replies);
+        }
+        finally
+        {
+            DangerousDebugGate.LiveServerProbe = original;
+        }
+    }
+
+    [Fact]
     public async Task Allow_RefusesOnTheLiveServer_EvenWhenTheOptionIsOn()
     {
         Func<bool> original = DangerousDebugGate.LiveServerProbe;
-        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IConfiguration>(
-            new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string?>(DangerousDebugGate.OptionPath, "true")]).Build()));
-        await using WorldTestClient client = await host.EnterWorldAsync("DDGPRB", "Ddgprb", AccountSecurity.Administrator);
-        var session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DDGPRB"))!.Id)!;
         var replies = new List<string>();
         List<bool> results = [];
         string? failure = null;
 
         try
         {
+            DangerousDebugGate.LiveServerProbe = () => false;
+            await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string?>(DangerousDebugGate.OptionPath, "true")]).Build()));
+            await using WorldTestClient client = await host.EnterWorldAsync("DDGPRB", "Ddgprb", AccountSecurity.Administrator);
+            var session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DDGPRB"))!.Id)!;
+
             await host.OnWorldAsync(() =>
             {
                 CommandContext context = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Add);

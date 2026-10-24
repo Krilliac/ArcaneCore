@@ -74,28 +74,6 @@ public sealed class DangerousDebugGateHostTests
         Assert.False(host.WorldServices.GetRequiredService<GmAuditFeature>().DangerousDebug.Allowed);
     }
 
-    [Fact]
-    public async Task TheFeature_ReadsTheConfiguredValue_AndAllowPasses_ForConsoleAndPlayer()
-    {
-        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(Config("true")));
-        await using WorldTestClient client = await host.EnterWorldAsync("DDHONE", "Ddhone", AccountSecurity.Administrator);
-        var session = host.Registry.Find((await host.Accounts.FindByUsernameAsync("DDHONE"))!.Id)!;
-        var replies = new List<string>();
-        List<(bool Allowed, string? Failure)> results = [];
-
-        await host.OnWorldAsync(() =>
-        {
-            CommandContext console = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Add);
-            results.Add((DangerousDebugGate.Allow(console, "inject"), console.Failure));
-            CommandContext player = new(session, session.Player!, ChatCommands.CreateTable());
-            results.Add((DangerousDebugGate.Allow(player, "inject"), player.Failure));
-        });
-
-        Assert.True(host.WorldServices.GetRequiredService<GmAuditFeature>().DangerousDebug.Allowed);
-        Assert.Equal([(true, (string?)null), (true, (string?)null)], results);
-        Assert.Empty(replies);
-    }
-
     [Theory]
     [InlineData(AccountSecurity.GameMaster)]
     [InlineData(AccountSecurity.Administrator)]

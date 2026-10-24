@@ -117,6 +117,7 @@ public sealed class DebugWriteLogTests
 
         DebugWriteEntry entry = Assert.Single(audit.DebugWrites.Tail(5));
         Assert.Equal(CommandContext.ConsoleName, entry.Character);
+        Assert.Equal(0, entry.AccountId);
         Assert.Equal(DebugWrite.Hash("203.0.113.9:8085"), entry.OldValue);
         Assert.DoesNotContain("203.0.113.9", entry.OldValue, StringComparison.Ordinal);
         Assert.Equal(string.Empty, entry.NewValue);

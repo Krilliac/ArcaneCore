@@ -164,7 +164,7 @@ public static class DebugWrite
         }
 
         DebugWriteEntry entry = audit.DebugWrites.Record(
-            context.Session.AccountId, context.InvokerName, path, target, field, oldValue, newValue, scope, reason, confirmed);
+            context.IsConsole ? 0 : context.Session.AccountId, context.InvokerName, path, target, field, oldValue, newValue, scope, reason, confirmed);
         log.LogInformation(
             "DebugWrite {Command} by {Character} (account {Account}) target {Target} field {Field}: {Old} -> {New} [{Scope}] reason {Reason} confirmed {Confirmed}",
             entry.Command, entry.Character, entry.AccountId, entry.Target, entry.Field, entry.OldValue, entry.NewValue, entry.Scope, entry.Reason, entry.Confirmed);

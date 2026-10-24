@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Gm.Core;
 /// The <c>AllowDangerousDebug</c> gate (plan I8) in front of the debug commands that can hurt a running world: time offset, inject,
 /// opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps. The option is Restart-only (read once) and
 /// off by default. On the live server (<c>ARCANECORE_LIVE_SERVER=1</c>, the same probe as the map feed) the commands are refused
-/// whatever the option says: nothing overrides that. A value that is not a boolean is off.
+/// whatever the option says: nothing overrides that.
 /// <para>Thread affinity: immutable after construction, any thread.</para>
 /// </summary>
 public sealed class DangerousDebugGate
@@ -58,7 +58,8 @@ public sealed class DangerousDebugGate
             return Create(configured: false, liveServer);
         }
 
-        // The raw text, not GmOptions.Bind: a value that is not a boolean is off here instead of an exception.
+        // The raw text, not GmOptions.Bind: here a value that is not a boolean is off. (A host's GmAuditFeature binds GmOptions first,
+        // which rejects such a value at startup; only this pure path turns it off quietly.)
         string? raw = configuration.GetSection(GmOptions.SectionName)[nameof(GmOptions.AllowDangerousDebug)];
         return Create(bool.TryParse(raw, out bool configured) && configured, liveServer);
     }
