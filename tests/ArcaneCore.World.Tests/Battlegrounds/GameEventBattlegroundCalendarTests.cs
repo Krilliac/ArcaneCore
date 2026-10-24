@@ -1,5 +1,9 @@
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Game.WorldState.Time;
+using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.World.WorldState;
 using ArcaneCore.World.Battlegrounds;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -55,5 +59,62 @@ public sealed class GameEventBattlegroundCalendarTests
             () => new BattlegroundWorldHost(host.WorldServices.GetRequiredService<BattlegroundFeature>()).BasePorts().Calendar);
 
         Assert.IsType<GameEventBattlegroundCalendar>(calendar);
+    }
+
+    /// <summary>Event 19 (Call to Arms: Warsong Gulch, holiday 284) runs 12:00 to 14:00 every day.</summary>
+    private static GameEventContent CallToArmsWarsong()
+        => new(
+            [new GameEventRecord(19, 1, 1440, 120, 284, 0, "Call to Arms: Warsong Gulch")],
+            [new GameEventTimeRecord(19, "2026-10-03 12:00:00", "2030-12-31 22:59:59")],
+            [], [], [], [], []);
+
+    private static async Task<int> NewWarsongCaptureReputationAsync(WorldTestHost host)
+        => await host.OnWorldAsync(() =>
+        {
+            BattlegroundManager manager = host.WorldServices.GetRequiredService<BattlegroundFeature>().Manager;
+            if (manager.TemplateOf(BattlegroundType.WarsongGulch) is null)
+            {
+                // The test world has no graveyard rows, so the feature registered no built-in template.
+                manager.RegisterTemplate(new BattlegroundTemplate
+                {
+                    Type = BattlegroundType.WarsongGulch,
+                    MapId = BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch),
+                    Name = "Warsong Gulch",
+                    MinPlayersPerTeam = 5,
+                    MaxPlayersPerTeam = 10,
+                    MinLevel = 10,
+                    MaxLevel = 60,
+                    AllianceStart = new BattlegroundStartLocation(1f, 2f, 3f, 0f),
+                    HordeStart = new BattlegroundStartLocation(4f, 5f, 6f, 0f),
+                });
+            }
+
+            Battleground bg = manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0)
+                ?? throw new InvalidOperationException("no Warsong Gulch template");
+            return Assert.IsType<WarsongGulch>(bg).CaptureReputation;
+        });
+
+    [Fact]
+    public async Task ALiveCallToArmsEvent_GivesANewWarsongMatchTheWeekendValues_AndWithoutItTheNormalOnes()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();
+        var clock = new FixedGameTime(new DateTimeOffset(2026, 10, 3, 15, 0, 0, TimeSpan.Zero));
+        await host.OnWorldAsync(() =>
+        {
+            WorldStateHooks.For(host.World).Time = clock;
+            events.UseContent(CallToArmsWarsong(), new HashSet<ushort>());
+        });
+
+        // 15:00: the event is over, so a new match gets the normal values.
+        await Task.Delay(300);
+        Assert.False(await host.OnWorldAsync(() => events.IsActiveHoliday(284)));
+        Assert.Equal(35, await NewWarsongCaptureReputationAsync(host));
+
+        // 12:30: the event runs, so the next new match gets the weekend values.
+        clock.UtcNow = new DateTimeOffset(2026, 10, 3, 12, 30, 0, TimeSpan.Zero);
+        await host.OnWorldAsync(() => events.UseContent(CallToArmsWarsong(), new HashSet<ushort>()));
+        await host.WaitForWorldAsync(() => events.IsActiveHoliday(284), "the Call to Arms event to start");
+        Assert.Equal(45, await NewWarsongCaptureReputationAsync(host));
     }
 }
