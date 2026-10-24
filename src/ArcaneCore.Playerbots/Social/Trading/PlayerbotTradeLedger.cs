@@ -9,7 +9,8 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// the windows are ignored at read time (a scam or ninja loot is held against the partner for good) and switching War Mode off restores them; the ledger itself is normal-only
 /// and War Mode writes nothing to it. A bot holds at most <see cref="PlayerbotTradeRecord.MaxRowsPerBot"/> partners: the one that makes room is a partner with no scam or ninja
 /// inside its window and the fewest fair deals (then the least recently written), so a row that still matters is kept. Thread-safe (one lock; every call is a few dictionary
-/// operations, and only a full bot scans its rows, once per new partner). <see cref="Snapshot"/> returns the stored rows (what <see cref="Load"/> expects back).
+/// operations, and only a full bot scans its rows, once per new partner). It is fed by the social recorder whether or not <c>Social:Trading:Enabled</c> is on (counts and
+/// times only; the switch gates what the bots do with them). <see cref="Snapshot"/> returns the stored rows (what <see cref="Load"/> expects back).
 /// </summary>
 internal sealed class PlayerbotTradeLedger(PlayerbotSocialTradingOptions options, PlayerbotWarModeOptions war, Func<long> clock)
 {

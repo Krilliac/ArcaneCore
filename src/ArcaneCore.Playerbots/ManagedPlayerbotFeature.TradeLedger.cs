@@ -48,6 +48,12 @@ public sealed partial class ManagedPlayerbotFeature
             {
                 long version = ledger.Version(botId); // before the snapshot: the saved version never runs ahead of the rows
                 IReadOnlyList<PlayerbotTradeRecord> rows = ledger.Snapshot(botId);
+                if (version == 0 && rows.Count == 0)
+                {
+                    Volatile.Write(ref active.SavedTradeVersion, version); // never written to: nothing to replace (a restored bot would otherwise send one DELETE)
+                    return;
+                }
+
                 await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, rows), CancellationToken.None).ConfigureAwait(false);
                 Volatile.Write(ref active.SavedTradeVersion, version);
             }
