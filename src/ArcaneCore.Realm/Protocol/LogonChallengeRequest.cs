@@ -41,7 +41,8 @@ public sealed class LogonChallengeRequest
         // AuthPackets.h sends these four-character tags byte reversed ("68x" -> "x86").
         static string Tag(ReadOnlySpan<byte> bytes)
         {
-            string raw = Encoding.ASCII.GetString(bytes).TrimEnd('\0');
+            // Printable ASCII only: a stray NUL or control byte is dropped (PostgreSQL text rejects U+0000).
+            string raw = new(Encoding.ASCII.GetString(bytes).Where(static c => c is >= ' ' and <= '~').ToArray());
             return new string(raw.Reverse().ToArray());
         }
 

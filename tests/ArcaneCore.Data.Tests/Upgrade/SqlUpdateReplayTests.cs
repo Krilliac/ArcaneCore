@@ -98,20 +98,21 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
         // The account index is missing, as in a database whose index was lost; the step puts it back.
         await SchemaProbe.DropIndexesAsync(db, "account");
 
-        // Recorded at the wrong version (4, not 5): refused, nothing changes.
-        await UpgradeTestSupport.SetVersionAsync(db, "auth", 4);
+        // Recorded at the wrong version (one below the step's source): refused, nothing changes.
+        int prior = schema.CurrentVersion - 1;
+        await UpgradeTestSupport.SetVersionAsync(db, "auth", prior - 1);
         string wrong = await SqlUpdateTestKit.CatalogDumpAsync(db, schema);
         await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, step));
         Assert.Equal(wrong, await SqlUpdateTestKit.CatalogDumpAsync(db, schema));
         Assert.Empty(await SchemaProbe.ActualIndexesAsync(db, ["account"]));
 
-        // At version 5: applies, creates the index, records 6.
-        await UpgradeTestSupport.SetVersionAsync(db, "auth", 5);
+        // At the source version: applies, creates the index, records the next one.
+        await UpgradeTestSupport.SetVersionAsync(db, "auth", prior);
         await SqlUpdateTestKit.ExecuteAsync(db, provider, step);
-        Assert.Equal(6, await UpgradeTestSupport.ReadVersionAsync(db, "auth"));
+        Assert.Equal(prior + 1, await UpgradeTestSupport.ReadVersionAsync(db, "auth"));
         Assert.Contains(await SchemaProbe.ActualIndexesAsync(db, ["account"]), i => i.Name == "IX_account_Username");
 
-        // Again: now at 6, refused, nothing changes.
+        // Again: now one above the source, refused, nothing changes.
         string applied = await SqlUpdateTestKit.CatalogDumpAsync(db, schema);
         await Assert.ThrowsAnyAsync<Exception>(() => SqlUpdateTestKit.ExecuteAsync(db, provider, step));
         Assert.Equal(applied, await SqlUpdateTestKit.CatalogDumpAsync(db, schema));
@@ -130,7 +131,10 @@ public sealed class SqlUpdateReplayTests : IAsyncLifetime
     {
         const string component = "auth";
         SchemaDefinition schema = SchemaProbe.SchemaOf(component);
-        string text = File.ReadAllText(SqlUpdateTestKit.OrderedFiles(component, provider)[0]);
+        // A baseline cut at the current version: the resume rebuilds the current model, so an older committed baseline (which
+        // later steps extend) is not the file under test; a fresh export with no snapshot is.
+        UpdateSet baseline = await UpdateScriptWriter.GenerateAsync(UpdateComponent.For(component), null);
+        string text = baseline.Files.Single(f => f.Path.Contains("/" + SqlUpdateTestKit.Folder(provider) + "/", StringComparison.Ordinal)).Content;
         string[] all = [.. MysqlClientSplitter.Split(text)];
         int first = Array.FindIndex(all, s => s.StartsWith("ALTER DATABASE", StringComparison.Ordinal) || s.StartsWith("CREATE TABLE", StringComparison.Ordinal));
         int last = Array.FindLastIndex(all, s => s.StartsWith("UPDATE", StringComparison.Ordinal));
