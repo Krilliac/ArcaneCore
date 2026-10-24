@@ -628,9 +628,9 @@ public sealed class GmTargetResolverTests
 
         // A set selection wins over the target.
         Player self = await host.PlayerAsync("Rslvtgt");
-        await host.OnWorldAsync(() => self.Selection = self.Guid);
+        await host.OnWorldAsync(() => self.Selection = wolf.Guid);
         Resolved viaSelection = await ResolveAsync(host, gm, "Rslvtgt", "", GmTargetRequest.Reading);
-        Assert.Equal("Rslvtgt", viaSelection.Target?.Player?.Name);
+        Assert.Equal(wolf.Guid, viaSelection.Target?.Creature?.Guid);
     }
 
     [Fact]

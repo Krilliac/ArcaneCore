@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Gm.Core;
 /// <summary>The form of a target selector (docs: debug-commands plan, section 1.3).</summary>
 public enum GmSelectorKind
 {
-    /// <summary>Omitted: the selected unit, then the issuer's target, then the issuer.</summary>
+    /// <summary>Omitted: the selected unit, then the issuer.</summary>
     Default,
 
     /// <summary><c>$name</c>: an online player or bot.</summary>
@@ -537,7 +537,7 @@ public static class GmTargetResolver
         ObjectGuid guid = self.Selection;
         if (guid.IsEmpty)
         {
-            // Nothing selected and no target: the issuer itself, when that is a valid kind for the command.
+            // Nothing selected: the issuer itself, when that is a valid kind for the command.
             return (request.Accepted & GmTargetKinds.Player) != 0 ? Accept(context, self, request) : Refuse(context, "no-target", NoTarget);
         }
 
