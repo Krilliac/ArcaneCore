@@ -48,7 +48,7 @@ public sealed class PlayerbotPopulationFeatureTests
         // The creature survey of the graveyards runs in the background; creation waits for it (the terrain hold).
         PopulationStatus status = await world.PassAsync();
         for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+            status.Reason.Contains("waiting for the ", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
         {
             await Task.Delay(20);
             world.Ticks.Set(200, 10);
@@ -74,7 +74,7 @@ public sealed class PlayerbotPopulationFeatureTests
         // every zone was refused as unsafe.
         PopulationStatus status = await world.PassAsync();
         for (DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-            status.Reason.Contains("waiting for the graveyard terrain lookup", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
+            status.Reason.Contains("waiting for the ", StringComparison.Ordinal) && DateTime.UtcNow < deadline;)
         {
             await Task.Delay(20);
             world.Ticks.Set(200, 10);

@@ -217,6 +217,35 @@ public sealed class TerrainManager
         }
     }
 
+    /// <summary>
+    /// One tile read straight from its <c>.map</c> file, without the tile cache or the prefetch (so no counter and no shared state is
+    /// touched): <see cref="TerrainTile.Empty"/> without terrain data or for a missing or unreadable file. Thread affinity: any thread
+    /// (it reads only the data directory, fixed at construction). It reads a file per call, so it is for background work.
+    /// </summary>
+    public TerrainTile ReadTileDetached(uint mapId, int tileX, int tileY)
+    {
+        if (_mapsDirectory is null)
+        {
+            return TerrainTile.Empty;
+        }
+
+        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+        try
+        {
+            return File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : TerrainTile.Empty;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            FaultLedger.Shared.Record("terrain.tile-read", ex);
+            if (ex is InvalidDataException)
+            {
+                AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
+            }
+            _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
+            return TerrainTile.Empty;
+        }
+    }
+
     internal TerrainTile LoadTile(uint mapId, int tileX, int tileY)
     {
         if (_mapsDirectory is null)

@@ -3,7 +3,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 namespace ArcaneCore.World.Playerbots.Population;
 
 /// <summary>
-/// A fixed-spawn grid for population placement checks. Constructed once per creature content object on the world thread;
+/// A fixed-spawn grid for population placement checks. Constructed once per creature content object on a background task (<see cref="PopulationPlacementFacts.Build"/>), then only read;
 /// template definitions may reload on that same object, so callers resolve entries through <see cref="Content"/> at query time.
 /// </summary>
 internal sealed class PopulationSpawnIndex

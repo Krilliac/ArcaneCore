@@ -62,8 +62,9 @@ public sealed class PopulationRushTests
         Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
     }
 
-    private static Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
-        => PopulationTestHost.StartAsync(o =>
+    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
+    {
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
         {
             o.MaxBots = 6;
             o.Population.Enabled = false;      // the rush needs no running population
@@ -74,6 +75,10 @@ public sealed class PopulationRushTests
             o.Population.RushBrakeWindowSeconds = 1;
             configure?.Invoke(o);
         }, dataStore: store);
+        // A rush started on a cold world halts at once ("waiting for the placement safety data"); these tests are about a warm one.
+        await world.Feature.WarmNowAsync();
+        return world;
+    }
 
     private static async Task<PopulationRushStatus> WaitRushAsync(PopulationTestHost world, Func<PopulationRushStatus, bool> done, string what, int seconds = 20)
     {
