@@ -9,7 +9,9 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Death;
 
@@ -121,24 +123,22 @@ public sealed class DeathGmCommands : ICommandGroup
 
         uint zone = player.ZoneId;
         GraveyardCatalog catalog = WorldGraveyards.Of(context.World).Catalog;
-        MapRegistry registry = WorldMaps.Of(context.World).Registry;
-        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
-        WorldSafeLoc? graveyard = GraveyardSelector.FindClosest(catalog, registry, map.MapId, player.X, player.Y, player.Z, zoneId, areaId, team);
+
+        // The same choice as a real repop (battleground overrides, zone and area links, the default fallback, run-time links),
+        // asked of the graveyard service for the requested team.
+        GraveyardRepopService? repop = context.Session.Services.GetService<GraveyardFeature>()?.Service;
+        WorldSafeLoc? graveyard = repop?.ChooseNearest(player, map, team);
         if (graveyard is null)
         {
             context.Reply(ZoneNoGraveyardForFaction(zone, TeamName(team)));
             return true;
         }
 
-        // vmangos looks the link up in the player's zone: a graveyard that is only linked to the AREA has no data there.
-        GraveyardEntry? link = catalog.LinksOf(zone).Where(e => e.Location.Id == graveyard.Id).Select(e => (GraveyardEntry?)e).FirstOrDefault();
-        if (link is null)
-        {
-            context.Reply(GraveyardError(graveyard.Id));
-            return true;
-        }
-
-        context.Reply(GraveyardNearest(graveyard.Id, TeamName(link.Value.Team), zone));
+        // The team of the link: the player's zone first (vmangos), then its area; a graveyard that no table link names (a
+        // battleground's, the default fallback, a run-time link) has no team of its own and reads as any.
+        (_, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+        GraveyardEntry? link = catalog.LinksOf(zone).Concat(catalog.LinksOf(areaId)).Where(e => e.Location.Id == graveyard.Id).Select(e => (GraveyardEntry?)e).FirstOrDefault();
+        context.Reply(GraveyardNearest(graveyard.Id, TeamName(link?.Team ?? 0), zone));
         return true;
     }
 }

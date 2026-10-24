@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Death;
+using ArcaneCore.World.Graveyards;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -63,6 +65,35 @@ public sealed class DeathGmCommandTests
 
         Assert.Equal("Graveyard #1 (faction: any) is nearest from linked to zone #12.", await ReplyAsync(gm, ".neargrave"));
         Assert.Equal("Graveyard #1 (faction: any) is nearest from linked to zone #12.", await ReplyAsync(gm, ".neargrave horde"));
+    }
+
+    private sealed class ExtraLink(uint id) : IGraveyardLinkSource
+    {
+        public IEnumerable<uint> ExtraLinks(Player player, uint zoneId, uint areaId) => [id];
+    }
+
+    [Fact]
+    public async Task NearGrave_AgreesWithTheRealRepop_WhenARunTimeLinkIsCloser()
+    {
+        // Graveyard 2 is linked to no zone: only a run-time link (an outdoor PvP tower) makes it a candidate, and the real repop
+        // then prefers it to the zone's graveyard 1 because it is closer. .neargrave has to name the one the spirit would get.
+        await using WorldTestHost host = Start(new GraveyardLink(1, 12, 0));
+        await using WorldTestClient gm = await host.EnterWorldAsync("DGMNEAR3", "Dgmnearthree", AccountSecurity.Administrator);
+        await host.PlaceAsync("Dgmnearthree", -8995f, -195f, 90f);
+        await host.OnWorldAsync(() =>
+        {
+            host.World.FindOnlinePlayer("Dgmnearthree")!.ZoneId = 12;
+            host.WorldServices.GetRequiredService<GraveyardFeature>().Service!.AddLinkSource(new ExtraLink(2));
+        });
+        await gm.CollectAsync(Quiet);
+
+        uint real = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Dgmnearthree")!;
+            return host.WorldServices.GetRequiredService<GraveyardFeature>().Service!.Choose(player, player.Map!)!.Id;
+        });
+        Assert.Equal(2u, real);
+        Assert.Equal("Graveyard #2 (faction: any) is nearest from linked to zone #12.", await ReplyAsync(gm, ".neargrave"));
     }
 
     [Fact]

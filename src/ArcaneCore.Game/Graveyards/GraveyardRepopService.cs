@@ -120,13 +120,26 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
     /// <summary>The safe location for <paramref name="player"/> at its position, or null.</summary>
     internal WorldSafeLoc? Choose(Player player, Map map) => ChooseAt(player, map, player.X, player.Y, player.Z);
 
+    /// <summary>
+    /// The graveyard a spirit of <paramref name="player"/>'s position would be sent to, as a GM query (<c>.neargrave</c>): the same
+    /// selection as a real repop (battleground overrides, zone links, the default fallback, run-time links), but for
+    /// <paramref name="team"/> instead of the player's own: 469 (Alliance), 67 (Horde) or 0 (any team).
+    /// </summary>
+    public WorldSafeLoc? ChooseNearest(Player player, Map map, uint team)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        (uint zoneId, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+        return ChooseAt(player, map.MapId, player.X, player.Y, player.Z, zoneId, areaId, team);
+    }
+
     private WorldSafeLoc? ChooseAt(Player player, Map map, float x, float y, float z)
     {
         (uint zoneId, uint areaId) = map.GetZoneAndAreaId(x, y, z);
         return ChooseAt(player, map.MapId, x, y, z, zoneId, areaId);
     }
 
-    private WorldSafeLoc? ChooseAt(Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId)
+    private WorldSafeLoc? ChooseAt(Player player, uint mapId, float x, float y, float z, uint zoneId, uint areaId, uint? teamOverride = null)
     {
         WorldMaps maps = WorldMaps.Of(world);
         if (maps.Registry.Find(mapId) is { IsBattleground: true })
@@ -148,10 +161,15 @@ public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportServi
             return null;
         }
 
-        uint team = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
-        WorldSafeLoc? picked = DeathHooks.For(world).Options.GraveyardFallbackToDefaults
-            ? GraveyardSelector.FindClosestOrDefault(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team)
-            : GraveyardSelector.FindClosest(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team);
+        uint ownTeam = player.Team == Team.Alliance ? GraveyardCatalog.TeamAlliance : GraveyardCatalog.TeamHorde;
+        uint team = teamOverride ?? ownTeam;
+        WorldSafeLoc? picked = GraveyardSelector.FindClosest(catalog, maps.Registry, mapId, x, y, z, zoneId, areaId, team);
+        if (picked is null && DeathHooks.For(world).Options.GraveyardFallbackToDefaults)
+        {
+            // The default graveyards are per team; "any team" (a GM query only) falls back to the player's own.
+            picked = catalog.Find((team == 0 ? ownTeam : team) == GraveyardCatalog.TeamHorde ? GraveyardCatalog.DefaultHordeGraveyard : GraveyardCatalog.DefaultAllianceGraveyard);
+        }
+
         return _linkSources.Count == 0 ? picked : WithExtraLinks(picked, catalog, player, mapId, x, y, z, zoneId, areaId);
     }
 
