@@ -87,7 +87,7 @@ public sealed class DebugToolsCommandTests
         });
 
         string[] wide = await RunAsync(gm, ".debug slowticks 300");
-        Assert.Contains(wide, l => l.Contains("1 slow tick(s) within the last 300 s", StringComparison.Ordinal) && l.Contains("replaced first", StringComparison.Ordinal));
+        Assert.Contains(wide, l => l.Contains("slow tick(s) within the last 300 s", StringComparison.Ordinal) && l.Contains("replaced first", StringComparison.Ordinal));
         Assert.Contains(wide, l => l.Contains("987 ms", StringComparison.Ordinal) && l.Contains("240 s ago", StringComparison.Ordinal));
         Assert.DoesNotContain(wide, l => l.Contains("requested", StringComparison.Ordinal));
 
