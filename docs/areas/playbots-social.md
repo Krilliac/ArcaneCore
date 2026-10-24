@@ -331,6 +331,12 @@ Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one p
 - **Verified.** `TryAnnounce` does not refuse whispers to non-opted players (the opt-in only gates model use), so the Interacted gate in the lane is the guard. `SpellSystem.HolderAdded` is raised on the world thread. The thank emote id 97 is the repo's `PlayerbotSocialEmotes.TextEmotes.Thank`.
 
 
+## Trading (`World:Playerbots:Social:Trading`, P4a foundation)
+
+Status: the 26 Trading keys are registered and documented, but until the trade desk and the deal steps land (later P4 steps) nothing reads them except `ScamMemoryDays` and `NinjaMemoryDays`, which the trade ledger applies when it reads a row. Setting the others changes no bot behaviour yet.
+
+The trade ledger (`playerbot_trade_record`, characters schema) keeps, per bot and partner, the fair deals and scams counted, the last scam and ninja times and the last UTC day a gift counted: counts and times only, no items, prices or chat. It is fed by the social recorder (a scam, ninja loot or gift note) whether or not `World:Playerbots:Social:Trading:Enabled` or `World:Playerbots:Social:Memory:Enabled` is on; the switches gate what bots do with it, not what is counted. It holds at most 4096 partners per bot and is written at the bot's checkpoint only when it changed. Deleting a bot removes its own rows and nothing else: rows other bots hold about it are kept until they age out, and rows about a deleted real player are kept too (the same rule as the relation table).
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is

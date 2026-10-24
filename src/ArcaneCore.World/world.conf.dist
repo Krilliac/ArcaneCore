@@ -16501,8 +16501,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookMinSellers = 3
 
 #
 #    World.Playerbots.Social.Trading.Enabled
-#        Description: Master switch (on by default). Off cancels every window the trade desk drives
-#                     at its next pass.
+#        Description: Master switch (on by default). Once the trade desk lands (a later P4 step),
+#                     off will cancel every window it drives at its next pass; no effect until then.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false

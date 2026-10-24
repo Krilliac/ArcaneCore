@@ -2,12 +2,13 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 
 /// <summary>
 /// <c>World:Playerbots:Social:Trading</c>: bots answering trade windows, fixed-price deals, group gifts and the outflow limits (P4a). On by default.
-/// Every key is live. It runs only while <c>World:Playerbots:Enabled</c>, the social feature and the economy are on; the deal talk and the "anyone need"
+/// The keys are live (a change applies without a restart), but until the trade desk and deal steps land in later P4 steps nothing reads them except
+/// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/>. It will run only while <c>World:Playerbots:Enabled</c>, the social feature and the economy are on; the deal talk and the "anyone need"
 /// lines also need <c>World:Playerbots:Chat:Enabled</c>. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
 /// </summary>
 public sealed class PlayerbotSocialTradingOptions
 {
-    /// <summary>Master switch (on by default). Off cancels every window the trade desk drives at its next pass.</summary>
+    /// <summary>Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then.</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default).</summary>
