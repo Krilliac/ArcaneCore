@@ -132,6 +132,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot))
+        {
+            return;
+        }
+
         inventory.SwapItem(srcBag, srcSlot, dstBag, dstSlot);
     }
 
@@ -172,6 +177,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        if (RefuseIfOffered(session, player, InventorySlots.Bag0, srcSlot) || RefuseIfOffered(session, player, InventorySlots.Bag0, dstSlot))
+        {
+            return;
+        }
+
         inventory.SwapItem(InventorySlots.Bag0, srcSlot, InventorySlots.Bag0, dstSlot);
     }
 
@@ -186,6 +196,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         byte srcBag = reader.ReadByte();
         byte srcSlot = reader.ReadByte();
+        if (RefuseIfOffered(session, player, srcBag, srcSlot))
+        {
+            return;
+        }
+
         player.Inventory.AutoEquipItem(srcBag, srcSlot);
     }
 
@@ -207,6 +222,11 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         if (bank && !inventory.BankUsable)
         {
             inventory.SendEquipError(InventoryResult.TooFarAwayFromBank, inventory.GetItem(srcBag, srcSlot), null);
+            return;
+        }
+
+        if (RefuseIfOffered(session, player, srcBag, srcSlot))
+        {
             return;
         }
 
@@ -258,6 +278,13 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // vmangos Player::SplitItem returns silently for an item in the trade window; the destination
+        // is checked too because a split onto an offered stack would merge into it.
+        if (RefuseIfOffered(session, player, srcBag, srcSlot) || RefuseIfOffered(session, player, dstBag, dstSlot))
+        {
+            return;
+        }
+
         inventory.SplitItem(srcBag, srcSlot, dstBag, dstSlot, count);
     }
 
@@ -273,7 +300,36 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         byte bag = reader.ReadByte();
         byte slot = reader.ReadByte();
         byte count = reader.ReadByte();
+        if (RefuseIfOffered(session, player, bag, slot))
+        {
+            return;
+        }
+
         player.Inventory.DestroyItemRequest(bag, slot, count);
+    }
+
+    /// <summary>
+    /// True (after sending ItemLocked and scoring the anticheat) when the item at the position is offered in
+    /// the player's open trade. Moving, splitting, merging or destroying an offered item would change what
+    /// the partner accepted, because the trade settles from the item's count at completion.
+    /// </summary>
+    private static bool RefuseIfOffered(WorldSession session, Player player, byte bag, byte slot)
+    {
+        Item? item = player.Inventory.GetItem(bag, slot);
+        if (item is null)
+        {
+            return false;
+        }
+
+        EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
+        if (economy?.TradeOf(player) is not { } trade || !trade.SideOf(player).TradedItems.Contains(item.Guid))
+        {
+            return false;
+        }
+
+        session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "inventory change of an item offered in the trade window");
+        player.Inventory.SendEquipError(InventoryResult.ItemLocked, item, null);
+        return true;
     }
 
     /// <summary>
