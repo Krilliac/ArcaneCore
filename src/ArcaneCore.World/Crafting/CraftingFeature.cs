@@ -55,5 +55,5 @@ public sealed class CraftingFeature(IServiceProvider services) : IWorldFeature
 
     /// <summary>vmangos <c>Item::IsInTrade</c>: the item is offered in one of the six trade slots of the player's open trade. The non-traded slot (enchant target) is shown and never moved, so it still counts.</summary>
     private bool IsInTrade(Player player, Item item)
-        => services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid);
+        => services.GetService<EconomyFeature>()?.IsOffered(player, item) == true;
 }
