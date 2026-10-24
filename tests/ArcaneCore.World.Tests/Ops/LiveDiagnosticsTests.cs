@@ -177,6 +177,48 @@ public sealed class LiveDiagnosticsTests : IDisposable
         Assert.DoesNotContain(heapRequested.Warnings, w => w.Contains("Heap dump, not Full", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The sidecar is started without the daemon's createdump variables (so it, its collectors and its other .NET tools cannot write dumps
+    /// named like the daemon's), and the launcher's own environment gets them back.
+    /// </summary>
+    [PwshFact]
+    public void SidecarStart_HasNoDumpVariables_AndTheyAreRestoredAfterwards()
+    {
+        string launch = File.ReadAllText(Path.Combine(LiveDir, "launch-daemon.ps1"));
+        int wrapped = launch.IndexOf("Invoke-WithoutDumpEnvironment { Start-Process pwsh", StringComparison.Ordinal);
+        Assert.True(wrapped > launch.IndexOf("Set-LiveDiagnosticsEnvironment", StringComparison.Ordinal), "the sidecar must be started without the dump variables");
+
+        string output = RunPwsh($$"""
+            $env:DOTNET_DbgEnableMiniDump = '1'; $env:DOTNET_DbgMiniDumpType = '4'; $env:DOTNET_DbgMiniDumpName = 'x.dmp'
+            $env:DOTNET_CreateDumpDiagnostics = '1'; $env:DOTNET_CreateDumpLogToFile = 'x.log'; $env:DOTNET_gcServer = '0'
+            $probe = '$e = Get-ChildItem Env: | Where-Object Name -match ''^DOTNET_(Dbg|CreateDump)''; ($e | ForEach-Object Name) -join '',''; [Environment]::GetEnvironmentVariable(''DOTNET_gcServer'')'
+            $inside = Invoke-WithoutDumpEnvironment { pwsh -NoProfile -Command $probe }
+            [pscustomobject]@{
+                Inside = @($inside)
+                After = @('DOTNET_DbgEnableMiniDump', 'DOTNET_DbgMiniDumpType', 'DOTNET_DbgMiniDumpName', 'DOTNET_CreateDumpDiagnostics', 'DOTNET_CreateDumpLogToFile' | ForEach-Object { [Environment]::GetEnvironmentVariable($_) })
+            } | ConvertTo-Json -Compress
+            """);
+        using JsonDocument json = JsonDocument.Parse(output.Trim());
+        string[] inside = json.RootElement.GetProperty("Inside").EnumerateArray().Select(e => e.GetString() ?? "").ToArray();
+        Assert.Equal(["", "0"], inside); // no DOTNET_Dbg*/CreateDump* names; an unrelated DOTNET_ variable is untouched
+        Assert.Equal(["1", "4", "x.dmp", "1", "x.log"], json.RootElement.GetProperty("After").EnumerateArray().Select(e => e.GetString() ?? "").ToArray());
+    }
+
+    /// <summary>A DOTNET_DbgEnableMiniDump kept from the environment as 0 is not reported as an active crash dump.</summary>
+    [PwshFact]
+    public void KeptDisabledCrashDump_IsReportedOff_AndCountersLineNamesTheMetricsCondition()
+    {
+        InstallTools("dotnet-stack", "dotnet-counters");
+        string output = RunPwsh($$"""
+            $plan = Get-LiveDiagnosticsPlan -Role World -LiveHome '{{Quote(_home)}}' -DotnetRoot '{{Quote(_dotnet)}}' -UserHome '{{Quote(_userHome)}}' -Environment @{ DOTNET_DbgEnableMiniDump = '0' }
+            $plan.Active | ConvertTo-Json -Compress -AsArray
+            """);
+        string[] active = JsonSerializer.Deserialize<string[]>(output.Trim())!;
+        Assert.Contains(active, l => l.StartsWith("crash dump: off", StringComparison.Ordinal));
+        Assert.DoesNotContain(active, l => l.StartsWith("crash dump: Full", StringComparison.Ordinal));
+        Assert.Contains(active, l => l.StartsWith("counters:", StringComparison.Ordinal) && l.Contains("Ops:Metrics:Enabled", StringComparison.Ordinal));
+    }
+
     /// <summary>Retention deletes the oldest files beyond the count and byte caps, always keeps the newest, and ignores other file names.</summary>
     [PwshFact]
     public void Retention_DeletesOldestBeyondCountAndByteCaps()

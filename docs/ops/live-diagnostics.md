@@ -20,7 +20,7 @@ At launch the script prints one `[diagnostics]` line per active capture (and a w
 [diagnostics] diagnostics Max (World)
 [diagnostics] crash dump: Full -> <LiveHome>\dumps
 [diagnostics] hang stacks: <dotnet-stack> every >= 60 s -> <LiveHome>\logs\hangstacks
-[diagnostics] counters: System.Runtime + ArcaneCore meters -> <LiveHome>\logs\counters
+[diagnostics] counters: System.Runtime (+ the ArcaneCore meters when Ops:Metrics:Enabled is true in the profile) -> <LiveHome>\logs\counters
 [diagnostics] repo options: fault log limit 50, slow transaction/command 500 ms, write-gate stats 60 s, heap sample 5 s, counter dump 60 s
 [diagnostics] sidecar pid 1234 (ends with the daemon)
 ```
@@ -42,7 +42,7 @@ At launch the script prints one `[diagnostics]` line per active capture (and a w
 | `Ops__Watchdog__Counters__DumpIntervalSeconds` | `60` | both | The counters registry line every minute (default 300, `WatchdogOptions.cs:214`). One line, on the watchdog thread. |
 | `Ops__Watchdog__Memory__SampleIntervalSeconds` | `5` | both | Heap sample every 5 s on the watchdog thread (default 10, `WatchdogOptions.cs:113`). |
 | `Ops__Watchdog__HostLoad__HistorySeconds` | `300` | both | Five minutes of host-load samples to difference a slow window against (default 120, `WatchdogOptions.cs:103`); 300 small structs. |
-| `Database__SlowTransactionWarnMs` | `500` | both | WARN, with the DbContext and the closing code, for a transaction open over 500 ms (default 2000, `DatabaseOptions.cs:108`). Logged by the interceptor after the fact, not on the tick. |
+| `Database__SlowTransactionWarnMs` | `500` | both | WARN, with the DbContext and the closing code, for a transaction open over 500 ms (default 2000, `DatabaseOptions.cs:108`). Logged by the interceptor on the thread that ran the transaction, when it closes; it adds no polling, and it is off the tick only for work that does not run on the world thread. |
 | `Database__SlowCommandWarnMs` | `500` | both | The same for a single command (default 2000, `DatabaseOptions.cs:116`; identical warnings are limited to one per 10 s). |
 | `Database__Sqlite__SingleWriter__StatsIntervalMs` | `60000` | both | The SQLite write gate's statistics line (writes, contended writes, waits, longest hold) every minute (default 300000, `SqliteSingleWriterOptions.cs:44`). Its WARN for a writer that waited behind the gate (1000 ms) and ERROR for a leaked hold (60 s) are not settings (`SqliteSingleWriterOptions.cs:38-41`). |
 
@@ -52,10 +52,14 @@ With `Max` the launcher starts a hidden `diagnostics-sidecar.ps1` for each daemo
 runs until it exits, and never outlives it. It stops only its own collector, by process id, never by image name.
 
 - **Counters.** With `dotnet-counters` it runs `collect` on the daemon, 10 s refresh, CSV, in segments of 60 minutes
-  (`<LiveHome>\logs\counters\<role>-<pid>-<utc stamp>.csv`; the tool has no rotation, so the sidecar starts the next segment). Providers:
-  `System.Runtime`, `ArcaneCore.Runtime`, `ArcaneCore.World`, `ArcaneCore.Faults`, `ArcaneCore.Anomalies`, `ArcaneCore.Playerbots.Qa`,
-  `ArcaneCore.Playerbots.Qa.Findings` (the meters created in `RuntimeMeters.cs`, `WorldMetricsFeature.cs`, `FaultLedger.cs`,
-  `AnomalyLedger.cs`, `PlayerbotQaMeters.cs`), with at most 2000 time series and 50 histograms so a per-map or per-opcode dimension cannot
+  (`<LiveHome>\logs\counters\<role>-<pid>-<utc stamp>.csv`; the tool has no rotation, so the sidecar starts the next segment). Providers requested:
+  `System.Runtime` (always present), `ArcaneCore.Runtime`, `ArcaneCore.World`, `ArcaneCore.Faults`, `ArcaneCore.Anomalies`,
+  `ArcaneCore.Playerbots.Qa`, `ArcaneCore.Playerbots.Qa.Findings`. A requested meter that does not exist yet is simply absent from the CSV:
+  `ArcaneCore.Runtime` is created only by `MetricsHost.StartAsync` and `ArcaneCore.World` only by `WorldMetricsFeature`, both after the
+  `Ops:Metrics:Enabled` check (`MetricsHost.cs:32-39`, `WorldMetricsFeature.cs:45-46`; default false, `MetricsOptions.cs:23`), so **they
+  appear only when the profile enables `Ops:Metrics`** (the launcher does not, because that opens an exporter endpoint). `ArcaneCore.Faults`
+  and `ArcaneCore.Anomalies` are created lazily on the first fault or anomaly (`FaultLedger.cs:1026`, `AnomalyLedger.cs:569`); the Playerbots
+  meters when the Playerbots QA code runs (`PlayerbotQaMeters.cs`). With `Ops:Metrics` off the CSV is mostly `System.Runtime`. The collection has at most 2000 time series and 50 histograms so a per-map or per-opcode dimension cannot
   grow the target's memory without bound. A collector that ends at once is retried after 60 s. Its own log is `<role>-sidecar.log` there.
 - **Retention.** At launch and at every segment the oldest files beyond a cap are deleted (the newest file is always kept):
 
@@ -65,9 +69,11 @@ runs until it exits, and never outlives it. It stops only its own collector, by 
 | `logs\hangstacks` (`hang-stacks-*.txt`) | hang stacks | 500 files, 200 MB | `-MaxHangStackFiles`, `-MaxHangStackMB` |
 | `logs\counters` (`*.csv`) | counters segments | 48 files, 2048 MB | `-MaxCountersFiles`, `-MaxCountersMB` |
 
+Environment inheritance: the launcher starts the sidecar with the `DOTNET_DbgEnableMiniDump`, `DOTNET_DbgMiniDump*` and `DOTNET_CreateDump*` variables removed (`Invoke-WithoutDumpEnvironment`), so the sidecar and its `dotnet-counters` collectors never dump into `dumps`. The World does pass them on to the `dotnet-stack` it runs for a hang capture (`HangStackCapture.cs:139`): if that tool itself crashes, it writes a dump into `dumps` named with its own process id, and that file counts against the dump cap. The launcher console keeps the `Ops__`/`Database__`/`DOTNET_` variables after the daemon ends (`-NoExit`), so a .NET tool run there afterwards inherits them.
+
 A dump is written by the crashing process, so a cap trims at the next launch (or the next segment), not at the moment of the crash: keep
 `-MaxDumpFiles` times the dump size free on the volume. Dumps contain session keys and character data (`OpsDiagnosticsOptions.cs:21-26`):
-keep `dumps` private.
+keep `dumps` private. `Max` also sets `Ops:Diagnostics:Dumps:Enabled=true` on the World, which turns on the `.debug dump` command: administrator-only and rate-limited (`MinIntervalSeconds` 600), but a security-relevant default; use `-Diagnostics Standard` or set `Ops__Diagnostics__Dumps__Enabled=false` in the environment to keep it off.
 
 ## Survey: what was left out, and why
 
@@ -78,9 +84,10 @@ keep `dumps` private.
 | `Ops:Watchdog:TickMonitor:HangMs` | `WatchdogOptions.cs:53` | Left at 2000. Lowering it fails config validation when a profile's `BudgetMs` is at or above the new value (`WatchdogOptionsValidation.cs:37`), so the launcher does not change it; set both in the profile to capture shorter hangs. |
 | `Ops:Watchdog:TickMonitor:Action`/`ActionHangMs` | `WatchdogOptions.cs:65-68` | Left off: they stop or kill the world, which is not a diagnostic. |
 | `PerformanceLog:*` | `PerformanceLogOptions.cs` | Left to the profile (`WorldConfigChecks.cs:65` validates the detail keys). The defaults already log a summary a minute plus one detail line per map per interval. |
-| `Ops:Metrics` | `MetricsOptions.cs:23` | Left to the profile (it opens an exporter endpoint). The counters sidecar reads the same meters without a listener port. |
+| `Ops:Metrics` | `MetricsOptions.cs:23` | Left to the profile (it opens an exporter endpoint). The counters sidecar needs it: without `Ops:Metrics:Enabled` the `ArcaneCore.Runtime` and `ArcaneCore.World` meters are never created, so the CSV holds `System.Runtime` plus whatever fault, anomaly and QA meters have been created. The sidecar attaches through the diagnostics port, not the exporter's listener. |
 | `Logging` levels | profile | Left to the profile: raising them to Trace costs tick-thread time on every log call. |
 | `DOTNET_EnableEventPipe` (+ `DOTNET_EventPipeOutputPath`, `DOTNET_EventPipeConfig`, `DOTNET_EventPipeCircularMB`) | runtime | **Not enabled.** A startup EventPipe session writes a `.nettrace` for the life of the process: it grows without bound, and the sample-profiler and GC-verbose providers cost CPU on a loaded process. `dotnet-stack` and `dotnet-counters` use short, bounded EventPipe sessions through the diagnostics port instead; a long trace is an operator action (`dotnet-trace collect -p <pid> --duration ...`). |
+| `DOTNET_EnableCrashReport` (JSON crash report) | runtime | Not supported on Windows (Microsoft's "Collect dumps on crash" article), so there is nothing to enable; the crash dump above is the capture. |
 | `.debug alloc` (EventListener, GC keyword) | `diagnostics.md` | On demand only (administrator command); its sampling is measured as noise-level but it is not left running. |
 | `DOTNET_gcServer`, `DOTNET_GCHighMemPercent` | `ArcaneCore.World.csproj:12`, `launch-daemon.ps1` | Not diagnostics. `launch-daemon.ps1` already sets `DOTNET_GCHighMemPercent` for the World. |
 

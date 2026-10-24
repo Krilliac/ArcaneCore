@@ -63,6 +63,7 @@ while (Test-Alive $daemon) {
             $collector = Start-Process -FilePath $CountersTool -ArgumentList $arguments -PassThru -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $dirs.Counters "$($Role.ToLowerInvariant())-collector.out") `
                 -RedirectStandardError (Join-Path $dirs.Counters "$($Role.ToLowerInvariant())-collector.err")
+            [void]$collector.Handle # cache the handle now: ExitCode is $null for a process whose handle was never opened
         } catch { Write-SidecarLog "counters collector did not start: $($_.Exception.Message)" }
     }
     $segmentStart = [DateTime]::UtcNow
@@ -75,7 +76,7 @@ while (Test-Alive $daemon) {
     if ($collector -and -not $collector.HasExited) {
         # The daemon is gone (or the segment overran): the collector ends itself when its target exits; give it a moment, then stop this one process by id.
         if (-not $collector.WaitForExit(10000)) {
-            try { Stop-Process -Id $collector.Id -Force -ErrorAction Stop; Write-SidecarLog "stopped collector pid $($collector.Id)" } catch { }
+            try { $collector.Kill(); Write-SidecarLog "stopped collector pid $($collector.Id)" } catch { }
         }
     }
     # A collector that ends at once (bad tool, the runtime refusing a second session) must not be restarted in a tight loop.

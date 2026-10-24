@@ -134,11 +134,12 @@ function Get-LiveDiagnosticsPlan {
     }
 
     $active.Add("diagnostics Max ($Role)")
-    $active.Add("crash dump: $effectiveDump -> $dumpDir")
+    $dumpOn = $settings | Where-Object { $_.Name -eq 'DOTNET_DbgEnableMiniDump' -and $_.Kept -and $_.Existing.Trim() -ne '1' }
+    $active.Add($(if ($dumpOn) { "crash dump: off (DOTNET_DbgEnableMiniDump=$($dumpOn.Existing) kept from the environment)" } else { "crash dump: $effectiveDump -> $dumpDir" }))
     if ($Role -eq 'World') {
         $active.Add($(if ($plan.StackTool) { "hang stacks: $($plan.StackTool) every >= $HangStackIntervalSeconds s -> $($dirs.HangStacks)" } else { 'hang stacks: off (dotnet-stack not found)' }))
     }
-    $active.Add($(if ($counters) { "counters: System.Runtime + ArcaneCore meters -> $($dirs.Counters)" } else { 'counters: off (dotnet-counters not found)' }))
+    $active.Add($(if ($counters) { "counters: System.Runtime (+ the ArcaneCore meters when Ops:Metrics:Enabled is true in the profile) -> $($dirs.Counters)" } else { 'counters: off (dotnet-counters not found)' }))
     $active.Add('repo options: fault log limit 50, slow transaction/command 500 ms, write-gate stats 60 s, heap sample 5 s, counter dump 60 s')
     foreach ($s in $settings | Where-Object Kept) { $active.Add("kept from the environment: $($s.Name)=$($s.Existing)") }
     return [pscustomobject]$plan
@@ -156,6 +157,28 @@ function Set-LiveDiagnosticsEnvironment {
         $set.Add($s.Name)
     }
     return $set.ToArray()
+}
+
+function Invoke-WithoutDumpEnvironment {
+    <#
+    .SYNOPSIS
+      Runs -ScriptBlock with the runtime's crash-dump variables (DOTNET_DbgEnableMiniDump, DOTNET_DbgMiniDump*, DOTNET_CreateDump*) removed
+      from this process's environment, then restores them. A child started inside it (the sidecar and its dotnet-counters collectors) does
+      not inherit the daemon's dump settings, so a crash in a helper tool cannot write a dump named like the daemon's into the same
+      directory, share its createdump log, or count against the dump cap. Returns the script block's output.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$ScriptBlock)
+    $saved = [ordered]@{}
+    foreach ($name in [System.Environment]::GetEnvironmentVariables().Keys) {
+        if ($name -match '^DOTNET_(DbgEnableMiniDump|DbgMiniDump|CreateDump)') { $saved[$name] = [System.Environment]::GetEnvironmentVariable($name) }
+    }
+    try {
+        # Remove-Item, not SetEnvironmentVariable($null): the latter can leave an empty-valued variable that a child still inherits.
+        foreach ($name in $saved.Keys) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
+        & $ScriptBlock
+    } finally {
+        foreach ($name in $saved.Keys) { [System.Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+    }
 }
 
 function Invoke-DiagnosticsRetention {

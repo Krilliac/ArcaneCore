@@ -77,7 +77,8 @@ if ($Diagnostics -eq 'Max') {
             '-MaxDumpFiles', $MaxDumpFiles, '-MaxDumpGB', $MaxDumpGB, '-MaxHangStackFiles', $MaxHangStackFiles, '-MaxHangStackMB', $MaxHangStackMB,
             '-MaxCountersFiles', $MaxCountersFiles, '-MaxCountersMB', $MaxCountersMB)
         if ($diagPlan.CountersTool) { $sidecarArgs += @('-CountersTool', $diagPlan.CountersTool) }
-        $sidecar = Start-Process pwsh -ArgumentList $sidecarArgs -WindowStyle Hidden -PassThru
+        # Without the daemon's dump variables: the sidecar and the .NET tools it runs must not dump into the daemon's dump directory.
+        $sidecar = Invoke-WithoutDumpEnvironment { Start-Process pwsh -ArgumentList $sidecarArgs -WindowStyle Hidden -PassThru }
         Write-Host "[diagnostics] sidecar pid $($sidecar.Id) (ends with the daemon)"
     } catch { Write-Warning "[diagnostics] the sidecar did not start: $($_.Exception.Message)" }
 }
