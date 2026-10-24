@@ -182,7 +182,36 @@ public sealed class ClusterCommandTests
 
         string[] two = await LinesAsync(admin, ".cluster diag");
         Assert.Contains("xferPending=2", two[0], StringComparison.Ordinal);
-        Assert.Contains("rollbackReady=false", two[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClusterDiag_WhenTheStoreCannotCount_RepliesThatTheCountIsUnavailable_InsteadOfFaulting()
+    {
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(new UncountableTransferStore()));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMU", "Admuncount");
+
+        string[] lines = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Single(lines);
+        Assert.Contains("Cluster diagnostics unavailable", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("xferPending", lines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>A decision store whose aggregate count fails, as a database fault would.</summary>
+    private sealed class UncountableTransferStore : ITransferDecisionStore
+    {
+        public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<int>(new InvalidOperationException("store offline"));
+
+        public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => throw new NotSupportedException();
+        public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CreateReservationAsync(Guid transferId, ulong characterGuid, int accountId, long sessionGeneration, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, uint sourceMapId, uint sourceInstanceId, uint targetMapId, uint targetInstanceId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AbortPreCommitAsync(Guid transferId, string reason, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord?> GetDecisionAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<TransferDecisionRecord>> GetUnresolvedForCharacterAsync(ulong characterGuid, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     [Theory]

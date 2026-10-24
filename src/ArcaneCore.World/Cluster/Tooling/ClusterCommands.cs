@@ -25,6 +25,7 @@ using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
 
@@ -549,7 +550,8 @@ public sealed class ClusterCommands : ICommandGroup
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the characters database.");
+            services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
+            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
             return true;
         }
 
@@ -743,7 +745,7 @@ public sealed class ClusterCommands : ICommandGroup
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command); a store failure propagates to the caller.</summary>
+    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command; the EF store's query is a COUNT over the indexed state column); a store failure propagates to the caller.</summary>
     private static int CountUnresolvedTransfers(IServiceProvider services)
         => services.GetService<ITransferDecisionStore>() is { } store
             ? store.CountUnresolvedAsync().GetAwaiter().GetResult()

@@ -251,15 +251,18 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
     /// versions the database contexts are composed at), not literals that go stale each time a schema module is added.
     /// </summary>
     internal static ClusterNodeManifest BuildWorldManifest(Guid nodeIncarnation)
-        => new(
+    {
+        ClusterCommands.DiagSchemaVersions schema = ClusterCommands.DiagSchemaVersions.Current;
+        return new(
             RealmId: 1,
             NodeId: "world-1",
             NodeIncarnation: nodeIncarnation,
             Role: ClusterRole.Gateway,
             ContractVersion: ClusterNodeManifest.CurrentContractVersion,
-            CharactersSchemaVersion: ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion,
-            WorldSchemaVersion: ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion,
+            CharactersSchemaVersion: schema.Characters,
+            WorldSchemaVersion: schema.World,
             ContentRevision: "dbc-1.12.1-5875-w44");
+    }
 
     private async Task MonitorLoopAsync(CancellationToken ct)
     {

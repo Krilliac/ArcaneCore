@@ -339,7 +339,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.send message` | 6 | Administrator | declared retail level | Syntax: .send message $playername $message Show a message from the administrator in the middle of the player's screen. |
 | `.send money` | 6 | Administrator | declared retail level | Syntax: .send money #playername "#subject" "#text" #money Send a letter with money (in copper) to a player, online or not. |
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
-| `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
+| `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again, clearing the GM mute, the flood mute and the chat restriction mute. The character may be offline. |
 | `.damage` | 3 | GameMaster | declared retail level | Syntax: .damage #amount Deal direct physical damage to the selected unit. |
 | `.combatstop` | 3 | GameMaster | declared retail level | Syntax: .combatstop [$playername] Stop combat for the selected or named player. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |

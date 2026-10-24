@@ -31,7 +31,7 @@ public sealed class AuditCommands : ICommandGroup
     [
         new ChatCommand("pinfo", AccountSecurity.GameMaster, "Syntax: .pinfo [$playername]\nShow account, level, position, chat-mute and ticket state of the named character (online or not), the selected player, or yourself.", Pinfo),
         new ChatCommand("mute", AccountSecurity.Moderator, "Syntax: .mute [$playername] $duration [$reason]\nDisable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online.", Mute),
-        new ChatCommand("unmute", AccountSecurity.Moderator, "Syntax: .unmute [$playername]\nEnable the chat of the player's account again. The character may be offline.", Unmute),
+        new ChatCommand("unmute", AccountSecurity.Moderator, "Syntax: .unmute [$playername]\nEnable the chat of the player's account again, clearing the GM mute, the flood mute and the chat restriction mute. The character may be offline.", Unmute),
         new ChatCommand("gmannounce", AccountSecurity.Moderator, "Syntax: .gmannounce $message\nSend a chat message to every staff member online.", GmAnnounce),
         new ChatCommand("gmnotify", AccountSecurity.Moderator, "Syntax: .gmnotify $message\nSend an on-screen notification to every staff member online.", GmNotify),
     ];
