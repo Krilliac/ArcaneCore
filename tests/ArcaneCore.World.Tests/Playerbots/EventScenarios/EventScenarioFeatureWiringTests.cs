@@ -187,26 +187,14 @@ public sealed class EventScenarioFeatureWiringTests
     }
 
     /// <summary>
-    /// Whether <paramref name="ledger"/> recorded a fault whose message carries <paramref name="marker"/>. The shared ledger is process-wide and
-    /// bounded, so a count read at a site is not proof: parallel tests move it, and once its signature cap is reached a new signature is counted in
-    /// the overflow bucket, under no site at all. The newest messages of every entry, the overflow bucket included, hold the marker either way.
+    /// Whether <paramref name="ledger"/> recorded a fault whose message carries <paramref name="marker"/>: proof that this test's own store fault
+    /// reached the ledger, which a site count is not (any other test's fault at the site moves it). A snapshot keeps only a few recent messages
+    /// and top subjects per entry, so the lookup is sound only while the ledger is not at its signature cap and a count-1 marker is not pushed out
+    /// by concurrent faults; <see cref="FaultLedgerTestBounds"/> lifts the cap for the whole World test assembly, which is what this relies on.
+    /// The cause of the earlier CI failure of the site-count check is not established: a run from before that cap was lifted is the likely one.
     /// </summary>
     private static bool HoldsMarker(FaultLedger ledger, string marker) => ledger.Snapshot().Any(s =>
         s.RecentMessages.Any(m => m.Contains(marker, StringComparison.Ordinal)) || s.TopMessages.Any(t => t.Subject.Contains(marker, StringComparison.Ordinal)));
-
-    [Fact]
-    public void ALedgerAtItsSignatureCap_CountsANewFaultUnderNoSite_ButItsMarkerIsStillFound()
-    {
-        var ledger = new FaultLedger(new FaultLedgerLimits(MaxSignatures: 1), TimeProvider.System);
-        ledger.Record("some.other-site", new InvalidOperationException("fills the only signature"));
-        string marker = "evscenario-capped-" + Guid.NewGuid().ToString("N");
-
-        ledger.Record("playerbot.event-scenarios", new InvalidOperationException(marker));
-
-        Assert.Equal(0, ledger.Snapshot().Where(s => s.Site == "playerbot.event-scenarios").Sum(s => s.Count)); // what the old assertion read
-        Assert.True(HoldsMarker(ledger, marker));
-        Assert.False(HoldsMarker(ledger, marker + "-never-recorded"));
-    }
 
     [Fact]
     public async Task FailingStore_RecordsFaultAndAnomaly_AndSubscribesToNothing()

@@ -687,9 +687,12 @@ public sealed class PlayerbotBattlegroundWorldTests
     }
 
     /// <summary>
-    /// A health pool no test guard can empty. The guard fight is melee between two level-1 units with the real hit table
-    /// (<see cref="SharedCombatRandom"/>), a coin flip the test is not about: a bot that lost it died at the start cave and the wait for the
-    /// guard's death ran out its game budget in a fraction of a second of wall time.
+    /// A health pool no test guard can empty. The guard fight is melee with the real hit table (<see cref="SharedCombatRandom"/>) and a thin
+    /// margin: the bot (60 health) walks to the guard (20 health, no melee damage in the fixture, so the combat fallback of 0 to 5 per swing
+    /// every 2 s) and kills it in 28 to 40 s of game time while losing 24 to 54 health, over 20 runs of an instrumented copy of the test (it
+    /// won all 20, the closest with 6 health left; the bot closed in, kept swinging and never dithered). A bot that loses the tail of that
+    /// distribution dies at the start cave and the wait for the guard's death runs out its game budget at once, which is what one CI run
+    /// showed; what attacked it there was not observed, and the CI trace's second dead bot (the parked Horde one) is not explained.
     /// </summary>
     private static Task FortifyAsync(ScenarioContext context, ScenarioBot bot) => context.ReadAsync(() =>
     {
@@ -700,10 +703,9 @@ public sealed class PlayerbotBattlegroundWorldTests
     });
 
     /// <summary>
-    /// The bot's side of the guard fight must not depend on the dice: the fixture's guard hits for 3 to 4 every 2 s and the bot, hitting for
-    /// 1 to 7, needs about as long to kill it as the guard needs to kill a level-1 bot, so the unprotected bot lost the duel now and then
-    /// (CI saw it die 37 s after the gates opened). With the guard hitting for 90 to 100, which empties an unprotected bot in one swing, the
-    /// protected bot still wins within the 90 s the test allows (at most 45 swings, under 5000 damage), stays alive and the guard dies.
+    /// That protection is checked against a guard far stronger than the fixture's: hitting for 90 to 100 it empties an unprotected bot in one
+    /// swing, yet the protected bot still kills it within the 90 s the test allows (the kill took 14 to 20 of the guard's 2 s swings: about
+    /// 2000 damage, 4000 if every one were a critical hit, against 5000 health), stays alive and the guard dies.
     /// </summary>
     [Fact]
     public async Task Av_AutonomousBot_KillsTheGuard_WithoutDying_EvenWhenTheGuardHitsFarHarderThanTheFixture()
