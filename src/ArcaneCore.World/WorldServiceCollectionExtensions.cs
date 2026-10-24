@@ -82,6 +82,7 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();
+        services.AddSingleton(sp => Gm.Diagnostics.WorldPersistenceProbes.CreateRegistry(sp)); // every write-behind queue, for .arcane queues
         services.AddSingleton(sp => new WorldRuntime(
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,
             sp.GetRequiredService<ICharacterSaveQueue>(),

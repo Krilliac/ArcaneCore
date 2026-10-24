@@ -9,6 +9,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Diagnostics;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Reputation;
@@ -252,32 +253,16 @@ public sealed class ArcaneCommands : ICommandGroup
         }
 
         IServiceProvider services = context.Session.Services;
-        var lines = new List<(string Name, int Pending, IReadOnlyList<string> Retained)>();
-        Add(lines, "character saves", services.GetService<CharacterSaveQueue>()?.Pending);
-        Add(lines, "social", services.GetService<SocialFeature>()?.PendingWrites);
-        Add(lines, "reputation", services.GetService<ReputationFeature>()?.PendingWrites);
-        Add(lines, "instances", services.GetService<InstanceFeature>()?.PendingWrites);
-        Add(lines, "creature respawns", services.GetService<CreatureRespawnFeature>()?.PendingWrites);
-        Add(lines, "explored zones", services.GetService<ExploredZonesPersistence>()?.Writes.Pending);
-        if (services.GetService<GmAuditFeature>() is { } audit)
+        PersistenceProbeRegistry registry = services.GetService<PersistenceProbeRegistry>() ?? WorldPersistenceProbes.CreateRegistry(services);
+        foreach (PersistenceQueueSnapshot queue in registry.Snapshot())
         {
-            lines.Add(("gm audit", audit.Writes.Pending, audit.Writes.RetainedKeys));
-        }
-
-        foreach ((string name, int pending, IReadOnlyList<string> retained) in lines)
-        {
-            context.Reply(string.Create(CultureInfo.InvariantCulture,
-                $"{name}: {pending} pending{(retained.Count > 0 ? $", RETAINED after failed writes: {string.Join(", ", retained)}" : string.Empty)}"));
+            context.Reply(queue.Format());
+            if (queue.FormatFailure() is { } failure)
+            {
+                context.Reply(failure);
+            }
         }
 
         return true;
-    }
-
-    private static void Add(List<(string Name, int Pending, IReadOnlyList<string> Retained)> lines, string name, int? pending)
-    {
-        if (pending is { } value)
-        {
-            lines.Add((name, value, []));
-        }
     }
 }
