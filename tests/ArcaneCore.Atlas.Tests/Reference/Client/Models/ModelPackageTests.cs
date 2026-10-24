@@ -71,6 +71,48 @@ public sealed class ModelPackageTests
         Assert.Equal("missing", second.Textures[0].Key);
     }
 
+    [Theory]
+    [InlineData(0x01, MaterialFlags.Unlit)]
+    [InlineData(0x02, MaterialFlags.Unfogged)]
+    [InlineData(0x04, MaterialFlags.TwoSided)]
+    [InlineData(0x08, MaterialFlags.NoDepthTest)]
+    [InlineData(0x10, MaterialFlags.NoDepthWrite)]
+    public async Task ModelPackage_MapsEachM2RenderFlagBit_ToItsOwnMaterialFlag(ushort bit, MaterialFlags expected)
+    {
+        byte[] m2 = M2PackageFixtures.Build(
+            [new(0, 0, 0, 0, 0), new(1, 0, 0, 1, 0), new(1, 1, 0, 1, 1)],
+            [0, 1, 2],
+            [new(0, 0, 3)],
+            [new(0, 0, 0)],
+            [new(0, "Creature\\Test\\Skin.blp")],
+            [(bit, 0)],
+            [0]);
+        await using HostRig rig = HostRig.Create(register: Register(Files(m2)));
+
+        JsonNode data = await rig.DataAsync("model.package", new JsonObject { ["path"] = Path });
+
+        Material material = Material.FromJson(data["batches"]![0]!["material"]!.AsObject());
+        Assert.Equal(expected, material.Flags & ~(MaterialFlags.ClampS | MaterialFlags.ClampT));
+    }
+
+    [Fact]
+    public async Task ModelPackage_ATextureTypeAboveTheM2Range_IsRejected_NotAServerError()
+    {
+        byte[] m2 = M2PackageFixtures.Build(
+            [new(0, 0, 0, 0, 0), new(1, 0, 0, 1, 0), new(1, 1, 0, 1, 1)],
+            [0, 1, 2],
+            [new(0, 0, 3)],
+            [new(0, 0, 0)],
+            [new(0x80000000u, string.Empty)],
+            [(0, 0)],
+            [0]);
+        await using HostRig rig = await HostRig.StartAsync(register: Register(Files(m2)));
+
+        using HttpResponseMessage response = await rig.Http.GetAsync("api/bin/model?path=Creature%5CTest%5CThing.m2");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+    }
+
     [Fact]
     public async Task TheBinaryEndpoint_ServesAnAtg1V2Chunk_WithUv0AndAModelBlock()
     {

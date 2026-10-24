@@ -287,7 +287,7 @@ public sealed class GeometryBuilder(string layerId, TileKey tile, WorldPoint ori
     /// <summary>The "model" block of the built chunk (model packages only); null for every other layer.</summary>
     public JsonObject? Model { get; set; }
 
-    public uint AddVertex(double x, double y, double z) =>AddVertex(x, y, z, default(VertexExtras));
+    public uint AddVertex(double x, double y, double z) => AddVertex(x, y, z, default(VertexExtras));
 
     public uint AddVertex(double x, double y, double z, in VertexExtras extras)
     {

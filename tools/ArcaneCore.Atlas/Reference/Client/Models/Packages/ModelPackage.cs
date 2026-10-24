@@ -225,12 +225,14 @@ public sealed class ModelPackageCache : ICacheParticipant
 /// </summary>
 public sealed class M2PackageSource : IModelPackageSource
 {
-    // Render flags (wowdev vanilla): 0x01 unlit, 0x02 unfogged, 0x04 two-sided, 0x08 billboard, 0x10 no depth write.
+    // M2Material flags (wowdev.wiki M2 page, M2Material table): 0x01 unlit, 0x02 unfogged, 0x04 two-sided, 0x08 depth test disabled,
+    // 0x10 depth write disabled.
     private const ushort FlagUnlit = 0x01;
     private const ushort FlagUnfogged = 0x02;
     private const ushort FlagTwoSided = 0x04;
-    private const ushort FlagBillboard = 0x08;
+    private const ushort FlagNoDepthTest = 0x08;
     private const ushort FlagNoDepthWrite = 0x10;
+    private const uint MaxTextureType = 63;
     private const double AlphaKeyReference = 0.5;
     private const string MissingTexture = "missing";
 
@@ -460,7 +462,7 @@ public sealed class M2PackageSource : IModelPackageSource
             flags |= (renderFlags & FlagUnlit) != 0 ? MaterialFlags.Unlit : 0;
             flags |= (renderFlags & FlagUnfogged) != 0 ? MaterialFlags.Unfogged : 0;
             flags |= (renderFlags & FlagTwoSided) != 0 ? MaterialFlags.TwoSided : 0;
-            flags |= (renderFlags & FlagBillboard) != 0 ? MaterialFlags.Billboard : 0;
+            flags |= (renderFlags & FlagNoDepthTest) != 0 ? MaterialFlags.NoDepthTest : 0;
             flags |= (renderFlags & FlagNoDepthWrite) != 0 ? MaterialFlags.NoDepthWrite : 0;
         }
         else
@@ -478,7 +480,12 @@ public sealed class M2PackageSource : IModelPackageSource
             int wrapT = (entry.Flags & 2) != 0 ? 0 : 1;
             if (entry.Type != 0)
             {
-                texture = new TextureRef(MissingTexture, 0, wrapS, wrapT, checked((int)entry.Type));
+                if (entry.Type > MaxTextureType)
+                {
+                    throw new InvalidDataException($"texture type {entry.Type} is not an M2 texture type (0 to {MaxTextureType}).");
+                }
+
+                texture = new TextureRef(MissingTexture, 0, wrapS, wrapT, (int)entry.Type);
             }
             else if (entry.Name.Length == 0 || !entry.Name.EndsWith(".blp", StringComparison.OrdinalIgnoreCase))
             {
