@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
@@ -119,6 +121,82 @@ public sealed class InspectSectionRegistryTests
         Assert.Equal("for Player", lines[^1]);
         Assert.DoesNotContain(lines, l => l.Contains("empty", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("secret detail", StringComparison.Ordinal));
+    }
+
+    private sealed class DiscoveredProbe : IInspectSection
+    {
+        public InspectLeaf Leaf => InspectLeaf.Motion;
+
+        public string Name => "disc-probe";
+
+        public int Order => 7;
+
+        public IEnumerable<string>? Render(CommandContext context, InspectSubject subject) => ["from a discovered class"];
+    }
+
+    private sealed class DuplicateOfProbe : IInspectSection
+    {
+        public InspectLeaf Leaf => InspectLeaf.Motion;
+
+        public string Name => "DISC-PROBE";
+
+        public IEnumerable<string>? Render(CommandContext context, InspectSubject subject) => ["the duplicate"];
+    }
+
+    private sealed class BrokenProbe : IInspectSection
+    {
+        public BrokenProbe() => throw new InvalidOperationException("boom");
+
+        public InspectLeaf Leaf => InspectLeaf.Ai;
+
+        public string Name => "disc-broken";
+
+        public IEnumerable<string>? Render(CommandContext context, InspectSubject subject) => null;
+    }
+
+    private sealed class NamelessProbe : IInspectSection
+    {
+        public InspectLeaf Leaf => InspectLeaf.Ai;
+
+        public string Name => " ";
+
+        public IEnumerable<string>? Render(CommandContext context, InspectSubject subject) => null;
+    }
+
+    [Fact]
+    public void ASectionClassInAScannedAssemblyIsDiscoveredAndRendered()
+    {
+        (ImmutableArray<IInspectSection> sections, IReadOnlyList<string> problems) = InspectSectionRegistry.Discover(CodeAssemblies.Of(typeof(InspectSectionRegistryTests).Assembly));
+
+        IInspectSection probe = Assert.Single(sections, s => s.Name == "disc-probe");
+        Assert.Equal(InspectLeaf.Motion, probe.Leaf);
+        Assert.Equal(7, probe.Order);
+        var output = new List<string>();
+        Assert.Equal(["from a discovered class"], probe.Render(Console(output), default));
+        // The delegate record has no parameterless constructor, so it is never mistaken for a discoverable class.
+        Assert.DoesNotContain(sections, s => s is InspectSection);
+        Assert.Equal(1, sections.Count(s => s.Name.Equals("disc-probe", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(problems, p => p.Contains("DuplicateOfProbe", StringComparison.Ordinal) && p.Contains("already has a section 'DISC-PROBE'", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("BrokenProbe", StringComparison.Ordinal) && p.Contains("could not be created", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("NamelessProbe", StringComparison.Ordinal) && p.Contains("no name", StringComparison.Ordinal));
+        Assert.DoesNotContain(sections, s => s.Name is "disc-broken" or " ");
+    }
+
+    [Fact]
+    public void TheBuiltInAssembliesContributeNoBrokenOrDuplicateSections()
+    {
+        // The registry skips a bad contribution instead of failing every .inspect leaf, so this is the place a bad one shows up.
+        Assert.Empty(InspectSectionRegistry.DiscoveryProblems);
+        Assert.DoesNotContain(InspectSectionRegistry.SectionsOf(InspectLeaf.Motion), s => s.Name == "disc-probe");
+    }
+
+    [Fact]
+    public void ARegisteredSectionMayNotRepeatADiscoveredName()
+    {
+        // The leaf and name of a built-in discovered section would be refused the same way; here the registered pair is the discovered probe's.
+        using IDisposable first = InspectSectionRegistry.Register(new DiscoveredProbe());
+        Assert.Contains(InspectSectionRegistry.SectionsOf(InspectLeaf.Motion), s => s is DiscoveredProbe);
+        Assert.Throws<InvalidOperationException>(() => InspectSectionRegistry.Register(new DuplicateOfProbe()));
     }
 
     private static CommandContext Console(List<string> output)

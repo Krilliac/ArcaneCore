@@ -1,70 +1,53 @@
 using System.Collections.Immutable;
-using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 
 namespace ArcaneCore.World.Gm.Inspect;
 
-/// <summary>The <c>.inspect</c> leaves that render registered extra sections (I13).</summary>
-public enum InspectLeaf
-{
-    Unit,
-    Ai,
-    Motion,
-    Map,
-    Threat,
-}
-
-/// <summary>What an inspect leaf is showing: the unit (<see cref="InspectLeaf.Unit"/>, <see cref="InspectLeaf.Ai"/>, <see cref="InspectLeaf.Motion"/>, <see cref="InspectLeaf.Threat"/>) or the map (<see cref="InspectLeaf.Map"/>).</summary>
-public readonly record struct InspectSubject(Unit? Unit, Map? Map);
-
 /// <summary>
-/// Renders one extra section of an inspect leaf. Returns the chat lines (empty or null to print nothing). Runs on the world thread after
-/// the leaf's own lines, read-only.
-/// </summary>
-public delegate IEnumerable<string>? InspectSectionRenderer(CommandContext context, InspectSubject subject);
-
-/// <summary>One extra section of an inspect leaf.</summary>
-/// <param name="Leaf">The leaf it extends.</param>
-/// <param name="Name">The section name (unique per leaf, case-insensitive); printed as a heading line when the section has lines.</param>
-/// <param name="Render">The renderer.</param>
-/// <param name="Order">Sort key within a leaf (lower first); ties sort by name.</param>
-public sealed record InspectSection(InspectLeaf Leaf, string Name, InspectSectionRenderer Render, int Order = 0);
-
-/// <summary>
-/// Contributes sections to <c>.inspect unit|ai|motion|map|threat</c> from the contributor's own file (I13): an implementation with a
-/// parameterless constructor in a built-in assembly is discovered like an <see cref="ArcaneCore.World.Gm.Core.ICommandExtension"/>, so batches add sections
-/// without editing <c>InspectCommands.cs</c>.
-/// </summary>
-public interface IInspectSectionProvider
-{
-    IReadOnlyList<InspectSection> Sections { get; }
-}
-
-/// <summary>
-/// The registry the inspect leaves read. Sections come from every <see cref="IInspectSectionProvider"/> (discovered once) plus
-/// <see cref="Register"/>ed ones (hot-loaded packs, tests). Thread safe; the section list is an immutable snapshot swapped under a lock, so a
-/// leaf renders against a stable list.
+/// The registry the inspect leaves read. Sections come from every <see cref="IInspectSection"/> class with a public parameterless
+/// constructor in the built-in assemblies (discovered once, on first use) plus <see cref="Register"/>ed ones (hot-loaded packs, tests).
+/// Thread safe; the section list is an immutable snapshot swapped under a lock, so a leaf renders against a stable list. A discovered
+/// section that cannot be created, has no name or repeats a leaf and name is skipped and listed in <see cref="DiscoveryProblems"/>
+/// (a test asserts the list is empty), so a bad contribution never breaks every <c>.inspect</c> leaf at run time.
 /// </summary>
 public static class InspectSectionRegistry
 {
     private static readonly object Gate = new();
-    private static ImmutableArray<InspectSection> _registered = [];
-    private static ImmutableArray<InspectSection>? _discovered;
+    private static ImmutableArray<IInspectSection> _registered = [];
+    private static ImmutableArray<IInspectSection>? _discovered;
+    private static IReadOnlyList<string> _problems = [];
 
     /// <summary>The leaf name as typed after <c>.inspect</c>.</summary>
     public static string LeafName(InspectLeaf leaf) => leaf.ToString().ToLowerInvariant();
 
+    /// <summary>What discovery of the built-in assemblies skipped (empty when every contribution was accepted).</summary>
+    public static IReadOnlyList<string> DiscoveryProblems
+    {
+        get
+        {
+            lock (Gate)
+            {
+                _ = All();
+                return _problems;
+            }
+        }
+    }
+
     /// <summary>Add a section; dispose the result to remove it. A second section of the same leaf and name (a discovered one included) is refused.</summary>
-    public static IDisposable Register(InspectSection section)
+    public static IDisposable Register(IInspectSection section)
     {
         ArgumentNullException.ThrowIfNull(section);
         ArgumentException.ThrowIfNullOrWhiteSpace(section.Name);
-        ArgumentNullException.ThrowIfNull(section.Render);
+        if (section is InspectSection { Renderer: null })
+        {
+            throw new ArgumentNullException(nameof(section), "the section has no renderer");
+        }
+
         lock (Gate)
         {
-            if (All().Any(s => s.Leaf == section.Leaf && s.Name.Equals(section.Name, StringComparison.OrdinalIgnoreCase)))
+            if (All().Any(s => Same(s, section)))
             {
                 throw new InvalidOperationException($"inspect {LeafName(section.Leaf)} already has a section '{section.Name}'");
             }
@@ -76,7 +59,7 @@ public static class InspectSectionRegistry
     }
 
     /// <summary>The sections of <paramref name="leaf"/> in render order.</summary>
-    public static IReadOnlyList<InspectSection> SectionsOf(InspectLeaf leaf)
+    public static IReadOnlyList<IInspectSection> SectionsOf(InspectLeaf leaf)
     {
         lock (Gate)
         {
@@ -91,7 +74,7 @@ public static class InspectSectionRegistry
     public static void Render(CommandContext context, InspectLeaf leaf, InspectSubject subject)
     {
         ArgumentNullException.ThrowIfNull(context);
-        foreach (InspectSection section in SectionsOf(leaf))
+        foreach (IInspectSection section in SectionsOf(leaf))
         {
             IReadOnlyList<string> lines;
             try
@@ -117,32 +100,68 @@ public static class InspectSectionRegistry
         }
     }
 
-    private static ImmutableArray<InspectSection> All()
+    /// <summary>
+    /// The sections of the <see cref="IInspectSection"/> classes of <paramref name="assemblies"/> (public parameterless constructor), and
+    /// what was skipped: a class that cannot be created, a blank name, a repeated leaf and name (the first by type name wins).
+    /// </summary>
+    internal static (ImmutableArray<IInspectSection> Sections, IReadOnlyList<string> Problems) Discover(CodeAssemblies assemblies)
     {
-        _discovered ??= Discover();
-        return _discovered.Value.AddRange(_registered);
+        var found = new List<IInspectSection>();
+        var problems = new List<string>();
+        foreach (Type type in AssemblyDiscovery.FindTypes<IInspectSection>(assemblies).Where(t => t.GetConstructor(Type.EmptyTypes) is not null))
+        {
+            IInspectSection section;
+            try
+            {
+                section = (IInspectSection)Activator.CreateInstance(type)!;
+                if (string.IsNullOrWhiteSpace(section.Name))
+                {
+                    problems.Add($"{type.FullName}: the section has no name");
+                    continue;
+                }
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                problems.Add($"{type.FullName}: could not be created ({error.GetType().Name})");
+                continue;
+            }
+
+            if (found.Any(s => Same(s, section)))
+            {
+                problems.Add($"{type.FullName}: inspect {LeafName(section.Leaf)} already has a section '{section.Name}'");
+                continue;
+            }
+
+            found.Add(section);
+        }
+
+        return ([.. found], problems);
     }
 
-    private static ImmutableArray<InspectSection> Discover()
-    {
-        var found = new List<InspectSection>();
-        foreach (IInspectSectionProvider provider in AssemblyDiscovery.CreateAll<IInspectSectionProvider>())
-        {
-            foreach (InspectSection section in provider.Sections)
-            {
-                if (found.Any(s => s.Leaf == section.Leaf && s.Name.Equals(section.Name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    throw new InvalidOperationException($"inspect {LeafName(section.Leaf)} has two sections named '{section.Name}'");
-                }
+    private static bool Same(IInspectSection a, IInspectSection b)
+        => a.Leaf == b.Leaf && a.Name.Equals(b.Name, StringComparison.OrdinalIgnoreCase);
 
-                found.Add(section);
+    private static ImmutableArray<IInspectSection> All()
+    {
+        if (_discovered is null)
+        {
+            try
+            {
+                (ImmutableArray<IInspectSection> sections, IReadOnlyList<string> problems) = Discover(AssemblyDiscovery.BuiltIn);
+                _discovered = sections;
+                _problems = problems;
+            }
+            catch (CodeAssemblyLoadException error)
+            {
+                _discovered = [];
+                _problems = [$"discovery failed: {error.Message}"];
             }
         }
 
-        return [.. found];
+        return _discovered.Value.AddRange(_registered);
     }
 
-    private sealed class Registration(InspectSection section) : IDisposable
+    private sealed class Registration(IInspectSection section) : IDisposable
     {
         private int _disposed;
 
