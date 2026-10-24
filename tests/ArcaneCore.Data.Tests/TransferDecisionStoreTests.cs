@@ -48,6 +48,44 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task CountUnresolvedAsync_CountsPreCommitAndCommittedAcrossAllCharacters_AndNothingElse(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        (_, EfTransferDecisionStore store) = await OpenAsync(connection);
+        Assert.Equal(0, await store.CountUnresolvedAsync());
+
+        Guid preCommit = Guid.NewGuid(), committed = Guid.NewGuid(), completed = Guid.NewGuid(), aborted = Guid.NewGuid();
+        foreach ((Guid id, ulong guid) in new[] { (preCommit, 21UL), (committed, 22UL), (completed, 23UL), (aborted, 24UL) })
+        {
+            await store.CreateReservationAsync(id, guid, 11, 5, A, B, 0, 0, 1, 0, new CharacterOwnershipToken($"char:{guid}", 1, Guid.NewGuid()));
+        }
+
+        Assert.Equal(4, await store.CountUnresolvedAsync());
+
+        await store.AbortPreCommitAsync(aborted, "test");
+        Assert.Equal(3, await store.CountUnresolvedAsync());
+
+        foreach (Guid id in new[] { committed, completed })
+        {
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.SuspendAndCapture);
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.InstallPassive);
+            await store.AdvancePreCommitStageAsync(id, PlayerTransferStage.StageWorldPort);
+            await store.CommitDecisionAsync(id, Guid.NewGuid());
+        }
+
+        Assert.Equal(3, await store.CountUnresolvedAsync()); // a committed transfer is still unresolved
+
+        await store.MarkCompletedAsync(completed);
+        Assert.Equal(2, await store.CountUnresolvedAsync());
+
+        // The count is read from storage, so a new process agrees with the old one.
+        (_, EfTransferDecisionStore restarted) = await OpenAsync(connection);
+        Assert.Equal(2, await restarted.CountUnresolvedAsync());
+        Assert.Single(await restarted.GetUnresolvedForCharacterAsync(21));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task EveryTransferStage_SurvivesARestart_AndTheBundleRoundTrips(DatabaseProvider provider)
     {
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
