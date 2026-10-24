@@ -3,6 +3,10 @@
 # - Waits for one of $Slots slot files (atomic CreateNew) AND >= $MinAvailableMB available memory.
 # - Slot files live in <LanesRoot>\slot-locks, shared by every lane on the machine; LanesRoot defaults to ARCANECORE_LANES_ROOT.
 # - Runs the command in a child pwsh at BelowNormal (its children inherit it), output to <LanesRoot>\slot-logs\<lane>-<n>.log.
+# - Each `dotnet build|test|msbuild|publish|pack` in -Command gets -maxcpucount:$MaxCpuCount (0 = leave MSBuild's default;
+#   a command that sets -m/-maxcpucount itself is left alone). At the default width every build fans out to one worker node
+#   per core, so three slots ran 54 nodes (6.4 GB) and paged the live World. Directory.Build.rsp cannot do this: the CLI's
+#   own bare -maxcpucount overrides it.
 # - The child gets DOTNET_ROOT (default %USERPROFILE%\.dotnet) and, when ARCANECORE_DATA_ROOT (or ARCANECORE_TERRAIN_DIR /
 #   ARCANECORE_DBC_DIR) is set, ARCANECORE_TEST_TERRAIN_DIR / ARCANECORE_TEST_DBC_DIR, so real-data tests run instead of skipping.
 # - Always releases the slot (finally). A slot file whose holder pwsh is dead (or older than $StaleMin minutes) is abandoned and removed.
@@ -15,6 +19,7 @@ param(
     [int]$Slots = 2,
     [int]$MinAvailableMB = 2000,
     [int]$StaleMin = 75,
+    [int]$MaxCpuCount = 6,
     [string]$LanesRoot
 )
 $ErrorActionPreference = 'Stop'
@@ -68,6 +73,11 @@ try {
     $setup = "Set-Location -LiteralPath '$WorkDir'`n`$env:DOTNET_ROOT='$dotnetRoot'`n`$env:PATH=`"`$env:DOTNET_ROOT;`$env:PATH`"`n"
     if ($terrainDir) { $setup += "`$env:ARCANECORE_TEST_TERRAIN_DIR='$terrainDir'`n" }
     if ($dbcDir) { $setup += "`$env:ARCANECORE_TEST_DBC_DIR='$dbcDir'`n" }
+    if ($MaxCpuCount -gt 0 -and $Command -notmatch '(^|\s)(--?|/)(m|maxcpucount)(:|\s|$)') {
+        # A text rewrite, right after the verb so it never lands behind a `--` that hands the rest to the test runner. A pwsh
+        # `dotnet` function cannot do this: function calls split `-v:diag` into two arguments and drop `--`.
+        $Command = [regex]::Replace($Command, '\bdotnet(\.exe)?(\s+)(build|test|msbuild|publish|pack)\b', "dotnet`$1`$2`$3 -maxcpucount:$MaxCpuCount")
+    }
     $script = "$setup$Command`nexit `$LASTEXITCODE"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
