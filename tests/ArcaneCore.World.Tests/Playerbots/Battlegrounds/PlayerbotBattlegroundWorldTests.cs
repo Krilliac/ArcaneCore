@@ -692,7 +692,8 @@ public sealed class PlayerbotBattlegroundWorldTests
     /// every 2 s) and kills it in 28 to 40 s of game time while losing 24 to 54 health, over 20 runs of an instrumented copy of the test (it
     /// won all 20, the closest with 6 health left; the bot closed in, kept swinging and never dithered). A bot that loses the tail of that
     /// distribution dies at the start cave and the wait for the guard's death runs out its game budget at once, which is what one CI run
-    /// showed; what attacked it there was not observed, and the CI trace's second dead bot (the parked Horde one) is not explained.
+    /// showed; what attacked it there was not observed, and the CI trace's second dead bot (the parked Horde one) is not explained. The
+    /// protection hides a stray attacker, so <see cref="ExpectOnlyTheGuardHurtTheBot"/> fails the test if anything but the guard hit the bot.
     /// </summary>
     private static Task FortifyAsync(ScenarioContext context, ScenarioBot bot) => context.ReadAsync(() =>
     {
@@ -701,6 +702,15 @@ public sealed class PlayerbotBattlegroundWorldTests
         player.Health = 5000;
         return true;
     });
+
+    /// <summary>Every melee hit the bot took since <paramref name="since"/> came from the guard: no stray hostile in the test world.</summary>
+    private static void ExpectOnlyTheGuardHurtTheBot(ScenarioBot bot, Game.Creatures.Creature guard, long since)
+    {
+        ulong[] attackers = bot.Received(WorldOpcode.SmsgAttackerstateupdate, ScenarioDecoders.AttackerState, since)
+            .Where(h => h.Victim == bot.Guid.Value).Select(h => h.Attacker).Distinct().ToArray();
+        ScenarioContext.Expect(attackers.All(a => a == guard.Guid.Value),
+            $"something other than the guard hit the bot (attacker guids: {string.Join(", ", attackers.Select(a => a.ToString("X")))})");
+    }
 
     /// <summary>
     /// That protection is checked against a guard far stronger than the fixture's: hitting for 90 to 100 it empties an unprotected bot in one
@@ -721,6 +731,7 @@ public sealed class PlayerbotBattlegroundWorldTests
                 () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60)));
             var av = (AlteracValley)(await context.BattlegroundOfAsync(ally))!;
             coordinator.Options.QueueChancePerMinute = 0f;
+            long since = ally.Mark();
             await FortifyAsync(context, ally);
             await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => av.Status == BattlegroundStatus.InProgress, StartWait));
 
@@ -736,6 +747,8 @@ public sealed class PlayerbotBattlegroundWorldTests
             {
                 await WaitExplainedAsync(context, "the guard is dead", () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally);
                 ScenarioContext.Expect(await context.ReadAsync(() => ally.RequirePlayer().IsAlive), "the bot died in the guard fight");
+                ScenarioContext.ExpectEqual(5000u, await context.ReadAsync(() => ally.RequirePlayer().MaxHealth), "the bot's max health was reset after the fortification");
+                ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
             });
         });
     }
@@ -761,6 +774,7 @@ public sealed class PlayerbotBattlegroundWorldTests
                 () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60)));
             var av = (AlteracValley)(await context.BattlegroundOfAsync(ally))!;
             coordinator.Options.QueueChancePerMinute = 0f;
+            long since = ally.Mark();
             await FortifyAsync(context, ally);
             await context.StepAsync("the gates open", () => context.WaitUntilAsync("in progress", () => av.Status == BattlegroundStatus.InProgress, StartWait));
 
@@ -768,6 +782,7 @@ public sealed class PlayerbotBattlegroundWorldTests
                 .Creatures.Single(c => c.Entry == Content.AvGuardEntry));
             await context.StepAsync("the bot fights and kills the hostile guard on its way", () => WaitExplainedAsync(context, "the guard is dead",
                 () => !guard.IsAlive, TimeSpan.FromSeconds(90), ally));
+            ExpectOnlyTheGuardHurtTheBot(ally, guard, since);
 
             long mark = ally.Mark();
             await context.StepAsync("the bot casts 21651 at the Horde banner and Iceblood is assaulted by the Alliance", async () =>

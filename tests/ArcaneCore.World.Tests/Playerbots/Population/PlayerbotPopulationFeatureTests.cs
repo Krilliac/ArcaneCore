@@ -1420,11 +1420,11 @@ public sealed class PlayerbotPopulationFeatureTests
     private static Task SetBotWhenFreeAndHoldItsThinksAsync(PopulationTestHost world, Guid bot, byte level, uint zone) => world.Host.WaitForWorldAsync(() =>
     {
         if (world.Bots.FindSession(bot)?.Player is not { IsInWorld: true } player) return false;
-        if (player.Combat.IsInCombat || PopulationProvisioner.IsInTransit(player)) return false;
+        if (!player.IsAlive || player.Combat.IsInCombat || PopulationProvisioner.IsInTransit(player)) return false;
         if (world.Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player)) return false;
         player.Level = level;
         player.ZoneId = zone;
-        world.Options.ThinkIntervalMs = int.MaxValue;
+        world.Options.ThinkIntervalMs = 3_600_000;
         return true;
     }, "the bot is free to be moved again");
 
