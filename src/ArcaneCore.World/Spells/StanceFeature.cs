@@ -75,8 +75,11 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
             Service.AddListener(listener);
         }
 
+        _spells = spells;
         spells.PlayerSpellsRestored += ApplyLoginStance;
     }
+
+    private SpellFeature? _spells;
 
     /// <summary>Battle Stance.</summary>
     private const uint BattleStanceSpell = 2457;
@@ -89,12 +92,11 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
     /// </summary>
     private void ApplyLoginStance(Player player)
     {
-        if (player.Class != Class.Warrior || Service is null)
+        if (player.Class != Class.Warrior || Service is null || _spells is not { } spells)
         {
             return;
         }
 
-        SpellFeature spells = services.GetRequiredService<SpellFeature>();
         SpellSystem system = spells.System;
         if (!spells.Spellbook.HasSpell(player, BattleStanceSpell)
             || ShapeshiftService.IsWarriorStance(ShapeshiftService.GetForm(player))

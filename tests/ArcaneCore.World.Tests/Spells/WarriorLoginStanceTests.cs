@@ -96,6 +96,8 @@ public sealed class WarriorLoginStanceTests
         await using WorldTestClient second = await host.ConnectAsync();
         await second.AuthenticateAsync("STANCEKEEP", key);
         await second.LoginAsync((ulong)character.Id);
+        await host.WaitForWorldAsync(
+            () => host.World.FindOnlinePlayer("Stancekeep") is { } p && ActiveStances(spells, p).Length > 0, "the restored stance");
         await host.OnWorldAsync(() =>
         {
             Player player = host.World.FindOnlinePlayer("Stancekeep")!;
