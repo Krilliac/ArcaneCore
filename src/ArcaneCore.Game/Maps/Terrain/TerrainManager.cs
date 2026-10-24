@@ -217,6 +217,12 @@ public sealed class TerrainManager
         }
     }
 
+    [ThreadStatic]
+    private static int _detachedReadsOnThisThread;
+
+    /// <summary>Test seam: how many <see cref="ReadTileDetached"/> calls the calling thread has made. A test reads it on the world thread to prove none ran there.</summary>
+    internal static int DetachedReadsOnThisThread => _detachedReadsOnThisThread;
+
     /// <summary>
     /// One tile read straight from its <c>.map</c> file, without the tile cache or the prefetch (so no counter and no shared state is
     /// touched): <see cref="TerrainTile.Empty"/> without terrain data or for a missing or unreadable file. Thread affinity: any thread
@@ -224,6 +230,7 @@ public sealed class TerrainManager
     /// </summary>
     public TerrainTile ReadTileDetached(uint mapId, int tileX, int tileY)
     {
+        _detachedReadsOnThisThread++;
         if (_mapsDirectory is null)
         {
             return TerrainTile.Empty;

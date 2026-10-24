@@ -55,7 +55,6 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
     private Task _warmTask = Task.CompletedTask;
 
     private int _factsBuilds;
-    private int _factsBuildsOnWorldThread;
     private int _unknownSiteRefusals;
 
     /// <summary>Test seam: awaited inside the background build before it starts, so a test can hold the build open.</summary>
@@ -63,9 +62,6 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
 
     /// <summary>Test seam: how many facts builds finished (any thread).</summary>
     internal int FactsBuilds => Volatile.Read(ref _factsBuilds);
-
-    /// <summary>Test seam: how many facts builds ran on the world thread. Always 0: the build is a background task.</summary>
-    internal int FactsBuildsOnWorldThread => Volatile.Read(ref _factsBuildsOnWorldThread);
 
     /// <summary>How many checks refused a location the facts do not cover (the facts and the atlas disagree; should stay 0).</summary>
     internal int UnknownSiteRefusals => Volatile.Read(ref _unknownSiteRefusals);
@@ -256,7 +252,6 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
             {
                 if (gate is not null) await gate(ct).ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
-                if (world.IsWorldThread) Interlocked.Increment(ref _factsBuildsOnWorldThread);
                 WorldSafeLoc[] locations = [.. atlas.Zones.SelectMany(z => z.AllianceLocations.Concat(z.HordeLocations)).DistinctBy(l => l.Id)];
                 built = PopulationPlacementFacts.Build(content, areas, readFrom, locations, ct);
                 Interlocked.Increment(ref _factsBuilds);

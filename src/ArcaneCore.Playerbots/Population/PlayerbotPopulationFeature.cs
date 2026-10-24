@@ -454,7 +454,7 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
             return _provisioner.WarmTask;
         }).ConfigureAwait(false);
         await build.ConfigureAwait(false);
-        await world.InvokeAsync(() => true).ConfigureAwait(false); // the finished build is posted to the world thread; this runs after it
+        await world.InvokeAsync(() => true).ConfigureAwait(false); // the finished build is posted to the world thread; this runs after it (Post and InvokeAsync share one FIFO queue)
     }
 
     /// <summary>World thread: capture the facts and start the pass task.</summary>
@@ -536,8 +536,10 @@ public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogge
         // Fresh launch places nobody (the character-create handler puts a bot at its race start): no atlas, no terrain lookup, no hold.
         PopulationZoneAtlas atlas = pop.FreshLaunch ? _atlas : AtlasFor(world, pop);
         string? terrainHold = pop.FreshLaunch ? null : TerrainHold();
-        // The placement safety data is built in the background for the atlas in force (not for the unlocated fallback the terrain hold
-        // covers). Until it is ready the same hold applies, with no pass limit: going ahead without it would build it on the world thread.
+        // The placement safety data is built in the background for the atlas in force. While the unlocated fallback atlas is held back the
+        // terrain hold covers it; once the hold gives up after MaxTerrainHoldPasses the facts are built for the fallback too, and rebuilt when
+        // the located atlas arrives. Until they are ready the same hold applies, with no pass limit: going ahead without them would build
+        // them on the world thread.
         PopulationPlacementFacts? facts = null;
         if (!pop.FreshLaunch && terrainHold is null)
         {
