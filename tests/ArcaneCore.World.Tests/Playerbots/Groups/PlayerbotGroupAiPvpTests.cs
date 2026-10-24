@@ -43,7 +43,7 @@ public sealed class PlayerbotGroupAiPvpTests
         }
     }
 
-    private static async Task Run(Func<Rig, Task> body)
+    private static async Task Run(Func<Rig, Task> body, bool botLeads = false)
     {
         await using WorldTestHost host = PartyTestHost.Start(options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
         WorldSession bot = await PartyTestHost.EnterManagedAsync(host, "GAIBOT", "Gaibot");
@@ -64,7 +64,7 @@ public sealed class PlayerbotGroupAiPvpTests
                 groups.Accept(b);
                 bot.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Store = new SpellStore([], [], []);
                 var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.Quest, 0, 0, b.MapId, b.MapId, Vector3.Zero, 0, Vector3.Zero, 2, 1, "test");
-                group = new PlayerbotGroupCoordinator.BotGroup(1, goal, Guid.Empty, l.Guid, host.World.NowMs) { State = PlayerbotGroupState.Engaging };
+                group = new PlayerbotGroupCoordinator.BotGroup(1, goal, Guid.Empty, botLeads ? b.Guid : l.Guid, host.World.NowMs) { State = PlayerbotGroupState.Engaging };
                 me = new PlayerbotGroupCoordinator.Member(Guid.NewGuid(), b.Guid, b.Name, PlayerbotGroupRole.Damage, PlayerbotRole.MeleeDps, 0, real: false)
                     { Joined = true, AI = ai };
                 group.Members.Add(new PlayerbotGroupCoordinator.Member(Guid.Empty, l.Guid, l.Name, PlayerbotGroupRole.Tank, PlayerbotRole.Tank, 0, real: true) { Joined = true });
@@ -128,6 +128,63 @@ public sealed class PlayerbotGroupAiPvpTests
         rig.Think();
         Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit); // at the rally point the member answers its attacker
     }));
+
+    /// <summary>
+    /// The bot leads a rallying siege raid and its own attacker (a flagged player) stands 7 yd east of it. <paramref name="moveToDx"/> puts the retreat point
+    /// that far east of the bot (negative: west), so the attacker is 7 - moveToDx yd from the point; the bot stays within RallyYards of the point.
+    /// </summary>
+    private static (float X, float Y) LeaderRallies(Rig rig, float moveToDx, bool noPath)
+    {
+        Player bot = rig.BotPlayer;
+        rig.Bot.ManagedBudget = new ManagedActionBudget(8);
+        rig.Enemy.Player!.Relocate(bot.X + 7, bot.Y, bot.Z, MathF.PI, rig.Host.World.NowMs);
+        var siege = new PlayerbotSiege(1, bot.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1)
+            { Order = PlayerbotSiegeOrder.Rally, RetreatNoPath = noPath, MoveTo = new Vector3(bot.X + moveToDx, bot.Y, bot.Z) };
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotPvpTestKit.Flag(bot);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        Assert.True(rig.Group.LeaderPlayer(rig.Host.World)!.Guid == bot.Guid, "the bot leads the group");
+        return (bot.X, bot.Y);
+    }
+
+    [Fact]
+    public Task RallyingLeaderKeepsItsAttackerBeyondRallyYardsAsItsTargetButDoesNotChaseIt() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        (float x, float y) = LeaderRallies(rig, -5, noPath: false);
+        Assert.True(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z)) > PlayerbotSiegeCommander.RallyYards);
+        for (int i = 0; i < 4; i++)
+        {
+            rig.Think();
+            Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit); // still the target: no route failure dropped it
+            Assert.StartsWith("fight:player:chase", rig.Ai.Step); // it wants to close in, but the leash holds it: no route is planned (that would end in no-path)
+            Assert.Equal((x, y), (rig.BotPlayer.X, rig.BotPlayer.Y));
+        }
+    }), botLeads: true);
+
+    [Fact]
+    public Task RallyingLeaderChasesAnAttackerWithinRallyYardsOfThePoint() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        LeaderRallies(rig, 0, noPath: false);
+        Assert.True(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z)) <= PlayerbotSiegeCommander.RallyYards);
+        rig.Think();
+        // Past the leash check the chase asks for a route; the rig has no navmesh, so the plan fails and the step says so.
+        // The chase got past the leash to the route planner; the rig has no navmesh, so the plan fails: that is the step, and the target is dropped.
+        Assert.Equal("fight:player:no-path", rig.Ai.Step);
+        Assert.Null(rig.Ai.TargetUnit);
+    }), botLeads: true);
+
+    [Fact]
+    public Task RallyingLeaderWithNoPathChasesEvenAnAttackerBeyondRallyYards() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        LeaderRallies(rig, -5, noPath: true);
+        Assert.True(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z)) > PlayerbotSiegeCommander.RallyYards);
+        rig.Think();
+        // The chase got past the leash to the route planner; the rig has no navmesh, so the plan fails: that is the step, and the target is dropped.
+        Assert.Equal("fight:player:no-path", rig.Ai.Step);
+        Assert.Null(rig.Ai.TargetUnit);
+    }), botLeads: true);
 
     [Fact]
     public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>
