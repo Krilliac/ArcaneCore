@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots.Population;
