@@ -132,4 +132,67 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
         PlayerbotTradeRecord left = Assert.Single(await store.LoadAllAsync()); // the kept bot is not running: only the delete itself rewrote its stored rows
         Assert.Equal((kept, 4242UL), (left.BotId, left.OtherGuid));
     }
+
+    /// <summary>Holds the first non-empty write of one bot until released; every other write goes straight through.</summary>
+    private sealed class HoldingTradeRecordStore(IPlayerbotTradeRecordStore inner, Func<Guid> held) : IPlayerbotTradeRecordStore
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _heldOnce;
+        public Task Entered => _entered.Task;
+        public void Release() => _release.TrySetResult();
+
+        public Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default) => inner.LoadAllAsync(cancellationToken);
+
+        public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
+        {
+            if (botId == held() && rows.Count > 0 && Interlocked.Exchange(ref _heldOnce, 1) == 0)
+            {
+                _entered.TrySetResult();
+                await _release.Task.ConfigureAwait(false);
+            }
+
+            await inner.ReplaceAsync(botId, rows, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    [Fact]
+    public async Task ASaveInFlight_WhenABotIsDeleted_CannotWriteBackTheRowAboutIt_BecauseTheWritesShareOneGate()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var backing = new MemoryTradeRecordStore();
+        Guid runningId = Guid.Empty;
+        var store = new HoldingTradeRecordStore(backing, () => runningId);
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotTradeRecordStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        runningId = Assert.IsType<Guid>((await feature.CreateAsync("Runningrace", 1, 1)).BotId);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Gonerace", 1, 1)).BotId);
+        int runningCharacter = (await owners.FindAsync(runningId))!.CharacterId, goneCharacter = (await owners.FindAsync(gone))!.CharacterId;
+        ulong aboutGone = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;
+        Assert.True((await feature.StartAsync(runningId.ToString())).Success);
+        PlayerbotTradeLedger ledger = Assert.IsType<PlayerbotTradeLedger>(feature.Social.Ledger);
+        ledger.NoteScam(runningId, runningCharacter, aboutGone);
+        ledger.NoteScam(runningId, runningCharacter, 4242);
+
+        // The running bot's stop snapshots both rows, then waits inside the store: its write is in flight with the row about the character that is about to be deleted.
+        Task<PlayerbotOperationResult> stopping = feature.StopAsync(runningId.ToString());
+        await store.Entered.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // The deletion cleanup runs meanwhile: it forgets the row in memory and rewrites the running bot's rows without it. Both writes must queue behind the first.
+        Task forgetting = feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
+        await Task.Delay(300);
+        Assert.False(forgetting.IsCompleted); // not gated: it would have written already and the in-flight write would then land last, bringing the row back
+
+        store.Release();
+        Assert.True((await stopping.WaitAsync(TimeSpan.FromSeconds(30))).Success);
+        await forgetting.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.False(ledger.TryGet(runningId, aboutGone, out _));
+        PlayerbotTradeRecord stored = Assert.Single(await backing.LoadAllAsync());
+        Assert.Equal((runningId, 4242UL), (stored.BotId, stored.OtherGuid));
+    }
 }
