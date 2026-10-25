@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// Counts and times only. The scam and ninja windows (<see cref="PlayerbotSocialTradingOptions.ScamMemoryDays"/>, <see cref="PlayerbotSocialTradingOptions.NinjaMemoryDays"/>)
 /// are applied when a row is read, from the live options: the stored times never change with them. With War Mode on and <see cref="PlayerbotWarModeOptions.NeverForget"/>
 /// the windows are ignored at read time (a scam or ninja loot is held against the partner for good) and switching War Mode off restores them; the ledger itself is normal-only
-/// and War Mode writes nothing to it. A bot holds at most <see cref="PlayerbotTradeRecord.MaxRowsPerBot"/> partners: the one that makes room is a partner with no scam or ninja
+/// and War Mode has no layer of its own in it. A bot holds at most <see cref="PlayerbotTradeRecord.MaxRowsPerBot"/> partners: the one that makes room is a partner with no scam or ninja
 /// inside its window and the fewest fair deals (then the least recently written), so a row that still matters is kept. Thread-safe (one lock; every call is a few dictionary
 /// operations, and only a full bot scans its rows, once per new partner). It is fed by the social recorder whether or not <c>Social:Trading:Enabled</c> or <c>Social:Memory:Enabled</c> is on
 /// (counts and times only; the switches gate what the bots do with them, not what is counted). <see cref="Snapshot"/> returns the stored rows (what <see cref="Load"/> expects back).
@@ -132,6 +132,24 @@ internal sealed class PlayerbotTradeLedger(PlayerbotSocialTradingOptions options
     public void Forget(Guid botId)
     {
         lock (_gate) _bots.Remove(botId);
+    }
+
+    /// <summary>
+    /// Drop every bot's row about <paramref name="other"/> (the character no longer exists) and return the bots that held one; their <see cref="Version"/> moves,
+    /// so the next save writes them without it.
+    /// </summary>
+    public IReadOnlyList<Guid> ForgetOthers(ulong other)
+    {
+        List<Guid> changed = [];
+        lock (_gate)
+            foreach ((Guid botId, BotLedger bot) in _bots)
+            {
+                if (!bot.Rows.Remove(other)) continue;
+                bot.Version = ++_versionSeq;
+                changed.Add(botId);
+            }
+
+        return changed;
     }
 
     private bool Write(Guid botId, int characterId, ulong other, Func<Entry, long, bool> change)

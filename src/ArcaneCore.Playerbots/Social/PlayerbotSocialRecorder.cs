@@ -61,11 +61,12 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <summary>Record <paramref name="e"/> in <paramref name="bot"/>'s memory toward <paramref name="other"/>; nothing if the first is not a managed bot or the second not a player.</summary>
     public void Note(ObjectGuid bot, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
-        if (!Enabled || !other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
+        if (!other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
+        Guarded(() => FeedLedger(botId, characterId, other.Value, e)); // the ledger is fed whether or not the memory is on: scam safety does not depend on that switch
+        if (!Enabled) return;
         Guarded(() =>
         {
             Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction);
-            FeedLedger(botId, characterId, other.Value, e);
             Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
         });
     }
@@ -74,7 +75,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     // before recording, and this stamp then finds the day already taken. A flake stays a memory event only.
     private void FeedLedger(Guid botId, int characterId, ulong other, PlayerbotSocialEvent e)
     {
-        if (Ledger is not { } ledger) return;
+        if (Ledger is not { } ledger || !_managed.ContainsKey((uint)characterId)) return; // a bot that left (deleted) must not bring its ledger back
         switch (e)
         {
             case PlayerbotSocialEvent.FairDeal: ledger.NoteFairDeal(botId, characterId, other); break;
@@ -87,11 +88,12 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <summary>Record <paramref name="e"/> for a bot whose id is already known (chat, the party AI).</summary>
     public void NoteById(Guid botId, ObjectGuid botGuid, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
-        if (!Enabled || !other.IsPlayer || other == botGuid) return;
+        if (!other.IsPlayer || other == botGuid) return;
+        Guarded(() => FeedLedger(botId, (int)botGuid.Low, other.Value, e)); // the ledger is fed whether or not the memory is on
+        if (!Enabled) return;
         Guarded(() =>
         {
             Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction);
-            FeedLedger(botId, (int)botGuid.Low, other.Value, e);
             Mood.Nudge(botId, PlayerbotMood.DeltaOf(e));
         });
     }

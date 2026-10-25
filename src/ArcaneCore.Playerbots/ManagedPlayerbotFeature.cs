@@ -3485,7 +3485,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
             foreach ((Guid botId, _) in removed) memory.Forget(botId);
-            await ForgetTradeLedgerAsync(provider, removed.Select(bot => bot.BotId)).ConfigureAwait(false);
+            await ForgetTradeLedgerAsync(provider, removed).ConfigureAwait(false);
             HashSet<Guid> survivors = [];
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)

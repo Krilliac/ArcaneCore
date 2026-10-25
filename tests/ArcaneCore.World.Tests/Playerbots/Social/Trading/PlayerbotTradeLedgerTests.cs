@@ -379,4 +379,64 @@ public sealed class PlayerbotTradeLedgerTests
         Assert.True(memory.TryGet(RecorderBot, Human.Value, out PlayerbotRelation relation));
         Assert.Equal(-15, relation.Affinity);
     }
+
+    [Fact]
+    public void Recorder_WithTheMemoryOff_StillFeedsTheLedger_AndTheMemoryGetsNoRelation()
+    {
+        var clock = new Clock();
+        var ledger = new PlayerbotTradeLedger(new PlayerbotSocialTradingOptions(), new PlayerbotWarModeOptions(), () => clock.Now);
+        var memory = new PlayerbotSocialMemory(new PlayerbotSocialMemoryOptions { Enabled = false }, () => clock.Now);
+        var recorder = new PlayerbotSocialRecorder(memory, NullLogger.Instance, ledger);
+        recorder.Track(RecorderBot, 21);
+        Assert.False(recorder.Enabled);
+
+        recorder.Note(BotGuid, Human, PlayerbotSocialEvent.TradeScam);
+        recorder.NoteById(RecorderBot, BotGuid, Human, PlayerbotSocialEvent.NinjaLoot);
+        recorder.NoteById(RecorderBot, BotGuid, Human, PlayerbotSocialEvent.GiftReceived);
+
+        PlayerbotTradeRecord row = Get(ledger, Human.Value, RecorderBot);
+        Assert.Equal(1, row.Scams);
+        Assert.True(ledger.IsScammer(RecorderBot, Human.Value));
+        Assert.True(ledger.IsNinja(RecorderBot, Human.Value));
+        Assert.True(row.LastGiftDay > 0);
+        Assert.False(memory.TryGet(RecorderBot, Human.Value, out _));
+    }
+
+    [Fact]
+    public void ForgetOthers_RemovesTheRowFromEveryBot_BumpsOnlyTheirVersions_AndReturnsThem()
+    {
+        (PlayerbotTradeLedger ledger, _, _, _) = Make();
+        Guid third = Guid.Parse("00000000-0000-0000-0000-0000000000f7");
+        ledger.NoteScam(Bot, 7, Partner);
+        ledger.NoteFairDeal(Bot, 7, Partner + 1);
+        ledger.NoteScam(OtherBot, 8, Partner);
+        ledger.NoteFairDeal(third, 9, Partner + 1);
+        long thirdVersion = ledger.Version(third), botVersion = ledger.Version(Bot);
+
+        IReadOnlyList<Guid> changed = ledger.ForgetOthers(Partner);
+
+        Assert.Equal(new[] { Bot, OtherBot }.Order(), changed.Order());
+        Assert.False(ledger.TryGet(Bot, Partner, out _));
+        Assert.False(ledger.TryGet(OtherBot, Partner, out _));
+        Assert.True(ledger.TryGet(Bot, Partner + 1, out _));
+        Assert.True(ledger.Version(Bot) > botVersion);
+        Assert.Equal(thirdVersion, ledger.Version(third));
+        Assert.Empty(ledger.ForgetOthers(Partner));
+    }
+
+    [Fact]
+    public void Recorder_AfterAForgottenBotIsUntracked_ANoteByIdDoesNotBringItsLedgerBack()
+    {
+        (PlayerbotSocialRecorder recorder, PlayerbotTradeLedger ledger) = MakeRecorder();
+        recorder.NoteById(RecorderBot, BotGuid, Human, PlayerbotSocialEvent.TradeScam);
+        Assert.NotEmpty(ledger.Snapshot(RecorderBot));
+
+        ledger.Forget(RecorderBot);
+        recorder.Untrack(21);
+        recorder.NoteById(RecorderBot, BotGuid, Human, PlayerbotSocialEvent.TradeScam);
+        recorder.NoteById(RecorderBot, BotGuid, Human, PlayerbotSocialEvent.NinjaLoot);
+
+        Assert.Empty(ledger.Snapshot(RecorderBot));
+        Assert.Equal(0, ledger.Version(RecorderBot));
+    }
 }

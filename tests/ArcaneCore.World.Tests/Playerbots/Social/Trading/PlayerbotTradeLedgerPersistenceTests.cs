@@ -103,4 +103,33 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
         PlayerbotTradeRecord left = Assert.Single(await store.LoadAllAsync());
         Assert.Equal(kept, left.BotId);
     }
+
+    [Fact]
+    public async Task DeletingABot_RemovesTheRowsOtherBotsHoldAboutIt_FromMemoryAndFromTheirStoredRows()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var store = new MemoryTradeRecordStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotTradeRecordStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Goneabout", 1, 1)).BotId);
+        Guid kept = Assert.IsType<Guid>((await feature.CreateAsync("Keptabout", 1, 1)).BotId);
+        int goneCharacter = (await owners.FindAsync(gone))!.CharacterId, keptCharacter = (await owners.FindAsync(kept))!.CharacterId;
+        ulong aboutGone = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;
+        PlayerbotTradeLedger ledger = Assert.IsType<PlayerbotTradeLedger>(feature.Social.Ledger);
+        ledger.NoteScam(kept, keptCharacter, aboutGone);
+        ledger.NoteScam(kept, keptCharacter, 4242);
+        await store.ReplaceAsync(kept, ledger.Snapshot(kept));
+        Assert.Equal(2, (await store.LoadAllAsync()).Count);
+
+        Assert.True((await feature.DeleteAsync(gone.ToString())).Success);
+
+        Assert.False(ledger.TryGet(kept, aboutGone, out _));
+        Assert.True(ledger.TryGet(kept, 4242, out _));
+        PlayerbotTradeRecord left = Assert.Single(await store.LoadAllAsync()); // the kept bot is not running: only the delete itself rewrote its stored rows
+        Assert.Equal((kept, 4242UL), (left.BotId, left.OtherGuid));
+    }
 }

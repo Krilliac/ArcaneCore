@@ -66,22 +66,43 @@ public sealed partial class ManagedPlayerbotFeature
         }
     }
 
-    /// <summary>Deleted bots: forget their ledgers in memory and in the store. Never throws: a failure is recorded at <c>playerbot.social-memory</c>.</summary>
-    private async Task ForgetTradeLedgerAsync(IServiceProvider provider, IEnumerable<Guid> botIds)
+    /// <summary>
+    /// Deleted bots: forget their ledgers in memory and in the store, and every surviving bot's row about their characters (written again without it right away:
+    /// a bot that is not running is never checkpointed, so a version bump alone would leave its stored rows). The gate is held for one write at a time, never across
+    /// a whole fleet reset: a save racing a delete sees version 0 with no rows (the ledger was forgotten first) and writes nothing. Never throws: a failure is
+    /// recorded at <c>playerbot.social-memory</c>.
+    /// </summary>
+    private async Task ForgetTradeLedgerAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed)
     {
         try
         {
             if (Social.Ledger is not { } ledger) return;
-            Guid[] gone = [.. botIds.Where(id => id != Guid.Empty)];
+            Guid[] gone = [.. removed.Select(bot => bot.BotId).Where(id => id != Guid.Empty)];
             foreach (Guid botId in gone) ledger.Forget(botId);
+            HashSet<Guid> survivors = [];
+            foreach ((_, IReadOnlyList<int> characterIds) in removed)
+                foreach (int characterId in characterIds)
+                    if (characterId > 0) survivors.UnionWith(ledger.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
             if (provider.GetService<IPlayerbotTradeRecordStore>() is not { } store) return;
-            await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
-            try
+            foreach (Guid botId in gone)
             {
-                foreach (Guid botId in gone)
-                    await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false);
+                await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
+                try { await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false); }
+                finally { _tradeLedgerGate.Release(); }
             }
-            finally { _tradeLedgerGate.Release(); }
+
+            foreach (Guid other in survivors)
+            {
+                await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    long version = ledger.Version(other); // before the snapshot: the saved version never runs ahead of the rows
+                    IReadOnlyList<PlayerbotTradeRecord> rows = ledger.Snapshot(other);
+                    await RetryTransientBusyAsync(() => store.ReplaceAsync(other, rows), CancellationToken.None).ConfigureAwait(false);
+                    if (_active.TryGetValue(other, out ActiveBot? active)) Volatile.Write(ref active.SavedTradeVersion, version);
+                }
+                finally { _tradeLedgerGate.Release(); }
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

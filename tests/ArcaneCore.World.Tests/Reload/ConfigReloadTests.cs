@@ -378,7 +378,7 @@ public sealed class ConfigReloadTests : IDisposable
     [Fact]
     public async Task PlayerbotSocialTrading_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
-        // The trade desk reads Trading:Enabled and the limits from this options object at every pass (P4): switching off mid-trade cancels the window.
+        // The trade desk (a later P4 step) will read Trading:Enabled and the limits from this options object at every pass: switching off mid-trade will cancel the window.
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Trading": { "Enabled": false, "TradeTimeoutSeconds": 90, "Limits": { "MaxConcurrentTrades": 4, "DailyOutflowCopperServer": 5000 } } } } } }""");
         var playerbots = new PlayerbotOptions { Enabled = true };
         ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
