@@ -1,6 +1,7 @@
 using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
@@ -8,6 +9,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Effects;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Tests.ClientData;
 using ArcaneCore.World.Playerbots.Qa;
@@ -256,8 +258,10 @@ public sealed class PlayerbotQaSpellMonitorTests
     }
 
     // Issue #240: 10946 Mind Blast (Rank 8). Its Spell.dbc row is SCHOOL_DAMAGE like every other rank and the server deals it; the bot QA saw hits that took no
-    // health. A hit on a unit at its invincibility threshold takes none (vmangos Unit.cpp:825-850), which can be by design (Spirit of Redemption) or a
-    // leaked/never-ending death prevention: the report must not guess, it names the target so the next report can be diagnosed.
+    // health. Issue #240 was explained by the Blasted Lands quest creatures 7668/7669 (EventAI holds them at 1 health, so a creature at its threshold is excused).
+    // A hit on a unit at its invincibility threshold takes none (vmangos Unit.cpp:825-850), which can be by design (a creature held by its script, Spirit of
+    // Redemption) or a leaked/never-ending death prevention on a player: a held player with no Spirit of Redemption aura stays reported, and the report names
+    // the target so the next report can be diagnosed.
     [RealClientDbcFact]
     public void MindBlastRank8_FromTheDbc_DealsDamage_AndANoEffectReportNamesTheThresholdTarget()
     {
@@ -291,6 +295,124 @@ public sealed class PlayerbotQaSpellMonitorTests
         Assert.Equal("expected damage", signal.Detail); // the finding's key and detail do not change with the target
         Assert.Contains($"player, health {kit.Human.MaxHealth}/{kit.Human.MaxHealth}, invincibility threshold {kit.Human.MaxHealth}, absorb aura no", signal.Message,
             StringComparison.Ordinal);
+    }
+
+    private static Creature HeldCreature(uint health, uint threshold, uint low = 990_900)
+    {
+        var template = new CreatureTemplate { Entry = 7668, Name = "held", CreatureType = 1, MinLevelHealth = 2000, MaxLevelHealth = 2000 };
+        var creature = new Creature(low, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
+        creature.Health = health;
+        creature.InvincibilityHpThreshold = threshold;
+        return creature;
+    }
+
+    /// <summary>A real cast of <paramref name="spell"/> by the bot at itself, for a <see cref="SpellCast"/> to hand to the monitor with a made-up outcome.</summary>
+    private static SpellCast CastOf(QaSpellKit kit, uint spell)
+    {
+        var capture = new CastCapture();
+        kit.System.RegisterObserver(capture);
+        kit.Cast(kit.Bot, spell);
+        kit.Signals.Clear();
+        return capture.Last!;
+    }
+
+    private static void Hit(QaSpellKit kit, SpellCast cast, Unit target, int mask, int times)
+    {
+        for (int i = 0; i < times; i++)
+        {
+            kit.Monitor.OnTargetOutcome(cast, new SpellTargetOutcome(target, SpellMissInfo.None, Damage: 0, Healing: 0, Critical: false, EffectMask: mask));
+        }
+    }
+
+    // The Blasted Lands quest creatures 7668-7671 (creature_ai_scripts 766801) sit at 1 health, invincible: every damage spell on them measures 0.
+    [Fact]
+    public void DamageOnACreatureHeldAtItsInvincibilityThreshold_IsNotNoEffect()
+    {
+        using var kit = new QaSpellKit();
+        SpellCast cast = CastOf(kit, QaSpellKit.SelfNuke);
+
+        Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
+
+        Assert.Empty(kit.Signals);
+    }
+
+    [Fact]
+    public void ADamageHitThatDealsNothingToAHealthyCreature_IsStillReported_EvenWithAThreshold()
+    {
+        using var kit = new QaSpellKit();
+        SpellCast cast = CastOf(kit, QaSpellKit.SelfNuke);
+
+        Hit(kit, cast, HeldCreature(health: 2000, threshold: 1), mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
+
+        QaSignal signal = Assert.Single(kit.Signals);
+        Assert.Equal((QaSignalKind.SpellNoEffect, QaSpellKit.SelfNuke), (signal.Kind, signal.Spell));
+    }
+
+    [Fact]
+    public void ADamageAndAuraSpellOnAHeldCreatureWhoseAuraDoesNotApply_IsStillReported()
+    {
+        const uint mixed = 990_300;
+        using var kit = new QaSpellKit(extra:
+        [
+            QaSpellKit.Spell(mixed, QaSpellKit.Effect(SpellEffectName.SchoolDamage, 10), QaSpellKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModThreat))
+                with { Duration = new SpellDuration(30_000, 0, 30_000) },
+        ]);
+        SpellCast cast = CastOf(kit, mixed);
+
+        Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 3, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
+
+        QaSignal signal = Assert.Single(kit.Signals);
+        Assert.Equal(mixed, signal.Spell);
+    }
+
+    // Frenzied Regeneration tick (DruidScripts.FrenziedRegenerationTick) casts heal 22845 with rage * amount / 10 base points: 0 at 0 rage.
+    [Fact]
+    public void FrenziedRegenerationTicksOfADruidWithNoRage_AreNotNoEffect()
+    {
+        const uint frenziedHeal = 22845;
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(frenziedHeal, QaSpellKit.Effect(SpellEffectName.Heal, 5))]);
+        kit.Bot.Health = 30;
+
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastCustomSpell(kit.Bot, frenziedHeal, SpellCastTargets.ForSelf(), 0));
+        }
+
+        Assert.Equal(30u, kit.Bot.Health);
+        Assert.Empty(kit.Signals);
+    }
+
+    [Fact]
+    public void ACustomHealWithAPositiveValueThatHealsNothing_IsStillReported()
+    {
+        const uint frenziedHeal = 22845;
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(frenziedHeal, QaSpellKit.Effect(SpellEffectName.Heal, 5))]);
+        kit.System.Damage = new NoHealSink();
+        kit.Bot.Health = 30;
+
+        for (int i = 0; i < PlayerbotQaSpellMonitor.NoEffectRepeats; i++)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastCustomSpell(kit.Bot, frenziedHeal, SpellCastTargets.ForSelf(), 100));
+        }
+
+        QaSignal signal = Assert.Single(kit.Signals);
+        Assert.Equal((QaSignalKind.SpellNoEffect, frenziedHeal, "expected healing"), (signal.Kind, signal.Spell, signal.Detail));
+    }
+
+    [Fact]
+    public void CustomValueIsNonPositive_IsFalseOutsideACustomCast()
+    {
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(22845, QaSpellKit.Effect(SpellEffectName.Heal, 5))]);
+
+        Assert.False(kit.System.CustomValueIsNonPositive(kit.System.Store.Get(22845)!, 1));
+    }
+
+    /// <summary>A sink that heals and damages nothing.</summary>
+    private sealed class NoHealSink : IDamageSink
+    {
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic) => 0;
+
+        public uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount) => 0;
     }
 
     [Fact]

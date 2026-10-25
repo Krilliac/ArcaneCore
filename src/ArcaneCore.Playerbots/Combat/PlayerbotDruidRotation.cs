@@ -60,6 +60,12 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
 
     private static bool Feral(Form form) => form is Form.Cat or Form.Bear or Form.DireBear;
 
+    /// <summary>
+    /// The least rage (power units, rage x10: 10 rage) that makes Frenzied Regeneration worth casting: its tick heals <c>rage * amount / 10</c> (Druid scripts,
+    /// SpellAuras.cpp:1417-1433), so with no rage it heals nothing and only burns the cooldown.
+    /// </summary>
+    internal const uint FrenziedRegenerationMinRage = 100;
+
     /// <summary>A druid alone, still classed as a healer because it has no Moonkin or Leader of the Pack, heals only below this.</summary>
     internal const float SoloEmergencyHealth = 30f;
 
@@ -141,7 +147,7 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
         => Do(s, Growl, v, NeedsTaunt(s, v))
             ?? Do(s, FeralCharge, v, !v.InMeleeRange)
             ?? Do(s, Bash, v, v.IsCasting || s.InGroup)
-            ?? Do(s, FrenziedRegeneration, s.Self, s.Self.HealthPercent < 30f)
+            ?? Do(s, FrenziedRegeneration, s.Self, s.Self.HealthPercent < 30f && s.Power >= FrenziedRegenerationMinRage)
             ?? Do(s, FaerieFireFeral, v)
             ?? (s.Power > 800 || AttackersWithin(s, 10f) > 1
                 ? Do(s, DemoralizingRoar, s.Self, !v.HasAura(DemoralizingRoar)) ?? Do(s, Swipe, v)

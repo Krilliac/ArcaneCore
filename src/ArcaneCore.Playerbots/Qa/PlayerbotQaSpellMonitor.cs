@@ -142,7 +142,8 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         int selected = outcome.EffectMask & facts.MeasurableMask;
         if (outcome.EffectMask != 0 && selected == 0) return; // nothing measurable aimed at this target (a self part of a mixed spell)
         var key = (cast.Caster.Guid.Value, cast.Spell.Id);
-        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || FullyDiminished(cast, outcome, facts, selected) || outcome.SlotLimited))
+        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || HeldByDesign(outcome, facts, selected)
+            || ZeroByScript(cast, facts, selected) || FullyDiminished(cast, outcome, facts, selected) || outcome.SlotLimited))
         {
             if (_noEffect.ContainsKey(key)) _noEffect[key] = 0;
             return;
@@ -169,6 +170,27 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     /// </summary>
     private bool FullyDiminished(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
         => (selected & facts.AuraMask) != 0 && _gaps.System.IsFullyDiminished is { } diminished && diminished(cast.Caster, outcome.Target, cast.Spell);
+
+    /// <summary>
+    /// A pure damage hit on a unit held at its invincibility threshold takes no health by design (vmangos Unit::DealDamage, Unit.cpp:825-850: nothing at or
+    /// below the threshold is taken): a creature whose EventAI sets the threshold (the Blasted Lands quest creatures 7668-7671 stay at 1 health) or a player in
+    /// Spirit of Redemption. A player held with no such aura is a death prevention that leaked, and a hit with a heal or aura part (which can fail on its own)
+    /// or on a target above its threshold stays reported.
+    /// </summary>
+    private bool HeldByDesign(SpellTargetOutcome outcome, SpellFacts facts, int selected)
+    {
+        Unit target = outcome.Target;
+        uint threshold = target.InvincibilityHpThreshold;
+        if ((selected & ~facts.DamageMask) != 0 || threshold == 0 || target.Health > threshold) return false;
+        return target is Creature || target is Player && _gaps.System.HasAura(target, SpellSystem.SpiritOfRedemptionSpell);
+    }
+
+    /// <summary>
+    /// A script's cast (CastCustomSpell) whose selected damage or heal effects all carry an explicit value of 0 or less does nothing by design: Frenzied
+    /// Regeneration's tick casts heal 22845 with <c>rage * amount / 10</c> base points (vmangos SpellAuras.cpp:1417-1433), 0 for a druid with no rage.
+    /// </summary>
+    private bool ZeroByScript(SpellCast cast, SpellFacts facts, int selected)
+        => cast.IsTriggered && (selected & facts.AuraMask) == 0 && _gaps.System.CustomValueIsNonPositive(cast.Spell, selected);
 
     private bool Worked(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
