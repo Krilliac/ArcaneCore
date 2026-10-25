@@ -345,12 +345,15 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             _crypt.EncryptHeader(frame.AsSpan(0, headerLength));
+            // Observed before the frame is queued: the writer loop does not take _sendLock, so once TryWrite returns the client can already hold
+            // this packet, and an observer that records state "at the moment of the send" would race the client. A write to a completed channel
+            // (the session is closing) is still reported, which is harmless for a diagnostic hook.
+            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
             if (!_outbound.Writer.TryWrite(frame))
             {
                 return;
             }
 
-            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
             CapturePacket(false, opcode, payload);
         }
 
