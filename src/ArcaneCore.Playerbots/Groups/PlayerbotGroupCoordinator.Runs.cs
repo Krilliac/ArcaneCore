@@ -444,7 +444,17 @@ public sealed partial class PlayerbotGroupCoordinator
     private void ReportTimeout(BotGroup group, Player leader, string reason)
     {
         if (_world is null) return;
+        string line = DescribeTimeout(reason, unchecked(Now - group.StateSinceMs) / 1000, StepLimitOf(group) / 1000, group.Goal.ToString(),
+            group.State.ToString().ToLowerInvariant(), TimeoutMembers(group, leader));
+        Note($"group {group.Id} {line}");
+        logger.LogWarning("Playerbot group {Group} {Line}", group.Id, line);
+    }
+
+    /// <summary>The leader and every bot member as <see cref="DescribeTimeout"/> lists them: map, position, distances to the approach point and to the leader, alive, step.</summary>
+    private List<(string, uint, Vector3, float, float, bool, string)> TimeoutMembers(BotGroup group, Player leader)
+    {
         var members = new List<(string, uint, Vector3, float, float, bool, string)>();
+        if (_world is null) return members;
         var leaderAt = new Vector3(leader.X, leader.Y, leader.Z);
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
         {
@@ -459,11 +469,21 @@ public sealed partial class PlayerbotGroupCoordinator
                 player.MapId, at, Vector3.Distance(at, group.Approach), Vector3.Distance(at, leaderAt), player.IsAlive, member.AI?.Step ?? "none"));
         }
 
-        string line = DescribeTimeout(reason, unchecked(Now - group.StateSinceMs) / 1000, StepLimitOf(group) / 1000, group.Goal.ToString(),
-            group.State.ToString().ToLowerInvariant(), members);
-        Note($"group {group.Id} {line}");
-        logger.LogWarning("Playerbot group {Group} {Line}", group.Id, line);
+        return members;
     }
+
+    /// <summary>
+    /// The diagnostic that goes with a group's stall line (live #1470: it carried the leader's brain snapshot, stale while a group drives the bot):
+    /// the group's state, the leader's step, the approach point and the leader's distance to it, then <see cref="DescribeTimeout"/>'s per-member list.
+    /// </summary>
+    internal static string DescribeGroupStall(int groupId, string state, string leaderStep, Vector3 approach, float leaderToApproach, string timeout)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"group {groupId} state={state} leader-step={leaderStep} approach={approach.X:F1},{approach.Y:F1},{approach.Z:F1} leader-distance={leaderToApproach:F0}yd; {timeout}");
+
+    /// <summary>The diagnostic <see cref="DescribeGroupStall"/> made for the stall report of the group led by <paramref name="botId"/> (once; null: none).</summary>
+    internal string? TakeStallDiagnostic(Guid botId) => _stallDiags.Remove(botId, out string? diag) ? diag : null;
+
+    private readonly Dictionary<Guid, string> _stallDiags = [];
 
     /// <summary>The Engaging state of a run: bosses die, a boss may be absent, the group wipes or finishes and loots.</summary>
     internal void AdvanceRun(BotGroup group, Player leader, PlayerbotRunMachine run, uint now)

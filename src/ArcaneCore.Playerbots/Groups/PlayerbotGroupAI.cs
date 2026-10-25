@@ -7,6 +7,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
@@ -293,6 +294,7 @@ internal sealed class PlayerbotGroupAI
         _spells.GroupRole = PlayerbotGroupContent.CombatRole(me.Role, me.TalentRole);
         bool dead = !player.IsAlive;
         if (dead) _fightWatch.Reset();
+        if (dead || player.Combat.IsInCombat) _stuckSinceMs = _stuckLastMs = 0; // the leader stopped trying to walk: a new stretch of refusals starts afterwards
         if (dead && !_deathRetired)
         {
             _risk.OnDeath(player);
@@ -500,14 +502,23 @@ internal sealed class PlayerbotGroupAI
                 return;
             case PlayerbotGroupState.Travelling:
                 if (player.MapId != group.Goal.MeetingMap) { Step = "lead:hold-map"; HoldRun(player); return; }
-                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
-                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
+                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; Hold(player); return; }
+                // The holds above are not attempts and do not end a stretch of refused walks (live #1470: a leader that alternated its holds for members, rests and buffs with refused walks reset the stretch every time, and its group stood on the hill for good).
                 // The leader keeps out of known hazards. Not on the way back after a world-boss wipe: the hazard at the spot the raid died on lies between the leader and the rally, and the raid is going back to that fight on purpose (a refusal there ended the raid as no-path-to-approach).
                 PlayerbotNavigation.Guard(player, _options.Risk.Enabled && group.WorldBoss is not { Wipes: > 0 } ? _risk : null);
                 Vector3 approach = TravelPoint(group);
                 bool approaching = WalkTo(player, approach, interval, toward: true);
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
                 NoteRunProgress(group, approaching);
+                if (!approaching && !group.ApproachRetried && PlayerbotGroupCoordinator.WithinApproachRingFlat(player, group))
+                {
+                    // Inside the ring flat but refused at its own position (the hill above the entrance): it cannot get nearer on foot. The approach point is chosen again once from here, a point it can reach or the meeting point itself.
+                    group.ApproachRetried = true;
+                    IPathfinder? pathfinder = WorldCollision.Of(_session.World).Pathfinder;
+                    group.Approach = PlayerbotGroupCoordinator.ReachableApproach(pathfinder, group.Goal, new Vector3(player.X, player.Y, player.Z), group.WorldBoss is { } rallying ? rallying.RallyYards : group.Goal.InInstance ? PlayerbotGroupCoordinator.ApproachYards : PlayerbotGroupCoordinator.QuestApproachYards);
+                }
+
                 NoteApproachProgress(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
@@ -654,7 +665,8 @@ internal sealed class PlayerbotGroupAI
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
     {
         if (group.Run is null && (group.Handoff is not null || group.Members.Any(m => m.Real))) return;
-        if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
+        bool travelling = group.State == PlayerbotGroupState.Travelling;
+        if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now, travelling ? long.MaxValue : RunStuckGapMs)) return;
         bool engaging = group.State == PlayerbotGroupState.Engaging;
         group.RunFault ??= group.Run is null
             ? (engaging ? "no-path-to-objective" : "no-path-to-approach")
@@ -666,16 +678,22 @@ internal sealed class PlayerbotGroupAI
     /// the leader plans a way and walks it but gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
     /// <see cref="ApproachNoProgressMs"/> (a root, a wall the mesh does not show, a route that circles): the group goes on to the content instead of
     /// waiting at a point nobody reaches. A way that cannot be planned is <see cref="NoteRunProgress"/>'s. A pause of more than
-    /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) starts a new stretch.
+    /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) is not counted towards the bound, and does not end the stretch.
     /// </summary>
     private void NoteApproachProgress(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
     {
         uint now = _session.World.NowMs;
         float yards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach);
-        if (_approachTriedMs == 0 || unchecked(now - _approachTriedMs) > RunStuckGapMs)
+        if (_approachTriedMs == 0)
         {
             _approachNearestYards = yards;
             _approachProgressMs = now;
+        }
+        else if (unchecked(now - _approachTriedMs) is var paused && paused > RunStuckGapMs && paused <= int.MaxValue)
+        {
+            // A pause (a hold for members, a rest, a buff) is no time spent not getting nearer: the stretch goes on without it. Before, it
+            // started a new stretch, and a leader that held every few seconds never reached the bound (live #1470).
+            _approachProgressMs = unchecked(_approachProgressMs + paused);
         }
 
         _approachTriedMs = Math.Max(1u, now);
@@ -705,9 +723,9 @@ internal sealed class PlayerbotGroupAI
     /// <summary>
     /// Account one walking attempt. <paramref name="since"/> is when the current unbroken stretch of failed attempts began and
     /// <paramref name="last"/> when the latest failed one was made (0: none). Returns true when the stretch has lasted more than
-    /// <see cref="RunStuckMs"/>. A planned way ends the stretch; so does a gap of more than <see cref="RunStuckGapMs"/> between two failures.
+    /// <see cref="RunStuckMs"/>. A planned way ends the stretch; so does a gap of more than <paramref name="gapMs"/> (<see cref="RunStuckGapMs"/>) between two failures. The walk to the approach point passes no bound (<see cref="long.MaxValue"/>): its stretch runs on wall-clock time from the first refusal, whatever the leader held or rested for between two attempts.
     /// </summary>
-    internal static bool NoteStuck(ref long since, ref long last, bool planned, long now)
+    internal static bool NoteStuck(ref long since, ref long last, bool planned, long now, long gapMs = RunStuckGapMs)
     {
         if (planned)
         {
@@ -716,7 +734,7 @@ internal sealed class PlayerbotGroupAI
             return false;
         }
 
-        if (since == 0 || now - last > RunStuckGapMs) since = now;
+        if (since == 0 || now - last > gapMs) since = now;
         last = now;
         return now - since > RunStuckMs;
     }

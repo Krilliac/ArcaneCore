@@ -2400,7 +2400,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 ActiveBot? leader = FindOrderedBot(bots, botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
-                string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
+                string? diag = groups.TakeStallDiagnostic(botId) ?? (leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null);
                 LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
             }
         }
