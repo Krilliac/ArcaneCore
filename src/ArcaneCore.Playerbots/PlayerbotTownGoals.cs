@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (<see cref="NeedsRepairTrip"/>) is also a reason to travel to a repair NPC out of sight (<see cref="TravelToRepair"/>), and full bags
 /// with something to sell (<see cref="SellTripNeeded"/>) a reason to travel to a vendor.
 /// </summary>
-internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions options)
+internal sealed partial class PlayerbotTownGoals(WorldSession session, PlayerbotOptions options)
 {
     private const uint ThinkCooldownMs = 1500;
     private const uint RepairBackoffMs = 60_000;

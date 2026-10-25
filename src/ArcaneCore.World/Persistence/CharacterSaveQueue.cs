@@ -109,6 +109,30 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// <summary>Characters with a snapshot waiting or being written.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
+    /// <summary>Ids of characters whose snapshot failed to save and is still held (retried or parked), ascending.</summary>
+    public IReadOnlyList<int> RetainedCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _failed.Keys.Order()];
+            }
+        }
+    }
+
+    /// <summary>The failure that halted the queue for good (a rejected character ownership), or null while it is running.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
     /// <summary>How long the longest-waiting snapshot has been waiting or being written (zero when nothing is pending).</summary>
     public TimeSpan OldestPendingAge
     {

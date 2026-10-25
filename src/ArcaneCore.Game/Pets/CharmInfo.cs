@@ -73,7 +73,7 @@ public readonly record struct ActionButton(uint Packed)
 /// mini pet; <see cref="PetSpells"/> is the pet's spell list (vmangos <c>m_petSpells</c>/<c>m_spells</c>).
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class CharmInfo
+public sealed partial class CharmInfo
 {
     /// <summary>vmangos ACTION_BAR_INDEX_PET_SPELL_START: the first spell slot (slots 0-2 are the commands).</summary>
     public const int SpellSlotStart = 3;

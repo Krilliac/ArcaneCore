@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 374 |
-| `Administrator` | 6 | 570 |
+| `GameMaster` | 3 | 378 |
+| `Administrator` | 6 | 574 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -402,6 +402,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |

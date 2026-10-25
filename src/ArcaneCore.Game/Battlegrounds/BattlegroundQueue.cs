@@ -127,7 +127,7 @@ internal sealed class SelectionPool
 /// The queue of one battleground type: groups per bracket, the match selection and the invitations (vmangos
 /// <c>BattleGroundQueue</c>, BattleGroundMgr.cpp:49-975). Owned and driven by <see cref="BattlegroundManager"/>; world thread.
 /// </summary>
-internal sealed class BattlegroundQueue
+internal sealed partial class BattlegroundQueue
 {
     private const int CountOfPlayersToAverageWaitTime = 10;
     private const uint OfflineQueueTimeMs = 60 * 1000;
