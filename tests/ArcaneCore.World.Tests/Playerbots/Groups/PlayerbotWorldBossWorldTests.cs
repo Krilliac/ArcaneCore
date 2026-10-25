@@ -64,7 +64,7 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.Contains(PlayerbotGroupState.Travelling, states);
         Assert.Contains(PlayerbotGroupState.Engaging, states);
 
-        Assert.False(await world.OnWorldAsync(() => boss.IsAlive), "the boss lived");
+        Assert.False(await world.OnWorldAsync(() => boss.IsAlive), "the boss lived" + Environment.NewLine + await world.TraceAsync());
         Assert.Contains(await world.OnWorldAsync(() => boss.LootTapper), group.Members.Select(m => world.Player(m.BotId).Guid));
         Assert.True(Noted(world, "disbanded (killed)"), await world.TraceAsync());
         Assert.True(group.SuccessNoted, "GroupSucceeded not noted for a kill the raid held the tap on");

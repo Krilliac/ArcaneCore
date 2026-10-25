@@ -463,7 +463,8 @@ internal sealed class PlayerbotGroupAI
                 if (player.MapId != group.Goal.MeetingMap) { Step = "lead:hold-map"; HoldRun(player); return; }
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
-                PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? _risk : null); // the leader keeps out of known hazards
+                // The leader keeps out of known hazards. Not on the way back after a world-boss wipe: the hazard at the spot the raid died on lies between the leader and the rally, and the raid is going back to that fight on purpose (a refusal there ended the raid as no-path-to-approach).
+                PlayerbotNavigation.Guard(player, _options.Risk.Enabled && group.WorldBoss is not { Wipes: > 0 } ? _risk : null);
                 Vector3 approach = TravelPoint(group);
                 bool approaching = WalkTo(player, approach, interval, toward: true);
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";

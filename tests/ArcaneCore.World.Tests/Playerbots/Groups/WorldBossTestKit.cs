@@ -41,11 +41,11 @@ internal static class WorldBossTestKit
     internal static CreatureTemplate Boss(uint entry = BossEntry, byte level = 60, uint health = 400, float damage = 5f) => new()
     {
         Entry = entry, Name = "Test Wyrm", Faction = 14, CreatureType = 2, MinLevel = level, MaxLevel = level, DisplayIds = [903],
-        MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = damage, MaxMeleeDamage = damage, MeleeBaseAttackTime = 2000, Rank = 3,
+        MinLevelHealth = health, MaxLevelHealth = health, MinMeleeDamage = damage, MaxMeleeDamage = damage, MeleeBaseAttackTime = 8000, Rank = 3, // a slow swing: the level-60 attack-power part of every blow lands a 72-health bot, and the test raid (no real healing, a mage out-damaging 400 health in ~50 s) must win the race on any dice
     };
 
     /// <summary>A boss no raid kills and that kills the raid in a blow or two.</summary>
-    internal static CreatureTemplate Unbeatable(byte level = 60) => Boss(level: level, health: 20_000_000, damage: 5000f);
+    internal static CreatureTemplate Unbeatable(byte level = 60) => Boss(level: level, health: 20_000_000, damage: 5000f) with { MeleeBaseAttackTime = 2000 };
 
     /// <summary>A boss that hits for nothing and never dies: it holds whoever tapped it for as long as the test wants.</summary>
     internal static CreatureTemplate Passive() => Boss(health: 5_000_000, damage: 0f) with { MeleeBaseAttackTime = 3_600_000 }; // a swing an hour: damage 0 still lands the level-60 attack-power part, which kills a level-1 player in half a minute
