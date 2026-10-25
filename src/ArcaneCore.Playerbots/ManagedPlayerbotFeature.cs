@@ -2077,7 +2077,6 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     // The dead-end pin cells every bot avoids once several of them were pinned in one (PlayerbotSharedPins); thread-safe.
     private readonly PlayerbotSharedPins _sharedPins = new();
 
-
     // The soft claims of the fleet on untagged mobs (PlayerbotClaims): one table for every bot, touched on the world thread only.
     private readonly PlayerbotClaims _claims = new();
 

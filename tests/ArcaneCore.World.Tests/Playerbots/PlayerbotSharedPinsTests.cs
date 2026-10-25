@@ -226,10 +226,18 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
             Assert.False(PlayerbotNavigation.IsDeadEndPin(world.Player, pinPos));
 
             // Its first stall counts as a dead-end pin: the entry is set aside for longer than one ordinary stall.
+            botB.Suspensions.SuspendQuest(66, now);
+            botB.Suspensions.SuspendQuest(66, now); // two set-asides already: an own pin would now mark the quest unreachable
             botB.HoldGoalForTests(PlayerbotGoalKind.Quest, 267, 66);
             botB.GiveUpStalledGoal(world.Player, shareable: false);
             Assert.Equal(1, botB.StallWatch.PinStallCount(0, pinPos.X, pinPos.Y));
             Assert.True(botB.Suspensions.IsEntrySuspended(267, now + PlayerbotSuspensions.SuspendMs + 1_000), "escalated, not the ordinary ten minutes");
+            Assert.False(botB.Suspensions.IsQuestUnreachable(66, now), "a world pin alone does not make the quest unreachable");
+
+            // The control: its second stall in the cell is its own pin, which does.
+            botB.HoldGoalForTests(PlayerbotGoalKind.Quest, 267, 66);
+            botB.GiveUpStalledGoal(world.Player, shareable: false);
+            Assert.True(botB.Suspensions.IsQuestUnreachable(66, now));
             return true;
         });
 
@@ -273,6 +281,51 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         Assert.Equal(0, pins.Count);
         await StallTwiceAsync(OpenZone);
         Assert.Equal(1, pins.Count); // the control: the same stalls in open country are shared
+    }
+
+    [Theory]
+    [InlineData(MapType.Common, 0u, 0u, true)]
+    [InlineData(MapType.Common, 0u, 87u, true)]   // an ordinary sub-area
+    [InlineData(MapType.Instance, 0u, 0u, false)]
+    [InlineData(MapType.Raid, 0u, 0u, false)]
+    [InlineData(MapType.Battleground, 0u, 0u, false)]
+    [InlineData(MapType.Common, 1519u, 0u, false)] // a capital zone
+    [InlineData(MapType.Common, 0u, 88u, false)]   // a town inside an open zone (Goldshire, Sentinel Hill, Booty Bay)
+    [InlineData(MapType.Common, 0u, 89u, false)]   // a slave-capital sub-area
+    public void OnlyOpenWorldMapsOutsideTownsMayShareAPin(MapType type, uint zoneOverride, uint areaId, bool expected)
+    {
+        var template = new MapTemplate(0, 0, type, 0, 0, 0, -1, 0, 0, "map", "");
+        var registry = new MapRegistry([template]);
+        var areas = new AreaTable([
+            new AreaTemplate(OpenZone, 0, 0, 12, 0, 1, "open", 0, 0),
+            new AreaTemplate(CapitalZone, 0, 0, 1519, (uint)ArcaneCore.Game.WorldState.Zones.AreaFlags.Capital, 1, "capital", 0, 0),
+            new AreaTemplate(87, 0, OpenZone, 87, 0, 1, "farm", 0, 0),
+            new AreaTemplate(88, 0, OpenZone, 88, (uint)ArcaneCore.Game.WorldState.Zones.AreaFlags.City, 1, "town", 0, 0),
+            new AreaTemplate(89, 0, OpenZone, 89, (uint)ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital, 1, "slave capital", 0, 0)], registry);
+        uint zone = zoneOverride == 0 ? OpenZone : zoneOverride;
+        Assert.Equal(expected, PlayerbotBrain.CanShareDeadEndPin(template, areas, zone, areaId));
+    }
+
+    [Fact]
+    public void AnUnknownZoneOrNoMap_CannotSharePins()
+    {
+        var template = new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "map", "");
+        var areas = new AreaTable([new AreaTemplate(OpenZone, 0, 0, 12, 0, 1, "open", 0, 0)], new MapRegistry([template]));
+        Assert.False(PlayerbotBrain.CanShareDeadEndPin(template, areas, 0, 0));
+        Assert.False(PlayerbotBrain.CanShareDeadEndPin(template, areas, 999_999, 0));
+        Assert.False(PlayerbotBrain.CanShareDeadEndPin(null, areas, OpenZone, 0));
+    }
+
+    [Fact]
+    public void AnActiveWorldPin_KeepsNoBotsWaiting()
+    {
+        var pins = new PlayerbotSharedPins();
+        pins.Report(0, 0, 35, 5, 1, 1_000);
+        Assert.NotNull(pins.Report(0, 0, 35, 5, 2, 1_000));
+        for (ulong bot = 3; bot < 50; bot++) pins.Report(0, 0, 35, 5, bot, 2_000);
+        // After the pin ends, one bot alone does not make a new one: the reports made while it was active were not kept.
+        uint after = 1_000 + PlayerbotSharedPins.PinMs + 1;
+        Assert.Null(pins.Report(0, 0, 35, 5, 60, after));
     }
 
     [Fact]
@@ -451,14 +504,22 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     {
         await using SyntheticNavWorld world = await ExploreWorldAsync(new IndoorsWhere(at => at.X > 40), FarSpawn);
         await WaitForRegionsAsync(world, FarSpawn);
-        (bool indoorSpot, bool outdoorSpot) = await world.Host.OnWorldAsync(() => (
-            PlayerbotBrain.ExploreSpotUsable(world.Player, FarSpawn), PlayerbotBrain.ExploreSpotUsable(world.Player, NearSpawn)));
+        (bool indoorSpot, bool outdoorSpot) = await world.Host.OnWorldAsync(() =>
+        {
+            bool skipIndoor = PlayerbotBrain.ExploreSkipsIndoor(world.Player);
+            Assert.True(skipIndoor, "a bot standing outdoors leaves indoor spots out");
+            return (PlayerbotBrain.ExploreSpotUsable(world.Player, FarSpawn, skipIndoor), PlayerbotBrain.ExploreSpotUsable(world.Player, NearSpawn, skipIndoor));
+        });
         Assert.False(indoorSpot, "the indoor spot is left out for a bot standing outdoors");
         Assert.True(outdoorSpot, "an outdoor spot is not");
 
         await world.PlaceAsync(new Vector3(75, 25, 0));
-        Assert.True(await world.Host.OnWorldAsync(() => PlayerbotBrain.ExploreSpotUsable(world.Player, FarSpawn)),
-            "a bot already indoors may explore indoors");
+        Assert.True(await world.Host.OnWorldAsync(() =>
+        {
+            bool skipIndoor = PlayerbotBrain.ExploreSkipsIndoor(world.Player);
+            Assert.False(skipIndoor, "a bot already indoors judges nothing");
+            return PlayerbotBrain.ExploreSpotUsable(world.Player, FarSpawn, skipIndoor);
+        }), "a bot already indoors may explore indoors");
     }
 
     private sealed class Content(CreatureContent content) : ICreatureDataStore

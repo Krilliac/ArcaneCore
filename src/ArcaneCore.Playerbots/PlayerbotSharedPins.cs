@@ -48,7 +48,6 @@ internal sealed class PlayerbotSharedPins
 
     private long T(uint nowMs) => World is { } world ? PlayerbotWorldClock.Ms(world, nowMs) : nowMs;
 
-
     /// <summary>Cells remembered (bounded by <see cref="MaxKeys"/>).</summary>
     internal int Count
     {
@@ -82,9 +81,10 @@ internal sealed class PlayerbotSharedPins
             }
 
             record.LastMs = now;
+            if (Active(record, now)) return null; // already a world pin: nobody is kept waiting to make it one
             record.Bots.RemoveAll(seen => now - seen.AtMs > WindowMs || seen.Bot == bot);
             record.Bots.Add(new Seen(bot, now));
-            if (record.Bots.Count < BotsToShare || Active(record, now)) return null;
+            if (record.Bots.Count < BotsToShare) return null;
             uint length = (uint)Math.Min((ulong)PinMs << Math.Min(record.Times, 8), MaxPinMs);
             record.Times = Math.Min(record.Times + 1, 8);
             record.UntilMs = now + length;
