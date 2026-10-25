@@ -198,6 +198,14 @@ public sealed class PlayerbotPopulationOptions
     /// </summary>
     public int CreatureSurveyRadius { get; set; } = 100;
 
+    /// <summary>
+    /// Zone capacity: a zone takes no new or relocated bot once its assigned bots reach the zone's level-fitting outdoor creature
+    /// spawns (on the surface, not indoors or underground, hostile to the bot's faction) divided by this many (0..100; 0 turns the cap
+    /// off). Keeps a small zone such as Deadwind Pass (47 surface spawns, 600 s respawn) from taking a hundred bots that find every
+    /// creature dead. The spawn survey runs off the world thread; until it is in, no zone is capped.
+    /// </summary>
+    public int SpawnsPerBot { get; set; } = 3;
+
     /// <summary>How many levels a bot may be above the highest level of its zone before it is relocated (0..10).</summary>
     public int OutlevelMargin { get; set; } = 2;
 
@@ -440,6 +448,7 @@ public sealed class PlayerbotPopulationOptions
             : CheckRange(ZoneLevelSlackMaxFloor, 1, MaxLevel) is { } zf ? $"ZoneLevelSlackMaxFloor {zf}"
             : CheckRange(CreatureLevelMargin, 0, 10) is { } cm ? $"CreatureLevelMargin {cm}"
             : CheckRange(CreatureSurveyRadius, 0, 300) is { } cr ? $"CreatureSurveyRadius {cr}"
+            : CheckRange(SpawnsPerBot, 0, 100) is { } spb ? $"SpawnsPerBot {spb}"
             : CheckRange(OutlevelMargin, 0, 10) is { } o ? $"OutlevelMargin {o}"
             : CheckDefined(Relocation) is { } l ? $"Relocation {l}"
             : CheckRange(MaxRelocationsPerInterval, 0, 50) is { } m ? $"MaxRelocationsPerInterval {m}"

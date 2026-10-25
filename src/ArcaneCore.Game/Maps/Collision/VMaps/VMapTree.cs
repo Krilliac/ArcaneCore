@@ -112,6 +112,15 @@ public sealed class VMapTree
         _loadedTiles[tile] = slots;
     }
 
+    /// <summary>Adds the model name of every instance a loaded tile holds to <paramref name="names"/>.</summary>
+    internal void CollectModelNames(HashSet<string> names)
+    {
+        foreach (ModelInstance? instance in _instances)
+        {
+            if (instance is not null) names.Add(instance.Spawn.Name);
+        }
+    }
+
     /// <summary>Release a tile's slots; a model leaves when no loaded tile lists it.</summary>
     internal bool RemoveTile((int X, int Y) tile)
     {

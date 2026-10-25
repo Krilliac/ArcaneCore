@@ -1,10 +1,13 @@
 using ArcaneCore.Kernel.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Npc;
@@ -34,7 +37,7 @@ namespace ArcaneCore.World.Playerbots.Population;
 /// effective target less the operator bots running), <see cref="Have"/> the population's own bots running in it. An operator's bot
 /// never counts in a band.
 /// </summary>
-public sealed record PopulationBandStatus(int MinLevel, int MaxLevel, int Weight, int Want, int Have);
+public sealed record PopulationBandStatus(int MinLevel, int MaxLevel, int Weight, int Want, int Have, int? Capacity = null);
 
 /// <summary>What the population manager last saw and did (immutable; replaced after every pass).</summary>
 public sealed record PopulationStatus(
@@ -139,6 +142,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     private bool _locateRunning;
     private int _locateHeldPasses;
     private CancellationTokenSource? _locateCts;
+    private PopulationSpawnCapacity? _capacity;
+    private string _capacityKey = string.Empty;
+    private object? _capacityToken;
+    private object? _capacityAreas;
+    private CancellationTokenSource? _capacityCts;
+    private Task _capacityTask = Task.CompletedTask;
+    private readonly PopulationZoneVetoes _vetoes = new();
 
     /// <summary>The most passes creation and relocation wait for a running graveyard terrain lookup before going ahead on the fallback atlas.</summary>
     internal const int MaxTerrainHoldPasses = 6;
@@ -301,6 +311,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _atlasAreas = _atlasGraveyards = _atlasCreatures = null;
         _atlasLocated = false;
         _located = null;
+        _capacity = null;
+        _capacityKey = string.Empty;
         _coverageChecked = null;
         _pairs = null;
         _pairsKey = string.Empty;
@@ -317,7 +329,12 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _locateCts?.Cancel();
         _locateCts?.Dispose();
         _locateCts = null;
-        return Task.WhenAll(_locateTask, _provisioner.CancelWarm());
+        _capacityToken = null;
+        _capacityKey = string.Empty; // a cancelled survey restarts on the next capture
+        _capacityCts?.Cancel();
+        _capacityCts?.Dispose();
+        _capacityCts = null;
+        return Task.WhenAll(_locateTask, _capacityTask, _provisioner.CancelWarm());
     }
 
     public async Task StopAsync()
@@ -568,7 +585,10 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             // Busy: cannot be stopped now. A dead bot or a ghost is not busy: it can log out, and it earns nothing until it is back.
             bool busy = !player.IsInWorld || player.Combat.IsInCombat || teleports?.IsBeingTeleported(player) == true;
             bool sick = spells?.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == SpiritHealerResurrection.ResurrectionSicknessSpell) == true;
-            bool stalled = managed.FindBrain(status.BotId)?.StallReport is not null;
+            PlayerbotBrain? brain = managed.FindBrain(status.BotId);
+            bool stalled = brain?.StallReport is not null;
+            if (brain?.TakeEscapedZones() is { Length: > 0 } escaped)
+                foreach (uint escapedZone in escaped) _vetoes.RecordEscape(status.BotId, escapedZone, NowUnix());
             running.Add(new PopulationBotFacts(status.BotId, player.Level, player.Team, player.ZoneId, autonomous, busy,
                 realZones.Contains(player.ZoneId), vetoes.Any(v => v.OwnsPlacement(status.BotId)), !player.IsAlive, sick, stalled,
                 (byte)player.Race, (byte)player.Class, player.MapId, player.X, player.Y));
@@ -617,8 +637,10 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             _locateCts = null;
         }
 
+        _atlas.SpawnsPerBot = pop.SpawnsPerBot; // read live: not part of the atlas key, so a change restarts no terrain lookup
         if (!sourcesChanged && (_located is null || _atlasLocated))
         {
+            EnsureCapacity(world, areas, pop);
             LogCoverage(pop);
             return _atlas;
         }
@@ -626,7 +648,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         PopulationLocated? located = _located;
         _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
             located is null ? null : l => located.Where.GetValueOrDefault(l.Id),
-            located is null || located.Creatures.Count == 0 ? null : (l, t) => located.Creatures.GetValueOrDefault((l.Id, t)));
+            located is null || located.Creatures.Count == 0 ? null : (l, t) => located.Creatures.GetValueOrDefault((l.Id, t)),
+            pop.SpawnsPerBot, _capacity);
         _atlasLocated = located is not null;
         logger.LogInformation(
             "Playerbot population atlas{Pending}: {Zones} zones, {Locations} locations ({Alliance} zones open to the Alliance, {Horde} to the Horde); {Surveyed} graveyard/faction pairs with a creature survey level; {Dropped} graveyard links left out as standing in another zone{List}",
@@ -636,6 +659,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             _atlas.Dropped.Count == 0 ? string.Empty
                 : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
         if (located is null && _locating is null) StartLocating(world, areas, pop);
+        EnsureCapacity(world, areas, pop);
         LogCoverage(pop);
         return _atlas;
     }
@@ -727,6 +751,228 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     }
 
     private static readonly Team[] SurveyedTeams = [Team.Alliance, Team.Horde];
+
+    /// <summary>Test seam: replaces the production survey (zones, terrain and creature content are then not needed). Set before the first pass.</summary>
+    internal Func<CancellationToken, PopulationSpawnCapacity?>? CapacitySurveyor { get; set; }
+
+    /// <summary>Test seam: part of the survey key while <see cref="CapacitySurveyor"/> is set; a new value is a source change.</summary>
+    internal int CapacitySurveyorVersion { get; set; }
+
+    /// <summary>The latest capacity survey task (tests).</summary>
+    internal Task CapacityTask => _capacityTask;
+
+    /// <summary>World thread: stop the terrain lookup, the capacity survey and the placement data build in flight (tests call it to cancel).</summary>
+    internal Task CancelBackgroundWork() => CancelLocating();
+
+    /// <summary>
+    /// World thread: start the background survey of the zones' surface creature spawns (<see cref="SurveySurface"/>) when
+    /// <c>SpawnsPerBot</c> is above 0 and terrain data, creature content and faction templates are there, and none is running or
+    /// done for the current sources (maps, creature definitions, area table). <c>SpawnsPerBot</c> itself is not a source: the divisor is
+    /// read live from the atlas. The old capacity stays in force until the new one arrives, unless the area table changed. The result is
+    /// posted back and attached to the atlas in force; it never holds creation back. The log gives the survey's duration, hop count and
+    /// the vmap model cache before and after.
+    /// </summary>
+    private void EnsureCapacity(WorldRuntime world, AreaTable areas, PlayerbotPopulationOptions pop)
+    {
+        CreatureContent? creatures = _atlasCreatures as CreatureContent;
+        TerrainManager terrain = WorldMaps.Of(world).Terrain;
+        Func<CancellationToken, PopulationSpawnCapacity?>? fake = CapacitySurveyor;
+        FactionTemplateCatalog? factions = fake is null ? FactionTemplatesOf(world) : null;
+        if (pop.SpawnsPerBot <= 0) return;
+        if (fake is null && (creatures is null || !terrain.Enabled || factions is not { Count: > 0 })) return;
+        // The area table changed (zone ids may mean something else): the old capacity no longer applies.
+        if (!ReferenceEquals(_capacityAreas, areas))
+        {
+            _capacity = null;
+            _atlas.Capacity = null;
+            _capacityAreas = areas;
+        }
+
+        string key = fake is not null
+            ? "fake|" + CapacitySurveyorVersion + "|" + RuntimeHelpers.GetHashCode(areas)
+            : string.Join(',', _options.AllowedMaps) + "|" + creatures!.DefinitionsVersion + "|" + RuntimeHelpers.GetHashCode(areas)
+                + "|" + RuntimeHelpers.GetHashCode(creatures);
+        if (key == _capacityKey) return;
+        _capacityKey = key;
+        _capacityCts?.Cancel();
+        _capacityCts?.Dispose();
+        var token = new object();
+        _capacityToken = token;
+        _capacityCts = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        CancellationToken ct = _capacityCts.Token;
+        HashSet<uint> gated = [];
+        if (services.GetService<GameEventFeature>()?.Service?.Rows is { } rows)
+            foreach ((int signedEvent, IReadOnlyList<uint> guids) in rows.Creatures)
+                if (signedEvent > 0) gated.UnionWith(guids);
+        uint[] maps = [.. _options.AllowedMaps];
+        _capacityTask = Task.Factory.StartNew(() =>
+        {
+            PopulationSpawnCapacity? result = null;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            SurfaceSurveyProbe probe = new();
+            try
+            {
+                if (fake is not null) result = fake(ct);
+                else
+                {
+                    IEnumerable<CreatureSpawn> ordered = maps.SelectMany(m => creatures!.GetSpawns(m))
+                        .Select(s => (Spawn: s, Tile: TerrainTile.TileOf(s.X, s.Y) ?? (-1, -1)))
+                        .OrderBy(p => p.Spawn.MapId).ThenBy(p => p.Tile.X).ThenBy(p => p.Tile.Y)
+                        .Select(p => p.Spawn);
+                    result = SurveySurface(world, ordered, terrain, areas, creatures!.FindTemplate, factions!, gated, probe, ct);
+                }
+
+                if (result is { Total: 0 }) result = null; // nothing located (no tile data): no capacity rather than a zero cap everywhere
+            }
+            catch (OperationCanceledException) { return; } // superseded or stopping: nothing to deliver
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("playerbot.population", ex);
+                AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"zone capacity survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
+                logger.LogFault("playerbot.population", ex, "Playerbot population: the zone capacity survey failed; no zone is capped until the sources change");
+                result = null;
+            }
+
+            TimeSpan took = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            world.Post(() =>
+            {
+                if (!ReferenceEquals(_capacityToken, token)) return;
+                if (result is not null)
+                {
+                    _capacity = result;
+                    _atlas.Capacity = result;
+                    logger.LogInformation(
+                        "Playerbot population: zone capacity survey in: {Spawns} surface creature spawn/team pairs counted in {Seconds:0.0} s over {Hops} world-thread hops (vmap models cached {Before} before, {After} after, {Trimmed} dropped); {Caps}",
+                        result.Total, took.TotalSeconds, probe.Hops, probe.ModelsBefore, probe.ModelsAfter, probe.Trimmed,
+                        string.Join("; ", _atlas.CapacityLines(_options.Population)));
+                }
+            });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+
+    /// <summary>What the world-thread hops of a survey saw: their count and the vmap model cache around the survey.</summary>
+    internal sealed class SurfaceSurveyProbe
+    {
+        public int Hops { get; set; }
+
+        public int ModelsBefore { get; set; } = -1;
+
+        public int ModelsAfter { get; set; }
+
+        public int Trimmed { get; set; }
+
+        public uint LastMapId { get; set; }
+    }
+
+    /// <summary>Hops between two trims of the vmap model cache: a model shared by neighbouring tiles is parsed once per window.</summary>
+    internal const int TrimEveryHops = 16;
+
+    /// <summary>
+    /// The zone of the spawn a bot can walk to, read from the spawn's terrain tile (any thread): 0 when the spawn stands more than
+    /// <see cref="PopulationCreatureSurvey.UndergroundYards"/> under the ground, or the tile's area flag is 0 or has no area row.
+    /// </summary>
+    internal static uint SurfaceZoneOf(CreatureSpawn spawn, TerrainTile tile, AreaTable areas)
+    {
+        float ground = tile.GetHeight(spawn.X, spawn.Y);
+        if (PlayerbotMotion.ValidHeight(ground) && spawn.Z < ground - PopulationCreatureSurvey.UndergroundYards) return 0;
+        ushort flag = tile.GetAreaFlag(spawn.X, spawn.Y);
+        return flag == 0 ? 0 : areas.GetZoneAndAreaId(flag, spawn.MapId).ZoneId;
+    }
+
+    /// <summary>
+    /// The survey proper, on the calling (background) thread: zones and ground heights from the detached tile reads, spawns ordered by
+    /// tile so one tile is held at a time; only the indoor test hops to the world thread (<see cref="IndoorSurface(WorldRuntime, IReadOnlyList{CreatureSpawn}, bool, SurfaceSurveyProbe)"/>),
+    /// once per batch lying in one tile. The vmap tiles and models the survey brings in are released again (see there).
+    /// </summary>
+    internal static PopulationSpawnCapacity SurveySurface(WorldRuntime world, IEnumerable<CreatureSpawn> ordered, TerrainManager terrain, AreaTable areas,
+        Func<uint, CreatureTemplate?> templateOf, FactionTemplateCatalog factions, IReadOnlySet<uint> gated, SurfaceSurveyProbe probe, CancellationToken ct)
+    {
+        (uint Map, int X, int Y) loaded = (uint.MaxValue, 0, 0);
+        TerrainTile tile = TerrainTile.Empty;
+        try
+        {
+            return PopulationCreatureSurvey.CountSurface(ordered,
+                spawn =>
+                {
+                    if (TerrainTile.TileOf(spawn.X, spawn.Y) is not { } at) return 0;
+                    if (loaded != (spawn.MapId, at.X, at.Y))
+                    {
+                        tile = terrain.ReadTileDetached(spawn.MapId, at.X, at.Y);
+                        loaded = (spawn.MapId, at.X, at.Y);
+                    }
+
+                    return SurfaceZoneOf(spawn, tile, areas);
+                },
+                batch =>
+                {
+                    int hop = ++probe.Hops;
+                    return world.InvokeAsync(() => IndoorSurface(world, batch, hop % TrimEveryHops == 0, probe), ct).GetAwaiter().GetResult();
+                },
+                templateOf, factions, gated, ct);
+        }
+        finally
+        {
+            // The last window's models go too, also when the survey was cancelled or failed (bounded wait: the world may be stopping).
+            if (probe.Hops > 0)
+            {
+                try { world.InvokeAsync(() => IndoorSurface(world, [], true, probe)).Wait(TimeSpan.FromSeconds(5)); }
+                catch (Exception ex) when (ex is AggregateException or OperationCanceledException) { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// World thread: <see cref="IndoorSurface(IReadOnlyList{CreatureSpawn}, Action{float, float}, Func{float, float, float, bool})"/> on the batch's map. The
+    /// tile's vmap is loaded on demand (the line-of-sight service only; never the navigation mesh tile, which would evict the mesh cache
+    /// the bots' routes use). A tile nobody held before is released again after the batch, and every <see cref="TrimEveryHops"/>th
+    /// hop (<paramref name="trim"/>) the cached models no loaded tile uses are dropped (<see cref="VMapManager.TrimUnusedModels"/>),
+    /// so the survey does not leave its models behind: the model cache otherwise only grows. The trim drops every unused model server-wide, so it may drop more than the survey brought in, and a grid tile that reloads later parses such a model again on the world thread. An empty batch only trims.
+    /// </summary>
+    internal static bool[] IndoorSurface(WorldRuntime world, IReadOnlyList<CreatureSpawn> batch, bool trim, SurfaceSurveyProbe probe)
+    {
+        uint mapId = batch.Count > 0 ? batch[0].MapId : probe.LastMapId;
+        Map map = world.FindMap(mapId) ?? world.GetMap(mapId);
+        probe.LastMapId = mapId;
+        VMapManager? vmaps = map.Collision.LineOfSight as VMapManager;
+        if (vmaps is not null && probe.ModelsBefore < 0) probe.ModelsBefore = vmaps.CachedModelCount;
+        bool[] answers = [];
+        if (batch.Count > 0)
+        {
+            bool held = vmaps?.HoldsTile(mapId, batch[0].X, batch[0].Y) ?? true;
+            try
+            {
+                answers = IndoorSurface(batch, (x, y) => (map.Collision.LineOfSight as ICollisionTileDemand)?.LoadTileOnDemand(mapId, x, y),
+                    (x, y, z) => map.Collision.IsOutdoors(x, y, z));
+            }
+            finally
+            {
+                if (!held) vmaps!.ReleaseOnDemandTile(mapId, batch[0].X, batch[0].Y);
+            }
+        }
+
+        if (vmaps is not null)
+        {
+            if (trim) probe.Trimmed += vmaps.TrimUnusedModels();
+            probe.ModelsAfter = vmaps.CachedModelCount;
+        }
+
+        return answers;
+    }
+
+    /// <summary>
+    /// For each spawn of a batch lying in one tile, whether it is outdoors (not inside an indoor WMO group): the tile is loaded first
+    /// (<paramref name="loadTile"/>, once), so an unloaded tile does not read as outdoors, then each spawn is asked (<paramref name="isOutdoors"/>
+    /// with x, y and z + 1). The under-terrain test was made off the world thread.
+    /// </summary>
+    internal static bool[] IndoorSurface(IReadOnlyList<CreatureSpawn> batch, Action<float, float> loadTile, Func<float, float, float, bool> isOutdoors)
+    {
+        var answers = new bool[batch.Count];
+        if (batch.Count == 0) return answers;
+        loadTile(batch[0].X, batch[0].Y);
+        for (int i = 0; i < batch.Count; i++)
+            answers[i] = isOutdoors(batch[i].X, batch[i].Y, batch[i].Z + 1f);
+        return answers;
+    }
 
     /// <summary>
     /// World thread: the creature survey for the graveyard lookup, over the creature spawns of the content in force (immutable lists;
@@ -983,7 +1229,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: decision.Reason);
         }
 
-        PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i]))];
+        PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i],
+            input.Atlas.BandCapacity(b, pop.Factions switch { PopulationFactions.Alliance => [Team.Alliance], PopulationFactions.Horde => [Team.Horde], _ => [Team.Alliance, Team.Horde] }, PopulationLevelRule.From(pop))))];
         _actionLog.Add(pass);
         if (_actionLog.Due(now, pop.ActionLogSeconds) is { } line)
             logger.LogInformation(
@@ -2044,7 +2291,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
                 if (player is null || PopulationProvisioner.IsInTransit(player)) return (null, true);
                 return (atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
-                    (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate)), false);
+                    (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate),
+                    zone => _vetoes.IsVetoed(bot.BotId, zone, NowUnix())), false);
             }, ct).ConfigureAwait(false);
             if (inTransit) continue;
             if (selected is null)
@@ -2083,7 +2331,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (s.FreshLaunch)
             yield return "Fresh launch: new bots stay level 1 at their race start (no boost, no teleport, no relocation); the bands are bypassed.";
         foreach (PopulationBandStatus band in s.Bands)
-            yield return string.Create(c, $"  Levels {band.MinLevel}-{band.MaxLevel} (weight {band.Weight}): want {band.Want}, have {band.Have}.");
+            yield return string.Create(c, $"  Levels {band.MinLevel}-{band.MaxLevel} (weight {band.Weight}): want {band.Want}, have {band.Have}.")
+                + (band.Capacity is { } cap ? string.Create(c, $" Zone capacity {cap}{(cap < band.Want ? " (SHORT of want)" : string.Empty)}.") : string.Empty);
         if (s.LastError is not null) yield return "Last problem: " + s.LastError;
     }
 

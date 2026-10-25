@@ -282,6 +282,8 @@ internal sealed class PlayerbotQaPublisher
         // report's Spell coverage section and is never published on its own, so a first deploy cannot open one issue per uncast spell.
         if (f.Count < (QaKinds.Of(f.Kind).SingleOccurrence ? 1 : git.MinOccurrences)) return false;
         if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
+        if (f.Kind == QaSignalKind.Anomaly && f.Goal == PlayerbotQaSpellMonitor.HeldTargetGoal
+            && f.Reason.StartsWith(PlayerbotQaSpellMonitor.HeldTargetReason, StringComparison.Ordinal)) return false; // a creature held at its threshold: report-only
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (f.Kind == QaSignalKind.SharedSetAside && !f.Publication.HoldsIssue && CoveredByStall(f, all)) return false; // the stall finding carries the rich samples
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;

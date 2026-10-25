@@ -36,6 +36,9 @@ internal sealed partial class PlayerbotBrain
     private QuestNpcFeature? _deferQuests;
     private bool _deferFeaturesLooked;
 
+    /// <summary>The dead-end pins every bot shares (<see cref="PlayerbotSharedPins"/>); set by the feature at construction, null in a host or test without it.</summary>
+    internal PlayerbotSharedPins? SharedPins { init => _defer.Stall.SharedPins = value; }
+
     private PlayerbotSuspensions _suspensions => _defer.Suspensions;
     private PlayerbotStallWatch _stall => _defer.Stall;
 

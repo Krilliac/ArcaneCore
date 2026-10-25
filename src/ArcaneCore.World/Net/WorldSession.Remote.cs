@@ -232,13 +232,14 @@ public sealed partial class WorldSession
                 return;
             }
 
+            // Observed before the send so the observer cannot race the client receiving the packet.
+            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
             if (!_remoteOutput!.TrySend(opcode, payload))
             {
                 linkGone = true;
             }
             else
             {
-                _outboundPacketObserver?.Observe(opcode, payload.ToArray());
                 CapturePacket(false, opcode, payload);
             }
         }

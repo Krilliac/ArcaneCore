@@ -47,6 +47,15 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     /// <summary>The least time between two reports of the same thing (kind, spell, detail).</summary>
     internal const long ThrottleMs = 60_000;
 
+    /// <summary>The least time between two held-target reports of one creature entry.</summary>
+    internal const long HeldTargetThrottleMs = 6 * 60 * 60_000L;
+
+    /// <summary>The Reason prefix of the <see cref="QaSignalKind.Anomaly"/> a creature held at its invincibility threshold is reported with (the entry follows).</summary>
+    internal const string HeldTargetReason = "held-target-";
+
+    /// <summary>The Goal (subsystem) of that anomaly.</summary>
+    internal const string HeldTargetGoal = "bot-spell";
+
     /// <summary>The counters are cleared when they hold more entries than this (a bound, not a target).</summary>
     internal const int MaxTracked = 8192;
 
@@ -142,7 +151,8 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         int selected = outcome.EffectMask & facts.MeasurableMask;
         if (outcome.EffectMask != 0 && selected == 0) return; // nothing measurable aimed at this target (a self part of a mixed spell)
         var key = (cast.Caster.Guid.Value, cast.Spell.Id);
-        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || FullyDiminished(cast, outcome, facts, selected) || outcome.SlotLimited))
+        if (outcome.EffectMask != 0 && (Worked(cast, outcome, facts, selected) || Unmeasurable(outcome, facts, selected) || HeldByDesign(bot, cast, outcome, facts, selected)
+            || ZeroByScript(cast, facts, selected) || FullyDiminished(cast, outcome, facts, selected) || outcome.SlotLimited))
         {
             if (_noEffect.ContainsKey(key)) _noEffect[key] = 0;
             return;
@@ -169,6 +179,50 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     /// </summary>
     private bool FullyDiminished(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
         => (selected & facts.AuraMask) != 0 && _gaps.System.IsFullyDiminished is { } diminished && diminished(cast.Caster, outcome.Target, cast.Spell);
+
+    /// <summary>
+    /// A pure damage hit on a unit held at its invincibility threshold takes no health by design (vmangos Unit::DealDamage, Unit.cpp:825-850: nothing at or
+    /// below the threshold is taken): a creature whose EventAI sets the threshold (the Blasted Lands quest creatures 7668-7671 stay at 1 health) or a player in
+    /// Spirit of Redemption. A player held with no such aura is a death prevention that leaked, and a hit with a heal or aura part (which can fail on its own)
+    /// or on a target above its threshold stays reported as SpellNoEffect. A held creature is excused from SpellNoEffect but not hidden: a script that leaks a
+    /// threshold (an unkillable boss) looks the same, so each creature entry is reported once per <see cref="HeldTargetThrottleMs"/> as an
+    /// <see cref="QaSignalKind.Anomaly"/> (<see cref="HeldTargetGoal"/>, <see cref="HeldTargetReason"/> + entry) naming the entry and the threshold. It appears
+    /// in the QA report only and never files an issue (PlayerbotQaPublisher.Eligible skips it).
+    /// </summary>
+    private bool HeldByDesign(QaBot bot, SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
+    {
+        Unit target = outcome.Target;
+        uint threshold = target.InvincibilityHpThreshold;
+        if ((selected & ~facts.DamageMask) != 0 || threshold == 0 || target.Health > threshold) return false;
+        if (target is Creature creature)
+        {
+            ReportHeldCreature(bot, cast, creature, threshold);
+            return true;
+        }
+
+        return target is Player && _gaps.System.HasAura(target, SpellSystem.SpiritOfRedemptionSpell);
+    }
+
+    private void ReportHeldCreature(QaBot bot, SpellCast cast, Creature creature, uint threshold)
+    {
+        long now = _clockMs();
+        if (!Due(QaSignalKind.Anomaly, 0, (int)creature.Entry, now, HeldTargetThrottleMs)) return;
+        string message = string.Create(CultureInfo.InvariantCulture,
+            $"creature {creature.Entry} is held at its invincibility threshold {threshold} (health {creature.Health}/{creature.MaxHealth}): spell {cast.Spell.Id} deals nothing to it by design, but a script that leaks the threshold looks the same");
+        _sink.Report(new QaSignal
+        {
+            Kind = QaSignalKind.Anomaly, AtUtc = DateTime.UtcNow, BotKey = bot.Key, BotClass = bot.Class, Goal = HeldTargetGoal,
+            Reason = HeldTargetReason + creature.Entry.ToString(CultureInfo.InvariantCulture), Target = creature.Entry,
+            Detail = string.Create(CultureInfo.InvariantCulture, $"entry {creature.Entry}, threshold {threshold}"), Message = message,
+        });
+    }
+
+    /// <summary>
+    /// A script's cast (CastCustomSpell) whose selected damage or heal effects all carry an explicit value of 0 or less does nothing by design: Frenzied
+    /// Regeneration's tick casts heal 22845 with <c>rage * amount / 10</c> base points (vmangos SpellAuras.cpp:1417-1433), 0 for a druid with no rage.
+    /// </summary>
+    private bool ZeroByScript(SpellCast cast, SpellFacts facts, int selected)
+        => cast.IsTriggered && (selected & facts.AuraMask) == 0 && _gaps.System.CustomValueIsNonPositive(cast.Caster, cast.Spell, selected);
 
     private bool Worked(SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {
@@ -307,10 +361,10 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
         });
 
     /// <summary>Whether (kind, spell, detail) was not reported within <see cref="ThrottleMs"/>; if so, it is marked as reported now.</summary>
-    private bool Due(QaSignalKind kind, uint spell, int detail, long now)
+    private bool Due(QaSignalKind kind, uint spell, int detail, long now, long windowMs = ThrottleMs)
     {
         var key = (kind, spell, detail);
-        if (_reported.TryGetValue(key, out long last) && now - last < ThrottleMs) return false;
+        if (_reported.TryGetValue(key, out long last) && now - last < windowMs) return false;
         if (_reported.Count >= MaxTracked) _reported.Clear();
         _reported[key] = now;
         return true;
