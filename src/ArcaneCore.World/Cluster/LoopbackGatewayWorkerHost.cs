@@ -40,7 +40,15 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         public Task? SendTask { get; set; }
         public volatile bool Admitted;
 
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync() => DisposeCoreAsync(awaitReceiveTask: true);
+
+        /// <summary>
+        /// Disposal entry point for the receive loop's own <c>finally</c>. It must not await
+        /// <see cref="ReceiveTask"/>: that task is the caller and cannot complete until this returns.
+        /// </summary>
+        public ValueTask DisposeFromReceiveLoopAsync() => DisposeCoreAsync(awaitReceiveTask: false);
+
+        private async ValueTask DisposeCoreAsync(bool awaitReceiveTask)
         {
             Owner.DisposeStartedForTest?.Invoke();
             SendChannel.Writer.TryComplete();
@@ -104,7 +112,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 }
             }
 
-            if (ReceiveTask is not null)
+            if (awaitReceiveTask && ReceiveTask is not null)
             {
                 try
                 {
@@ -120,6 +128,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             }
 
             Tcp.Dispose();
+            Owner.DisposeCompletedForTest?.Invoke();
         }
     }
 
@@ -144,6 +153,9 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
     /// <summary>Test seam (instance state): invoked when a connection's disposal starts.</summary>
     internal Action? DisposeStartedForTest { get; set; }
+
+    /// <summary>Test seam (instance state): invoked after a connection's socket has been fully disposed.</summary>
+    internal Action? DisposeCompletedForTest { get; set; }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
 
@@ -354,7 +366,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             if (_connections.TryRemove(conn.Id, out _))
             {
                 await _localTransport.DetachAllForConnectionAsync(conn.Id, CancellationToken.None).ConfigureAwait(false);
-                await conn.DisposeAsync().ConfigureAwait(false);
+                await conn.DisposeFromReceiveLoopAsync().ConfigureAwait(false);
             }
         }
     }
