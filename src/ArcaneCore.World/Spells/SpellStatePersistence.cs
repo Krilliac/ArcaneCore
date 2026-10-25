@@ -163,6 +163,30 @@ public sealed class SpellStatePersistence
         await Task.WhenAll(chains).ConfigureAwait(false);
     }
 
+    /// <summary>Characters whose snapshot has not reached storage yet.</summary>
+    public int Pending
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _unsaved.Count;
+            }
+        }
+    }
+
+    /// <summary>Ids of characters whose unsaved snapshot has a recorded write failure, ascending.</summary>
+    public IReadOnlyList<int> RetainedCharacters
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _lastFailure.Keys.Order()];
+            }
+        }
+    }
+
     /// <summary>Whether a character has a snapshot that has not reached storage yet.</summary>
     public bool HasUnsaved(int characterId)
     {

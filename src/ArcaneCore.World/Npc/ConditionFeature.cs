@@ -45,7 +45,7 @@ public sealed class ConditionOptions
 /// conditioned option stays hidden, as a missing row does in cmangos). The evaluator forwards to the current inner evaluator, so a services
 /// rebuild by another feature never holds a stale one.
 /// </summary>
-public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
+public sealed partial class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
     : IWorldFeature, IConditionEvaluator, IConditionTableEvaluator
 {
     private readonly ILogger<ConditionFeature> _logger = logger;

@@ -185,7 +185,7 @@ public sealed record SlowTickInfo(long Sequence, long Timestamp, long DurationMi
 /// thread beyond a few instructions of a lock held only to copy the ring. Recording does not
 /// allocate.
 /// </summary>
-public sealed class TickStats
+public sealed partial class TickStats
 {
     private readonly object _gate = new();
     private readonly long[] _durations;

@@ -70,9 +70,11 @@ public sealed partial class CreatureMapSystem
         {
             using (Serial())
             {
+                // Timed inside the gate: the wait for another map to release it is not this map's drape time.
+                long gated = Stopwatch.GetTimestamp();
                 draped = GroundHeight.DrapePath(Map.Collision, start, corners, step: GroundSampleYards, tolerance: GroundToleranceYards, query: query,
                     modelTolerance: GroundModelToleranceYards, cornersOnMesh: cornersOnMesh);
-                NoteDrapeTicks(Stopwatch.GetTimestamp() - started);
+                NoteDrapeTicks(Stopwatch.GetTimestamp() - gated);
             }
 
             return draped;

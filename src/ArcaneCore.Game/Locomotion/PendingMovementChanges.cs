@@ -93,7 +93,7 @@ public static class MovementChangeInfo
 /// leaves the ledger when the matching ack arrives (<see cref="TryAcknowledge"/>) or when the ack times out
 /// (<see cref="CheckTimeout"/>).
 /// </summary>
-public sealed class PendingMovementChanges
+public sealed partial class PendingMovementChanges
 {
     private readonly List<PendingMovementChange> _changes = [];
     private readonly Dictionary<MovementChangeType, uint> _lastCounter = [];
