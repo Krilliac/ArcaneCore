@@ -51,13 +51,15 @@ internal sealed partial class MapFeedConnection
     private bool _greeted;
     private volatile bool _subscribed;
 
-    public MapFeedConnection(WorldMapFeed feed, Stream stream, string client, ILogger logger, CancellationToken stopping)
+    public MapFeedConnection(WorldMapFeed feed, Stream stream, string client, ILogger logger, CancellationToken stopping, FeedRole role = FeedRole.Unbound)
     {
         _feed = feed;
         _stream = stream;
         Client = client;
         _logger = logger;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+        Role = role;
+        _roleFixedByPipe = role != FeedRole.Unbound;
     }
 
     /// <summary>Who is connected, for the log ("client pid 1234 atlas").</summary>
@@ -136,6 +138,11 @@ internal sealed partial class MapFeedConnection
             _feed.Unsubscribe(this);
             _subscribed = false;
             _outbound.Writer.TryComplete();
+            if (_feed.Extension is { } extension)
+            {
+                await extension.ConnectionEndedAsync(this).ConfigureAwait(false);
+            }
+
             await EndToolsAsync().ConfigureAwait(false);
             try
             {
@@ -158,10 +165,17 @@ internal sealed partial class MapFeedConnection
     private async Task ReadLoopAsync()
     {
         // With the packet tools on, a line may carry the hex payload of the largest client packet.
-        int maxLine = _feed.Tools is null ? MapFeedProtocol.MaxLineBytes : MapFeedProtocol.MaxToolLineBytes;
+        int maxLine = _feed.Tools is null || Role == FeedRole.Web ? MapFeedProtocol.MaxLineBytes : MapFeedProtocol.MaxToolLineBytes;
         var reader = new MapFeedLineReader(_stream, maxLine);
         while (true)
         {
+            if (Role == FeedRole.Web && maxLine != MapFeedProtocol.MaxLineBytes)
+            {
+                // A connection on the shared pipe starts unbound with the tools' limit; once it binds the web role it gets the web limit.
+                maxLine = MapFeedProtocol.MaxLineBytes;
+                reader.MaxBytes = maxLine;
+            }
+
             LineRead read;
             using (CancellationTokenSource idle = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token))
             {
@@ -232,10 +246,21 @@ internal sealed partial class MapFeedConnection
             return await RefuseAsync(request, new FeedError(MapFeedProtocol.HelloRequired, "send {\"op\":\"hello\",\"protocol\":1} first")).ConfigureAwait(false);
         }
 
+        if (MapFeedRoles.RefuseCoreOp(Role, request.Op) is { } mismatch)
+        {
+            // An answer, not a strike: the role is the connection's, and the client is told which op it may not use.
+            string kind = MapFeedRoles.KindOf(request.Op);
+            _logger.LogWarning("map feed: {Kind} refused on a web connection ({Client})", kind, Client);
+            await QueueAsync(PacketToolsJson.Refused(request.Id, kind, mismatch.Code, mismatch.Message)).ConfigureAwait(false);
+            return Outcome.Served;
+        }
+
         switch (request.Op)
         {
             case FeedOp.Hello:
                 return await HelloAsync(request).ConfigureAwait(false);
+            case FeedOp.Extension:
+                return await HandleExtensionAsync(request).ConfigureAwait(false);
             case FeedOp.Subscribe:
                 _feed.Subscribe(this, request);
                 _subscribed = true;
@@ -271,7 +296,7 @@ internal sealed partial class MapFeedConnection
             return Outcome.Served;
         }
 
-        await QueueAsync(MapFeedJson.HelloLine(WorldMapFeed.BuildSha, Environment.ProcessId, maps, tools: _feed.Tools is not null)).ConfigureAwait(false);
+        await QueueAsync(MapFeedJson.HelloLine(WorldMapFeed.BuildSha, Environment.ProcessId, maps, tools: _feed.Tools is not null && Role != FeedRole.Web)).ConfigureAwait(false);
         return Outcome.Served;
     }
 
@@ -336,7 +361,7 @@ internal sealed partial class MapFeedConnection
     /// Run <paramref name="work"/> on the world thread and wait for it, at most <see cref="WorldMapFeed.QueryTimeout"/>. The value, or a
     /// refusal that says why there is none. A connection that is going away rethrows the cancellation instead.
     /// </summary>
-    private async Task<(T? Value, FeedError? Failure)> InvokeWorldAsync<T>(Func<T> work)
+    internal async Task<(T? Value, FeedError? Failure)> InvokeWorldAsync<T>(Func<T> work)
         where T : class
     {
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -365,7 +390,7 @@ internal sealed partial class MapFeedConnection
     }
 
     /// <summary>Queue a control line; waits while the queue is full (the reader stops reading meanwhile).</summary>
-    private ValueTask QueueAsync(byte[] line)
+    internal ValueTask QueueAsync(byte[] line)
         => _outbound.Writer.WriteAsync(new Outbound(OutboundKind.Line, null, line, 0, 0), _lifetime.Token);
 
     private async Task WriteLoopAsync()

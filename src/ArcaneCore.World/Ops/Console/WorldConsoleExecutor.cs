@@ -119,7 +119,14 @@ public sealed class WorldConsoleExecutor
     /// failed and <see cref="CommandContext.WhenSettled"/> completes once its asynchronous work (a <c>.botctl wait</c>) ended. Null for
     /// an empty line. World thread only; never throws.
     /// </summary>
-    public CommandContext? Run(string line)
+    public CommandContext? Run(string line) => Run(line, prepare: null);
+
+    /// <summary>
+    /// <see cref="Run(string)"/> with a hook: <paramref name="prepare"/> is called once with the built context, after it exists and before
+    /// the command executes (the action channel attaches its click context there). Not called for an empty line. World thread only; a
+    /// throwing hook fails the command like any other fault.
+    /// </summary>
+    public CommandContext? Run(string line, Action<CommandContext>? prepare)
     {
         Invariant.Assert(_session.World.IsWorldThread, "console commands run on the world thread");
         string text = Normalize(line);
@@ -141,6 +148,7 @@ public sealed class WorldConsoleExecutor
 
         try
         {
+            prepare?.Invoke(context);
             context.Commands.Execute(context, text);
         }
         catch (ConsoleInvokerException)

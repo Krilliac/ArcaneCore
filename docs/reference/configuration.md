@@ -78,6 +78,8 @@ How to read the tables:
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
 - [`World:Control:MapFeed`](#worldcontrolmapfeed)
+- [`World:Control:MapFeed:Actions`](#worldcontrolmapfeedactions)
+- [`World:Control:MapFeed:Web`](#worldcontrolmapfeedweb)
 - [`World:Control:PacketTools`](#worldcontrolpackettools)
 - [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
@@ -1166,6 +1168,38 @@ How to read the tables:
 | `World:Control:MapFeed:MaxConnections` | `int` | `2` | - | The most tools connected at once: one pipe instance each, all created at start. A tool beyond the limit finds the pipe busy and is not served. 1 to 16. |
 | `World:Control:MapFeed:MaxEntitiesPerFrame` | `int` | `4096` | - | The most entities one frame carries. Players and bots come first, then creatures (moving ones before idle ones) and game objects; the rest are counted as truncated in the frame. 16 to 65536. |
 | `World:Control:MapFeed:MaxHz` | `int` | `5` | - | The most frames per second any subscription gets; a tool asking for more is given this rate. 1 to 60. |
+
+## `World:Control:MapFeed:Actions`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Actions:AllowOnLiveServer` | `bool` | `false` | - | A second, deliberate opt-in: let `Enabled` take effect on the live server (`ARCANECORE_LIVE_SERVER=1`, set by the live launcher, which runs the server as Development). The daemon then logs a warning at start. Default off. |
+| `World:Control:MapFeed:Actions:AuditDirectory` | `string` | `null` | - | The directory of the durable audit file; null: `logs` beside the working directory (where the server log goes). |
+| `World:Control:MapFeed:Actions:AuditLocalDurable` | `bool` | `true` | - | Also append local actions to the durable audit file (`atlas-web-audit.jsonl`). Web actions are always recorded. Default on. |
+| `World:Control:MapFeed:Actions:BulkConfirmAbove` | `int` | `1` | - | A template applied to more targets than this needs a confirm code. 0 to 50. Default 1. |
+| `World:Control:MapFeed:Actions:Deny` | `List<string>` | `[]` | - | Command paths no actor may run, local included (same matching as `PublicDeny`). Default none. |
+| `World:Control:MapFeed:Actions:Enabled` | `bool` | `false` | - | Accept action requests on the map feed (World:Control:MapFeed:Enabled must be on too). Default off. |
+| `World:Control:MapFeed:Actions:LocalAccountId` | `int?` | `null` | - | The account id the local actor counts as for "my own character" checks (`.atlas tele` of a player at GameMaster level). Set here, in the world's configuration, never by a tool. Default none: the local actor has no account. |
+| `World:Control:MapFeed:Actions:LocalBurst` | `int` | `20` | - | Local actor: burst. Default 20. |
+| `World:Control:MapFeed:Actions:LocalPerSecond` | `int` | `10` | - | Local actor: actions per second. Default 10. |
+| `World:Control:MapFeed:Actions:LocalSecurity` | `AccountSecurity` | `Administrator` | - | The security the local actor (whoever controls the daemon's Windows account on this machine; the world sees "the daemon account") runs commands at. Player to Administrator: there is no Console level, so the local actor is never the true console. Default Administrator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:PublicAllowModeration` | `bool` | `false` | - | Let web actors run `.ban` and `.unban`: removes them from `PublicDeny`. Default off. |
+| `World:Control:MapFeed:Actions:PublicDeny` | `List<string>` | `["account", "server shutdown", "server restart", "server idleshutdown", "server idlerestart", "reload", "hotcode", "hotmodule", "botctl raw", "ban", "unban"]` | - | Command paths no web actor may run, matched on the path the command table resolved (so an abbreviation cannot dodge a rule): a path is denied when it starts with an entry's words ("ban" denies "ban account", "botctl raw" denies "botctl raw send"). The default list is the account, lifecycle, reload, hot-code, raw bot and moderation commands. |
+| `World:Control:MapFeed:Actions:PublicMaxSecurity` | `AccountSecurity` | `GameMaster` | - | The highest security a web actor runs at, whatever its account has. Default GameMaster. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:SettleSeconds` | `int` | `30` | - | Seconds an action waits for its command to settle (a command that holds itself open) before the answer goes out. 1 to 600. Default 30. |
+| `World:Control:MapFeed:Actions:WebAuditDays` | `int` | `90` | - | Days the durable audit file's rotated copies are kept. 1 to 3650. Default 90. |
+| `World:Control:MapFeed:Actions:WebBurst` | `int` | `5` | - | Each web actor: burst. Default 5. |
+| `World:Control:MapFeed:Actions:WebLogin` | `bool` | `false` | - | Accept web actors (tickets issued by the public Atlas listener's login). Needs the true-console predicate (`CommandContextConsole`, design 1.7) in this build: without it the channel logs a warning and refuses web actors. Default off. |
+| `World:Control:MapFeed:Actions:WebLoginMinSecurity` | `AccountSecurity` | `Moderator` | - | The lowest account security a web login is accepted for. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:WebPerSecond` | `int` | `2` | - | Each web actor: actions per second. Default 2. |
+
+## `World:Control:MapFeed:Web`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Web:ClientAccount` | `string` | `null` | - | The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\atlas-public`). Required when `Enabled` is set; without it the pipe is not created. A group or built-in principal is refused (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, `BUILTIN\`, `NT AUTHORITY\` and `NT SERVICE\` names, `S-1-5-32-*`, any account with a RID below 1000), and so is the daemon's own account: `Problems` checks the text at start-up, the pipe checks the resolved SID. |
+| `World:Control:MapFeed:Web:Enabled` | `bool` | `false` | - | Serve the web pipe (World:Control:MapFeed:Enabled must be on too). Default off. |
+| `World:Control:MapFeed:Web:MaxConnections` | `int` | `2` | - | The most web connections at once, independent of the local pipe's count. 1 to 8. Default 2. |
 
 ## `World:Control:PacketTools`
 

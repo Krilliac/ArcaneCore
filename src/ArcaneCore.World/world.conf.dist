@@ -9929,6 +9929,301 @@ World.Control.MapFeed.MaxEntitiesPerFrame = 4096
 World.Control.MapFeed.MaxHz = 5
 
 #----------------------------------------------------------------------------
+# World:Control:MapFeed:Actions
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.MapFeed.Actions.AllowOnLiveServer
+#        Description: A second, deliberate opt-in: let Enabled take effect on the live server
+#                     (ARCANECORE_LIVE_SERVER=1, set by the live launcher, which runs the server as
+#                     Development). The daemon then logs a warning at start. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.AllowOnLiveServer = false
+
+#
+#    World.Control.MapFeed.Actions.AuditDirectory
+#        Description: The directory of the durable audit file; null: logs beside the working
+#                     directory (where the server log goes).
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# World.Control.MapFeed.Actions.AuditDirectory =
+
+#
+#    World.Control.MapFeed.Actions.AuditLocalDurable
+#        Description: Also append local actions to the durable audit file (atlas-web-audit.jsonl).
+#                     Web actions are always recorded. Default on.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.AuditLocalDurable = true
+
+#
+#    World.Control.MapFeed.Actions.BulkConfirmAbove
+#        Description: A template applied to more targets than this needs a confirm code. 0 to 50.
+#                     Default 1.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.BulkConfirmAbove = 1
+
+#
+#    World.Control.MapFeed.Actions.Deny
+#        Description: Command paths no actor may run, local included (same matching as PublicDeny).
+#                     Default none.
+#        Type: List<string>
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# Empty by default.
+# World.Control.MapFeed.Actions.Deny.0 =
+
+#
+#    World.Control.MapFeed.Actions.Enabled
+#        Description: Accept action requests on the map feed (World:Control:MapFeed:Enabled must be
+#                     on too). Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.Enabled = false
+
+#
+#    World.Control.MapFeed.Actions.LocalAccountId
+#        Description: The account id the local actor counts as for "my own character" checks (.atlas
+#                     tele of a player at GameMaster level). Set here, in the world's configuration,
+#                     never by a tool. Default none: the local actor has no account.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# World.Control.MapFeed.Actions.LocalAccountId =
+
+#
+#    World.Control.MapFeed.Actions.LocalBurst
+#        Description: Local actor: burst. Default 20.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalBurst = 20
+
+#
+#    World.Control.MapFeed.Actions.LocalPerSecond
+#        Description: Local actor: actions per second. Default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalPerSecond = 10
+
+#
+#    World.Control.MapFeed.Actions.LocalSecurity
+#        Description: The security the local actor (whoever controls the daemon's Windows account on
+#                     this machine; the world sees "the daemon account") runs commands at. Player to
+#                     Administrator: there is no Console level, so the local actor is never the true
+#                     console. Default Administrator. Values: Player, Moderator, GameMaster,
+#                     Administrator.
+#        Type: AccountSecurity
+#        Default: Administrator
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalSecurity = Administrator
+
+#
+#    World.Control.MapFeed.Actions.PublicAllowModeration
+#        Description: Let web actors run .ban and .unban: removes them from PublicDeny. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.PublicAllowModeration = false
+
+#
+#    World.Control.MapFeed.Actions.PublicDeny
+#        Description: Command paths no web actor may run, matched on the path the command table
+#                     resolved (so an abbreviation cannot dodge a rule): a path is denied when it
+#                     starts with an entry's words ("ban" denies "ban account", "botctl raw" denies
+#                     "botctl raw send"). The default list is the account, lifecycle, reload,
+#                     hot-code, raw bot and moderation commands.
+#        Type: List<string>
+#        Default: 0 = account; 1 = server shutdown; 2 = server restart; 3 = server idleshutdown; 4 =
+#                 server idlerestart; 5 = reload; 6 = hotcode; 7 = hotmodule; 8 = botctl raw; 9 =
+#                 ban; 10 = unban
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# These entries are the default list. They are commented out because a list you write is appended to the default list, not
+# substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
+# World.Control.MapFeed.Actions.PublicDeny.0 = "account"
+# World.Control.MapFeed.Actions.PublicDeny.1 = "server shutdown"
+# World.Control.MapFeed.Actions.PublicDeny.2 = "server restart"
+# World.Control.MapFeed.Actions.PublicDeny.3 = "server idleshutdown"
+# World.Control.MapFeed.Actions.PublicDeny.4 = "server idlerestart"
+# World.Control.MapFeed.Actions.PublicDeny.5 = "reload"
+# World.Control.MapFeed.Actions.PublicDeny.6 = "hotcode"
+# World.Control.MapFeed.Actions.PublicDeny.7 = "hotmodule"
+# World.Control.MapFeed.Actions.PublicDeny.8 = "botctl raw"
+# World.Control.MapFeed.Actions.PublicDeny.9 = "ban"
+# World.Control.MapFeed.Actions.PublicDeny.10 = "unban"
+
+#
+#    World.Control.MapFeed.Actions.PublicMaxSecurity
+#        Description: The highest security a web actor runs at, whatever its account has. Default
+#                     GameMaster. Values: Player, Moderator, GameMaster, Administrator.
+#        Type: AccountSecurity
+#        Default: GameMaster
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.PublicMaxSecurity = GameMaster
+
+#
+#    World.Control.MapFeed.Actions.SettleSeconds
+#        Description: Seconds an action waits for its command to settle (a command that holds itself
+#                     open) before the answer goes out. 1 to 600. Default 30.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.SettleSeconds = 30
+
+#
+#    World.Control.MapFeed.Actions.WebAuditDays
+#        Description: Days the durable audit file's rotated copies are kept. 1 to 3650. Default 90.
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebAuditDays = 90
+
+#
+#    World.Control.MapFeed.Actions.WebBurst
+#        Description: Each web actor: burst. Default 5.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebBurst = 5
+
+#
+#    World.Control.MapFeed.Actions.WebLogin
+#        Description: Accept web actors (tickets issued by the public Atlas listener's login). Needs
+#                     the true-console predicate (CommandContextConsole, design 1.7) in this build:
+#                     without it the channel logs a warning and refuses web actors. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebLogin = false
+
+#
+#    World.Control.MapFeed.Actions.WebLoginMinSecurity
+#        Description: The lowest account security a web login is accepted for. Default Moderator.
+#                     Values: Player, Moderator, GameMaster, Administrator.
+#        Type: AccountSecurity
+#        Default: Moderator
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebLoginMinSecurity = Moderator
+
+#
+#    World.Control.MapFeed.Actions.WebPerSecond
+#        Description: Each web actor: actions per second. Default 2.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebPerSecond = 2
+
+#----------------------------------------------------------------------------
+# World:Control:MapFeed:Web
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.MapFeed.Web.ClientAccount
+#        Description: The one Windows account allowed to open the web pipe: a SID (S-1-5-21-...) or
+#                     an account name (MACHINE\atlas-public). Required when Enabled is set; without
+#                     it the pipe is not created. A group or built-in principal is refused
+#                     (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, BUILTIN\, NT
+#                     AUTHORITY\ and NT SERVICE\ names, S-1-5-32-*, any account with a RID below
+#                     1000), and so is the daemon's own account: Problems checks the text at
+#                     start-up, the pipe checks the resolved SID.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+# World.Control.MapFeed.Web.ClientAccount =
+
+#
+#    World.Control.MapFeed.Web.Enabled
+#        Description: Serve the web pipe (World:Control:MapFeed:Enabled must be on too). Default
+#                     off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+World.Control.MapFeed.Web.Enabled = false
+
+#
+#    World.Control.MapFeed.Web.MaxConnections
+#        Description: The most web connections at once, independent of the local pipe's count. 1 to
+#                     8. Default 2.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+World.Control.MapFeed.Web.MaxConnections = 2
+
+#----------------------------------------------------------------------------
 # World:Control:PacketTools
 #----------------------------------------------------------------------------
 

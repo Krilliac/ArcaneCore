@@ -29,6 +29,16 @@ public static class ConsoleOnlyCommands
         }
     }
 
+    /// <summary>Remove paths added by <see cref="Register"/> (a path that is not registered is ignored). For tests that register a scratch path in the process-wide registry.</summary>
+    public static void Unregister(params string[] paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        foreach (string path in paths)
+        {
+            Registered.TryRemove(string.Join(' ', Words(path)), out _);
+        }
+    }
+
     /// <summary>Whether the command at <paramref name="resolvedPath"/> (a <c>CommandLookup.Path</c>) is Console-only, itself or by a group above it.</summary>
     public static bool IsConsoleOnly(string resolvedPath)
     {

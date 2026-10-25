@@ -31,7 +31,7 @@ export class Browser {
         ], { stdio: 'ignore', windowsHide: true });
         const browser = new Browser(child, profile);
         const portFile = path.join(profile, 'DevToolsActivePort');
-        const deadline = Date.now() + 30_000;
+        const deadline = Date.now() + 90_000; // generous: several builds and test runs share the machine
         while (!fs.existsSync(portFile)) {
             if (Date.now() > deadline || child.exitCode !== null) {
                 await browser.close();

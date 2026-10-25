@@ -81,6 +81,24 @@ internal sealed class FeedWorldSetup
 
     /// <summary>A permit to register as it is (instead of the one <see cref="PacketTools"/> registers: <c>AddSingleton&lt;PacketToolsPermit&gt;()</c> makes DI pick the longest constructor it can satisfy, the three-argument one), such as one built from configuration like the daemon's.</summary>
     internal PacketToolsPermit? Permit { get; init; }
+
+    /// <summary>The action channel's options (lane devui-chan, docs/areas/atlas-actions.md); non-null registers <c>AddMapFeedActions()</c> with them. Null leaves the channel unconfigured (default config: off).</summary>
+    public Action<MapFeedActionsOptions>? Actions { get; init; }
+
+    /// <summary>The web ticket service lane auth implements (<see cref="IFeedActorTickets"/>); a test fake here.</summary>
+    internal IFeedActorTickets? Tickets { get; init; }
+
+    /// <summary>The clock the channel's caches and rate limits read (registered as the <see cref="TimeProvider"/>); null leaves the system clock.</summary>
+    public TimeProvider? Time { get; init; }
+
+    /// <summary>Also start the separate web pipe (<c>WebFeedPipe</c>, section 0.10) with these options; its pipe name is unique.</summary>
+    public Action<WebFeedPipeOptions>? WebPipe { get; init; }
+
+    /// <summary>
+    /// Apply the web pipe's client-account rules as production does, including the refusal of the daemon's own account. Off by default: the
+    /// pipe client in a test is this very process, so most web pipe tests must name the daemon's account as the client.
+    /// </summary>
+    public bool StrictWebPipeAccount { get; init; }
 }
 
 /// <summary>
@@ -141,6 +159,9 @@ internal sealed class FeedWorld : IAsyncDisposable
 
     public CapturingLoggerProvider Logs { get; }
 
+    /// <summary>The separate web pipe (null unless <see cref="FeedWorldSetup.WebPipe"/>).</summary>
+    public WebFeedPipe? WebPipe { get; private set; }
+
     public static ulong ExtraWolfGuid(int index) => ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, ExtraSpawnBase + (uint)index).Value;
 
     public static ulong WolfGuid => ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, WolfSpawn).Value;
@@ -166,7 +187,7 @@ internal sealed class FeedWorld : IAsyncDisposable
         var options = new WorldMapFeedOptions { Enabled = true };
         setup.Options?.Invoke(options);
 
-        WorldTestHost host = StartHost(setup, dataDirectory);
+        WorldTestHost host = StartHost(setup, dataDirectory, loggers);
         var feed = new WorldMapFeed(Microsoft.Extensions.Options.Options.Create(options), host.World, host.WorldServices, loggers)
         {
             PipeNameTemplate = setup.DefaultPipeName
@@ -182,12 +203,19 @@ internal sealed class FeedWorld : IAsyncDisposable
         if (setup.StartFeed)
         {
             await feed.StartAsync(CancellationToken.None);
+            if (setup.WebPipe is not null)
+            {
+                world.WebPipe = host.WorldServices.GetRequiredService<WebFeedPipe>();
+                world.WebPipe.PipeNameTemplate = "arcanecore-mapfeed-web-test-" + Guid.NewGuid().ToString("N");
+                world.WebPipe.SkipClientAccountRules = !setup.StrictWebPipeAccount;
+                await world.WebPipe.StartAsync(CancellationToken.None);
+            }
         }
 
         return world;
     }
 
-    private static WorldTestHost StartHost(FeedWorldSetup setup, string? dataDirectory)
+    private static WorldTestHost StartHost(FeedWorldSetup setup, string? dataDirectory, ILoggerFactory loggers)
     {
         CreatureTestContext? creatures = null;
         GameObjectTestContext? objects = null;
@@ -247,6 +275,43 @@ internal sealed class FeedWorld : IAsyncDisposable
                     // The daemon registers its opcode table (WorldServiceCollectionExtensions); the test host builds its own outside DI.
                     services.AddSingleton(_ => WorldServiceCollectionExtensions.BuildOpcodeTable());
                 }
+
+                if (setup.Actions is { } actions)
+                {
+                    // The channel logs through the harness's factory (so the test reads the audit line) and builds its per-request executors
+                    // from the same opcode table the daemon registers.
+                    services.AddOptions();
+                    services.AddSingleton(loggers);
+                    if (setup.PacketTools is null && setup.Permit is null)
+                    {
+                        services.AddSingleton(_ => WorldServiceCollectionExtensions.BuildOpcodeTable());
+                    }
+
+                    services.Configure(actions);
+                    if (setup.Tickets is { } tickets)
+                    {
+                        services.AddSingleton(tickets);
+                    }
+
+                    // A scoped service the spy commands resolve from the command context's session services: it tells the tests when the
+                    // per-request service scope is disposed.
+                    services.AddSingleton<ScopeProbeState>();
+                    services.AddScoped<ScopeProbe>();
+
+                    if (setup.Time is { } time)
+                    {
+                        services.AddSingleton(time);
+                    }
+
+                    services.AddMapFeedActions();
+                }
+
+                if (setup.WebPipe is { } webPipe)
+                {
+                    services.AddOptions();
+                    services.Configure(webPipe);
+                    services.AddWebFeedPipe();
+                }
             }
 
             return setup.Bots
@@ -287,6 +352,37 @@ internal sealed class FeedWorld : IAsyncDisposable
             Assert.Equal("hello", reply.Op());
         }
 
+        return client;
+    }
+
+    /// <summary>Log lines of the action channel (category <c>ArcaneCore.Ops.MapFeed.Actions</c>).</summary>
+    public CapturedCategoryLog[] ActionLog => [.. Logs.Entries.Where(e => e.Category == "ArcaneCore.Ops.MapFeed.Actions")];
+
+    /// <summary>
+    /// Connect to the shared pipe and bind the connection's role: <c>web</c> sends <c>{"op":"role","role":"web"}</c> right after the hello and
+    /// checks the acknowledgement; <c>local</c> sends nothing (a connection whose first extension op is not <c>role</c> is local).
+    /// </summary>
+    public async Task<FeedClient> ConnectAsync(string role)
+    {
+        FeedClient client = await ConnectAsync();
+        if (role == "web")
+        {
+            await client.SendAsync("""{"op":"role","id":900,"role":"web"}""");
+            JsonElement ack = await client.ReadOpAsync("result");
+            Assert.True(ack.GetProperty("ok").GetBoolean(), ack.ToString());
+            Assert.Equal("web", ack.GetProperty("role").GetString());
+        }
+
+        return client;
+    }
+
+    /// <summary>Connect to the separate web pipe (no <c>role</c> op: the pipe fixes the role) and do the hello.</summary>
+    public async Task<FeedClient> ConnectWebPipeAsync()
+    {
+        Assert.NotNull(WebPipe?.PipeName);
+        FeedClient client = await FeedClient.ConnectAsync(WebPipe!.PipeName!);
+        _clients.Add(client);
+        Assert.Equal("hello", (await client.HelloAsync()).Op());
         return client;
     }
 
@@ -352,6 +448,11 @@ internal sealed class FeedWorld : IAsyncDisposable
         }
 
         await StopFeedAsync();
+        if (WebPipe is not null)
+        {
+            await WebPipe.StopAsync(CancellationToken.None);
+        }
+
         await Host.DisposeAsync();
         _loggers.Dispose();
         if (_terrainDirectory is not null)

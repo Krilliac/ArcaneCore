@@ -90,6 +90,12 @@ public sealed class WorldMapFeed : IHostedService
         // Sized from the limit the options allow (a value outside it keeps the feed off, but the service is still built).
         int connections = Math.Clamp(_options.MaxConnections, 1, WorldMapFeedOptions.MaxMaxConnections);
 
+        // The separate web pipe's connections are served by this feed too (their frames come from the same pool).
+        if (services.GetService<IOptions<WebFeedPipeOptions>>()?.Value is { Enabled: true } web)
+        {
+            connections += Math.Clamp(web.MaxConnections, 1, WebFeedPipeOptions.MaxMaxConnections);
+        }
+
         // Per connection at most MaxInFlightFrames frames are reserved, and one tick's own frames are held until the tick's end.
         _pool = new FramePool(((MapFeedConnection.MaxInFlightFrames + 1) * connections) + 1);
         _tickFrames = new FeedFrame?[connections];
@@ -162,6 +168,15 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
 
+    /// <summary>The protocol extension (the action channel), or null when the host registered none. Set when the feed starts.</summary>
+    internal IFeedExtension? Extension { get; set; }
+
+    /// <summary>Whether <c>World:Control:MapFeed:Enabled</c> is set (the web pipe and the action channel are served by an enabled feed only).</summary>
+    internal bool IsEnabled => _options.Enabled;
+
+    /// <summary>Whether this process is the live server (the <see cref="LiveServer"/> override, else the <see cref="WorldPacketToolsOptions.LiveServerVariable"/> marker).</summary>
+    internal bool IsLiveServer => LiveServer ?? WorldPacketToolsOptions.IsLiveServer();
+
     /// <summary>The world the feed reads.</summary>
     internal WorldRuntime World => _world;
 
@@ -204,6 +219,7 @@ public sealed class WorldMapFeed : IHostedService
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        MapFeedExtensions.FeedStarted(this, _services);
         if (!_options.Enabled)
         {
             _logger.LogDebug("map feed off: World:Control:MapFeed:Enabled is false");
@@ -403,13 +419,13 @@ public sealed class WorldMapFeed : IHostedService
     }
 
     /// <summary>Serve one connection on <paramref name="stream"/> until it ends (tests call this with an in-memory stream).</summary>
-    internal async Task ServeConnectionAsync(Stream stream, string client, CancellationToken token)
+    internal async Task ServeConnectionAsync(Stream stream, string client, CancellationToken token, FeedRole role = FeedRole.Unbound)
     {
         Interlocked.Increment(ref _active);
         try
         {
             using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(token, _stopping.Token);
-            await new MapFeedConnection(this, stream, client, _logger, linked.Token).RunAsync().ConfigureAwait(false);
+            await new MapFeedConnection(this, stream, client, _logger, linked.Token, role).RunAsync().ConfigureAwait(false);
         }
         finally
         {
