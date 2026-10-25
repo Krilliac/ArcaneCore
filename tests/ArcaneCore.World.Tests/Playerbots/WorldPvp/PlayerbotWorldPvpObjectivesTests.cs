@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
@@ -225,6 +226,37 @@ public sealed class PlayerbotWorldPvpObjectivesTests
 
         Assert.True(capture.Any(Key("silithyst-unreachable-trigger")), capture.Describe());
         Assert.False(run.Active);
+    }
+
+    // --- a dropped flag --------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ADroppedMound_IsSoughtBySecondBot_AndDelivered()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid dropper = await world.AddBotAsync("Dustdropper", 1, inZone: false);
+        Assert.True(await world.CastOnSelfAsync(dropper, Flag));
+
+        // The server's own drop path: the zone script casts 29533, which puts the Silithyst Mound down at the carrier's feet (the summon's 2-yard radius).
+        await world.OnWorldAsync(() => world.Zone.HandleDropFlag(new OutdoorPvPPlayer(world.PlayerOf(dropper).Guid, Team.Alliance), Flag));
+        GameObject mound = await world.OnWorldAsync(() =>
+            world.PlayerOf(dropper).Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects.Single(g => g.Entry == SilithystWorld.Mound));
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(mound.IsSpawned);
+            Assert.Equal(GameObjectLootState.Ready, mound.LootState);
+            Assert.Equal(0u, (uint)(mound.Flags & GameObjectFlags.InUse));
+            Assert.True(Vector3.Distance(new Vector3(mound.X, mound.Y, mound.Z), Start) <= 2.5f, $"the mound is not at the carrier's feet (the summon's 2-yard radius): {mound.X},{mound.Y},{mound.Z} vs {Start}");
+            return true;
+        });
+
+        Guid seeker = await world.AddBotAsync("Dustseeker", 1, at: Start + new Vector3(-20f, 0f, 0f));
+        await world.OnWorldAsync(() => { world.Options.WorldPvp.Silithyst.Enabled = true; return true; });
+        Assert.True(await world.RunUntilAsync(30_000, () => world.BrainOf(seeker).WorldPvp.ActiveKey == mound.Guid.Value || world.BrainOf(seeker).WorldPvp.Pickups > 0),
+            "the seeker never went for the mound");
+        Assert.True(await world.RunUntilAsync(180_000, () => world.BrainOf(seeker).WorldPvp.Deliveries > 0),
+            "the seeker never delivered; " + await world.OnWorldAsync(() => world.BrainOf(seeker).WorldPvp.Description));
+        Assert.Equal(1UL, await world.OnWorldAsync(() => world.Zone.TurnInsTotal));
     }
 
     private static WorldPvpStep Step(SilithystWorld world, Guid bot, PlayerbotWorldPvpObjectives run, uint elapsedMs = 200)

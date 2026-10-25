@@ -286,16 +286,23 @@ internal sealed class PlayerbotMount
     /// <summary>
     /// Cancels the bot's own mount-up cast while it is still on (CMSG_CANCEL_CAST for the cast spell) and forgets it: a Silithyst carrier
     /// whose flag landed during the cast would lose the dust the moment the mount aura applied. Nothing when no mount-up cast is running.
-    /// Returns whether a cancel was sent. World thread.
+    /// Returns whether a cancel was sent; a cancel the budget refuses is kept for the next think. World thread.
     /// </summary>
     internal static bool CancelPendingMountCast(WorldSession session, Player player)
     {
         if (!States.TryGetValue(session, out PlayerbotMount? state) || !state._casting) return false;
         uint spell = state._activeSpellId;
+        if (spell == 0 || session.Services.GetService<SpellFeature>() is not { } spells || !IsCasting(spells, player, spell))
+        {
+            state._casting = false;
+            state._activeSpellId = 0; // the cast is over already: nothing to cancel
+            return false;
+        }
+
+        if (!session.TryManagedAction(WorldOpcode.CmsgCancelCast, BitConverter.GetBytes(spell))) return false; // no budget this think: still casting, asked again next think
         state._casting = false;
         state._activeSpellId = 0;
-        if (spell == 0 || session.Services.GetService<SpellFeature>() is not { } spells || !IsCasting(spells, player, spell)) return false;
-        return session.TryManagedAction(WorldOpcode.CmsgCancelCast, BitConverter.GetBytes(spell));
+        return true;
     }
 
     /// <summary>Takes the bot's mount off and clears any pending mount-up cast state.</summary>

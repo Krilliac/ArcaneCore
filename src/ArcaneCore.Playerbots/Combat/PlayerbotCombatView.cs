@@ -222,7 +222,7 @@ internal static class PlayerbotCombatView
             IsRooted = system.IsRooted(player),
             IsSlowed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModDecreaseSpeed)),
             IsStealthed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModStealth)),
-            NoStealth = ownAuras.Any(h => !h.IsRemoved && h.Spell.Id == Events.PlayerbotWorldPvpObjectives.SilithystFlag),
+            NoStealth = player.ZoneId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.SilithusZone && HasHolder(ownAuras, Events.PlayerbotWorldPvpObjectives.SilithystFlag),
             WearsShield = offHand?.Template is { Class: ItemClassArmor, SubClass: SubClassShield },
             Pet = petStatus,
             PetUnit = petView,
@@ -429,6 +429,13 @@ internal static class PlayerbotCombatView
         if (ranged?.Template is not { Class: ItemClassWeapon } template || template.SubClass is SubClassWand or 16) return true;
         uint ammo = player.Inventory.AmmoId;
         return ammo != 0 && player.Inventory.GetItemCount(ammo) > 0;
+    }
+
+    private static bool HasHolder(IReadOnlyList<SpellAuraHolder> holders, uint spellId)
+    {
+        for (int i = 0; i < holders.Count; i++)
+            if (!holders[i].IsRemoved && holders[i].Spell.Id == spellId) return true;
+        return false;
     }
 
     private static int ComboPoints(WorldSession session, Player player)

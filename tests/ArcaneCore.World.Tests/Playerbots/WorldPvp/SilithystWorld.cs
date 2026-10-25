@@ -172,10 +172,20 @@ internal sealed class SilithystWorld : IAsyncDisposable
             RangeIndex = 1, DurationIndex = 21,
             Effect1 = 6, EffectApplyAuraName1 = 37, EffectMiscValue1 = 85, EffectImplicitTargetA1 = 25,
             Effect2 = 6, EffectApplyAuraName2 = 139, EffectMiscValue2 = 950, EffectImplicitTargetA2 = 25,
-            Effect3 = 6, EffectApplyAuraName3 = 23, EffectImplicitTargetA3 = 1, EffectTriggerSpell3 = 30176, EffectAmplitude3 = 5000,
+            Effect3 = 6, EffectApplyAuraName3 = 23, EffectImplicitTargetA3 = 1, EffectTriggerSpell3 = 30176, EffectAmplitude3 = 15000,
         },
-        new SpellTemplateRow { Id = 30176, SpellName = "Silithyst tick", RangeIndex = 1 },
+        new SpellTemplateRow
+        {
+            Id = 30176, SpellName = "ToWoW - Sillithus PvP Flag", Attributes = 0x100, CastingTimeIndex = 1, RangeIndex = 1, Effect1 = 3, EffectImplicitTargetA1 = 1,
+        },
     ];
+
+    /// <summary>"Sillithus Flag Drop (DND)" (29533) as world.db has it: a SummonObjectWild of the Silithyst Mound at target 47.</summary>
+    private static SpellTemplateRow FlagDropRow() => new()
+    {
+        Id = SilithusCatalog.SpellFlagDrop, SpellName = "Sillithus Flag Drop (DND)", Attributes = 0x9800000, AttributesEx = 32, AttributesEx2 = 0x10000804,
+        CastingTimeIndex = 1, DurationIndex = 25, RangeIndex = 13, Effect1 = 76, EffectMiscValue1 = (int)Mound, EffectImplicitTargetA1 = 47, EffectRadiusIndex1 = 7,
+    };
 
     private static SpellContent Spells(bool realFlag = false)
     {
@@ -193,12 +203,14 @@ internal sealed class SilithystWorld : IAsyncDisposable
                 },
                 .. (realFlag ? RealFlagRows() : [Aura(SilithusCatalog.SpellSilithystFlag, "Silithyst", durationIndex: 21)]),
                 Aura(SilithusCatalog.SpellTracesOfSilithyst, "Traces of Silithyst", durationIndex: 4),
-                Aura(SilithusCatalog.SpellFlagDrop, "Silithyst drop", durationIndex: 4),
+                FlagDropRow(),
             ],
             CastTimes = Missing(baseContent.CastTimes, c => c.Id, new SpellCastTimeRow { Id = 1 }),
             Durations = Missing(baseContent.Durations, d => d.Id, new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 },
-                new SpellDurationRow { Id = 4, Duration = 900_000, MaxDuration = 900_000 }),
-            Ranges = Missing(baseContent.Ranges, r => r.Id, new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 6, MaxRange = 100 }),
+                new SpellDurationRow { Id = 4, Duration = 900_000, MaxDuration = 900_000 }, new SpellDurationRow { Id = 25, Duration = 180_000, MaxDuration = 180_000 }),
+            Ranges = Missing(baseContent.Ranges, r => r.Id, new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 6, MaxRange = 100 },
+                new SpellRangeRow { Id = 13, MaxRange = 50_000 }),
+            Radii = Missing(baseContent.Radii, r => r.Id, new SpellRadiusRow { Id = 7, Radius = 2.0f }),
         };
     }
 
@@ -232,7 +244,7 @@ internal sealed class SilithystWorld : IAsyncDisposable
         }
     }
 
-    private sealed class OpenPathfinder : IPathfinder
+    internal sealed class OpenPathfinder : IPathfinder
     {
         public bool Enabled => true;
 

@@ -1,3 +1,8 @@
+using ArcaneCore.World.Playerbots.Combat;
+using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.World.Spells;
+using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Spells;
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
@@ -275,13 +280,17 @@ public sealed class PlayerbotWorldPvpGiveUpTests
     public async Task ATurnInTheServerRefuses_IsReportedOnce_AfterThreeEntries_AndTheFlagIsCancelled()
     {
         await using SilithystWorld world = await StartAsync();
-        // Out of the zone script: the area trigger handler ignores the bot, so the flag is never taken.
-        Guid bot = await world.AddBotAsync("Dustrefuse", 1, inZone: false);
+        // Not in the zone script: the area trigger handler ignores the bot, so the flag is never taken.
+        Guid bot = await world.AddBotAsync("Dustrefuse", 1);
+        // In zone 1377 (so the bot is watched) but taken out of the script: it left the script's zone without the player's zone field changing.
+        await world.OnWorldAsync(() => { world.PlayerOf(bot).ZoneId = SilithusCatalog.SilithusZone; return true; });
+        await world.RunUntilAsync(1_000, () => false); // the zone updater notices the zone and enters the bot into the script
+        await world.OnWorldAsync(() => { world.Pvp.OnZoneChanged(world.PlayerOf(bot), SilithusCatalog.SilithusZone, 17, 0, null); return true; });
         Assert.True(await world.CastOnSelfAsync(bot, Flag));
         using AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.PlayerOf(bot)));
 
         Assert.True(await world.RunUntilAsync(180_000, () => world.BrainOf(bot).WorldPvp.LastOutcome == "no-turn-in"),
-            "the refused turn-in was not given up; " + await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Description) + " " + capture.Describe());
+            "the refused turn-in was not given up; " + await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Description + " last=" + world.BrainOf(bot).WorldPvp.LastOutcome + " pickups=" + world.BrainOf(bot).WorldPvp.Pickups) + " " + capture.Describe());
         Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
         Assert.Equal(0, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Deliveries));
         Assert.Equal(0UL, await world.OnWorldAsync(() => world.Zone.TurnInsTotal));
@@ -343,6 +352,157 @@ public sealed class PlayerbotWorldPvpGiveUpTests
             EscapeSituation free = PlayerbotRetreat.SituationOf(player, [], out _) with { InCombat = true, HasVictim = true, VictimInMelee = true };
             Assert.False(free.CarriesSilithyst);
             Assert.Equal(PlayerbotEscapes.Vanish, PlayerbotEscapes.Choose(free, _ => true)?.Spell);
+            return true;
+        });
+    }
+
+    // --- the per-think aura view ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ABotHoldingTheFlagOutsideTheZone_IsNotTakenUp_AndWalksNoAuras()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustoutside", 1, inZone: false);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+
+        await world.RunUntilAsync(5_000, () => false);
+        Assert.Equal(0, await world.OnWorldAsync(() => world.BrainOf(bot).SilithystScans));
+        Assert.NotEqual(PlayerbotGoalKind.WorldPvp, await world.OnWorldAsync(() => world.BrainOf(bot).Goal));
+        Assert.Equal(0UL, await world.OnWorldAsync(() => world.Zone.TurnInsTotal));
+
+        long thinksAtSwitch = await world.OnWorldAsync(() =>
+        {
+            world.RemoveAura(world.PlayerOf(bot), Flag); // no flag in the zone, so neither rung takes the bot up and both reach the view
+            world.PlayerOf(bot).ZoneId = SilithusCatalog.SilithusZone;
+            return world.BrainOf(bot).ThinkCount;
+        });
+        await world.RunUntilAsync(5_000, () => false);
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotBrain brain = world.BrainOf(bot);
+            Assert.True(brain.SilithystScans > 0, "no aura walk in the zone");
+            // ThinkCount ticks every update (50 ms); a think is every 200 ms (ThinkIntervalMs): 25 in 5 s, one walk each, shared by both rungs (two would be ~50).
+            Assert.InRange(brain.SilithystScans, 20, 26);
+            Assert.True(brain.ThinkCount > thinksAtSwitch);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task Scan_FindsTheFlagAndTheLiveTracesInOnePass()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustscan", 1);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        Assert.True(await world.CastOnSelfAsync(bot, Traces));
+
+        await world.OnWorldAsync(() =>
+        {
+            WorldSession session = world.World.Bots.FindSession(bot)!;
+            SilithystAuras both = PlayerbotWorldPvpObjectives.Scan(session, world.PlayerOf(bot));
+            Assert.True(both.Carries);
+            Assert.Equal(Traces, both.Traces?.Spell.Id);
+            world.RemoveAura(world.PlayerOf(bot), Flag);
+            SilithystAuras onlyTraces = PlayerbotWorldPvpObjectives.Scan(session, world.PlayerOf(bot));
+            Assert.False(onlyTraces.Carries);
+            Assert.Equal(Traces, onlyTraces.Traces?.Spell.Id);
+            return true;
+        });
+    }
+
+    // --- a mount cast the budget cannot cancel ----------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AMountCastTheBudgetCannotCancel_IsCancelledAtTheNextThink()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustmount", 1);
+        (PlayerbotWorldPvpObjectives run, _, Action<uint> advance) = await ControllerAsync(world, bot);
+
+        await world.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = world.World.Services.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = 97199, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = world.PlayerOf(bot);
+            WorldSession session = world.World.Bots.FindSession(bot)!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            var options = new PlayerbotOptions { Enabled = true };
+            var route = new PlayerbotRoute([new Vector3(player.X, player.Y, player.Z), new Vector3(player.X + 200f, player.Y, player.Z)], 200f);
+
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, route, options));
+            Assert.True(PlayerbotMount.IsBusy(session), "the mount-up cast did not start");
+
+            // The flag landed during the cast and no action is left this think: the cast must stay known and be cancelled at the next think.
+            session.ManagedBudget = new ManagedActionBudget(0);
+            Assert.True(run.Update(player, 200, false, new SilithystAuras(true, null)).Busy);
+            Assert.True(PlayerbotMount.IsBusy(session), "the mount-up cast was forgotten without being cancelled");
+            Assert.True(feature.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting });
+
+            session.ManagedBudget = new ManagedActionBudget(5);
+            advance(200);
+            run.Update(player, 200, false, new SilithystAuras(true, null));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            feature.System.Update(3000);
+            Assert.False(MountService.IsMounted(player), "the cancelled mount-up cast still landed");
+            return true;
+        });
+    }
+
+    // --- the motion blacklist ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Unblacklist_LiftsOnlyThePlaceItIsGiven_AndAllocatesNothing()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustblack", 1);
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.PlayerOf(bot);
+            var a = new Vector3(100f, 100f, 0f);
+            var b = new Vector3(120f, 100f, 0f);
+            PlayerbotMotion.Blacklist(player, [a, b], world.World.Host.World.NowMs);
+            Assert.True(PlayerbotMotion.IsBlacklisted(player, a) && PlayerbotMotion.IsBlacklisted(player, b));
+            PlayerbotMotion.Unblacklist(player, a);
+            Assert.False(PlayerbotMotion.IsBlacklisted(player, a));
+            Assert.True(PlayerbotMotion.IsBlacklisted(player, b));
+
+            PlayerbotMotion.Unblacklist(player, a);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++) PlayerbotMotion.Unblacklist(player, a);
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            return true;
+        });
+    }
+
+    // --- the combat view -----------------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(1377, true, true)]
+    [InlineData(17, true, false)]
+    [InlineData(1377, false, false)]
+    public async Task TheCombatView_SaysNoStealth_OnlyWhileCarryingInZone1377(uint zone, bool holdsFlag, bool expected)
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustview" + (zone == 1377 ? "a" : "b") + (holdsFlag ? "f" : "n"), 1, cls: 4);
+        if (holdsFlag) Assert.True(await world.CastOnSelfAsync(bot, Flag));
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.PlayerOf(bot);
+            player.ZoneId = zone;
+            RotationState view = PlayerbotCombatView.Build(world.World.Bots.FindSession(bot)!, world.World.Services.GetRequiredService<SpellFeature>(), player,
+                null, PlayerbotAbilities.Empty, PlayerbotRole.Healer, static _ => false);
+            Assert.Equal(expected, view.NoStealth);
             return true;
         });
     }

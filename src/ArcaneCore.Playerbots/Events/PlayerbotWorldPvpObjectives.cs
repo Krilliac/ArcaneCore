@@ -27,6 +27,12 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
     internal static WorldPvpStep None => default;
 }
 
+/// <summary>One walk of the bot's aura list (the brain does it once per think, only in zone 1377 or while the controller has work).</summary>
+internal readonly record struct SilithystAuras(bool Carries, SpellAuraHolder? Traces)
+{
+    internal static SilithystAuras None => default;
+}
+
 /// <summary>
 /// The world PvP objectives of one bot (docs/areas/playbots-social.md, World PvP: Silithyst; docs/design/playerbot-social.md, P7c phase 1):
 /// a bot in Silithus (zone 1377) at level 55 or more, that rolls in (<see cref="PlayerbotSilithystOptions.ParticipationChance"/>, higher
@@ -56,13 +62,14 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
 /// <c>silithyst-carry-timeout</c> (the carry ran past <see cref="CarryMaxMs"/>), <c>silithyst-unreachable-trigger</c> (no route or no trigger),
 /// once per episode; nothing on success or on an early loss of the flag.
 /// </para>
-/// Thread affinity: world thread only, owned by one brain. Cost: while the bot is eligible in Silithus and not cooling down, a seek every
-/// <see cref="ScanEveryMs"/> that does one dictionary lookup per geyser spawn of the map (16 in the real data; no enumerator, no allocation).
-/// The geyser guids come from the map's spawn table, so they are complete whichever grids are loaded (an unloaded one is skipped at the lookup
-/// and found as soon as its grid loads); the table is read once per map, shared by its bots in a per-map weak table, and again every
-/// <see cref="GeyserCacheRefreshMs"/>. Mounds are not in the spawn table: the loaded objects of the map are scanned for them every
-/// <see cref="MoundScanMs"/> (one enumerator per map per minute), so a mound in a grid that loads in between is seen up to a minute late.
-/// Nothing per think otherwise but an options read and a zone test; a carrier adds an aura-list walk per think.
+/// Thread affinity: world thread only, owned by one brain. Cost: per think, a bot outside zone 1377 with no run, no pending flag drop and no
+/// flag seen at its last scan does one zone compare per rung and no aura walk; a bot in zone 1377 (any level, option on or off) walks its aura
+/// list once per think (one pass finds the flag and Traces of Silithyst; the two rungs share it through the brain's per-think view) and
+/// allocates nothing. Eligible and not cooling down: a seek every <see cref="ScanEveryMs"/> with one dictionary lookup per geyser spawn (16 on
+/// live, 0 mounds in gameobject_spawn), the spawn table read once per map (<see cref="GameObjectMapSystem.SpawnGuidsOf"/>, so complete whichever
+/// grids are loaded) and again every <see cref="GeyserCacheRefreshMs"/>, the mound enumerator once a minute per map (<see cref="MoundScanMs"/>;
+/// a mound in a grid that loads in between is seen up to a minute late). The mount check (per walking step), the retreat and the combat view
+/// add an aura walk only inside zone 1377.
 /// </summary>
 internal sealed class PlayerbotWorldPvpObjectives
 {
@@ -163,6 +170,7 @@ internal sealed class PlayerbotWorldPvpObjectives
     private int _dropAttempts;
     private uint _dropNextMs;
     private bool _carryFaultReported;
+    private bool _sawFlag;
 
     /// <summary>The geyser and mound objects of each map (their guids), found by one scan and looked up by guid afterwards.</summary>
     private static readonly ConditionalWeakTable<Map, GeyserCache> GeyserCaches = [];
@@ -214,25 +222,36 @@ internal sealed class PlayerbotWorldPvpObjectives
     internal string Description => _episode is { } e ? $"worldpvp=silithyst entry={e.Entry} phase={e.Phase.ToString().ToLowerInvariant()}" : LastOutcome is { } last ? $"worldpvp={last}" : "worldpvp=none";
 
     /// <summary>
-    /// Whether <paramref name="player"/> holds the Silithyst flag. Called by the mount check and the class upkeep: world thread, no
-    /// allocation (a service lookup and a scan of the aura list).
+    /// Whether <paramref name="player"/> holds the flag, for the mount check (per walking step), the retreat and the combat view: a zone compare,
+    /// then one aura walk only inside zone 1377 (the server drops the dust on mount or stealth only there, OutdoorPvPFeature.OnHolderAdded).
+    /// No allocation.
     /// </summary>
     internal static bool Carries(Player player)
-        => player.Session is WorldSession session && session.Services.GetService<SpellFeature>() is { } spells && spells.System.HasAura(player, SilithystFlag);
+        => player.ZoneId == SilithusCatalog.SilithusZone && player.Session is WorldSession session
+            && session.Services.GetService<SpellFeature>() is { } spells && spells.System.HasAura(player, SilithystFlag);
 
-    /// <summary>Whether the bot holds the flag; <paramref name="traces"/> is its Traces of Silithyst holder, if any (no allocation).</summary>
-    private bool Carries(Player player, out SpellAuraHolder? traces)
+    /// <summary>One pass over the aura list: the flag (the same test as <c>SpellSystem.HasAura</c>) and the live Traces of Silithyst holder. No allocation.</summary>
+    internal static SilithystAuras Scan(WorldSession session, Player player)
     {
-        traces = null;
-        if (_session.Services.GetService<SpellFeature>()?.System is not { } spells) return false;
+        if (session.Services.GetService<SpellFeature>()?.System is not { } spells) return default;
         List<SpellAuraHolder> holders = spells.GetAuras(player);
+        bool carries = false;
+        SpellAuraHolder? traces = null;
         for (int i = 0; i < holders.Count; i++)
         {
-            if (holders[i].Spell.Id == SilithusCatalog.SpellTracesOfSilithyst && !holders[i].IsRemoved) traces = holders[i];
+            SpellAuraHolder holder = holders[i];
+            if (holder.Spell.Id == SilithystFlag) carries = true;
+            else if (holder.Spell.Id == SilithusCatalog.SpellTracesOfSilithyst && !holder.IsRemoved) traces = holder;
         }
 
-        return spells.HasAura(player, SilithystFlag);
+        return new SilithystAuras(carries, traces);
     }
+
+    /// <summary>
+    /// The brain keeps scanning for this controller outside zone 1377 while a run is on, a flag drop is pending, or the flag was on at the last
+    /// scan.
+    /// </summary>
+    internal bool NeedsAuras => _episode is not null || _dropFlag || _sawFlag;
 
     private static bool Past(uint untilMs, uint now) => unchecked((int)(now - untilMs)) >= 0;
 
@@ -247,8 +266,13 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// in progress and takes up a bot that holds the flag already (the high rung).
     /// </summary>
     internal WorldPvpStep Update(Player player, uint elapsedMs, bool mayBegin)
+        => Update(player, elapsedMs, mayBegin, Scan(_session, player));
+
+    /// <summary><see cref="Update(Player, uint, bool)"/> with the aura view the brain took for this think.</summary>
+    internal WorldPvpStep Update(Player player, uint elapsedMs, bool mayBegin, in SilithystAuras auras)
     {
         ArgumentNullException.ThrowIfNull(player);
+        _sawFlag = auras.Carries;
         PlayerbotSilithystOptions options = _options.WorldPvp.Silithyst;
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Map is not { } map)
         {
@@ -265,7 +289,8 @@ internal sealed class PlayerbotWorldPvpObjectives
         uint now = Now;
         if (_episode is null)
         {
-            bool carrying = Carries(player, out SpellAuraHolder? tracesBefore);
+            bool carrying = auras.Carries;
+            SpellAuraHolder? tracesBefore = auras.Traces;
             if (!carrying)
             {
                 _carryFaultReported = false;
@@ -299,7 +324,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             }
         }
 
-        return Step(player, map, elapsedMs, now, options);
+        return Step(player, map, elapsedMs, now, options, auras);
     }
 
     /// <summary>
@@ -313,7 +338,7 @@ internal sealed class PlayerbotWorldPvpObjectives
         uint now = Now;
         if (episode.Phase == Phase.Carry)
         {
-            GiveUpCarry(player, now);
+            GiveUpCarry(player, now, Scan(_session, player).Carries);
         }
         else if (episode.Key != 0)
         {
@@ -460,14 +485,15 @@ internal sealed class PlayerbotWorldPvpObjectives
 
     private WorldPvpStep Busy(Episode episode) => new(true, PlayerbotGoalKind.WorldPvp, episode.Phase == Phase.Carry ? 0u : episode.Entry);
 
-    private WorldPvpStep Step(Player player, Map map, uint elapsedMs, uint now, PlayerbotSilithystOptions options)
+    private WorldPvpStep Step(Player player, Map map, uint elapsedMs, uint now, PlayerbotSilithystOptions options, in SilithystAuras auras)
     {
         Episode episode = _episode!;
         bool stale = unchecked(now - episode.LastStepMs) > StaleMs;
         episode.LastStepMs = now;
         if (player.Combat.IsInCombat) return WorldPvpStep.None; // the brain's combat path has the think; the walk goes on after it
 
-        bool carries = Carries(player, out SpellAuraHolder? traces);
+        bool carries = auras.Carries;
+        SpellAuraHolder? traces = auras.Traces;
         if (carries && episode.Phase != Phase.Carry)
         {
             // The flag is in hand (the use landed, or another source gave it): the geyser's claim is not needed any more.
@@ -649,7 +675,8 @@ internal sealed class PlayerbotWorldPvpObjectives
             goal = episode.ExitPoint;
         }
 
-        // Out and in again between the same two places is what the motion's loop guard refuses and blacklists; here it is the plan.
+        // Out and in again between the same two places is what the motion's loop guard refuses and blacklists; here it is the plan
+        // (the lift is 5 yards wide and takes any other goal's refusal of that spot with it).
         if (episode.Entries > 0 || episode.ExitFirst) PlayerbotMotion.Unblacklist(player, goal);
         switch (WalkTo(player, goal, elapsedMs, now))
         {
@@ -671,7 +698,7 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// <summary>Gives the carry up: the geyser is set aside, the flag (if still held) is let go of, no new run starts for a while.</summary>
     private WorldPvpStep GiveUp(Player player, Episode episode, string outcome, uint now, bool carries)
     {
-        if (carries) GiveUpCarry(player, now);
+        if (carries) GiveUpCarry(player, now, carries);
         return Quit(episode, outcome, defer: true, cooldown: true);
     }
 
@@ -680,9 +707,9 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// cancel it (CMSG_CANCEL_AURA, retried by <see cref="Update"/> for <see cref="MaxDropAttempts"/> tries) and do not take the flag up again
     /// for <see cref="GiveUpBackoffMs"/> whether or not it went.
     /// </summary>
-    private void GiveUpCarry(Player player, uint now)
+    private void GiveUpCarry(Player player, uint now, bool carries)
     {
-        if (!Carries(player, out _)) return;
+        if (!carries) return;
         _noAdopt = true;
         _noAdoptUntilMs = unchecked(now + GiveUpBackoffMs);
         _dropFlag = true;

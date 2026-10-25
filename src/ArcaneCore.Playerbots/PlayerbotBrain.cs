@@ -2138,19 +2138,43 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The Silithyst run (<see cref="PlayerbotWorldPvpObjectives"/>, docs/areas/playbots-social.md; inspection and tests).</summary>
     internal PlayerbotWorldPvpObjectives WorldPvp => _worldPvp ??= new PlayerbotWorldPvpObjectives(_session, _options, _contention.Claims);
 
+    private long _silithystThink = -1;
+    private SilithystAuras _silithyst;
+
+    /// <summary>Aura walks the Silithyst view did (tests: one per think in zone 1377, none outside it).</summary>
+    internal int SilithystScans { get; private set; }
+
+    /// <summary>The bot's flag and Traces of Silithyst, from one aura walk per think shared by both rungs; walked only in zone 1377 or while the controller has work.</summary>
+    private SilithystAuras SilithystThisThink(Player player)
+    {
+        if (_silithystThink == ThinkCount) return _silithyst;
+        _silithystThink = ThinkCount;
+        if (player.ZoneId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.SilithusZone || _worldPvp is { NeedsAuras: true })
+        {
+            SilithystScans++;
+            _silithyst = PlayerbotWorldPvpObjectives.Scan(_session, player);
+        }
+        else
+        {
+            _silithyst = SilithystAuras.None;
+        }
+
+        return _silithyst;
+    }
+
     /// <summary>
     /// Offers the world PvP run to the ladder: true when it drove the bot this think (walked to a geyser, used it, carried the flag).
     /// <paramref name="mayBegin"/> false only carries on a run in progress and takes up a bot that already holds the flag.
     /// </summary>
     private bool TakeWorldPvp(Player player, uint interval, bool mayBegin)
     {
-        // Nothing to do (and nothing allocated) for a bot with no run that is away from Silithus or has the objective off.
+        // Nothing to do for a bot with no run that is away from Silithus (no aura walk outside zone 1377) or has the objective off.
         // A bot holding the flag with no run (the option is off, or a GM or a script gave it) is still taken up, so the carry or its give-up
         // (drop and back-off) runs instead of the dust staying on forever.
-        if (_worldPvp is null
-            && !(player.MapId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.MapId && PlayerbotWorldPvpObjectives.Carries(player))
+        SilithystAuras auras = SilithystThisThink(player);
+        if (_worldPvp is null && !auras.Carries
             && (!mayBegin || !_options.WorldPvp.Silithyst.Enabled || !PlayerbotWorldPvpObjectives.Eligible(player))) return false;
-        WorldPvpStep step = WorldPvp.Update(player, interval, mayBegin);
+        WorldPvpStep step = WorldPvp.Update(player, interval, mayBegin, auras);
         if (!step.Busy) return false;
         RetireIdleCombatRoute();
         _goal = step.Goal;
