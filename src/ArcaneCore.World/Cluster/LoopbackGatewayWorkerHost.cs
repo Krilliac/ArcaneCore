@@ -29,6 +29,8 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
     private sealed class ClientConnection : IAsyncDisposable
     {
+        private static readonly TimeSpan SendDrainTimeout = TimeSpan.FromSeconds(2);
+
         public required int Id { get; init; }
         public required TcpClient Tcp { get; init; }
         public required NetworkStream Stream { get; init; }
@@ -40,6 +42,37 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         public async ValueTask DisposeAsync()
         {
             SendChannel.Writer.TryComplete();
+
+            // Drain queued frames (notably the HelloAck rejection) before closing: closing first would discard
+            // the unsent ack or turn the close into an RST that the peer sees before it reads the ack.
+            if (SendTask is not null)
+            {
+                try
+                {
+                    await SendTask.WaitAsync(SendDrainTimeout).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    if (ex is not (TimeoutException or OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+                    {
+                        FaultLedger.Shared.Record("cluster.transport", ex);
+                    }
+                }
+            }
+
+            try
+            {
+                // Graceful FIN after the last queued byte; the peer reads everything before seeing EOF.
+                Tcp.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (ex is not (ObjectDisposedException or SocketException or IOException or InvalidOperationException))
+                {
+                    FaultLedger.Shared.Record("cluster.transport", ex);
+                }
+            }
+
             try
             {
                 Tcp.Close();
