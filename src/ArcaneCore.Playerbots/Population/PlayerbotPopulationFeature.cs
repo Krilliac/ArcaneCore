@@ -889,27 +889,36 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     {
         (uint Map, int X, int Y) loaded = (uint.MaxValue, 0, 0);
         TerrainTile tile = TerrainTile.Empty;
-        PopulationSpawnCapacity result = PopulationCreatureSurvey.CountSurface(ordered,
-            spawn =>
-            {
-                if (TerrainTile.TileOf(spawn.X, spawn.Y) is not { } at) return 0;
-                if (loaded != (spawn.MapId, at.X, at.Y))
+        try
+        {
+            return PopulationCreatureSurvey.CountSurface(ordered,
+                spawn =>
                 {
-                    tile = terrain.ReadTileDetached(spawn.MapId, at.X, at.Y);
-                    loaded = (spawn.MapId, at.X, at.Y);
-                }
+                    if (TerrainTile.TileOf(spawn.X, spawn.Y) is not { } at) return 0;
+                    if (loaded != (spawn.MapId, at.X, at.Y))
+                    {
+                        tile = terrain.ReadTileDetached(spawn.MapId, at.X, at.Y);
+                        loaded = (spawn.MapId, at.X, at.Y);
+                    }
 
-                return SurfaceZoneOf(spawn, tile, areas);
-            },
-            batch =>
+                    return SurfaceZoneOf(spawn, tile, areas);
+                },
+                batch =>
+                {
+                    int hop = ++probe.Hops;
+                    return world.InvokeAsync(() => IndoorSurface(world, batch, hop % TrimEveryHops == 0, probe), ct).GetAwaiter().GetResult();
+                },
+                templateOf, factions, gated, ct);
+        }
+        finally
+        {
+            // The last window's models go too, also when the survey was cancelled or failed (bounded wait: the world may be stopping).
+            if (probe.Hops > 0)
             {
-                int hop = ++probe.Hops;
-                return world.InvokeAsync(() => IndoorSurface(world, batch, hop % TrimEveryHops == 0, probe), ct).GetAwaiter().GetResult();
-            },
-            templateOf, factions, gated, ct);
-        if (probe.Hops > 0)
-            world.InvokeAsync(() => IndoorSurface(world, [], true, probe), ct).GetAwaiter().GetResult(); // the last window's models go too
-        return result;
+                try { world.InvokeAsync(() => IndoorSurface(world, [], true, probe)).Wait(TimeSpan.FromSeconds(5)); }
+                catch (Exception ex) when (ex is AggregateException or OperationCanceledException) { }
+            }
+        }
     }
 
     /// <summary>
@@ -917,7 +926,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     /// tile's vmap is loaded on demand (the line-of-sight service only; never the navigation mesh tile, which would evict the mesh cache
     /// the bots' routes use). A tile nobody held before is released again after the batch, and every <see cref="TrimEveryHops"/>th
     /// hop (<paramref name="trim"/>) the cached models no loaded tile uses are dropped (<see cref="VMapManager.TrimUnusedModels"/>),
-    /// so the survey leaves the map's memory as it found it: the model cache otherwise only grows. An empty batch only trims.
+    /// so the survey does not leave its models behind: the model cache otherwise only grows. The trim drops every unused model server-wide, so it may drop more than the survey brought in, and a grid tile that reloads later parses such a model again on the world thread. An empty batch only trims.
     /// </summary>
     internal static bool[] IndoorSurface(WorldRuntime world, IReadOnlyList<CreatureSpawn> batch, bool trim, SurfaceSurveyProbe probe)
     {
@@ -930,9 +939,15 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (batch.Count > 0)
         {
             bool held = vmaps?.HoldsTile(mapId, batch[0].X, batch[0].Y) ?? true;
-            answers = IndoorSurface(batch, (x, y) => (map.Collision.LineOfSight as ICollisionTileDemand)?.LoadTileOnDemand(mapId, x, y),
-                (x, y, z) => map.Collision.IsOutdoors(x, y, z));
-            if (!held) vmaps!.ReleaseOnDemandTile(mapId, batch[0].X, batch[0].Y);
+            try
+            {
+                answers = IndoorSurface(batch, (x, y) => (map.Collision.LineOfSight as ICollisionTileDemand)?.LoadTileOnDemand(mapId, x, y),
+                    (x, y, z) => map.Collision.IsOutdoors(x, y, z));
+            }
+            finally
+            {
+                if (!held) vmaps!.ReleaseOnDemandTile(mapId, batch[0].X, batch[0].Y);
+            }
         }
 
         if (vmaps is not null)

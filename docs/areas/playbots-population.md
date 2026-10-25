@@ -414,8 +414,7 @@ fitting zone is full no bot is placed rather than overfilling one. Bots already 
   loading at most that tile's **vmap** (`ICollisionTileDemand` of the line-of-sight service; never the navigation mesh tile, which
   would evict the mesh cache the bots' routes use). A tile nobody held is released again after its batch
   (`VMapManager.ReleaseOnDemandTile`, never a tile a grid holds), and every 16th hop and at the end the cached models no loaded tile
-  uses are dropped (`VMapManager.TrimUnusedModels`; the model cache otherwise only grows), so the survey leaves the vmap memory as it
-  found it. Measured on the real vmaps (`PopulationSurveyRealTerrainTests`, 8 spawns on Stormwind, Ironforge, Deathknell and Goldshire
+  uses are dropped (`VMapManager.TrimUnusedModels`; the model cache otherwise only grows), so the survey does not leave its models behind. The trim drops every unused model server-wide, so it may drop more than the survey brought in, and a grid tile that reloads later parses such a model again, on the world thread. Measured on the real vmaps (`PopulationSurveyRealTerrainTests`, 8 spawns on Stormwind, Ironforge, Deathknell and Goldshire
   tiles): 227 models cached before and after, 244 brought in and dropped. The first parse of a tile's models still runs on the world
   thread, once per hop. The survey's duration, hop count and the model cache before/after are logged with its result. It never holds
   creation back: until the result is posted (and attached to the atlas, `PopulationZoneAtlas.Capacity`) the previous capacity, or none,

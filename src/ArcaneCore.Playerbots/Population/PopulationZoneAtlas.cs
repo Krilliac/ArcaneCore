@@ -129,7 +129,7 @@ internal sealed class PopulationZoneAtlas
 
     // The shared Empty atlas takes no capacity or divisor (it would leak between features).
     private readonly bool _frozen;
-    private int _spawnsPerBot;
+    private volatile int _spawnsPerBot;
 
     /// <summary>
     /// The zone capacity divisor (<c>SpawnsPerBot</c>; 0 = no cap): a zone takes no bot once its assigned bots reach the fitting surface
@@ -163,8 +163,9 @@ internal sealed class PopulationZoneAtlas
     public int? CapOf(PopulationZone zone, Team team, int minLevel, int maxLevel)
     {
         ArgumentNullException.ThrowIfNull(zone);
-        if (SpawnsPerBot <= 0 || _capacity is not { } capacity) return null;
-        return capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / SpawnsPerBot;
+        int perBot = _spawnsPerBot;
+        if (perBot <= 0 || _capacity is not { } capacity) return null;
+        return capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / perBot;
     }
 
     /// <summary>
@@ -175,7 +176,7 @@ internal sealed class PopulationZoneAtlas
     {
         ArgumentNullException.ThrowIfNull(band);
         ArgumentNullException.ThrowIfNull(teams);
-        if (SpawnsPerBot <= 0 || _capacity is null) return null;
+        if (_spawnsPerBot <= 0 || _capacity is null) return null;
         var perZone = new Dictionary<uint, int>();
         foreach (Team team in teams)
             foreach (PopulationZone zone in FittingZones(band.MinLevel, band.MaxLevel, team, rule))
@@ -209,8 +210,9 @@ internal sealed class PopulationZoneAtlas
     {
         ArgumentNullException.ThrowIfNull(zone);
         ArgumentNullException.ThrowIfNull(assigned);
-        if (SpawnsPerBot <= 0 || _capacity is not { } capacity) return true;
-        return assigned.GetValueOrDefault(zone.ZoneId) < capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / SpawnsPerBot;
+        int perBot = _spawnsPerBot;
+        if (perBot <= 0 || _capacity is not { } capacity) return true;
+        return assigned.GetValueOrDefault(zone.ZoneId) < capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / perBot;
     }
 
     public static PopulationZoneAtlas Empty { get; } = new([], [], 0, frozen: true);
