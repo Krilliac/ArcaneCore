@@ -19781,6 +19781,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Population:SpawnsPerBot",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Zone capacity: a zone takes no new or relocated bot once its assigned bots reach the zone's level-fitting outdoor creature spawns (on the surface, not indoors or underground, hostile to the bot's faction) divided by this many (0..100; 0 turns the cap off). Keeps a small zone such as Deadwind Pass (47 surface spawns, 600 s respawn) from taking a hundred bots that find every creature dead. The spawn survey runs off the world thread; until it is in, no zone is capped.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Population:TargetOnline",
       "section": "World:Playerbots",
       "type": "int",
