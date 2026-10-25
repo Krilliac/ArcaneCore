@@ -9858,6 +9858,22 @@ World.Console.Enabled = true
 #----------------------------------------------------------------------------
 
 #
+#    World.Control.MapFeed.AnomaliesUnowned
+#        Description: Whether the anomaly ring keeps notices that carry no owner identity
+#                     (AnomalyNotice.Origin null). The ledger is process-wide, and a notice with an
+#                     owner is kept only when the owner is this world; a reporter that passes none
+#                     cannot be told apart, so it is kept only when this is true. Default true,
+#                     because the daemon runs one world per process; tests that run several worlds
+#                     in one process set it false.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeed
+#
+World.Control.MapFeed.AnomaliesUnowned = true
+
+#
 #    World.Control.MapFeed.Enabled
 #        Description: Serve the map feed on a local Windows named pipe. A connected tool may watch
 #                     one map at a time (players, bots, creatures, game objects, creature splines,

@@ -1180,7 +1180,22 @@ public sealed partial class MapCombat
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }
 
+        bool wasInCombat = (attacker.UnitFlags & UnitFlags.InCombat) != 0;
         SetInCombatState(attacker, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithVictim));
+
+        // vmangos Unit::SetInCombatState (Unit.cpp:5942-5946) -> Creature::OnEnterCombat (Creature.cpp:3652-3653): a creature entering combat
+        // through its own hit runs AttackedBy, so it attacks and lists the unit it hit instead of sitting in combat with no victim and
+        // evading at its next update. Partial port: vmangos does this inside SetInCombatState for every entrant; here only this attacker-side
+        // path does (DealDamage already runs AttackedBy for the victim), so other direct SetInCombatState callers do not get it.
+        // vmangos gates on UNIT_STATE_CONFUSED|FLEEING (unit states); the Confused/Fleeing unit flags below mirror them (CcState keeps both in sync).
+        // SuppressesSpellThreat is not checked here, unlike the victim-side AttackedBy in DealDamage: NO_HARMFUL_THREAT / EX_NO_THREAT only stop
+        // the hit creating a threat reference for the attacker on the victim's list (Spell::DoSpellHitOnUnit skips the victim's AttackedBy for
+        // that reason), while vmangos runs OnEnterCombat -> AttackedBy for the entrant in SetInCombatState whatever spell put it in combat.
+        if (!wasInCombat && attacker is ICombatCreature creature && IsAliveState(attacker)
+            && (attacker.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
+        {
+            creature.OnAttackedBy(victim);
+        }
     }
 
     /// <summary>vmangos Unit::ClearInCombat.</summary>

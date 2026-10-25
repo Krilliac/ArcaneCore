@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
@@ -78,9 +79,15 @@ public sealed class WorldportSpikeTests
         }
     }
 
-    private static async Task<Rig> StartAsync(string tag, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null)
+    private static async Task<Rig> StartAsync(string tag, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null, int fillerCharacters = 0)
     {
         WorldTestHost host = WorldTestHost.Start();
+        for (int i = 0; i < fillerCharacters; i++)
+        {
+            // Characters created first take the low guids; the host disposes its clients.
+            await host.EnterWorldAsync("WPF" + tag + i, "Wpf" + tag.ToLowerInvariant() + (char)('a' + i));
+        }
+
         WorldTestClient admin = await host.EnterWorldAsync("WPA" + tag, "Wpa" + tag.ToLowerInvariant(), AccountSecurity.Administrator);
         var log = new ListLogger();
         TeleportFeature feature = host.WorldServices.GetRequiredService<TeleportFeature>();
@@ -212,6 +219,21 @@ public sealed class WorldportSpikeTests
         WorldportTrace run = await LastRunAsync(rig);
         Assert.Equal("failed: the client left the world before the re-add", run.Outcome);
         Assert.Equal("client-left", run.Steps[^1].Name);
+    }
+
+    [Fact]
+    public async Task ATeleportAnomalyReportedThroughServerAnomalies_IsRecordedInTheRun_ForAGuidAboveNine()
+    {
+        await using Rig rig = await StartAsync("ANOM", observeWindow: TimeSpan.FromSeconds(30), fillerCharacters: 9);
+        uint low = await rig.Host.PlayerStateAsync("Wpaanom", p => p.Guid.Low);
+        Assert.True(low >= 10, "the decimal and hex subject forms differ only from guid 10 up; the premise needs such a guid, got " + low);
+
+        await rig.Admin.SendChatAsync(ChatType.Say, Language.Common, ".worldport far");
+        await rig.Admin.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        await rig.Host.OnWorldAsync(() => ServerAnomalies.Report(rig.Host.World.FindOnlinePlayer("Wpaanom")!, ServerAnomalies.Teleport, ServerAnomalies.AckTimeout, "test anomaly"));
+
+        await rig.Host.WaitForWorldAsync(() => rig.Spike.Recent[^1].Steps.Any(s => s.Name == "anomaly"), "the anomaly is recorded in the run");
+        Assert.Contains("test anomaly", (await LastRunAsync(rig)).Steps.First(s => s.Name == "anomaly").Detail, StringComparison.Ordinal);
     }
 
     [Fact]

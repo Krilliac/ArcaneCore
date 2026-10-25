@@ -9,8 +9,8 @@ namespace ArcaneCore.Data.Resilience;
 /// a writer that finds the lock taken polls it from SQLite's busy handler (sleeps of 1-100 ms, no queue), so with a dozen background write queues on one
 /// characters database the writers starve each other and some fail with "database is locked" although the total work fits easily
 /// (live 2026-10-17: 959 locked lines in 24 h, a 1000-character save backlog). Every write transaction and every autocommit write statement that EF runs against the file
-/// first takes this gate, so writers inside the process queue in arrival order on an async semaphore and are handed the lock the moment the previous one ends,
-/// instead of racing for it. Readers never take it (WAL readers do not block the writer).
+/// first takes this gate, so writers inside the process, blocking and async alike, queue in one arrival-order queue and are handed the lock the moment the previous one ends,
+/// instead of racing for it (a waiter keeps its place across its periodic wake-ups). Readers never take it (WAL readers do not block the writer).
 /// <para>
 /// Bounded like the lock it replaces: a waiter gives up after its connection's write bound and fails with SQLite's own busy error (code 5), so callers that retain
 /// and retry a locked write behave exactly as before, but the message names the holder. A hold that outlives <see cref="SqliteSingleWriterOptions.MaxHoldMs"/> (a leaked transaction) is
@@ -24,7 +24,9 @@ public sealed class SqliteWriteGate
     private static readonly ConcurrentDictionary<string, SqliteWriteGate> Gates = new(PathComparer);
     private static readonly ConcurrentDictionary<string, string?> Keys = new(StringComparer.Ordinal);
 
-    private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly Lock _queueLock = new();
+    private readonly LinkedList<Waiter> _queue = new();
+    private bool _held; // guarded by _queueLock
     private readonly Lock _stats = new();
     private Hold? _current;
     private int _waiting;
@@ -97,25 +99,27 @@ public sealed class SqliteWriteGate
     public Hold? Enter(int timeoutMs, string owner, int maxHoldMs)
     {
         long start = Stopwatch.GetTimestamp();
-        if (_semaphore.Wait(0)) return Granted(start, owner, contended: false);
-        Interlocked.Increment(ref _waiting);
+        if (TryTakeOrQueue(runContinuationsAsynchronously: false, out Waiter? waiter)) return Granted(start, owner, contended: false);
         try
         {
-            if (ReleaseIfStuck(maxHoldMs) && _semaphore.Wait(0)) return Granted(start, owner, contended: true);
+            ReleaseIfStuck(maxHoldMs);
             int remaining = Remaining(start, timeoutMs);
             while (remaining > 0)
             {
                 // Wake at least every second to release a stuck hold, so a leaked transaction cannot block for longer than max hold plus a second.
-                if (_semaphore.Wait(Math.Min(remaining, 1000))) return Granted(start, owner, contended: true);
+                // The waiter keeps its place in the queue across wake-ups.
+                if (waiter!.Task.Wait(Math.Min(remaining, 1000))) return Granted(start, owner, contended: true);
                 ReleaseIfStuck(maxHoldMs);
                 remaining = Remaining(start, timeoutMs);
             }
 
-            return TimedOut();
+            // Time is up: leave the queue, unless the hand-off got there first.
+            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
         }
-        finally
+        catch
         {
-            Interlocked.Decrement(ref _waiting);
+            if (Withdraw(waiter!) == WaiterState.Granted) HandOff();
+            throw;
         }
     }
 
@@ -123,25 +127,120 @@ public sealed class SqliteWriteGate
     public async ValueTask<Hold?> EnterAsync(int timeoutMs, string owner, int maxHoldMs, CancellationToken cancellationToken)
     {
         long start = Stopwatch.GetTimestamp();
-        if (_semaphore.Wait(0)) return Granted(start, owner, contended: false);
-        Interlocked.Increment(ref _waiting);
+        if (TryTakeOrQueue(runContinuationsAsynchronously: true, out Waiter? waiter)) return Granted(start, owner, contended: false);
         try
         {
-            if (ReleaseIfStuck(maxHoldMs) && _semaphore.Wait(0)) return Granted(start, owner, contended: true);
+            ReleaseIfStuck(maxHoldMs);
             int remaining = Remaining(start, timeoutMs);
             while (remaining > 0)
             {
-                if (await _semaphore.WaitAsync(Math.Min(remaining, 1000), cancellationToken).ConfigureAwait(false)) return Granted(start, owner, contended: true);
+                try
+                {
+                    await waiter!.Task.WaitAsync(TimeSpan.FromMilliseconds(Math.Min(remaining, 1000)), cancellationToken).ConfigureAwait(false);
+                    return Granted(start, owner, contended: true);
+                }
+                catch (TimeoutException)
+                {
+                    // Still queued, in the same place: only the wait was bounded, not the position.
+                }
+
                 ReleaseIfStuck(maxHoldMs);
                 remaining = Remaining(start, timeoutMs);
             }
 
-            return TimedOut();
+            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
         }
-        finally
+        catch
         {
-            Interlocked.Decrement(ref _waiting);
+            // Canceled or faulted: leave the queue, and if the grant raced us, pass it on instead of orphaning it.
+            if (Withdraw(waiter!) == WaiterState.Granted) HandOff();
+            throw;
         }
+    }
+
+    /// <summary>
+    /// Takes the gate at once when it is free and nobody is queued (true); otherwise appends a waiter at the tail of the arrival-order queue (false).
+    /// </summary>
+    private bool TryTakeOrQueue(bool runContinuationsAsynchronously, out Waiter? waiter)
+    {
+        lock (_queueLock)
+        {
+            if (!_held && _queue.Count == 0)
+            {
+                _held = true;
+                waiter = null;
+                return true;
+            }
+
+            waiter = new Waiter(runContinuationsAsynchronously);
+            waiter.Node = _queue.AddLast(waiter); // State starts as Queued
+            Interlocked.Increment(ref _waiting);
+            return false;
+        }
+    }
+
+    /// <summary>Gives the gate to the oldest queued waiter (it stays held), or marks it free when nobody waits.</summary>
+    private void HandOff()
+    {
+        lock (_queueLock)
+        {
+            LinkedListNode<Waiter>? head = _queue.First;
+            if (head is null)
+            {
+                _held = false;
+                return;
+            }
+
+            _queue.RemoveFirst();
+            Waiter next = head.Value;
+            next.Node = null;
+            next.State = WaiterState.Granted;
+            Interlocked.Decrement(ref _waiting);
+            next.TrySetResult(true);
+        }
+    }
+
+    /// <summary>
+    /// Takes <paramref name="waiter"/> out of the queue and returns its final state. <see cref="WaiterState.Granted"/>: the gate had already been handed to it (the caller
+    /// owns it now and must use or pass it on). <see cref="WaiterState.Withdrawn"/>: it left the queue without ever being granted (also when it had already withdrawn, so a
+    /// repeated call can never be mistaken for a grant).
+    /// </summary>
+    private WaiterState Withdraw(Waiter waiter)
+    {
+        lock (_queueLock)
+        {
+            if (waiter.State == WaiterState.Queued)
+            {
+                _queue.Remove(waiter.Node!);
+                waiter.Node = null;
+                waiter.State = WaiterState.Withdrawn;
+                Interlocked.Decrement(ref _waiting);
+            }
+
+            return waiter.State;
+        }
+    }
+
+    private enum WaiterState
+    {
+        Queued,
+        Granted,
+        Withdrawn,
+    }
+
+    private sealed class Waiter : TaskCompletionSource<bool>
+    {
+        // Async waiters resume on the pool, so the releaser (which holds the queue lock while it completes the task) never runs their continuation inline.
+        // A blocking waiter has no continuation: it waits on the task itself and is released by the completion, but it still needs its own thread, which under
+        // thread-pool starvation may not exist; the queue does not depend on it (the waiter's own timeout still applies).
+        public Waiter(bool runContinuationsAsynchronously)
+            : base(runContinuationsAsynchronously ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None)
+        {
+        }
+
+        public LinkedListNode<Waiter>? Node;
+
+        public WaiterState State; // guarded by _queueLock
     }
 
     /// <summary>The busy error a timed-out waiter reports: SQLITE_BUSY (5), so every existing "locked: retain and retry" path treats it as before.</summary>
@@ -160,7 +259,7 @@ public sealed class SqliteWriteGate
         lock (_stats)
         {
             var stats = new GateStats(Path, _acquired, _contended, _acquired == 0 ? 0 : _waitMsTotal / _acquired, _waitMsMax, _holdMsMax, _holdMaxOwner, _timeouts, _forced, Waiting,
-                AcquiredTotal, TimeoutsTotal, ForcedTotal);
+                AcquiredTotal, TimeoutsTotal, ForcedTotal, HandlerFaultsTotal, FirstHandlerFault);
             _acquired = _contended = _timeouts = _forced = 0;
             _waitMsTotal = _waitMsMax = _holdMsMax = 0;
             _holdMaxOwner = null;
@@ -175,7 +274,6 @@ public sealed class SqliteWriteGate
     {
         double waited = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
         var hold = new Hold(this, owner);
-        Volatile.Write(ref _current, hold);
         Interlocked.Increment(ref _acquiredTotal);
         lock (_stats)
         {
@@ -186,6 +284,7 @@ public sealed class SqliteWriteGate
         }
 
         hold.WaitedMs = waited;
+        Volatile.Write(ref _current, hold); // last: nothing after this can throw and leave an orphan hold published
         return hold;
     }
 
@@ -211,7 +310,7 @@ public sealed class SqliteWriteGate
             holder.Dead = true;
             Interlocked.Increment(ref _deadTotal);
             Exit(holder);
-            DeadReleased?.Invoke(holder);
+            NotifyHandler(DeadReleased, holder);
             return true;
         }
 
@@ -219,9 +318,40 @@ public sealed class SqliteWriteGate
         Interlocked.Increment(ref _forcedTotal);
         lock (_stats) _forced++;
         Exit(holder);
-        StuckReleased?.Invoke(holder);
+        NotifyHandler(StuckReleased, holder);
         return true;
     }
+
+    /// <summary>
+    /// Runs a release notification after the gate has been handed on. A throwing subscriber (the interceptor's logger) must not fail the waiter that happened to
+    /// find the stuck hold, so the fault is swallowed and counted in <see cref="HandlerFaultsTotal"/>.
+    /// </summary>
+    private void NotifyHandler(Action<Hold>? handler, Hold holder)
+    {
+        if (handler is null) return;
+        // Each subscriber runs on its own: one that throws must not suppress the ones after it (each interceptor subscribes separately).
+        foreach (Delegate subscriber in handler.GetInvocationList())
+        {
+            try
+            {
+                ((Action<Hold>)subscriber)(holder);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _handlerFaultsTotal);
+                Interlocked.CompareExchange(ref _firstHandlerFault, ex.GetType().Name + ": " + ex.Message, null);
+            }
+        }
+    }
+
+    private long _handlerFaultsTotal;
+    private string? _firstHandlerFault;
+
+    /// <summary>The type and message of the first release-notification fault since start, or null when none occurred.</summary>
+    public string? FirstHandlerFault => Volatile.Read(ref _firstHandlerFault);
+
+    /// <summary>Lifetime number of release notifications whose subscriber threw (swallowed so the waiter that ran them is not failed).</summary>
+    public long HandlerFaultsTotal => Interlocked.Read(ref _handlerFaultsTotal);
 
     /// <summary>Raised (on the waiter's thread) when a hold older than the max hold was released; the interceptor logs it.</summary>
     internal event Action<Hold>? StuckReleased;
@@ -259,7 +389,7 @@ public sealed class SqliteWriteGate
             }
         }
 
-        _semaphore.Release();
+        HandOff();
     }
 
     /// <summary>One granted hold of the gate. Released at most once (<see cref="Release"/> is idempotent and thread-safe).</summary>
@@ -314,4 +444,4 @@ public sealed class SqliteWriteGate
 /// <summary>Interval statistics of one <see cref="SqliteWriteGate"/> (see <see cref="SqliteWriteGate.TakeStats"/>).</summary>
 public readonly record struct GateStats(
     string Path, long Acquired, long Contended, double WaitMsMean, double WaitMsMax, double HoldMsMax, string? HoldMaxOwner, long Timeouts, long Forced, int Waiting,
-    long AcquiredTotal, long TimeoutsTotal, long ForcedTotal);
+    long AcquiredTotal, long TimeoutsTotal, long ForcedTotal, long HandlerFaultsTotal, string? FirstHandlerFault);

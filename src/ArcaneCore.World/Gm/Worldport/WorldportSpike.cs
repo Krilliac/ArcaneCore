@@ -442,7 +442,7 @@ public sealed class WorldportSpike : IDisposable
     }
 
     private static string SubjectOf(WorldportTrace trace)
-        => string.Create(CultureInfo.InvariantCulture, $"player {trace.PlayerName} (guid {trace.PlayerGuid.Value:X})");
+        => ServerAnomalies.SubjectOf(trace.PlayerName, trace.PlayerGuid);
 
     private void Record(WorldportTrace trace, string name, string detail)
     {

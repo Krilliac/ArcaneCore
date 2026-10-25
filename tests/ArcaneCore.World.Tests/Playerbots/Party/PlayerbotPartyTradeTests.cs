@@ -336,6 +336,11 @@ public sealed class PlayerbotPartyTradeTests
         await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
         await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
         await scene.Stranger.SendAsync(WorldOpcode.CmsgBusyTrade, []);
+        // The busy answer arrives over the stranger's socket and is handled on a later world tick, while the bot's packets below are handled
+        // at once on the world thread. If the busy answer is still in flight, the bot's second CMSG_INITIATE_TRADE is ignored (the first
+        // invitation still stands), the busy answer then closes the first one, and the stranger's CMSG_BEGIN_TRADE finds no window to open.
+        // Wait until the server has closed the first invitation.
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the busy answer to close the first invitation");
         await scene.World.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(scene.World).NoteById(scene.Bot, scene.BotGuid, scene.StrangerGuid, PlayerbotSocialEvent.ChatExchange));
         int before = await scene.AffinityAsync(scene.StrangerGuid);
 
