@@ -148,8 +148,8 @@ public sealed class DevOpcodeTests
     /// <summary>Class (b): real gameplay opcodes with no handler; they must keep going through the unhandled path.</summary>
     private static readonly (ushort Value, WorldOpcode Opcode)[] GameplayGaps =
     [
-        (0x00F9, WorldOpcode.CmsgOpeningCinematic),
-        (0x032A, WorldOpcode.CmsgGmsurveySubmit),
+        (0x0109, WorldOpcode.CmsgStoreLootInSlot),
+        (0x021F, WorldOpcode.CmsgSkillBuyStep),
     ];
 
     /// <summary>Class (c) samples (obsolete / server-to-client / doubtful), kept unhandled on purpose so a doubtful name never raises a finding.</summary>
