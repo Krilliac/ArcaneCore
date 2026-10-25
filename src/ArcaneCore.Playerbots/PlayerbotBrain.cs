@@ -1824,7 +1824,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     else _suspensions.SuspendEntry(TargetEntry, now);
                 }
                 if (_home is null && IsUnderLevelledForArea(player))
-                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true); // among creatures too strong for it
+                {
+                    uint leftZone = player.ZoneId;
+                    if (TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true)) RememberEscapedZone(leftZone); // among creatures too strong for it
+                }
                 break;
             case PlayerbotGoalKind.Rest:
             case PlayerbotGoalKind.Recover:
@@ -1925,7 +1928,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
+    private bool EscapeIslandCore(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
@@ -1980,6 +1983,34 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
 
         return false;
+    }
+
+    private readonly HashSet<uint> _escapedZones = [];
+
+    internal void RememberEscapedZone(uint zone)
+    {
+        if (zone != 0 && _escapedZones.Count < 8) _escapedZones.Add(zone);
+    }
+
+    /// <summary>
+    /// <see cref="EscapeIslandCore"/>, remembering the zone the bot left when it was moved so the population can veto relocating it back
+    /// there (<see cref="TakeEscapedZones"/>).
+    /// </summary>
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
+    {
+        uint zone = player.ZoneId;
+        bool moved = EscapeIslandCore(player, out onIsland, deadEndPin, confinedFrom);
+        if (moved) RememberEscapedZone(zone);
+        return moved;
+    }
+
+    /// <summary>The zones of the dead-end, island and too-strong-creatures escapes since the last call; the population records them as relocation vetoes. World thread.</summary>
+    internal uint[] TakeEscapedZones()
+    {
+        if (_escapedZones.Count == 0) return [];
+        uint[] zones = [.. _escapedZones];
+        _escapedZones.Clear();
+        return zones;
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -3129,7 +3160,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
 
         // The near teleport pending now is the resurrection's own, into the landing: the escape replaces it (urgent).
-        return TryTeleportToBindPoint(player, "was revived by the spirit healer among creatures too strong for it", urgent: true);
+        uint revivedIn = player.ZoneId;
+        bool toBind = TryTeleportToBindPoint(player, "was revived by the spirit healer among creatures too strong for it", urgent: true);
+        if (toBind) RememberEscapedZone(revivedIn);
+        return toBind;
     }
 
     /// <summary>The shortest time between two of the brain's own bind-point teleports that are not urgent (<see cref="TryTeleportToBindPoint"/>).</summary>

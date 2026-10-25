@@ -15805,6 +15805,23 @@ World.Playerbots.Population.SecondaryStayMaxMinutes = 90
 World.Playerbots.Population.SecondaryStayMinMinutes = 30
 
 #
+#    World.Playerbots.Population.SpawnsPerBot
+#        Description: Zone capacity: a zone takes no new or relocated bot once its assigned bots
+#                     reach the zone's level-fitting outdoor creature spawns (on the surface, not
+#                     indoors or underground, hostile to the bot's faction) divided by this many
+#                     (0..100; 0 turns the cap off). Keeps a small zone such as Deadwind Pass (47
+#                     surface spawns, 600 s respawn) from taking a hundred bots that find every
+#                     creature dead. The spawn survey runs off the world thread; until it is in, no
+#                     zone is capped.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.SpawnsPerBot = 3
+
+#
 #    World.Playerbots.Population.TargetOnline
 #        Description: The number of managed bots to keep running (0..5000). The effective target is
 #                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count

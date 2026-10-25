@@ -118,14 +118,102 @@ internal sealed class PopulationZoneAtlas
     private readonly PopulationZone[] _zones;
     private readonly Dictionary<uint, PopulationZone> _byId;
 
-    private PopulationZoneAtlas(PopulationZone[] zones, IReadOnlyList<PopulationDroppedLocation> dropped)
+    private PopulationZoneAtlas(PopulationZone[] zones, IReadOnlyList<PopulationDroppedLocation> dropped, int spawnsPerBot = 0, bool frozen = false)
     {
         _zones = zones;
         _byId = zones.ToDictionary(z => z.ZoneId);
         Dropped = dropped;
+        _spawnsPerBot = spawnsPerBot;
+        _frozen = frozen;
     }
 
-    public static PopulationZoneAtlas Empty { get; } = new([], []);
+    // The shared Empty atlas takes no capacity or divisor (it would leak between features).
+    private readonly bool _frozen;
+    private int _spawnsPerBot;
+
+    /// <summary>
+    /// The zone capacity divisor (<c>SpawnsPerBot</c>; 0 = no cap): a zone takes no bot once its assigned bots reach the fitting surface
+    /// spawns of <see cref="Capacity"/> divided by this.
+    /// </summary>
+    public int SpawnsPerBot
+    {
+        get => _spawnsPerBot;
+        set
+        {
+            if (!_frozen) _spawnsPerBot = value;
+        }
+    }
+
+    private volatile PopulationSpawnCapacity? _capacity;
+
+    /// <summary>
+    /// The surface spawn survey (<see cref="PopulationCreatureSurvey.CountSurface"/>); null until it is in, and while it is null no zone is
+    /// capped. Set by the world thread when the background survey posts its result; the zones themselves never change.
+    /// </summary>
+    public PopulationSpawnCapacity? Capacity
+    {
+        get => _capacity;
+        set
+        {
+            if (!_frozen) _capacity = value;
+        }
+    }
+
+    /// <summary>The most bots <paramref name="zone"/> takes of <paramref name="team"/> in the level range; null when it is not capped (cap off or survey not in).</summary>
+    public int? CapOf(PopulationZone zone, Team team, int minLevel, int maxLevel)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        if (SpawnsPerBot <= 0 || _capacity is not { } capacity) return null;
+        return capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / SpawnsPerBot;
+    }
+
+    /// <summary>
+    /// The bots the zones that fit the band can hold together (a zone counts the larger of its caps for the teams); null when no zone is
+    /// capped. A value below the band's want means the band cannot be filled.
+    /// </summary>
+    public int? BandCapacity(PopulationBand band, IReadOnlyList<Team> teams, PopulationLevelRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(band);
+        ArgumentNullException.ThrowIfNull(teams);
+        if (SpawnsPerBot <= 0 || _capacity is null) return null;
+        var perZone = new Dictionary<uint, int>();
+        foreach (Team team in teams)
+            foreach (PopulationZone zone in FittingZones(band.MinLevel, band.MaxLevel, team, rule))
+                perZone[zone.ZoneId] = Math.Max(perZone.GetValueOrDefault(zone.ZoneId), CapOf(zone, team, band.MinLevel, band.MaxLevel) ?? 0);
+        return perZone.Values.Sum();
+    }
+
+    /// <summary>Diagnostic lines for the survey log: the capped bots of each band, and each zone whose cap is under 20 at its own level range.</summary>
+    public IEnumerable<string> CapacityLines(PlayerbotPopulationOptions pop)
+    {
+        ArgumentNullException.ThrowIfNull(pop);
+        PopulationLevelRule rule = PopulationLevelRule.From(pop);
+        Team[] teams = pop.Factions switch { PopulationFactions.Alliance => [Team.Alliance], PopulationFactions.Horde => [Team.Horde], _ => [Team.Alliance, Team.Horde] };
+        foreach (PopulationBand band in pop.Bands.Where(b => b.Weight > 0))
+            if (BandCapacity(band, teams, rule) is { } cap)
+                yield return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"levels {band.MinLevel}-{band.MaxLevel} hold {cap} bots");
+        foreach (PopulationZone zone in _zones)
+        {
+            int cap = teams.Where(zone.OpenTo).Select(t => CapOf(zone, t, zone.MinLevel, zone.MaxLevel) ?? 0).DefaultIfEmpty(0).Max();
+            if (cap < 20 && teams.Any(zone.OpenTo))
+                yield return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"zone {zone.ZoneId} {zone.Name} cap {cap}");
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="zone"/> may take one more bot of <paramref name="team"/> in the level range given <paramref name="assigned"/> bots:
+    /// always when the cap is off or the survey is not in, otherwise only while the assigned bots are fewer than
+    /// (fitting surface spawns) / <see cref="SpawnsPerBot"/>.
+    /// </summary>
+    public bool HasRoom(PopulationZone zone, Team team, int minLevel, int maxLevel, IReadOnlyDictionary<uint, int> assigned)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        ArgumentNullException.ThrowIfNull(assigned);
+        if (SpawnsPerBot <= 0 || _capacity is not { } capacity) return true;
+        return assigned.GetValueOrDefault(zone.ZoneId) < capacity.Fitting(zone.ZoneId, team, minLevel, maxLevel) / SpawnsPerBot;
+    }
+
+    public static PopulationZoneAtlas Empty { get; } = new([], [], 0, frozen: true);
 
     /// <summary>The graveyard links <see cref="Build"/> left out because the terrain puts the graveyard in another zone (diagnostics).</summary>
     public IReadOnlyList<PopulationDroppedLocation> Dropped { get; }
@@ -152,8 +240,11 @@ internal sealed class PopulationZoneAtlas
     /// The creature survey level of a location for a team (<see cref="PopulationCreatureSurvey"/>; 0 when nothing constrains it); null
     /// surveys nothing. Kept on the zone as <see cref="PopulationZone.CreatureLevels"/>.
     /// </param>
+    /// <param name="spawnsPerBot">The zone capacity divisor (<see cref="SpawnsPerBot"/>); 0 puts no cap on a zone.</param>
+    /// <param name="capacity">The surface spawn survey (<see cref="Capacity"/>); null while it is not in.</param>
     public static PopulationZoneAtlas Build(IReadOnlyList<AreaTemplate> areas, GraveyardCatalog graveyards, IReadOnlyCollection<uint> allowedMaps,
-        ISet<uint> excluded, Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = null, Func<WorldSafeLoc, Team, int>? creatureLevel = null)
+        ISet<uint> excluded, Func<WorldSafeLoc, (uint ZoneId, uint AreaId)>? locate = null, Func<WorldSafeLoc, Team, int>? creatureLevel = null,
+        int spawnsPerBot = 0, PopulationSpawnCapacity? capacity = null)
     {
         ArgumentNullException.ThrowIfNull(areas);
         ArgumentNullException.ThrowIfNull(graveyards);
@@ -217,7 +308,7 @@ internal sealed class PopulationZoneAtlas
             });
         }
 
-        return new PopulationZoneAtlas([.. zones.OrderBy(z => z.ZoneId)], dropped);
+        return new PopulationZoneAtlas([.. zones.OrderBy(z => z.ZoneId)], dropped, spawnsPerBot) { Capacity = capacity };
     }
 
     /// <summary>
@@ -263,7 +354,7 @@ internal sealed class PopulationZoneAtlas
     {
         ArgumentNullException.ThrowIfNull(assigned);
         ArgumentNullException.ThrowIfNull(random);
-        PopulationZone[] fitting = [.. FittingZones(minLevel, maxLevel, team, rule)];
+        PopulationZone[] fitting = [.. FittingZones(minLevel, maxLevel, team, rule).Where(z => HasRoom(z, team, minLevel, maxLevel, assigned))];
         if (fitting.Length == 0) return null;
         int fewest = fitting.Min(z => assigned.GetValueOrDefault(z.ZoneId));
         PopulationZone[] least = [.. fitting.Where(z => assigned.GetValueOrDefault(z.ZoneId) == fewest)];
@@ -276,16 +367,18 @@ internal sealed class PopulationZoneAtlas
     /// <summary>
     /// Try the least-assigned fitting zones first, including every eligible level and team-linked graveyard before giving up.
     /// <paramref name="safe"/> reads terrain and creature content on the world thread; a refused zone is skipped in this
-    /// selection, even when it stays least-assigned after the refusal.
+    /// selection, even when it stays least-assigned after the refusal. A zone at its capacity (<see cref="HasRoom"/>) and a zone
+    /// <paramref name="vetoed"/> for this bot (it escaped a dead end there) are not offered.
     /// </summary>
     internal PopulationSafeSelection? PickSafe(int minLevel, int maxLevel, Team team, PopulationLevelRule rule,
-        IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe)
+        IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe, Func<uint, bool>? vetoed = null)
     {
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(assigned);
         ArgumentNullException.ThrowIfNull(random);
         ArgumentNullException.ThrowIfNull(safe);
         var ordered = FittingZones(minLevel, maxLevel, team, rule)
+            .Where(zone => HasRoom(zone, team, minLevel, maxLevel, assigned) && vetoed?.Invoke(zone.ZoneId) != true)
             .Select(zone => (Zone: zone, Tie: random.Next()))
             .OrderBy(pair => assigned.GetValueOrDefault(pair.Zone.ZoneId)).ThenBy(pair => pair.Tie);
         foreach (var (zone, _) in ordered)
