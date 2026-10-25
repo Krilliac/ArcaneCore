@@ -312,8 +312,18 @@ public sealed class PlayerbotFestivalRulesTests
     [InlineData(5f, true)]
     [InlineData(12f, true)]
     [InlineData(float.NaN, false)]
-    public void ASpotIsNotHeldWithinFiveYardsOfTheAnchor_ASoStalledWalkNeverParksInAnInteractionDisc(float anchorDistance, bool held)
-        => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(2f, 0f, anchorDistance));
+    public void AStalledWalkIsNotHeldWithinFiveYardsOfTheAnchor_SoItNeverParksInAnInteractionDisc(float anchorDistance, bool held)
+        => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(10f, 0f, anchorDistance));
+
+    [Fact]
+    public void ABotThatArrivedAtASpotIsHeld_EvenWhenTheLingerDistanceBringsItWithinFiveYardsOfTheAnchor()
+    {
+        // The nearest spot is RingMinYards from the anchor and a linger counts from LingerYards: the bot may stand 4 yards from the anchor.
+        float anchorDistance = PlayerbotFestivalRules.RingMinYards - 3.5f;
+        Assert.True(anchorDistance < PlayerbotFestivalRules.AnchorClearYards);
+        Assert.Equal(TownIdleAction.Linger, new PlayerbotTownIdle().Decide(TownStay.Capital, 3.5f, 0));
+        Assert.True(PlayerbotFestivalRules.IsHeldAtSpot(3.5f, 0f, anchorDistance));
+    }
 
     [Fact]
     public void TheSpotDistance_IsThe2DDistanceOnTheSameFloor_AndAddsTheHeightOnAnother()

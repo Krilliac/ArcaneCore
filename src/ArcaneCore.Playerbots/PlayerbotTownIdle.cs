@@ -98,6 +98,13 @@ internal sealed partial class PlayerbotTownIdle
         _deferred = false;
     }
 
+    /// <summary>The bot has another home: the linger and explore window of the old one is dropped and the walk state with it.</summary>
+    internal void Rehomed()
+    {
+        (_started, _exploring) = (false, false);
+        Recentre();
+    }
+
     private bool _started;
     private float _bestDistance = float.MaxValue;
     private uint _bestAt;
@@ -114,6 +121,7 @@ internal sealed partial class PlayerbotTownIdle
 
     private TownIdleAction Choose(TownStay stay, float distance, uint nowMs)
     {
+        if (stay != TownStay.Secondary) _exploring = false; // an explore window belongs to a secondary town's stay only
         if (stay == TownStay.None) return TownIdleAction.Explore;
         if (stay == TownStay.Secondary) Advance(nowMs);
         else _started = false; // the capital: always town; the secondary's window starts afresh on return

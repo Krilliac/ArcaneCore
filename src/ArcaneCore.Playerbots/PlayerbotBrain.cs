@@ -199,6 +199,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (ReferenceEquals(_home, value)) return;
             _home = value;
             _homeReturn.Reset();
+            _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
             _crafting.Home = value;

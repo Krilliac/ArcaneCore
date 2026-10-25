@@ -138,6 +138,15 @@ internal sealed class EventsTestWorld : IAsyncDisposable
         return bot;
     }
 
+    /// <summary>Gives the bot another home stay in place (a progression sweep swaps a bot's Home on the same brain).</summary>
+    internal Task RehomeAsync(Guid bot, TownStay stay) => World.Host.OnWorldAsync(() =>
+    {
+        PlayerbotBrain brain = World.Bots.FindBrain(bot)!;
+        PlayerbotHomeArea old = brain.Home!;
+        brain.Home = new PlayerbotHomeArea(old.MapId, old.Centre, old.Radius, old.Place) { Stay = stay };
+        return true;
+    });
+
     internal Task StartEventAsync(ushort id) => World.Host.OnWorldAsync(() => Events.Service!.StartEvent(id, overwrite: true));
 
     internal Task StopEventAsync(ushort id) => World.Host.OnWorldAsync(() => Events.Service!.StopEvent(id, overwrite: true));

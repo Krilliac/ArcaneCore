@@ -97,6 +97,21 @@ public sealed class PlayerbotFestivalWorldTests
         Assert.False(await world.RunUntilAsync(bot, 100_000, () => world.World.Bots.FindBrain(bot)!.EventBoard!.Claims.TakenCount != taken), "the bot took a place again inside its explore window");
     }
 
+    [Fact]
+    public async Task ABotRehomedFromASecondaryTownInItsExploreWindow_ToACapital_GathersThere()
+    {
+        await using EventsTestWorld world = await EventsTestWorld.StartAsync([Reveler()], Quick);
+        Guid bot = await world.AddHomedBotAsync("Rehomebot", TownStay.Secondary);
+        await world.StartEventAsync(WinterVeil);
+        Assert.True(await world.RunUntilAsync(bot, 60_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "no place in the linger window");
+        Assert.True(await world.RunUntilAsync(bot, 150_000, () => !world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the explore window never began");
+        await world.RunForAsync(bot, 5_000);
+
+        await world.RehomeAsync(bot, TownStay.Capital);
+
+        Assert.True(await world.RunUntilAsync(bot, 120_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the re-homed bot took no place in its capital");
+    }
+
     public static TheoryData<string> SwitchesOff() => new() { "Events:Enabled", "Holidays:Enabled", "CelebrateChance=0" };
 
     [Theory]
