@@ -171,7 +171,8 @@ public sealed class PlayerbotPolicyEngineTests
     [Fact]
     public async Task TheRuleLadderPolicy_AgreesWithTheLadderForEveryOpenSet()
     {
-        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true });
+        // A frozen clock: the scorer's real-time budget must not decide this test on a loaded runner.
+        var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true }, time: new FakeClock());
         Assert.Same(RuleBasedPolicy.Instance, engine.Policy);
         var agents = new List<(PlayerbotPolicyAgent Agent, PlayerbotPolicyGoalMask Open)>();
         for (int bits = 1; bits < 1 << PlayerbotPolicySchema.GoalCount; bits++)
@@ -239,16 +240,16 @@ public sealed class PlayerbotPolicyEngineTests
     public async Task ABatchOverItsTickBudget_LeavesTheRestToTheLadder_AndCountsTheOverrun()
     {
         var options = new PlayerbotPolicyOptions { Enabled = true, TickBudgetMs = 0.1 };
-        var engine = new PlayerbotPolicyEngine(options, policy: new StubPolicy(PlayerbotPolicyGoal.Explore) { SleepMs = 5 });
+        var clock = new FakeClock();
+        var engine = new PlayerbotPolicyEngine(options, policy: new StubPolicy(PlayerbotPolicyGoal.Explore) { Clock = clock, AdvanceMs = 5 }, time: clock);
         var agents = Enumerable.Range(1, 100).Select(i => engine.CreateAgent((ulong)i)).ToList();
         foreach (PlayerbotPolicyAgent agent in agents) agent.Request(0, new float[PlayerbotPolicySchema.FeatureCount], TownOrExplore, nowMs: 0);
         engine.Dispatch();
         await engine.WhenIdleAsync();
 
         PlayerbotPolicyStats stats = engine.Stats;
-        Assert.True(stats.Overruns >= 1, $"overruns {stats.Overruns}");
-        Assert.Equal(100, stats.Scored + stats.Unscored);
-        Assert.True(stats.Unscored > 0, $"unscored {stats.Unscored}");
+        // Each 32-row chunk costs 5 ms of fake time against a 0.1 ms budget, so the batch stops after the first chunk.
+        Assert.Equal((1L, 32L, 68L), (stats.Overruns, stats.Scored, stats.Unscored));
         int missing = agents.Count(agent => agent.Decide(10).Source == PlayerbotPolicySource.Missing);
         Assert.Equal(stats.Unscored, (long)missing);
     }
@@ -349,12 +350,22 @@ public sealed class PlayerbotPolicyEngineTests
         layers,
     });
 
+    /// <summary>A clock that only moves when told to (1 tick = 1 ms), so the scorer's budget is deterministic.</summary>
+    internal sealed class FakeClock : TimeProvider
+    {
+        private long _ms;
+        public override long TimestampFrequency => 1000;
+        public override long GetTimestamp() => Interlocked.Read(ref _ms);
+        public void AdvanceMs(long ms) => Interlocked.Add(ref _ms, ms);
+    }
+
     /// <summary>Scores one goal 10 and the others 0 (or NaN), noting the thread it ran on.</summary>
     internal sealed class StubPolicy(PlayerbotPolicyGoal best) : IPlayerbotPolicy
     {
         public ManualResetEventSlim? Gate { get; init; }
         public bool NaN { get; init; }
-        public int SleepMs { get; init; }
+        public FakeClock? Clock { get; init; }
+        public int AdvanceMs { get; init; }
         public int Thread { get; private set; }
         public string Name => "stub";
 
@@ -362,7 +373,7 @@ public sealed class PlayerbotPolicyEngineTests
         {
             Thread = Environment.CurrentManagedThreadId;
             if (Gate is { } gate && !gate.Wait(TimeSpan.FromSeconds(30))) throw new TimeoutException("the test never opened the gate");
-            if (SleepMs > 0) System.Threading.Thread.Sleep(SleepMs);
+            if (Clock is not null && AdvanceMs > 0) Clock.AdvanceMs(AdvanceMs);
             for (int row = 0; row < count; row++)
                 for (int goal = 0; goal < PlayerbotPolicySchema.GoalCount; goal++)
                     scores[row * PlayerbotPolicySchema.GoalCount + goal] = NaN ? float.NaN : goal == (int)best ? 10f : 0f;

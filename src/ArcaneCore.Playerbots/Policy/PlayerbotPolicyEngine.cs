@@ -28,6 +28,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
 
     private readonly PlayerbotPolicyOptions _options;
     private readonly ILogger? _logger;
+    private readonly TimeProvider _time;
     private readonly Dictionary<uint, MapBatch> _maps = []; // world thread
     private readonly List<Task> _flights = [];               // the batches started (locked: shutdown reads it off the world thread)
     private int _disposed;
@@ -36,10 +37,11 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
     private long _applied, _agreed, _missing, _stale, _nonFinite, _explored, _floor, _refused;
 
     /// <summary>Make an engine. Never throws for a bad model: it reports one anomaly and scores with the ladder.</summary>
-    internal PlayerbotPolicyEngine(PlayerbotPolicyOptions options, ILogger? logger = null, string? contentRoot = null, IPlayerbotPolicy? policy = null)
+    internal PlayerbotPolicyEngine(PlayerbotPolicyOptions options, ILogger? logger = null, string? contentRoot = null, IPlayerbotPolicy? policy = null, TimeProvider? time = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger;
+        _time = time ?? TimeProvider.System;
         if (policy is not null)
         {
             Policy = policy;
@@ -133,7 +135,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
         int count = batch.FlightCount, done = 0;
         try
         {
-            long started = Stopwatch.GetTimestamp();
+            long started = _time.GetTimestamp();
             while (done < count)
             {
                 int rows = Math.Min(Chunk, count - done);
@@ -144,7 +146,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
                     batch.FlightRows[i].Agent.Publish(new PlayerbotPolicyScores(batch.FlightRows[i].Sequence, line.ToArray()));
                 }
                 done += rows;
-                if (done < count && Stopwatch.GetElapsedTime(started).TotalMilliseconds > _options.TickBudgetMs)
+                if (done < count && _time.GetElapsedTime(started).TotalMilliseconds > _options.TickBudgetMs)
                 {
                     // Over the tick budget: the rest of the batch is left to the ladder this time.
                     Interlocked.Increment(ref _overruns);
@@ -152,7 +154,7 @@ internal sealed class PlayerbotPolicyEngine : IAsyncDisposable
                     break;
                 }
             }
-            if (done == count && Stopwatch.GetElapsedTime(started).TotalMilliseconds > _options.TickBudgetMs) Interlocked.Increment(ref _overruns);
+            if (done == count && _time.GetElapsedTime(started).TotalMilliseconds > _options.TickBudgetMs) Interlocked.Increment(ref _overruns);
             Interlocked.Add(ref _scored, done);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
