@@ -125,7 +125,7 @@ Each bot also has five stable traits from its guid (sociability, chattiness, gen
 
 **Events and deltas** (`World:Playerbots:Social:Memory`, all live, on by default; `PlayerbotSocialMemory.Note`): a chat exchange
 (`AffinityPerChat`), grouped (`AffinityPerGroup`), a group's run succeeding (`AffinityPerGroupSuccess`), a wipe (+1, shared hardship), a
-kick from a group (`AffinityPerKick`), a completed trade (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
+kick from a group (`AffinityPerKick`), a completed party-AI trade window in which the bot received at least 100 copper of item vendor value (gold is not counted) or gave something (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
 safety strike (`AffinityPerStrike`), a PvP kill either way (`AffinityPerKilledBy`, `AffinityPerKilledThem`; duels never count), and a
 friendly or rude emote aimed at the bot, from either faction (`AffinityPerFriendlyEmote`, `AffinityPerRudeEmote`). Every event adds one
 familiarity; a chat exchange or emote does so at most once per pair in `ChatFamiliarityCooldownMinutes`, and a friendly emote raises
@@ -134,8 +134,8 @@ below `RivalAffinity` sets the Rival flag and above it clears it. Over the limit
 affinity of 50 or more either way unless every one is like that.
 
 **Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
-wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
-request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
+wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from a begin-trade packet of the master or a group member, or the bot's own
+request; a stranger's begin-trade is not answered and sets nothing, and any close status forgets the window; completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
 brain's assist and heal-the-tagger paths for help; `PlayerbotPvpKillFeed` for PvP kills (the feature hears `MapCombat.UnitKilled` of every map of its own world, so a kill is
 recorded exactly once even right after a teleport or a brain replacement; no process-wide event, which kept every disposed world reachable). All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).

@@ -14,6 +14,9 @@
     <!-- EF Core Sqlite 9.0.0 brings SQLitePCLRaw 2.1.10, affected by CVE-2025-6965
          (GHSA-2m69-gcr7-jv3q, fixed after 2.1.11). Pin the patched native bundle. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <!-- EF Core Sqlite 9.0.0 brings Microsoft.Data.Sqlite.Core 9.0.0, whose pool can lend one native handle to two live
+         connections (dotnet/efcore#39008: "database is locked" on Open, shared transactions). Fixed in 10.0.13. -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <!-- Microsoft.Extensions.{DependencyInjection.Abstractions,Logging.Abstractions,Options} are part of Microsoft.NETCore.App in .NET 11 (NU1510). -->
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
