@@ -44,7 +44,7 @@ exactly one terminal line** after its replies:
 #done error <reason>
 ```
 
-Reasons: `unknown-command`, `unknown-subcommand`, `security`, `syntax`, `needs-player` (the command needs a player in game, e.g.
+Reasons: `unknown-command`, `unknown-subcommand`, `security`, `console-only` (the command can only be run at the true server console), `syntax`, `needs-player` (the command needs a player in game, e.g.
 `.gps`), `exception`, `timeout`, `world-timeout`, `empty`, or the command's own code (every `.botctl` failure code, e.g. `no-match`,
 `not-controlled`, `server-error`, `step-failed`).
 
@@ -61,6 +61,10 @@ The commands of one connection run one at a time, in order, except that a comman
 background while the next lines run. A command that holds itself open (`.botctl wait`, `.botctl run`, `.botctl sleep`) is `#done`
 only when its work is done, or after `CommandTimeoutSeconds` with `#done error timeout`. Lines starting with `#event` can arrive at any time on a connection that turned on
 `.botctl stream`. A leading `.` on commands is optional.
+
+Remote administration, including the `@token` "Console" login, never has the true console's outranks-every-account exemption: it is
+checked at its login's security level like any other invoker. With `ProtectHigherSecurity` on it cannot ban an account of equal or
+higher security, and it cannot run Console-only commands. Scripts that need those use the control pipe.
 
 ## Example
 

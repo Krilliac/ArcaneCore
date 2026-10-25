@@ -1342,7 +1342,7 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 | `instance` | Instance target, bot neither grouped with the target nor inside it. |
 | `other-instance` | Same map id, a different instance than the target's. |
 | `map-not-allowed` | The destination map is not in `AllowedMaps`. |
-| `security` | The bot's account outranks the invoker (never from the console). |
+| `security` | The bot's account outranks the invoker (never from the true console; a remote-administration invoker is checked like any other). |
 | `not-running` | The registered bot has no live in-world session. |
 | `not-managed` | The session is not a managed bot. |
 | `no-free-spot` | No ring slot with ground and line of sight was left for it. |
