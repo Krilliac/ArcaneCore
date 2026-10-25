@@ -178,21 +178,7 @@ public sealed class MrSmiteAi(Creature creature, DeadminesInstance instance) : A
     }
 
     private void SetVirtualItem(int slot, uint display, byte subclass, byte material, byte inventoryType, byte sheath)
-    {
-        int info = UpdateFields.UnitVirtualItemInfo + slot * 2;
-        Me.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, display);
-        Me.SetByte(info, 0, 2); // ITEM_CLASS_WEAPON
-        Me.SetByte(info, 1, subclass);
-        Me.SetByte(info, 2, material);
-        Me.SetByte(info, 3, inventoryType);
-        Me.SetByte(info + 1, 0, sheath);
-    }
+        => Me.SetVirtualItem(slot, display, 2 /* ITEM_CLASS_WEAPON */, subclass, material, inventoryType, sheath);
 
-    private void ClearVirtualItem(int slot)
-    {
-        int info = UpdateFields.UnitVirtualItemInfo + slot * 2;
-        Me.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, 0);
-        Me.SetUInt32(info, 0);
-        Me.SetUInt32(info + 1, 0);
-    }
+    private void ClearVirtualItem(int slot) => Me.ClearVirtualItem(slot);
 }

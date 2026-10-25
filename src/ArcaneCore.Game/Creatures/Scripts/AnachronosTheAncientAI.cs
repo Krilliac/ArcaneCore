@@ -284,34 +284,17 @@ public sealed class AnachronosTheAncientAI(Creature creature) : CreatureAI(creat
 
     private static void EquipScepter(Creature fandral, CreatureMapSystem? system)
     {
-        int info = UpdateFields.UnitVirtualItemInfo;
         if (system?.AiServices.ItemTemplateOf?.Invoke(ItemHammerOfTheQiraji) is { } proto)
         {
-            fandral.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay, proto.DisplayId);
-            fandral.SetByte(info, 0, (byte)proto.Class);
-            fandral.SetByte(info, 1, (byte)proto.SubClass);
-            fandral.SetByte(info, 2, (byte)proto.Material);
-            fandral.SetByte(info, 3, (byte)proto.InventoryType);
-            fandral.SetByte(info + 1, 0, (byte)proto.Sheath);
+            fandral.SetVirtualItem(0, proto);
         }
         else
         {
-            fandral.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay, HammerDisplayId);
-            fandral.SetByte(info, 0, 2);
-            fandral.SetByte(info, 1, 10);
-            fandral.SetByte(info, 2, 2);
-            fandral.SetByte(info, 3, 17);
-            fandral.SetByte(info + 1, 0, 2);
+            fandral.SetVirtualItem(0, HammerDisplayId, itemClass: 2, subclass: 10, material: 2, inventoryType: 17, sheath: 2);
         }
     }
 
-    private static void UnequipScepter(Creature fandral)
-    {
-        int info = UpdateFields.UnitVirtualItemInfo;
-        fandral.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay, 0);
-        fandral.SetUInt32(info, 0);
-        fandral.SetUInt32(info + 1, 0);
-    }
+    private static void UnequipScepter(Creature fandral) => fandral.ClearVirtualItem(0);
 
     private void BeginScene()
     {

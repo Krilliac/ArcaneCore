@@ -117,12 +117,7 @@ public sealed partial class CreatureMapSystem
         {
             if (wearer.ScriptEquipmentDefault is { } saved)
             {
-                for (int slot = 0; slot < 3; slot++)
-                {
-                    wearer.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, saved[slot * 3]);
-                    wearer.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2), saved[(slot * 3) + 1]);
-                    wearer.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1, saved[(slot * 3) + 2]);
-                }
+                wearer.RestoreVirtualItems(saved);
             }
 
             return;
@@ -147,36 +142,9 @@ public sealed partial class CreatureMapSystem
                 }
             }
 
-            wearer.ScriptEquipmentDefault ??= SnapshotEquipment(wearer);
-            int info = UpdateFields.UnitVirtualItemInfo + (slot * 2);
-            if (proto is null)
-            {
-                wearer.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, 0);
-                wearer.SetUInt32(info, 0);
-                wearer.SetUInt32(info + 1, 0);
-                continue;
-            }
-
-            wearer.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, proto.DisplayId);
-            wearer.SetByte(info, 0, (byte)proto.Class);
-            wearer.SetByte(info, 1, (byte)proto.SubClass);
-            wearer.SetByte(info, 2, (byte)proto.Material);
-            wearer.SetByte(info, 3, (byte)proto.InventoryType);
-            wearer.SetByte(info + 1, 0, (byte)proto.Sheath);
+            wearer.ScriptEquipmentDefault ??= wearer.SnapshotVirtualItems();
+            wearer.SetVirtualItem(slot, proto);
         }
-    }
-
-    private static uint[] SnapshotEquipment(Creature creature)
-    {
-        var saved = new uint[9];
-        for (int slot = 0; slot < 3; slot++)
-        {
-            saved[slot * 3] = creature.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot);
-            saved[(slot * 3) + 1] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2));
-            saved[(slot * 3) + 2] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1);
-        }
-
-        return saved;
     }
 
     /// <summary>SCRIPT_COMMAND_SET_GOSSIP_MENU (52): the creature TARGET's default gossip menu becomes datalong (cmangos SetDefaultGossipMenuId).</summary>

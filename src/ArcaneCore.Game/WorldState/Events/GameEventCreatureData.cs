@@ -18,7 +18,6 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
     private readonly Dictionary<ushort, uint[]> _guidsByEvent;
     private readonly Dictionary<uint, (ushort Event, GameEventCreatureOverride Data)[]> _byGuid;
     private readonly Dictionary<uint, uint> _appliedEquipmentByGuid = [];
-    private readonly Dictionary<uint, uint[]> _savedEquipment = [];
     private readonly Dictionary<uint, uint> _lastSpellCastByGuid = [];
     private readonly List<(uint Guid, uint SpellId)> _castSpells = [];
 
@@ -113,20 +112,9 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
                 continue;
             }
 
-            if (active is { EquipmentId: not 0 })
-            {
-                if (!_savedEquipment.ContainsKey(guid))
-                {
-                    _savedEquipment[guid] = SnapshotEquipment(live);
-                }
-
-                live.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay, active.EquipmentId);
-            }
-            else if (_savedEquipment.Remove(guid, out uint[]? saved))
-            {
-                RestoreEquipment(live, saved);
-            }
-
+            // The event's equipment id (a creature_equip_template entry) is applied by the creature system with the rest of the event data
+            // (CreatureMapSystem.ApplyEventData -> Creature.ApplyEquipment: all three slots and their info, the template's equipment when
+            // the event stops), so a respawn keeps it while the event runs.
             if (live.DeathState != CreatureDeathState.Alive || !_byGuid.TryGetValue(guid, out (ushort Event, GameEventCreatureOverride Data)[]? rows))
             {
                 continue;
@@ -162,26 +150,4 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         }
     }
 
-    private static uint[] SnapshotEquipment(Creature creature)
-    {
-        var saved = new uint[9];
-        for (int slot = 0; slot < 3; slot++)
-        {
-            saved[slot * 3] = creature.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot);
-            saved[(slot * 3) + 1] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2));
-            saved[(slot * 3) + 2] = creature.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1);
-        }
-
-        return saved;
-    }
-
-    private static void RestoreEquipment(Creature creature, uint[] saved)
-    {
-        for (int slot = 0; slot < 3; slot++)
-        {
-            creature.SetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot, saved[slot * 3]);
-            creature.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2), saved[(slot * 3) + 1]);
-            creature.SetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1, saved[(slot * 3) + 2]);
-        }
-    }
 }

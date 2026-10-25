@@ -260,8 +260,10 @@ Limit: a manual `.event start` / `.event stop` schedule override does not surviv
   (`GetCreatureUpdateDataForActiveEvent`). An `entry_id` with no template is ignored. `Creature.EventTemplate` / `EventDisplayId` are the
   override (new partial `Creature.EventData.cs`), `ICreatureEventData` is what the creature system asks, `GameEventCreatureData` answers it and
   refreshes live creatures on an event change, `GameEventCreatureDataFeature` wires it.
-- **Not applied, counted and reported once:** `equipment_id` (creatures have no equipment model, 13 rows in classic-db) and
-  `spell_start` / `spell_end` (920 of 977 rows, 748 on Love is in the Air: casting the spell on the creature, removing the opposite aura and
+- **Equipment:** `equipment_id` is a `creature_equip_template` entry (13 rows in classic-db). While the event runs the creature holds that set in all
+  three virtual item slots (`Creature.EventEquipmentId`, applied with the other event data; a respawn keeps it) and holds its template's set again when
+  the event stops. It used to be written raw into the first display slot.
+- **Not applied, counted and reported once:** `spell_start` / `spell_end` (920 of 977 rows, 748 on Love is in the Air: casting the spell on the creature, removing the opposite aura and
   keeping it across death and respawn is the aura engine's, another lane's). Also: a creature's AI instance is not rebuilt for a swapped
   entry (it keeps the AI of the spawn's own template until its next creation).
 - Shared-file edits: `Creatures/Creature.cs` (`Template` returns `EventTemplate` when set; `InitializeFields` uses `EventDisplayId` when set),

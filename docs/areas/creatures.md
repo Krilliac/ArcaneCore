@@ -106,8 +106,9 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
   terrain and static models (`MapCollision.GetHeight`, falling back to `Map.GetHeight` when no floor is under `z + 2`), while
   `GetTerrainHeight` answers the raw `.map` terrain surface for the creature under-map check. Paths come from the navmesh
   ([creature movement](creature-movement-spawns.md)) and line of sight from the vmaps ([collision and pathing](collision-pathing.md)).
+- Equipment: `creature_template.EquipmentTemplateId` -> `creature_equip_template` -> the world item store fills the three virtual item slots in
+  `Creature.InitializeFields` (`Creature.Equipment.cs`; `SetVirtualItem` / `ClearVirtualItem` are the shared writers scripts use too).
 - Not driven yet:
-  - Equipment / virtual items (items area)
   - Auras from the addon
   - Gossip, vendors, trainers (NPC area)
   - AI and aggro (combat)
