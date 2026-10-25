@@ -23,6 +23,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.Game.Creatures.CreaturePathStats.s_homeTeleports"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Creatures.CreaturePathStats.s_noPath"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Locomotion.ForcedMovement.s_splineId"] = "spline id counter, Interlocked.Increment",
+        ["ArcaneCore.Game.Maps.Collision.MMaps.NavMesh.DeadlineClock (property)"] = "test seam, a delegate reference (atomic write) swapped by tests only (serialized in the DisableParallelization collection NavMeshDeadlineClock, keep it that way); production never writes it",
         ["ArcaneCore.Game.Maps.Collision.MMaps.NavMeshTile.s_nextSearchId"] = "tile search id counter, Interlocked.Increment",
         ["ArcaneCore.Game.Maps.Collision.NavJobSystem.s_shared"] = "the process's path-job pool, created under lock (s_sharedGate)",
         ["ArcaneCore.Game.Maps.Collision.PathSearchCounters.s_bvTreesRejected"] = "process-wide counter, Interlocked",
