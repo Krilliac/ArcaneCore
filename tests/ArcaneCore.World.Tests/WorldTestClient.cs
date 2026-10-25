@@ -213,6 +213,9 @@ internal sealed class WorldTestClient : IAsyncDisposable
         return [.. lines];
     }
 
+    /// <summary>Total time <see cref="CollectThroughBarrierAsync"/> waits for the barrier answer (not restarted by each read).</summary>
+    private static readonly TimeSpan BarrierDeadline = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// Everything the server sends for the packets this client has already sent, however late it is scheduled: sends a barrier,
     /// CMSG_PLAYED_TIME (empty, no side effects, not audited, not mute-gated, answered by exactly one SMSG_PLAYED_TIME), and reads
@@ -221,19 +224,31 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// of its reply lines synchronously inside its handler. So the barrier is handled after the command, and all of the command's
     /// lines come before the answer, with nothing to guess about timing. Unlike CMSG_PING, which the read loop answers at once,
     /// the answer cannot overtake a command still waiting in the queue. The barrier answer itself is not returned.
-    /// Only a reply the command posts to a later world tick (<c>CommandContext.CanReplyLater</c>) can still arrive after it.
-    /// The caller must be in the world and must not have another CMSG_PLAYED_TIME in flight. If the server closes the connection the
-    /// packets read so far are returned, since nothing more will come.
+    /// A reply written in more than one synchronous block can still arrive after the barrier: a part posted with <c>World.Post</c>, written
+    /// by an async continuation, or sent from a later tick (<c>CommandContext.CanReplyLater</c>). The caller must read the command's first
+    /// reply line before calling this; that makes a single deferred block safe, because the block has then already started.
+    /// The barrier is silently dropped, and the helper then times out, when the session is not InWorld, when a quest settlement is
+    /// pending, when <c>player.Map</c> is null (between SMSG_NEW_WORLD and the worldport ack), or when the opcode budget drops it.
+    /// The caller must not have another CMSG_PLAYED_TIME in flight. If the server closes the connection the packets read so far are
+    /// returned, since nothing more will come. The whole wait is bounded by <see cref="BarrierDeadline"/>, however many unrelated
+    /// packets keep arriving.
     /// </summary>
     public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectThroughBarrierAsync()
     {
         var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             await SendAsync(WorldOpcode.CmsgPlayedTime, []);
             while (true)
             {
-                (WorldOpcode Opcode, byte[] Payload) packet = await ReadAsync();
+                TimeSpan remaining = BarrierDeadline - watch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    throw new OperationCanceledException();
+                }
+
+                (WorldOpcode Opcode, byte[] Payload) packet = await ReadAsync(remaining);
                 if (packet.Opcode == WorldOpcode.SmsgPlayedTime)
                 {
                     return packets;
@@ -244,7 +259,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
         catch (OperationCanceledException ex)
         {
-            throw new TimeoutException($"timed out waiting for the SMSG_PLAYED_TIME barrier; read {packets.Count} packets: {string.Join(", ", packets.TakeLast(12).Select(p => p.Opcode))}", ex);
+            throw new TimeoutException($"timed out after {BarrierDeadline.TotalSeconds:F0} s waiting for the SMSG_PLAYED_TIME barrier (CMSG_PLAYED_TIME); read {packets.Count} packets: {string.Join(", ", packets.TakeLast(12).Select(p => p.Opcode))}", ex);
         }
         catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
         {
