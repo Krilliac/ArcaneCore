@@ -300,7 +300,7 @@ public sealed class PlayerbotChatProviderOptions
 
     /// <summary>
     /// OpenAICompatible only: send <c>response_format: {"type":"json_object"}</c> with the reply prompts, which ask for a JSON object (on by
-    /// default; Ollama, OpenAI and most compatible servers support it). Turn it off for a server that rejects the field.
+    /// default; Ollama, OpenAI and most compatible servers support it). Turn it off for a server that rejects the field (LM Studio answers 400).
     /// </summary>
     public bool JsonResponseFormat { get; set; } = true;
 

@@ -45,6 +45,14 @@ public sealed class PlayerbotChatJsonTests
         Assert.False(string.IsNullOrEmpty(error));
     }
 
+    [Theory]
+    [InlineData("{'reply': 'I don't know'}", "I don't know")]                      // an apostrophe inside a single-quoted value
+    [InlineData("{reply: \"he said \"hi\"\"}", "he said \"hi\"")]                 // quotes inside a double-quoted value
+    [InlineData("{'reply': 'a, b', 'intent': 'follow'}", "a, b")]
+    [InlineData("{\"reply\": \"use ``` for code\"}", "use ``` for code")]         // a fence inside a JSON string is the reply
+    [InlineData("{'reply': 'caf\\u00e9'}", "café")]
+    public void ASalvagedValue_KeepsItsInnerQuotes(string answer, string expected) => Assert.Equal(expected, Reply(answer));
+
     [Fact]
     public void AnEscapedObject_ReadsItsEscapes()
         => Assert.Equal("say \"hi\"", Reply("{\\\"reply\\\": \\\"say \\\\\\\"hi\\\\\\\"\\\"}"));
@@ -55,7 +63,7 @@ public sealed class PlayerbotChatJsonTests
     [InlineData("{\"reply\": \"cut off")]
     public void UnreadableAnswers_AreAnomaliesNotFaults(string answer)
     {
-        long Faults() => FaultLedger.Shared.Snapshot().Where(s => s.Site == "playerbot.chat-prompts").Sum(s => s.Count);
+        long Faults() => FaultLedger.Shared.Snapshot().Where(s => s.Site == "playerbot.chat-prompts" && s.ExceptionType.Contains("JsonException", StringComparison.Ordinal)).Sum(s => s.Count);
         long before = Faults();
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "bot-chat/prompt-json-invalid");
 

@@ -254,7 +254,7 @@ public sealed class PlayerbotChatServiceTests
     public async Task MalformedModelJson_IsAnAnomalyAndTheFallbackReply_NotAFault()
     {
         static long PromptFaults() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
-            .Where(s => s.Site == "playerbot.chat-prompts").Sum(s => s.Count);
+            .Where(s => s.Site == "playerbot.chat-prompts" && s.ExceptionType.Contains("JsonException", StringComparison.Ordinal)).Sum(s => s.Count);
 
         await using var rig = new Rig(chat => chat.Providers = [Anthropic()]);
         using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(

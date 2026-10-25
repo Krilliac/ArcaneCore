@@ -26,8 +26,10 @@ internal static class PlayerbotChatJson
             return null;
         }
 
+        // strict first, on the answer as sent: a fence inside a JSON string is part of the reply, not a fence
+        if (TryParseFirstObject(answer, out JsonDocument? document, out error)) return document;
         string text = StripFences(answer);
-        if (TryParseFirstObject(text, out JsonDocument? document, out error)) return document;
+        if (!ReferenceEquals(text, answer) && TryParseFirstObject(text, out document, out error)) return document;
         if (LooksEscaped(text) && Unescape(text) is { } unescaped && TryParseFirstObject(unescaped, out document, out _))
         {
             error = null;
@@ -44,8 +46,9 @@ internal static class PlayerbotChatJson
     }
 
     private static readonly Regex FieldPattern = new(
-        """(?<![A-Za-z0-9_])["']?(?<key>reply|intent)["']?\s*:\s*(?:"(?<dq>(?:[^"\\]|\\.)*)"|'(?<sq>(?:[^'\\]|\\.)*)')""",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(50));
+        // a value ends at the first closing quote that is followed by a comma or the closing brace, so an apostrophe or quotes inside the reply stay in it
+        """(?<![A-Za-z0-9_])["']?(?<key>reply|intent)["']?\s*:\s*(?:"(?<dq>(?:[^\\]|\\.)*?)"|'(?<sq>(?:[^\\]|\\.)*?)')(?=\s*[,}])""",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
 
     /// <summary>
     /// Last resort for an object that is not JSON but plainly meant to be one (single-quoted or unquoted keys, single-quoted values): the
@@ -63,6 +66,7 @@ internal static class PlayerbotChatJson
                 string key = match.Groups["key"].Value.ToLowerInvariant();
                 if (result.ContainsKey(key)) continue;
                 result[key] = Decode(match.Groups["dq"].Success ? match.Groups["dq"].Value : match.Groups["sq"].Value);
+                if (result.ContainsKey("reply") && result.ContainsKey("intent")) break;
             }
         }
         catch (RegexMatchTimeoutException)
@@ -83,7 +87,13 @@ internal static class PlayerbotChatJson
             else
             {
                 char next = raw[++i];
-                text.Append(next switch { 'n' or 't' or 'r' => ' ', _ => next });
+                if (next == 'u' && i + 4 < raw.Length && ushort.TryParse(raw.AsSpan(i + 1, 4), System.Globalization.NumberStyles.AllowHexSpecifier,
+                        System.Globalization.CultureInfo.InvariantCulture, out ushort unit))
+                {
+                    text.Append((char)unit);
+                    i += 4;
+                }
+                else text.Append(next switch { 'n' or 't' or 'r' => ' ', _ => next });
             }
         }
 
