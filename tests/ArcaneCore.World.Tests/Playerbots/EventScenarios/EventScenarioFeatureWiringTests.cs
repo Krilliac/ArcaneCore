@@ -186,15 +186,20 @@ public sealed class EventScenarioFeatureWiringTests
             => Task.FromException<GameEventPlayerbotContent>(new InvalidOperationException(message));
     }
 
+    /// <summary>
+    /// Whether <paramref name="ledger"/> recorded a fault whose message carries <paramref name="marker"/>: proof that this test's own store fault
+    /// reached the ledger, which a site count is not (any other test's fault at the site moves it). A snapshot keeps only a few recent messages
+    /// and top subjects per entry, so the lookup is sound only while the ledger is not at its signature cap and a count-1 marker is not pushed out
+    /// by concurrent faults; <see cref="FaultLedgerTestBounds"/> lifts the cap for the whole World test assembly, which is what this relies on.
+    /// The cause of the earlier CI failure of the site-count check is not established: a run from before that cap was lifted is the likely one.
+    /// </summary>
+    private static bool HoldsMarker(FaultLedger ledger, string marker) => ledger.Snapshot().Any(s =>
+        s.RecentMessages.Any(m => m.Contains(marker, StringComparison.Ordinal)) || s.TopMessages.Any(t => t.Subject.Contains(marker, StringComparison.Ordinal)));
+
     [Fact]
     public async Task FailingStore_RecordsFaultAndAnomaly_AndSubscribesToNothing()
     {
-        static long SiteCount() => FaultLedger.Shared.Snapshot()
-            .Where(s => s.Site == "playerbot.event-scenarios")
-            .Sum(s => s.Count);
-
         string marker = "evscenario-store-fault-" + Guid.NewGuid().ToString("N");
-        long before = SiteCount();
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(
             n => n.Key == "bot-event/scenario-fault" && n.Detail.Contains(marker, StringComparison.Ordinal));
 
@@ -207,7 +212,7 @@ public sealed class EventScenarioFeatureWiringTests
 
         PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
         Assert.False(feature.Listening);
-        Assert.True(SiteCount() > before);
+        Assert.True(HoldsMarker(FaultLedger.Shared, marker));
         Assert.Equal(1, capture.Count("bot-event/scenario-fault"));
     }
 }

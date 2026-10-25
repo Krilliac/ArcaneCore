@@ -150,7 +150,7 @@ public sealed class PlayerbotOptions
     public int PathJobWaitMaxMs { get; set; } = 30_000;
 
     /// <summary>
-    /// The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, the default until the 200-bot benchmark has run; else 10..60000):
+    /// The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, else 10..60000):
     /// a search past it stops as one that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2 168 ms in a single
     /// 32 768-node search. Live: <c>.reload config</c>.
     /// </summary>

@@ -2,60 +2,60 @@
 
 Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-oracle histogram](../integration/wire-oracle-histogram-20261008.tsv). Regenerate with `ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`.
 
-`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.
+`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `dropped (dev)` means a stripped developer, GM, cheat or debug opcode that the release client never sends: it is registered as a stripped entry (`StrippedDevOpcodes`), dropped unread with no reply, flagged `packet/dev-opcode` for a player (audited for staff) and kept out of the unhandled-opcode counters. `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.
 
 | Opcode | ID | CMSG status | SMSG emitted | Oracle |
 | --- | ---: | --- | ---: | --- |
 | `MSG_NULL_ACTION` | `0x0000` | unhandled | 0 | — |
-| `CMSG_BOOTME` | `0x0001` | unhandled | — | — |
-| `CMSG_DBLOOKUP` | `0x0002` | unhandled | — | — |
+| `CMSG_BOOTME` | `0x0001` | dropped (dev) | — | — |
+| `CMSG_DBLOOKUP` | `0x0002` | dropped (dev) | — | — |
 | `SMSG_DBLOOKUP` | `0x0003` | — | 0 | — |
-| `CMSG_QUERY_OBJECT_POSITION` | `0x0004` | unhandled | — | — |
+| `CMSG_QUERY_OBJECT_POSITION` | `0x0004` | dropped (dev) | — | — |
 | `SMSG_QUERY_OBJECT_POSITION` | `0x0005` | — | 0 | — |
-| `CMSG_QUERY_OBJECT_ROTATION` | `0x0006` | unhandled | — | — |
+| `CMSG_QUERY_OBJECT_ROTATION` | `0x0006` | dropped (dev) | — | — |
 | `SMSG_QUERY_OBJECT_ROTATION` | `0x0007` | — | 0 | — |
 | `CMSG_WORLD_TELEPORT` | `0x0008` | handled | — | — |
 | `CMSG_TELEPORT_TO_UNIT` | `0x0009` | handled | — | — |
-| `CMSG_ZONE_MAP` | `0x000A` | unhandled | — | — |
+| `CMSG_ZONE_MAP` | `0x000A` | dropped (dev) | — | — |
 | `SMSG_ZONE_MAP` | `0x000B` | — | 0 | — |
-| `CMSG_DEBUG_CHANGECELLZONE` | `0x000C` | unhandled | — | — |
+| `CMSG_DEBUG_CHANGECELLZONE` | `0x000C` | dropped (dev) | — | — |
 | `CMSG_EMBLAZON_TABARD_OBSOLETE` | `0x000D` | unhandled | — | — |
 | `CMSG_UNEMBLAZON_TABARD_OBSOLETE` | `0x000E` | unhandled | — | — |
-| `CMSG_RECHARGE` | `0x000F` | unhandled | — | — |
-| `CMSG_LEARN_SPELL` | `0x0010` | unhandled | — | — |
-| `CMSG_CREATEMONSTER` | `0x0011` | unhandled | — | — |
-| `CMSG_DESTROYMONSTER` | `0x0012` | unhandled | — | — |
-| `CMSG_CREATEITEM` | `0x0013` | unhandled | — | — |
-| `CMSG_CREATEGAMEOBJECT` | `0x0014` | unhandled | — | — |
+| `CMSG_RECHARGE` | `0x000F` | dropped (dev) | — | — |
+| `CMSG_LEARN_SPELL` | `0x0010` | dropped (dev) | — | — |
+| `CMSG_CREATEMONSTER` | `0x0011` | dropped (dev) | — | — |
+| `CMSG_DESTROYMONSTER` | `0x0012` | dropped (dev) | — | — |
+| `CMSG_CREATEITEM` | `0x0013` | dropped (dev) | — | — |
+| `CMSG_CREATEGAMEOBJECT` | `0x0014` | dropped (dev) | — | — |
 | `SMSG_CHECK_FOR_BOTS` | `0x0015` | — | 0 | — |
-| `CMSG_MAKEMONSTERATTACKGUID` | `0x0016` | unhandled | — | — |
+| `CMSG_MAKEMONSTERATTACKGUID` | `0x0016` | dropped (dev) | — | — |
 | `CMSG_BOT_DETECTED2` | `0x0017` | unhandled | — | — |
-| `CMSG_FORCEACTION` | `0x0018` | unhandled | — | — |
-| `CMSG_FORCEACTIONONOTHER` | `0x0019` | unhandled | — | — |
-| `CMSG_FORCEACTIONSHOW` | `0x001A` | unhandled | — | — |
+| `CMSG_FORCEACTION` | `0x0018` | dropped (dev) | — | — |
+| `CMSG_FORCEACTIONONOTHER` | `0x0019` | dropped (dev) | — | — |
+| `CMSG_FORCEACTIONSHOW` | `0x001A` | dropped (dev) | — | — |
 | `SMSG_FORCEACTIONSHOW` | `0x001B` | — | 0 | — |
-| `CMSG_PETGODMODE` | `0x001C` | unhandled | — | — |
+| `CMSG_PETGODMODE` | `0x001C` | dropped (dev) | — | — |
 | `SMSG_PETGODMODE` | `0x001D` | — | 0 | — |
 | `SMSG_DEBUGINFOSPELLMISS_OBSOLETE` | `0x001E` | — | 0 | — |
-| `CMSG_WEATHER_SPEED_CHEAT` | `0x001F` | unhandled | — | — |
-| `CMSG_UNDRESSPLAYER` | `0x0020` | unhandled | — | — |
-| `CMSG_BEASTMASTER` | `0x0021` | unhandled | — | — |
-| `CMSG_GODMODE` | `0x0022` | unhandled | — | — |
+| `CMSG_WEATHER_SPEED_CHEAT` | `0x001F` | dropped (dev) | — | — |
+| `CMSG_UNDRESSPLAYER` | `0x0020` | dropped (dev) | — | — |
+| `CMSG_BEASTMASTER` | `0x0021` | dropped (dev) | — | — |
+| `CMSG_GODMODE` | `0x0022` | dropped (dev) | — | — |
 | `SMSG_GODMODE` | `0x0023` | — | 0 | — |
-| `CMSG_CHEAT_SETMONEY` | `0x0024` | unhandled | — | — |
-| `CMSG_LEVEL_CHEAT` | `0x0025` | unhandled | — | — |
-| `CMSG_PET_LEVEL_CHEAT` | `0x0026` | unhandled | — | — |
-| `CMSG_SET_WORLDSTATE` | `0x0027` | unhandled | — | — |
-| `CMSG_COOLDOWN_CHEAT` | `0x0028` | unhandled | — | — |
-| `CMSG_USE_SKILL_CHEAT` | `0x0029` | unhandled | — | — |
-| `CMSG_FLAG_QUEST` | `0x002A` | unhandled | — | — |
-| `CMSG_FLAG_QUEST_FINISH` | `0x002B` | unhandled | — | — |
-| `CMSG_CLEAR_QUEST` | `0x002C` | unhandled | — | — |
-| `CMSG_SEND_EVENT` | `0x002D` | unhandled | — | — |
-| `CMSG_DEBUG_AISTATE` | `0x002E` | unhandled | — | — |
+| `CMSG_CHEAT_SETMONEY` | `0x0024` | dropped (dev) | — | — |
+| `CMSG_LEVEL_CHEAT` | `0x0025` | dropped (dev) | — | — |
+| `CMSG_PET_LEVEL_CHEAT` | `0x0026` | dropped (dev) | — | — |
+| `CMSG_SET_WORLDSTATE` | `0x0027` | dropped (dev) | — | — |
+| `CMSG_COOLDOWN_CHEAT` | `0x0028` | dropped (dev) | — | — |
+| `CMSG_USE_SKILL_CHEAT` | `0x0029` | dropped (dev) | — | — |
+| `CMSG_FLAG_QUEST` | `0x002A` | dropped (dev) | — | — |
+| `CMSG_FLAG_QUEST_FINISH` | `0x002B` | dropped (dev) | — | — |
+| `CMSG_CLEAR_QUEST` | `0x002C` | dropped (dev) | — | — |
+| `CMSG_SEND_EVENT` | `0x002D` | dropped (dev) | — | — |
+| `CMSG_DEBUG_AISTATE` | `0x002E` | dropped (dev) | — | — |
 | `SMSG_DEBUG_AISTATE` | `0x002F` | — | 0 | — |
-| `CMSG_DISABLE_PVP_CHEAT` | `0x0030` | unhandled | — | — |
-| `CMSG_ADVANCE_SPAWN_TIME` | `0x0031` | unhandled | — | — |
+| `CMSG_DISABLE_PVP_CHEAT` | `0x0030` | dropped (dev) | — | — |
+| `CMSG_ADVANCE_SPAWN_TIME` | `0x0031` | dropped (dev) | — | — |
 | `CMSG_PVP_PORT_OBSOLETE` | `0x0032` | unhandled | — | — |
 | `CMSG_AUTH_SRP6_BEGIN` | `0x0033` | unhandled | — | — |
 | `CMSG_AUTH_SRP6_PROOF` | `0x0034` | unhandled | — | — |
@@ -74,11 +74,11 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_CHARACTER_LOGIN_FAILED` | `0x0041` | — | 16 | decoded |
 | `SMSG_LOGIN_SETTIMESPEED` | `0x0042` | — | 1963 | decoded |
 | `SMSG_GAMETIME_UPDATE` | `0x0043` | — | 0 | — |
-| `CMSG_GAMETIME_SET` | `0x0044` | unhandled | — | — |
+| `CMSG_GAMETIME_SET` | `0x0044` | dropped (dev) | — | — |
 | `SMSG_GAMETIME_SET` | `0x0045` | — | 0 | — |
-| `CMSG_GAMESPEED_SET` | `0x0046` | unhandled | — | — |
+| `CMSG_GAMESPEED_SET` | `0x0046` | dropped (dev) | — | — |
 | `SMSG_GAMESPEED_SET` | `0x0047` | — | 0 | — |
-| `CMSG_SERVERTIME` | `0x0048` | unhandled | — | — |
+| `CMSG_SERVERTIME` | `0x0048` | dropped (dev) | — | — |
 | `SMSG_SERVERTIME` | `0x0049` | — | 0 | — |
 | `CMSG_PLAYER_LOGOUT` | `0x004A` | handled | — | — |
 | `CMSG_LOGOUT_REQUEST` | `0x004B` | handled | — | — |
@@ -202,28 +202,28 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `MSG_MOVE_STOP_PITCH` | `0x00C1` | handled | 0 | — |
 | `MSG_MOVE_SET_RUN_MODE` | `0x00C2` | handled | 0 | — |
 | `MSG_MOVE_SET_WALK_MODE` | `0x00C3` | handled | 0 | — |
-| `MSG_MOVE_TOGGLE_LOGGING` | `0x00C4` | unhandled | 0 | — |
+| `MSG_MOVE_TOGGLE_LOGGING` | `0x00C4` | dropped (dev) | 0 | — |
 | `MSG_MOVE_TELEPORT` | `0x00C5` | unhandled | 313 | allowlisted |
 | `MSG_MOVE_TELEPORT_CHEAT` | `0x00C6` | handled | 0 | — |
 | `MSG_MOVE_TELEPORT_ACK` | `0x00C7` | handled | 240 | decoded |
-| `MSG_MOVE_TOGGLE_FALL_LOGGING` | `0x00C8` | unhandled | 0 | — |
+| `MSG_MOVE_TOGGLE_FALL_LOGGING` | `0x00C8` | dropped (dev) | 0 | — |
 | `MSG_MOVE_FALL_LAND` | `0x00C9` | handled | 0 | — |
 | `MSG_MOVE_START_SWIM` | `0x00CA` | handled | 0 | — |
 | `MSG_MOVE_STOP_SWIM` | `0x00CB` | handled | 0 | — |
-| `MSG_MOVE_SET_RUN_SPEED_CHEAT` | `0x00CC` | unhandled | 0 | — |
+| `MSG_MOVE_SET_RUN_SPEED_CHEAT` | `0x00CC` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_RUN_SPEED` | `0x00CD` | unhandled | 2 | allowlisted |
-| `MSG_MOVE_SET_RUN_BACK_SPEED_CHEAT` | `0x00CE` | unhandled | 0 | — |
+| `MSG_MOVE_SET_RUN_BACK_SPEED_CHEAT` | `0x00CE` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_RUN_BACK_SPEED` | `0x00CF` | unhandled | 1 | allowlisted |
-| `MSG_MOVE_SET_WALK_SPEED_CHEAT` | `0x00D0` | unhandled | 0 | — |
+| `MSG_MOVE_SET_WALK_SPEED_CHEAT` | `0x00D0` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_WALK_SPEED` | `0x00D1` | unhandled | 1 | allowlisted |
-| `MSG_MOVE_SET_SWIM_SPEED_CHEAT` | `0x00D2` | unhandled | 0 | — |
+| `MSG_MOVE_SET_SWIM_SPEED_CHEAT` | `0x00D2` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_SWIM_SPEED` | `0x00D3` | unhandled | 1 | allowlisted |
-| `MSG_MOVE_SET_SWIM_BACK_SPEED_CHEAT` | `0x00D4` | unhandled | 0 | — |
+| `MSG_MOVE_SET_SWIM_BACK_SPEED_CHEAT` | `0x00D4` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_SWIM_BACK_SPEED` | `0x00D5` | unhandled | 1 | allowlisted |
-| `MSG_MOVE_SET_ALL_SPEED_CHEAT` | `0x00D6` | unhandled | 0 | — |
-| `MSG_MOVE_SET_TURN_RATE_CHEAT` | `0x00D7` | unhandled | 0 | — |
+| `MSG_MOVE_SET_ALL_SPEED_CHEAT` | `0x00D6` | dropped (dev) | 0 | — |
+| `MSG_MOVE_SET_TURN_RATE_CHEAT` | `0x00D7` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_TURN_RATE` | `0x00D8` | unhandled | 1 | allowlisted |
-| `MSG_MOVE_TOGGLE_COLLISION_CHEAT` | `0x00D9` | unhandled | 0 | — |
+| `MSG_MOVE_TOGGLE_COLLISION_CHEAT` | `0x00D9` | dropped (dev) | 0 | — |
 | `MSG_MOVE_SET_FACING` | `0x00DA` | handled | 0 | — |
 | `MSG_MOVE_SET_PITCH` | `0x00DB` | handled | 0 | — |
 | `MSG_MOVE_WORLDPORT_ACK` | `0x00DC` | handled | 0 | — |
@@ -254,8 +254,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MOVE_UNSET_HOVER` | `0x00F5` | — | 0 | — |
 | `CMSG_MOVE_HOVER_ACK` | `0x00F6` | handled | — | — |
 | `MSG_MOVE_HOVER` | `0x00F7` | unhandled | 2 | allowlisted |
-| `CMSG_TRIGGER_CINEMATIC_CHEAT` | `0x00F8` | unhandled | — | — |
-| `CMSG_OPENING_CINEMATIC` | `0x00F9` | unhandled | — | — |
+| `CMSG_TRIGGER_CINEMATIC_CHEAT` | `0x00F8` | dropped (dev) | — | — |
+| `CMSG_OPENING_CINEMATIC` | `0x00F9` | handled | — | — |
 | `SMSG_TRIGGER_CINEMATIC` | `0x00FA` | — | 3 | decoded |
 | `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | handled | — | — |
 | `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | handled | — | — |
@@ -300,7 +300,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SET_FACTION_VISIBLE` | `0x0123` | — | 16 | allowlisted |
 | `SMSG_SET_FACTION_STANDING` | `0x0124` | — | 49 | allowlisted |
 | `CMSG_SET_FACTION_ATWAR` | `0x0125` | handled | — | — |
-| `CMSG_SET_FACTION_CHEAT` | `0x0126` | unhandled | — | — |
+| `CMSG_SET_FACTION_CHEAT` | `0x0126` | dropped (dev) | — | — |
 | `SMSG_SET_PROFICIENCY` | `0x0127` | — | 10 | decoded |
 | `CMSG_SET_ACTION_BUTTON` | `0x0128` | handled | — | — |
 | `SMSG_ACTION_BUTTONS` | `0x0129` | — | 1961 | decoded |
@@ -343,8 +343,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SPELLHEALLOG` | `0x0150` | — | 26 | decoded |
 | `SMSG_SPELLENERGIZELOG` | `0x0151` | — | 4 | decoded |
 | `CMSG_SHEATHE_OBSOLETE` | `0x0152` | unhandled | — | — |
-| `CMSG_SAVE_PLAYER` | `0x0153` | unhandled | — | — |
-| `CMSG_SETDEATHBINDPOINT` | `0x0154` | unhandled | — | — |
+| `CMSG_SAVE_PLAYER` | `0x0153` | dropped (dev) | — | — |
+| `CMSG_SETDEATHBINDPOINT` | `0x0154` | dropped (dev) | — | — |
 | `SMSG_BINDPOINTUPDATE` | `0x0155` | — | 1962 | decoded |
 | `CMSG_GETDEATHBINDZONE` | `0x0156` | handled | — | — |
 | `SMSG_BINDZONEREPLY` | `0x0157` | — | 0 | — |
@@ -426,9 +426,9 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_BUY_ITEM_IN_SLOT` | `0x01A3` | handled | — | — |
 | `SMSG_BUY_ITEM` | `0x01A4` | — | 6 | decoded |
 | `SMSG_BUY_FAILED` | `0x01A5` | — | 3 | decoded |
-| `CMSG_TAXICLEARALLNODES` | `0x01A6` | unhandled | — | — |
-| `CMSG_TAXIENABLEALLNODES` | `0x01A7` | unhandled | — | — |
-| `CMSG_TAXISHOWNODES` | `0x01A8` | unhandled | — | — |
+| `CMSG_TAXICLEARALLNODES` | `0x01A6` | dropped (dev) | — | — |
+| `CMSG_TAXIENABLEALLNODES` | `0x01A7` | dropped (dev) | — | — |
+| `CMSG_TAXISHOWNODES` | `0x01A8` | dropped (dev) | — | — |
 | `SMSG_SHOWTAXINODES` | `0x01A9` | — | 0 | — |
 | `CMSG_TAXINODE_STATUS_QUERY` | `0x01AA` | handled | — | — |
 | `SMSG_TAXINODE_STATUS` | `0x01AB` | — | 0 | — |
@@ -476,7 +476,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `MSG_MINIMAP_PING` | `0x01D5` | handled | 0 | — |
 | `SMSG_RESISTLOG` | `0x01D6` | — | 0 | — |
 | `SMSG_ENCHANTMENTLOG` | `0x01D7` | — | 4 | decoded |
-| `CMSG_SET_SKILL_CHEAT` | `0x01D8` | unhandled | — | — |
+| `CMSG_SET_SKILL_CHEAT` | `0x01D8` | dropped (dev) | — | — |
 | `SMSG_START_MIRROR_TIMER` | `0x01D9` | — | 0 | — |
 | `SMSG_PAUSE_MIRROR_TIMER` | `0x01DA` | — | 0 | — |
 | `SMSG_STOP_MIRROR_TIMER` | `0x01DB` | — | 0 | — |
@@ -489,17 +489,17 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SPELL_DELAYED` | `0x01E2` | — | 1 | decoded |
 | `CMSG_PLAYER_MACRO_OBSOLETE` | `0x01E3` | unhandled | — | — |
 | `SMSG_PLAYER_MACRO_OBSOLETE` | `0x01E4` | — | 0 | — |
-| `CMSG_GHOST` | `0x01E5` | unhandled | — | — |
-| `CMSG_GM_INVIS` | `0x01E6` | unhandled | — | — |
+| `CMSG_GHOST` | `0x01E5` | dropped (dev) | — | — |
+| `CMSG_GM_INVIS` | `0x01E6` | dropped (dev) | — | — |
 | `SMSG_INVALID_PROMOTION_CODE` | `0x01E7` | — | 0 | — |
-| `MSG_GM_BIND_OTHER` | `0x01E8` | unhandled | 0 | — |
-| `MSG_GM_SUMMON` | `0x01E9` | unhandled | 0 | — |
+| `MSG_GM_BIND_OTHER` | `0x01E8` | dropped (dev) | 0 | — |
+| `MSG_GM_SUMMON` | `0x01E9` | dropped (dev) | 0 | — |
 | `SMSG_ITEM_TIME_UPDATE` | `0x01EA` | — | 0 | — |
 | `SMSG_ITEM_ENCHANT_TIME_UPDATE` | `0x01EB` | — | 3 | decoded |
 | `SMSG_AUTH_CHALLENGE` | `0x01EC` | — | 1606 | decoded |
 | `CMSG_AUTH_SESSION` | `0x01ED` | handled | — | — |
 | `SMSG_AUTH_RESPONSE` | `0x01EE` | — | 1594 | decoded |
-| `MSG_GM_SHOWLABEL` | `0x01EF` | unhandled | 0 | — |
+| `MSG_GM_SHOWLABEL` | `0x01EF` | dropped (dev) | 0 | — |
 | `CMSG_PET_CAST_SPELL` | `0x01F0` | handled | — | — |
 | `MSG_SAVE_GUILD_EMBLEM` | `0x01F1` | handled | 2 | decoded |
 | `MSG_TABARDVENDOR_ACTIVATE` | `0x01F2` | handled | 2 | allowlisted |
@@ -509,18 +509,18 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_COMPRESSED_UPDATE_OBJECT` | `0x01F6` | — | 1 | decoded |
 | `SMSG_PLAY_SPELL_IMPACT` | `0x01F7` | — | 0 | — |
 | `SMSG_EXPLORATION_EXPERIENCE` | `0x01F8` | — | 6 | decoded |
-| `CMSG_GM_SET_SECURITY_GROUP` | `0x01F9` | unhandled | — | — |
-| `CMSG_GM_NUKE` | `0x01FA` | unhandled | — | — |
+| `CMSG_GM_SET_SECURITY_GROUP` | `0x01F9` | dropped (dev) | — | — |
+| `CMSG_GM_NUKE` | `0x01FA` | dropped (dev) | — | — |
 | `MSG_RANDOM_ROLL` | `0x01FB` | handled | 0 | — |
 | `SMSG_ENVIRONMENTALDAMAGELOG` | `0x01FC` | — | 2 | decoded |
-| `CMSG_RWHOIS` | `0x01FD` | unhandled | — | — |
+| `CMSG_RWHOIS` | `0x01FD` | dropped (dev) | — | — |
 | `SMSG_RWHOIS` | `0x01FE` | — | 0 | — |
 | `MSG_LOOKING_FOR_GROUP` | `0x01FF` | handled | 0 | — |
 | `CMSG_SET_LOOKING_FOR_GROUP` | `0x0200` | unhandled | — | — |
-| `CMSG_UNLEARN_SPELL` | `0x0201` | unhandled | — | — |
+| `CMSG_UNLEARN_SPELL` | `0x0201` | dropped (dev) | — | — |
 | `CMSG_UNLEARN_SKILL` | `0x0202` | handled | — | — |
 | `SMSG_REMOVED_SPELL` | `0x0203` | — | 33 | decoded |
-| `CMSG_DECHARGE` | `0x0204` | unhandled | — | — |
+| `CMSG_DECHARGE` | `0x0204` | dropped (dev) | — | — |
 | `CMSG_GMTICKET_CREATE` | `0x0205` | handled | — | — |
 | `SMSG_GMTICKET_CREATE` | `0x0206` | — | 27 | decoded |
 | `CMSG_GMTICKET_UPDATETEXT` | `0x0207` | handled | — | — |
@@ -531,11 +531,11 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_UPDATE_ACCOUNT_DATA` | `0x020C` | — | 7 | allowlisted |
 | `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` | `0x020D` | — | 0 | — |
 | `SMSG_POWERGAINLOG_OBSOLETE` | `0x020E` | — | 0 | — |
-| `CMSG_GM_TEACH` | `0x020F` | unhandled | — | — |
-| `CMSG_GM_CREATE_ITEM_TARGET` | `0x0210` | unhandled | — | — |
+| `CMSG_GM_TEACH` | `0x020F` | dropped (dev) | — | — |
+| `CMSG_GM_CREATE_ITEM_TARGET` | `0x0210` | dropped (dev) | — | — |
 | `CMSG_GMTICKET_GETTICKET` | `0x0211` | handled | — | — |
 | `SMSG_GMTICKET_GETTICKET` | `0x0212` | — | 10 | decoded |
-| `CMSG_UNLEARN_TALENTS` | `0x0213` | unhandled | — | — |
+| `CMSG_UNLEARN_TALENTS` | `0x0213` | dropped (dev) | — | — |
 | `SMSG_GAMEOBJECT_SPAWN_ANIM` | `0x0214` | — | 5 | decoded |
 | `SMSG_GAMEOBJECT_DESPAWN_ANIM` | `0x0215` | — | 17 | decoded |
 | `MSG_CORPSE_QUERY` | `0x0216` | handled | 1 | decoded |
@@ -545,25 +545,25 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GMTICKET_SYSTEMSTATUS` | `0x021A` | handled | — | — |
 | `SMSG_GMTICKET_SYSTEMSTATUS` | `0x021B` | — | 1 | decoded |
 | `CMSG_SPIRIT_HEALER_ACTIVATE` | `0x021C` | handled | — | — |
-| `CMSG_SET_STAT_CHEAT` | `0x021D` | unhandled | — | — |
+| `CMSG_SET_STAT_CHEAT` | `0x021D` | dropped (dev) | — | — |
 | `SMSG_SET_REST_START` | `0x021E` | — | 1961 | decoded |
 | `CMSG_SKILL_BUY_STEP` | `0x021F` | unhandled | — | — |
 | `CMSG_SKILL_BUY_RANK` | `0x0220` | unhandled | — | — |
-| `CMSG_XP_CHEAT` | `0x0221` | unhandled | — | — |
+| `CMSG_XP_CHEAT` | `0x0221` | dropped (dev) | — | — |
 | `SMSG_SPIRIT_HEALER_CONFIRM` | `0x0222` | — | 0 | — |
-| `CMSG_CHARACTER_POINT_CHEAT` | `0x0223` | unhandled | — | — |
+| `CMSG_CHARACTER_POINT_CHEAT` | `0x0223` | dropped (dev) | — | — |
 | `SMSG_GOSSIP_POI` | `0x0224` | — | 0 | — |
 | `CMSG_CHAT_IGNORED` | `0x0225` | handled | — | — |
-| `CMSG_GM_VISION` | `0x0226` | unhandled | — | — |
-| `CMSG_SERVER_COMMAND` | `0x0227` | unhandled | — | — |
-| `CMSG_GM_SILENCE` | `0x0228` | unhandled | — | — |
-| `CMSG_GM_REVEALTO` | `0x0229` | unhandled | — | — |
-| `CMSG_GM_RESURRECT` | `0x022A` | unhandled | — | — |
-| `CMSG_GM_SUMMONMOB` | `0x022B` | unhandled | — | — |
-| `CMSG_GM_MOVECORPSE` | `0x022C` | unhandled | — | — |
-| `CMSG_GM_FREEZE` | `0x022D` | unhandled | — | — |
-| `CMSG_GM_UBERINVIS` | `0x022E` | unhandled | — | — |
-| `CMSG_GM_REQUEST_PLAYER_INFO` | `0x022F` | unhandled | — | — |
+| `CMSG_GM_VISION` | `0x0226` | dropped (dev) | — | — |
+| `CMSG_SERVER_COMMAND` | `0x0227` | dropped (dev) | — | — |
+| `CMSG_GM_SILENCE` | `0x0228` | dropped (dev) | — | — |
+| `CMSG_GM_REVEALTO` | `0x0229` | dropped (dev) | — | — |
+| `CMSG_GM_RESURRECT` | `0x022A` | dropped (dev) | — | — |
+| `CMSG_GM_SUMMONMOB` | `0x022B` | dropped (dev) | — | — |
+| `CMSG_GM_MOVECORPSE` | `0x022C` | dropped (dev) | — | — |
+| `CMSG_GM_FREEZE` | `0x022D` | dropped (dev) | — | — |
+| `CMSG_GM_UBERINVIS` | `0x022E` | dropped (dev) | — | — |
+| `CMSG_GM_REQUEST_PLAYER_INFO` | `0x022F` | dropped (dev) | — | — |
 | `SMSG_GM_PLAYER_INFO` | `0x0230` | — | 0 | — |
 | `CMSG_GUILD_RANK` | `0x0231` | handled | — | — |
 | `CMSG_GUILD_ADD_RANK` | `0x0232` | handled | — | — |
@@ -571,7 +571,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GUILD_SET_PUBLIC_NOTE` | `0x0234` | handled | — | — |
 | `CMSG_GUILD_SET_OFFICER_NOTE` | `0x0235` | handled | — | — |
 | `SMSG_LOGIN_VERIFY_WORLD` | `0x0236` | — | 1838 | decoded |
-| `CMSG_CLEAR_EXPLORATION` | `0x0237` | unhandled | — | — |
+| `CMSG_CLEAR_EXPLORATION` | `0x0237` | dropped (dev) | — | — |
 | `CMSG_SEND_MAIL` | `0x0238` | handled | — | — |
 | `SMSG_SEND_MAIL_RESULT` | `0x0239` | — | 34 | decoded |
 | `CMSG_GET_MAIL_LIST` | `0x023A` | handled | — | — |
@@ -581,8 +581,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_BATTLEFIELD_JOIN` | `0x023E` | handled | — | — |
 | `SMSG_BATTLEFIELD_WIN` | `0x023F` | — | 2 | allowlisted |
 | `SMSG_BATTLEFIELD_LOSE` | `0x0240` | — | 2 | allowlisted |
-| `CMSG_TAXICLEARNODE` | `0x0241` | unhandled | — | — |
-| `CMSG_TAXIENABLENODE` | `0x0242` | unhandled | — | — |
+| `CMSG_TAXICLEARNODE` | `0x0241` | dropped (dev) | — | — |
+| `CMSG_TAXIENABLENODE` | `0x0242` | dropped (dev) | — | — |
 | `CMSG_ITEM_TEXT_QUERY` | `0x0243` | handled | — | — |
 | `SMSG_ITEM_TEXT_QUERY_RESPONSE` | `0x0244` | — | 0 | — |
 | `CMSG_MAIL_TAKE_MONEY` | `0x0245` | handled | — | — |
@@ -624,9 +624,9 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_CORPSE_RECLAIM_DELAY` | `0x0269` | — | 52 | decoded |
 | `CMSG_SET_ACTIVE_MOVER` | `0x026A` | handled | — | — |
 | `CMSG_PET_CANCEL_AURA` | `0x026B` | handled | — | — |
-| `CMSG_PLAYER_AI_CHEAT` | `0x026C` | unhandled | — | — |
+| `CMSG_PLAYER_AI_CHEAT` | `0x026C` | dropped (dev) | — | — |
 | `CMSG_CANCEL_AUTO_REPEAT_SPELL` | `0x026D` | handled | — | — |
-| `MSG_GM_ACCOUNT_ONLINE` | `0x026E` | unhandled | 0 | — |
+| `MSG_GM_ACCOUNT_ONLINE` | `0x026E` | dropped (dev) | 0 | — |
 | `MSG_LIST_STABLED_PETS` | `0x026F` | handled | 0 | — |
 | `CMSG_STABLE_PET` | `0x0270` | handled | — | — |
 | `CMSG_UNSTABLE_PET` | `0x0271` | handled | — | — |
@@ -641,21 +641,21 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_FAR_SIGHT` | `0x027A` | handled | — | — |
 | `SMSG_SPELLDISPELLOG` | `0x027B` | — | 0 | — |
 | `SMSG_DAMAGE_CALC_LOG` | `0x027C` | — | 0 | — |
-| `CMSG_ENABLE_DAMAGE_LOG` | `0x027D` | unhandled | — | — |
+| `CMSG_ENABLE_DAMAGE_LOG` | `0x027D` | dropped (dev) | — | — |
 | `CMSG_GROUP_CHANGE_SUB_GROUP` | `0x027E` | handled | — | — |
 | `CMSG_REQUEST_PARTY_MEMBER_STATS` | `0x027F` | handled | — | — |
 | `CMSG_GROUP_SWAP_SUB_GROUP` | `0x0280` | handled | — | — |
-| `CMSG_RESET_FACTION_CHEAT` | `0x0281` | unhandled | — | — |
+| `CMSG_RESET_FACTION_CHEAT` | `0x0281` | dropped (dev) | — | — |
 | `CMSG_AUTOSTORE_BANK_ITEM` | `0x0282` | handled | — | — |
 | `CMSG_AUTOBANK_ITEM` | `0x0283` | handled | — | — |
 | `MSG_QUERY_NEXT_MAIL_TIME` | `0x0284` | handled | 105 | decoded |
 | `SMSG_RECEIVED_MAIL` | `0x0285` | — | 6 | decoded |
 | `SMSG_RAID_GROUP_ONLY` | `0x0286` | — | 1 | decoded |
-| `CMSG_SET_DURABILITY_CHEAT` | `0x0287` | unhandled | — | — |
-| `CMSG_SET_PVP_RANK_CHEAT` | `0x0288` | unhandled | — | — |
-| `CMSG_ADD_PVP_MEDAL_CHEAT` | `0x0289` | unhandled | — | — |
-| `CMSG_DEL_PVP_MEDAL_CHEAT` | `0x028A` | unhandled | — | — |
-| `CMSG_SET_PVP_TITLE` | `0x028B` | unhandled | — | — |
+| `CMSG_SET_DURABILITY_CHEAT` | `0x0287` | dropped (dev) | — | — |
+| `CMSG_SET_PVP_RANK_CHEAT` | `0x0288` | dropped (dev) | — | — |
+| `CMSG_ADD_PVP_MEDAL_CHEAT` | `0x0289` | dropped (dev) | — | — |
+| `CMSG_DEL_PVP_MEDAL_CHEAT` | `0x028A` | dropped (dev) | — | — |
+| `CMSG_SET_PVP_TITLE` | `0x028B` | dropped (dev) | — | — |
 | `SMSG_PVP_CREDIT` | `0x028C` | — | 15 | decoded |
 | `SMSG_AUCTION_REMOVED_NOTIFICATION` | `0x028D` | — | 2 | decoded |
 | `CMSG_GROUP_RAID_CONVERT` | `0x028E` | handled | — | — |
@@ -664,13 +664,13 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SERVER_MESSAGE` | `0x0291` | — | 7 | decoded |
 | `CMSG_MEETINGSTONE_JOIN` | `0x0292` | handled | — | — |
 | `CMSG_MEETINGSTONE_LEAVE` | `0x0293` | handled | — | — |
-| `CMSG_MEETINGSTONE_CHEAT` | `0x0294` | unhandled | — | — |
+| `CMSG_MEETINGSTONE_CHEAT` | `0x0294` | dropped (dev) | — | — |
 | `SMSG_MEETINGSTONE_SETQUEUE` | `0x0295` | — | 17 | decoded |
 | `CMSG_MEETINGSTONE_INFO` | `0x0296` | handled | — | — |
 | `SMSG_MEETINGSTONE_COMPLETE` | `0x0297` | — | 0 | — |
 | `SMSG_MEETINGSTONE_IN_PROGRESS` | `0x0298` | — | 0 | — |
 | `SMSG_MEETINGSTONE_MEMBER_ADDED` | `0x0299` | — | 2 | decoded |
-| `CMSG_GMTICKETSYSTEM_TOGGLE` | `0x029A` | unhandled | — | — |
+| `CMSG_GMTICKETSYSTEM_TOGGLE` | `0x029A` | dropped (dev) | — | — |
 | `CMSG_CANCEL_GROWTH_AURA` | `0x029B` | handled | — | — |
 | `SMSG_CANCEL_AUTO_REPEAT` | `0x029C` | — | 3 | decoded |
 | `SMSG_STANDSTATE_UPDATE` | `0x029D` | — | 35 | decoded |
@@ -689,15 +689,15 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `MSG_TALENT_WIPE_CONFIRM` | `0x02AA` | handled | 6 | decoded |
 | `SMSG_SUMMON_REQUEST` | `0x02AB` | — | 1 | decoded |
 | `CMSG_SUMMON_RESPONSE` | `0x02AC` | handled | — | — |
-| `MSG_MOVE_TOGGLE_GRAVITY_CHEAT` | `0x02AD` | unhandled | 0 | — |
+| `MSG_MOVE_TOGGLE_GRAVITY_CHEAT` | `0x02AD` | dropped (dev) | 0 | — |
 | `SMSG_MONSTER_MOVE_TRANSPORT` | `0x02AE` | — | 0 | — |
 | `SMSG_PET_BROKEN` | `0x02AF` | — | 0 | — |
 | `MSG_MOVE_FEATHER_FALL` | `0x02B0` | unhandled | 1 | decoded |
 | `MSG_MOVE_WATER_WALK` | `0x02B1` | unhandled | 2 | allowlisted |
-| `CMSG_SERVER_BROADCAST` | `0x02B2` | unhandled | — | — |
+| `CMSG_SERVER_BROADCAST` | `0x02B2` | dropped (dev) | — | — |
 | `CMSG_SELF_RES` | `0x02B3` | handled | — | — |
 | `SMSG_FEIGN_DEATH_RESISTED` | `0x02B4` | — | 0 | — |
-| `CMSG_RUN_SCRIPT` | `0x02B5` | unhandled | — | — |
+| `CMSG_RUN_SCRIPT` | `0x02B5` | dropped (dev) | — | — |
 | `SMSG_SCRIPT_MESSAGE` | `0x02B6` | — | 0 | — |
 | `SMSG_DUEL_COUNTDOWN` | `0x02B7` | — | 26 | decoded |
 | `SMSG_AREA_TRIGGER_MESSAGE` | `0x02B8` | — | 14 | decoded |
@@ -706,7 +706,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MEETINGSTONE_JOINFAILED` | `0x02BB` | — | 2 | decoded |
 | `SMSG_PLAYER_SKINNED` | `0x02BC` | — | 0 | — |
 | `SMSG_DURABILITY_DAMAGE_DEATH` | `0x02BD` | — | 17 | decoded |
-| `CMSG_SET_EXPLORATION` | `0x02BE` | unhandled | — | — |
+| `CMSG_SET_EXPLORATION` | `0x02BE` | dropped (dev) | — | — |
 | `CMSG_SET_ACTIONBAR_TOGGLES` | `0x02BF` | handled | — | — |
 | `MSG_DELETE_GUILD_CHARTER` | `0x02C0` | unhandled | 0 | — |
 | `MSG_PETITION_RENAME` | `0x02C1` | handled | 0 | — |
@@ -732,8 +732,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_BATTLEFIELD_PORT` | `0x02D5` | handled | — | — |
 | `MSG_INSPECT_HONOR_STATS` | `0x02D6` | handled | 4 | decoded |
 | `CMSG_BATTLEMASTER_HELLO` | `0x02D7` | handled | — | — |
-| `CMSG_MOVE_START_SWIM_CHEAT` | `0x02D8` | unhandled | — | — |
-| `CMSG_MOVE_STOP_SWIM_CHEAT` | `0x02D9` | unhandled | — | — |
+| `CMSG_MOVE_START_SWIM_CHEAT` | `0x02D8` | dropped (dev) | — | — |
+| `CMSG_MOVE_STOP_SWIM_CHEAT` | `0x02D9` | dropped (dev) | — | — |
 | `SMSG_FORCE_WALK_SPEED_CHANGE` | `0x02DA` | — | 1 | decoded |
 | `CMSG_FORCE_WALK_SPEED_CHANGE_ACK` | `0x02DB` | handled | — | — |
 | `SMSG_FORCE_SWIM_BACK_SPEED_CHANGE` | `0x02DC` | — | 3 | decoded |
@@ -745,7 +745,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_AREA_SPIRIT_HEALER_QUERY` | `0x02E2` | handled | — | — |
 | `CMSG_AREA_SPIRIT_HEALER_QUEUE` | `0x02E3` | handled | — | — |
 | `SMSG_AREA_SPIRIT_HEALER_TIME` | `0x02E4` | — | 0 | — |
-| `CMSG_GM_UNTEACH` | `0x02E5` | unhandled | — | — |
+| `CMSG_GM_UNTEACH` | `0x02E5` | dropped (dev) | — | — |
 | `SMSG_WARDEN_DATA` | `0x02E6` | — | 0 | — |
 | `CMSG_WARDEN_DATA` | `0x02E7` | handled | — | — |
 | `SMSG_GROUP_JOINED_BATTLEGROUND` | `0x02E8` | — | 0 | — |
@@ -787,19 +787,19 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_SPLINE_MOVE_STOP_SWIM` | `0x030C` | — | 0 | — |
 | `SMSG_SPLINE_MOVE_SET_RUN_MODE` | `0x030D` | — | 1 | decoded |
 | `SMSG_SPLINE_MOVE_SET_WALK_MODE` | `0x030E` | — | 1 | decoded |
-| `CMSG_GM_NUKE_ACCOUNT` | `0x030F` | unhandled | — | — |
-| `MSG_GM_DESTROY_CORPSE` | `0x0310` | unhandled | 0 | — |
-| `CMSG_GM_DESTROY_ONLINE_CORPSE` | `0x0311` | unhandled | — | — |
+| `CMSG_GM_NUKE_ACCOUNT` | `0x030F` | dropped (dev) | — | — |
+| `MSG_GM_DESTROY_CORPSE` | `0x0310` | dropped (dev) | 0 | — |
+| `CMSG_GM_DESTROY_ONLINE_CORPSE` | `0x0311` | dropped (dev) | — | — |
 | `CMSG_ACTIVATETAXIEXPRESS` | `0x0312` | handled | — | — |
 | `SMSG_SET_FACTION_ATWAR` | `0x0313` | — | 0 | — |
 | `SMSG_GAMETIMEBIAS_SET` | `0x0314` | — | 0 | — |
-| `CMSG_DEBUG_ACTIONS_START` | `0x0315` | unhandled | — | — |
-| `CMSG_DEBUG_ACTIONS_STOP` | `0x0316` | unhandled | — | — |
+| `CMSG_DEBUG_ACTIONS_START` | `0x0315` | dropped (dev) | — | — |
+| `CMSG_DEBUG_ACTIONS_STOP` | `0x0316` | dropped (dev) | — | — |
 | `CMSG_SET_FACTION_INACTIVE` | `0x0317` | handled | — | — |
 | `CMSG_SET_WATCHED_FACTION` | `0x0318` | handled | — | — |
 | `MSG_MOVE_TIME_SKIPPED` | `0x0319` | unhandled | 2 | decoded |
 | `SMSG_SPLINE_MOVE_ROOT` | `0x031A` | — | 0 | — |
-| `CMSG_SET_EXPLORATION_ALL` | `0x031B` | unhandled | — | — |
+| `CMSG_SET_EXPLORATION_ALL` | `0x031B` | dropped (dev) | — | — |
 | `SMSG_INVALIDATE_PLAYER` | `0x031C` | — | 1 | decoded |
 | `CMSG_RESET_INSTANCES` | `0x031D` | handled | — | — |
 | `SMSG_INSTANCE_RESET` | `0x031E` | — | 2 | decoded |
@@ -814,9 +814,9 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GM_UPDATE_TICKET_STATUS` | `0x0327` | unhandled | — | — |
 | `SMSG_GM_TICKET_STATUS_UPDATE` | `0x0328` | — | 0 | — |
 | `MSG_SET_DUNGEON_DIFFICULTY` | `0x0329` | unhandled | 0 | — |
-| `CMSG_GMSURVEY_SUBMIT` | `0x032A` | unhandled | — | — |
+| `CMSG_GMSURVEY_SUBMIT` | `0x032A` | handled | — | — |
 | `SMSG_UPDATE_INSTANCE_OWNERSHIP` | `0x032B` | — | 123 | decoded |
-| `CMSG_IGNORE_KNOCKBACK_CHEAT` | `0x032C` | unhandled | — | — |
+| `CMSG_IGNORE_KNOCKBACK_CHEAT` | `0x032C` | dropped (dev) | — | — |
 | `SMSG_CHAT_PLAYER_AMBIGUOUS` | `0x032D` | — | 0 | — |
 | `MSG_DELAY_GHOST_TELEPORT` | `0x032E` | unhandled | 0 | — |
 | `SMSG_SPELLINSTAKILLLOG` | `0x032F` | — | 2 | decoded |
