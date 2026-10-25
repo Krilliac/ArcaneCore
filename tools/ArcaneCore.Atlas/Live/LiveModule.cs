@@ -35,6 +35,7 @@ public sealed class LiveModule : IAtlasModule
         ArgumentNullException.ThrowIfNull(context);
         var feed = new LiveFeed(_options, context.Events, context.View, context.Loggers.CreateLogger(LiveFeed.LogCategory));
         context.Services.Add(feed);
+        context.Services.Add<IFeedRequester>(new LiveFeedRequester(feed));
         context.Layers.Add(new LiveLayerSource());
         LiveCommands.Register(context.Commands, feed);
     }

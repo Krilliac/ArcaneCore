@@ -421,6 +421,21 @@ public sealed class LiveFeed : IDisposable
         return data;
     }
 
+    /// <summary>
+    /// Sends one line of the map-feed protocol as it is (the transport adds the <c>id</c>) and returns the daemon's whole answer object,
+    /// <c>ok:false</c> refusals included: the caller decides what a refusal means. Unlike <see cref="RequestAsync"/> it neither forces
+    /// <c>op:query</c> nor strips the answer. Unavailable when not connected; a timeout is a <c>failed</c> error; cancellation (the caller's,
+    /// or this feed's disposal) throws <see cref="OperationCanceledException"/>. Any thread.
+    /// </summary>
+    public async Task<JsonObject> ExchangeAsync(JsonObject message, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        FeedSession session = RequireSession();
+        var line = (JsonObject)message.DeepClone();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        return await session.QueryAsync(line, linked.Token).ConfigureAwait(false);
+    }
+
     private static CommandException UnsupportedKind(string kind)
         => new(CommandException.Unavailable, $"the connected world daemon does not support the {kind} query (it predates live insight); update and restart it.");
 
