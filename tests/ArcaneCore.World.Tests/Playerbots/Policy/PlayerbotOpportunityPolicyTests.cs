@@ -65,9 +65,9 @@ public sealed class PlayerbotOpportunityPolicyTests
     }
 
     [Fact]
-    public void TheRecordVersion_IsThree_TheOpenBitsMovedAtTwoAndTheBurstRetreatCameAtThree()
+    public void TheRecordVersion_IsThree()
     {
-        Assert.Equal(3,PlayerbotPolicyRecord.SchemaVersion);
+        Assert.Equal(3, PlayerbotPolicyRecord.SchemaVersion);
     }
 
     [Fact]

@@ -74,10 +74,14 @@ def remap_open_v1(bits: int) -> int:
 
 
 def upgrade_record(record: dict) -> dict | None:
-    """The record in the current layout, or None for a version this trainer does not read. Version 1 keeps its data."""
+    """The record in the current layout (labelled with RECORD_VERSION), or None for a version this trainer does not read. Versions 1 and 2 keep their data."""
     version = record.get("v")
-    if version == RECORD_VERSION or version == 2:
+    if version == RECORD_VERSION:
         return record
+    if version == 2:
+        upgraded = dict(record)
+        upgraded["v"] = RECORD_VERSION
+        return upgraded
     if version == 1:
         upgraded = dict(record)
         upgraded["v"] = RECORD_VERSION

@@ -38,6 +38,7 @@ public sealed class PlayerbotCombatTelemetryTests
                 .Where(root => root.GetProperty("k").GetString() == "fight").ToArray();
             JsonElement fight = Assert.Single(fights);
             Assert.Equal(["v", "k", "t", "bot", "map", "zone", "engage", "targets", "retreat", "rest", "o"], fight.EnumerateObject().Select(p => p.Name));
+            Assert.Equal(PlayerbotPolicyRecord.SchemaVersion, fight.GetProperty("v").GetInt32());
 
             JsonElement engage = fight.GetProperty("engage");
             Assert.Equal("engage", engage.GetProperty("decision").GetString());

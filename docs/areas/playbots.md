@@ -718,7 +718,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 
 | Key | Meaning |
 |---|---|
-| `v` | Record version (3). Version 3 added the `losing-burst-N` retreat `reason` and the `round_damage` retreat feature to fight records (goal and health records keep their layout). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
+| `v` | Record version (3). Version 3 added the `losing-burst-N` retreat `reason` and the `round_damage` retreat feature to fight records (every other record kind keeps its layout). Servers built between PR 1427 and the bump wrote that change under version 2, so a version 2 fight record may already carry `round_damage` and `losing-burst-N`: a fight-record reader should go by the length of `retreat.f` (7 or 8), not by `v`. Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads all three (1, 2, 3), remapping version 1 bits and labelling every record with the current version. An older `train.py` rejects version 3 goal records even though their layout is unchanged. |
 | `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |

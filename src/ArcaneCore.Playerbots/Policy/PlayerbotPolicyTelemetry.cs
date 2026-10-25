@@ -30,7 +30,7 @@ internal sealed record PlayerbotPolicyRecord(
     PlayerbotPolicyGoal? Pick, PlayerbotPolicySource Source, bool Explored, PlayerbotPolicyGoal? Goal, PlayerbotGoalKind Kind,
     uint WindowMs, PlayerbotPolicyOutcome Outcome, PlayerbotPolicyArm Arm = PlayerbotPolicyArm.Policy) : IPlayerbotTelemetryRecord
 {
-    /// <summary>3: fight records' <c>retreat</c> block adds the <c>losing-burst-N</c> reason and the <c>round_damage</c> feature (version 2 files have neither). 2: the Opportunity goal changed the goal list, so a goal record's <c>open</c> bits (and the model layout) moved; version 1 files have the old seven-goal bits.</summary>
+    /// <summary>3: fight records' <c>retreat</c> block adds the <c>losing-burst-N</c> reason and the <c>round_damage</c> feature. Servers built between PR 1427 and this bump wrote them under version 2, so a version 2 fight record may already carry both: a fight-record reader should use the length of <c>retreat.f</c> (7 or 8), not <c>v</c>. 2: the Opportunity goal changed the goal list, so a goal record's <c>open</c> bits (and the model layout) moved; version 1 files have the old seven-goal bits.</summary>
     internal const int SchemaVersion = 3;
 
     /// <summary>The record as one JSON line (with its newline).</summary>
