@@ -445,7 +445,9 @@ internal static partial class PlayerbotShip
             return;
         }
 
-        Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
+        // A walk that failed far from the port says nothing about the dock: it is not backed off for it.
+        bool nearPort = Flat(Position(player), trip.From.Position) <= PlayerbotTravel.HandOffOnFailureYards;
+        Fail(session, player, trip, now, "dock-unreachable", why!, backoff: nearPort);
     }
 
     /// <summary>

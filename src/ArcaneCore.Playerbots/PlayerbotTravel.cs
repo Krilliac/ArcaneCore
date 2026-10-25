@@ -337,7 +337,8 @@ internal sealed class JourneyWalk
 /// only walks and begins legs; nothing it begins is moved by it.
 /// <list type="bullet">
 /// <item>A walk leg right before a boat, zeppelin or portal leg ends within <see cref="HandOffYards"/> of its end (that leg's driver walks the
-/// last yards to its dock or mage itself); a failure of such a walk hands off at once, and the next driver's failure is the leg's.</item>
+/// last yards to its dock or mage itself); a failure of such a walk within <see cref="HandOffOnFailureYards"/> of its end hands off at once,
+/// and the next driver's failure is the leg's; farther out the walk's own failure is the leg's.</item>
 /// <item>A failed leg (its driver reported it once) is replanned once from where the bot stands, leaving out the failed means or point on top
 /// of the drivers' backoffs (<see cref="TravelExclusions"/>); a second failure, or a replan with no route, fails the journey: reported once
 /// (anomaly area <see cref="AnomalyArea"/>, <c>leg-failed</c>). The journey is bounded (<see cref="DeadlineOf"/>, <c>overdue</c>). Nothing is
@@ -359,6 +360,12 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     /// <summary>A walk before a boat, zeppelin or portal leg hands off this close to that leg's start.</summary>
     internal const float HandOffYards = 100f;
+
+    /// <summary>
+    /// A walk before a boat, zeppelin or portal leg that fails hands off to that leg's driver only this close to the leg's start; farther out the
+    /// failure is the walk leg's own (replanned once, reported as <c>leg-failed</c>), not a <c>dock-unreachable</c> of a dock the walk never neared.
+    /// </summary>
+    internal const float HandOffOnFailureYards = 300f;
 
     /// <summary>On top of twice the planned seconds, the time a journey may take before it is overdue.</summary>
     internal const uint SlackMs = 600_000;
@@ -1115,7 +1122,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             case JourneyWalk.Outcome.Yield:
                 return StepResult.Yield;
             case JourneyWalk.Outcome.Failed:
-                if (handOff) return StepResult.Next; // the next leg's own driver walks to its dock or mage, and its failure is the leg's
+                // Near the next leg's start its own driver walks the last yards to its dock or mage, and its failure is the leg's; far from it
+                // the journey walk's failure is the honest one (the driver's weaker walk would only fail there and back off a healthy dock).
+                if (handOff && left <= HandOffOnFailureYards) return StepResult.Next;
                 why = "walk: " + walkWhy;
                 return StepResult.Failed;
             default:

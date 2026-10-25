@@ -150,4 +150,44 @@ public sealed class TravelLegFailureTests(ITestOutputHelper output)
             brain.Stop();
         }
     }
+
+    /// <summary>
+    /// Bot QA #1456 class 1: a journey walk that failed 600 yards from the dock handed off to the ship driver, whose weaker walk failed too: a
+    /// <c>dock-unreachable</c> of a dock the bot never neared, backing off a healthy dock so the journey left the ship out. Far from the dock the
+    /// walk leg's own failure is the journey's, and the dock is untouched.
+    /// </summary>
+    [Fact]
+    public async Task AWalkThatFails600YardsFromTheDock_IsTheWalkLegsFailure_NotADockUnreachable_AndTheDockIsNotBackedOff()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.PlaceAsync(0, ShipTestWorld.Start + new Vector3(-540f, 0f, 0f));
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new Refusing()));
+        PlayerbotOptions options = TravelJourneyShipTests.Options();
+        var brain = new PlayerbotBrain(world.Session, options);
+        var travel = new PlayerbotTravel(options);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        try
+        {
+            float fromDock = await world.OnWorldAsync(() =>
+            {
+                Assert.True(travel.TryBegin(world.Session, world.Player, 1, TravelJourneyShipTests.Goal, out string? why), why);
+                Assert.Equal([TravelMeans.Walk, TravelMeans.Boat], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Take(2).Select(l => l.Means));
+                return Vector2.Distance(new(world.Player.X, world.Player.Y), new(ShipTestWorld.PortOnMap0.Position.X, ShipTestWorld.PortOnMap0.Position.Y));
+            });
+            Assert.True(fromDock > 550f, $"{fromDock:F0} yd from the dock");
+
+            JourneyState? state = await TravelJourneyShipTests.RunAsync(world, brain, 300_000);
+            TravelJourney journey = await world.OnWorldAsync(() => PlayerbotTravel.JourneyOf(world.Player)!);
+            output.WriteLine($"{state} {journey.Failure}; {capture.Describe()}");
+            Assert.Equal(JourneyState.Failed, state);
+            Assert.Contains("Walk leg: walk:", journey.Failure);
+            Assert.Equal(0, capture.Count(PlayerbotAnomalies.Key(PlayerbotShip.AnomalyArea, "dock-unreachable")));
+            Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key(PlayerbotTravel.AnomalyArea, "leg-failed")));
+            Assert.False(await world.OnWorldAsync(() => PlayerbotShip.IsBackedOff(world.Player, 20808, fromA: true, world.Host.World.NowMs)));
+        }
+        finally
+        {
+            brain.Stop();
+        }
+    }
 }
