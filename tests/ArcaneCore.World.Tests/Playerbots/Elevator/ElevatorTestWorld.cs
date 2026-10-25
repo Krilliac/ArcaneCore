@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -138,9 +139,9 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
     /// A real player's client (a socket, as <see cref="WorldTestHost.EnterWorldAsync"/> makes one) brought to <paramref name="at"/> on
     /// Kalimdor, so it observes the bot there: the far teleport from its start, its worldport acknowledgement, the clock moved meanwhile.
     /// </summary>
-    public async Task<WorldTestClient> ObserverAsync(string account, string name, Vector3 at)
+    public async Task<WorldTestClient> ObserverAsync(string account, string name, Vector3 at, AccountSecurity security = AccountSecurity.Player)
     {
-        WorldTestClient client = await Host.EnterWorldAsync(account, name);
+        WorldTestClient client = await Host.EnterWorldAsync(account, name, security);
         Assert.True(await OnWorldAsync(() => Teleports.TeleportTo(Host.World.FindOnlinePlayer(name)!, ElevatorTestData.Kalimdor, at.X, at.Y, at.Z, 0)),
             "the observer's teleport was refused");
         for (int i = 0; i < 10; i++) await AdvanceAsync(50);

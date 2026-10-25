@@ -23,12 +23,16 @@ public sealed record WiringFinding(string Category, string Subject, string Detai
     public override string ToString() => $"[{Category}] {Subject}: {Detail}";
 }
 
-/// <summary>The outcome of one <see cref="WiringAudit.Run"/>: the findings, and how much was looked at (so "clean" is not "looked at nothing").</summary>
+/// <summary>
+/// The outcome of one <see cref="WiringAudit.Run"/>: the findings, and how much was looked at (so "clean" is not "looked at nothing").
+/// <paramref name="DevDropped"/> is informational and never a finding (<see cref="IsClean"/> ignores it): the stripped developer opcodes dropped so far, null when none.
+/// </summary>
 public sealed record WiringReport(
     IReadOnlyList<WiringFinding> Findings,
     int OpcodeHandlers,
     int ConfigChecksRun,
-    int OptionsConsumersChecked)
+    int OptionsConsumersChecked,
+    string? DevDropped = null)
 {
     public bool IsClean => Findings.Count == 0;
 
@@ -151,6 +155,8 @@ public sealed class WiringAudit
         }
 
         int handlers = AuditHandlers(findings);
+        DevOpcodeTracker dev = _services.GetService<DevOpcodeTracker>() ?? DevOpcodeTracker.Shared;
+        IReadOnlyList<DevOpcodeCount> dropped = dev.Snapshot();
 
         StaticResult computed;
         lock (_staticGate)
@@ -159,7 +165,19 @@ public sealed class WiringAudit
         }
 
         findings.AddRange(computed.Findings);
-        return new WiringReport(findings, handlers, computed.Checks, computed.Consumers);
+        return new WiringReport(findings, handlers, computed.Checks, computed.Consumers, DevDroppedLine(dropped));
+    }
+
+    private static string? DevDroppedLine(IReadOnlyList<DevOpcodeCount> dropped)
+    {
+        if (dropped.Count == 0)
+        {
+            return null;
+        }
+
+        long total = dropped.Sum(c => c.Count);
+        return string.Create(CultureInfo.InvariantCulture,
+            $"dev opcodes dropped: {total} (stripped developer opcodes, not gaps; top {string.Join(", ", dropped.Take(5).Select(c => $"{c.Opcode} x{c.Count}"))})");
     }
 
     private StaticResult ComputeStatic()
@@ -187,7 +205,8 @@ public sealed class WiringAudit
             }
         }
 
-        return opcodes.Count;
+        // The stripped developer opcodes are table entries with no handler: they are not counted as handlers here.
+        return opcodes.Count(o => !table.TryGet(o, out OpcodeHandler handler) || !handler.Stripped);
     }
 
     private int AuditConfigChecks(List<WiringFinding> findings)

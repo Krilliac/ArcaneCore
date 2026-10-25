@@ -35,7 +35,7 @@ public sealed class PacketHeuristicsClientTests
             using AnomalyCapture capture = ledger.Capture();
             for (int i = 0; i < 20; i++)
             {
-                await client.SendAsync(WorldOpcode.CmsgBootme, []);
+                await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
                 await client.SendAsync((WorldOpcode)826, [1, 2, 3]);
                 await client.SendAsync(WorldOpcode.CmsgStandstatechange, [0, 0, 0, 0, 9]);
                 await client.SendAsync(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(0));
@@ -103,21 +103,21 @@ public sealed class PacketHeuristicsClientTests
     public async Task UnknownOpcode_IsInfoWhenNamed_AndWarningWhenOutsideTheTableOrAServerOpcode()
     {
         await using var host = WorldTestHost.Start();
-        Assert.False(host.Opcodes.TryGet(WorldOpcode.CmsgBootme, out _));
+        Assert.False(host.Opcodes.TryGet(WorldOpcode.CmsgNewSpellSlot, out _));
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHUNK", "Phunkone");
         await using (client)
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await client.SendAsync((WorldOpcode)826, [1, 2, 3]);
             await client.SendAsync(WorldOpcode.SmsgPong, [0, 0, 0, 0]);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
 
             Assert.Equal(3, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
             IReadOnlyList<AnomalyNotice> notices = capture.Notices;
-            Assert.Equal(AnomalySeverity.Info, Assert.Single(notices, n => n.Detail.StartsWith("CMSG_BOOTME", StringComparison.Ordinal)).Severity);
+            Assert.Equal(AnomalySeverity.Info, Assert.Single(notices, n => n.Detail.StartsWith("CMSG_NEW_SPELL_SLOT", StringComparison.Ordinal)).Severity);
             AnomalyNotice outside = Assert.Single(notices, n => n.Detail.Contains("outside the opcode table", StringComparison.Ordinal));
             Assert.Equal(AnomalySeverity.Warning, outside.Severity);
             AnomalyNotice server = Assert.Single(notices, n => n.Detail.StartsWith("SMSG_PONG", StringComparison.Ordinal));
@@ -357,14 +357,14 @@ public sealed class PacketHeuristicsClientTests
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Empty(capture.Notices);
             Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.UnknownOpcode));
             Assert.Null(session.HeuristicsState);
 
             feature.SetExemptStaff(false);
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Staff) >= 1, "the staff finding");
             Assert.Equal(0, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
             Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.UnknownOpcode));
@@ -379,12 +379,12 @@ public sealed class PacketHeuristicsClientTests
         await using (client)
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player) == 1, "one finding while on");
 
             feature.SetEnabled(false);
             Assert.False(feature.Active);
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Equal(1, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
 
