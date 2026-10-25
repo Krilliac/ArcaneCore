@@ -171,12 +171,15 @@ public sealed class PublicHubTests
     public async Task TheByteBudgetIsPerAddress_SoASecondSocketOfTheSameAddressCannotDoubleIt()
     {
         var time = new ManualTime();
-        await using PublicRig rig = await PublicRig.StartAsync(o => { o.Guest.MaxBytesPerSecond = 4096; o.Guest.FeedHz = 2; }, time: time);
+        await using PublicRig rig = await PublicRig.StartAsync(o => { o.Guest.MaxBytesPerSecond = 8192; o.Guest.FeedHz = 2; }, time: time);
         using ClientWebSocket one = await OpenAsync(rig, await rig.VisitAsync());
         using ClientWebSocket two = await OpenAsync(rig, await rig.VisitAsync());
         AllowLinks(rig, 1);
 
-        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 14)); // about 1.7 KiB: one fits in the 4 KiB budget beside the reserve, two do not
+        // A frame of about 3.3 KiB in an 8 KiB budget (reserve 2 KiB): one fits beside the reserve, two do not, and the margin on each side is
+        // about 1 KiB. The hello and the status notes the hub charges first are timing dependent (a tick between the socket becoming ready and
+        // the ingest adds a note per socket), so a frame sized to fit with a margin of tens of bytes flaked: a few extra notes dropped both.
+        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 27));
         Assert.True(await WaitAsync(() => rig.Runtime.Stats.FramesDropped == 1), "one of the two sockets should have had its frame dropped");
 
         bool oneGotIt = await GotFrameAsync(one);
