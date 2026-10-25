@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -331,20 +332,22 @@ public sealed class PlayerbotPvpKillRoutingWorldTests
         ManagedPlayerbotFeature feature = PartyTestHost.Feature(world.Host);
         await using WorldTestClient killer = await world.AddPlayerAsync("Allockiller", SocialTestKit.Orc);
         await using WorldTestClient victim = await world.AddPlayerAsync("Allocvictim");
-        const int deaths = 10_000;
+        const int deathsPerWindow = 1000;
 
-        long allocated = await world.Host.OnWorldAsync(() =>
+        await world.Host.OnWorldAsync(() =>
         {
             PlayerbotSocialRecorder recorder = feature.Social;
             Player slayer = Online(world, "Allockiller");
             Player dead = Online(world, "Allocvictim");
+            Action window = () =>
+            {
+                for (int i = 0; i < deathsPerWindow; i++) recorder.NotePvpKill(slayer, dead);
+            };
             for (int i = 0; i < 1000; i++) recorder.NotePvpKill(slayer, dead); // warm-up: JIT, tiering
-            long start = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < deaths; i++) recorder.NotePvpKill(slayer, dead);
-            return GC.GetAllocatedBytesForCurrentThread() - start;
-        });
 
-        // A closure plus its delegate cost over 100 bytes per death (about a megabyte here); the bound is for the whole loop.
-        Assert.True(allocated < 200, $"{deaths} player deaths allocated {allocated} bytes");
+            // A closure plus its delegate cost over 100 bytes per death; no window may allocate. Runtime cast-cache rebuilds on this thread are
+            // excused by the probe (see the note in AllocationProbe).
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, $"{deathsPerWindow} player deaths with no bot involved");
+        });
     }
 }
