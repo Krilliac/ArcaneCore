@@ -31,6 +31,12 @@ public sealed class DynamicRespawnTests
 
         public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId) => new Dictionary<uint, long>();
 
+        public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds)
+        {
+            respawnUnixSeconds = 0;
+            return false;
+        }
+
         public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds) => Calls.Add($"save:{mapId}:{instanceId}:{spawnGuid}:{respawnUnixSeconds}");
 
         public void Delete(uint mapId, uint instanceId, uint spawnGuid)

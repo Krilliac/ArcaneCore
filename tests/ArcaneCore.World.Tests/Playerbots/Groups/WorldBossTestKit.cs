@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
@@ -70,13 +71,21 @@ internal static class WorldBossTestKit
         boss?.Invoke(w);
     }
 
-    internal static async Task<GroupTestWorld> StartAsync(Action<PlayerbotWorldBossOptions>? boss = null, Action<PlayerbotOptions>? configure = null, params CreatureTemplate[] templates)
+    internal static Task<GroupTestWorld> StartAsync(Action<PlayerbotWorldBossOptions>? boss = null, Action<PlayerbotOptions>? configure = null, params CreatureTemplate[] templates)
+        => StartCoreAsync(boss, configure, null, null, templates);
+
+    /// <summary>
+    /// <see cref="StartAsync"/> with more services (a recording QA sink) and, when <paramref name="spawned"/> is given, creature rows instead of a template alone: a boss with a
+    /// database spawn is listed with a <c>Spawn</c> locator (its <see cref="Tune"/> entry must then be written without <c>@0</c>).
+    /// </summary>
+    internal static async Task<GroupTestWorld> StartCoreAsync(Action<PlayerbotWorldBossOptions>? boss, Action<PlayerbotOptions>? configure, Action<IServiceCollection>? services,
+        (CreatureTemplate Template, CreatureSpawn Spawn)[]? spawned, CreatureTemplate[] templates)
     {
         GroupTestWorld world = await GroupTestWorld.StartAsync([], options =>
         {
             Tune(options, boss);
             configure?.Invoke(options);
-        }, extraTemplates: templates.Length == 0 ? [Boss()] : templates);
+        }, services: services, extraCreatures: spawned, extraTemplates: spawned is null && templates.Length == 0 ? [Boss()] : templates);
         world.Coordinator.UnixNow = () => BaseUnix + world.World.Host.World.NowMs / 1000;
         return world;
     }

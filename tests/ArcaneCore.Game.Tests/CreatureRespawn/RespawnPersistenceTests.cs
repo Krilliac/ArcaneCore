@@ -32,6 +32,9 @@ public sealed class RespawnPersistenceTests
         public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId)
             => Stored.Where(e => e.Key.Map == mapId && e.Key.Instance == instanceId).ToDictionary(e => e.Key.Guid, e => e.Value);
 
+        public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds)
+            => Stored.TryGetValue((mapId, instanceId, spawnGuid), out respawnUnixSeconds);
+
         public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds)
         {
             Calls.Add($"save:{mapId}:{instanceId}:{spawnGuid}:{respawnUnixSeconds}");

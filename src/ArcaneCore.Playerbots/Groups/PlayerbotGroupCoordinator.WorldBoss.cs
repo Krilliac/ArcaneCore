@@ -424,7 +424,8 @@ public sealed partial class PlayerbotGroupCoordinator
             }, unix);
         }
 
-        long pending = locator.Kind == PlayerbotWorldBossLocatorKind.Spawn ? RespawnLedger()?.GetPending(mapId, 0).GetValueOrDefault(locator.SpawnGuid) ?? 0 : 0;
+        long pending = 0; // the ledger is read only for a boss that is not alive: a point lookup, never the copy of the map's dictionary
+        if (locator.Kind == PlayerbotWorldBossLocatorKind.Spawn && RespawnLedger()?.TryGetPending(mapId, 0, locator.SpawnGuid, out long due) == true) pending = due;
         return PlayerbotWorldBossStatus.Resolve(new PlayerbotWorldBossFacts
         {
             Position = position,
@@ -433,7 +434,13 @@ public sealed partial class PlayerbotGroupCoordinator
         }, unix);
     }
 
-    private ICreatureRespawnPersistence? RespawnLedger() => services.GetService<CreatureRespawnFeature>()?.Persistence;
+    /// <summary>The respawn ledger the world-boss code reads (tests set it to count the reads; null: the world's own).</summary>
+    internal ICreatureRespawnPersistence? RespawnLedgerOverride { get; set; }
+
+    private ICreatureRespawnPersistence? RespawnLedger() => RespawnLedgerOverride ?? services.GetService<CreatureRespawnFeature>()?.Persistence;
+
+    /// <summary>What the last watch of the boss <paramref name="entry"/> saw of it (tests); null before the first watch.</summary>
+    internal PlayerbotWorldBossStatus? WorldBossStatus(uint entry) => _wbSeen.TryGetValue(entry, out WorldBossSeen? seen) ? seen.Status : null;
 
     // --- the raid's life --------------------------------------------------------------------------------------------------
 
@@ -535,7 +542,7 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>The boss creature (alive, or its corpse) the raid is after: by spawn guid for a database spawn, else the nearest of the entry to <paramref name="home"/>.</summary>
-    private Creature? FindRaidBoss(CreatureMapSystem system, PlayerbotWorldBossRaid raid, Vector3 home, uint now)
+    internal Creature? FindRaidBoss(CreatureMapSystem system, PlayerbotWorldBossRaid raid, Vector3 home, uint now)
     {
         // The cached guid is one lookup; it is dropped when it finds nothing or a creature of another entry.
         if (!raid.BossGuid.IsEmpty)
@@ -554,6 +561,7 @@ public sealed partial class PlayerbotGroupCoordinator
         // Nothing cached: scan the map's creatures at most once per watch interval (a miss is looked at again then).
         if (raid.BossScanMs != 0 && unchecked(now - raid.BossScanMs) < (uint)Math.Max(1, Wb.WatchSeconds) * 1000u) return null;
         raid.BossScanMs = Math.Max(1u, now);
+        raid.BossScans++;
         Creature? best = null;
         float bestYards = float.MaxValue;
         foreach (Creature creature in system.Creatures)
@@ -664,7 +672,7 @@ public sealed partial class PlayerbotGroupCoordinator
             AnyResting = group.AnyResting(world),
             CorpseTapByRaid = corpseTapByRaid,
             TapSeen = raid.TapSeen,
-            LedgerPending = LedgerHoldsBoss(raid),
+            LedgerPending = boss is null && LedgerHoldsBoss(raid), // read by Decide only when no boss was found: no ledger lookup on the 200 ms path while it is alive
             OthersClaim = othersClaim,
             OthersClaimMs = raid.ClaimSinceMs == 0 ? 0 : unchecked(now - raid.ClaimSinceMs),
             RealPlayersNear = playersNear,
@@ -731,7 +739,7 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         PlayerbotWorldBossLocator locator = raid.Boss.Locator;
         return locator.Kind == PlayerbotWorldBossLocatorKind.Spawn
-            && RespawnLedger()?.GetPending(locator.MapId, 0).TryGetValue(locator.SpawnGuid, out long due) == true && due > UnixNow();
+            && RespawnLedger()?.TryGetPending(locator.MapId, 0, locator.SpawnGuid, out long due) == true && due > UnixNow();
     }
 
     /// <summary>The raid is over: count its outcome, set its campaign's cooldown (and the attempt, when it reached the walk to the boss) and the gauge.</summary>

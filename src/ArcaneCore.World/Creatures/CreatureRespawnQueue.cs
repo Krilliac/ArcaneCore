@@ -214,6 +214,13 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId)
         => _times.TryGetValue((mapId, instanceId), out Dictionary<uint, long>? times) ? new Dictionary<uint, long>(times) : new Dictionary<uint, long>();
 
+    public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds)
+    {
+        if (_times.TryGetValue((mapId, instanceId), out Dictionary<uint, long>? times) && times.TryGetValue(spawnGuid, out respawnUnixSeconds)) return true;
+        respawnUnixSeconds = 0;
+        return false;
+    }
+
     public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds)
     {
         For(mapId, instanceId)[spawnGuid] = respawnUnixSeconds;
