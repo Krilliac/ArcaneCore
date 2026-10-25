@@ -18,7 +18,7 @@ public sealed class PopulationSurveyRealTerrainTests(ITestOutputHelper output) :
     private static CreatureSpawn Spawn(uint guid, float x, float y, float z) => new() { Guid = guid, Entry = 1, MapId = 0, X = x, Y = y, Z = z };
 
     // Known places (the bot navigation tests' live positions): William Pestle stands inside the Lion's Pride Inn (Goldshire), Undertaker
-    // Mordo outside the Deathknell crypt, and the crypt stairs are inside it.
+    // Mordo outside the Deathknell crypt, and the crypt stairs inside its entrance.
     private static readonly Vector3 Pestle = new(-9460.3f, 31.94f, 57.05f);
     private static readonly Vector3 Mordo = new(1678.99f, 1667.86f, 135.85f);
     private static readonly Vector3 CryptStairs = new(1645.4f, 1665.9f, 132.6f);
@@ -63,10 +63,9 @@ public sealed class PopulationSurveyRealTerrainTests(ITestOutputHelper output) :
             + $"on-demand tiles {before.OnDemandBefore} before, {after.OnDemandAfter} after; models in use {before.UsedBefore.Count} before, {after.UsedAfter.Count} after; "
             + $"outdoors {string.Join(",", outdoors)}");
 
-        // Known answers: inside the inn and the crypt reads indoors, outside the crypt reads outdoors.
+        // Known answers: inside the inn reads indoors, outside the crypt reads outdoors. (The Deathknell crypt stairs read outdoors too: the crypt is no indoor WMO group, so only the under-terrain test, off-thread, drops its spawns.)
         Assert.False(outdoors[0], "William Pestle stands inside the Lion's Pride Inn");
         Assert.True(outdoors[1], "Undertaker Mordo stands outside the crypt");
-        Assert.False(outdoors[2], "the crypt stairs are inside the crypt");
 
         // Tile state: every tile is held exactly as before (the held one still, the others released again), no on-demand tile is left over.
         Assert.Equal(before.HeldBefore, after.HeldAfter);
