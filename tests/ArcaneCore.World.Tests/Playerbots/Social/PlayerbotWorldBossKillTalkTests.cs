@@ -68,8 +68,7 @@ public sealed class PlayerbotWorldBossKillTalkTests
         public Task<(int GuildTopics, IReadOnlyList<PlayerbotGuildTopic> Queued, int Noticed, string? NoticedWhere)> KillAsync(string killer, CreatureTemplate template) => World.Host.OnWorldAsync(() =>
         {
             Player player = World.Host.World.FindOnlinePlayer(killer)!;
-            var system = player.Map!.FindUpdater<CreatureMapSystem>()!;
-            Creature victim = system.SpawnTemporary(template, player.X + 10f, player.Y, player.Z, 0f);
+            var victim = new Creature(template.Entry, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
             PlayerbotSocialPass pass = SocialTestKit.BotPass(World.Host, 1_000, Timings);
             Chat.OnUnitKilled(pass, player.Map!, player, victim);
             Conversations.OnUnitKilled(player.Map!, player, victim);

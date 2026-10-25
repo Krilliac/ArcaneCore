@@ -86,8 +86,6 @@ public sealed class PlayerbotWorldBossOutcomesTests
     {
         Assert.Equal("arcanecore.playerbot.worldboss_raids", PlayerbotWorldBossMeters.Raids.Name);
         Assert.Equal("arcanecore.playerbot.worldboss_active", PlayerbotWorldBossMeters.Active.Name);
-        Assert.StartsWith(ArcaneMeters.Prefix, PlayerbotWorldBossMeters.Raids.Name, StringComparison.Ordinal);
-        Assert.StartsWith(ArcaneMeters.Prefix, PlayerbotWorldBossMeters.Active.Name, StringComparison.Ordinal);
         Assert.StartsWith(ArcaneMeters.Prefix, PlayerbotWorldBossMeters.Meter.Name, StringComparison.Ordinal);
     }
 

@@ -249,7 +249,7 @@ public sealed class PlayerbotWorldBossCatalogueTests
         Assert.False(catalogue.IsWorldBossEntry(Teremus));
         Assert.False(catalogue.IsWorldBossEntry(PlacedEntry));
         Assert.False(catalogue.IsWorldBossEntry(Ysondre));
-        Assert.Equal(new[] { Kazzak, Lethon, Emeriss, Taerar }.Order(), catalogue.Entries.Select(e => e.Entry).Order());
+        Assert.Equal(new[] { Kazzak, Lethon, Emeriss, Taerar, SpawnedEntry }.Order(), catalogue.Entries.Select(e => e.Entry).Order());
     }
 
     [Fact]
