@@ -52,6 +52,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
     public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
 
+    /// <summary>Answering trade windows, deals, group gifts and the outflow limits (<c>World:Playerbots:Social:Trading</c>).</summary>
+    public PlayerbotSocialTradingOptions Trading { get; set; } = new();
+
     /// <summary>Bots and the world's events: festival gathering, celebration and talk (<c>World:Playerbots:Social:Events</c>).</summary>
     public PlayerbotSocialEventsOptions Events { get; set; } = new();
 
@@ -81,6 +84,8 @@ public sealed class PlayerbotSocialOptions
         Mood.Validate();
         if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
         Initiative.Validate();
+        if (Trading is null) throw new InvalidOperationException($"{section}:Trading is missing.");
+        Trading.Validate();
         if (Events is null) throw new InvalidOperationException($"{section}:Events is missing.");
         Events.Validate();
         Lists.Validate();

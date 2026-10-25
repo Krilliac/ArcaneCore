@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// (a player guid carries the character id, so the map is keyed by it), keeps the <see cref="PlayerbotSocialMemory"/>, and never throws
 /// into game logic: a failure is recorded at the fault site <c>playerbot.social-memory</c> and logged. Any thread.
 /// </summary>
-internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILogger logger)
+internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILogger logger, PlayerbotTradeLedger? ledger = null)
 {
     public const string FaultSite = "playerbot.social-memory";
 
@@ -21,6 +21,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     private int _faultsLogged;
 
     public PlayerbotSocialMemory Memory { get; } = memory;
+
+    /// <summary>The bots' trade ledgers (P4 S3); events that belong in them are fed from <see cref="Note"/> and <see cref="NoteById"/>.</summary>
+    public PlayerbotTradeLedger? Ledger { get; } = ledger;
 
     /// <summary>The bots' short-term moods; every social event that moves one is applied by <see cref="Note"/> and <see cref="NoteById"/>.</summary>
     public PlayerbotMood Mood { get; } = new();
@@ -58,7 +61,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     /// <summary>Record <paramref name="e"/> in <paramref name="bot"/>'s memory toward <paramref name="other"/>; nothing if the first is not a managed bot or the second not a player.</summary>
     public void Note(ObjectGuid bot, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
-        if (!Enabled || !other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
+        if (!other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
+        if (IsLedgerEvent(e)) Guarded((Recorder: this, botId, characterId, Other: other.Value, e), static s => s.Recorder.FeedLedger(s.botId, s.characterId, s.Other, s.e)); // the ledger is fed whether or not the memory is on: scam safety does not depend on that switch
+        if (!Enabled) return;
         Guarded(() =>
         {
             Memory.Note(botId, characterId, other.Value, IsManaged(other), e, otherFaction);
@@ -66,10 +71,29 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         });
     }
 
+    // The events that belong in the trade ledger as well as in the memory. A gift's once-a-day rule is the ledger's: the caller that counts gifts asks it (NoteGiftReceived)
+    // before recording, and this stamp then finds the day already taken. A flake stays a memory event only.
+    private static bool IsLedgerEvent(PlayerbotSocialEvent e)
+        => e is PlayerbotSocialEvent.FairDeal or PlayerbotSocialEvent.TradeScam or PlayerbotSocialEvent.NinjaLoot or PlayerbotSocialEvent.GiftReceived;
+
+    private void FeedLedger(Guid botId, int characterId, ulong other, PlayerbotSocialEvent e)
+    {
+        if (Ledger is not { } ledger || !_managed.ContainsKey((uint)characterId)) return; // a bot that left (deleted) must not bring its ledger back
+        switch (e)
+        {
+            case PlayerbotSocialEvent.FairDeal: ledger.NoteFairDeal(botId, characterId, other); break;
+            case PlayerbotSocialEvent.TradeScam: ledger.NoteScam(botId, characterId, other); break;
+            case PlayerbotSocialEvent.NinjaLoot: ledger.NoteNinja(botId, characterId, other); break;
+            case PlayerbotSocialEvent.GiftReceived: ledger.NoteGiftReceived(botId, characterId, other); break;
+        }
+    }
+
     /// <summary>Record <paramref name="e"/> for a bot whose id is already known (chat, the party AI).</summary>
     public void NoteById(Guid botId, ObjectGuid botGuid, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
-        if (!Enabled || !other.IsPlayer || other == botGuid) return;
+        if (!other.IsPlayer || other == botGuid) return;
+        if (IsLedgerEvent(e)) Guarded((Recorder: this, botId, CharacterId: (int)botGuid.Low, Other: other.Value, e), static s => s.Recorder.FeedLedger(s.botId, s.CharacterId, s.Other, s.e)); // the ledger is fed whether or not the memory is on
+        if (!Enabled) return;
         Guarded(() =>
         {
             Memory.Note(botId, (int)botGuid.Low, other.Value, IsManaged(other), e, otherFaction);

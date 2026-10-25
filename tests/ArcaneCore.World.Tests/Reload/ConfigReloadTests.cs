@@ -376,6 +376,33 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotSocialTrading_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The trade desk (a later P4 step) will read Trading:Enabled and the limits from this options object at every pass: switching off mid-trade will cancel the window.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Trading": { "Enabled": false, "TradeTimeoutSeconds": 90, "Limits": { "MaxConcurrentTrades": 4, "DailyOutflowCopperServer": 5000 } } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.False(playerbots.Social.Trading.Enabled);
+        Assert.Equal(90, playerbots.Social.Trading.TradeTimeoutSeconds);
+        Assert.Equal(4, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+        Assert.Equal(5000, playerbots.Social.Trading.Limits.DailyOutflowCopperServer);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Trading": { "Limits": { "MaxConcurrentTrades": 257 } } } } } }""");
+        ReloadResult refused = await coordinator.ReloadAsync("config");
+        Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+        Assert.Equal(4, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(playerbots.Social.Trading.Enabled);
+        Assert.Equal(45, playerbots.Social.Trading.TradeTimeoutSeconds);
+        Assert.Equal(16, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+        Assert.Equal(2_000_000, playerbots.Social.Trading.Limits.DailyOutflowCopperServer);
+    }
+
+    [Fact]
     public async Task PlayerbotThinkLimits_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // ManagedPlayerbotFeature reads SlowThinkLogMs and MaxThinkSearchNodes from this options object at every think.
@@ -840,6 +867,22 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialGratitudeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Gratitude:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingDealsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Deals:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingGiftsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Gifts:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingLimitsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Limits:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialMoodOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

@@ -826,7 +826,7 @@ internal sealed class PlayerbotPartyAI
     private void OnLootRollWon(Player player, byte[] payload)
     {
         if (!PlayerbotLootRolls.TryReadWon(payload, out PlayerbotLootRolls.RollResult won)) return;
-        if (!_myRolls.Remove((won.Source.Value, won.Slot), out RollVote mine) || Social is not { Enabled: true } social) return;
+        if (!_myRolls.Remove((won.Source.Value, won.Slot), out RollVote mine) || Social is not { } social || (!social.Enabled && social.Ledger is null)) return; // the ledger is fed with the memory off
         if (won.Winner == player.Guid || _session.World.FindOnlinePlayer(won.Winner) is not { } winner) return;
         // Judging whether the winner could use the item reads the item and spell stores: part of the recording step, so a fault is recorded, not thrown.
         social.Guarded(() =>

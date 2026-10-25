@@ -1785,7 +1785,10 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:AffinityPerAbandonedRun` | `int` | `-10` | live | Affinity change toward a member who left the group during a dungeon or raid run (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerApology` | `int` | `10` | live | Affinity gained when someone the bot dislikes says sorry to it (a chat line or the sorry emote), at most once per pair per UTC day (0..50). |
 | `World:Playerbots:Social:Memory:AffinityPerChat` | `int` | `1` | live | Affinity gained when a chat exchange with the bot happens (0..20). |
+| `World:Playerbots:Social:Memory:AffinityPerDealFlaked` | `int` | `-1` | live | Affinity change toward a partner who agreed a deal and never completed it (-100..0). |
+| `World:Playerbots:Social:Memory:AffinityPerFairDeal` | `int` | `3` | live | Affinity gained when a trade deal completes at the agreed terms (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerFriendlyEmote` | `int` | `2` | live | Affinity gained when someone makes a friendly emote at the bot (0..20). |
+| `World:Playerbots:Social:Memory:AffinityPerGiftReceived` | `int` | `4` | live | Affinity gained for a gift worth at least the trading gift minimum (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerGroup` | `int` | `3` | live | Affinity gained when the bot is grouped with someone (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerGroupSuccess` | `int` | `5` | live | Affinity gained when a group the bot was in succeeds at its run (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerHelp` | `int` | `8` | live | Affinity gained toward someone who helped the bot, and toward someone the bot helped (0..50). |
@@ -1797,6 +1800,7 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:AffinityPerRudeEmote` | `int` | `-5` | live | Affinity change when someone makes a rude emote at the bot (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerStrike` | `int` | `-15` | live | Affinity change when the chat safety screen strikes a player's line to the bot (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerTrade` | `int` | `3` | live | Affinity gained when a trade with the bot completes (0..30). |
+| `World:Playerbots:Social:Memory:AffinityPerTradeScam` | `int` | `-15` | live | Affinity change toward a partner who changed a deal's value after matching it (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerWatchedDie` | `int` | `-12` | live | Affinity change toward a same-faction bystander who watched the bot die without helping (-100..0). |
 | `World:Playerbots:Social:Memory:AnswerHelpEnabled` | `bool` | `true` | live | Let a managed bot that is asked for help join the fight, by its helpfulness and its liking for the asker. |
 | `World:Playerbots:Social:Memory:BystanderMinHealthPercent` | `int` | `50` | live | The least health percent a bystander needs to count as able to help (1..100). |
@@ -1812,11 +1816,39 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:MaxRelationsPerBot` | `int` | `256` | live | The most relations one bot keeps (16..1024). Past it the least familiar, oldest entry that is not a strong bond or grudge is dropped; with War Mode on and RemoveCaps, one the war layer holds a grudge against stays as a war-only entry that only War Mode sees (a bot holds at most four times this many entries in all). |
 | `World:Playerbots:Social:Memory:RivalAffinity` | `int` | `-50` | live | At or below this affinity the Rival flag is set; above it again, the flag is cleared (-100..0). |
 | `World:Playerbots:Social:Memory:RivalHalfLifeDays` | `int` | `45` | live | The same half-life for a relation flagged Rival: a grudge fades slower (1..3650). |
+| `World:Playerbots:Social:Memory:TrustPerFairDeal` | `int` | `20` | live | Trust (permille) gained toward a partner whose deal completed at the agreed terms (-500..500). |
 | `World:Playerbots:Social:Memory:TrustPerFirstDeathInWipe` | `int` | `-30` | live | Trust (permille) change toward the member who died first in a wipe (-500..500). |
 | `World:Playerbots:Social:Memory:TrustPerGroupSuccess` | `int` | `30` | live | Trust (permille) gained toward every member of a group that finished its run (-500..500). |
+| `World:Playerbots:Social:Memory:TrustPerTradeScam` | `int` | `-200` | live | Trust (permille) change toward that partner (-500..500). |
 | `World:Playerbots:Social:Mood:Enabled` | `bool` | `true` | live | Let bots have a mood (on by default). Off: every mood reads 0 and events change nothing. |
 | `World:Playerbots:Social:Mood:HalfLifeMinutes` | `int` | `30` | live | The minutes in which a mood decays to half of itself (1..1440, default 30). |
 | `World:Playerbots:Social:PassBudgetMs` | `double` | `4` | live | The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply carries on (the next one starts when it has finished). The per-bot lanes stop between bots once the budget is spent (a tick may overshoot by one bot); the lanes that work on the whole population run whole. |
+| `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
+| `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
+| `World:Playerbots:Social:Trading:Deals:DealMinutes` | `int` | `5` | live | The minutes an agreed deal stays open (1..60, default 5). |
+| `World:Playerbots:Social:Trading:Deals:DislikeMarkupPercent` | `int` | `25` | live | The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25). |
+| `World:Playerbots:Social:Trading:Deals:Enabled` | `bool` | `true` | live | Fixed-price WTS completion (on by default). |
+| `World:Playerbots:Social:Trading:Deals:FriendDiscountPercent` | `int` | `20` | live | The ask discount in percent for a friend at full affinity, scaled by the bot's giving affinity (0..100, default 20). |
+| `World:Playerbots:Social:Trading:Deals:MaxDealCopper` | `int` | `500000` | live | The most a single deal may be worth in copper (0..100000000, default 500000 = 50 g; 0 disables deals). |
+| `World:Playerbots:Social:Trading:Deals:PairCooldownMinutes` | `int` | `10` | live | The minutes a pair waits after a deal expired, was declined or was cancelled before a new one (0..1440, default 10). |
+| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). |
+| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). |
+| `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then. |
+| `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
+| `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Group gifts after a run (on by default). |
+| `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |
+| `World:Playerbots:Social:Trading:Gifts:MaxGiftValueCopper` | `int` | `5000` | live | The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts). |
+| `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerAccount` | `int` | `20000` | live | The copper one real account, all its characters together, may receive from all bots per UTC day (0..100000000, default 20000 = 2 g). |
+| `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerBot` | `int` | `20000` | live | The copper one bot may give real players per UTC day, gifts and discounts counted (0..100000000, default 20000 = 2 g). |
+| `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperServer` | `int` | `2000000` | live | The copper all bots together may give real players per UTC day (0..1000000000, default 2000000 = 200 g). |
+| `World:Playerbots:Social:Trading:Limits:MaxConcurrentTrades` | `int` | `16` | live | The trade windows open at once in the world (0..256, default 16). |
+| `World:Playerbots:Social:Trading:Limits:MaxTradesPerAccountPerHour` | `int` | `10` | live | The trades all bots together may complete toward one real account in an hour (0..120, default 10). |
+| `World:Playerbots:Social:Trading:Limits:MaxTradesPerBotPerHour` | `int` | `6` | live | The trades one bot may complete with real players in an hour (0..120, default 6). |
+| `World:Playerbots:Social:Trading:LowTrustPermille` | `int` | `350` | live | The trust (permille) below which a partner's deals are capped at a quarter of the deal maximum (0..1000, default 350). |
+| `World:Playerbots:Social:Trading:MaxGiftsReceivedPerHour` | `int` | `10` | live | The gifts one bot accepts from one partner in an hour (0..120, default 10). |
+| `World:Playerbots:Social:Trading:NinjaMemoryDays` | `int` | `14` | live | The days a bot gives a partner who looted ninja-style no group gifts and asks more (0..365, default 14). |
+| `World:Playerbots:Social:Trading:ScamMemoryDays` | `int` | `30` | live | The days a bot refuses every trade and gift from a partner who scammed it (0..365, default 30; 0 forgets at once, the scam still costs affinity and trust). |
+| `World:Playerbots:Social:Trading:TradeTimeoutSeconds` | `int` | `45` | live | The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45). |
 | `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
 | `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
 | `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |

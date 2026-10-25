@@ -234,7 +234,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private BotSocial.PlayerbotSocialRecorder CreateSocial()
     {
         var created = new BotSocial.PlayerbotSocialRecorder(
-            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger);
+            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger,
+            new BotSocial.PlayerbotTradeLedger(_options.Social.Trading, _options.Social.WarMode, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()));
         return Interlocked.CompareExchange(ref _social, created, null) ?? created;
     }
 
@@ -494,6 +495,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             ActiveBot active = NewActiveBot(entry, brain);
             active.SavedSetAsideVersion = -1; // written again at the next checkpoint
             active.SavedRelationVersion = -1;
+            active.SavedTradeVersion = -1;
             if (controllers?.TryGetValue(entry.BotId, out IPlayerbotController? controller) == true) active.Controller = controller;
             if (_active.TryAdd(entry.BotId, active)) Interlocked.Increment(ref _activeVersion);
         }
@@ -581,6 +583,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverSharedSetAsides, _sharedSetAsides.Export(nowMs, unixNow));
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
         handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
+        handover.Set(HandoverTradeRecords, Social.Ledger?.SnapshotAll() ?? []);
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -624,6 +627,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
         RestoreMainPass(handover);
         if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
+        if (Social.Ledger is { } ledger && handover.TryGet<PlayerbotTradeRecord[]>(HandoverTradeRecords, out var tradeRecords)) ledger.Load(tradeRecords);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -707,7 +711,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         };
         party.Social = Social;
         Social.Track(entry.BotId, entry.Record.CharacterId);
-        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
+        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId), SavedTradeVersion = Social.Ledger?.Version(entry.BotId) ?? 0 };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
         {
             Recorder = Social,
@@ -781,6 +785,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 logger.LogWarning(ex, "Playerbot social memory could not be loaded ({Type}); the bots start with none", ex.GetType().Name);
             }
         }
+        await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
@@ -3499,6 +3504,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
             foreach ((Guid botId, _) in removed) memory.Forget(botId);
+            await ForgetTradeLedgerAsync(provider, removed).ConfigureAwait(false);
             HashSet<Guid> survivors = [];
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
@@ -3529,6 +3535,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task SaveBotRelationsAsync(ActiveBot active)
     {
         Guid botId = active.Record.BotId;
+        await SaveBotTradeLedgerAsync(active).ConfigureAwait(false); // the trade ledger rides every relation save (stop, pause, checkpoint)
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
@@ -3935,6 +3942,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
         public long SavedRelationVersion;
+        public long SavedTradeVersion;
 
         /// <summary>The bot's social view of its fights (helpers, the low-health window, the call for help); survives a brain replacement.</summary>
         public BotSocial.PlayerbotFightSocial? Fight;
