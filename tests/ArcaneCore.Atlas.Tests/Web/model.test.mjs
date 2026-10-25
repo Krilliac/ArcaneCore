@@ -799,7 +799,7 @@ test('hotkeys: digit keys toggle groups, hiding when any layer is on', () => {
     assert.deepEqual(collision, { ids: ['vmap.wmo', 'vmap.m2', 'vmap.bounds'], visible: false });
     const reference = groupToggle(layers, view, 'Reference');
     assert.equal(reference.visible, true);
-    assert.equal(reference.ids.length, 7, 'with no defaults, every layer of the group is shown');
+    assert.equal(reference.ids.length, 10, 'with no defaults, every layer of the group is shown (the 7 plus the reserved ref.terrain.tex, ref.wmo.tex, ref.m2.tex)');
     const off = allOff();
     assert.deepEqual(groupToggle(layers, off, 'Terrain'), { ids: ['terrain', 'terrain.holes', 'terrain.noheight'], visible: true }, 'showing a group restores its default layers');
     assert.equal(groupToggle(layers.map((l) => ({ ...l, available: l.group === 'Terrain' ? false : l.available })), view, 'Terrain'), null, 'a group with no available layer does nothing');

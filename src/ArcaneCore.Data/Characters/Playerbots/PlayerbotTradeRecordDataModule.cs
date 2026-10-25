@@ -17,10 +17,10 @@ public sealed class PlayerbotTradeRecordRow
     public int LastGiftDay { get; set; }
 }
 
-/// <summary>Characters schema 65: each managed playerbot's trade ledger (fair deals, scams, ninja loot, last gift) per partner.</summary>
+/// <summary>Characters schema 66: each managed playerbot's trade ledger (fair deals, scams, ninja loot, last gift) per partner.</summary>
 public sealed class PlayerbotTradeRecordDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 65;
+    public const int Version = 66;
     public const string Table = "playerbot_trade_record";
 
     public DatabaseComponent Component => DatabaseComponent.Characters;

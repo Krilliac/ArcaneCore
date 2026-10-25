@@ -140,7 +140,7 @@ public class CombatHooks
         // Player vs player outside duels needs the victim flagged for PvP (vmangos
         // Unit::IsValidAttackTarget → player targets must be IsPvP unless FFA/duel). A started duel is
         // checked first and does not test Finished (Object.cpp:3797-3800), so it holds for the whole finishing tick.
-        if (attacker is Player pa && victim is Player pv && (victim.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(pa, pv))
+        if (DuelRules.ControllingPlayer(attacker) is { } pa && DuelRules.ControllingPlayer(victim) is { } pv && !ReferenceEquals(pa, pv) && (pv.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(pa, pv))
         {
             return false;
         }

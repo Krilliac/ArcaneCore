@@ -3,8 +3,8 @@
 -- provider: sqlite
 -- from: 64
 -- to: 65
--- owner: Characters.Playerbots.PlayerbotTradeRecordDataModule
--- body-sha256: 5da29d2c89c3e37a19ef1feb67dd8fc61663b951d30300e636fae3b6b57b6d6d
+-- owner: Characters.Transfers.ClusterTransferStateIndexDataModule
+-- body-sha256: 7f04aac9df8957e270d5c6901a50dea656e7838cf35eb3b025eb0e3ee2720e50
 -- apply: sqlite3 -bail <database-file> < this-file.sql
 
 BEGIN;
@@ -14,19 +14,7 @@ CREATE TEMP TABLE "arcane_update_guard" ("requires_characters_schema_version_64"
 INSERT INTO "arcane_update_guard" SELECT CASE WHEN (SELECT "Version" FROM "characters_schema" WHERE "Id" = 1) = 64 THEN 1 ELSE 0 END;
 DROP TABLE "arcane_update_guard";
 
-CREATE TABLE "playerbot_trade_record" (
-    "BotId" TEXT NOT NULL,
-    "OtherGuid" INTEGER NOT NULL,
-    "CharacterId" INTEGER NOT NULL,
-    "FairDeals" INTEGER NOT NULL,
-    "Scams" INTEGER NOT NULL,
-    "LastScamUnixMs" INTEGER NOT NULL,
-    "LastNinjaUnixMs" INTEGER NOT NULL,
-    "LastGiftDay" INTEGER NOT NULL,
-    CONSTRAINT "PK_playerbot_trade_record" PRIMARY KEY ("BotId", "OtherGuid")
-);
-
-CREATE INDEX "IX_playerbot_trade_record_CharacterId" ON "playerbot_trade_record" ("CharacterId");
+CREATE INDEX "IX_cluster_transfer_decision_state" ON "cluster_transfer_decision" ("state");
 
 -- the version row is written last
 UPDATE "characters_schema" SET "Version" = 65 WHERE "Id" = 1 AND "Version" = 64;

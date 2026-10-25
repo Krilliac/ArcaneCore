@@ -9,7 +9,7 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests;
 
-/// <summary>The P4 trade ledger store (characters schema 65, table playerbot_trade_record): round trip, atomic replace, bounds, cleanup.</summary>
+/// <summary>The P4 trade ledger store (characters schema 66, table playerbot_trade_record): round trip, atomic replace, bounds, cleanup.</summary>
 public sealed class PlayerbotTradeRecordStoreTests
 {
     private static async Task<(SqliteConnection Connection, CharacterDbContext Db, int CharacterId)> OpenAsync(string name)
@@ -28,10 +28,10 @@ public sealed class PlayerbotTradeRecordStoreTests
         new(bot, characterId, other, fair, scams, 1_760_000_000_123, 1_760_000_500_456, 20_000);
 
     [Fact]
-    public void TheModule_IsCharactersSchema65_AndOwnsThePlayerbotTradeRecordTable()
+    public void TheModule_IsCharactersSchema66_AndOwnsThePlayerbotTradeRecordTable()
     {
         var module = new PlayerbotTradeRecordDataModule();
-        Assert.Equal(65, PlayerbotTradeRecordDataModule.Version);
+        Assert.Equal(66, PlayerbotTradeRecordDataModule.Version);
         Assert.Equal(DatabaseComponent.Characters, module.Component);
         Assert.Equal("playerbot_trade_record", PlayerbotTradeRecordDataModule.Table);
         Assert.Contains(module.SchemaChanges, change => change is CreateTableChange);

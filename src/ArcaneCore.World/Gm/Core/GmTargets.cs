@@ -69,7 +69,7 @@ public static class GmTargets
     /// </summary>
     public static void ActOnOffline(CommandContext context, IReadOnlyCollection<int> accountIds, Action act, bool unknownAccountIsNotFound)
     {
-        if (context.IsConsole)
+        if (context.IsTrueConsole())
         {
             act(); // the console outranks every account
             return;

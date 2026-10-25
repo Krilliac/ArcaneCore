@@ -16,7 +16,7 @@ Most verbs take `<bots>` as the first argument:
 
 | Selector | Bots |
 | --- | --- |
-| `Alice` or a bot id | One bot. |
+| `Alice` or a bot id | One bot. A leading `$` is optional (`$Alice`, `$Ali*`), the form the other debug commands use for names. |
 | `Ali*` | Every bot whose name starts with `Ali`. |
 | `Alice,Bob,Carl` | A list (any selectors). |
 | `all`, `running`, `controlled` (or `mine`) | All bots, the running ones, the ones under `.botctl` control. |

@@ -3,8 +3,8 @@
 -- provider: mariadb
 -- from: 64
 -- to: 65
--- owner: Characters.Playerbots.PlayerbotTradeRecordDataModule
--- body-sha256: 27a829ea5ad44e9b9b68782e2ec0bc4a44fcc910a209592d460ef90d689db139
+-- owner: Characters.Transfers.ClusterTransferStateIndexDataModule
+-- body-sha256: c16004275b4afa7b8f3fe20bf0c5175f8f6381302e5b7356b08a4c379d675f52
 -- apply: mysql <database> < this-file.sql   (the mysql/mariadb client; stops at the first error)
 
 -- guard: refuse any database that is not recorded at schema version 64
@@ -16,19 +16,7 @@ BEGIN NOT ATOMIC
 END//
 DELIMITER ;
 
-CREATE TABLE `playerbot_trade_record` (
-    `BotId` char(36) COLLATE ascii_general_ci NOT NULL,
-    `OtherGuid` bigint unsigned NOT NULL,
-    `CharacterId` int NOT NULL,
-    `FairDeals` int NOT NULL,
-    `Scams` int NOT NULL,
-    `LastScamUnixMs` bigint NOT NULL,
-    `LastNinjaUnixMs` bigint NOT NULL,
-    `LastGiftDay` int NOT NULL,
-    CONSTRAINT `PK_playerbot_trade_record` PRIMARY KEY (`BotId`, `OtherGuid`)
-) CHARACTER SET=utf8mb4;
-
-CREATE INDEX `IX_playerbot_trade_record_CharacterId` ON `playerbot_trade_record` (`CharacterId`);
+CREATE INDEX `IX_cluster_transfer_decision_state` ON `cluster_transfer_decision` (`state`);
 
 -- the version row is written last
 UPDATE `characters_schema` SET `Version` = 65 WHERE `Id` = 1 AND `Version` = 64;

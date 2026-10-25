@@ -179,7 +179,7 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
         ledger.NoteScam(runningId, runningCharacter, 4242);
 
         // The running bot's stop snapshots both rows, then waits inside the store: its write is in flight with the row about the character that is about to be deleted.
-        Task<PlayerbotOperationResult> stopping = feature.StopAsync(runningId.ToString());
+        var stopping = feature.StopAsync(runningId.ToString());
         await store.Entered.WaitAsync(TimeSpan.FromSeconds(30));
 
         // The deletion cleanup runs meanwhile: it forgets the row in memory and rewrites the running bot's rows without it. Both writes must queue behind the first.

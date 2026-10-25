@@ -18,6 +18,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Diagnostics;
 using ArcaneCore.World.Gm.Lookup;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Persistence;
@@ -25,6 +26,7 @@ using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
 
@@ -82,7 +84,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "diag",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0.",
+                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered.",
                     Diag),
             ]),
     ];
@@ -467,20 +469,13 @@ public sealed class ClusterCommands : ICommandGroup
         context.Reply(FormatLeasesSummaryLine(services, fencing.OwnerNode, worldToken));
 
         var queues = new List<string>();
-        if (services.GetService<CharacterSaveQueue>() is { } charSaves)
-            queues.Add(string.Create(c, $"charSaves={charSaves.Pending}"));
-        if (services.GetService<SocialFeature>() is { } social)
-            queues.Add(string.Create(c, $"social={social.PendingWrites}"));
-        if (services.GetService<ReputationFeature>() is { } rep)
-            queues.Add(string.Create(c, $"reputation={rep.PendingWrites}"));
-        if (services.GetService<InstanceFeature>() is { } inst)
-            queues.Add(string.Create(c, $"instances={inst.PendingWrites}"));
-        if (services.GetService<CreatureRespawnFeature>() is { } respawns)
-            queues.Add(string.Create(c, $"respawns={respawns.PendingWrites}"));
-        if (services.GetService<ExploredZonesPersistence>() is { } explored)
-            queues.Add(string.Create(c, $"explored={explored.Writes.Pending}"));
-        if (services.GetService<GmAuditFeature>() is { } audit)
-            queues.Add(string.Create(c, $"gmAudit={audit.Writes.Pending}(retained={audit.Writes.RetainedKeys.Count})"));
+        foreach (PersistenceQueueSnapshot queue in QueueRegistry(services).Snapshot())
+        {
+            int retainedKeys = queue.RetainedKeys?.Count ?? 0;
+            queues.Add(retainedKeys > 0
+                ? string.Create(c, $"{queue.Name}={queue.Pending}(retained={retainedKeys})")
+                : string.Create(c, $"{queue.Name}={queue.Pending}"));
+        }
 
         context.Reply("Write-behind queues: " + (queues.Count > 0 ? string.Join(", ", queues) : "none registered"));
         return true;
@@ -542,6 +537,17 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
+        int pendingTransfers;
+        try
+        {
+            pendingTransfers = CountUnresolvedTransfers(services);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
+            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
+            return true;
+        }
 
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
@@ -594,7 +600,7 @@ public sealed class ClusterCommands : ICommandGroup
             OwnershipEpoch: worldToken?.Epoch ?? 0,
             OperationId: "gm-cluster-diag");
 
-        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
+        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingTransfers, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
 
         ClusterDiagnosticsReport report = collector.Collect(
             correlation,
@@ -617,6 +623,7 @@ public sealed class ClusterCommands : ICommandGroup
     internal static ClusterRollbackSnapshot BuildRollbackSnapshot(
         int realmId,
         IReadOnlyList<ClusterNodeDescriptor> nodes,
+        int pendingTransfers,
         int pendingWrites,
         int retainedFailures,
         bool fencingEnabled,
@@ -625,7 +632,7 @@ public sealed class ClusterCommands : ICommandGroup
         => new(
             RealmId: realmId,
             ClusterNodes: nodes,
-            PendingTransfers: 0,
+            PendingTransfers: pendingTransfers,
             PendingCharacterWrites: pendingWrites,
             RetainedWriteFailures: retainedFailures,
             ActiveUnfencedWriters: fencingEnabled ? 0 : 1,
@@ -732,30 +739,28 @@ public sealed class ClusterCommands : ICommandGroup
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command; the EF store's query is a COUNT over the indexed state column); a store failure propagates to the caller.</summary>
+    private static int CountUnresolvedTransfers(IServiceProvider services)
+        => services.GetService<ITransferDecisionStore>() is { } store
+            ? store.CountUnresolvedAsync().GetAwaiter().GetResult()
+            : 0;
+
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {
         int pending = 0;
         int retained = 0;
-        if (services.GetService<CharacterSaveQueue>() is { } charSaves)
-            pending += charSaves.Pending;
-        if (services.GetService<SocialFeature>() is { } social)
-            pending += social.PendingWrites;
-        if (services.GetService<ReputationFeature>() is { } rep)
-            pending += rep.PendingWrites;
-        if (services.GetService<InstanceFeature>() is { } inst)
-            pending += inst.PendingWrites;
-        if (services.GetService<CreatureRespawnFeature>() is { } respawns)
-            pending += respawns.PendingWrites;
-        if (services.GetService<ExploredZonesPersistence>() is { } explored)
-            pending += explored.Writes.Pending;
-        if (services.GetService<GmAuditFeature>() is { } audit)
+        foreach (PersistenceQueueSnapshot queue in QueueRegistry(services).Snapshot())
         {
-            pending += audit.Writes.Pending;
-            retained += audit.Writes.RetainedKeys.Count;
+            pending += queue.Pending;
+            retained += queue.RetainedKeys?.Count ?? 0;
         }
 
         return (pending, retained);
     }
+
+    // The singleton registry when the world daemon registered one, else the built-in queues resolved against the same services.
+    private static PersistenceProbeRegistry QueueRegistry(IServiceProvider services)
+        => services.GetService<PersistenceProbeRegistry>() ?? WorldPersistenceProbes.CreateRegistry(services);
 
     private static string FormatLeasesSummaryLine(IServiceProvider services, string fallbackNode, CharacterOwnershipToken? worldToken)
     {
