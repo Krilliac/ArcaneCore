@@ -64,7 +64,7 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
     /// The least rage (power units, rage x10: 10 rage) that makes Frenzied Regeneration worth casting: its tick heals <c>rage * amount / 10</c> (Druid scripts,
     /// SpellAuras.cpp:1417-1433), so with no rage it heals nothing and only burns the cooldown.
     /// </summary>
-    internal const uint FrenziedRegenerationMinRage = 100;
+    internal const uint FrenziedRegenerationMinRage = ArcaneCore.Game.Spells.Druid.DruidScriptsModule.MaxRageConverted;
 
     /// <summary>A druid alone, still classed as a healer because it has no Moonkin or Leader of the Pack, heals only below this.</summary>
     internal const float SoloEmergencyHealth = 30f;

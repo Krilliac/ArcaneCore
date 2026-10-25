@@ -333,7 +333,64 @@ public sealed class PlayerbotQaSpellMonitorTests
 
         Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
 
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+    }
+
+    [Fact]
+    public void DamageOnAHeldCreature_IsReportedOnceAsAHeldTarget_AndNotAsNoEffect()
+    {
+        using var kit = new QaSpellKit();
+        SpellCast cast = CastOf(kit, QaSpellKit.SelfNuke);
+
+        Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats * 2);
+
+        Assert.DoesNotContain(kit.Signals, s => s.Kind == QaSignalKind.SpellNoEffect);
+        QaSignal signal = Assert.Single(kit.Signals);
+        Assert.Equal(QaSignalKind.Anomaly, signal.Kind);
+        Assert.Equal(PlayerbotQaSpellMonitor.HeldTargetGoal, signal.Goal);
+        Assert.Equal(PlayerbotQaSpellMonitor.HeldTargetReason + "7668", signal.Reason);
+        Assert.Equal(7668u, signal.Target);
+        Assert.Contains("entry 7668, threshold 1", signal.Detail, StringComparison.Ordinal);
+
+        kit.NowMs += PlayerbotQaSpellMonitor.HeldTargetThrottleMs - 1;
+        Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 1, times: 1);
+        Assert.Single(kit.Signals);
+
+        kit.NowMs += 1; // the 6 h window is over: the creature that stays held is visible again
+        Hit(kit, cast, HeldCreature(health: 1, threshold: 1), mask: 1, times: 1);
+        Assert.Equal(2, kit.Signals.Count);
+    }
+
+    // Spirit of Redemption (27827) holds a priest at its threshold by design; a player held without it is a leaked death prevention (GM god mode, Player.Cheats.cs).
+    [Fact]
+    public void DamageOnAHeldPlayerWithSpiritOfRedemption_IsNotReported()
+    {
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(SpellSystem.SpiritOfRedemptionSpell, QaSpellKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModThreat))
+            with { Duration = new SpellDuration(30_000, 0, 30_000) }]);
+        SpellCast cast = CastOf(kit, QaSpellKit.SelfNuke);
+        kit.CastTriggered(kit.Human, SpellSystem.SpiritOfRedemptionSpell);
+        Assert.True(kit.System.HasAura(kit.Human, SpellSystem.SpiritOfRedemptionSpell));
+        kit.Human.Health = kit.Human.MaxHealth;
+        kit.Human.InvincibilityHpThreshold = kit.Human.MaxHealth;
+
+        Hit(kit, cast, kit.Human, mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
+
         Assert.Empty(kit.Signals);
+    }
+
+    [Fact]
+    public void DamageOnAHeldPlayerWithoutSpiritOfRedemption_IsReported()
+    {
+        using var kit = new QaSpellKit();
+        SpellCast cast = CastOf(kit, QaSpellKit.SelfNuke);
+        Assert.False(kit.System.HasAura(kit.Human, SpellSystem.SpiritOfRedemptionSpell));
+        kit.Human.Health = kit.Human.MaxHealth;
+        kit.Human.InvincibilityHpThreshold = kit.Human.MaxHealth;
+
+        Hit(kit, cast, kit.Human, mask: 1, times: PlayerbotQaSpellMonitor.NoEffectRepeats);
+
+        QaSignal signal = Assert.Single(kit.Signals);
+        Assert.Equal((QaSignalKind.SpellNoEffect, QaSpellKit.SelfNuke), (signal.Kind, signal.Spell));
     }
 
     [Fact]
@@ -404,7 +461,53 @@ public sealed class PlayerbotQaSpellMonitorTests
     {
         using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(22845, QaSpellKit.Effect(SpellEffectName.Heal, 5))]);
 
-        Assert.False(kit.System.CustomValueIsNonPositive(kit.System.Store.Get(22845)!, 1));
+        Assert.False(kit.System.CustomValueIsNonPositive(kit.Bot, kit.System.Store.Get(22845)!, 1));
+    }
+
+    /// <summary>Calls CustomValueIsNonPositive from inside a custom cast of <paramref name="spell"/> by the bot, through an observer.</summary>
+    private static bool? InsideCustomCast(QaSpellKit kit, SpellInfo spell, int?[] basePoints, Unit asker, int mask)
+    {
+        var probe = new NonPositiveProbe(kit.System, asker, spell, mask);
+        kit.System.RegisterObserver(probe);
+        kit.System.CastCustomSpell(kit.Bot, spell.Id, SpellCastTargets.ForSelf(), basePoints[0], basePoints[1], basePoints[2]);
+        return probe.Result;
+    }
+
+    private sealed class NonPositiveProbe(SpellSystem system, Unit asker, SpellInfo spell, int mask) : ISpellCastObserver
+    {
+        public bool? Result { get; private set; }
+
+        public void OnTargetOutcome(SpellCast cast, SpellTargetOutcome outcome) => Result ??= system.CustomValueIsNonPositive(asker, spell, mask);
+    }
+
+    [Fact]
+    public void CustomValueIsNonPositive_MatchesTheCasterAndTheValue()
+    {
+        using var kit = new QaSpellKit(extra: [QaSpellKit.Spell(22845, QaSpellKit.Effect(SpellEffectName.Heal, 5))]);
+        SpellInfo spell = kit.System.Store.Get(22845)!;
+
+        Assert.True(InsideCustomCast(kit, spell, [0, null, null], kit.Bot, 1));
+        Assert.True(InsideCustomCast(kit, spell, [-1, null, null], kit.Bot, 1));
+        Assert.False(InsideCustomCast(kit, spell, [100, null, null], kit.Bot, 1));
+        Assert.False(InsideCustomCast(kit, spell, [0, null, null], kit.Human, 1)); // another caster than the scope's
+        Assert.False(InsideCustomCast(kit, spell, [0, null, null], kit.Bot, 0)); // an empty mask
+    }
+
+    [Fact]
+    public void CustomValueIsNonPositive_IsFalseForAnEffectWithItsOwnValueOrARandomDie()
+    {
+        const uint multi = 990_400, dice = 990_401;
+        using var kit = new QaSpellKit(extra:
+        [
+            QaSpellKit.Spell(multi, QaSpellKit.Effect(SpellEffectName.Heal, 5), QaSpellKit.Effect(SpellEffectName.Heal, 5)),
+            QaSpellKit.Spell(dice, QaSpellKit.Effect(SpellEffectName.Heal, 5) with { DieSides = 6 }),
+        ]);
+
+        // Effect 1 has no custom value (null): the spell's own value applies, so a mask holding it is not provably non-positive.
+        Assert.False(InsideCustomCast(kit, kit.System.Store.Get(multi)!, [0, null, null], kit.Bot, 0b11));
+        Assert.True(InsideCustomCast(kit, kit.System.Store.Get(multi)!, [0, null, null], kit.Bot, 0b01));
+        // A die of more than one side is still rolled on top of the explicit value.
+        Assert.False(InsideCustomCast(kit, kit.System.Store.Get(dice)!, [0, null, null], kit.Bot, 1));
     }
 
     /// <summary>A sink that heals and damages nothing.</summary>
