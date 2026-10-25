@@ -25,4 +25,5 @@ which ends in the same buffs and states.
 - Eastwall squad formation, the Spirit of Victory's waypoint path and the curing shrine's spawned-by-default flag are not modelled.
 - MaNGOS Zero awards 189 honor per tower capture; vmangos leaves the credit to the buffer's 30882 pulse, which is followed here.
 - Silithus's `SetSilithusPVPEventCompleted` game-event hook is commented out in vmangos and not implemented.
-- The Silithyst team buffs 29894/29895 (applied and removed by vmangos' aura script) are not modelled here. A dead carrier's drop cast needs spell 29533 to carry `AllowCastWhileDead` (the spell system's deliberate stricter rule); its real attributes are not in the repo.
+- The Silithyst team buffs 29894/29895 (applied and removed by vmangos' aura script) are not modelled here.
+- A dead carrier still drops the mound: 29533 carries AllowCastWhileDead (Spell.dbc 5875, Attributes 0x09800000).

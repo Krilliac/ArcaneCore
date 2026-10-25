@@ -332,15 +332,18 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
     {
         if (holder.Target is Player player && holder.Spell.Id == SilithusCatalog.SpellSilithystFlag)
         {
-            _flagRemovedAt[player.Guid] = World.NowMs;
-
             // vmangos SilithystAuraScript::OnAfterApply (spell_special.cpp:371-380): losing the aura in Silithus to a cancel, death or
-            // dispel runs HandleDropFlag; a turn-in, expiry, stack or mount/stealth strip (Default) does not, so no second mound.
+            // dispel runs HandleDropFlag; a turn-in, expiry, stack or mount/stealth strip (Default) does not. A flag dropped here leaves no
+            // same-tick marker, or a stealth/mount applied in the same ms would drop a second mound in OnHolderAdded.
             if (player.ZoneId == SilithusCatalog.SilithusZone
                 && holder.RemoveMode is AuraRemoveMode.Cancel or AuraRemoveMode.Death or AuraRemoveMode.Dispel)
             {
+                _flagRemovedAt.Remove(player.Guid);
                 DropFlag(player);
+                return;
             }
+
+            _flagRemovedAt[player.Guid] = World.NowMs;
         }
     }
 

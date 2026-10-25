@@ -25,6 +25,7 @@ namespace ArcaneCore.World.Tests.OutdoorPvP;
 public sealed class SilithystFlagDropTests
 {
     private const uint MountSpell = 991201;
+    private const uint StealthSpell = 991202;
     private const uint MoundEntry = 181597;
 
     [Theory]
@@ -82,6 +83,23 @@ public sealed class SilithystFlagDropTests
         Assert.Single(rig.Mounds());
     }
 
+    [Theory]
+    [InlineData(AuraRemoveMode.Cancel)]
+    [InlineData(AuraRemoveMode.Dispel)]
+    public void A_cancelled_or_dispelled_flag_followed_by_stealth_or_mount_in_the_same_tick_drops_exactly_one_mound(AuraRemoveMode mode)
+    {
+        foreach (uint follow in new[] { StealthSpell, MountSpell })
+        {
+            using Rig rig = new();
+            Player carrier = rig.AddCarrier();
+
+            rig.Spells.System.RemoveAuras(carrier, SilithusCatalog.SpellSilithystFlag, mode);
+            Assert.Equal(SpellCastResult.CastOk, rig.Spells.System.CastSpell(carrier, follow, SpellCastTargets.ForSelf(), triggered: true));
+
+            Assert.Single(rig.Mounds());
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         private readonly ServiceProvider _services;
@@ -106,6 +124,7 @@ public sealed class SilithystFlagDropTests
                 Spell(SilithusCatalog.SpellSilithystFlag, SpellEffectName.ApplyAura, AuraType.Dummy, 0),
                 Spell(SilithusCatalog.SpellFlagDrop, SpellEffectName.SummonObjectWild, AuraType.None, (int)MoundEntry),
                 Spell(MountSpell, SpellEffectName.ApplyAura, AuraType.Mounted, 0),
+                Spell(StealthSpell, SpellEffectName.ApplyAura, AuraType.ModStealth, 0),
             ], [], []);
             Feature = new OutdoorPvPFeature(_services, NullLogger<OutdoorPvPFeature>.Instance);
             Feature.Attach(World);
@@ -145,16 +164,17 @@ public sealed class SilithystFlagDropTests
 
         public List<GameObject> Mounds() => [.. _objects.GameObjects.Where(go => go.Template.Entry == MoundEntry)];
 
-        // The spell system lets a dead player cast only a spell carrying AllowCastWhileDead (SpellSystem.cs:1312-1316, a deliberate divergence
-        // from vmangos' triggered-cast exemption), so the death case needs the drop spell to carry it; 29533's real attributes are not in the repo.
+        // Real data (Spell.dbc 5875): 29533 carries Attributes 0x09800000 (AllowCastWhileDead 0x00800000, so a dead carrier still drops) and
+        // TargetA 47 (a location in front of the caster); 29519 has AuraInterruptFlags 0x003A0000, so mount and stealth strip it (Default).
         private static SpellInfo Spell(uint id, SpellEffectName effect, AuraType aura, int miscValue) => new()
         {
-            Attributes = id == SilithusCatalog.SpellFlagDrop ? SpellAttributes.AllowCastWhileDead : default,
+            Attributes = id == SilithusCatalog.SpellFlagDrop ? (SpellAttributes)0x09800000 : default,
+            AuraInterruptFlags = id == SilithusCatalog.SpellSilithystFlag ? (SpellAuraInterruptFlags)0x003A0000 : default,
             Id = id, Name = $"Silithyst test {id}", RangeIndex = 4, Range = new SpellRange(0, 30),
             Duration = aura == AuraType.None ? default : new SpellDuration(200000, 0, 200000),
             Effects = [new SpellEffectInfo
             {
-                Effect = effect, BasePoints = 0, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitCaster, AuraType = aura, MiscValue = miscValue,
+                Effect = effect, BasePoints = 0, BaseDice = 1, DieSides = 1, TargetA = id == SilithusCatalog.SpellFlagDrop ? (SpellImplicitTarget)47 : SpellImplicitTarget.UnitCaster, AuraType = aura, MiscValue = miscValue,
             }, new(), new()],
         };
 
