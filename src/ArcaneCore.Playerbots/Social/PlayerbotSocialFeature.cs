@@ -347,12 +347,15 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private bool IsWorldBossEntry(uint entry) => (_groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>())?.IsWorldBossEntry(entry) == true;
 
     /// <summary>The zone name of the place a creature stands in, from the area table; null where the terrain or the table does not know it.</summary>
-    private string? ZoneNameOf(Map map, ArcaneCore.Game.Creatures.Creature creature)
+    /// <summary>The zone-and-area lookup of a place (tests replace it to make the lookup fail; null: the map's terrain).</summary>
+    internal Func<Map, ArcaneCore.Game.Creatures.Creature, (uint ZoneId, uint AreaId)>? ZoneLookup { get; set; }
+
+    internal string? ZoneNameOf(Map map, ArcaneCore.Game.Creatures.Creature creature)
     {
         if (_world is not { } world) return null;
         try
         {
-            (uint zoneId, _) = map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z);
+            (uint zoneId, _) = ZoneLookup?.Invoke(map, creature) ?? map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z);
             return zoneId == 0 ? null : ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world).Areas.GetById(zoneId)?.Name;
         }
         catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)

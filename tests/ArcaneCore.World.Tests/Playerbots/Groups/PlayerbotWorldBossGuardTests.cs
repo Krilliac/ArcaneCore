@@ -324,6 +324,32 @@ public sealed class PlayerbotWorldBossGuardTests
     }
 
     [Fact]
+    public async Task ALootTapHeldByAPlayer_MakesTheWatchSeeABossTakenByOthers_EvenWhenTheBossFightsNoOne()
+    {
+        await using GroupTestWorld world = await StartAsync(templates: [Passive()]);
+        List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wq");
+        Creature boss = await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
+        await using WorldTestClient tapper = await world.World.EnterWorldAsync("WBTAPPER4", "Wbtapperfor", AccountSecurity.Player);
+        Player player = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer("Wbtapperfor")!);
+
+        // The tap alone, as an earlier hit would leave it: the boss has no victim, so the fight branch of the status cannot be what reports it.
+        await world.OnWorldAsync(() =>
+        {
+            boss.LootTapPlayerGuid = player.Guid;
+            return true;
+        });
+
+        bool noVictimWhenSeen = false;
+        Assert.True(await world.RunUntilAsync(120_000, () =>
+        {
+            if (world.Coordinator.WorldBossStatus(BossEntry) is not { TappedOrFightingOthers: true }) return false;
+            noVictimWhenSeen = boss.Combat.Victim is null;
+            return true;
+        }), await world.TraceAsync());
+        Assert.True(noVictimWhenSeen, "the boss fought someone: the loot-tap branch was not what the watch saw");
+    }
+
+    [Fact]
     public async Task TheTapOfTheRaidItself_IsNotTakenByOthers_InTheWatch()
     {
         await using GroupTestWorld world = await StartAsync();
@@ -467,5 +493,90 @@ public sealed class PlayerbotWorldBossGuardTests
         Assert.Equal(due, status.DeadUntilUnix);
         Assert.True(ledger.Lookups > 0);
         Assert.Equal(0, ledger.Copies);
+    }
+
+    // --- the corpse a raid never saw alive, and the fault sites --------------------------------------------------------------------
+
+    [Fact]
+    public async Task ACorpseTheRaidHoldsTheTapOf_ThatItNeverSawAlive_WhileTheLedgerHasTheBossDead_RecordsTheAnomalyOnce()
+    {
+        (GroupTestWorld world, CountingLedger ledger) = await StartSpawnedAsync(Boss());
+        await using GroupTestWorld _ = world;
+        ledger.Due[BossEntry] = BaseUnix + 100_000; // the ledger already holds the boss dead; the creature still stands, so the watch sees it Up and the muster opens
+        List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wc");
+        await world.RunAsync(500);
+        Creature boss = await FindSpawnedAsync(world, bots[0].Id);
+
+        using AnomalyCapture cap = PlayerbotAnomalies.CaptureIn(world.World.Host.World);
+        bool killed = false, sawAlive = false;
+        Assert.True(await world.RunUntilAsync(900_000, () =>
+        {
+            PlayerbotGroupCoordinator.BotGroup? raid = Raid(world);
+            if (raid is not null && !killed && raid.State < PlayerbotGroupState.Travelling && raid.Members.FirstOrDefault(m => m.Joined && !m.Real) is { } member)
+            {
+                // A member of the forming raid kills the boss before the raid's first look at it: the corpse carries the raid's tap and the raid never saw the boss alive.
+                Player killer = world.Player(member.BotId);
+                killer.Map!.Combat.DealDamage(killer, boss, 1);
+                killer.Map!.Combat.DealDamage(killer, boss, 1_000_000);
+                killed = !boss.IsAlive;
+            }
+
+            if (raid?.WorldBoss is { } wb) sawAlive |= wb.SawAlive;
+            return killed && world.Coordinator.Groups.Count == 0;
+        }), await world.TraceAsync());
+
+        Assert.False(sawAlive, "the raid saw the boss alive: it is not the case this anomaly is about");
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.WorldBossCorpseTapLedgerDead)));
+        Assert.True(ledger.Lookups > 0);
+    }
+
+    /// <summary>A ledger whose point lookup fails, as a broken store would.</summary>
+    private sealed class LedgerFault : Exception
+    {
+        public LedgerFault() : base("ledger fault") { }
+    }
+
+    private sealed class ThrowingLedger : ICreatureRespawnPersistence
+    {
+        public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId) => throw new LedgerFault();
+
+        public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds) => throw new LedgerFault();
+
+        public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds)
+        {
+        }
+
+        public void Delete(uint mapId, uint instanceId, uint spawnGuid)
+        {
+        }
+    }
+
+    [Fact]
+    public async Task AFaultInTheWatch_IsRecordedUnderTheWatchSite_AndTheWatchGoesOn()
+    {
+        (GroupTestWorld world, CountingLedger _) = await StartSpawnedAsync(Boss());
+        await using GroupTestWorld __ = world;
+        List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wf");
+        await world.RunAsync(500);
+        Creature boss = await FindSpawnedAsync(world, bots[0].Id);
+        world.Coordinator.RespawnLedgerOverride = new ThrowingLedger();
+        await using WorldTestClient killer = await world.World.EnterWorldAsync("WBKILLER3", "Wbkillerthr", AccountSecurity.Player);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.World.Host.World.FindOnlinePlayer("Wbkillerthr")!;
+            player.Relocate(BossAt.X - 3f, BossAt.Y, BossAt.Z, 0f, world.World.Host.World.NowMs);
+            player.Map!.Combat.DealDamage(player, boss, 1);
+            player.Map!.Combat.DealDamage(player, boss, 1_000_000);
+            return true;
+        });
+        Assert.False(await world.OnWorldAsync(() => boss.IsAlive));
+
+        // A dead boss is the only one whose status reads the ledger, so the watch now throws, every interval.
+        Assert.True(await world.RunUntilAsync(60_000, () => FaultLedger.Shared.Snapshot()
+            .Any(f => f.Site == PlayerbotGroupCoordinator.WorldBossWatchSite && f.ExceptionType.Contains(nameof(LedgerFault), StringComparison.Ordinal))), await world.TraceAsync());
+        long first = FaultLedger.Shared.Snapshot().Where(f => f.Site == PlayerbotGroupCoordinator.WorldBossWatchSite && f.ExceptionType.Contains(nameof(LedgerFault), StringComparison.Ordinal)).Sum(f => (long)f.Count);
+        await world.RunAsync(20_000);
+        long later = FaultLedger.Shared.Snapshot().Where(f => f.Site == PlayerbotGroupCoordinator.WorldBossWatchSite && f.ExceptionType.Contains(nameof(LedgerFault), StringComparison.Ordinal)).Sum(f => (long)f.Count);
+        Assert.True(later > first, "the watch did not run again after the fault");
     }
 }

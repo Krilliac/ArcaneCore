@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -140,6 +141,24 @@ public sealed class PlayerbotWorldBossKillTalkTests
         await using Rig rig = await Rig.StartAsync();
         var result = await rig.KillAsync("Quillb", Of(Azuregos).Template); // Quillb never joined the guild
         Assert.Equal(0, result.GuildTopics);
+    }
+
+    [Fact]
+    public async Task AZoneLookupThatFailsOnAHostWithoutAreaData_IsRecordedUnderItsFaultSite_AndNamesNoZone()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        PlayerbotSocialFeature feature = SocialTestKit.Feature(rig.World.Host);
+        feature.ZoneLookup = (_, _) => throw new InvalidOperationException("no area data");
+        string? zone = await rig.World.Host.OnWorldAsync(() =>
+        {
+            Player player = rig.World.Host.World.FindOnlinePlayer("Quilla")!;
+            CreatureTemplate template = Of(Azuregos).Template;
+            var boss = new Creature(template.Entry, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
+            return feature.ZoneNameOf(player.Map!, boss);
+        });
+
+        Assert.Null(zone);
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "playerbot.social.bosskill");
     }
 
     [Fact]
