@@ -16,6 +16,7 @@ using ArcaneCore.World.Names;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Playerbots.Events;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Progression;
@@ -113,6 +114,9 @@ internal sealed class PlayerbotSocialPass(
 
     /// <summary>The group coordinator, when the host runs one (guild calls for a forming group, <see cref="PlayerbotGuildChat"/>).</summary>
     internal PlayerbotGroupCoordinator? Coordinator { get; init; }
+
+    /// <summary>The world's festival board (the events lane and the event remark); null without one.</summary>
+    internal PlayerbotWorldEventBoard? Events { get; init; }
 
     /// <summary>The bots' social memory seam (friend and ignore lists, guild invitations by affinity); null without one.</summary>
     internal PlayerbotSocialRecorder? Recorder { get; init; }
@@ -238,6 +242,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
     private readonly PlayerbotInitiativeLane _initiative = new();
+    private PlayerbotEventLane? _events;
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -266,6 +271,15 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     /// <summary>The intervals in use (tests shorten them).</summary>
     internal PlayerbotSocialTimings Timings { get; } = new();
+
+    /// <summary>
+    /// The feature's own clock (world milliseconds summed over its updates): the time base of the events lane, the festival board and the
+    /// brains' festival goals, so a claim, an arrival and an emote due time agree with each other.
+    /// </summary>
+    internal long ClockMs => _clockMs;
+
+    /// <summary>The festival events lane: arrival lines and celebration emotes (tests and status).</summary>
+    internal PlayerbotEventLane Events => _events ??= new PlayerbotEventLane(_initiative);
 
     /// <summary>The generator of every random choice (tests seed it).</summary>
     internal Random Random { get; set; } = new();
@@ -486,6 +500,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
+            Events = bots?.EventBoard,
         };
     }
 
@@ -736,7 +751,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private static readonly string[] LaneNames =
     [
         "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
-        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "prune",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "prune",
     ];
 
     /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
@@ -768,6 +783,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 case 14: _conversations.Run(pass); break;
                 case 15: _worldChatter.Run(pass); break;
                 case 16: _voice.Run(pass); break;
+                case 17: Events.Run(pass); break;
                 default: _membership.Prune(pass); break;
             }
         }

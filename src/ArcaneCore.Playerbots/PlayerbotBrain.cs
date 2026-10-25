@@ -16,6 +16,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Playerbots.Events;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -198,6 +199,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (ReferenceEquals(_home, value)) return;
             _home = value;
             _homeReturn.Reset();
+            ReleaseEventSpot(PlayerbotEventMeters.Done); // the claim is the old town's: its coordinates, map and place
+            _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
             _crafting.Home = value;
@@ -349,8 +352,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // The claims registry and the bot's claim are world-thread state; Stop runs on any thread, so the release is posted.
         if (_session.World is { IsStopped: false } world)
         {
-            if (world.IsWorldThread) _contention.ReleaseClaim();
-            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
+            if (world.IsWorldThread)
+            {
+                _contention.ReleaseClaim();
+                ReleaseEventSpot(PlayerbotEventMeters.Done);
+            }
+            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); return true; });
         }
         _destinations.Dispose();
     }
@@ -604,7 +611,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _thinkStartedAt = 0;
             // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
             // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
-            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
+            if (_goal != PlayerbotGoalKind.Explore)
+            {
+                _townIdle.Interrupted();
+                ReleaseEventSpot(PlayerbotEventMeters.Done);
+            }
+
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
@@ -3262,23 +3274,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         bool budget = PlayerbotThinkProbe.Active is not { HasOptionalPlanBudget: false };
         if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
         {
-            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
-            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
-            if (idle == TownIdleAction.Linger && PlayerbotTownIdle.IsHeld(town.DistanceTo(player.X, player.Y)))
-            {
-                // Standing at the inn is what the idle rule asks for, not a stall: the watch starts afresh at every such think. Before, a bot
-                // lingering at its inn was reported stalled every stall bound, gave up its goal (which freed nothing: it was not stuck) and, at
-                // the second report within 10 yards, was sent home to where it stood (live 2026-10-17: 1 253 stalls of 186 bots at the
-                // Stormwind inn alone).
-                _stall.Reset();
-                PlayerbotMovementControl.Stop(_session, player);
-                TryBindAtInn(player, town);
-                return;
-            }
-
-            // A walk to the inn given up far from it (a Linger past HoldYards) falls through to the explore below: the bot hunts, or wanders
-            // inward (WanderLegEnd), for the give-up instead of standing in the open until the stall watch reports it.
-            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+            // Idle with a town home: back to the inn (or, while a festival runs, to the bot's place around a festival NPC) and wait there
+            // rather than roam the wilderness (PlayerbotTownIdle; PlayerbotBrain.Events.cs).
+            if (TownIdleThink(player, town, elapsedMs)) return;
         }
         else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
 

@@ -72,6 +72,8 @@ internal static class ConfigExceptionTable
     {
         ["src/ArcaneCore.Gateway/"] = "The Tier 3a gateway daemon reads `Gateway:*` from gateway.json; `ConfigDaemon` has no Gateway value and no gateway.conf.dist exists yet. "
             + "Its keys are documented in docs/areas/gateway.md.",
+        ["tools/ArcaneCore.Atlas/Host/Public/"] = "The Atlas public listener reads `Atlas:Public:*` from atlas.json (bound in `PublicOptions`); it is neither World nor Realm configuration. "
+            + "Its keys are documented in docs/areas/atlas-public.md and checked against `PublicOptions` by `PublicDocsTests` in the Atlas tests.",
     };
 
     /// <summary>Keys read by name.</summary>

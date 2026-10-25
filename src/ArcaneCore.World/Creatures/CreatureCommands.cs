@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Atlas;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Creatures;
@@ -49,7 +50,7 @@ public sealed class CreatureCommands : ICommandGroup
 
     private static bool Info(CommandContext context, string args)
     {
-        if (Selected(context) is not { } creature)
+        if (Selected(context) is not { Creature: { } creature })
         {
             return true;
         }
@@ -64,9 +65,9 @@ public sealed class CreatureCommands : ICommandGroup
 
     private static bool Kill(CommandContext context, string args)
     {
-        if (Selected(context) is { } creature)
+        if (Selected(context) is { Creature: { } creature, System: { } system })
         {
-            System(context).KillCreature(creature);
+            system.KillCreature(creature);
         }
 
         return true;
@@ -74,9 +75,9 @@ public sealed class CreatureCommands : ICommandGroup
 
     private static bool Respawn(CommandContext context, string args)
     {
-        if (Selected(context) is { } creature)
+        if (Selected(context) is { Creature: { } creature, System: { } system })
         {
-            System(context).ForceRespawn(creature);
+            system.ForceRespawn(creature);
         }
 
         return true;
@@ -84,7 +85,7 @@ public sealed class CreatureCommands : ICommandGroup
 
     internal static bool Delete(CommandContext context, string args)
     {
-        if (Selected(context) is not { } creature)
+        if (Selected(context) is not { Creature: { } creature, System: { } system })
         {
             return true;
         }
@@ -95,7 +96,7 @@ public sealed class CreatureCommands : ICommandGroup
             return true;
         }
 
-        System(context).Despawn(creature);
+        system.Despawn(creature);
         return true;
     }
 
@@ -104,14 +105,33 @@ public sealed class CreatureCommands : ICommandGroup
             ? context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(map)
             : context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(context.Player.MapId);
 
-    private static Creature? Selected(CommandContext context)
+    /// <summary>A selected creature and the creature system of its map.</summary>
+    private readonly record struct Pick(Creature Creature, CreatureMapSystem System);
+
+    /// <summary>
+    /// The invoker's selected creature. A console-like invoker driven by a tool (the action channel) has no character to select with: its
+    /// selection is the guid the tool attached (<see cref="GmActionContext"/>), on whatever map that creature is.
+    /// </summary>
+    private static Pick? Selected(CommandContext context)
     {
-        Creature? creature = System(context).FindCreature(context.Player.Selection);
-        if (creature is null)
+        CreatureWorldFeature feature = context.Session.Services.GetRequiredService<CreatureWorldFeature>();
+        if (context.IsConsole && GmActionContext.Of(context) is { Primary: not 0 } click)
         {
-            context.Reply("Select a creature first.");
+            if (GmActionContext.FindUnit(context, click.Primary) is Creature { Map: { } map } found)
+            {
+                return new Pick(found, feature.GetOrCreateSystem(map));
+            }
+        }
+        else
+        {
+            CreatureMapSystem system = System(context);
+            if (system.FindCreature(context.Player.Selection) is { } creature)
+            {
+                return new Pick(creature, system);
+            }
         }
 
-        return creature;
+        context.Reply("Select a creature first.");
+        return null;
     }
 }

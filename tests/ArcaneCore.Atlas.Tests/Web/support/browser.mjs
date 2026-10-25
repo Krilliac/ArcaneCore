@@ -58,7 +58,7 @@ export class Browser {
         ], { stdio: 'ignore', windowsHide: true });
         const browser = new Browser(child, profile);
         const portFile = path.join(profile, 'DevToolsActivePort');
-        const deadline = Date.now() + 30_000;
+        const deadline = Date.now() + 90_000; // generous: several builds and test runs share the machine
         let exitedAt;
         while (!fs.existsSync(portFile)) {
             // A launcher may relaunch itself (pending browser update) and exit 0; the real browser still writes the port file.

@@ -52,6 +52,9 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
     public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
 
+    /// <summary>Bots and the world's events: festival gathering, celebration and talk (<c>World:Playerbots:Social:Events</c>).</summary>
+    public PlayerbotSocialEventsOptions Events { get; set; } = new();
+
     /// <summary>
     /// The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many
     /// ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply
@@ -78,6 +81,8 @@ public sealed class PlayerbotSocialOptions
         Mood.Validate();
         if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
         Initiative.Validate();
+        if (Events is null) throw new InvalidOperationException($"{section}:Events is missing.");
+        Events.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

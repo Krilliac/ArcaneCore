@@ -136,12 +136,14 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             }
 
             // The keys are checked one by one above; the rules that tie two values together are checked on the whole candidate section
-            // (UnfriendAffinity not above FriendAffinity, UnignoreAffinity not below IgnoreAffinity), as at start.
+            // (UnfriendAffinity not above FriendAffinity, UnignoreAffinity not below IgnoreAffinity, EmoteMaxSeconds not below
+            // EmoteMinSeconds), as at start.
             if (candidate.Playerbots is { } playerbots)
             {
                 try
                 {
                     playerbots.Social.Lists.Validate();
+                    playerbots.Social.Events.Validate();
                 }
                 catch (InvalidOperationException ex)
                 {

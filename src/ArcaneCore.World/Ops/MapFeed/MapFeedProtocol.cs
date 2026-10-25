@@ -27,6 +27,9 @@ internal enum FeedOp : byte
 
     /// <summary>Packet tools: stop the connection's tap.</summary>
     Untap,
+
+    /// <summary>An op an extension declared (<see cref="MapFeedExtensions.IsDeclared"/>: <c>role</c>, <c>action</c>, <c>caps</c>); the extension parses the line.</summary>
+    Extension,
 }
 
 /// <summary>Which packets a tap passes.</summary>
@@ -122,6 +125,12 @@ internal struct FeedRequest
 
     /// <summary>tap: the most payload bytes each packet line carries as hex.</summary>
     public int MaxBytes;
+
+    /// <summary>extension: the op name.</summary>
+    public string? ExtensionOp;
+
+    /// <summary>extension: the whole line, valid until the connection reads the next one (the extension parses it itself).</summary>
+    public ReadOnlyMemory<byte> ExtensionLine;
 
     /// <summary>inspect: the object guid to describe.</summary>
     public ulong InspectGuid;
@@ -337,6 +346,14 @@ internal static class MapFeedProtocol
             {
                 request.Op = toolOp;
                 return ParseTool(root, ref request, out error);
+            }
+
+            if (op.GetString() is { } declared && MapFeedExtensions.IsDeclared(declared))
+            {
+                request.Op = FeedOp.Extension;
+                request.ExtensionOp = declared;
+                request.ExtensionLine = line;
+                return true;
             }
 
             error = new FeedError(UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query (and console, inject, send, tap and untap with the packet tools)");

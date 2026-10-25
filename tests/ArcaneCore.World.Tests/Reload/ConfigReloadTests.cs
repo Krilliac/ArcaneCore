@@ -560,6 +560,54 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotSocialEvents_AreLive_AndABadExcludedEventsListIsRefusedKeepingTheOldOne()
+    {
+        // The festival board and the events lane read World:Playerbots:Social:Events from this object at every decision (P7a slice 1).
+        string path = Write("""
+            { "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Events": {
+                "Enabled": false, "Holidays": { "CelebrateChance": 25, "ExcludedEvents": "12, 24 25", "MaxPerServiceAnchor": 0 } } } } } }
+            """);
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+
+        var events = playerbots.Social.Events;
+        Assert.False(events.Enabled);
+        Assert.Equal(25, events.Holidays.CelebrateChance);
+        Assert.Equal("12, 24 25", events.Holidays.ExcludedEvents);
+        Assert.Equal(0, events.Holidays.MaxPerServiceAnchor);
+        Assert.Same(events, playerbots.Social.Events); // changed in place: what the board holds is what the reload wrote
+
+        // A live string compares by value, so the same text again is no change, and a different one is applied.
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { "ExcludedEvents": "12, 24 25" } } } } } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { "ExcludedEvents": "2" } } } } } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal("2", events.Holidays.ExcludedEvents);
+        Assert.True(events.Enabled); // a key removed from the file returns to its default
+        Assert.Equal(60, events.Holidays.CelebrateChance);
+
+        // Bad values: the reload is refused as a whole and the old values stay.
+        foreach (string bad in new[]
+        {
+            "\"ExcludedEvents\": \"12, x\"", "\"ExcludedEvents\": \"0\"", "\"ExcludedEvents\": \"65536\"", "\"CelebrateChance\": 101",
+            "\"SpotRadiusYards\": 19", "\"MaxPerTown\": 0", "\"EmotesPerListenerMinute\": 11", "\"TalkZoneGapSeconds\": 0",
+            "\"EmoteMinSeconds\": 120, \"EmoteMaxSeconds\": 60",
+        })
+        {
+            File.WriteAllText(path, $$"""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { {{bad}} } } } } } }""");
+            ReloadResult refused = await coordinator.ReloadAsync("config");
+            Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+            Assert.Equal("2", events.Holidays.ExcludedEvents);
+            Assert.Equal(60, events.Holidays.CelebrateChance);
+            Assert.Equal(250, events.Holidays.SpotRadiusYards);
+            Assert.Equal(24, events.Holidays.MaxPerTown);
+            Assert.Equal((30, 90), (events.Holidays.EmoteMinSeconds, events.Holidays.EmoteMaxSeconds));
+        }
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -794,6 +842,16 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Initiative:{property.Name}");
         }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEventsOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotHolidayOptions)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Events:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotHolidayOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Events:Holidays:{property.Name}");
+        }
+
         // The social pass's per-tick time budget (a scalar of the Social section itself).
         expected.Add($"{PlayerbotOptions.SectionName}:Social:{nameof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialOptions.PassBudgetMs)}");
 
