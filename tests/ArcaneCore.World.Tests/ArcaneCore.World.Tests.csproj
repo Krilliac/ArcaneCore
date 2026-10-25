@@ -32,6 +32,10 @@
     <Compile Include="..\ArcaneCore.Game.Tests\GridTerrain\MapFileBuilder.cs" Link="Playerbots\Population\MapFileBuilder.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The map feed wire lines shared with the other test project. -->
+    <Compile Include="..\Shared\MapFeedWireFixture.cs" Link="MapFeedWireFixture.cs" />
+  </ItemGroup>
   <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
   <ItemGroup>
     <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />
