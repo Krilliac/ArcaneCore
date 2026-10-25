@@ -43,6 +43,8 @@ internal sealed partial class PlayerbotBrain
             return false;
         }
 
+        // A crowd at a festival spot that draws a player's attack disperses: the town's festival is set aside for the team for a while.
+        _eventGoals?.Attacked();
         FightUnit(player, opponent, interval);
         return true;
     }

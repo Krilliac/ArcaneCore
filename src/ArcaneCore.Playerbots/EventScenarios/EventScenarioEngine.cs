@@ -250,13 +250,44 @@ internal sealed class EventScenarioEngine(IEventScenarioHost host, ILogger logge
         var runs = new ScenarioGroupRun[groups.Count];
         for (int i = 0; i < runs.Length; i++) runs[i] = new ScenarioGroupRun(groups[i]);
         _runs[eventId] = new ScenarioEventRun(eventId, runs);
+        _areasVersion++;
         logger.LogInformation("Bot event scenario {Event} is wanted: {Groups} groups, {Bots} bots", eventId, runs.Length, groups.Sum(g => g.Count));
+    }
+
+    private int _areasVersion;
+
+    /// <summary>The yards around a siege waypoint that count as the scenario's area (<see cref="ActiveAreas"/>).</summary>
+    internal const float WaypointAreaYards = 40f;
+
+    /// <summary>Changes every time <see cref="ActiveAreas"/> may have changed (a run began or ended). World thread.</summary>
+    internal int AreasVersion => _areasVersion;
+
+    /// <summary>
+    /// The areas of the scenarios that run now: each defend post (map, centre, radius) and each siege waypoint (<see cref="WaypointAreaYards"/>).
+    /// Read-only for the festival board, which keeps bots celebrating away from them. A new list per call: the caller caches it by
+    /// <see cref="AreasVersion"/>. World thread.
+    /// </summary>
+    internal IReadOnlyList<(uint Map, Vector3 Centre, float Radius)> ActiveAreas()
+    {
+        var areas = new List<(uint, Vector3, float)>();
+        foreach (ScenarioEventRun run in _runs.Values)
+        {
+            foreach (ScenarioGroupRun g in run.Groups)
+            {
+                foreach (EventScenarioPost post in g.Group.Posts) areas.Add((post.Map, post.Centre, post.Radius));
+                if (g.Group.Siege is { } siege)
+                    foreach (Vector3 waypoint in siege.Waypoints) areas.Add((siege.Map, waypoint, WaypointAreaYards));
+            }
+        }
+
+        return areas;
     }
 
     /// <summary>The event stopped: posts cleared, the siege this scenario started stopped, claims forgotten. Bots are neither deleted nor moved.</summary>
     private void Teardown(ushort eventId)
     {
         if (!_runs.Remove(eventId, out ScenarioEventRun? run)) return;
+        _areasVersion++;
         int cleared = 0;
         int stays = 0;
         foreach (ScenarioGroupRun g in run.Groups)

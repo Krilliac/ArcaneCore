@@ -15505,6 +15505,201 @@ World.Playerbots.SlowThinkLogMs = 50
 World.Playerbots.Social.Emotes.Enabled = true
 
 #
+#    World.Playerbots.Social.Events.Enabled
+#        Description: Let bots take part in the world's events (on by default). Off: festival places
+#                     are given up (the bots go back to the inn at their next idle think) and no
+#                     event line or emote is made.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Enabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.CelebrateChance
+#        Description: The percent chance (0..100, default 60) that a bot celebrates a festival on a
+#                     given day; rolled per bot per festival per day (the day changes for each bot
+#                     at a time of its own). Sociable bots celebrate more often: p = 1 - (1 -
+#                     c)^(0.5 + sociability), which is exactly c at sociability 0.5. 0 sends nobody,
+#                     100 every bot.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.CelebrateChance = 60
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmoteMaxSeconds
+#        Description: The longest gap between two celebration emotes of one bot, in seconds
+#                     (5..3600, not below EmoteMinSeconds, default 90).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmoteMaxSeconds = 90
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmoteMinSeconds
+#        Description: The shortest gap between two celebration emotes of one bot, in seconds
+#                     (5..3600, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmoteMinSeconds = 30
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmotesPerAnchorMinute
+#        Description: The festival text emotes around one anchor per minute, players in range or not
+#                     (0..30, default 3).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmotesPerAnchorMinute = 3
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmotesPerListenerMinute
+#        Description: The festival text emotes one real player receives per minute from all bots
+#                     together (0..10, default 2; 0 sends none while a player is in range).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmotesPerListenerMinute = 2
+
+#
+#    World.Playerbots.Social.Events.Holidays.Enabled
+#        Description: Gather and celebrate at running festivals (on by default;
+#                     Social:Events:Enabled is the master switch).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.Enabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.ExcludedEvents
+#        Description: Game event ids that are never treated as a festival or part of one, separated
+#                     by commas and/or spaces ("12, 24 25"; each 1..65535, at most 64; empty: none).
+#                     A string so that a reload compares it by value.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.ExcludedEvents = ""
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerGossipAnchor
+#        Description: The most bots around one festival NPC that only talks (1..20, default 6).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerGossipAnchor = 6
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerServiceAnchor
+#        Description: The most bots around one festival quest giver or vendor (0..10, default 3; 0
+#                     keeps bots away from them).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerServiceAnchor = 3
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerTown
+#        Description: The most bots celebrating in one town per team (1..200, default 24).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerTown = 24
+
+#
+#    World.Playerbots.Social.Events.Holidays.SpotBackoffMinutes
+#        Description: The minutes a festival NPC whose spot a bot could not reach is set aside for
+#                     that bot, and a town whose crowd was attacked by a player is set aside for
+#                     that team (1..1440, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.SpotBackoffMinutes = 30
+
+#
+#    World.Playerbots.Social.Events.Holidays.SpotRadiusYards
+#        Description: How far from the town centre a festival NPC may stand to count, in yards
+#                     (20..1000, default 250); it must also be inside the bot's home.
+#        Type: int
+#        Default: 250
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.SpotRadiusYards = 250
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkBotGapMinutes
+#        Description: The minutes between two festival lines of the same bot (1..1440, default 20).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkBotGapMinutes = 20
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkEnabled
+#        Description: Let bots say the arrival line and the named event remark (on by default; chat
+#                     must be on as well).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkEnabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkZoneGapSeconds
+#        Description: The seconds between two festival lines in the same zone, whichever bot
+#                     (1..86400, default 120).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkZoneGapSeconds = 120
+
+#
 #    World.Playerbots.Social.Gratitude.Enabled
 #        Description: Let bots thank whoever helped them (on by default). Off: no emote, no line, no
 #                     favour.
