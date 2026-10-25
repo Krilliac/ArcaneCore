@@ -53,10 +53,14 @@ internal sealed partial class PlayerbotTravel
     /// </summary>
     private static readonly ConditionalWeakTable<NavMeshPathfinder, Dictionary<(uint Map, Vector3 Position), int[]>> KnownPlaces = [];
 
+    /// <summary>Water between the two places that no walk crosses (Teldrassil on map 1), whatever the mesh has loaded.</summary>
+    private static bool Separated(TravelPlace a, TravelPlace b)
+        => Population.PopulationTownProgression.SeparatedByWater(a.MapId, a.Position.X, a.Position.Y, b.MapId, b.Position.X, b.Position.Y);
+
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
     internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player, IReadOnlyList<ShipRoute> ships)
     {
-        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
+        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId && !Separated(a, b);
         Dictionary<(uint Map, Vector3 Position), int[]> kept = KnownPlaces.GetValue(nav, static _ => []);
         HashSet<TravelPlace> ports = [];
         foreach (ShipRoute ship in ships)
@@ -112,7 +116,7 @@ internal sealed partial class PlayerbotTravel
 
         return (a, b) =>
         {
-            if (a.MapId != b.MapId) return false;
+            if (a.MapId != b.MapId || Separated(a, b)) return false;
             int[] ca = Locate(a), cb = Locate(b);
             if (ca.Length == 0 || cb.Length == 0) return true;
             foreach (int x in ca)
