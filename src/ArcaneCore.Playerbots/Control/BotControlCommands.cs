@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Commands;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -214,133 +215,13 @@ internal static class BotControlDispatch
     internal static string? Select(BotCall call, out List<Picked> bots)
     {
         bots = [];
-        string? error = Resolve(call.Hub, call.Selector, bots, 0);
+        string? error = BotSelector.TryResolve(call.Selector, new FeatureBotSelectorSource(call.Hub.Feature, call.Hub), out BotSelection selection);
         if (error is not null) return error;
-        if (bots.Count == 0) return "no-match: no playerbot matches '" + call.Selector + "'";
+        bots = [.. selection.Bots.Select(b => new Picked(b.BotId, b.Name))];
         int cap = call.Context.Session.Services.GetService<IOptions<PlayerbotOptions>>()?.Value.MaxBulkCommand ?? 50;
         if (bots.Count > cap && !call.Has("--force"))
             return string.Create(CultureInfo.InvariantCulture, $"too-many: {bots.Count} bots match; the cap is {cap} (World:Playerbots:MaxBulkCommand); add --force");
         return null;
-    }
-
-    private static string? Resolve(BotControlHub hub, string selector, List<Picked> bots, int depth)
-    {
-        ManagedPlayerbotFeature feature = hub.Feature;
-        IReadOnlyList<PlayerbotStatus> snapshot = feature.Snapshot();
-        var seen = new HashSet<Guid>(bots.Select(b => b.BotId));
-        void Add(Guid id, string name)
-        {
-            if (seen.Add(id)) bots.Add(new Picked(id, name));
-        }
-
-        foreach (string raw in selector.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            string part = raw;
-            if (part.Equals("all", StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (PlayerbotStatus s in snapshot.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)) Add(s.BotId, s.Name);
-            }
-            else if (part.Equals("controlled", StringComparison.OrdinalIgnoreCase) || part.Equals("mine", StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (BotController c in hub.Controlled.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)) Add(c.BotId, c.Name);
-            }
-            else if (part.Equals("running", StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (PlayerbotStatus s in snapshot.Where(s => feature.IsActive(s.BotId)).OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)) Add(s.BotId, s.Name);
-            }
-            else if (part.StartsWith('@'))
-            {
-                if (depth > 3) return "bad-selector: aliases nest too deep";
-                if (hub.Group(part[1..]) is not { } members) return "no-alias: no bot alias '" + part + "' (.botctl alias)";
-                foreach (string member in members)
-                {
-                    string? inner = Resolve(hub, member, bots, depth + 1);
-                    if (inner is not null) return inner;
-                }
-
-                seen = [.. bots.Select(b => b.BotId)];
-            }
-            else if (part.StartsWith("where:", StringComparison.OrdinalIgnoreCase))
-            {
-                string? problem = Filter(feature, hub, snapshot, part[6..], Add);
-                if (problem is not null) return problem;
-            }
-            else if (part.EndsWith('*'))
-            {
-                string prefix = part[..^1];
-                if (prefix.Length == 0) return "bad-selector: a prefix needs at least one letter before '*'";
-                foreach (PlayerbotStatus s in snapshot.Where(s => s.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)) Add(s.BotId, s.Name);
-            }
-            else if (feature.TryResolveBotId(part, out Guid id, out string name))
-            {
-                Add(id, name);
-            }
-            else
-            {
-                return "no-match: no playerbot '" + part + "'";
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary><c>where:key=value&amp;key=value</c>: map, zone, level (n or a-b), class, race, controlled (0/1), running (0/1), state, goal.</summary>
-    private static string? Filter(ManagedPlayerbotFeature feature, BotControlHub hub, IReadOnlyList<PlayerbotStatus> snapshot, string filter, Action<Guid, string> add)
-    {
-        var terms = new List<(string Key, string Value)>();
-        foreach (string term in filter.Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            int eq = term.IndexOf('=');
-            if (eq <= 0) return "bad-selector: filter term '" + term + "' is not key=value";
-            string key = term[..eq].ToLowerInvariant();
-            if (key is not ("map" or "zone" or "level" or "class" or "race" or "controlled" or "running" or "state" or "goal" or "name"))
-                return "bad-selector: unknown filter key '" + key + "' (map, zone, level, class, race, controlled, running, state, goal, name)";
-            terms.Add((key, term[(eq + 1)..]));
-        }
-
-        foreach (PlayerbotStatus status in snapshot.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
-        {
-            Player? player = feature.FindSession(status.BotId)?.Player;
-            bool all = true;
-            foreach ((string key, string value) in terms)
-            {
-                bool match = key switch
-                {
-                    "map" => player is not null ? Num(value, player.MapId) : Num(value, status.MapId),
-                    "zone" => player is { Map: not null } p && Num(value, feature.ZoneAt(p.MapId, new(p.X, p.Y, p.Z))),
-                    "level" => player is not null && Range(value, player.Level),
-                    "class" => player is not null && player.Class.ToString().Equals(value, StringComparison.OrdinalIgnoreCase),
-                    "race" => player is not null && player.Race.ToString().Equals(value, StringComparison.OrdinalIgnoreCase),
-                    "controlled" => (hub.Find(status.BotId) is not null) == Flag(value),
-                    "running" => feature.IsActive(status.BotId) == Flag(value),
-                    "state" => status.State.ToString().Equals(value, StringComparison.OrdinalIgnoreCase),
-                    "goal" => status.Goal.ToString().Equals(value, StringComparison.OrdinalIgnoreCase),
-                    "name" => status.Name.Contains(value, StringComparison.OrdinalIgnoreCase),
-                    _ => throw new FormatException(key),
-                };
-                if (!match)
-                {
-                    all = false;
-                    break;
-                }
-            }
-
-            if (all) add(status.BotId, status.Name);
-        }
-
-        return null;
-
-        static bool Flag(string value) => value is "1" or "true" or "yes" or "on";
-        static bool Num(string value, uint actual) => uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out uint n) && n == actual;
-        static bool Range(string value, uint actual)
-        {
-            int dash = value.IndexOf('-');
-            if (dash < 0) return Num(value, actual);
-            return uint.TryParse(value[..dash], NumberStyles.None, CultureInfo.InvariantCulture, out uint low)
-                && uint.TryParse(value[(dash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out uint high)
-                && actual >= low && actual <= high;
-        }
     }
 
     // --- per-bot helpers ---------------------------------------------------------------------------------------

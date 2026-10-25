@@ -1,5 +1,7 @@
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData;
@@ -72,5 +74,37 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
         {
             Service.AddListener(listener);
         }
+
+        _spells = spells;
+        spells.PlayerSpellsRestored += ApplyLoginStance;
+    }
+
+    private SpellFeature? _spells;
+
+    /// <summary>Battle Stance.</summary>
+    private const uint BattleStanceSpell = 2457;
+
+    /// <summary>
+    /// vmangos Player::LoadFromDB casts Battle Stance on a warrior that has no shapeshift form (Player.cpp ~15349). Runs on the world
+    /// thread after the saved auras and the passives were restored (<see cref="SpellFeature.PlayerSpellsRestored"/>), so a saved stance
+    /// (Battle 2457, Defensive 71, Berserker 2458) is already active and is not replaced. The stance goes through the normal cast and
+    /// aura path, so the client receives the usual aura and update packets.
+    /// </summary>
+    private void ApplyLoginStance(Player player)
+    {
+        if (player.Class != Class.Warrior || Service is null || _spells is not { } spells)
+        {
+            return;
+        }
+
+        SpellSystem system = spells.System;
+        if (!spells.Spellbook.HasSpell(player, BattleStanceSpell)
+            || ShapeshiftService.IsWarriorStance(ShapeshiftService.GetForm(player))
+            || system.GetAuras(player).Any(h => !h.IsRemoved && h.HasAura(AuraType.ModShapeshift)))
+        {
+            return;
+        }
+
+        system.CastSpell(player, BattleStanceSpell, SpellCastTargets.ForSelf(), triggered: true);
     }
 }

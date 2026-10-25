@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -54,9 +55,9 @@ public sealed class PacketHeuristicsCommands : ICommandGroup
         return true;
     }
 
-    private static bool On(CommandContext context, string text) => Switch(context, "on", feature => feature.SetEnabled(true));
+    private static bool On(CommandContext context, string text) => Switch(context, "on", "packetcheck.enabled", true, null);
 
-    private static bool Off(CommandContext context, string text) => Switch(context, "off", feature => feature.SetEnabled(false));
+    private static bool Off(CommandContext context, string text) => Switch(context, "off", "packetcheck.enabled", false, null);
 
     private static bool Reset(CommandContext context, string text)
     {
@@ -71,23 +72,41 @@ public sealed class PacketHeuristicsCommands : ICommandGroup
         return true;
     }
 
-    private static bool Bots(CommandContext context, string text) => Toggle(context, text, "bots", (feature, include) => feature.SetExemptBots(!include));
+    private static bool Bots(CommandContext context, string text) => Toggle(context, text, "bots", "packetcheck.exemptbots");
 
-    private static bool Staff(CommandContext context, string text) => Toggle(context, text, "staff", (feature, include) => feature.SetExemptStaff(!include));
+    private static bool Staff(CommandContext context, string text) => Toggle(context, text, "staff", "packetcheck.exemptstaff");
 
-    private static bool Switch(CommandContext context, string state, Action<PacketHeuristicsFeature> apply)
+    /// <summary>Sets a key through the same posted set as <c>.server config set</c>, then prints the status (or the refusal).</summary>
+    private static bool Switch(CommandContext context, string state, string key, bool value, string? what)
     {
-        if (FeatureOf(context) is not { } feature)
+        if (FeatureOf(context) is null)
         {
             return true;
         }
 
-        apply(feature);
-        context.Session.Logger.LogInformation("Packet heuristics switched {State} by {Invoker} (runtime only)", state, context.InvokerName);
-        return Status(context, string.Empty);
+        ServerConfigCommands.PostSet(context, key, value ? "true" : "false", null, outcome =>
+        {
+            if (outcome.Result != OptionSetResult.Ok)
+            {
+                context.Reply($"Packet heuristics: {outcome.Error}.");
+                return;
+            }
+
+            if (what is null)
+            {
+                context.Session.Logger.LogInformation("Packet heuristics switched {State} by {Invoker} (runtime only)", state, context.InvokerName);
+            }
+            else
+            {
+                context.Session.Logger.LogInformation("Packet heuristics: {What} {State} by {Invoker} (runtime only)", what, state, context.InvokerName);
+            }
+
+            Status(context, string.Empty);
+        });
+        return true;
     }
 
-    private static bool Toggle(CommandContext context, string text, string what, Action<PacketHeuristicsFeature, bool> apply)
+    private static bool Toggle(CommandContext context, string text, string what, string exemptKey)
     {
         string? word = new CommandArgs(text).ExtractArg();
         bool include;
@@ -104,13 +123,7 @@ public sealed class PacketHeuristicsCommands : ICommandGroup
             return false;
         }
 
-        if (FeatureOf(context) is not { } feature)
-        {
-            return true;
-        }
-
-        apply(feature, include);
-        context.Session.Logger.LogInformation("Packet heuristics: {What} {State} by {Invoker} (runtime only)", what, include ? "included" : "exempt", context.InvokerName);
-        return Status(context, string.Empty);
+        // "bots on" includes the sessions in the checks; the key says the opposite (exempt).
+        return Switch(context, include ? "included" : "exempt", exemptKey, !include, what);
     }
 }
