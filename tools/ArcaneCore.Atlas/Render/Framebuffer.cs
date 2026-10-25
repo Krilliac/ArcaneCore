@@ -53,6 +53,35 @@ internal sealed class Framebuffer
     /// <summary>Writes <paramref name="color"/> over the pixel with the given opacity in (0, 1]; opacity 1 replaces it exactly.</summary>
     public void Blend(int x, int y, Rgb color, double alpha) => BlendAt(((y * Width) + x) * 4, color, alpha);
 
+    /// <summary>
+    /// Combines a shaded pixel with the frame by a material blend mode at a byte offset: alpha blend (also alpha key, after its test),
+    /// additive (the source times <paramref name="alpha"/> added), or modulate (the destination times the source, doubled for
+    /// <see cref="Core.Materials.BlendMode.Modulate2x"/>, mixed in by <paramref name="alpha"/>).
+    /// </summary>
+    public void Combine(int offset, Rgb color, double alpha, Core.Materials.BlendMode mode)
+    {
+        switch (mode)
+        {
+            case Core.Materials.BlendMode.Additive:
+            case Core.Materials.BlendMode.AdditiveAlpha:
+                Pixels[offset] = Rgb.Channel(Pixels[offset] + (color.R * alpha));
+                Pixels[offset + 1] = Rgb.Channel(Pixels[offset + 1] + (color.G * alpha));
+                Pixels[offset + 2] = Rgb.Channel(Pixels[offset + 2] + (color.B * alpha));
+                break;
+            case Core.Materials.BlendMode.Modulate:
+            case Core.Materials.BlendMode.Modulate2x:
+                double gain = mode == Core.Materials.BlendMode.Modulate2x ? 2.0 / 255.0 : 1.0 / 255.0;
+                double keep = 1.0 - alpha;
+                Pixels[offset] = Rgb.Channel((Pixels[offset] * color.R * gain * alpha) + (Pixels[offset] * keep));
+                Pixels[offset + 1] = Rgb.Channel((Pixels[offset + 1] * color.G * gain * alpha) + (Pixels[offset + 1] * keep));
+                Pixels[offset + 2] = Rgb.Channel((Pixels[offset + 2] * color.B * gain * alpha) + (Pixels[offset + 2] * keep));
+                break;
+            default:
+                BlendAt(offset, color, alpha);
+                break;
+        }
+    }
+
     /// <summary>Blends at a byte offset into <see cref="Pixels"/> (pixel index times four).</summary>
     public void BlendAt(int offset, Rgb color, double alpha)
     {

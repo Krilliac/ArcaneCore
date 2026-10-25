@@ -59,6 +59,9 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
 
+    /// <summary>The reputation write queue, once loaded (the persistence probe registry reads it).</summary>
+    internal ReputationWriteQueue? Writes => _writes;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);

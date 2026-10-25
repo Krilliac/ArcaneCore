@@ -989,6 +989,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return best;
     }
 
+    /// <summary>
+    /// The exit a retrying run's leader has to leave through: the run is on its <see cref="PlayerbotRunStep.Retry"/> step (a wipe's regroup
+    /// outside the instance) and <paramref name="leader"/> is standing inside the goal's dungeon, revived there. Null otherwise.
+    /// </summary>
+    internal static AreaTriggerTemplate? RetryExitOf(WorldRuntime world, BotGroup group, Player leader)
+        => group.Run is { Step: PlayerbotRunStep.Retry } && leader.MapId == group.Goal.MapId
+            && WorldMaps.Of(world).Registry.Find(leader.MapId) is { IsDungeon: true } ? ExitOf(world, leader.MapId) : null;
+
     /// <summary>The way out of an instance: a trigger on <paramref name="mapId"/> whose teleport leads off it, or null.</summary>
     internal static AreaTriggerTemplate? ExitOf(WorldRuntime world, uint mapId)
     {
@@ -1552,7 +1560,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     internal const float QuestApproachYards = 30f;
 
     private bool Gathered(BotGroup group, Player leader)
-        => _world is { } world && group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => world.FindOnlinePlayer(m.Guid) is not { } p
+        => _world is { } world && RetryExitOf(world, group, leader) is null // a retry regroups outside: a leader still inside has not gathered anyone
+            && group.Members.Where(m => m.Joined && !m.Real && m.Guid != leader.Guid).All(m => world.FindOnlinePlayer(m.Guid) is not { } p
             || !p.IsAlive || ReferenceEquals(p.Map, leader.Map) && Distance(p, leader) <= GatherYards);
 
     /// <summary>

@@ -24,7 +24,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (<see cref="PlayerbotRetreat"/>), remembering the creatures and the place (<see cref="PlayerbotDangerMemory"/>), then recovers to
 /// <see cref="PlayerbotRiskOptions.RecoverHealthPct"/> before it pulls again. World thread; owned by one bot's brain.
 /// </summary>
-internal sealed class PlayerbotRisk
+internal sealed partial class PlayerbotRisk
 {
     /// <summary>At most this many candidates are weighed per decision (each costs a path query).</summary>
     internal const int MaxCandidates = 5;
