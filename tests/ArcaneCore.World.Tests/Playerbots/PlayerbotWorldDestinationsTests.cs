@@ -616,7 +616,7 @@ public sealed class PlayerbotWorldDestinationsTests
     /// "planning", kept resetting the stall watch).
     /// </summary>
     [Fact]
-    public async Task EveryThinkOverBudget_DefersAtMostThreeTimes_ThenPlans_AndOnlyTheFirstDeferralCountsAsPlanning()
+    public async Task EveryThinkOverBudget_DefersAtMostThreeTimes_ThenPlans_AndNoDeferralCountsAsPlanning()
     {
         const float startX = -8949.95f;
         var content = new CreatureContent(
@@ -700,7 +700,7 @@ public sealed class PlayerbotWorldDestinationsTests
                     finally { probe.End(); }
                 }
 
-                Assert.True(forcedThinks >= 3, $"{forcedThinks} thinks planned for real");
+                Assert.Equal(3, forcedThinks); // thinks 3, 7 and 11: three deferrals, then one forced step, three times
                 return true;
             });
         }

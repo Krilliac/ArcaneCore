@@ -112,7 +112,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private int _deferrals;
     private bool _forcedStep;
 
-    /// <summary>The most thinks in a row a step may be deferred for budget; the next one runs its step whatever the budget (progress is guaranteed).</summary>
+    /// <summary>The most thinks in a row a step may be deferred for budget; the next one runs its step whatever the budget. This bounds only the destination loop: the brain's own 15 ms <c>HasOptionalThinkBudget</c> gate can still skip a destination update before it is asked.</summary>
     internal const int MaxConsecutiveDeferrals = 3;
 
     internal bool IsPlanning => _navigationPlan is not null || _planningDeferred && !_budgetDeferred;
