@@ -74,6 +74,16 @@ public sealed class CreatureSplinePassTests
     }
 
     [Fact]
+    public void ThePathTimeBudget_FeedsTheDigest_WhichIsWhyTheDeterminismFactsUseACountOnlyBudget()
+    {
+        // A zero wall budget defers every wanderer after the first drape; a count-only one never does. The digests differ, so a budget with
+        // a real wall limit makes the digest depend on how loaded the host is.
+        string timed = RunScripted(1, ungated: "", splinePass: true, new CreaturePathBudget(64, 16384, MaxMilliseconds: 0)).Digest;
+        string countOnly = RunScripted(1, ungated: "", splinePass: true).Digest;
+        Assert.NotEqual(countOnly, timed);
+    }
+
+    [Fact]
     public void TheSlowLineBreakdown_NamesTheSplinePass_WhenItRuns()
     {
         using WorldRuntime world = CreateRuntime(1, "", splinePass: true);
@@ -117,7 +127,7 @@ public sealed class CreatureSplinePassTests
         Assert.Equal(0, world.ParallelCounters.OwnerViolations);
     }
 
-    private static (string Digest, int Moved, long Packets) RunScripted(int threads, string ungated, bool splinePass)
+    private static (string Digest, int Moved, long Packets) RunScripted(int threads, string ungated, bool splinePass, CreaturePathBudget? budget = null)
     {
         using WorldRuntime world = CreateRuntime(threads, ungated, splinePass);
         world.UseManualClockFrom(0); // a fixed origin: the wall-clock reading so far would shift every timestamp of the run
@@ -128,7 +138,11 @@ public sealed class CreatureSplinePassTests
         foreach ((uint mapId, uint instanceId) in Maps)
         {
             Map map = world.GetMap(mapId, instanceId);
-            var system = new CreatureMapSystem(map, content, random: new Random((int)(mapId * 7919 + instanceId)));
+            var system = new CreatureMapSystem(map, content, random: new Random((int)(mapId * 7919 + instanceId)))
+            {
+                // Count-only: the default 12 ms wall budget makes the digest load-dependent (a descheduled thread defers a wanderer, which draws URand).
+                PathBudget = budget ?? new CreaturePathBudget(MaxSearches: 64, MaxNodes: 16384),
+            };
             map.AddUpdater(system);
             systems.Add(system);
             for (int i = 0; i < 3; i++)
