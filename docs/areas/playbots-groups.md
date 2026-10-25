@@ -196,7 +196,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
   (+`GuildBonus` 0.2 for a guildmate of the waiting group, +`LfgAnswerBonus` 0.15 when it answered a call), rolled by a hash of the bot and
   the group's stable id and the pair's current refusal window: a candidate that refuses is remembered with the time of the refusal and is not asked
   again for `RefusalMemoryMinutes` (10) from then, and gets a fresh roll afterwards while the group still waits. The roll's window is the clock
-  divided by that period, shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over at the same instant. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
+  divided by that period, shifted by a phase hashed from the candidate's character guid and the group's id (nothing random: the same on every run), so different pairs do not all turn over at the same instant. Missing roles are filled first, then the higher affinity and trust toward the members, then the nearer. The recruit gets the
   quest through the usual quest share; one that cannot take the quest still joins and helps. The group cap is `MaxGroups` (16); when it
   holds waiting bots back that is logged and noted once a minute.
 * **Answering calls** (`AnswerBotCalls`). A bot that hears another bot's looking-for-group line in a channel offers itself to the
