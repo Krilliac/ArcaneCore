@@ -23,6 +23,9 @@ internal static class MapFeedJson
     private static readonly JsonEncodedText OpResult = JsonEncodedText.Encode("result");
     private static readonly JsonEncodedText OpError = JsonEncodedText.Encode("error");
     private static readonly JsonEncodedText Protocol = JsonEncodedText.Encode("protocol");
+    private static readonly JsonEncodedText Rev = JsonEncodedText.Encode("rev");
+    private static readonly JsonEncodedText CombatFlag = JsonEncodedText.Encode("cb");
+    private static readonly JsonEncodedText DisplayIdProperty = JsonEncodedText.Encode("d");
     private static readonly JsonEncodedText Sha = JsonEncodedText.Encode("sha");
     private static readonly JsonEncodedText Pid = JsonEncodedText.Encode("pid");
     private static readonly JsonEncodedText Tools = JsonEncodedText.Encode("tools");
@@ -140,6 +143,7 @@ internal static class MapFeedJson
         writer.WriteStartObject();
         writer.WriteString(Op, OpHello);
         writer.WriteNumber(Protocol, MapFeedProtocol.Version);
+        writer.WriteNumber(Rev, MapFeedProtocol.Revision);
         writer.WriteString(Sha, sha);
         writer.WriteNumber(Pid, pid);
         if (tools)
@@ -382,6 +386,16 @@ internal static class MapFeedJson
         if ((entity.Parts & FeedEntityParts.Health) != 0)
         {
             writer.WriteNumber(Health, entity.HealthPercent);
+        }
+
+        if (entity.InCombat)
+        {
+            writer.WriteBoolean(CombatFlag, true);
+        }
+
+        if (entity.DisplayId != 0)
+        {
+            writer.WriteNumber(DisplayIdProperty, entity.DisplayId);
         }
 
         if (entity.Kind == FeedEntityKind.Creature)

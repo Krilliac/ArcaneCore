@@ -231,7 +231,7 @@ public sealed partial class CreatureMapSystem
         {
             if (creature.Z < validLocal - CreatureAnomalies.UnderMapMarginYards && ConfirmUnderMap(creature))
             {
-                if (TryRecoverClippedUnderTerrain(creature, validLocal))
+                if (TryRecoverClippedUnderTerrain(creature, validLocal) || TryLiftOntoFloorAbove(creature))
                 {
                     return;
                 }
@@ -255,7 +255,7 @@ public sealed partial class CreatureMapSystem
             && creature.Z < validUpper - CreatureAnomalies.UnderMapMarginYards
             && ConfirmUnderMap(creature))
         {
-            if (TryRecoverClippedUnderTerrain(creature, validUpper))
+            if (TryRecoverClippedUnderTerrain(creature, validUpper) || TryLiftOntoFloorAbove(creature))
             {
                 return;
             }
@@ -300,6 +300,53 @@ public sealed partial class CreatureMapSystem
 
         creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
         creature.ClearUnderMapEpisode();
+        return true;
+    }
+
+    /// <summary>
+    /// A creature already convicted of being under the map that has a navmesh floor straight above within 10 yd and none below within
+    /// 60 yd (a tunnel or cellar ceiling sits between it and the terrain, which <see cref="TryRecoverClippedUnderTerrain"/> declines):
+    /// it is put on that floor (when it is more than a yard below it). Reported once per episode: the episode stays open until a later sample
+    /// finds the creature on the floor, so a mover that keeps putting it back under is lifted again without a new report.
+    /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a stranded creature. Live 2026-10-16..23: 928 entry-416 (imp) reports,
+    /// 15.0-376.8 yd under the terrain surface (map 0: 801, p50 132 yd; map 1: 88, p50 27 yd; map 489: 39, 15.1-23.9 yd). Of the map 489 reports, 36 are
+    /// itemised: they lie in the two base tunnels (y 1456-1466), 7 on the tunnel floor (older classifiers), 27 at 2.2-4.6 yd and 2 (2026-10-23) at
+    /// 6.5-6.7 yd under it (the other 3 are not itemised in the source of these figures and cannot be recomputed from the repo); the 2 sit on the chord of a navmesh leg from the foot of the tunnel ramp to its far end. A path long enough to hit
+    /// DrapePath's point cap doubled the sample stride; samples more than the walker window under the ramp's top were dropped, and the
+    /// draped leg (1399.0, 1461.2, 328.2)-(1491.2, 1461.3, 342.8) ran 7.1 yd under the floor (z 336.0 at x 1448.2; logged 335.9).
+    /// Only those two map 489 reports of 2026-10-23 are tied to that cap. Measured on the real WSG terrain: GroundHeight.DrapePath keeping the
+    /// most deviating points instead of coarsening the leg is what brings the draped leg back to the floor (worst depth 7.10 yd before, 0.72 after);
+    /// the walk-mesh fallback for samples the walker window misses is not needed for it (without it the result is identical) and alone does
+    /// not fix it (2.09 yd). The other 37 map 489 reports (the 7 and 27 above and the 3 not itemised) are neither claimed fixed nor explained.
+    /// The map 0 and map 1 reports (889; the map 0 ones cluster in city interiors, to 376.8 yd deep, and 17
+    /// of them came after ground snap shipped) are unexplained and not investigated: this lift does not cover them and nothing here fixes their cause.
+    /// </summary>
+    private bool TryLiftOntoFloorAbove(Creature creature)
+    {
+        const float LiftYards = 10f;
+        const float MinLiftYards = 1f;
+        if (!Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 0f, LiftYards, out float floor)
+            || !float.IsFinite(floor)
+            || floor - creature.Z <= MinLiftYards
+            || Map.Collision.TryGetMeshFloor(creature.X, creature.Y, creature.Z, 60f, 0f, out _))
+        {
+            return false;
+        }
+
+        float standZ = floor + GroundHeight.StandOffset;
+        CreatureAnomalies.ReportUnderMap(
+            creature,
+            floor,
+            $"Creature {creature.Guid} was {floor - creature.Z:F1} yd under a navmesh floor (z={creature.Z:F1}, floor={floor:F1}) at ({creature.X:F1}, {creature.Y:F1}) on map {Map.MapId}: lifted onto it");
+        // The stop packet carries the old (under-floor) position and Relocate sends none, so clients see the corrected z once the
+        // movement generator launches its next spline; an idle creature is not re-sent until it next moves, so clients keep seeing it under the floor until then.
+        StopMoving(creature);
+        if (Vector2.DistanceSquared(new Vector2(creature.X, creature.Y), new Vector2(creature.Home.X, creature.Home.Y)) <= 1.0f)
+        {
+            creature.SetHome(creature.Home with { Z = standZ });
+        }
+
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
         return true;
     }
 

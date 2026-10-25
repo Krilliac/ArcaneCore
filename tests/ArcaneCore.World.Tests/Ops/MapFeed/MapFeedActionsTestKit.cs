@@ -144,7 +144,7 @@ internal static class ActionWire
 }
 
 /// <summary>A hand-wound <see cref="TimeProvider"/> for the channel's caches, rate limits and confirm expiry (the channel reads only <c>GetUtcNow</c> and <c>GetTimestamp</c>).</summary>
-internal sealed class ManualTimeProvider : TimeProvider
+internal sealed class FeedTestClock : TimeProvider
 {
     private long _utcTicks = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero).UtcTicks;
 

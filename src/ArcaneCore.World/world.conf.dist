@@ -26,57 +26,57 @@
 
 # SECTIONS
 #
-#   ANTICHEAT                   44 keys
-#   AUCTIONHOUSEBOT             39 keys
-#   AURAS                       4 keys
-#   AUTOBROADCAST               3 keys
-#   BANS                        7 keys
-#   BATTLEGROUND                8 keys
-#   CHARACTERCREATION           13 keys
-#   CLIENTDATA                  2 keys
-#   CLUSTER                     15 keys
-#   COMBAT                      11 keys
-#   CONDITIONS                  2 keys
-#   CRAFTING                    1 keys
-#   CREATURES                   67 keys
-#   DATABASE                    26 keys
-#   DIAGNOSTICS                 13 keys
-#   ECONOMY                     29 keys
-#   ENCHANTING                  3 keys
-#   FORMS                       1 keys
-#   GAMEOBJECTS                 5 keys
-#   HOTRELOAD                   5 keys
-#   ITEMRANDOMPROPERTIES        2 keys
-#   ITEMSETS                    1 keys
-#   ITEMS                       7 keys
-#   LOCOMOTION                  17 keys
-#   LOGGING                     16 keys
-#   LOOT                        15 keys
-#   MODULES                     6 keys
-#   NAMES                       2 keys
-#   NET                         16 keys
-#   NPCSERVICES                 8 keys
-#   OPS                         60 keys
-#   PAGETEXT                    1 keys
-#   PERFORMANCELOG              8 keys
-#   PETS                        7 keys
-#   PROGRESSION                 7 keys
-#   QUESTS                      14 keys
-#   RANGED                      4 keys
-#   REPUTATION                  7 keys
-#   RESILIENCE                  14 keys
-#   REST                        5 keys
-#   SERVERMAIL                  1 keys
-#   SKILLS                      19 keys
-#   SPECIALLOOT                 4 keys
-#   SPELLRULES                  8 keys
-#   SPELLS                      10 keys
-#   STARTUP                     1 keys
-#   STATS                       1 keys
-#   TALENTS                     12 keys
-#   TOTEMS                      3 keys
-#   WARDEN                      15 keys
-#   WORLD                       753 keys
+#   ANTICHEAT
+#   AUCTIONHOUSEBOT
+#   AURAS
+#   AUTOBROADCAST
+#   BANS
+#   BATTLEGROUND
+#   CHARACTERCREATION
+#   CLIENTDATA
+#   CLUSTER
+#   COMBAT
+#   CONDITIONS
+#   CRAFTING
+#   CREATURES
+#   DATABASE
+#   DIAGNOSTICS
+#   ECONOMY
+#   ENCHANTING
+#   FORMS
+#   GAMEOBJECTS
+#   HOTRELOAD
+#   ITEMRANDOMPROPERTIES
+#   ITEMSETS
+#   ITEMS
+#   LOCOMOTION
+#   LOGGING
+#   LOOT
+#   MODULES
+#   NAMES
+#   NET
+#   NPCSERVICES
+#   OPS
+#   PAGETEXT
+#   PERFORMANCELOG
+#   PETS
+#   PROGRESSION
+#   QUESTS
+#   RANGED
+#   REPUTATION
+#   RESILIENCE
+#   REST
+#   SERVERMAIL
+#   SKILLS
+#   SPECIALLOOT
+#   SPELLRULES
+#   SPELLS
+#   STARTUP
+#   STATS
+#   TALENTS
+#   TOTEMS
+#   WARDEN
+#   WORLD
 #
 ###############################################################################
 
@@ -9856,6 +9856,22 @@ World.Console.Enabled = true
 #----------------------------------------------------------------------------
 # World:Control:MapFeed
 #----------------------------------------------------------------------------
+
+#
+#    World.Control.MapFeed.AnomaliesUnowned
+#        Description: Whether the anomaly ring keeps notices that carry no owner identity
+#                     (AnomalyNotice.Origin null). The ledger is process-wide, and a notice with an
+#                     owner is kept only when the owner is this world; a reporter that passes none
+#                     cannot be told apart, so it is kept only when this is true. Default true,
+#                     because the daemon runs one world per process; tests that run several worlds
+#                     in one process set it false.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeed
+#
+World.Control.MapFeed.AnomaliesUnowned = true
 
 #
 #    World.Control.MapFeed.Enabled

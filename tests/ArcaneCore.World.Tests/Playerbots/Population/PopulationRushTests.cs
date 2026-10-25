@@ -302,8 +302,11 @@ public sealed class PopulationRushTests
             o.Population.MinRunSeconds = 0;
             o.MaxBots = 8;
         });
-        await using var slow = new SlowWorld(world, 120);
         Assert.Null(world.Feature.StartRush(6, 1));
+
+        // Slow the world only once the rush has made a bot: a brake that trips first leaves nothing to shed, and a paused rush never resumes.
+        await WaitRushAsync(world, r => r.State == "running" && r.Created >= 1, "the rush to create its first bot");
+        await using var slow = new SlowWorld(world, 120);
 
         await WaitRushAsync(world, r => r.State == "paused" && r.Created >= 1, "the brake to pause the rush");
         DateTime deadline = DateTime.UtcNow.AddSeconds(30);

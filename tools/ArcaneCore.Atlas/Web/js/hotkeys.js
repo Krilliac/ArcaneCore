@@ -19,6 +19,7 @@ export const SHORTCUTS = [
     ['W A S D', 'Move the camera (in orbit and top views over the ground, in fly view along the look direction)'],
     ['Q E', 'Move the camera down and up'],
     ['Shift', 'Hold with a movement key to go four times faster'],
+    ['P', 'Show or hide the performance HUD (frame rate, renderer and live feed numbers)'],
     ['[ ]', 'Hide or show the Layers rail and the right panel'],
     ['Esc', 'Close the open panel, then clear the selection'],
     ['?', 'Show this list'],
@@ -59,9 +60,10 @@ export function showShortcuts() {
  * @param {import('./viewport.js').Viewport} o.viewport
  * @param {import('./ui/topbar.js').TopBar} o.topbar
  * @param {(side: 'left'|'right') => void} o.toggleRail
+ * @param {{ toggle: () => boolean } | undefined} [o.hud] the performance HUD (key P)
  * @returns {() => void} removes the key listener again
  */
-export function installHotkeys({ app, viewport, topbar, toggleRail }) {
+export function installHotkeys({ app, viewport, topbar, toggleRail, hud }) {
     let returnMode = 'orbit';
     const onKeyDown = (e) => {
         const key = e.key;
@@ -119,6 +121,9 @@ export function installHotkeys({ app, viewport, topbar, toggleRail }) {
         } else if (lower === 'f') {
             e.preventDefault();
             viewport.frameSelection({ all: e.shiftKey });
+        } else if (lower === 'p' && hud) {
+            e.preventDefault();
+            hud.toggle();
         } else if (key === '[') {
             toggleRail('left');
         } else if (key === ']') {
