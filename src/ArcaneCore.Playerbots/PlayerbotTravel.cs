@@ -373,6 +373,17 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     private static readonly ConditionalWeakTable<Player, TravelJourney> Journeys = [];
 
+    /// <summary>After a plan that found no route a bot plans no journey for this long, whatever its goal (<see cref="TryBegin(WorldSession, Player, uint, Vector3, out string?, out TravelRoute?)"/>).</summary>
+    internal const uint JourneyPlanCooldownMs = 10_000;
+
+    private sealed class PlanStamp
+    {
+        internal bool Set;
+        internal uint UntilMs;
+    }
+
+    private static readonly ConditionalWeakTable<Player, PlanStamp> PlanStamps = [];
+
     // The ship routes CanReachStatic answers from: the classic routes of the transport system a journey last saw, an array of immutable
     // records written once per system (Volatile.Write) and never changed after; readers take it with Volatile.Read.
     private static readonly ConditionalWeakTable<TransportSystem, object> Published = [];
@@ -430,13 +441,24 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             return Refuse(out why, "a travel leg is under way");
         }
 
+        // After a plan that found no route no goal is planned for JourneyPlanCooldownMs: a bot that cannot get anywhere (the water of Teldrassil, a
+        // dock that failed) would otherwise search the whole graph at every think, for every goal the brain tries.
+        uint now = session.World.NowMs;
+        PlanStamp stamp = PlanStamps.GetValue(player, static _ => new PlanStamp());
+        if (stamp.Set && unchecked((int)(stamp.UntilMs - now)) > 0)
+            return Refuse(out why, string.Create(CultureInfo.InvariantCulture, $"journey planning is cooling down ({unchecked(stamp.UntilMs - now)} ms left)"));
         TravelFacts facts = BuildFacts(session, player, _options, ShipRoutes(session.World), null);
         TravelPlace here = TravelPlace.Of(player);
         if (PlayerbotTravelPlanner.Plan(facts, here, goal) is not { } planned)
+        {
+            stamp.Set = true;
+            stamp.UntilMs = unchecked(now + JourneyPlanCooldownMs);
             return Refuse(out why, $"no route from map {here.MapId} to map {toMap} by the bot's own means");
+        }
+
         PublishStaticRoutes(session.World);
+        stamp.Set = false;
         if (planned.Legs.Count == 0) return true; // already there
-        uint now = session.World.NowMs;
         Journeys.AddOrUpdate(player, new TravelJourney(goal, planned, now, DeadlineOf(planned, now), ShipRoutes));
         route = planned;
         return true;
