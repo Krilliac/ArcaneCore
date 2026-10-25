@@ -447,6 +447,28 @@ public sealed class DevOpcodeTests
     }
 
     [Fact]
+    public async Task AGmModeCharacterThatLeavesTheWorld_NoLongerCountsAsStaff()
+    {
+        await using var host = WorldTestHost.Start(configure: o => o.InstantLogoutSecurity = AccountSecurity.Player);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVGMLO", "Devgmlogout");
+        await using (client)
+        {
+            Player player = await host.PlayerAsync("Devgmlogout");
+            await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
+            await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet: the session learns the GM mode on dispatch
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+            Assert.True(session.HeuristicsGmMode);
+
+            await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+            await client.ReadUntilAsync(WorldOpcode.SmsgLogoutComplete);
+            await host.WaitForWorldAsync(() => session.State == SessionState.CharacterSelect, "the session is back at the character screen");
+
+            Assert.False(session.HeuristicsGmMode);
+            Assert.False(session.IsHeuristicsStaff);
+        }
+    }
+
+    [Fact]
     public async Task AFloodOfOneDevOpcode_IsCountedInFull_ButReportedAndLoggedOncePerInterval()
     {
         long now = 1_000_000;

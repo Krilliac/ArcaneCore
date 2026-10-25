@@ -11,7 +11,8 @@ namespace ArcaneCore.World.Net;
 /// The session's hooks into the packet heuristics (docs/areas/packet-heuristics.md). Report only: every hook is a call that returns nothing, never
 /// throws and never changes what the dispatcher does next, so a packet that dispatched before still dispatches and one that was dropped is still
 /// dropped. Resolved once from the connection's services; with the feature absent or off each hook is a null check and one volatile read, and no
-/// per-session state exists. The one exception is the world-packet hook, which also refreshes the GM-mode snapshot when off (one flag read, a write only on change).
+/// per-session state exists. The GM-mode snapshot field always exists; what the world-packet hook adds is writing it while the heuristics are off
+/// (one flag read, a write only on change). It is cleared when the player leaves the world.
 /// </summary>
 public sealed partial class WorldSession
 {
