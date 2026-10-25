@@ -218,13 +218,17 @@ public sealed class MapFeedAnomalyRingTests
         long queries = 0;
         long lastLatest = 0;
         bool latestWentBack = false;
+        var readerRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Task reader = Task.Run(() =>
+        // Its own thread, and the writers wait for its first query: on a busy machine the pool can run all four writers to the end before
+        // it schedules a queued reader (a worker takes its own newest task first), which left nothing to check against.
+        Task reader = Task.Factory.StartNew(() =>
         {
             while (!stop.IsCancellationRequested)
             {
                 AnomalyPage page = ring.Query(0, MapFeedAnomalyRing.Capacity);
                 Interlocked.Increment(ref queries);
+                readerRunning.TrySetResult();
                 if (page.Latest < lastLatest)
                 {
                     latestWentBack = true;
@@ -243,7 +247,8 @@ public sealed class MapFeedAnomalyRingTests
                     previous = slot.Seq;
                 }
             }
-        });
+        }, TaskCreationOptions.LongRunning);
+        await readerRunning.Task;
 
         Task[] writers = [.. Enumerable.Range(0, Threads).Select(t => Task.Run(() =>
         {
