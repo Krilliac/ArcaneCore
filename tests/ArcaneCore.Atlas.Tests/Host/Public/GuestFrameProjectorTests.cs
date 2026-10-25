@@ -68,6 +68,64 @@ public sealed class GuestFrameProjectorTests
         Assert.Empty(JsonNode.Parse(text)!["data"]!["playerCells"]!.AsArray());
     }
 
+    [Theory]
+    [InlineData((byte)1, (byte)1, "Human Warrior")]
+    [InlineData((byte)4, (byte)11, "Night Elf Druid")]
+    [InlineData((byte)5, (byte)9, "Undead Warlock")]
+    [InlineData((byte)8, (byte)7, "Troll Shaman")]
+    public void ShowPlayersTrue_NamesOff_PlayersAreLabelledRaceAndClass_WithNothingElse(byte race, byte playerClass, string label)
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions { ShowPlayers = true, ShowPlayerNames = false }, new ManualTime());
+        LiveFrame frame = Frames.Frame(10, Frames.Entity(0xDEADBEEF12345678, LiveKind.Player, "Secretname", 4441.5, 5551.5, race: race, playerClass: playerClass));
+
+        string text = Bytes(projector.Project(frame, Links(10, [])));
+
+        Assert.Equal(label, (string?)JsonNode.Parse(text)!["data"]!["entities"]![0]!["n"]);
+        Assert.DoesNotContain("Secretname", text, StringComparison.Ordinal);
+        AssertNoGuid(text, 0xDEADBEEF12345678);
+    }
+
+    [Theory]
+    [InlineData((byte)0, (byte)1)]
+    [InlineData((byte)1, (byte)0)]
+    [InlineData((byte)0, (byte)0)]
+    [InlineData((byte)9, (byte)1)]
+    [InlineData((byte)1, (byte)6)]
+    [InlineData((byte)255, (byte)255)]
+    public void ShowPlayersTrue_NamesOff_UnknownRaceOrClass_FallsBackToPlayer(byte race, byte playerClass)
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions { ShowPlayers = true, ShowPlayerNames = false }, new ManualTime());
+        LiveFrame frame = Frames.Frame(10, Frames.Entity(0xDEADBEEF12345678, LiveKind.Player, "Secretname", 4441.5, 5551.5, race: race, playerClass: playerClass));
+
+        string text = Bytes(projector.Project(frame, Links(10, [])));
+
+        Assert.Equal("Player", (string?)JsonNode.Parse(text)!["data"]!["entities"]![0]!["n"]);
+        Assert.DoesNotContain("Secretname", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShowPlayersTrue_NamesOn_PlayerWithRaceAndClass_StillShowsTheName()
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions { ShowPlayers = true, ShowPlayerNames = true }, new ManualTime());
+        LiveFrame frame = Frames.Frame(10, Frames.Entity(0xDEADBEEF12345678, LiveKind.Player, "Secretname", 4441.5, 5551.5, race: 1, playerClass: 1));
+
+        string text = Bytes(projector.Project(frame, Links(10, [])));
+
+        Assert.Equal("Secretname", (string?)JsonNode.Parse(text)!["data"]!["entities"]![0]!["n"]);
+        Assert.DoesNotContain("Human", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShowPlayersTrue_NamesOff_ANamedCreatureKeepsItsName_NotARaceClassLabel()
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions { ShowPlayers = true, ShowPlayerNames = false }, new ManualTime());
+        LiveFrame frame = Frames.Frame(10, Frames.Entity(100, LiveKind.Creature, "Boar", 300, 300, entry: 5, race: 1, playerClass: 1));
+
+        string text = Bytes(projector.Project(frame, Links(10, [])));
+
+        Assert.Equal("Boar", (string?)JsonNode.Parse(text)!["data"]!["entities"]![0]!["n"]);
+    }
+
     [Fact]
     public void ShowPlayersTrue_NamesOn_PlayersCarryTheirNames()
     {

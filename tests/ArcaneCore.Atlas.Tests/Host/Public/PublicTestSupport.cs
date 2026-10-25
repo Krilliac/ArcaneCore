@@ -67,8 +67,8 @@ internal sealed class CapturingLoggers : ILoggerFactory
 /// <summary>Builders for the entities and frames the projector tests use.</summary>
 internal static class Frames
 {
-    public static LiveEntity Entity(ulong id, LiveKind kind, string? name, double x, double y, double z = 10, string? motion = null, ulong? target = null, uint entry = 0, double? hp = 100, WorldPoint? home = null)
-        => new(id, kind, entry, name, 0, 0, new WorldPoint(x, y, z), 1.5, hp, motion, target, home, null, null);
+    public static LiveEntity Entity(ulong id, LiveKind kind, string? name, double x, double y, double z = 10, string? motion = null, ulong? target = null, uint entry = 0, double? hp = 100, WorldPoint? home = null, byte race = 0, byte playerClass = 0)
+        => new(id, kind, entry, name, 0, 0, new WorldPoint(x, y, z), 1.5, hp, motion, target, home, null, null, race, playerClass);
 
     public static LiveFrame Frame(long seq, params LiveEntity[] entities)
         => new(seq, seq * 500, 0, 0, [], null, entities, 0);

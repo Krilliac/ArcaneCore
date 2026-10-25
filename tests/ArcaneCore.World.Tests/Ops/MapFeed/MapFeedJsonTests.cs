@@ -321,6 +321,30 @@ public sealed class MapFeedJsonTests
     }
 
     [Fact]
+    public void TheRealWriter_EmitsRaceAndClass_OnlyWhenTheyAreSet()
+    {
+        var pool = new FramePool(1);
+        FeedFrame frame = pool.Rent() ?? throw new InvalidOperationException("the pool is empty");
+        frame.MapId = 0;
+        frame.InstanceId = 0;
+        frame.ClockMs = 1000;
+        frame.AddGrid(32, 48);
+        frame.Counters = new FeedCounters { Players = 2 };
+        int e1 = frame.AddEntity();
+        frame.Entities[e1] = new FeedEntity { Guid = 0x0000_0000_0000_0001UL, Kind = FeedEntityKind.Player, Name = "Alice", X = 1, Y = 2, Z = 3, Race = 4, Class = 11 };
+        int e2 = frame.AddEntity();
+        frame.Entities[e2] = new FeedEntity { Guid = 0x0000_0000_0000_0002UL, Kind = FeedEntityKind.Player, Name = "Bob", X = 1, Y = 2, Z = 3 };
+
+        using JsonDocument doc = JsonDocument.Parse(Write(w => MapFeedJson.WriteFrame(w, frame, 1, 0)));
+        JsonElement entities = doc.RootElement.GetProperty("entities");
+
+        Assert.Equal(4, entities[0].GetProperty("r").GetInt32());
+        Assert.Equal(11, entities[0].GetProperty("cl").GetInt32());
+        Assert.False(entities[1].TryGetProperty("r", out _));
+        Assert.False(entities[1].TryGetProperty("cl", out _));
+    }
+
+    [Fact]
     public void HelloAndErrorLines_AreOneLineEach_WithAStableShape()
     {
         byte[] hello = MapFeedJson.HelloLine("abc123", 4242, [new MapSummary(0, 0, 3, 1500), new MapSummary(36, 7, 0, 12)]);

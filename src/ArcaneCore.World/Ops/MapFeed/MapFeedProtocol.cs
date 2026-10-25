@@ -154,7 +154,9 @@ internal static class MapFeedProtocol
 
     /// <summary>
     /// The feed revision (the <c>rev</c> of <c>hello</c>): 1 is the original shape, 2 adds <c>cb</c> (in combat, written only when true)
-    /// and <c>d</c> (display id, written when non-zero) to unit entities. Additive, so a consumer that predates it ignores both.
+    /// and <c>d</c> (display id, written when non-zero) to unit entities. Additive, so a consumer that predates it ignores both. Player and bot entities also carry
+    /// <c>r</c> (race id) and <c>cl</c> (class id), each written when non-zero; they are optional extras that did not change the revision, so a consumer
+    /// treats their absence as unknown.
     /// </summary>
     public const int Revision = 2;
 

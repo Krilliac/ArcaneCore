@@ -26,6 +26,8 @@ internal static class MapFeedJson
     private static readonly JsonEncodedText Rev = JsonEncodedText.Encode("rev");
     private static readonly JsonEncodedText CombatFlag = JsonEncodedText.Encode("cb");
     private static readonly JsonEncodedText DisplayIdProperty = JsonEncodedText.Encode("d");
+    private static readonly JsonEncodedText RaceProperty = JsonEncodedText.Encode("r");
+    private static readonly JsonEncodedText ClassProperty = JsonEncodedText.Encode("cl");
     private static readonly JsonEncodedText Sha = JsonEncodedText.Encode("sha");
     private static readonly JsonEncodedText Pid = JsonEncodedText.Encode("pid");
     private static readonly JsonEncodedText Tools = JsonEncodedText.Encode("tools");
@@ -413,6 +415,16 @@ internal static class MapFeedJson
         if (entity.DisplayId != 0)
         {
             writer.WriteNumber(DisplayIdProperty, entity.DisplayId);
+        }
+
+        if (entity.Race != 0)
+        {
+            writer.WriteNumber(RaceProperty, entity.Race);
+        }
+
+        if (entity.Class != 0)
+        {
+            writer.WriteNumber(ClassProperty, entity.Class);
         }
 
         if (entity.Kind == FeedEntityKind.Creature)

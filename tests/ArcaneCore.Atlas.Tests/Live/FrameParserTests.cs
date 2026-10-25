@@ -18,6 +18,47 @@ public sealed class FrameParserTests
 
     private static JsonObject Raw(string json) => JsonNode.Parse(json)!.AsObject();
 
+    [Theory]
+    [InlineData(4, 11, (byte)4, (byte)11)]
+    [InlineData(0, 0, (byte)0, (byte)0)]
+    [InlineData(-3, 300, (byte)0, (byte)0)]
+    public void APlayerEntity_ReadsRaceAndClass_AndAnythingOutOfRangeIsUnknown(int race, int playerClass, byte expectedRace, byte expectedClass)
+    {
+        JsonObject entity = Wire.Entity("0x1A2B", "player", 1, 2, 3, "Alice", 0);
+        entity["r"] = race;
+        entity["cl"] = playerClass;
+
+        LiveEntity e = Assert.Single(Parse(Wire.Frame(1, 0, 9, entity)).Frame.Entities);
+
+        Assert.Equal(expectedRace, e.Race);
+        Assert.Equal(expectedClass, e.Class);
+    }
+
+    [Theory]
+    [InlineData("\"r\":4,\"cl\":11", (byte)4, (byte)11)]
+    [InlineData("\"r\":\"4\",\"cl\":\"11\"", (byte)0, (byte)0)]
+    [InlineData("\"r\":4.5,\"cl\":11.5", (byte)0, (byte)0)]
+    [InlineData("\"r\":null,\"cl\":true", (byte)0, (byte)0)]
+    [InlineData("\"r\":256,\"cl\":-1", (byte)0, (byte)0)]
+    public void APlayerEntityParsedFromJsonText_ReadsRaceAndClass_AndAWrongTypeIsUnknown(string fields, byte expectedRace, byte expectedClass)
+    {
+        JsonObject entity = Raw("{\"g\":\"0x1A2B\",\"k\":\"player\",\"n\":\"Alice\",\"x\":1,\"y\":2,\"z\":3," + fields + "}");
+
+        LiveEntity e = Assert.Single(Parse(Wire.Frame(1, 0, 9, entity)).Frame.Entities);
+
+        Assert.Equal(expectedRace, e.Race);
+        Assert.Equal(expectedClass, e.Class);
+    }
+
+    [Fact]
+    public void AnEntityWithoutRaceAndClass_ReadsThemAsUnknown()
+    {
+        LiveEntity e = Assert.Single(Parse(Wire.Frame(1, 0, 9, Wire.Entity("0x1A2B", "player", 1, 2, 3, "Alice", 0))).Frame.Entities);
+
+        Assert.Equal(0, e.Race);
+        Assert.Equal(0, e.Class);
+    }
+
     [Fact]
     public void AFullEntity_KeepsEveryField()
     {

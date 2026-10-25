@@ -55,7 +55,7 @@ Server lines besides `hello`:
   `deferredPaths`, `directFallbackPaths`, `noPathPaths`, `homePathTeleports`.
 * An entity is `{"g":"<16 hex digits>","k":"player|bot|creature|gameobject","n":"name","x":..,"y":..,"z":..,"o":..}` plus,
   when it has them: `e` (template entry, emitted for `creature` and `gameobject` only; players and bots have no entry and omit `e`),
-  `hp` (health percent), `cb` (`true` when the unit is in combat, rev 2; omitted otherwise), `d` (display id, rev 2; omitted when 0), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
+  `hp` (health percent), `cb` (`true` when the unit is in combat, rev 2; omitted otherwise), `d` (display id, rev 2; omitted when 0), `r` and `cl` (a player's or bot's race id and class id; omitted when 0; optional, no revision change), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
   `fleeing`, `distract`, `follow`, `formation`, else `unknown`), `tg` (the unit chased, else the selected target), `home` (`[x,y,z]`),
   `sp` (the creature's current spline: `{"id":n,"start":[x,y,z],"pts":[[x,y,z],...],"t0":clockMs,"dur":ms,"run":bool}`, with `"cut":true`
   when its points were cut at 512; `clockMs - t0` is the elapsed time the server itself uses), and `route` (a bot's current route:

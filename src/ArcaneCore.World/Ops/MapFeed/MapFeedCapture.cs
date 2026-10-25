@@ -121,6 +121,8 @@ internal static class MapFeedCapture
             entity.Guid = player.Guid.Value;
             entity.Kind = isBot ? FeedEntityKind.Bot : FeedEntityKind.Player;
             entity.Name = player.Name;
+            entity.Race = (byte)player.Race;
+            entity.Class = (byte)player.Class;
             Place(ref entity, player);
             SetHealth(ref entity, player);
             SetTarget(ref entity, player.Target.Value);
