@@ -122,8 +122,9 @@ public sealed class PlayerbotOptions
     /// path-job pool instead of the world thread: the bot answers "pending" for the think and the finished answer is applied on a later
     /// one, as it waits for a navigation tile still being read. A finished answer within 15% of the distance (10 to 40 yards) of a destination
     /// that keeps moving is applied as a route cut short, spliced from where the bot stands, and a refresh job for the new destination is queued
-    /// in the same think; a follower keeps walking its route while a re-plan is pending. Off by default (rollout). Live: <c>.reload config</c>
-    /// (jobs in flight finish and are dropped or applied by the same checks).
+    /// in the same think. Off by default (rollout). Separately from this switch, and on whatever it says: a follower keeps walking its current
+    /// route while a re-plan is pending (it also covers a navigation tile still being read). Live: <c>.reload config</c> (jobs in flight finish
+    /// and are dropped or applied by the same checks).
     /// </summary>
     public bool PathJobs { get; set; }
 
@@ -131,7 +132,7 @@ public sealed class PlayerbotOptions
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 8")]
     public int PathJobsMaxPerBot { get; set; } = 1;
 
-    /// <summary>The most bot path jobs in flight together (1..1024); a bot past it waits in line, oldest first, and never searches on the world thread instead.</summary>
+    /// <summary>The most bot path jobs in flight together (1..1024); a bot past it waits in line, oldest first, and answers "pending" until a slot frees; one held that long still runs a single search on the world thread after <see cref="PathJobWaitMaxMs"/>, held to <c>SyncPathQueryMaxMs</c>.</summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 1024")]
     public int PathJobsMaxInFlight { get; set; } = 64;
 

@@ -397,6 +397,70 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    [Fact]
+    public async Task TheLine_KeepsFirstComeOrder_WhenABotInTheMiddleLeavesOrStopsAsking()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Guid[] bots = [.. Enumerable.Range(0, 40).Select(_ => Guid.NewGuid())];
+            foreach (Guid bot in bots)
+                Assert.True(IsPending(h.Ask(h.Far(), nodes: 8192, bot: bot)));
+
+            Assert.Equal(32, h.Runner.Submitted.Count);
+            Assert.Equal(bots[32..], h.Jobs.LineForTests());
+
+            // A middle waiter that leaves does not disturb the order of the rest.
+            h.Jobs.Forget(bots[35]);
+            Assert.Equal(bots[32..35].Concat(bots[36..]).ToArray(), h.Jobs.LineForTests());
+
+            // A waiter that stops asking is dropped by the sweep once it has been silent long enough; the ones that keep asking stay.
+            h.Clock += 11_000;
+            foreach (Guid bot in bots[32..35]) Assert.True(IsPending(h.Ask(h.Far(), nodes: 8192, bot: bot)));
+            h.Jobs.Sweep();
+            Assert.Equal(bots[32..35], h.Jobs.LineForTests());
+            Assert.Equal(3, h.Jobs.Waiters);
+
+            // A bot that joins again goes to the back.
+            Assert.True(IsPending(h.Ask(h.Far(), nodes: 8192, bot: bots[36])));
+            Assert.Equal(bots[32..35].Append(bots[36]).ToArray(), h.Jobs.LineForTests());
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AnAnswerCutShortByAWorkerTimeBound_IsUsedOnce_AndTheNextAskSearchesAgain()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { WorkerHitsDeadline = true };
+            using var h = new Harness(world, Options(), nav);
+            Vector3 goal = h.Far();
+            Assert.True(IsPending(h.Ask(goal)));
+            h.Runner.CompleteAll();
+
+            PathResult capped = h.Ask(goal);
+            Assert.False(IsPending(capped));
+            Assert.NotEqual(0, (int)(capped.Type & PathType.Incomplete));
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(1, h.Jobs.Totals.DeadlineHits);
+            Assert.Single(h.Runner.Submitted);
+
+            // The capped answer is not kept: the next ask is pending again behind a new job, and a complete answer then stands.
+            Assert.True(IsPending(h.Ask(goal)));
+            Assert.Equal(2, h.Runner.Submitted.Count);
+            nav.WorkerHitsDeadline = false;
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(goal)));
+            Assert.Equal(2, h.Jobs.Totals.Applied);
+            Assert.False(IsPending(h.Ask(goal)), "a complete answer is kept");
+            Assert.Equal(2, h.Runner.Submitted.Count);
+            return true;
+        });
+    }
+
     // ---- 6/7. a wait always ends, and never as "unreachable" ----------------------------------------------------------------------
 
     [Fact]

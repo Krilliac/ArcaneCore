@@ -120,7 +120,8 @@ internal sealed class PlayerbotPathJobs
     private readonly ILogger _logger;
     private readonly Dictionary<Guid, BotState> _bots = [];
     private readonly List<NavJob> _active = [];
-    private readonly List<Guid> _line = [];
+    private readonly LinkedList<Guid> _line = new();
+    private readonly Dictionary<Guid, LinkedListNode<Guid>> _lineNodes = [];
     private long _activeNodes;
     private PlayerbotPathJobTotals _totals;
     private PlayerbotPathJobTotals _logged;
@@ -462,6 +463,11 @@ internal sealed class PlayerbotPathJobs
         }
 
         carry = default;
+
+        // An answer cut short by the worker's time bound or a deadline (Incomplete, with no tile missed to explain it) says how far the
+        // search got in that time, not what the route is: it is used for this ask only. The next ask searches again.
+        if ((result.Type & PathType.Incomplete) != 0 && job.Search.DeadlineHits > 0 && job.MissedTiles.Count == 0) state.Remove(entry);
+
         return result with
         {
             // A route to the destination of a moment ago ends short of the one asked now, by design: Short keeps it from being read as a
@@ -648,31 +654,47 @@ internal sealed class PlayerbotPathJobs
     /// </summary>
     private bool Admitted(Guid botId, int nodes)
     {
-        ExpireLine();
         int free = _options.PathJobsMaxInFlight - _active.Count;
         if (free <= 0) return false;
         if (_active.Count > 0 && _activeNodes + nodes > _options.PathJobsMaxInFlightNodes) return false;
-        int position = _line.IndexOf(botId);
-        return position < 0 ? _line.Count < free : position < free;
+        if (!_lineNodes.TryGetValue(botId, out LinkedListNode<Guid>? mine)) return _line.Count < free;
+
+        // Among the first `free` waiters? The walk stops after `free` steps, so it is bounded by the free slots (few while a line
+        // exists), never by the number of waiters.
+        int position = 0;
+        for (LinkedListNode<Guid>? n = _line.First; n is not null && position < free; n = n.Next, position++)
+        {
+            if (ReferenceEquals(n, mine)) return true;
+        }
+
+        return false;
     }
 
     private void JoinLine(Guid botId)
     {
-        if (!_line.Contains(botId)) _line.Add(botId);
+        if (!_lineNodes.ContainsKey(botId)) _lineNodes[botId] = _line.AddLast(botId);
     }
 
-    private void LeaveLine(Guid botId) => _line.Remove(botId);
+    private void LeaveLine(Guid botId)
+    {
+        if (_lineNodes.Remove(botId, out LinkedListNode<Guid>? node)) _line.Remove(node);
+    }
 
+    /// <summary>Drops the waiters that left or stopped asking (<see cref="UnaskedAbandonMs"/>), keeping the order of the rest. Run by <see cref="Sweep"/>, not per refused submit.</summary>
     private void ExpireLine()
     {
         uint now = _clockMs();
         uint bound = UnaskedAbandonMs();
-        for (int i = _line.Count - 1; i >= 0; i--)
+        for (LinkedListNode<Guid>? n = _line.First; n is not null;)
         {
-            if (!_bots.TryGetValue(_line[i], out BotState? s) || unchecked(now - s.LastAskMs) > bound)
+            LinkedListNode<Guid>? next = n.Next;
+            if (!_bots.TryGetValue(n.Value, out BotState? s) || unchecked(now - s.LastAskMs) > bound)
             {
-                _line.RemoveAt(i);
+                _lineNodes.Remove(n.Value);
+                _line.Remove(n);
             }
+
+            n = next;
         }
     }
 
@@ -711,7 +733,7 @@ internal sealed class PlayerbotPathJobs
                     if (!e.Job.IsDone) e.Job.Abandon();
             }
 
-            _line.Remove(botId);
+            LeaveLine(botId);
             _deadlineReported.Remove(botId);
         }
     }
@@ -726,6 +748,7 @@ internal sealed class PlayerbotPathJobs
                     if (!e.Job.IsDone) e.Job.Abandon();
             _bots.Clear();
             _line.Clear();
+            _lineNodes.Clear();
             _deadlineReported.Clear();
         }
     }
@@ -764,7 +787,7 @@ internal sealed class PlayerbotPathJobs
                 foreach (Guid id in gone)
                 {
                     _bots.Remove(id);
-                    _line.Remove(id);
+                    LeaveLine(id);
                 }
 
             ExpireLine();

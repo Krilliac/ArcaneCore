@@ -42,6 +42,9 @@ internal sealed class ManualSharedPathSearch : IPathfinder, ISharedTiledPathSear
     /// <summary>A search over its deadline is counted as one (the owner's, for the bot-level deadline tests).</summary>
     public bool OwnerHitsDeadline { get; set; }
 
+    /// <summary>A detached search is cut short by its time bound: counted as a deadline hit, and the answer is Incomplete.</summary>
+    public bool WorkerHitsDeadline { get; set; }
+
     private PathResult Answer(Vector3 start, Vector3 end)
     {
         PathSearchCounters.RecordSearch(64, 64, capped: false);
@@ -65,6 +68,13 @@ internal sealed class ManualSharedPathSearch : IPathfinder, ISharedTiledPathSear
     public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options)
     {
         lock (_gate) SharedCalls++;
+        if (WorkerHitsDeadline)
+        {
+            PathSearchCounters.RecordDeadline();
+            PathSearchCounters.RecordSearch(64, 64, capped: true);
+            return new PathResult(PathType.Incomplete, [start, end]);
+        }
+
         return Answer(start, end);
     }
 
