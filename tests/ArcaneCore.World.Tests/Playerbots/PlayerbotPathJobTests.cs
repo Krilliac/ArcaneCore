@@ -182,6 +182,42 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    /// <summary>A bot walking a route: its stored position lags its extrapolated one by up to a heartbeat, and the query's from is the extrapolated one.</summary>
+    [Fact]
+    public async Task AWalkingBotWithMotionState_FromAheadOfItsStoredPosition_KeepsAndCollectsItsJob()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 d = h.Far();
+            PlayerbotMotion.MotionState motion = PlayerbotMotion.Of(h.Player);
+            motion.World = world.Host.World;
+            motion.Map = h.Player.Map;
+            motion.Route = new PlayerbotRoute([h.Origin, h.Origin + new Vector3(300f, 0, 0)], 300f);
+            motion.Anchor = h.Origin;
+            motion.Speed = 0.007f; // a slow walker anchored long ago: 3.5 yards ahead, and the real clock moves it only a hair between asks
+            motion.AnchorMs = world.Host.World.NowMs - 500_000;
+
+            Vector3 ahead = PlayerbotMotion.CurrentPosition(h.Player);
+            Assert.True(Vector3.Distance(ahead, h.Origin) > 2f, "the motion position is ahead of the stored one");
+            Assert.True(IsPending(h.Ask(d, from: ahead)));
+            Assert.True(IsPending(h.Ask(d, from: PlayerbotMotion.CurrentPosition(h.Player))));
+            Assert.Single(h.Runner.Submitted); // kept across thinks, not abandoned and asked again
+            h.Runner.CompleteAll();
+
+            Vector3 later = PlayerbotMotion.CurrentPosition(h.Player);
+            PathResult answer = h.Ask(d, from: later);
+            Assert.False(IsPending(answer));
+            Assert.True(Vector3.Distance(later, answer.Points[0]) < 1f);
+            Assert.Equal(d, answer.Points[^1]);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(0, h.Jobs.Totals.Stale);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task ANearAnswerUnderPlanExact_IsARoute_WithoutAPathEndsShortAnomaly()
     {
@@ -664,7 +700,7 @@ public sealed class PlayerbotPathJobTests
             Assert.Equal(0, h.Nav.OwnerCalls);
             Assert.True(h.Jobs.Totals.Applied >= 1);
             Assert.True(h.Runner.Submitted.Count >= 2, "a refresh job for the destination asked now");
-            Assert.NotEqual(PathType.Normal, answer.Type & PathType.Short);
+            Assert.Equal(PathType.Short, answer.Type & PathType.Short);
             return true;
         });
     }

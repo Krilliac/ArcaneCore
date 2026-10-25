@@ -248,15 +248,15 @@ internal sealed class PlayerbotPathJobs
     internal static NoDeferScope NoDefer()
     {
         t_noDeferDepth++;
-        return default;
+        return new NoDeferScope(true);
     }
 
-    /// <summary>The scope of <see cref="NoDefer"/>.</summary>
-    internal readonly struct NoDeferScope : IDisposable
+    /// <summary>The scope of <see cref="NoDefer"/>. A default scope never entered, so disposing it leaves an enclosing scope's depth alone.</summary>
+    internal readonly struct NoDeferScope(bool entered) : IDisposable
     {
         public void Dispose()
         {
-            if (t_noDeferDepth > 0) t_noDeferDepth--;
+            if (entered && t_noDeferDepth > 0) t_noDeferDepth--;
         }
     }
 
@@ -309,7 +309,8 @@ internal sealed class PlayerbotPathJobs
 
             if (state.PendingSinceWallMs != 0 && unchecked(nowMs - state.LastAskMs) > UnaskedAbandonMs()) state.PendingSinceWallMs = 0; // an old episode
             state.LastAskMs = nowMs;
-            var botPosition = new Vector3(player.X, player.Y, player.Z);
+            // The same source as the query's from (PlayerbotMotion.CurrentPosition): player.X lags by up to a heartbeat while walking.
+            Vector3 botPosition = PlayerbotMotion.CurrentPosition(player);
             DropStale(state, botPosition);
             Entry? entry = state.Find(key, to, from, botPosition, options.MaxSearchNodes, _options);
             Carry carry = default;
@@ -606,7 +607,7 @@ internal sealed class PlayerbotPathJobs
         _active.Add(job);
         _activeNodes += options.MaxSearchNodes;
         _totals = _totals with { Submitted = _totals.Submitted + 1 };
-        state.Add(new Entry(job, key, to, from, new Vector3(player.X, player.Y, player.Z), options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs)
+        state.Add(new Entry(job, key, to, from, PlayerbotMotion.CurrentPosition(player), options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs)
         {
             Failures = failures,
             LastAskMs = nowMs,
