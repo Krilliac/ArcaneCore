@@ -57,6 +57,11 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
 
     public IEnumerable<uint> Listed => _byGuid.Keys;
 
+    /// <summary>
+    /// The data of the first running event that lists <paramref name="spawnGuid"/>, or null. Read-only: it is called from every grid spawn on whichever
+    /// map thread runs it during the parallel map phase, so it must not write any state of this world-wide singleton (the applied-equipment record is
+    /// kept by <see cref="UpdateCreatureData"/>, which runs on the world tick).
+    /// </summary>
     public GameEventCreatureOverride? For(uint spawnGuid)
     {
         if (!_byGuid.TryGetValue(spawnGuid, out (ushort Event, GameEventCreatureOverride Data)[]? listed))
@@ -68,20 +73,10 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         {
             if (_state.IsActiveEvent(eventId))
             {
-                if (data.EquipmentId != 0)
-                {
-                    _appliedEquipmentByGuid[spawnGuid] = data.EquipmentId;
-                }
-                else
-                {
-                    _appliedEquipmentByGuid.Remove(spawnGuid);
-                }
-
                 return data;
             }
         }
 
-        _appliedEquipmentByGuid.Remove(spawnGuid);
         return null;
     }
 
@@ -107,6 +102,15 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
         foreach (uint guid in guids)
         {
             GameEventCreatureOverride? active = For(guid);
+            if (active is { EquipmentId: not 0 })
+            {
+                _appliedEquipmentByGuid[guid] = active.EquipmentId;
+            }
+            else
+            {
+                _appliedEquipmentByGuid.Remove(guid);
+            }
+
             Creature? live = system.FindBySpawnGuid(guid);
             if (live is null)
             {
