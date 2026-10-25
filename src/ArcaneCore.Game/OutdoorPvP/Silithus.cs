@@ -140,7 +140,7 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
     }
 
     /// <summary>
-    /// vmangos <c>OutdoorPvPSI::HandleDropFlag</c> (OutdoorPvPSI.cpp:263-282): reached when the carrier mounts or stealths. Within five
+    /// vmangos <c>OutdoorPvPSI::HandleDropFlag</c> (OutdoorPvPSI.cpp:263-282): reached when the carrier mounts or stealths, or when the flag is lost to a cancel, death or dispel (spell_special.cpp:371-380). Within five
     /// yards of the own turn-in trigger the flag is kept for the turn-in; otherwise the drop spell puts it on the ground.
     /// </summary>
     public override bool HandleDropFlag(OutdoorPvPPlayer player, uint spellId)
