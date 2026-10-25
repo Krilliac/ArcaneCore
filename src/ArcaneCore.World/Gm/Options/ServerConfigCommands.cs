@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
@@ -47,8 +48,8 @@ public sealed class ServerConfigCommands : ICommandExtension
         [
             new ChatCommand("list", AccountSecurity.GameMaster, ListSyntax, List),
             new ChatCommand("get", AccountSecurity.GameMaster, GetSyntax, Get),
-            new ChatCommand("set", AccountSecurity.Administrator, SetSyntax, Set, RetailLevel: 6),
-            new ChatCommand("reset", AccountSecurity.Administrator, ResetSyntax, Reset, RetailLevel: 6),
+            new ChatCommand("set", AccountSecurity.Administrator, SetSyntax, Set, RetailLevel: 6, IsWrite: true),
+            new ChatCommand("reset", AccountSecurity.Administrator, ResetSyntax, Reset, RetailLevel: 6, IsWrite: true),
             new ChatCommand("diff", AccountSecurity.GameMaster, DiffSyntax, Diff),
             new ChatCommand("sources", AccountSecurity.Administrator, SourcesSyntax, Sources, RetailLevel: 6),
             new ChatCommand("dump", AccountSecurity.Administrator, DumpSyntax, Dump, RetailLevel: 6),
@@ -210,7 +211,9 @@ public sealed class ServerConfigCommands : ICommandExtension
             }
             else
             {
-                string lasts = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path) ? "until .reload config or restart" : "until restart";
+                bool untilReload = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path);
+                string lasts = untilReload ? "until .reload config or restart" : "until restart";
+                DebugWrite.Record(context, "server option", key.Path, outcome.Before, outcome.After, untilReload ? DebugWriteScope.UntilReload : DebugWriteScope.Live, reason);
                 context.Reply($"Option {key.Path}: {outcome.Before} -> {outcome.After} ({lasts}; not saved to any file)."
                     + (key.Apply == OptionApplyClass.NextLoad ? " Applies to what is created or loaded afterwards." : string.Empty));
             }
@@ -238,24 +241,47 @@ public sealed class ServerConfigCommands : ICommandExtension
                 OptionCatalog catalog = OptionCatalog.Create(scope);
                 if (name is null || name.Equals("all", StringComparison.OrdinalIgnoreCase))
                 {
-                    int count = catalog.ResetAll(scope, actor);
+                    int count = 0;
+                    foreach (OptionStatus status in catalog.Diff(scope))
+                    {
+                        if (ResetAndRecord(context, scope, catalog, status.Key, actor) is not null)
+                        {
+                            count++;
+                        }
+                    }
+
                     context.Reply(count == 0 ? "No option is overridden." : $"{count} option(s) back to their baseline values.");
                 }
                 else if (catalog.Find(name) is not { } key)
                 {
                     context.Reply($".server config reset: unknown option '{name}'. .server config list shows the names.");
                 }
-                else if (!catalog.Reset(scope, key, actor))
+                else if (ResetAndRecord(context, scope, catalog, key, actor) is not { } now)
                 {
                     context.Reply($"{key.Path} is not overridden.");
                 }
                 else
                 {
-                    context.Reply($"{key.Path} is back to its baseline value {key.Format(catalog.Describe(scope, key).Current)}.");
+                    context.Reply($"{key.Path} is back to its baseline value {now}.");
                 }
             }
         });
         return true;
+    }
+
+    /// <summary>Resets <paramref name="key"/> and records the write (plan 1.5); returns the shown value now, or null when nothing was reset. World thread.</summary>
+    private static string? ResetAndRecord(CommandContext context, OptionScope scope, OptionCatalog catalog, OptionKey key, string actor)
+    {
+        string before = key.Format(catalog.Describe(scope, key).Current);
+        if (!catalog.Reset(scope, key, actor))
+        {
+            return null;
+        }
+
+        string after = key.Format(catalog.Describe(scope, key).Current);
+        bool untilReload = key.Tracking is not null || OptionOverrides.EndsAtReload(key.Path);
+        DebugWrite.Record(context, "server option", key.Path, before, after, untilReload ? DebugWriteScope.UntilReload : DebugWriteScope.Live, "reset");
+        return after;
     }
 
     private static bool Diff(CommandContext context, string text)
