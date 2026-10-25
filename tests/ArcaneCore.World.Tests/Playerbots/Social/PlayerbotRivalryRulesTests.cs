@@ -233,6 +233,15 @@ public sealed class PlayerbotRivalryRulesTests
         Assert.Equal(new HashSet<uint?> { Emotes.Shrug, Emotes.Sigh }, Outcomes(PlayerbotStance.Neutral, Emotes.Rude, toBot: true));
     }
 
+    [Fact]
+    public void ANeutralBot_AnswersABotsRudeEmoteWithAShrugOrASigh_AboutHalfEach()
+    {
+        // Design 4.2: shrug or sigh. The table's rude pick must not fold into the shrug and leave the sigh a third of the answers.
+        List<uint?> answers = [.. Rolls().Select(roll => PlayerbotRivalryRules.ReplyTo(PlayerbotStance.Neutral, Emotes.Rude, toBot: true, roll))];
+        Assert.Equal(answers.Count / 2, answers.Count(o => o == Emotes.Shrug));
+        Assert.Equal(answers.Count / 2, answers.Count(o => o == Emotes.Sigh));
+    }
+
     [Theory]
     [InlineData(PlayerbotStance.Neutral)]
     [InlineData(PlayerbotStance.Friendly)]

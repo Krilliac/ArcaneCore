@@ -161,25 +161,26 @@ public sealed class SqlUpdateGoldenTests
         UpdateSet set = await UpdateScriptWriter.GenerateAsync(component, snapshot);
 
         Assert.Equal(3, set.Files.Count);
-        Assert.Equal(6, set.Snapshot.Version);
-        Assert.All(set.Files, f => Assert.Contains("0006_InlineStep.sql", f.Path));
+        int prior = AuthDbContext.Schema.CurrentVersion;
+        Assert.Equal(prior + 1, set.Snapshot.Version);
+        Assert.All(set.Files, f => Assert.Contains($"{prior + 1:0000}_InlineStep.sql", f.Path));
         string sqlite = set.Files.Single(f => f.Path.Contains("/sqlite/")).Content;
         string postgres = set.Files.Single(f => f.Path.Contains("/postgresql/")).Content;
         string maria = set.Files.Single(f => f.Path.Contains("/mariadb/")).Content;
         Assert.Contains("CREATE UNIQUE INDEX \"IX_account_Username\"", sqlite);
-        Assert.Contains("CHECK (\"requires_auth_schema_version_5\" = 1)", sqlite);
+        Assert.Contains($"CHECK (\"requires_auth_schema_version_{prior}\" = 1)", sqlite);
         Assert.Contains("RAISE EXCEPTION", postgres);
         Assert.Contains("BEGIN NOT ATOMIC", maria);
         Assert.Contains("SIGNAL SQLSTATE '45000'", maria);
         foreach (string text in new[] { sqlite, postgres, maria })
         {
             Assert.Contains("UPDATE", text);
-            Assert.Contains("= 6 WHERE", text);
+            Assert.Contains($"= {prior + 1} WHERE", text);
             // the version row is written last
-            Assert.True(text.LastIndexOf("= 6 WHERE", StringComparison.Ordinal) > text.LastIndexOf("INDEX", StringComparison.Ordinal));
+            Assert.True(text.LastIndexOf($"= {prior + 1} WHERE", StringComparison.Ordinal) > text.LastIndexOf("INDEX", StringComparison.Ordinal));
             UpdateFileHeader header = UpdateFileHeader.Parse(text);
-            Assert.Equal(5, header.From);
-            Assert.Equal(6, header.To);
+            Assert.Equal(prior, header.From);
+            Assert.Equal(prior + 1, header.To);
             Assert.Equal(header.BodySha256, header.ActualBodySha256);
         }
 
@@ -202,21 +203,47 @@ public sealed class SqlUpdateGoldenTests
     }
 
     [Fact]
-    public async Task ExportUpdatesCommand_WritesTheCommittedFiles_AndNeedsOut()
+    public async Task ExportUpdatesCommand_RewritesTheCommittedStepFiles_AndNeedsOut()
     {
         string root = Path.Combine(Path.GetTempPath(), "arcane-sqlupdates-" + Guid.NewGuid().ToString("N"));
         try
         {
+            // Export onto a copy of the committed tree without its step files (a baseline stays at the version it was released at;
+            // later versions are step files), so the export has to write them again.
+            string committed = Path.Combine(SqlUpdateTestKit.Root, "auth");
+            foreach (string source in Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories))
+            {
+                if (source.EndsWith(".sql", StringComparison.Ordinal) && !Path.GetFileName(source).StartsWith("base_", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string target = Path.Combine(root, "auth", Path.GetRelativePath(committed, source));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target);
+            }
+
             var options = new DatabaseOptions();
             var output = new StringWriter();
             var error = new StringWriter();
             int code = await DbUpgradeCli.RunAsync(["export-updates", "--component", "auth", "--out", root], options, output, error, CancellationToken.None);
             Assert.True(code == 0, error.ToString());
-            string sqlite = Path.Combine(root, "auth", "sqlite", UpdateScriptWriter.BaselineFileName(UpdateComponent.For("auth").Definition.CurrentVersion));
-            Assert.True(File.Exists(sqlite));
+            string[] stepFiles = [.. Directory.EnumerateFiles(committed, "*.sql", SearchOption.AllDirectories)
+                .Where(f => !Path.GetFileName(f).StartsWith("base_", StringComparison.Ordinal))];
+            Assert.NotEmpty(stepFiles);
+            foreach (string file in stepFiles)
+            {
+                string exported = Path.Combine(root, "auth", Path.GetRelativePath(committed, file));
+                Assert.True(File.Exists(exported), exported);
+                Assert.Equal(SqlUpdateTestKit.ReadNormalized(file), SqlUpdateTestKit.ReadNormalized(exported));
+            }
+
             Assert.Equal(
-                SqlUpdateTestKit.ReadNormalized(Path.Combine(SqlUpdateTestKit.Root, "auth", "sqlite", Path.GetFileName(sqlite))),
-                SqlUpdateTestKit.ReadNormalized(sqlite));
+                SqlUpdateTestKit.ReadNormalized(Path.Combine(committed, UpdateScriptWriter.SnapshotFileName)),
+                SqlUpdateTestKit.ReadNormalized(Path.Combine(root, "auth", UpdateScriptWriter.SnapshotFileName)));
+            Assert.Equal(
+                Directory.GetFiles(committed, "*.sql", SearchOption.AllDirectories).Length,
+                Directory.GetFiles(Path.Combine(root, "auth"), "*.sql", SearchOption.AllDirectories).Length);
 
             var err2 = new StringWriter();
             int usage = await DbUpgradeCli.RunAsync(["export-updates"], options, new StringWriter(), err2, CancellationToken.None);

@@ -75,6 +75,36 @@ public sealed class PlayerbotRivalryOptOutWorldTests
     }
 
     [Fact]
+    public async Task AnOptOut_SurvivesTheSocialFeatureBeingDetachedAndAttachedAgain_AndTheBotsPartyAisStillShareTheStore()
+    {
+        await using SocialWorld world = await RivalryKit.StartAsync();
+        await world.AddBotAsync("Rvswaphuman");
+        await world.AddBotAsync("Rvswapundead", race: RivalryKit.Undead);
+        (WorldTestClient client, ulong playerGuid, int account) = await HumanPlayerAsync(world, "Rvswapplayer", "Rvswaphuman");
+        await using WorldTestClient player = client;
+        await HelpTestKit.StandAsync(world, "Rvswaphuman", ("Rvswapundead", 2f));
+        await RivalryKit.SeedAsync(world, "Rvswapundead", "Rvswapplayer", killerIsBot: false);
+        PlayerbotRivalryOptOut before = RivalryKit.OptOut(world);
+        before.Handle(playerGuid, account, "rivals off", -100_000, world.Options.Social.Rivalry);
+
+        // The host's detach and re-attach of a detachable feature (a hot reload's rollback, or a swap of the same feature): same instance, cold attach.
+        await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialFeature feature = SocialTestKit.Feature(world.Host);
+            feature.Detach(new ArcaneCore.World.Features.FeatureHandover());
+            feature.AttachFrom(world.Host.World, null, new ArcaneCore.World.Features.FeatureSubscriptions("rivalry-swap"));
+            return true;
+        });
+
+        Assert.Same(before, RivalryKit.OptOut(world));
+        Assert.Same(before, RivalryKit.Lane(world).OptOut);
+        Assert.Same(before, PartyTestHost.Feature(world.Host).Social.RivalryOptOut); // what every bot's party AI writes whispers into and reads from
+        Assert.True(RivalryKit.OptOut(world).IsOptedOut(playerGuid, account));
+        await RivalryKit.RunAsync(world, 3_600_000);
+        Assert.DoesNotContain(RivalryKit.Lane(world).Sends, s => s.Target == playerGuid);
+    }
+
+    [Fact]
     public async Task RivalsOn_ThroughTheWhisperPath_BringsTheTauntsBack()
     {
         await using SocialWorld world = await RivalryKit.StartAsync();

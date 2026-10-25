@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       743 keys
+#   WORLD                       744 keys
 #
 ###############################################################################
 
@@ -11265,6 +11265,19 @@ World.PacketHeuristics.CadenceLimits.QueryPerSecond = 50
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
 World.PacketHeuristics.CadenceLimits.UsePerSecond = 10
+
+#
+#    World.PacketHeuristics.DevOpcode
+#        Description: Report a stripped developer, GM, cheat or debug opcode that the release client
+#                     never sends (dev-opcode); the packet is dropped unread either way. Default
+#                     true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.DevOpcode = true
 
 #
 #    World.PacketHeuristics.Enabled

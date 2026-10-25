@@ -314,6 +314,21 @@ public sealed class PlayerbotRivalryEmoteWorldTests
     }
 
     [Fact]
+    public async Task TheRoundRobin_MovesOnByTheBotsLookedAt_NeverMoreThanBotsPerPass()
+    {
+        await using SocialWorld world = await RivalryKit.StartAsync(o => o.MaxBots = 40);
+        const int bots = PlayerbotRivalryLane.BotsPerPass + 2;
+        for (int i = 0; i < bots; i++) await world.AddBotAsync($"Rvrobin{(char)('a' + i)}");
+        long t = 3_600_000;
+
+        Assert.Equal(0, RivalryKit.Lane(world).Cursor);
+        await RivalryKit.RunAsync(world, t += 60_000);
+        Assert.Equal(PlayerbotRivalryLane.BotsPerPass, RivalryKit.Lane(world).Cursor); // 26 running bots, 24 looked at
+        await RivalryKit.RunAsync(world, t += 60_000);
+        Assert.Equal((2 * PlayerbotRivalryLane.BotsPerPass) % bots, RivalryKit.Lane(world).Cursor); // wrapped: the bots the first pass skipped come next
+    }
+
+    [Fact]
     public async Task AStranger_IsStillGreeted_InACapital_AndWhenTheZoneIsUnknown()
     {
         await using SocialWorld world = await RivalryKit.StartAsync();

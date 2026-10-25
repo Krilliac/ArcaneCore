@@ -94,6 +94,7 @@ internal static class PlayerbotRivalryRules
     /// <summary>
     /// Whether the bot knows the character in <paramref name="layer"/>: the war layer sees every relation row; the normal layer only a row that has
     /// familiarity or an affinity of its own (the blank row of a relation only the war layer keeps is a stranger).
+    /// A known row at affinity 0 with no familiarity is a stranger here even when <c>Memory:RivalAffinity</c> is 0 (the range ends there) and memory calls it a rival.
     /// </summary>
     internal static bool IsKnown(PlayerbotRelation? relation, PlayerbotRivalryLayer layer)
         => relation is not null && (layer == PlayerbotRivalryLayer.War || relation.Familiarity > 0 || relation.Affinity != 0);
@@ -156,6 +157,8 @@ internal static class PlayerbotRivalryRules
             answer = rudeAllowed ? PickRude(roll) : ShrugOrSigh(roll);
         else if (mood == PlayerbotEmoteMood.Rude && stance == PlayerbotStance.Friendly)
             answer = ShrugOrSigh(roll);
+        else if (emote is PlayerbotSocialEmotes.TextEmotes.Rude or PlayerbotSocialEmotes.TextEmotes.Chicken && stance == PlayerbotStance.Neutral && !rudeAllowed)
+            answer = ShrugOrSigh(roll); // toward a bot the table's [rude, shrug, sigh] would fold the rude pick into a shrug (a sigh a third of the time); design 4.2 says shrug or sigh
         else
             answer = PlayerbotSocialEmotes.AnswersFor(emote) is { } answers ? Pick(answers, roll) : null;
         // Whatever the table said, a bot is never sent a rude answer without RudeAtBots (today's rude-for-rude and chicken-for-threaten included).
@@ -265,6 +268,9 @@ internal sealed class PlayerbotRivalryLane(PlayerbotRivalryOptOut optOut)
 
     /// <summary>The server-wide opt-out store ("rivals off") this lane honours.</summary>
     internal PlayerbotRivalryOptOut OptOut => optOut;
+
+    /// <summary>Where the next pass starts in the running bots (tests and status): it moves on by the bots looked at, at most <see cref="BotsPerPass"/>.</summary>
+    internal int Cursor => _cursor;
 
     /// <summary>Greetings sent so far (tests and status).</summary>
     internal int Greeted { get; private set; }

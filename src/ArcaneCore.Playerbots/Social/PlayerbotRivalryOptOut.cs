@@ -19,7 +19,7 @@ internal readonly record struct PlayerbotRivalryCommandResult(bool Consumed, str
 /// once per player per <see cref="AnswerGapMs"/>; <see cref="PlayerbotSocialRivalryOptions.AllowOptOut"/> only decides whether the line is parsed at
 /// all, and a choice already recorded is read by <see cref="IsOptedOut"/> whatever that option says. Bounded by <see cref="MaxPlayers"/>: past it the
 /// oldest "rivals on" is dropped to make room, and an opt-out is never dropped: a table full of opt-outs refuses a new choice (the player is told,
-    /// and the meter counts a "refused" change). Thread-safe (one lock; every call is a few dictionary operations).
+/// and the meter counts a "refused" change). Thread-safe (one lock; every call is a few dictionary operations).
 /// </para>
 /// </summary>
 internal sealed class PlayerbotRivalryOptOut

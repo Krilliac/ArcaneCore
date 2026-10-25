@@ -140,14 +140,14 @@ public sealed class PacketHeuristicsFollowUpTests
             await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet refreshes the flag
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.UnknownOpcode)); // GM mode: exempt staff
 
             await host.OnWorldAsync(() => player.Flags &= ~PlayerFlags.Gm);
             await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
-            await client.SendAsync(WorldOpcode.CmsgBootme, []);
+            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player) >= 1, "checked as a player again");
         }
     }
@@ -160,7 +160,7 @@ public sealed class PacketHeuristicsFollowUpTests
         using AnomalyCapture capture = ledger.Capture();
         WorldSession bot = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PHSUBJ");
 
-        feature.Unhandled(bot, WorldOpcode.CmsgBootme, 0);
+        feature.Unhandled(bot, WorldOpcode.CmsgNewSpellSlot, 0);
 
         AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.UnknownOpcode));
         Assert.StartsWith("botname ", notice.Subject, StringComparison.Ordinal);
