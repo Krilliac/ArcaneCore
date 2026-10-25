@@ -1752,12 +1752,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
+        // Asked before this bot reports: a cell other bots already found a dead end is one at this bot's first stall.
+        bool worldPin = _stall.IsWorldPin(player.MapId, player.X, player.Y, now);
         int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
-        bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
-        if (deadEndPin)
+        bool ownPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
+        bool deadEndPin = ownPin || worldPin;
+        if (ownPin)
+        {
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
+            if (_stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.X, player.Y, now) is { } newPin)
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+        }
+        else if (worldPin)
+        {
+            PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stalled inside a world dead-end pin within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} and leaving"));
+        }
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,

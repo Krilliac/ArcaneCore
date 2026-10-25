@@ -663,7 +663,8 @@ internal static class PlayerbotNavigation
     /// <summary>
     /// Whether <paramref name="goal"/> is a place no walk reaches from where the bot stands, by the map's region graph alone (no path
     /// search, no tile read beyond the two lookups): the walking graph (steep slopes excluded) puts the bot and the goal in different
-    /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
+    /// components, and the goal is outdoors, or indoors and in another component of the all-terrain graph too (an indoor goal may be
+    /// reached over steep stairs, <see cref="TryClimbIndoors"/>, which the all-terrain graph joins). False
     /// when the graph is not built yet or either place is on no region. <paramref name="fromComponent"/> and <paramref name="toComponent"/>
     /// are each place's component whatever the answer, -1 for a place on no region (or with no graph). Transport (tram, lift, taxi) is the
     /// caller's to try first.
@@ -689,10 +690,28 @@ internal static class PlayerbotNavigation
         // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above
         // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
         // graph's, so the answer costs no path search.
-        return fromComponent != toComponent && !IsFragment(graph, from)
-            && !(graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to))
-            && IsOutdoorsOnSurface(map, goal)
-            && IsOutdoorsOnSurface(map, here);
+        if (fromComponent == toComponent || IsFragment(graph, from)
+            || graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to)
+            || !IsOutdoorsOnSurface(map, here))
+            return false;
+        // An outdoor goal in another component is out of reach. An indoor one may still be reached over stairs the slope-excluded graph
+        // splits, so it is judged by the graph without the exclusion: only a goal no walk of any slope joins to the bot is unreachable.
+        return IsOutdoorsOnSurface(map, goal) || IsCutOffEvenOverSteepGround(nav, map, here, goal);
+    }
+
+    private static readonly PathOptions AllTerrainLocate = new() { Mover = PathMover.Player, LoadTiles = true, NonBlockingTiles = true };
+
+    /// <summary>
+    /// Whether the all-terrain region graph (the walking graph built without the <see cref="NavTerrain.SteepSlopes"/> exclusion) puts
+    /// <paramref name="here"/> and <paramref name="goal"/> in different components. False when that graph is not built yet or either place is
+    /// on no region of it (the indoor exemption then stands). Live 2026-10-25: explore picked spawns in a sealed Deadwind Pass crypt and
+    /// searched to the node cap (7448/7448) for a route that does not exist.
+    /// </summary>
+    private static bool IsCutOffEvenOverSteepGround(NavMeshPathfinder nav, Map map, Vector3 here, Vector3 goal)
+    {
+        if (nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.Empty) is not { } all) return false;
+        int from = nav.RegionAt(all, here, AllTerrainLocate), to = nav.RegionAt(all, goal, AllTerrainLocate);
+        return from >= 0 && to >= 0 && all.ComponentOf(from) != all.ComponentOf(to);
     }
 
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>

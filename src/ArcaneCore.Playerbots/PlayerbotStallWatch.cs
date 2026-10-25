@@ -244,8 +244,19 @@ internal sealed partial class PlayerbotStallWatch
     {
         if (!float.IsFinite(x) || !float.IsFinite(y)) return false;
         DeferKey key = PinKey(mapId, x, y);
-        return Ledger.Strikes(key) >= PinStallsToEscalate && Ledger.IsDeferred(key, LedgerTime(nowMs));
+        return Ledger.Strikes(key) >= PinStallsToEscalate && Ledger.IsDeferred(key, LedgerTime(nowMs)) || IsWorldPin(mapId, x, y, nowMs);
     }
+
+    /// <summary>The pins every bot of the world shares (<see cref="PlayerbotSharedPins"/>), or null (a watch used alone).</summary>
+    internal PlayerbotSharedPins? SharedPins { get; set; }
+
+    /// <summary>Whether other bots' dead-end pins made the cell containing <c>(x, y)</c> a world pin at world time <paramref name="nowMs"/>.</summary>
+    internal bool IsWorldPin(uint mapId, float x, float y, uint nowMs) => SharedPins?.IsWorldPin(mapId, x, y, nowMs) == true;
+
+    /// <summary>
+    /// This bot dead-end-pinned the cell containing <c>(x, y)</c>: tell the world. Returns what newly became a world pin, or null.
+    /// </summary>
+    internal string? ReportDeadEndPin(ulong bot, uint mapId, float x, float y, uint nowMs) => SharedPins?.Report(mapId, x, y, bot, nowMs);
 
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and

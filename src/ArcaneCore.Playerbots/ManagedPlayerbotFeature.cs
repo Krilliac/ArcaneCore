@@ -487,6 +487,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _world = world;
         EventBoard.Attach(world);
         _sharedSetAsides.World = world;
+        _sharedPins.World = world;
         // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this
         // world, so a kill reaches only this world's memory, exactly once, whether or not a bot has thought since it changed maps; the detach takes it off.
         BotSocial.PlayerbotSocialRecorder pvpRecorder = Social;
@@ -2030,7 +2031,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // registered anywhere below.
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
         {
-            Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
         };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
@@ -2072,6 +2073,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
+
+    // The dead-end pin cells every bot avoids once several of them were pinned in one (PlayerbotSharedPins); thread-safe.
+    private readonly PlayerbotSharedPins _sharedPins = new();
+
+    /// <summary>The cells every bot treats as a dead-end pin (inspection and tests).</summary>
+    internal PlayerbotSharedPins SharedPins => _sharedPins;
 
     // The soft claims of the fleet on untagged mobs (PlayerbotClaims): one table for every bot, touched on the world thread only.
     private readonly PlayerbotClaims _claims = new();
