@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role,
     [string]$LiveHome,
     [Alias('Profile')][string]$LiveProfile,
-    # World only: the machine memory load (percent) at which the GC turns aggressive. See below.
+    # The machine memory load (percent) at which the GC turns aggressive, for either role. See below.
     [ValidateRange(50, 99)][int]$GCHighMemPercent = 97,
     # Max: crash dump, hang stacks, counters CSV and the repo's diagnostic options at their most informative safe values
     # (docs/ops/live-diagnostics.md); Standard adds nothing. A variable already set in the environment is kept.
@@ -54,12 +54,11 @@ $env:ARCANECORE_LIVE_SERVER = '1'
 # Each daemon its own log (<LiveHome>\logs\<role>.debug.log/.jsonl): both read the profile's appsettings.json, and a log file has one
 # writer, so with one shared path the daemon started second (the World, in redeploy.ps1) would write a fallback name instead.
 Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome
-if ($Role -eq 'World') {
-    # The GC turns aggressive (blocking compacting gen2, 2-15 s ticks) when the MACHINE's memory load passes its high-memory threshold
-    # (default 90%). On a shared box the load comes from builds and tests, not the world, so compacting the world cannot relieve it.
-    # Verify: the MemoryPressure log line prints the GC's high-load threshold.
-    $env:DOTNET_GCHighMemPercent = '0x{0:X}' -f $GCHighMemPercent
-}
+# The GC turns aggressive (blocking compacting gen2, 2-15 s ticks) when the MACHINE's memory load passes its high-memory threshold
+# (default 90%). On a shared box the load comes from builds and tests, not the daemon, so compacting the daemon cannot relieve it.
+# Both roles: a Realm left at 90% compacts first and stalls logins (2026-10-25: Realm MemoryPressure at 88% while the World sat at 97%).
+# Verify: the MemoryPressure log line prints the GC's high-load threshold.
+$env:DOTNET_GCHighMemPercent = '0x{0:X}' -f $GCHighMemPercent
 # A launcher's NO_COLOR (agent shells set it) would turn off the console logger's level colours.
 Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue
 $diagPlan = Get-LiveDiagnosticsPlan -Role $Role -LiveHome $LiveHome -Level $Diagnostics -DotnetRoot $env:DOTNET_ROOT -DumpType $DumpType -HangStackIntervalSeconds $HangStackIntervalSeconds
