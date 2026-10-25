@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -331,56 +332,22 @@ public sealed class PlayerbotPvpKillRoutingWorldTests
         ManagedPlayerbotFeature feature = PartyTestHost.Feature(world.Host);
         await using WorldTestClient killer = await world.AddPlayerAsync("Allockiller", SocialTestKit.Orc);
         await using WorldTestClient victim = await world.AddPlayerAsync("Allocvictim");
-        const int chunks = 20, deathsPerChunk = 500;
+        const int deathsPerWindow = 1000;
 
-        long allocated = await world.Host.OnWorldAsync(() =>
+        await world.Host.OnWorldAsync(() =>
         {
             PlayerbotSocialRecorder recorder = feature.Social;
             Player slayer = Online(world, "Allockiller");
             Player dead = Online(world, "Allocvictim");
-            return SteadyStateBytes(() => recorder.NotePvpKill(slayer, dead), chunks, deathsPerChunk);
+            Action window = () =>
+            {
+                for (int i = 0; i < deathsPerWindow; i++) recorder.NotePvpKill(slayer, dead);
+            };
+            for (int i = 0; i < 1000; i++) recorder.NotePvpKill(slayer, dead); // warm-up: JIT, tiering
+
+            // A closure plus its delegate cost over 100 bytes per death; no window may allocate. Runtime cast-cache rebuilds on this thread are
+            // excused by the probe (see the note in AllocationProbe).
+            AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, $"{deathsPerWindow} player deaths with no bot involved");
         });
-
-        // A closure plus its delegate cost over 100 bytes per death (about a megabyte over these chunks); the bound is for all the chunks but the noisiest.
-        Assert.True(allocated < 200, $"{chunks * deathsPerChunk} player deaths allocated {allocated} bytes (the noisiest chunk left out)");
-    }
-
-    [Fact]
-    public void TheAllocationMeasure_IgnoresOneStrayAllocation_ButNotARepeatedOne()
-    {
-        // The measured loop runs on the world thread, where a stray one-off (a runtime cache filling, a tier-up, a collection from another test's
-        // threads) lands as a single large allocation in whatever window it falls in. The recorder's own cost is per death or per N deaths.
-        int calls = 0;
-        object? keep = null; // a captured local is a heap field: the allocations below cannot be stack-allocated away
-        long stray = SteadyStateBytes(() => { if (++calls == 7 * 500 + 3) keep = new byte[98_000]; }, 20, 500);
-
-        calls = 0;
-        long everyHundredth = SteadyStateBytes(() => { if (++calls % 100 == 0) keep = new object(); }, 20, 500);
-
-        long everyCall = SteadyStateBytes(() => keep = new object(), 20, 500);
-        GC.KeepAlive(keep);
-
-        Assert.True(stray < 200, $"one stray allocation must not decide the result, got {stray}");
-        Assert.True(everyHundredth >= 200, $"an allocation every 100 calls must be seen, got {everyHundredth}");
-        Assert.True(everyCall >= 19 * 500 * 24, $"an allocation per call must be seen, got {everyCall}");
-    }
-
-    // Bytes allocated by the calling thread over the chunks, without the noisiest one. The whole-loop total made this test flaky: one stray
-    // 96 KB allocation on the world thread (98352 bytes seen in CI) failed it though the recorder allocates nothing. A per-call or periodic
-    // allocation is in every chunk, so it still adds up; a one-off is in a single chunk and is dropped.
-    private static long SteadyStateBytes(Action call, int chunks, int callsPerChunk)
-    {
-        for (int i = 0; i < 2 * callsPerChunk; i++) call(); // warm-up: JIT, tiering
-        long total = 0, noisiest = 0;
-        for (int c = 0; c < chunks; c++)
-        {
-            long start = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < callsPerChunk; i++) call();
-            long used = GC.GetAllocatedBytesForCurrentThread() - start;
-            total += used;
-            if (used > noisiest) noisiest = used;
-        }
-
-        return total - noisiest;
     }
 }
