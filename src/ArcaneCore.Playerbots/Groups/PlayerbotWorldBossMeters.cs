@@ -1,5 +1,4 @@
 using System.Diagnostics.Metrics;
-using System.Runtime.CompilerServices;
 using ArcaneCore.Kernel.Ops.Metrics;
 
 namespace ArcaneCore.World.Playerbots.Groups;
@@ -71,8 +70,7 @@ internal static class PlayerbotWorldBossOutcomes
 /// </summary>
 internal static class PlayerbotWorldBossMeters
 {
-    /// <summary>The raids-under-way count: the static is a readonly reference, the int lives in the box and is only touched with Volatile.</summary>
-    private static readonly StrongBox<int> s_active = new();
+    private static int _active;
 
     /// <summary>The world-boss meter.</summary>
     internal static Meter Meter { get; } = new("ArcaneCore.Playerbots.WorldBosses", "1.0");
@@ -81,12 +79,12 @@ internal static class PlayerbotWorldBossMeters
     internal static Counter<long> Raids { get; } = Meter.CreateCounter<long>("arcanecore.playerbot.worldboss_raids", "{raid}", "World-boss raids formed and ended, and musters that failed, by outcome.");
 
     /// <summary>The raids under way now (the last value a coordinator set).</summary>
-    internal static ObservableGauge<int> Active { get; } = Meter.CreateObservableGauge("arcanecore.playerbot.worldboss_active", static () => Volatile.Read(ref s_active.Value), "{raid}", "World-boss raids under way.");
+    internal static ObservableGauge<int> Active { get; } = Meter.CreateObservableGauge("arcanecore.playerbot.worldboss_active", static () => Volatile.Read(ref _active), "{raid}", "World-boss raids under way.");
 
     internal static void Count(string outcome)
     {
         if (Raids.Enabled) Raids.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
     }
 
-    internal static void SetActive(int raids) => Volatile.Write(ref s_active.Value, raids);
+    internal static void SetActive(int raids) => Volatile.Write(ref _active, raids);
 }

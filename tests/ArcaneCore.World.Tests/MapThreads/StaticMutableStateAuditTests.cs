@@ -44,6 +44,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.HotCode.HotCodeMetadataHandler.s_active"] = "Volatile/Interlocked reference",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafety.s_nextLogin"] = "login sequence, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.Control.BotController.s_sequence"] = "control event sequence, Interlocked.Increment and Interlocked.Read",
+        ["ArcaneCore.World.Playerbots.Groups.PlayerbotWorldBossMeters._active"] = "gauge value, Volatile.Write by the coordinator and Volatile.Read by the meter callback",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam, set by tests before the world runs",
         ["ArcaneCore.World.Playerbots.PlayerbotTravel.s_staticRoutes"] = "Volatile reference to an immutable route list",
