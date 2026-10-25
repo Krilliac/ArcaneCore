@@ -13,6 +13,7 @@ export class DebugOverlays {
     #guid = null;
     #timer = null;
     #busy = false;
+    #run = 0;
 
     /**
      * @param {object} o
@@ -48,9 +49,10 @@ export class DebugOverlays {
             return false;
         }
         this.#busy = true;
+        const run = ++this.#run;
         try {
             const result = await this.app.runCommand('action.on', { template: 'debug', guid }, { quiet: true, noRefresh: true });
-            if (this.#guid !== guid) {
+            if (this.#run !== run || this.#guid !== guid) {
                 return false;
             }
             const data = result.ok ? result.data : null;
@@ -62,12 +64,18 @@ export class DebugOverlays {
             }
             return true;
         } finally {
-            this.#busy = false;
+            // A run that stop() already abandoned must not clear the busy flag of the run that replaced it.
+            if (this.#run === run) {
+                this.#busy = false;
+            }
         }
     }
 
     /** Stops refreshing and removes the drawn overlay. */
     stop() {
+        // Abandon the run in flight: its answer is ignored and a hung action no longer blocks watching again.
+        this.#run++;
+        this.#busy = false;
         if (this.#timer !== null) {
             this.clearTimer(this.#timer);
             this.#timer = null;

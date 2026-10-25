@@ -297,6 +297,27 @@ test('toggling the same creature again switches the overlay off, another creatur
     assert.deepEqual(app.removed, ['action.on', 'action.on']);
 });
 
+test('stopping abandons a hung run so watching again works, and the abandoned run does not disturb the new one', async () => {
+    const app = fakeApp([]);
+    const hung = [];
+    app.runCommand = async (name, args, options) => {
+        app.calls.push({ name, args, options });
+        return new Promise((resolve) => hung.push(resolve));
+    };
+    const overlays = new DebugOverlays({ app, setTimer: () => 1, clearTimer: () => {} });
+    const first = overlays.watch('A');
+    overlays.stop();
+    const second = overlays.watch('B');
+    assert.equal(app.calls.length, 2, 'the second watch ran although the first never answered');
+    hung[0]({ ok: true, data: { ok: false, message: 'late' } });
+    assert.equal(await first, false, 'the abandoned answer is ignored');
+    assert.equal(overlays.watched, 'B');
+    assert.equal(await overlays.refresh(), false, 'the second run still holds the busy flag');
+    assert.equal(app.calls.length, 2);
+    hung[1]({ ok: true, data: { ok: true } });
+    assert.equal(await second, true);
+});
+
 // ---- in a real browser ------------------------------------------------------------------------------------------------------
 
 const executable = browserFromEnvironment();

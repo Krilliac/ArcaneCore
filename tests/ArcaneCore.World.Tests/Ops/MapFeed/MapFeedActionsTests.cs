@@ -127,6 +127,7 @@ public sealed class MapFeedActionsTests
         string expectedActor = ActionWire.ExpectedLocalActor();
         Assert.Equal(expectedActor[..expectedActor.LastIndexOf('#')], caps.GetProperty("operator").GetString());
         Assert.Equal("local", caps.GetProperty("role").GetString());
+        Assert.Equal(new MapFeedActionsOptions().SettleSeconds, caps.GetProperty("settleSeconds").GetInt32());
     }
 
     // ---- security and the invoker -----------------------------------------------------------------------------------------

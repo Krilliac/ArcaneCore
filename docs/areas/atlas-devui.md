@@ -70,14 +70,21 @@ overlay layer. It refreshes on its own timer at no more than 2 Hz and stops when
 ## Not done
 
 * (The transport is bound.) `LiveActions` sends through `IFeedRequester`; `LiveModule` registers `LiveFeedRequester`, which calls
-  `LiveFeed.ExchangeAsync`. That sends only the `caps` and `action` ops, adds the id, returns the whole answer (`ok:false` is an answer),
-  gives `unavailable` when not connected or when the connection closes mid-request, and throws `OperationCanceledException` on cancellation. It
-  is not `LiveFeed.RequestAsync`, which is the insight query path (it forces `op:query` and throws on a refusal). A `caps` request waits the
-  normal `LiveOptions.QueryTimeout` (5 s); an `action` waits `LiveFeedRequester.ActionWait` (625 s: the 10 s world-thread invoke, the longest
-  `SettleSeconds` of 600, and a margin), because the world answers an action only when the command settles (`settled:false` at the end of
-  `World:Control:MapFeed:Actions:SettleSeconds`, default 30). `caps` does not advertise that setting, hence the maximum.
+  `LiveFeed.ExchangeAsync`. That sends only the `caps` and `action` ops (anything else is a `bad-args` `CommandException`), adds the id, returns
+  the whole answer (`ok:false` is an answer), gives `unavailable` when not connected or when the connection closes mid-request, and throws
+  `OperationCanceledException` on cancellation. It is not `LiveFeed.RequestAsync`, which is the insight query path (it forces `op:query` and
+  throws on a refusal). A `caps` request waits the normal `LiveOptions.QueryTimeout` (5 s).
+  An `action` waits longer, because the world answers it only when the command has settled. The world waits up to 10 s for the invoke on its
+  world thread (`WorldMapFeed.cs:126`) and then `SettleSeconds` twice (once for the delegate, once for the command's contexts:
+  `MapFeedActions.cs`), so one action takes up to `10 + 2 x SettleSeconds`. The world handles one line at a time per connection and Atlas starts
+  the timer when it sends, so a line queued behind another action (the 2 Hz AI overlay refresh is an action) spends part of its wait in the
+  queue. The wait is therefore `2 x (10 + 2 x SettleSeconds) + 15 s` (one line ahead, itself, a margin; `LiveFeedRequester.ActionWaitFor`):
+  155 s at the default of 30 s, 2435 s at the 600 s maximum. `SettleSeconds` comes from the `settleSeconds` field of `caps`
+  (asked once per connection); a world without the field gets the maximum. Cancelling the request stops the wait early.
+  Side effect: the same connection also carries the insight queries, and the world answers lines in order, so while an action settles a query
+  waits behind it and times out at 5 s.
 * The `catalog` branch of `LiveActions` is dead against the real daemon: the world never sets `catalog:true` in `caps` and `catalog` is not a
-  declared op, so sending it would be a protocol strike.
+  declared op, so sending it would be a protocol strike (a daemon that did set `catalog:true` would make `caps` fail with a `bad-args` error).
 * Late `op:"actionLine"` output (lines that arrive after the action's answer) is ignored by `FeedSession`.
 * `LiveActions` has no try/catch around a step: in a multi-step plan, an error in a later step loses the earlier steps that already ran from the
   action log.
