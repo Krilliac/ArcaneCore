@@ -249,7 +249,9 @@ internal sealed class PlayerbotMount
             && !player.Movement.HasFlag(MovementFlags.Swimming)
             && (player.Locomotion.Environment & (EnvironmentFlags.InWater | EnvironmentFlags.HighLiquid))
                 != (EnvironmentFlags.InWater | EnvironmentFlags.HighLiquid)
-            && !FormInterlocks.IsInDisallowedMountForm(player);
+            && !FormInterlocks.IsInDisallowedMountForm(player)
+            // Silithyst dust is dropped by the server when its carrier mounts (OutdoorPvPFeature.OnHolderAdded): a carrier walks.
+            && !Events.PlayerbotWorldPvpObjectives.Carries(player);
 
     private static float RemainingYards(Player player, PlayerbotRoute route)
     {

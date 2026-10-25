@@ -419,6 +419,31 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
 - **Not done in this slice.** Targeted festival emotes at friendly real players, and the war-effort and scenario festival chapters.
   Tests: `tests/ArcaneCore.World.Tests/Playerbots/Events/`.
 
+## World PvP: Silithyst (P7c phase 1, `World:Playerbots:WorldPvp:Silithyst`, live)
+
+Bots take part in the Silithus objective as a player does. The server half is unchanged ([outdoor PvP](outdoor-pvp.md)); `Events/PlayerbotWorldPvpObjectives.cs`
+is the bot half, one controller per brain.
+
+- **Who.** A bot in Silithus proper (map 1, zone 1377), level 55 or more, alive, out of combat, that rolls in. The roll is made once per two-minute window from the bot's guid
+  against `ParticipationChance` (default 0.5), or `WarModeParticipationChance` (default 0.9) while `World:Playerbots:Social:WarMode:Enabled` is on, so a crowd of bots is not all on the geysers at once.
+  `Enabled` (default true) off: no new run starts; a bot already carrying finishes its trip.
+- **The run.** *Seek*: the nearest spawned Silithyst Geyser (181598) or Mound (181597) that is ready, not set aside and claimed by fewer than `MaxBotsPerGeyser` (default 1) other bots
+  (`PlayerbotClaims`, the same claim table as mobs and chests). *Use*: walk to within 4 yards, stop, CMSG_GAMEOBJ_USE (the goober casts 29518, whose script gives the flag aura 29519).
+  *Await*: 3 s for the flag. *Carry*: walk on foot to the centre of the own faction's turn-in trigger (4162 Alliance, 4168 Horde); the ordinary area trigger packet fires on entering it and the server counts the
+  delivery and applies Traces of Silithyst (29534). *Deliver* is done when the flag is gone within the trigger's radius plus 8 yards and 29534 is on. The geyser is looked at again after a minute.
+- **Priority.** A run in progress, or a bot found holding the flag, is driven high in the think ladder: after rest and equipment, before class upkeep, home, town errands, the goal policy and quests (a fight still comes first).
+  A new run is only started low, next to the opportunity goal. The goal kind reported is `WorldPvp` (appended to `PlayerbotGoalKind`; it is not a goal-policy rung).
+- **A carrier never mounts or stealths.** The server drops the dust when the carrier mounts or stealths away from its trigger. `PlayerbotMount.CanMountHere` refuses while 29519 is on, and the class upkeep gets
+  `RotationState.NoStealth` (rogue Stealth and Vanish, druid Prowl). Using the geyser still dismounts the bot (ordinary game object use).
+- **Giving up.** A geyser someone else used, or a lost flag away from the trigger, ends the run quietly (the geyser is set aside 30 s to a minute). A death, no route, or a stalled walk sets it aside with the
+  ledger's backoff (60 s doubling to 5 min, `PlayerbotOpportunityLedger`).
+- **Anomalies** (area `world-pvp`, once per run, none on success or an early loss of the flag): `silithyst-use-no-aura` (the use gave no 29519 within 3 s),
+  `silithyst-carry-timeout` (a carry of more than 5 minutes) and `silithyst-unreachable-trigger` (no route to the trigger, or no trigger row loaded).
+- **Observability (server).** Each pickup and each turn-in writes a debug line `outdoor-pvp.silithyst` with the player, team and count; `SilithusZone.PickupsTotal` and `TurnInsTotal` count them since start.
+- **Cost.** A bot with no run, away from Silithus or with the option off does a zone test per think and allocates nothing; an eligible bot scans the map's game objects (an entry test each) every 5 s.
+- **Not done in phase 1.** Eastern Plaguelands towers, dropped flags and dust bags, escorting a carrier, killing enemy carriers on purpose and group runs.
+  Tests: `tests/ArcaneCore.World.Tests/Playerbots/WorldPvp/`, and the server end to end in `tests/ArcaneCore.World.Tests/OutdoorPvP/SilithystEndToEndTests.cs`.
+
 ## Review round 1 (P2)
 
 - **PvP flags.** A player-flagged creature or player is a flagging fight (`PlayerbotHelpRules.WouldFlag`).

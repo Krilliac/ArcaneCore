@@ -853,6 +853,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Opportunities)}:{property.Name}");
         }
 
+        // The world PvP objectives (Silithyst) are live key by key (docs/areas/playbots-social.md, World PvP: Silithyst).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotSilithystOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:WorldPvp:Silithyst:{property.Name}");
+        }
+
         // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).
         foreach (PropertyInfo property in typeof(PlayerbotContentionOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

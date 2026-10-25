@@ -224,6 +224,9 @@ public sealed class PlayerbotOptions
     /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
     public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
 
+    /// <summary>World PvP objectives bots take part in: the Silithus Silithyst run (<c>World:Playerbots:WorldPvp</c>; live; docs/areas/playbots-social.md).</summary>
+    public PlayerbotWorldPvpOptions WorldPvp { get; set; } = new();
+
     /// <summary>
     /// Bots answer players who talk to them (<c>World:Playerbots:Chat</c>; live): built-in template replies by default, with optional
     /// model providers (Anthropic, OpenAI-compatible, local servers) in front of them (docs/areas/playbots.md, Bot chat).
@@ -343,6 +346,8 @@ public sealed class PlayerbotOptions
         Risk.Validate();
         if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
         Opportunities.Validate();
+        if (WorldPvp is null) throw new InvalidOperationException($"{SectionName}:WorldPvp is missing.");
+        WorldPvp.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");

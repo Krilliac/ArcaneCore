@@ -132,6 +132,7 @@ internal sealed class RotationStateBuilder
     public int ComboPoints { get; set; }
     public Game.Spells.ShapeshiftForm Form { get; set; }
     public bool IsStealthed { get; set; }
+    public bool NoStealth { get; set; }
     public bool WearsShield { get; set; }
     public bool IsMoving { get; set; }
     public RotationPetStatus Pet { get; set; }
@@ -151,7 +152,7 @@ internal sealed class RotationStateBuilder
     public RotationState Build() => new()
     {
         Spells = Spells, Self = Self, Victim = Victim, Role = Role, InCombat = InCombat, PowerType = PowerType, Power = Power, MaxPower = MaxPower,
-        Party = Party, Attackers = Attackers, ComboPoints = ComboPoints, Form = Form, IsStealthed = IsStealthed, WearsShield = WearsShield,
+        Party = Party, Attackers = Attackers, ComboPoints = ComboPoints, Form = Form, IsStealthed = IsStealthed, NoStealth = NoStealth, WearsShield = WearsShield,
         IsMoving = IsMoving, Pet = Pet, PetUnit = PetUnit, PetFighting = PetFighting, PetFightingCrowdControlled = PetFightingCrowdControlled,
         CanCallPet = CanCallPet, TameCandidate = TameCandidate, AutoRepeatActive = AutoRepeatActive,
         HasRangedWeapon = HasRangedWeapon, HasWand = HasWand, HealingPotion = HealingPotion, Bandage = Bandage, Totems = Totems,

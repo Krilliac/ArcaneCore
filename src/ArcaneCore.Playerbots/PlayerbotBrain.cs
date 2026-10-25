@@ -181,6 +181,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
     private PlayerbotOpportunities? _opportunities;
+    private PlayerbotWorldPvpObjectives? _worldPvp;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -653,6 +654,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 RecordDeath(player);
                 _opportunities?.BotDied();
+                _worldPvp?.BotDied();
                 RetireDeathIntent();
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
@@ -1218,6 +1220,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _goal = PlayerbotGoalKind.Explore;
                 return;
             }
+            // A bot carrying the Silithyst flag, or already on its way to a geyser, goes on with the run ahead of the upkeep, errands and quests
+            // (a fight still comes first); the seek of a new run is lower down, beside the opportunities.
+            PlayerbotThinkProbe.Phase("world pvp");
+            if (TakeWorldPvp(player, interval, mayBegin: false)) return;
             // Class upkeep between fights (forms, buffs on the bot and its group, the pet, heals, stealth before a pull),
             // vmangos UpdateOutOfCombatAI_<Class>; the creature the bot is closing in on is its pull target.
             PlayerbotThinkProbe.Phase("class upkeep");
@@ -1260,6 +1266,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             { RetireIdleCombatRoute(); _goal = PlayerbotGoalKind.Vendor; TargetEntry = _bank.TargetEntry; return; }
             PlayerbotThinkProbe.Phase("opportunities");
             if (TakeOpportunity(player, interval, out bool opportunityPull)) { if (opportunityPull) goto afterGoalLadder; return; }
+            PlayerbotThinkProbe.Phase("world pvp seek");
+            if (TakeWorldPvp(player, interval, mayBegin: true)) return;
             bool visibleQuestTarget = _quests.PreferredCreatureEntry != 0
                 && FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is not null;
             PlayerbotThinkProbe.Phase("trainers");
@@ -2116,6 +2124,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (!step.Busy) return false;
         OpportunityDriven = true;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
+    }
+
+    /// <summary>The Silithyst run (<see cref="PlayerbotWorldPvpObjectives"/>, docs/areas/playbots-social.md; inspection and tests).</summary>
+    internal PlayerbotWorldPvpObjectives WorldPvp => _worldPvp ??= new PlayerbotWorldPvpObjectives(_session, _options, _contention.Claims);
+
+    /// <summary>
+    /// Offers the world PvP run to the ladder: true when it drove the bot this think (walked to a geyser, used it, carried the flag).
+    /// <paramref name="mayBegin"/> false only carries on a run in progress and takes up a bot that already holds the flag.
+    /// </summary>
+    private bool TakeWorldPvp(Player player, uint interval, bool mayBegin)
+    {
+        // Nothing to do (and nothing allocated) for a bot with no run that is away from Silithus or has the objective off.
+        if (_worldPvp is null && (!mayBegin || !_options.WorldPvp.Silithyst.Enabled || !PlayerbotWorldPvpObjectives.Eligible(player))) return false;
+        WorldPvpStep step = WorldPvp.Update(player, interval, mayBegin);
+        if (!step.Busy) return false;
         RetireIdleCombatRoute();
         _goal = step.Goal;
         TargetEntry = step.TargetEntry;

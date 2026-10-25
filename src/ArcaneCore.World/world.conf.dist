@@ -18171,6 +18171,55 @@ World.Playerbots.Travel.TransitBackoffSeconds = 60
 #
 World.Playerbots.Travel.Zeppelins = true
 
+#
+#    World.Playerbots.WorldPvp.Silithyst.Enabled
+#        Description: Let bots pick up and deliver silithyst (on by default). Off: bots ignore the
+#                     geysers; a bot already carrying finishes its trip.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.Enabled = true
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser
+#        Description: The most bots that go for one geyser or mound at the same time (1..8; default
+#                     1).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser = 1
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.ParticipationChance
+#        Description: The chance (0..1; default 0.5) that an eligible bot takes part in a given
+#                     two-minute window: each bot rolls once per window from its guid, so a crowd of
+#                     bots in Silithus is not all on the geysers at once.
+#        Type: float
+#        Default: 0.5
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.ParticipationChance = 0.5
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance
+#        Description: The chance (0..1; default 0.9) of the same roll while
+#                     World:Playerbots:Social:WarMode:Enabled is on.
+#        Type: float
+#        Default: 0.9
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance = 0.9
+
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa
 #----------------------------------------------------------------------------

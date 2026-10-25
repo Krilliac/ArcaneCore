@@ -384,6 +384,7 @@ internal static class PlayerbotChatPrompts
         PlayerbotGoalKind.Assist => p.MasterName is { } master ? $"helping {master}" : "helping my group",
         PlayerbotGoalKind.Retreat => "backing off from a fight",
         PlayerbotGoalKind.Escape => "walking out from among creatures too strong for me",
+        PlayerbotGoalKind.WorldPvp => "running silithyst in Silithus for my faction",
         _ => null,
     };
 

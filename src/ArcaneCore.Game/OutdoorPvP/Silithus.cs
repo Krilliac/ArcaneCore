@@ -31,6 +31,18 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
 
     public uint GatheredHorde { get; private set; }
 
+    /// <summary>Silithyst flags picked up (the flag aura applied) since the zone script started; the world feature counts them.</summary>
+    public ulong PickupsTotal { get; private set; }
+
+    /// <summary>Turn-ins accepted at the own camp since the zone script started (the reset at the maximum does not clear it).</summary>
+    public ulong TurnInsTotal { get; private set; }
+
+    /// <summary>The camp counter right after the latest turn-in (before a reset at the maximum), for the log line.</summary>
+    public uint LastTurnInCount { get; private set; }
+
+    /// <summary>Called by the world feature when a player takes the flag (aura 29519 applied).</summary>
+    public void NotePickup() => PickupsTotal++;
+
     /// <summary>vmangos <c>m_LastController</c>: the last team to fill its counter.</summary>
     public Team? LastController { get; private set; }
 
@@ -105,6 +117,8 @@ public sealed class SilithusZone(IOutdoorPvPHost host, uint maxResources = Silit
         }
 
         uint gathered = team == Team.Alliance ? ++GatheredAlliance : ++GatheredHorde;
+        TurnInsTotal++;
+        LastTurnInCount = gathered;
         uint[] yells = team == Team.Alliance ? SilithusCatalog.YellsAlliance : SilithusCatalog.YellsHorde;
         int yell = gathered == MaxResources / 4 ? 0
             : gathered == MaxResources / 2 ? 1

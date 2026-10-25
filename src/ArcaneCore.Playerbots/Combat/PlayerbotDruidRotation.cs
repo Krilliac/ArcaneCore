@@ -89,7 +89,7 @@ internal sealed class PlayerbotDruidRotation : PlayerbotClassRotation
         }
 
         // A cat closing in on its prey prowls (vmangos EnterStealthIfNeeded with Prowl).
-        return s.Form == Form.Cat && s.Victim is not null && !s.IsStealthed ? Do(s, Prowl, s.Self) : null;
+        return s.Form == Form.Cat && s.Victim is not null && !s.IsStealthed && !s.NoStealth ? Do(s, Prowl, s.Self) : null;
     }
 
     protected override RotationAction? Fight(RotationState s, RotationUnit v)

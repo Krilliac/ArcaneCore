@@ -221,6 +221,14 @@ public static class WorldConfigKeys
         LivePlayerbots("Opportunities:LockedChests", o => o.Opportunities.LockedChests, (o, v) => o.Opportunities.LockedChests = v),
         LivePlayerbots("Opportunities:Nodes", o => o.Opportunities.Nodes, (o, v) => o.Opportunities.Nodes = v),
         LivePlayerbots("Opportunities:Rares", o => o.Opportunities.Rares, (o, v) => o.Opportunities.Rares = v),
+        // PlayerbotWorldPvpObjectives reads the shared PlayerbotOptions.WorldPvp at every scan and decision.
+        LivePlayerbots("WorldPvp:Silithyst:Enabled", o => o.WorldPvp.Silithyst.Enabled, (o, v) => o.WorldPvp.Silithyst.Enabled = v),
+        LivePlayerbotsValue("WorldPvp:Silithyst:ParticipationChance", o => o.WorldPvp.Silithyst.ParticipationChance, (o, v) => o.WorldPvp.Silithyst.ParticipationChance = v,
+            PlayerbotSilithystOptions.CheckChance),
+        LivePlayerbotsValue("WorldPvp:Silithyst:WarModeParticipationChance", o => o.WorldPvp.Silithyst.WarModeParticipationChance, (o, v) => o.WorldPvp.Silithyst.WarModeParticipationChance = v,
+            PlayerbotSilithystOptions.CheckChance),
+        LivePlayerbotsValue("WorldPvp:Silithyst:MaxBotsPerGeyser", o => o.WorldPvp.Silithyst.MaxBotsPerGeyser, (o, v) => o.WorldPvp.Silithyst.MaxBotsPerGeyser = v,
+            PlayerbotSilithystOptions.CheckMaxBots),
 
         // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every
         // line and every provider attempt; the provider list is compared and replaced as one value.

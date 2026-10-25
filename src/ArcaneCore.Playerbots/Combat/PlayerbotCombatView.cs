@@ -222,6 +222,7 @@ internal static class PlayerbotCombatView
             IsRooted = system.IsRooted(player),
             IsSlowed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModDecreaseSpeed)),
             IsStealthed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModStealth)),
+            NoStealth = ownAuras.Any(h => !h.IsRemoved && h.Spell.Id == Events.PlayerbotWorldPvpObjectives.SilithystFlag),
             WearsShield = offHand?.Template is { Class: ItemClassArmor, SubClass: SubClassShield },
             Pet = petStatus,
             PetUnit = petView,

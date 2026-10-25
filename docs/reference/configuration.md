@@ -1897,6 +1897,10 @@ How to read the tables:
 | `World:Playerbots:Travel:TransitBackoffMaxSeconds` | `int` | `300` | live | The longest wait (seconds) before a failed transit point is tried again (10..86400; default 300). Must not be below `TransitBackoffSeconds`. |
 | `World:Playerbots:Travel:TransitBackoffSeconds` | `int` | `60` | live | The first wait (seconds) before a bot tries a transit point again (one flight master's node, tram platform, lift, dock) that just failed it; each further failure of the same point doubles the wait up to `TransitBackoffMaxSeconds` (10..3600; default 60). |
 | `World:Playerbots:Travel:Zeppelins` | `bool` | `true` | live | Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar - Grom'gol, Undercity - Grom'gol; on by default). |
+| `World:Playerbots:WorldPvp:Silithyst:Enabled` | `bool` | `true` | live | Let bots pick up and deliver silithyst (on by default). Off: bots ignore the geysers; a bot already carrying finishes its trip. |
+| `World:Playerbots:WorldPvp:Silithyst:MaxBotsPerGeyser` | `int` | `1` | live | The most bots that go for one geyser or mound at the same time (1..8; default 1). |
+| `World:Playerbots:WorldPvp:Silithyst:ParticipationChance` | `float` | `0.5` | live | The chance (0..1; default 0.5) that an eligible bot takes part in a given two-minute window: each bot rolls once per window from its guid, so a crowd of bots in Silithus is not all on the geysers at once. |
+| `World:Playerbots:WorldPvp:Silithyst:WarModeParticipationChance` | `float` | `0.9` | live | The chance (0..1; default 0.9) of the same roll while `World:Playerbots:Social:WarMode:Enabled` is on. |
 
 ## `World:Playerbots:Qa`
 

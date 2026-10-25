@@ -125,6 +125,9 @@ internal sealed class RotationState
 
     public bool IsStealthed { get; init; }
 
+    /// <summary>The bot carries the Silithyst flag: it must not stealth (the server drops the dust), so no stealth or Vanish is cast.</summary>
+    public bool NoStealth { get; init; }
+
     public bool WearsShield { get; init; }
 
     public RotationPetStatus Pet { get; init; }
