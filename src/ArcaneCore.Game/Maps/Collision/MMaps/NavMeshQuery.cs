@@ -52,6 +52,32 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
     internal Func<int, int, NavMeshTile?>? TileLoaderForCurrentThread
         => _tileLoader is { } loader && _tileLoaderThread == Environment.CurrentManagedThreadId ? loader : null;
 
+    [ThreadStatic] private static List<(int X, int Y)>? t_missedTiles;
+
+    /// <summary>The most distinct missed tiles one recorded search keeps.</summary>
+    internal const int MaxMissedTiles = 64;
+
+    /// <summary>
+    /// Sets the list this thread's searches add each Detour tile they wanted and found unloaded to (null: record nothing). Only
+    /// <see cref="NavMeshPathfinder"/>'s shared search with a missed-tile list sets it, around one query. Returns the list that was set.
+    /// </summary>
+    internal static List<(int X, int Y)>? MissedTileSink
+    {
+        get => t_missedTiles;
+        set => t_missedTiles = value;
+    }
+
+    private static void NoteMissedTile(int x, int y)
+    {
+        if (t_missedTiles is not { } list || list.Count >= MaxMissedTiles) return;
+        foreach ((int X, int Y) known in list)
+            if (known.X == x && known.Y == y) return;
+        list.Add((x, y));
+    }
+
+    /// <summary>Test seam: the clock of the search wall-time bound (<see cref="PathOptions.MaxSearchMs"/>), in <see cref="System.Diagnostics.Stopwatch"/> ticks.</summary>
+    internal static Func<long> DeadlineClock { get; set; } = System.Diagnostics.Stopwatch.GetTimestamp;
+
     /// <summary>The centre of Detour tile (<paramref name="x"/>, <paramref name="y"/>) in Recast space (y 0).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Vector3 TileCenter(int x, int y)
@@ -174,9 +200,15 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
             }
 
             int side = nei & 0xff;
-            if (NavMeshFormat.SideOffset(side) is not { } offset
-                || (GetTile(tile.X + offset.Dx, tile.Y + offset.Dy) ?? TileLoaderForCurrentThread?.Invoke(tile.X + offset.Dx, tile.Y + offset.Dy)) is not { } other)
+            if (NavMeshFormat.SideOffset(side) is not { } offset)
             {
+                continue;
+            }
+
+            int otherX = tile.X + offset.Dx, otherY = tile.Y + offset.Dy;
+            if ((GetTile(otherX, otherY) ?? TileLoaderForCurrentThread?.Invoke(otherX, otherY)) is not { } other)
+            {
+                NoteMissedTile(otherX, otherY);
                 continue;
             }
 
@@ -640,6 +672,11 @@ public static class NavMeshQuery
         int goal = ReferenceEquals(start.Tile, endTile) && start.Poly == endPoly ? 0 : -1;
         int expansions = 0;
         bool capped = false;
+        bool deadlined = false;
+        Func<long> clock = NavMesh.DeadlineClock;
+        long deadline = options.MaxSearchMs > 0
+            ? clock() + (long)(options.MaxSearchMs * System.Diagnostics.Stopwatch.Frequency / 1000.0)
+            : long.MaxValue;
 
         int maxExpansions = (int)Math.Min(int.MaxValue, (long)MaxExpansionsPerNode * Math.Max(1, maxNodes));
         while (goal < 0 && open.TryDequeue(out int current, out float priority))
@@ -655,6 +692,14 @@ public static class NavMeshQuery
             if (canCancel && (expansions & 31) == 0)
             {
                 cancel.ThrowIfCancellationRequested();
+            }
+
+            if (deadline != long.MaxValue && (expansions & 31) == 0 && clock() >= deadline)
+            {
+                // Out of time rather than out of nodes: answer the node closest to the goal, as a capped search does.
+                capped = true;
+                deadlined = true;
+                break;
             }
 
             // A node re-queued at a lower total leaves its older, dearer entry behind.
@@ -752,6 +797,7 @@ public static class NavMeshQuery
         bool complete = goal >= 0;
         int count = scratch.Count;
         PathSearchCounters.RecordSearch(count, expansions, capped);
+        if (deadlined) PathSearchCounters.RecordDeadline();
         List<(NavPolyRef Poly, Vector3 Left, Vector3 Right)> corridor = scratch.Corridor;
         corridor.Clear();
         Node[] nodes = scratch.Nodes;

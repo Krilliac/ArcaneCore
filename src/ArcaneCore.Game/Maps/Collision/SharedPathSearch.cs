@@ -28,6 +28,46 @@ public interface ISharedPathSearch
     PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options);
 }
 
+/// <summary>What <see cref="ISharedTiledPathSearch.ResolveSharedMisses"/> found for the tiles a shared search wanted and did not have.</summary>
+public enum SharedMissVerdict
+{
+    /// <summary>Every missed tile has no data or is over the query's bounds: the shared answer is the verdict.</summary>
+    None = 0,
+
+    /// <summary>A missed tile is still being read: the answer may be only for want of it.</summary>
+    Pending = 1,
+
+    /// <summary>A missed tile is loaded now: the shared answer is out of date and the search should run again.</summary>
+    Changed = 2,
+}
+
+/// <summary>
+/// An <see cref="ISharedPathSearch"/> whose owner can also read the navigation tiles a detached search missed, without blocking
+/// (the bots' path jobs: their queries cross tiles that no grid holds). Tile reads stay the owner's; the shared search only reports.
+/// </summary>
+public interface ISharedTiledPathSearch : ISharedPathSearch
+{
+    /// <summary>
+    /// Owner thread: non-blocking tile read for both endpoints (stamps the on-demand tiles' use). False when an endpoint's tile is
+    /// still being read (<see cref="PathSearchCounters.TilesPending"/> is bumped, as <see cref="IPathfinder.FindPath"/> does).
+    /// </summary>
+    bool PrepareShared(uint mapId, Vector3 start, Vector3 end);
+
+    /// <summary>
+    /// <see cref="ISharedPathSearch.FindPathShared(uint, Vector3, Vector3, PathOptions)"/>, adding to <paramref name="missedTiles"/> each
+    /// Detour tile (x, y) a neighbour expansion wanted and found unloaded. Any thread; the list belongs to the caller.
+    /// </summary>
+    PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options, List<(int X, int Y)> missedTiles);
+
+    /// <summary>
+    /// Owner thread: for at most <see cref="MMaps.NavMeshPathfinder.MaxTilesPerQuery"/> of the missed tiles, skips those known to have no
+    /// data, reports one loaded since the search ran as <see cref="SharedMissVerdict.Changed"/>, and otherwise starts or polls its
+    /// non-blocking read (installing a finished one: <see cref="SharedMissVerdict.Changed"/>; one still open:
+    /// <see cref="SharedMissVerdict.Pending"/>, with <see cref="PathSearchCounters.TilesPending"/> bumped).
+    /// </summary>
+    SharedMissVerdict ResolveSharedMisses(uint mapId, IReadOnlyList<(int X, int Y)> missedTiles);
+}
+
 /// <summary>
 /// Mesh point queries a map thread may make outside the world's serial gate (parallel maps phase: creature wander legs). They read only
 /// what is loaded, under the pathfinder's shared read lock, like <see cref="ISharedPathSearch.FindPathShared"/>.
@@ -67,7 +107,11 @@ public sealed class NavJob
     private int _status;
     private int _abandoned;
 
-    public NavJob(ISharedPathSearch pathfinder, uint mapId, Vector3 start, Vector3 destination, PathOptions options, bool urgent = false)
+    private static readonly List<(int X, int Y)> NoMissedTiles = [];
+    private readonly List<(int X, int Y)>? _missed;
+
+    public NavJob(ISharedPathSearch pathfinder, uint mapId, Vector3 start, Vector3 destination, PathOptions options, bool urgent = false,
+        bool trackMissedTiles = false)
     {
         ArgumentNullException.ThrowIfNull(pathfinder);
         ArgumentNullException.ThrowIfNull(options);
@@ -77,7 +121,17 @@ public sealed class NavJob
         Destination = destination;
         Options = options;
         Urgent = urgent;
+        TrackMissedTiles = trackMissedTiles && pathfinder is ISharedTiledPathSearch;
+        if (TrackMissedTiles) _missed = [];
     }
+
+    /// <summary>The worker reports the navigation tiles its search wanted and did not have (<see cref="MissedTiles"/>); needs an <see cref="ISharedTiledPathSearch"/>.</summary>
+    public bool TrackMissedTiles { get; }
+
+    /// <summary>Detour tiles the search wanted and found unloaded; valid once the job is done.</summary>
+    public IReadOnlyList<(int X, int Y)> MissedTiles => _missed ?? NoMissedTiles;
+
+    internal List<(int X, int Y)> MissedList => _missed ?? throw new InvalidOperationException("the job tracks no missed tiles");
 
     public ISharedPathSearch Pathfinder { get; }
 
@@ -260,7 +314,9 @@ public sealed class NavJobSystem : IDisposable
         PathSearchTotals before = PathSearchCounters.Current;
         try
         {
-            PathResult result = job.Pathfinder.FindPathShared(job.MapId, job.Start, job.Destination, job.Options);
+            PathResult result = job.TrackMissedTiles && job.Pathfinder is ISharedTiledPathSearch tiled
+                ? tiled.FindPathShared(job.MapId, job.Start, job.Destination, job.Options, job.MissedList)
+                : job.Pathfinder.FindPathShared(job.MapId, job.Start, job.Destination, job.Options);
             long compute = Stopwatch.GetTimestamp() - taken;
             Account(compute);
             Interlocked.Increment(ref _completed);
@@ -329,15 +385,29 @@ public sealed class NavJobSystem : IDisposable
         }
     }
 
+    private static readonly HashSet<int> s_mismatchLogged = [];
+
     /// <summary>
-    /// The process's creature path-job pool, started on first use with <paramref name="threads"/> workers (later calls get the same pool
-    /// whatever they ask; the setting is read at start). Its threads are background threads and end with the process.
+    /// The process's path-job pool (creatures and playerbots), started on first use with <paramref name="threads"/> workers. Later calls get
+    /// the same pool whatever they ask (the first starter wins); a later starter that asked for another count is warned once per count.
+    /// Its threads are background threads and end with the process.
     /// </summary>
     public static NavJobSystem Shared(int threads, ILogger? logger = null)
     {
         lock (s_sharedGate)
         {
-            return s_shared ??= new NavJobSystem(Math.Clamp(threads, 1, 64), DefaultCapacity, logger);
+            int asked = Math.Clamp(threads, 1, 64);
+            if (s_shared is { } have)
+            {
+                if (have.Threads != asked && s_mismatchLogged.Add(asked))
+                {
+                    (logger ?? have._logger).LogWarning("Path-job pool already runs {Have} threads; a later starter asked for {Asked}, ignored (first starter wins)", have.Threads, asked);
+                }
+
+                return have;
+            }
+
+            return s_shared = new NavJobSystem(asked, DefaultCapacity, logger);
         }
     }
 }

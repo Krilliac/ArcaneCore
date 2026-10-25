@@ -725,6 +725,14 @@ public sealed class ConfigReloadTests : IDisposable
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SlowThinkLogMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxThinkSearchNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxPerBot)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxInFlight)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxInFlightNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobSyncNodeThreshold)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobWorkerMaxMs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobWaitMaxMs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SyncPathQueryMaxMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.AsyncNavigationEnabled)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

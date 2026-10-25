@@ -493,6 +493,7 @@ rollout flag, and its first steps. Gains are estimates to be confirmed by §8; t
   dropped.
 - **Tests:** `ActiveCellReactivationTests`, the chase fairness tests, `NavMeshSearchCostTests` (identical corridors through
   the job path), and a BenchmarkDotNet path benchmark at 1/4/8 threads. **Rollout:** **World:Navigation:CreatureJobs**.
+- **Status (2026-10-24):** bot plans now use the pool too: far queries of the `PlanExact`/`PlanToward`/`PlanFar`/`PlanWander` wrappers run as `NavJob`s with shared tiles (`World:Playerbots:PathJobs`, off by default; see `docs/ASYNC_NAVIGATION_ACCEPTANCE.md`), plus a `SyncPathQueryMaxMs` wall-time deadline for any search still on the world thread. Creature jobs are unchanged. Live and 200-bot benchmark acceptance pending.
 
 ### W6. AI level of detail and adaptive activation
 

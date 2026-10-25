@@ -117,6 +117,49 @@ public sealed class PlayerbotOptions
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("0 (no bound), or a whole number from 2048 to 10000000")]
     public int MaxThinkSearchNodes { get; set; } = 3 * MaxRouteSearchNodes;
 
+    /// <summary>
+    /// Whether a bot plan's far navigation-mesh search (more than <see cref="PathJobSyncNodeThreshold"/> nodes) runs on the shared
+    /// path-job pool instead of the world thread: the bot answers "pending" for the think and the finished answer is applied on a later
+    /// one, as it waits for a navigation tile still being read. A finished answer within 15% of the distance (10 to 40 yards) of a destination
+    /// that keeps moving is applied as a route cut short, spliced from where the bot stands, and a refresh job for the new destination is queued
+    /// in the same think. Off by default (rollout). Separately from this switch, and on whatever it says: a follower keeps walking its current
+    /// route while a re-plan is pending (it also covers a navigation tile still being read). Live: <c>.reload config</c> (jobs in flight finish
+    /// and are dropped or applied by the same checks).
+    /// </summary>
+    public bool PathJobs { get; set; }
+
+    /// <summary>The most path jobs one bot may have in flight (1..8).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 8")]
+    public int PathJobsMaxPerBot { get; set; } = 1;
+
+    /// <summary>The most bot path jobs in flight together (1..1024); a bot past it waits in line, oldest first, and answers "pending" until a slot frees; one held that long still runs a single search on the world thread after <see cref="PathJobWaitMaxMs"/>, held to <c>SyncPathQueryMaxMs</c>.</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 1024")]
+    public int PathJobsMaxInFlight { get; set; } = 64;
+
+    /// <summary>The most search nodes (the sum of the jobs' <c>MaxSearchNodes</c>) the bot path jobs in flight may hold together: it bounds pool time, not only the job count (4096..100000000).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 4096 to 100000000")]
+    public long PathJobsMaxInFlightNodes { get; set; } = 8L * MaxRouteSearchNodes;
+
+    /// <summary>A path query of at most this many nodes stays on the world thread even with <see cref="PathJobs"/> (2048, vmangos' own budget, is a goal within about 100 yards; 0..32768).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 0 to 32768")]
+    public int PathJobSyncNodeThreshold { get; set; } = ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes;
+
+    /// <summary>The longest wall time in milliseconds a path job may hold a pool thread (a search past it ends as one that ran out of nodes; 10..60000).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 10 to 60000")]
+    public int PathJobWorkerMaxMs { get; set; } = 1000;
+
+    /// <summary>How long one query may wait for its path job (wall ms) before it runs once on the world thread, held to <see cref="SyncPathQueryMaxMs"/> (1000..600000).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1000 to 600000")]
+    public int PathJobWaitMaxMs { get; set; } = 30_000;
+
+    /// <summary>
+    /// The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, else 10..60000):
+    /// a search past it stops as one that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2 168 ms in a single
+    /// 32 768-node search. Live: <c>.reload config</c>.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("0 (no bound), or a whole number from 10 to 60000")]
+    public int SyncPathQueryMaxMs { get; set; } = 0;
+
     /// <summary>The most points of one bot route (1..4096).</summary>
     public int MaxPathPoints { get; set; } = 128;
 
@@ -271,6 +314,14 @@ public sealed class PlayerbotOptions
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
             throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");
+        if (PathJobsMaxPerBot is < 1 or > 8) throw new InvalidOperationException($"{SectionName}: PathJobsMaxPerBot must be 1..8.");
+        if (PathJobsMaxInFlight is < 1 or > 1024) throw new InvalidOperationException($"{SectionName}: PathJobsMaxInFlight must be 1..1024.");
+        if (PathJobsMaxInFlightNodes is < 4096 or > 100_000_000) throw new InvalidOperationException($"{SectionName}: PathJobsMaxInFlightNodes must be 4096..100000000.");
+        if (PathJobSyncNodeThreshold is < 0 or > 32_768) throw new InvalidOperationException($"{SectionName}: PathJobSyncNodeThreshold must be 0..32768.");
+        if (PathJobWorkerMaxMs is < 10 or > 60_000) throw new InvalidOperationException($"{SectionName}: PathJobWorkerMaxMs must be 10..60000.");
+        if (PathJobWaitMaxMs is < 1000 or > 600_000) throw new InvalidOperationException($"{SectionName}: PathJobWaitMaxMs must be 1000..600000.");
+        if (SyncPathQueryMaxMs != 0 && (SyncPathQueryMaxMs is < 10 or > 60_000))
+            throw new InvalidOperationException($"{SectionName}: SyncPathQueryMaxMs must be 0 or 10..60000.");
         if (MaxPathPoints is < 1 or > 4096) throw new InvalidOperationException($"{SectionName}: MaxPathPoints must be 1..4096.");
         if (!float.IsFinite(MaxRouteYards) || MaxRouteYards <= 0 || MaxRouteYards > 100_000)
             throw new InvalidOperationException($"{SectionName}: MaxRouteYards must be finite and > 0..100000.");
