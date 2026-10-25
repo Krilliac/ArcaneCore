@@ -468,7 +468,12 @@ public sealed class PublicServerTests
         await using PublicRig rig = await PublicRig.StartAsync(RaiseLoginLimits);
         rig.World.Accounts["gm"] = ("pw", 1);
         Visitor visitor = await rig.VisitAsync();
-        rig.Runtime.Config.LoginAllowed = false; // what PublicConfigCheck computes for AllowInsecureDev on a bind that is not loopback
+        Assert.True(rig.Runtime.Config.LoginAllowed); // the loopback insecure-dev listener of this rig may log in
+        var environment = new PublicEnvironmentInfo(PublicProcessMode.Separate, null, _ => true, _ => null, null);
+        PublicConfigResult lan = PublicConfigCheck.Evaluate(new PublicOptions { AllowInsecureDev = true, Bind = "192.168.1.20:8443" }, environment);
+        Assert.Equal(PublicTlsMode.InsecureDev, lan.TlsMode);
+        Assert.False(lan.LoginAllowed); // what the configuration check really computes for plain HTTP on a private, non-loopback bind
+        rig.Runtime.Config.LoginAllowed = lan.LoginAllowed;
 
         Reply reply = await rig.PostAsync("/api/public/login", visitor, new { user = "gm", password = "pw" });
 

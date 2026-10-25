@@ -45,7 +45,7 @@ Settings live in the `Atlas:Public` section of `atlas.json`, then `ARCANECORE_AT
 | `Guest:WorldCallsPerSecond` | 50 | Budget of calls from guests into the world. |
 | `Feed:Pid` | 0 | The world's process id; 0 finds the one feed on this machine. |
 | `Feed:WebMaxConnections` | 2 | The world's `World:Control:MapFeed:Web:MaxConnections` (separate-process mode), 1 to 8. |
-| `Feed:WorldMaxConnections` | 2 | The world's `MapFeed:MaxConnections` (in-process mode). |
+| `Feed:WorldMaxConnections` | 2 | The world's `World:Control:MapFeed:MaxConnections` (in-process mode). |
 | `Feed:WorldActionsEnabled` | `true` | What you state about the world's action channel. In-process mode needs `false`. |
 | `Feed:LiveServer` | `false` | What you state about the world being the live server. In-process mode is refused when `true`. |
 
@@ -111,7 +111,7 @@ An Account session whose security is Moderator or higher gets the staff projecti
 ## Process modes
 
 - **Separate process** (`arcane-atlas public`): the listener connects to the world's web pipe (`World:Control:MapFeed:Web:Enabled`, `ClientAccount` = the one Windows account that runs the listener). This is the mode to use on a live server. Operator commands are read from standard input: `public.status`, `public.sessions`, `public.kick`, `public.revoke`.
-- **In process** (`arcane-atlas serve --public`): the public listener shares the Local feed connection pool. Allowed only against a world whose action channel is off and which is not the live server. Beyond the two operator statements (`Feed:WorldActionsEnabled=false`, `Feed:LiveServer=false`), the pool asks the world for its `caps` after the role ack on every connection, at start and on every reconnect, and refuses the connection (a `Fatal` event) unless the world itself reports `actions:false` and `liveServer:false`. A missing or malformed answer is a refusal.
+- **In process** (`arcane-atlas serve --public`): the public listener runs inside the Atlas process but opens its own feed connections (role `web`, never the Local connection) from the world's shared pipe budget, one connection reserved for Local. Allowed only against a world whose action channel is off and which is not the live server. Beyond the two operator statements (`Feed:WorldActionsEnabled=false`, `Feed:LiveServer=false`), the pool asks the world for its `caps` after the role ack on every connection, at start and on every reconnect, and refuses the connection (a `Fatal` event) unless the world itself reports `actions:false` and `liveServer:false`. A missing or malformed answer is a refusal.
 
 The feed pool opens a world feed only while someone watches that map and closes it again when the last viewer leaves; a map with no free feed shows "busy" to its viewers.
 

@@ -31,6 +31,9 @@ public sealed partial class DocKeyAuditTests
         ["Database:Upgrade:PostgresAtomic"] = "docs/integration/db-upgrade-tooling.md: a designed switch that was not built",
     };
 
+    /// <summary>Pages that document the Atlas tool's own settings (atlas.json), which no World options class reads; the Atlas tests check them against <c>PublicOptions</c>.</summary>
+    private static readonly HashSet<string> AtlasConfigPages = new(StringComparer.Ordinal) { "docs/areas/atlas-public.md" };
+
     [GeneratedRegex(@"^[A-Z][A-Za-z0-9]*(?::[A-Za-z][A-Za-z0-9]*)+$")]
     private static partial Regex KeyShape();
 
@@ -76,7 +79,7 @@ public sealed partial class DocKeyAuditTests
         var seenAllowed = new HashSet<string>(StringComparer.Ordinal);
         foreach (string file in MarkdownDocs.Files(root))
         {
-            if (file.StartsWith("docs/reference/", StringComparison.Ordinal))
+            if (file.StartsWith("docs/reference/", StringComparison.Ordinal) || AtlasConfigPages.Contains(file))
             {
                 continue;
             }
