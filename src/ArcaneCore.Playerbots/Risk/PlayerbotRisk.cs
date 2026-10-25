@@ -1197,7 +1197,11 @@ internal sealed partial class PlayerbotRisk
         uint now = _session.World.NowMs;
         bool knownDanger = enemies.Any(e => Memory.RememberedBefore(e.Guid, _fightSinceMs, now));
         PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, now, priorIn, priorOut)
-            with { Lethal = knownDanger || enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)), RoundDamage = RoundDamage(player) };
+            with
+            {
+                Lethal = knownDanger || enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)),
+                RoundDamage = RoundDamage(player),
+            };
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);
         if (verdict.Retreat && !facts.Lethal)
         {
@@ -1228,18 +1232,19 @@ internal sealed partial class PlayerbotRisk
     }
 
     /// <summary>
-    /// The most one swing round can take (<see cref="PlayerbotFightFacts.RoundDamage"/>): one blow from each live, non-evading creature
-    /// attacking the bot, at its template's maximum melee damage (already read for the damage rate, so no extra lookup); a template
-    /// with no damage counts its estimated rate over one attack time (2 seconds when the template has none). A few float additions.
+    /// The non-crit max hit of each melee attacker added up (<see cref="PlayerbotFightFacts.RoundDamage"/>): one blow from each live,
+    /// non-evading creature attacking the bot, at the creature's <c>UnitFieldMaxdamage</c> (the template maximum with its damage rate,
+    /// attack power, damage-done mods and disarm applied). When that is not positive, the template's estimated rate over one attack
+    /// time (2 seconds when the template has none). Players and creatures on another map are ignored. A few float additions.
     /// </summary>
-    private static float RoundDamage(Player player)
+    internal static float RoundDamage(Player player)
     {
         float total = 0f;
         foreach (Unit unit in player.Combat.Attackers)
         {
             if (unit is not Creature { IsAlive: true, IsInEvadeMode: false } creature || !ReferenceEquals(creature.Map, player.Map)) continue;
             CreatureTemplate t = creature.Template;
-            float blow = t.MaxMeleeDamage;
+            float blow = creature.GetFloat(UpdateFields.UnitFieldMaxdamage);
             if (!(float.IsFinite(blow) && blow > 0f))
             {
                 float swing = t.MeleeBaseAttackTime > 0 ? t.MeleeBaseAttackTime / 1000f : 2f;

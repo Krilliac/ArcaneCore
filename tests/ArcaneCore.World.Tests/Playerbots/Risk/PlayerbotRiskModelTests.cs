@@ -150,7 +150,7 @@ public sealed class PlayerbotRiskModelTests
         // The mean rate alone says "behind"; one round of three blows (15) would leave 10 health (17%), under the line.
         PlayerbotFightVerdict burst = PlayerbotRiskModel.Judge(facts with { RoundDamage = 15f }, Defaults);
         Assert.True(burst.Retreat, burst.ToString());
-        Assert.Equal("losing-to-3", burst.Reason);
+        Assert.Equal("losing-burst-3", burst.Reason);
 
         PlayerbotFightVerdict mean = PlayerbotRiskModel.Judge(facts with { RoundDamage = 0f }, Defaults);
         Assert.False(mean.Retreat);
@@ -159,8 +159,13 @@ public sealed class PlayerbotRiskModelTests
         // A round that leaves the bot above the line changes nothing.
         Assert.Equal("behind", PlayerbotRiskModel.Judge(facts with { RoundDamage = 3f }, Defaults).Reason);
 
-        // Feasibility is judged at the current health: the run costs about 10.5 health, fine from 25 and not from 10 (90% of 10 is 9).
-        PlayerbotFightVerdict cornered = PlayerbotRiskModel.Judge(facts with { BotHealth = 10, RoundDamage = 15f }, Defaults);
+        // A lone attacker keeps the plain line however hard its round: the verdict is unchanged.
+        PlayerbotFightVerdict lone = PlayerbotRiskModel.Judge(facts with { Enemies = 1, RoundDamage = 15f }, Defaults);
+        Assert.False(lone.Retreat);
+        Assert.Equal("behind", lone.Reason);
+
+        // Feasibility is judged at the current health: at 8 health the run (at least 8.4 health of blows) is no way out.
+        PlayerbotFightVerdict cornered = PlayerbotRiskModel.Judge(facts with { BotHealth = 8, RoundDamage = 15f }, Defaults);
         Assert.False(cornered.Retreat);
         Assert.Equal(PlayerbotRiskModel.CorneredReason, cornered.Reason);
     }
