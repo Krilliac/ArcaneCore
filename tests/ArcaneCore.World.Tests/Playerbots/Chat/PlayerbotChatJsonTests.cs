@@ -59,6 +59,7 @@ public sealed class PlayerbotChatJsonTests
 
     [Theory]
     [InlineData("{'text': 'x'}")]
+    [InlineData("{'reply': 'hi' 'intent': 'follow'}")]                     // a missing comma: never say the swallowed field
     [InlineData("{name: x}")]
     [InlineData("{\"reply\": \"cut off")]
     public void UnreadableAnswers_AreAnomaliesNotFaults(string answer)

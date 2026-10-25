@@ -50,6 +50,9 @@ internal static class PlayerbotChatJson
         """(?<![A-Za-z0-9_])["']?(?<key>reply|intent)["']?\s*:\s*(?:"(?<dq>(?:[^\\]|\\.)*?)"|'(?<sq>(?:[^\\]|\\.)*?)')(?=\s*[,}])""",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
 
+    /// <summary>A quote, a word, an optional quote and a colon: the start of another field inside a salvaged value.</summary>
+    private static readonly Regex KeyLike = new("""['"]\s*\w+\s*['"]?\s*:""", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+
     /// <summary>
     /// Last resort for an object that is not JSON but plainly meant to be one (single-quoted or unquoted keys, single-quoted values): the
     /// <c>reply</c> and <c>intent</c> string fields only, read by pattern, as a new object. Null when no <c>reply</c> field is found.
@@ -65,7 +68,9 @@ internal static class PlayerbotChatJson
             {
                 string key = match.Groups["key"].Value.ToLowerInvariant();
                 if (result.ContainsKey(key)) continue;
-                result[key] = Decode(match.Groups["dq"].Success ? match.Groups["dq"].Value : match.Groups["sq"].Value);
+                string raw = match.Groups["dq"].Success ? match.Groups["dq"].Value : match.Groups["sq"].Value;
+                if (KeyLike.IsMatch(raw)) return null; // a missing comma made the value swallow the next field: never say half an object
+                result[key] = Decode(raw);
                 if (result.ContainsKey("reply") && result.ContainsKey("intent")) break;
             }
         }

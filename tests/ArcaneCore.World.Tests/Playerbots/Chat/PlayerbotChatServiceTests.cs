@@ -251,6 +251,15 @@ public sealed class PlayerbotChatServiceTests
     }
 
     [Fact]
+    public async Task ARejectedOpenAIRequest_NamesJsonResponseFormat_InTheWarning()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.Rejected));
+        await rig.AskAsync(ChatSamples.Ask("hello"));
+        Assert.Contains(rig.Log.Lines, line => line.Contains("JsonResponseFormat=false", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task MalformedModelJson_IsAnAnomalyAndTheFallbackReply_NotAFault()
     {
         static long PromptFaults() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
