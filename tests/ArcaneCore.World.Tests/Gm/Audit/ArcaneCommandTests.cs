@@ -242,7 +242,12 @@ public sealed class ArcaneCommandTests
             await admin.SendChatAsync(ChatType.Say, Language.Common, $".gmannounce n{i}");
         }
 
-        await admin.CollectAsync();
+        // Each .gmannounce echoes to the sender; read up to the last echo so none can still be in flight and be
+        // mistaken for part of the gmlog reply (a fixed quiet window is not enough on a loaded machine).
+        while (!(await admin.ReadChatAsync()).Text.EndsWith("n5", StringComparison.Ordinal))
+        {
+        }
+
         string[] lines = await LinesAsync(admin, ".arcane gmlog");
 
         Assert.Equal(3, lines.Length);
