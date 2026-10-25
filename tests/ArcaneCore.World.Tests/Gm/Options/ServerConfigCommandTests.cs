@@ -26,7 +26,7 @@ public sealed class ServerConfigCommandTests
         await SayAsync(client, line);
         // Wait for the first reply line (a loaded machine can take longer than any quiet window to answer at all), then collect the rest.
         var lines = new List<string> { (await client.ReadSystemChatAsync()).Text };
-        var packets = await client.CollectAsync(TimeSpan.FromMilliseconds(600));
+        var packets = await client.CollectRepliesAsync(TimeSpan.FromMilliseconds(600));
         lines.AddRange(packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload)).Where(m => m.Type == ChatType.System).Select(m => m.Text));
         return string.Join('\n', lines);
     }

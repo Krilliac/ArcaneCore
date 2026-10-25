@@ -189,9 +189,9 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal("This command is not available to you.", await CommandAsync(player, ".kick Listener"));
         Assert.Equal("There is no such command", await CommandAsync(player, ".nonsense"));
         Assert.Equal("There is no such subcommand", await CommandAsync(player, ".server"));
-        await player.CollectAsync();   // the sub-command list that follows
+        await player.CollectRepliesAsync();   // the sub-command list that follows
         Assert.Equal("Syntax: .server motd", await CommandAsync(player, ".help server motd"));
-        await player.CollectAsync();
+        await player.CollectRepliesAsync();
         Assert.DoesNotContain(await listener.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
 
         // Not commands (vmangos ParseCommands): a lone prefix and repeated prefixes are chat.
@@ -306,7 +306,7 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal($"You give 500 copper to {staff}.", await CommandAsync(gm, ".modify money 500"));
         Assert.Equal($"You take all copper of {staff}.", await CommandAsync(gm, ".mod mon -1000")); // CharacterCommands.cpp:4482: taking more than held takes all
         Assert.StartsWith("Syntax: .modify money", await CommandAsync(gm, ".modify money lots"));
-        await gm.CollectAsync();   // the help text's second line
+        await gm.CollectRepliesAsync();   // the help text's second line
 
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, U64(2));
         Assert.Equal($"You give 7 copper to {target}.", await CommandAsync(gm, ".modify money 7"));

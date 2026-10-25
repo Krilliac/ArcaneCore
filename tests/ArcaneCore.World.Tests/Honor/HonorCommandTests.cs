@@ -25,7 +25,7 @@ public sealed class HonorCommandTests
     private static async Task<string> Usage(WorldTestClient client, string command)
     {
         string first = await Run(client, command);
-        await client.CollectAsync();
+        await client.CollectRepliesAsync();
         return first;
     }
 
