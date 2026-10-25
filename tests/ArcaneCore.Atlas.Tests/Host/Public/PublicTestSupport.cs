@@ -115,6 +115,9 @@ internal sealed class FakeWorld : IPublicWorld
 
     public WorldLoginKind OtherwiseKind { get; set; } = WorldLoginKind.Failed;
 
+    /// <summary>When set, <see cref="LoginAsync"/> throws it (a world link that fails in an unexpected way).</summary>
+    public Exception? LoginThrows { get; set; }
+
     public List<(string User, string Ip, int Floor)> Logins { get; } = [];
 
     public IReadOnlyList<string> EndedTickets => [.. _ended];
@@ -134,6 +137,11 @@ internal sealed class FakeWorld : IPublicWorld
         lock (Logins)
         {
             Logins.Add((user, clientIp, floor));
+        }
+
+        if (LoginThrows is not null)
+        {
+            throw LoginThrows;
         }
 
         if (Accounts.TryGetValue(user, out (string Password, int Security) account) && account.Password == password && account.Security >= floor)
@@ -208,6 +216,15 @@ internal sealed class FakeFeed : IPublicFeedConnector
 
     public JsonObject? RoleAnswer { get; set; }
 
+    /// <summary>What the world's <c>caps</c> says about its action channel (<c>actions</c>); the default is a world with the channel off.</summary>
+    public bool CapsActions { get; set; }
+
+    /// <summary>What the world's <c>caps</c> says about the live-server marker (<c>liveServer</c>).</summary>
+    public bool CapsLiveServer { get; set; }
+
+    /// <summary>Replaces the whole <c>caps</c> answer (a broken or old world).</summary>
+    public JsonObject? CapsAnswer { get; set; }
+
     public List<FakeConnection> Opened { get; } = [];
 
     public int OpenFailures { get; set; }
@@ -266,6 +283,7 @@ internal sealed class FakeConnection(FakeFeed feed, IPublicFeedSink sink, long i
             "role" => feed.RoleAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = "role", ["role"] = "web" },
             "links" when feed.LinksSupported => Frames.LinksAnswer(feed.Linked, feed.SummonEntries),
             "links" => throw new ArcaneCore.Atlas.Core.Commands.CommandException(ArcaneCore.Atlas.Core.Commands.CommandException.Failed, "unknown-op"),
+            "caps" => feed.CapsAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = feed.CapsActions, ["login"] = true, ["liveServer"] = feed.CapsLiveServer, ["role"] = "web", ["templates"] = new JsonArray() },
             "login" => feed.LoginAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = false, ["kind"] = "login", ["code"] = "login-failed" },
             _ => new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = op },
         };

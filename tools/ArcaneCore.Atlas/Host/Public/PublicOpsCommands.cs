@@ -83,7 +83,7 @@ internal static class PublicOpsCommands
                 ["feedHz"] = runtime.Options.Guest.FeedHz,
                 ["maxBytesPerSecond"] = runtime.Options.Guest.MaxBytesPerSecond,
             },
-            ["accountActions"] = runtime.Options.AccountActions,
+            ["accountActions"] = PublicServer.AccountActionsWord(runtime.Options.AccountActions, runtime.Actions is not null),
             ["loginMinSecurity"] = PublicRuntime.LevelName(runtime.LoginFloor),
             ["loginAvailable"] = runtime.Config.LoginAllowed,
             ["sessions"] = new JsonObject { ["guest"] = guests, ["account0"] = accounts - privileged, ["accountGm"] = privileged },

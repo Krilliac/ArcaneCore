@@ -111,12 +111,14 @@ public sealed class PublicFeedOptions
     public int WorldMaxConnections { get; set; } = 2;
 
     /// <summary>
-    /// What the operator states about the world: whether its action channel is enabled. The hello reply does not carry this today, so the
-    /// in-process mode (design 0.10) is allowed only when the operator sets it to <c>false</c>. Default <c>true</c>, which refuses in-process mode.
+    /// What the operator states about the world: whether its action channel is enabled. In-process mode (design 0.10) is allowed only when the
+    /// operator sets it to <c>false</c> (default <c>true</c>, which refuses in-process mode). This is a first check only: after the role ack the
+    /// pool asks the world for <c>caps</c> and refuses the connection unless the world itself reports <c>actions:false</c> and
+    /// <c>liveServer:false</c>, at start and on every reconnect.
     /// </summary>
     public bool WorldActionsEnabled { get; set; } = true;
 
-    /// <summary>Whether the world is the live server (any in-process mode is refused then).</summary>
+    /// <summary>Whether the operator states the world is the live server (any in-process mode is refused then; the world's own <c>caps</c> answer is checked as well).</summary>
     public bool LiveServer { get; set; }
 }
 

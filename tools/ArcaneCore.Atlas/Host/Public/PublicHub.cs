@@ -34,6 +34,9 @@ internal sealed class PublicHub
 
     private static readonly TimeSpan StatusRepeat = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long a socket we started closing may wait for the peer's close frame before it is aborted (so it releases its connection slot).</summary>
+    internal TimeSpan CloseGrace { get; set; } = TimeSpan.FromSeconds(3);
+
     private sealed class SocketState(PublicSession session, WebSocket socket, string key)
     {
         public readonly PublicSession Session = session;
@@ -174,7 +177,7 @@ internal sealed class PublicHub
                 state.Frames.Writer.TryWrite(Encoding.UTF8.GetBytes(statusText));
             }
 
-            if (status.Projection is not { } projection || projection.Seq == state.LastSeq && projection.Map == map && state.LastSeq >= 0)
+            if (status.For(state.Session) is not { } projection || projection.Seq == state.LastSeq && projection.Map == map && state.LastSeq >= 0)
             {
                 continue;
             }
@@ -289,8 +292,9 @@ internal sealed class PublicHub
         while (state.Socket.State == WebSocketState.Open)
         {
             byte[]? message = await ReceiveMessageAsync(state, cancellationToken).ConfigureAwait(false);
-            if (message is null)
+            if (message is null || state.Socket.State != WebSocketState.Open)
             {
+                // A socket we have already started closing (kick, expiry, shutdown) processes nothing more the peer sends.
                 return;
             }
 
@@ -457,19 +461,41 @@ internal sealed class PublicHub
         }
     }
 
-    private static async Task CloseAsync(SocketState state, WebSocketCloseStatus status, string reason)
+    private async Task CloseAsync(SocketState state, WebSocketCloseStatus status, string reason)
     {
         try
         {
             if (state.Socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
+                bool peerAlreadyClosed = state.Socket.State == WebSocketState.CloseReceived;
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await state.Socket.CloseOutputAsync(status, reason, timeout.Token).ConfigureAwait(false);
+                if (!peerAlreadyClosed)
+                {
+                    // We closed first: the socket stays in CloseSent until the peer answers. A peer that never does must not keep its slot.
+                    _ = AbortAfterGraceAsync(state.Socket);
+                }
             }
         }
         catch (Exception e) when (e is WebSocketException or ObjectDisposedException or OperationCanceledException or IOException or InvalidOperationException)
         {
             state.Socket.Abort();
+        }
+    }
+
+    private async Task AbortAfterGraceAsync(WebSocket socket)
+    {
+        try
+        {
+            await Task.Delay(CloseGrace).ConfigureAwait(false);
+            if (socket.State is not (WebSocketState.Closed or WebSocketState.Aborted))
+            {
+                socket.Abort();
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed with the connection.
         }
     }
 }

@@ -109,7 +109,15 @@ internal sealed class PublicRig : IAsyncDisposable
         return options;
     }
 
-    public static async Task<PublicRig> StartAsync(Action<PublicOptions>? edit = null, bool tls = false, PublicState? state = null, FakeWorld? world = null)
+    /// <summary>Starts a listener. With <paramref name="connector"/> the listener builds its own feed pool on it (and <see cref="World"/> is an unused fake); without, <see cref="World"/> is the world link.</summary>
+    public static async Task<PublicRig> StartAsync(
+        Action<PublicOptions>? edit = null,
+        bool tls = false,
+        PublicState? state = null,
+        FakeWorld? world = null,
+        IPublicFeedConnector? connector = null,
+        PublicProcessMode mode = PublicProcessMode.Separate,
+        TimeProvider? time = null)
     {
         PublicOptions options = Options(tls, out string? pfx);
         edit?.Invoke(options);
@@ -123,7 +131,10 @@ internal sealed class PublicRig : IAsyncDisposable
                 {
                     Options = options,
                     Loggers = logs,
-                    World = world,
+                    World = connector is null ? world : null,
+                    Connector = connector,
+                    Mode = mode,
+                    Time = time ?? TimeProvider.System,
                     Assets = new PublicAssets(),
                     State = state,
                     GetEnvironmentVariable = name => name == "ATLAS_TEST_PFX" ? "pw" : null,
@@ -251,6 +262,7 @@ internal sealed class PublicRig : IAsyncDisposable
     public async Task<ClientWebSocket> ConnectAsync(Visitor? visitor, string? origin = "default", CancellationToken cancellationToken = default)
     {
         var socket = new ClientWebSocket();
+        socket.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
         if (visitor is not null)
         {
             socket.Options.SetRequestHeader("Cookie", $"{CookieName}={visitor.Cookie}");
@@ -263,7 +275,7 @@ internal sealed class PublicRig : IAsyncDisposable
 
         try
         {
-            await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{Port}/api/public/ws"), cancellationToken);
+            await socket.ConnectAsync(new Uri($"{(Tls ? "wss" : "ws")}://127.0.0.1:{Port}/api/public/ws"), cancellationToken);
         }
         catch
         {

@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Live;
+using ArcaneCore.Kernel.Logging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -86,6 +87,7 @@ internal sealed class PublicServer : IAsyncDisposable
 {
     private const int MaxLoginBodyBytes = 2048;
     private const int MaxCommandBodyBytes = 16 * 1024;
+    private const int MaxFailureRunKeys = 4096;
     private const string CsrfHeader = "X-Atlas-CSRF";
 
     private static readonly string[] HiddenAssets = ["index.html", "js/main.js"];
@@ -136,7 +138,8 @@ internal sealed class PublicServer : IAsyncDisposable
             {
                 if (certificate is not null)
                 {
-                    // HTTP/2 serves ordinary requests; the socket handler refuses anything but HTTP/1.1 (one code path for the handshake checks).
+                    // HTTP/2 serves ordinary requests. Kestrel advertises RFC 8441 extended CONNECT whenever HTTP/2 is on and documents no switch to turn
+                    // that off, so "not offered" is enforced in the handler: a socket request over anything but HTTP/1.1 is refused (one code path for the handshake checks).
                     listen.Protocols = HttpProtocols.Http1AndHttp2;
                     listen.UseHttps(new HttpsConnectionAdapterOptions { ServerCertificate = certificate, SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 });
                 }
@@ -226,7 +229,7 @@ internal sealed class PublicServer : IAsyncDisposable
             else
             {
                 IPublicFeedConnector connector = startup.Connector ?? new PipeFeedConnector(startup.Mode, options.Feed.Pid, startup.Live ?? LiveOptions.Default, startup.Loggers);
-                pool = new PublicFeedPool(connector, options, config.FeedCapacity, store, time, startup.Loggers.CreateLogger("ArcaneCore.Atlas.Public.Feed"));
+                pool = new PublicFeedPool(connector, options, config.FeedCapacity, store, time, startup.Loggers.CreateLogger("ArcaneCore.Atlas.Public.Feed"), requireQuietWorld: startup.Mode == PublicProcessMode.InProcess);
                 world = pool;
                 try
                 {
@@ -327,13 +330,16 @@ internal sealed class PublicServer : IAsyncDisposable
             PublicOpsCommands.TlsWord(_rt.Config.TlsMode),
             o.PlayersWord,
             o.NamesWord,
-            o.AccountActions ? "on" : "off",
+            AccountActionsWord(o.AccountActions, _rt.Actions is not null),
             _rt.Config.LoginAllowed ? PublicRuntime.LevelName(_rt.LoginFloor) : "off");
         if (o.Guest.ShowPlayers)
         {
             _rt.Log.LogWarning("Atlas public: guests can see real players' live positions (Atlas:Public:Guest:ShowPlayers=true, names {Names})", o.NamesWord);
         }
     }
+
+    /// <summary>The listener line's word for account actions: <c>unwired</c> when they are enabled but this host has no runner, so every action command answers not-available.</summary>
+    internal static string AccountActionsWord(bool enabled, bool wired) => !enabled ? "off" : wired ? "on" : "unwired";
 
     private async Task HaltAsync(string reason)
     {
@@ -810,14 +816,23 @@ internal sealed class PublicServer : IAsyncDisposable
     {
         _rt.Stats.LoginFailed();
         int run = _failureRuns.AddOrUpdate(context.IpKey, 1, (_, n) => n + 1);
+        if (_failureRuns.Count > MaxFailureRunKeys)
+        {
+            // Bounded memory: many source addresses (IPv6 /64s) must not grow this map without limit; forgetting runs only delays a warning.
+            _failureRuns.Clear();
+        }
+
         string reference = NewRef();
+
+        // The name is the visitor's text: escaped, so CR/LF or control characters cannot forge log lines.
+        string account = LogSafe.Escape(user);
         if (run >= 3)
         {
-            _rt.Log.LogWarning("login failed account={Account} ip={Ip} ref={Ref} ({Run} in a row)", user, context.Client, reference, run);
+            _rt.Log.LogWarning("login failed account={Account} ip={Ip} ref={Ref} ({Run} in a row)", account, context.Client, reference, run);
         }
         else
         {
-            _rt.Log.LogInformation("login failed account={Account} ip={Ip} ref={Ref}", user, context.Client, reference);
+            _rt.Log.LogInformation("login failed account={Account} ip={Ip} ref={Ref}", account, context.Client, reference);
         }
 
         await ErrorAsync(http, status, "login-failed", context, reference).ConfigureAwait(false);

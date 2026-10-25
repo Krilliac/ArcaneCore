@@ -146,6 +146,7 @@ internal sealed class MapFeedLogin : IFeedExtension
         bool success = false;
         Account? account = null;
         string why = "refused";
+        long totpStep = -1;
         try
         {
             await using AsyncServiceScope scope = _services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
@@ -160,7 +161,7 @@ internal sealed class MapFeedLogin : IFeedExtension
                 account = check.Account;
                 bool floorOk = account is not null && account.Security >= (AccountSecurity)Math.Max(floor, (int)_options.WebLoginMinSecurity);
                 bool ipLockFree = account is null || !account.LockFlags.HasFlag(AccountLockFlags.IpLock);
-                bool codeOk = account is not null && CodeAccepted(account, code);
+                bool codeOk = account is not null && CodeAccepted(account, code, out totpStep);
                 success = check.Ok & burstOk & !locked & !ipBanned & floorOk & ipLockFree & codeOk;
                 if (!success)
                 {
@@ -185,6 +186,13 @@ internal sealed class MapFeedLogin : IFeedExtension
         if (!_audit.Preflight())
         {
             await connection.QueueAsync(FeedExtensionJson.Refused(id, Kind, ActionCodes.AuditUnavailable, "the audit file cannot be written; login is refused")).ConfigureAwait(false);
+            return true;
+        }
+
+        // The code's TOTP step is spent only now that every other check has passed, and the claim is atomic: of two logins racing with the same code, one wins.
+        if (totpStep >= 0 && !ClaimTotpStep(account!.Id, totpStep))
+        {
+            await FailAsync(connection, id, name, clientIp, key, network, "code", reference).ConfigureAwait(false);
             return true;
         }
 
@@ -239,10 +247,13 @@ internal sealed class MapFeedLogin : IFeedExtension
     /// <summary>
     /// Whether <paramref name="code"/> satisfies the account's second factor: a fixed PIN (checked first, as the realm does), else a TOTP code of the
     /// current 30 s step or one either side, never a step already used for this account. An account with neither flag takes any code (it is ignored).
-    /// A TOTP step is only recorded as used by a successful login (<see cref="NoteTotpUsed"/>).
+    /// A TOTP step is only recorded as used by a successful login: this method does not record it, it returns the accepted step in
+    /// <paramref name="totpStep"/> (-1 when the code was a PIN, the account has no second factor, or nothing was accepted) and the caller claims it
+    /// with <see cref="ClaimTotpStep"/> once every other check has passed.
     /// </summary>
-    private bool CodeAccepted(Account account, string? code)
+    private bool CodeAccepted(Account account, string? code, out long totpStep)
     {
+        totpStep = -1;
         if (account.LockFlags.HasFlag(AccountLockFlags.FixedPin))
         {
             string pin = account.SecurityInfo;
@@ -276,14 +287,39 @@ internal sealed class MapFeedLogin : IFeedExtension
             if (CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(typed), Encoding.UTF8.GetBytes(expected)) & step > lastUsed)
             {
                 accepted = true;
-                NoteTotpUsed(account.Id, step);
+                totpStep = step;
             }
         }
 
         return accepted;
     }
 
-    private void NoteTotpUsed(int accountId, long step) => _lastTotpStep.AddOrUpdate(accountId, step, (_, old) => Math.Max(old, step));
+    /// <summary>Records <paramref name="step"/> as the account's newest used step; false when that step (or a newer one) was already used, so a replay loses.</summary>
+    private bool ClaimTotpStep(int accountId, long step)
+    {
+        while (true)
+        {
+            if (!_lastTotpStep.TryGetValue(accountId, out long last))
+            {
+                if (_lastTotpStep.TryAdd(accountId, step))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (step <= last)
+            {
+                return false;
+            }
+
+            if (_lastTotpStep.TryUpdate(accountId, step, last))
+            {
+                return true;
+            }
+        }
+    }
 
     // ---- logout and revoke -----------------------------------------------------------------------------------------------------
 

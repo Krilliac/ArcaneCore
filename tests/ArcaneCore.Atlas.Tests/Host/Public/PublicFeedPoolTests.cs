@@ -11,12 +11,12 @@ public sealed class PublicFeedPoolTests
 {
     private sealed class Rig
     {
-        public Rig(int capacity = 2, Action<PublicOptions>? edit = null)
+        public Rig(int capacity = 2, Action<PublicOptions>? edit = null, bool inProcess = false)
         {
             Options = new PublicOptions();
             edit?.Invoke(Options);
             Store = new PublicFrameStore(Options, Time);
-            Pool = new PublicFeedPool(Feed, Options, capacity, Store, Time, NullLogger.Instance);
+            Pool = new PublicFeedPool(Feed, Options, capacity, Store, Time, NullLogger.Instance, requireQuietWorld: inProcess);
         }
 
         public ManualTime Time { get; } = new();
@@ -64,6 +64,89 @@ public sealed class PublicFeedPoolTests
         Assert.NotNull(fatal);
         Assert.Empty(Assert.Single(rig.Feed.Opened).Sent);
         Assert.Equal(0, rig.Pool.ConnectionCount);
+    }
+
+    [Fact]
+    public async Task InProcessMode_AsksTheWorldForCaps_AfterTheRoleAck_AndAcceptsAQuietWorld()
+    {
+        var rig = new Rig(inProcess: true);
+
+        await rig.Pool.StartAsync(CancellationToken.None);
+
+        FakeConnection connection = Assert.Single(rig.Feed.Opened);
+        Assert.Equal(["role", "caps"], connection.Ops);
+        Assert.Equal(1, rig.Pool.ConnectionCount);
+    }
+
+    [Theory]
+    [InlineData(true, false, "actions:true")]
+    [InlineData(false, true, "liveServer:true")]
+    public async Task InProcessMode_RefusesAWorldWhoseCapsSayActionsOrLive_WhateverTheOperatorStated(bool actions, bool live, string expected)
+    {
+        var rig = new Rig(inProcess: true, edit: o => { o.Feed.WorldActionsEnabled = false; o.Feed.LiveServer = false; });
+        rig.Feed.CapsActions = actions;
+        rig.Feed.CapsLiveServer = live;
+        string? fatal = null;
+        rig.Pool.Fatal += reason => fatal = reason;
+
+        PublicFeedException e = await Assert.ThrowsAsync<PublicFeedException>(() => rig.Pool.StartAsync(CancellationToken.None));
+
+        Assert.Contains(expected, e.Message, StringComparison.Ordinal);
+        Assert.Contains(expected, fatal, StringComparison.Ordinal);
+        Assert.Equal(0, rig.Pool.ConnectionCount);
+        Assert.Equal(["role", "caps"], Assert.Single(rig.Feed.Opened).Ops);
+    }
+
+    [Fact]
+    public async Task InProcessMode_RefusesAWorldWhoseCapsAnswerIsMissingOrBroken()
+    {
+        foreach (JsonObject answer in new JsonObject[]
+        {
+            new() { ["op"] = "result", ["ok"] = true, ["kind"] = "caps" },
+            new() { ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = false },
+            new() { ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = "no", ["liveServer"] = false },
+            new() { ["op"] = "result", ["ok"] = false, ["kind"] = "caps", ["code"] = "unknown-op" },
+        })
+        {
+            var rig = new Rig(inProcess: true);
+            rig.Feed.CapsAnswer = answer;
+
+            await Assert.ThrowsAsync<PublicFeedException>(() => rig.Pool.StartAsync(CancellationToken.None));
+
+            Assert.Equal(0, rig.Pool.ConnectionCount);
+        }
+    }
+
+    [Fact]
+    public async Task InProcessMode_ChecksCapsOnAReconnectToo_AndRaisesFatalWhenTheWorldTurnedActionsOn()
+    {
+        var rig = new Rig(capacity: 1, inProcess: true);
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? demand = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        string? fatal = null;
+        rig.Pool.Fatal += reason => fatal = reason;
+
+        // The world is restarted with its action channel on; the pooled connection is lost and the pool reconnects.
+        rig.Feed.CapsActions = true;
+        rig.Feed.Opened[0].Close("restart");
+        rig.Time.Advance(TimeSpan.FromSeconds(30));
+        await rig.Pool.MaintainAsync(CancellationToken.None);
+
+        Assert.NotNull(fatal);
+        Assert.Contains("actions:true", fatal, StringComparison.Ordinal);
+        Assert.Equal(2, rig.Feed.Opened.Count);
+        Assert.Equal(0, rig.Pool.ConnectionCount);
+        Assert.Empty(rig.Pool.SubscribedMaps);
+    }
+
+    [Fact]
+    public async Task SeparateMode_DoesNotAskForCaps()
+    {
+        var rig = new Rig();
+
+        await rig.Pool.StartAsync(CancellationToken.None);
+
+        Assert.DoesNotContain("caps", Assert.Single(rig.Feed.Opened).Ops);
     }
 
     [Fact]

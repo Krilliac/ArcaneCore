@@ -35,7 +35,7 @@ internal static class PublicLoginCommands
     public static async Task<JsonObject> PickAsync(PublicRuntime runtime, PublicSession session, uint map, string? id, double[]? cell, CancellationToken cancellationToken)
     {
         PublicMapStatus status = runtime.Frames.Status(map);
-        GuestProjection? projection = status.Projection;
+        GuestProjection? projection = status.For(session);
         if (projection is null)
         {
             throw new CommandException(CommandException.Unavailable, "there is no live data for that map right now.");
@@ -73,7 +73,7 @@ internal static class PublicLoginCommands
             _ => "Game object",
         };
         if (runtime.Limits.AllowInfo(session.Ref)
-            && await runtime.World.InfoPublicAsync(picked.Guid, runtime.Options.Guest.ShowPlayers, runtime.Options.Guest.ShowPlayerNames, cancellationToken).ConfigureAwait(false) is { } world)
+            && await runtime.World.InfoPublicAsync(picked.Guid, runtime.Options.Guest.ShowPlayers || session.IsStaff, (runtime.Options.Guest.ShowPlayers && runtime.Options.Guest.ShowPlayerNames) || session.IsStaff, cancellationToken).ConfigureAwait(false) is { } world)
         {
             foreach (string field in InfoFields)
             {

@@ -143,6 +143,7 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
     /// <summary>Raised when a connection reports that the packet tools are on (design 0.10): the host must stop serving. Called on the thread that opened the connection.</summary>
     public event Action<string>? Fatal;
 
+    private readonly bool _requireQuietWorld;
     private readonly IPublicFeedConnector _connector;
     private readonly PublicOptions _options;
     private readonly int _capacity;
@@ -158,8 +159,20 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
     private long _nextAttempt;
     private int _disposed;
 
-    public PublicFeedPool(IPublicFeedConnector connector, PublicOptions options, int capacity, PublicFrameStore store, TimeProvider time, ILogger log)
+    /// <param name="connector">Opens the connections.</param>
+    /// <param name="options">The listener settings.</param>
+    /// <param name="capacity">How many connections the pool may hold.</param>
+    /// <param name="store">Where frames go.</param>
+    /// <param name="time">The clock.</param>
+    /// <param name="log">The pool's log.</param>
+    /// <param name="requireQuietWorld">
+    /// True in the in-process mode (design 0.10): after the role ack every new connection asks the world for <c>caps</c> and is refused unless the
+    /// world itself reports <c>actions:false</c> and <c>liveServer:false</c> (what the operator's settings say is not trusted). A violation raises
+    /// <see cref="Fatal"/> too, so a reconnect to a world that has since turned its action channel on stops the listener.
+    /// </param>
+    public PublicFeedPool(IPublicFeedConnector connector, PublicOptions options, int capacity, PublicFrameStore store, TimeProvider time, ILogger log, bool requireQuietWorld = false)
     {
+        _requireQuietWorld = requireQuietWorld;
         _connector = connector;
         _options = options;
         _capacity = Math.Max(1, capacity);
@@ -656,6 +669,16 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
             {
                 throw new PublicFeedException($"the world did not bind the connection as web (answer code {ack["code"]?.GetValue<string>() ?? "none"}).");
             }
+
+            if (_requireQuietWorld)
+            {
+                JsonObject caps = await connection.RequestAsync(new JsonObject { ["op"] = "caps" }, RequestTimeout, cancellationToken).ConfigureAwait(false);
+                if (QuietWorldProblem(caps) is { } problem)
+                {
+                    Fatal?.Invoke(problem);
+                    throw new PublicFeedException(problem);
+                }
+            }
         }
         catch (CommandException e)
         {
@@ -675,6 +698,36 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         }
 
         return slot;
+    }
+
+    /// <summary>
+    /// Why the in-process mode may not use the world behind a <c>caps</c> answer, or null when it may: the world must say <c>actions:false</c> and
+    /// <c>liveServer:false</c>. A missing or non-boolean value is a refusal (fail closed).
+    /// </summary>
+    internal static string? QuietWorldProblem(JsonObject caps)
+    {
+        const string separate = "Run 'arcane-atlas public' as a separate process instead (design 0.10).";
+        if (caps["ok"] is not JsonValue ok || !ok.TryGetValue(out bool answered) || !answered)
+        {
+            return $"the world did not answer caps, so the in-process public listener cannot tell whether its action channel is off. {separate}";
+        }
+
+        if (caps["actions"] is not JsonValue actions || !actions.TryGetValue(out bool actionsOn))
+        {
+            return $"the world's caps answer does not say whether its action channel is on. {separate}";
+        }
+
+        if (actionsOn)
+        {
+            return $"the world's caps report actions:true (its action channel is on), which the in-process public listener refuses. {separate}";
+        }
+
+        if (caps["liveServer"] is not JsonValue live || !live.TryGetValue(out bool liveServer))
+        {
+            return $"the world's caps answer does not say whether it is the live server. {separate}";
+        }
+
+        return liveServer ? $"the world's caps report liveServer:true, which the in-process public listener refuses. {separate}" : null;
     }
 
     private void RemoveSlotLocked(Slot slot)

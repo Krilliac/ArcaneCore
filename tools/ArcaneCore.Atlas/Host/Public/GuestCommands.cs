@@ -58,7 +58,7 @@ internal static class GuestCommands
                 ["available"] = runtime.Config.LoginAllowed,
                 ["minSecurity"] = PublicRuntime.LevelName(runtime.LoginFloor),
             },
-            ["accountActions"] = o.AccountActions,
+            ["accountActions"] = o.AccountActions && runtime.Actions is not null,
             ["reducedData"] = runtime.AnyReduced,
             ["feed"] = runtime.World.Connected ? "connected" : "unavailable",
         };
@@ -124,7 +124,7 @@ internal static class GuestCommands
         PublicMapStatus status = runtime.Frames.Status(map);
         var entities = new JsonArray();
         var cells = new JsonArray();
-        if (status.Projection is { } projection)
+        if (status.For(session) is { } projection)
         {
             foreach (GuestEntity entity in projection.Entities)
             {
@@ -151,7 +151,7 @@ internal static class GuestCommands
             ["connected"] = status.Connected,
             ["busy"] = status.Busy,
             ["reduced"] = status.Reduced,
-            ["seq"] = status.Projection?.Seq ?? 0,
+            ["seq"] = status.For(session)?.Seq ?? 0,
             ["count"] = entities.Count,
             ["entities"] = entities,
             ["playerCells"] = cells,
@@ -163,7 +163,7 @@ internal static class GuestCommands
     {
         PublicMapStatus status = runtime.Frames.Status(map);
         var found = new JsonArray();
-        if (status.Projection is { } projection)
+        if (status.For(session) is { } projection)
         {
             foreach (GuestEntity entity in projection.Entities)
             {

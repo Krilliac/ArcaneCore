@@ -267,6 +267,41 @@ public sealed class MapFeedLoginTests
     }
 
     [WindowsFact]
+    public async Task ATotpStep_IsNotUsedUp_ByALoginThatFailsForAnotherReason()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string directory = WebAuditFile.NewDirectory();
+        try
+        {
+            var time = new ManualTimeProvider();
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
+            string secret = Totp.NewSecret();
+            await AccountAsync(world.Host, "TOTPGM", AccountSecurity.GameMaster, flags: AccountLockFlags.Totp, securityInfo: secret);
+            Assert.True(Totp.TryDecodeSecret(secret, out byte[] key));
+            FeedClient web = await world.ConnectAsync("web");
+            string code = Totp.Generate(key, time.GetUtcNow().ToUnixTimeSeconds()).ToString("D6", CultureInfo.InvariantCulture);
+
+            // Right password, right code, but the account is below the floor Atlas states (Administrator): the login fails.
+            (await LoginAsync(web, 1, "TOTPGM", Password, code, floor: (int)AccountSecurity.Administrator)).AssertRefused("login-failed");
+
+            // The failed login did not spend the step: the same code still works once the floor is met.
+            JsonElement ok = await LoginAsync(web, 2, "TOTPGM", Password, code);
+            Assert.True(ok.Ok(), ok.ToString());
+
+            // And now it is spent.
+            (await LoginAsync(web, 3, "TOTPGM", Password, code)).AssertRefused("login-failed");
+        }
+        finally
+        {
+            WebAuditFile.TryDelete(directory);
+        }
+    }
+
+    [WindowsFact]
     public async Task ALevelZeroAccount_NeedsTheFloorLoweredOnBothSides()
     {
         if (!OperatingSystem.IsWindows())

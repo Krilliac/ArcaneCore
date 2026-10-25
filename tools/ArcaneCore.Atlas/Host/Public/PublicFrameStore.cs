@@ -9,7 +9,12 @@ namespace ArcaneCore.Atlas.Host.Public;
 /// <param name="Reduced">Whether the guest data is reduced because the world's <c>links</c> answer is missing or stale (design 0.6, fail closed).</param>
 /// <param name="Projection">The latest guest projection, or null before the first frame.</param>
 /// <param name="ReceivedAt">When the projection was made (<see cref="TimeProvider.GetTimestamp"/>), 0 before the first frame.</param>
-internal sealed record PublicMapStatus(uint Map, bool Connected, bool Busy, bool Reduced, GuestProjection? Projection, long ReceivedAt);
+/// <param name="StaffProjection">The latest staff projection (design 0.7: players shown with their names, nothing hidden for links) for accounts at Moderator or above, or null before the first frame.</param>
+internal sealed record PublicMapStatus(uint Map, bool Connected, bool Busy, bool Reduced, GuestProjection? Projection, long ReceivedAt, GuestProjection? StaffProjection = null)
+{
+    /// <summary>The projection this session may see: the staff one for a Moderator or above, else the guest one.</summary>
+    public GuestProjection? For(PublicSession session) => session.IsStaff ? StaffProjection : Projection;
+}
 
 /// <summary>
 /// The latest guest-safe state of each public map: frames from the pooled feed connections go in through <see cref="Ingest"/>, are projected once by the
@@ -18,11 +23,13 @@ internal sealed record PublicMapStatus(uint Map, bool Connected, bool Busy, bool
 /// </summary>
 internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
 {
-    private sealed class MapState(GuestFrameProjector projector)
+    private sealed class MapState(GuestFrameProjector projector, GuestFrameProjector staffProjector)
     {
         public readonly GuestFrameProjector Projector = projector;
+        public readonly GuestFrameProjector StaffProjector = staffProjector;
         public LinksSnapshot Links = LinksSnapshot.Unsupported;
         public GuestProjection? Projection;
+        public GuestProjection? StaffProjection;
         public long ReceivedAt;
         public bool Connected;
         public bool Busy;
@@ -44,6 +51,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
         {
             projection = state.Projector.Project(frame, state.Links);
             state.Projection = projection;
+            state.StaffProjection = state.StaffProjector.Project(frame, state.Links);
             state.ReceivedAt = time.GetTimestamp();
             state.Connected = true;
             state.Busy = false;
@@ -82,6 +90,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
             if (!connected)
             {
                 state.Projection = null;
+                state.StaffProjection = null;
                 state.Links = LinksSnapshot.Unsupported;
             }
         }
@@ -107,7 +116,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
         MapState state = State(map);
         lock (state)
         {
-            return new PublicMapStatus(map, state.Connected, state.Busy, state.Projection?.Reduced ?? false, state.Projection, state.ReceivedAt);
+            return new PublicMapStatus(map, state.Connected, state.Busy, state.Projection?.Reduced ?? false, state.Projection, state.ReceivedAt, state.StaffProjection);
         }
     }
 
@@ -117,11 +126,31 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
         {
             if (!_maps.TryGetValue(map, out MapState? state))
             {
-                state = new MapState(new GuestFrameProjector(options.Guest, time));
+                state = new MapState(new GuestFrameProjector(options.Guest, time), new GuestFrameProjector(StaffPolicy(options.Guest), time));
                 _maps[map] = state;
             }
 
             return state;
         }
     }
+
+    /// <summary>
+    /// The policy of the staff projection (design 0.7): the guest settings with players shown by name, so nothing is hidden or delayed. Ids are still
+    /// opaque per session and <c>tg</c>, <c>home</c> and routes are still never written.
+    /// </summary>
+    private static PublicGuestOptions StaffPolicy(PublicGuestOptions guest)
+        => new()
+        {
+            MaxSessions = guest.MaxSessions,
+            MaxSessionsPerIp = guest.MaxSessionsPerIp,
+            Maps = guest.Maps,
+            FeedHz = guest.FeedHz,
+            MaxBytesPerSecond = guest.MaxBytesPerSecond,
+            ShowPlayers = true,
+            ShowPlayerNames = true,
+            PlayerCellYards = guest.PlayerCellYards,
+            PlayerDelaySeconds = guest.PlayerDelaySeconds,
+            PlayerMinCellCount = guest.PlayerMinCellCount,
+            WorldCallsPerSecond = guest.WorldCallsPerSecond,
+        };
 }

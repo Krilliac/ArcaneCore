@@ -64,6 +64,9 @@ public sealed class PublicSession
     /// <summary>The account's security level for display; the world decides what it may do.</summary>
     public int Security { get; }
 
+    /// <summary>Whether this is an Account session at Moderator or above, who sees players as in game (design 0.7) and so gets the staff projection.</summary>
+    public bool IsStaff => Tier == PublicTier.Account && Security >= (int)PublicSecurity.Moderator;
+
     /// <summary>The world's opaque ticket for an Account session, else null.</summary>
     internal string? Ticket { get; }
 
