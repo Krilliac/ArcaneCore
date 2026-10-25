@@ -264,9 +264,11 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
             });
         }
 
-        await StallTwiceAsync(OpenZone); // no area table installed: the guard fails closed
-        Assert.Equal(0, pins.Count);
         await InstallAreasAsync(world);
+        await StallTwiceAsync(0); // a bot with no zone yet: the guard fails closed
+        Assert.Equal(0, pins.Count);
+        await StallTwiceAsync(999_999); // a zone the table does not hold
+        Assert.Equal(0, pins.Count);
         await StallTwiceAsync(CapitalZone);
         Assert.Equal(0, pins.Count);
         await StallTwiceAsync(OpenZone);
