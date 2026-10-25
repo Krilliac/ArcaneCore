@@ -201,6 +201,72 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         }
     }
 
+    /// <summary>
+    /// A bot that took quest 2681 before the rule existed keeps it in its log with objectives a plain attack never finishes: it abandons that
+    /// quest through the client packet, and keeps the quests it can finish.
+    /// </summary>
+    [Fact]
+    public async Task QuestInTheLog_WithObjectivesHeldInvincible_IsAbandonedByTheBot_WhileKillableOnesStay()
+    {
+        var fixture = new InvincibleServantFixture();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IQuestContentStore>(fixture);
+            services.AddSingleton<ICreatureDataStore>(fixture);
+            services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
+            services.AddSingleton(new FactionTemplateCatalog(
+            [
+                new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 8),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.FriendlyFaction, 0, 0, OwnMask: 2, FriendlyMask: 3, HostileMask: 0),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.HostileFaction, 0, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 3),
+            ]));
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.WaitForWorldAsync(() => session.Player!.Map?.FindObject(InvincibleServantFixture.GiverGuid) is Creature, "quest giver spawned");
+            QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player player = session.Player!;
+                Assert.Equal(GmQuestAddResult.Added, services.GmAddQuest(player, services.Quests.Get(InvincibleServantFixture.StonesQuest)!));
+                Assert.Equal(GmQuestAddResult.Added, services.GmAddQuest(player, services.Quests.Get(InvincibleServantFixture.PlainQuest)!));
+                PlayerNpcState state = services.StateOf(player)!;
+                Assert.Equal(InvincibleServantFixture.StonesQuest,
+                    PlayerbotQuestGoals.UnkillableQuestToShed(player, services, state, host.WorldServices.GetRequiredService<CreatureWorldFeature>().Content));
+                return true;
+            });
+
+            bool shed = false;
+            for (int i = 0; i < 40 && !shed; i++)
+            {
+                shed = await host.World.InvokeAsync(() =>
+                {
+                    Player player = session.Player!;
+                    session.ManagedBudget = new ManagedActionBudget(8);
+                    goals.Update(player, 500);
+                    return services.StateOf(player)!.Quests.FindSlot(InvincibleServantFixture.StonesQuest) >= QuestConstants.MaxQuestLogSize;
+                });
+                if (!shed) await Task.Delay(50);
+            }
+
+            Assert.True(shed, "the bot kept quest 2681 in its log");
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.True(services.StateOf(session.Player!)!.Quests.FindSlot(InvincibleServantFixture.PlainQuest) < QuestConstants.MaxQuestLogSize,
+                    "the bot abandoned the quest it can finish");
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     [Fact]
     public async Task ItemUseCreatureQuest_WithSourceItem_IsAcceptedAndExecutedViaCmsgUseItem()
     {

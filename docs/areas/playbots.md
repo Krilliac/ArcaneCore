@@ -833,7 +833,12 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   `World:Playerbots:Contention:InvincibleTargetAbandonSeconds` (8, 1..600, live) the bot sets that creature aside exactly like a fight that
   goes nowhere (`MarkUnreachable` for `StalledTargetMs`, `MarkFruitless`, then explores) and reports the anomaly `bot-combat` /
   `invincible-target-abandoned` once per creature entry per bot, again only after 10 minutes, doubling up to 6 hours. A creature with a
-  threshold but health above it, or at low health with no threshold, is never abandoned. Follow-up, not done: using the quest's stone
+  threshold but health above it, or at low health with no threshold, is never abandoned, nor is any target on a dungeon or raid map (scripted
+  boss phases hold at 1 health) or a `NotSelectable` one. The brain resets the watch whenever it chooses a target afresh. Also: `IsSkipped` drops
+  these entries from solo grind and hunt target choice; a spell-hit lift with spell id 0 (any spell of its school) counts as an ordinary lift;
+  rows keyed by spawn guid are ignored (fail open, the watch catches them); and a bot that already holds such a quest in its log abandons
+  it through the client packet (`PlayerbotQuestGoals.UnkillableQuestToShed`, checked each quest update outside combat, set aside afterwards).
+  The anomaly key is `bot-combat/invincible-target-abandoned`. Follow-up, not done: using the quest's stone
   and casting Shackle Shatter (quest 2681's real mechanic) so a bot could complete these objectives.
 * **No credit.** A quest creature that gained no credit (kill or quest item) in three minutes of *contested hunting* is set aside for the bot for
   `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among

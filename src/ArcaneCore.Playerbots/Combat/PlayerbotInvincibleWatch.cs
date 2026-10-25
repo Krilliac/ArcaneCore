@@ -46,6 +46,15 @@ internal sealed class PlayerbotInvincibleWatch
     /// </summary>
     internal bool Observe(ArcaneCore.Game.Entities.Player player, Creature target, uint nowMs, uint limitMs)
     {
+        if (player.Map?.Template is { IsDungeon: true } || (target.UnitFlags & UnitFlags.NotSelectable) != 0)
+        {
+            // A scripted boss phase (a fake death at 1 health on an instance map) or a creature the client cannot select is not a creature
+            // the bot is stuck on.
+            _target = default;
+            _seen = nowMs;
+            return false;
+        }
+
         uint threshold = target.InvincibilityHpThreshold;
         bool held = threshold != 0 && target.IsAlive && target.Health <= threshold;
         bool gap = unchecked(nowMs - _seen) > GapMs;
@@ -64,7 +73,7 @@ internal sealed class PlayerbotInvincibleWatch
         return true;
     }
 
-    /// <summary>Forgets the watched target (the bot dropped its fight).</summary>
+    /// <summary>Forgets the watched target (the brain calls this when it chooses a target afresh, so a bot that returns to the same creature within <see cref="GapMs"/> starts the clock over).</summary>
     internal void Reset() => _target = default;
 
     private void Report(ArcaneCore.Game.Entities.Player player, Creature target, uint nowMs, uint threshold, uint heldMs)

@@ -168,7 +168,7 @@ public sealed class CreatureAiContent
     /// Whether creatures of <paramref name="entry"/> spawn unkillable by an ordinary attack: a row on the spawned event (11) runs the
     /// set-death-prevention action (42) with a nonzero first parameter (damage never takes the creature below 1 health), and no row
     /// of the entry lifts it (action 42 with parameter 0) on an event other than a spell hit (8), which only a particular spell
-    /// satisfies (Blasted Lands servants 7668-7671 of quest 2681: Shackle Shatter). Computed once at load; cmangos-dialect rows only.
+    /// satisfies (Blasted Lands servants 7668-7671 of quest 2681: Shackle Shatter). A spell-hit row with spell id 0 matches a hit by any spell of its school (cmangos CreatureEventAI.cpp:1673-1675), so it counts as an ordinary lift. Computed once at load from the entry-keyed rows only: rows keyed by spawn guid (negative creature_id, <see cref="GetGuidEvents"/>) are ignored, which fails open (the creature stays a kill objective and the bot's combat watch catches it). cmangos-dialect rows only.
     /// </summary>
     public bool IsInvincibleUntilSpellHit(uint entry) => _deathPreventedOnSpawn.Contains(entry);
 
@@ -186,7 +186,7 @@ public sealed class CreatureAiContent
                 {
                     if (action.Type != ActionSetDeathPrevention) continue;
                     if (action.Param1 != 0) preventsOnSpawn |= row.EventType == EventSpawned;
-                    else liftedOrdinarily |= row.EventType != EventSpellHit;
+                    else liftedOrdinarily |= row.EventType != EventSpellHit || row.Param1 == 0;
                 }
             }
 

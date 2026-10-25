@@ -1334,6 +1334,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_target is null || _target.Map != player.Map)
         {
             PlayerbotThinkProbe.Phase("choose target");
+            _invincibleWatch.Reset();
             Creature? previousTarget = _target;
             uint materialDropper = _quests.PreferredCreatureEntry == 0 && _quests.PreferredItemUseId == 0
                 ? _crafting.PreferredMaterialDropperEntry(player)
@@ -2706,6 +2707,22 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         => _invincibleWatch.Observe(player, target, _session.World.NowMs,
             (uint)Math.Clamp(_options.Contention.InvincibleTargetAbandonSeconds, 1, 600) * 1000u);
 
+    /// <summary>
+    /// Whether the creature's EventAI holds it invincible from spawn until a particular spell hits it
+    /// (<see cref="ArcaneCore.Kernel.WorldData.Creatures.CreatureAiContent.IsInvincibleUntilSpellHit"/>): no target for a bot's grind or hunt.
+    /// </summary>
+    private bool IsHeldInvincibleEntry(Creature creature)
+    {
+        if (!_deferFeaturesLooked)
+        {
+            _deferCreatures = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+            _deferQuests = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>();
+            _deferFeaturesLooked = true;
+        }
+
+        return _deferCreatures?.Content?.Ai.IsInvincibleUntilSpellHit(creature.Entry) == true;
+    }
+
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
 
@@ -2760,7 +2777,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// The defensive-attacker path does not use this: a bot always fights back.
     /// </summary>
     private bool IsSkipped(Creature creature)
-        => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+        => IsUnreachable(creature) || IsHeldInvincibleEntry(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
             || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
