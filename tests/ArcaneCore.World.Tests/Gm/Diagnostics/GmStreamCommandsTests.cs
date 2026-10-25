@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -57,5 +58,44 @@ public sealed class GmStreamCommandsTests
         string[] refused = await LinesAsync(gm, ".arcane stream on bad|name");
         Assert.Contains(refused, l => l.Contains("Syntax: .arcane stream on", StringComparison.Ordinal));
         Assert.Empty(stream.Subscriptions(guid));
+    }
+
+    private static DebugWriteEntry[] Writes(WorldTestHost host)
+        => [.. host.WorldServices.GetRequiredService<GmAuditFeature>().DebugWrites.Tail(100).Where(e => e.Command.Contains("stream", StringComparison.Ordinal))];
+
+    [Fact]
+    public async Task OnRenewOffAndOffAll_RecordOneDebugWriteEachForWhatChanged_AndNoOpsRecordNothing()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+
+        await LinesAsync(gm, ".arcane stream on moves");
+        DebugWriteEntry on = Assert.Single(Writes(host));
+        Assert.EndsWith("stream on", on.Command, StringComparison.Ordinal);
+        Assert.Equal(("gm stream moves", "subscribed", "off", "on", DebugWriteScope.Live), (on.Target, on.Field, on.OldValue, on.NewValue, on.Scope));
+
+        await LinesAsync(gm, ".arcane stream on moves");
+        DebugWriteEntry renew = Writes(host)[1];
+        Assert.Equal(("gm stream moves", "expires"), (renew.Target, renew.Field));
+        Assert.EndsWith("Z", renew.OldValue, StringComparison.Ordinal);
+        Assert.EndsWith("Z", renew.NewValue, StringComparison.Ordinal);
+        Assert.Equal(DebugWriteScope.Live, renew.Scope);
+
+        await LinesAsync(gm, ".arcane stream off moves");
+        DebugWriteEntry off = Writes(host)[2];
+        Assert.EndsWith("stream off", off.Command, StringComparison.Ordinal);
+        Assert.Equal(("gm stream moves", "subscribed", "on", "off", DebugWriteScope.Live), (off.Target, off.Field, off.OldValue, off.NewValue, off.Scope));
+
+        await LinesAsync(gm, ".arcane stream off moves");
+        await LinesAsync(gm, ".arcane stream off all");
+        Assert.Equal(3, Writes(host).Length);
+
+        await LinesAsync(gm, ".arcane stream on moves");
+        await LinesAsync(gm, ".arcane stream on proc");
+        await LinesAsync(gm, ".arcane stream off all");
+        DebugWriteEntry[] all = [.. Writes(host).Skip(5)];
+        Assert.Equal(["gm stream moves", "gm stream proc"], all.Select(e => e.Target));
+        Assert.All(all, e => Assert.Equal(("subscribed", "on", "off", DebugWriteScope.Live), (e.Field, e.OldValue, e.NewValue, e.Scope)));
     }
 }
