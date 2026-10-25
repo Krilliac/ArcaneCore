@@ -12672,6 +12672,22 @@
       "isCollection": false
     },
     {
+      "path": "World:GmCommands:AllowDangerousDebug",
+      "section": "World:GmCommands",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps) behind `DangerousDebugGate`. Off by default; changing it needs a restart. On the live server (`ARCANECORE_LIVE_SERVER=1`) the commands are refused whatever this says.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldgmcommands",
+      "isCollection": false
+    },
+    {
       "path": "World:GmCommands:AuditTailSize",
       "section": "World:GmCommands",
       "type": "int",
@@ -20371,6 +20387,22 @@
       "reload": "live",
       "meaning": "The minutes in which a mood decays to half of itself (1..1440, default 30).",
       "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Social:PassBudgetMs",
+      "section": "World:Playerbots",
+      "type": "double",
+      "kind": "scalar",
+      "elementType": "double",
+      "enumValues": null,
+      "default": "4",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply carries on (the next one starts when it has finished). The per-bot lanes stop between bots once the budget is spent (a tick may overshoot by one bot); the lanes that work on the whole population run whole.",
+      "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

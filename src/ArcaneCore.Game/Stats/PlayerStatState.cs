@@ -14,7 +14,7 @@ public readonly record struct WeaponDamageEntry(float Min, float Max, uint Schoo
 /// the flat shield block value (SHIELD_BLOCK_VALUE FLAT_MOD) and the dynamic armor already added to the
 /// armor field. Maintained by <see cref="PlayerStatSystem"/> on the world thread.
 /// </summary>
-public sealed class PlayerStatState
+public sealed partial class PlayerStatState
 {
     /// <summary>vmangos MAX_ITEM_PROTO_DAMAGES.</summary>
     public const int MaxDamages = ItemTemplate.MaxDamages;

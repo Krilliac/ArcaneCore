@@ -275,7 +275,7 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-internal static class PlayerbotTram
+internal static partial class PlayerbotTram
 {
     internal const string AnomalyArea = "tram";
 

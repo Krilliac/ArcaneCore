@@ -26,14 +26,6 @@
           "Microsoft.Extensions.Logging.EventSource": "9.0.0"
         }
       },
-      "Microsoft.Data.Sqlite.Core": {
-        "type": "Transitive",
-        "resolved": "9.0.0",
-        "contentHash": "cFfZjFL+tqzGYw9lB31EkV1IWF5xRQNk2k+MQd+Cf86Gl6zTeAoiZIFw5sRB1Z8OxpEC7nu+nTDsLSjieBAPTw==",
-        "dependencies": {
-          "SQLitePCLRaw.core": "2.1.10"
-        }
-      },
       "Microsoft.EntityFrameworkCore.Abstractions": {
         "type": "Transitive",
         "resolved": "9.0.0",
@@ -213,6 +205,7 @@
         "type": "Project",
         "dependencies": {
           "ArcaneCore.Kernel": "[1.0.0, )",
+          "Microsoft.Data.Sqlite.Core": "[10.0.13, )",
           "Microsoft.EntityFrameworkCore": "[9.0.0, )",
           "Microsoft.EntityFrameworkCore.Relational": "[9.0.0, )",
           "Microsoft.EntityFrameworkCore.Sqlite": "[9.0.0, )",
@@ -263,6 +256,15 @@
         "type": "Project",
         "dependencies": {
           "ArcaneCore.Game": "[1.0.0, )"
+        }
+      },
+      "Microsoft.Data.Sqlite.Core": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.13, )",
+        "resolved": "10.0.13",
+        "contentHash": "Gge8XsSCOwcbkbdmt2UDAe6kIv9Q0vA6yb3wsTStjjexaMFLTWfc/1gH4kbhJ+zWiXRTRA4lG2sOQNVfir204w==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.13"
         }
       },
       "Microsoft.Diagnostics.NETCore.Client": {

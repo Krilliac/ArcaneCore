@@ -150,6 +150,23 @@ export class Api extends Emitter {
         };
     }
 
+    /**
+     * GET /api/bin/texture: one ATX1 texture as bytes. `fmt` is 'rgba' or 'dxt' (compressed blocks, only when the browser
+     * advertises S3TC); `maxSize` (a power of two, 0 = none) drops the top mip levels host side. A key the host does not have
+     * answers 404, which surfaces as an ApiError with that status.
+     */
+    async texture(key, { fmt = 'rgba', maxSize = 0, signal } = {}) {
+        const query = new URLSearchParams({ key, fmt });
+        if (maxSize > 0) {
+            query.set('maxSize', String(maxSize));
+        }
+        const response = await this.#request(`/api/bin/texture?${query}`, { signal });
+        if (!response.ok) {
+            throw new ApiError(`GET /api/bin/texture answered ${response.status} for '${key}'.`, { status: response.status });
+        }
+        return new Uint8Array(await response.arrayBuffer());
+    }
+
     async postCapture(id, blob) {
         const response = await this.#request(`/api/capture/${encodeURIComponent(id)}`, {
             method: 'POST',

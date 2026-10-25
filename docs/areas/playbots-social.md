@@ -125,7 +125,7 @@ Each bot also has five stable traits from its guid (sociability, chattiness, gen
 
 **Events and deltas** (`World:Playerbots:Social:Memory`, all live, on by default; `PlayerbotSocialMemory.Note`): a chat exchange
 (`AffinityPerChat`), grouped (`AffinityPerGroup`), a group's run succeeding (`AffinityPerGroupSuccess`), a wipe (+1, shared hardship), a
-kick from a group (`AffinityPerKick`), a completed trade (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
+kick from a group (`AffinityPerKick`), a completed party-AI trade window in which the bot received at least 100 copper of item vendor value (gold is not counted) or gave something (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
 safety strike (`AffinityPerStrike`), a PvP kill either way (`AffinityPerKilledBy`, `AffinityPerKilledThem`; duels never count), and a
 friendly or rude emote aimed at the bot, from either faction (`AffinityPerFriendlyEmote`, `AffinityPerRudeEmote`). Every event adds one
 familiarity; a chat exchange or emote does so at most once per pair in `ChatFamiliarityCooldownMinutes`, and a friendly emote raises
@@ -134,8 +134,8 @@ below `RivalAffinity` sets the Rival flag and above it clears it. Over the limit
 affinity of 50 or more either way unless every one is like that.
 
 **Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
-wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
-request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
+wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from a begin-trade packet of the master or a group member, or the bot's own
+request; a stranger's begin-trade is not answered and sets nothing, and any close status forgets the window; completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
 brain's assist and heal-the-tagger paths for help; `PlayerbotPvpKillFeed` for PvP kills (the feature hears `MapCombat.UnitKilled` of every map of its own world, so a kill is
 recorded exactly once even right after a teleport or a brain replacement; no process-wide event, which kept every disposed world reachable). All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
@@ -391,7 +391,19 @@ One pass every second of world time. A pass does a constant number of dictionary
 gathered once per pass and only when something needs it; an event handler's pass gathers none), drains only the guild-invite,
 charter-signature and battleground-win packets of each bot's capture queue, and makes at most one chat admission per guild. The rate
 limiters and the boss and battleground-win maps are bounded and swept; a pass that throws is logged (the first five in full) and the world
-carries on. Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
+carries on.
+
+**The pass is incremental** (`World:Playerbots:Social:PassBudgetMs`, default 4; 0 = no limit). A pass starts when its interval has passed and no
+pass is in flight, takes a snapshot of the running bots (a bot that leaves the world meanwhile is dropped from it) and walks its stages in
+order, at most the budget per world tick (plus one slice): the packet intake, the injected test lanes, then the lanes in their usual order.
+The lanes that act on one bot at a time and independently of the others (`answer-invites`, `emotes`) run on slices of the snapshot and stop
+between slices once the budget is spent; the next tick resumes at the next bot. Every other lane is population-wide (it has its own cursor
+and per-pass quota, or reasons about guilds, charters and the set of running bots) and runs whole as one stage, so the registry check, the
+intake and these lanes keep their once-per-pass meaning. A stage never starts before the one before it has finished, a pass that outlasts
+its interval is simply followed by the next as soon as it ends (no catch-up passes), and a pass in flight for more than 20 intervals is
+reported once to the anomaly ledger (`bot-social` / `pass-starved`).
+
+Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
 state is in memory or read back from it.
 
 ## Tests

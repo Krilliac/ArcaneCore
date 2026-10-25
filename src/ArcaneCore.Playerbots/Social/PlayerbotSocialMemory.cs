@@ -36,7 +36,7 @@ internal enum PlayerbotSocialEvent
 /// changing the entry, and a write folds those days in and moves the anchor by exactly them. <see cref="Snapshot"/> returns the stored rows (what
 /// <see cref="Load"/> expects back); <see cref="TryGet"/> and <see cref="Top"/> return the effective ones.
 /// </summary>
-internal sealed class PlayerbotSocialMemory
+internal sealed partial class PlayerbotSocialMemory
 {
     private const long DayMs = 86_400_000L;
     private const int ProtectedAffinity = 50;

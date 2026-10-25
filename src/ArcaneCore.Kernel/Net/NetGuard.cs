@@ -20,7 +20,7 @@ namespace ArcaneCore.Kernel.Net;
 /// its log line is admitted.
 /// </para>
 /// </summary>
-public sealed class NetGuard
+public sealed partial class NetGuard
 {
     private readonly ILogger _logger;
     private readonly LogGate _refusedCap;
