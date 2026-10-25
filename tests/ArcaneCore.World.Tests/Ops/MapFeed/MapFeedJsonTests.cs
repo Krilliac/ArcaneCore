@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.TestFixtures;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Ops.MapFeed;
@@ -267,6 +268,56 @@ public sealed class MapFeedJsonTests
         using JsonDocument doc = Frame(frame);
 
         Assert.Equal(string.Empty, doc.RootElement.GetProperty("entities")[0].GetProperty("n").GetString());
+    }
+
+    [Fact]
+    public void TheHello_OffersFeedRevisionTwo()
+    {
+        byte[] hello = MapFeedJson.HelloLine("abc123", 4242, [new MapSummary(0, 0, 0, 3)]);
+
+        Assert.Equal(MapFeedWireFixture.RevisionTwoHelloLine, Encoding.UTF8.GetString(hello).TrimEnd((char)10));
+        using JsonDocument doc = JsonDocument.Parse(hello.AsMemory(0, hello.Length - 1));
+        Assert.Equal(MapFeedProtocol.Revision, doc.RootElement.GetProperty("rev").GetInt32());
+        Assert.Equal(2, MapFeedProtocol.Revision);
+        Assert.Equal(1, doc.RootElement.GetProperty("protocol").GetInt32());
+    }
+
+    [Fact]
+    public void TheRealWriter_EmitsTheCombatFlagAndDisplayId_OnlyWhereTheyApply()
+    {
+        var pool = new FramePool(1);
+        FeedFrame frame = pool.Rent() ?? throw new InvalidOperationException("the pool is empty");
+        frame.MapId = 0;
+        frame.InstanceId = 0;
+        frame.ClockMs = 1000;
+        frame.AddGrid(32, 48);
+        frame.Counters = new FeedCounters { Creatures = 2, GameObjects = 1 };
+        int e1 = frame.AddEntity();
+        frame.Entities[e1] = new FeedEntity
+        {
+            Guid = 0xF130_0001_2B00_0001UL, Kind = FeedEntityKind.Creature, Entry = 299, Name = "Wolf", X = 10, Y = 10, Z = 5, HealthPercent = 75f,
+            Motion = (byte)MovementGeneratorType.Chase, InCombat = true, DisplayId = 1234, Parts = FeedEntityParts.Health,
+        };
+        int e2 = frame.AddEntity();
+        frame.Entities[e2] = new FeedEntity
+        {
+            Guid = 0xF130_0001_2B00_0002UL, Kind = FeedEntityKind.Creature, Entry = 299, Name = "Wolf", X = 250, Y = 10, Z = 5, HealthPercent = 100f,
+            Motion = (byte)MovementGeneratorType.Idle, DisplayId = 55, Parts = FeedEntityParts.Health,
+        };
+        int e3 = frame.AddEntity();
+        frame.Entities[e3] = new FeedEntity { Guid = 0xF110_0000_0000_0001UL, Kind = FeedEntityKind.GameObject, Entry = 2843, Name = "Chest", X = 1, Y = 2, Z = 3 };
+
+        string line = Write(w => MapFeedJson.WriteFrame(w, frame, 1, 0));
+        using JsonDocument doc = JsonDocument.Parse(line);
+        JsonElement entities = doc.RootElement.GetProperty("entities");
+
+        Assert.True(entities[0].GetProperty("cb").GetBoolean());
+        Assert.Equal(1234u, entities[0].GetProperty("d").GetUInt32());
+        Assert.False(entities[1].TryGetProperty("cb", out _));
+        Assert.Equal(55u, entities[1].GetProperty("d").GetUInt32());
+        Assert.False(entities[2].TryGetProperty("cb", out _));
+        Assert.False(entities[2].TryGetProperty("d", out _));
+        Assert.Equal(MapFeedWireFixture.RevisionTwoFrameLine, line);
     }
 
     [Fact]

@@ -343,7 +343,7 @@ public sealed class GroundHeightTests
     }
 
     [Fact]
-    public void TheCapOnPoints_CoarsensTheStep_InsteadOfCuttingTheLegShort()
+    public void TheCapOnPoints_KeepsTheCornersAndTheMostDeviatingPoints_InsteadOfCuttingTheLegShort()
     {
         using WorldRuntime world = TestWorld.CreateRuntime();
         MapCollision collision = ModelOnly(world, (x, _) => Hill(x));
@@ -359,6 +359,86 @@ public sealed class GroundHeightTests
         Assert.Equal(240f, few[^1].X);
         Assert.Equal(240f, many[^1].X);
         Assert.Contains(few, p => p.X == 120f);
+    }
+
+    /// <summary>A gently rippled leg (0.4 yd amplitude) with one ramp in it: level up to x = 100, then 3 yd of rise over 12 yd, then level at 3.</summary>
+    private static float Ramp(float x) => Math.Clamp((x - 100f) * 0.25f, 0f, 3f) + (0.4f * MathF.Sin(x / 5f));
+
+    private static float WorstMiss(IReadOnlyList<Vector3> polyline, Vector3 start, Func<float, float> ground)
+    {
+        float worst = 0f;
+        Vector3 prev = start;
+        foreach (Vector3 p in polyline)
+        {
+            int n = Math.Max(1, (int)MathF.Ceiling(Vector2.Distance(new(prev.X, prev.Y), new(p.X, p.Y)) / 0.5f));
+            for (int j = 1; j <= n; j++)
+            {
+                Vector3 m = Vector3.Lerp(prev, p, j / (float)n);
+                worst = MathF.Max(worst, MathF.Abs(m.Z - (ground(m.X) + GroundHeight.StandOffset)));
+            }
+
+            prev = p;
+        }
+
+        return worst;
+    }
+
+    [Fact]
+    public void ALegWithOneRampAndSmallRipples_CappedBelowItsUncappedCount_StillKeepsTheRamp()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        MapCollision collision = ModelOnly(world, (x, _) => Ramp(x));
+        var start = new Vector3(0f, 0f, Ramp(0f));
+        Vector3[] corners = [new(200f, 0f, Ramp(200f))];
+
+        List<Vector3> uncapped = GroundHeight.DrapePath(collision, start, corners, maxPoints: 1000);
+        const int cap = 8;
+        List<Vector3> capped = GroundHeight.DrapePath(collision, start, corners, maxPoints: cap);
+
+        Assert.True(uncapped.Count > cap, $"the cap must bite or the test proves nothing (uncapped {uncapped.Count})");
+        Assert.True(capped.Count <= cap, $"{capped.Count} points");
+        Assert.Equal(200f, capped[^1].X);
+        Assert.Equal(Ramp(200f) + GroundHeight.StandOffset, capped[^1].Z, 0.001f);
+        // The bends at the foot (x = 100) and the top (x = 112) of the ramp stay sampled: a point close to each.
+        Assert.Contains(capped, p => MathF.Abs(p.X - 100f) <= 4.01f);
+        Assert.Contains(capped, p => MathF.Abs(p.X - 112f) <= 4.01f);
+        float worst = WorstMiss(capped, start, Ramp);
+        Assert.True(worst < 1.0f, $"the capped polyline misses the ramp by up to {worst:F2} yd (uncapped {uncapped.Count} points, capped {capped.Count})");
+    }
+
+    /// <summary>A pathfinder whose mesh is walkable everywhere at a surface that is a function of (x, y): a walk to a point answers that height.</summary>
+    private sealed class MeshWalker(Func<float, float, float> surfaceAt) : IPathfinder, IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, end]);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(true, false, 1f, new Vector3(end.X, end.Y, surfaceAt(end.X, end.Y)));
+    }
+
+    [Fact]
+    public void ASampleTheWalkerWindowMisses_IsLookedForWhereTheMeshWalkArrives()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        // The model floor is 0, except over x 50..70 where it is a trench 10 yd down: the chord (at 0) is 10 yd over it, beyond the 4 yd the
+        // walker looks down. The mesh walk from the last sample arrives at the trench floor, so the sample is found there.
+        static float Floor(float x) => x is > 50f and < 70f ? -10f : 0f;
+        MapCollision collision = ModelOnly(world, (x, _) => Floor(x));
+        WorldCollision.Of(world).Install(pathfinder: new MeshWalker((x, _) => Floor(x)));
+        var start = new Vector3(0f, 0f, 0f);
+        Vector3[] corners = [new(120f, 0f, 0f)];
+
+        List<Vector3> draped = GroundHeight.DrapePath(collision, start, corners);
+
+        Assert.Contains(draped, p => p.X is > 50f and < 70f && MathF.Abs(p.Z - (-10f + GroundHeight.StandOffset)) < 0.001f);
     }
 
     [Fact]

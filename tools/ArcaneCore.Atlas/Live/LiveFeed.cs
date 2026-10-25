@@ -377,6 +377,57 @@ public sealed class LiveFeed : IDisposable
     }
 
     /// <summary>
+    /// Sends a generic id-correlated query (<c>{"op":"query","kind":...}</c>) and returns the result fields (without op, id and ok).
+    /// A world that answers <c>bad-args</c> with "unknown query kind" predates the kind: that is an <c>unavailable</c> error, remembered for
+    /// this connection so the kind is not asked again (a new connection asks afresh, the world may have been upgraded). Any other refusal
+    /// is a <c>failed</c> error carrying the world's message.
+    /// </summary>
+    public async Task<JsonObject> RequestAsync(JsonObject query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        FeedSession session = RequireSession();
+        string kind = query["kind"] is JsonValue kv && kv.TryGetValue(out string? kindText) ? kindText : "query";
+        if (session.UnsupportedKinds.ContainsKey(kind))
+        {
+            throw UnsupportedKind(kind);
+        }
+
+        var message = (JsonObject)query.DeepClone();
+        message["op"] = LiveProtocol.OpQuery;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        JsonObject reply = await session.QueryAsync(message, linked.Token).ConfigureAwait(false);
+        if (!(reply["ok"] is JsonValue okValue && okValue.TryGetValue(out bool ok) && ok))
+        {
+            string code = reply["code"] is JsonValue c && c.TryGetValue(out string? codeText) ? codeText : "refused";
+            string why = reply["message"] is JsonValue m && m.TryGetValue(out string? text) ? text : "it gave no reason";
+            if (code == "bad-args" && why.Contains("unknown query kind", StringComparison.Ordinal))
+            {
+                session.UnsupportedKinds[kind] = 0;
+                throw UnsupportedKind(kind);
+            }
+
+            throw new CommandException(CommandException.Failed, $"the world daemon could not answer the {kind} query: {why}");
+        }
+
+        var data = new JsonObject();
+        foreach ((string key, JsonNode? value) in reply)
+        {
+            if (key is not ("op" or "id" or "ok"))
+            {
+                data[key] = value?.DeepClone();
+            }
+        }
+
+        return data;
+    }
+
+    private static CommandException UnsupportedKind(string kind)
+        => new(CommandException.Unavailable, $"the connected world daemon does not support the {kind} query (it predates live insight); update and restart it.");
+
+    /// <summary>The connected feed's revision (hello <c>rev</c>, 1 when absent); 1 when not connected.</summary>
+    public int FeedRevision => _session?.FeedRevision ?? 1;
+
+    /// <summary>
     /// Sends one packet-tools request (docs/areas/map-feed.md, "Packet tools") and returns its result fields. Unavailable when not connected
     /// or when the daemon's hello did not offer the tools; a refusal by the daemon fails with its code in the message (BadArguments for a
     /// malformed request, Unavailable when the tools are off, Failed otherwise).
