@@ -12672,6 +12672,22 @@
       "isCollection": false
     },
     {
+      "path": "World:GmCommands:AllowDangerousDebug",
+      "section": "World:GmCommands",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps) behind `DangerousDebugGate`. Off by default; changing it needs a restart. On the live server (`ARCANECORE_LIVE_SERVER=1`) the commands are refused whatever this says.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldgmcommands",
+      "isCollection": false
+    },
+    {
       "path": "World:GmCommands:AuditTailSize",
       "section": "World:GmCommands",
       "type": "int",
