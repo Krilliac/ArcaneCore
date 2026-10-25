@@ -53,7 +53,7 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     /// reads, is the faction catalog's either way).
     /// </param>
     /// <param name="dice">
-    /// The map's combat dice (hit table, crits, damage, regeneration remainders). Default: <see cref="SeededDice"/> on a fixed seed, so a
+    /// The map's combat dice (hit table, crits, damage, armor and dither rolls). Default: <see cref="SeededDice"/> on a fixed seed, so a
     /// test's fights play out the same every run instead of on <see cref="Random.Shared"/>, where a lucky streak kept a losing bot
     /// above its retreat threshold now and then.
     /// </param>
@@ -165,7 +165,7 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     }
 
     /// <summary>A fixed-seed <see cref="ICombatRandom"/>; world thread only (<see cref="Random"/> is not thread-safe).</summary>
-    private sealed class SeededDice(int seed) : ICombatRandom
+    internal sealed class SeededDice(int seed) : ICombatRandom
     {
         private readonly Random _random = new(seed);
 
