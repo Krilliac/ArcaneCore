@@ -332,6 +332,28 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         // The per-map kill handlers come and go with the maps; the bag undoes whichever are still on at detach.
         subscriptions.Add(new Undo(UnsubscribeMaps));
         foreach (Map map in world.Maps) OnMapCreated(map);
+        // The kill talk asks the group coordinator's frozen world-boss snapshot (any thread) and names the zone a catalogued boss fell in.
+        _chat.IsWorldBossEntry = _conversations.IsWorldBossEntry = IsWorldBossEntry;
+        _chat.ZoneOf = _conversations.ZoneOf = ZoneNameOf;
+    }
+
+    /// <summary>Whether <paramref name="entry"/> is in the group coordinator's world-boss catalogue (read from the map threads: a volatile snapshot).</summary>
+    private bool IsWorldBossEntry(uint entry) => (_groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>())?.IsWorldBossEntry(entry) == true;
+
+    /// <summary>The zone name of the place a creature stands in, from the area table; null where the terrain or the table does not know it.</summary>
+    private string? ZoneNameOf(Map map, ArcaneCore.Game.Creatures.Creature creature)
+    {
+        if (_world is not { } world) return null;
+        try
+        {
+            (uint zoneId, _) = map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z);
+            return zoneId == 0 ? null : ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world).Areas.GetById(zoneId)?.Name;
+        }
+        catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
+        {
+            FaultLedger.Shared.Record("playerbot.social-zone-name", error);
+            return null; // a minimal host without terrain or area data: the map's name is named instead
+        }
     }
 
     /// <summary>Start no further bot registry read, then wait for one still running (the only background work).</summary>

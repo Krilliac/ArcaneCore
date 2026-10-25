@@ -54,6 +54,9 @@ public sealed class PlayerbotGroupOptions
     /// <summary>Dungeon and raid runs: free bots group up on their own for instances that fit them (<c>World:Playerbots:Groups:DungeonRuns</c>; live).</summary>
     public PlayerbotRunOptions DungeonRuns { get; set; } = new();
 
+    /// <summary>Raids that muster for a world boss on a continent (<c>World:Playerbots:Groups:WorldBosses</c>; live).</summary>
+    public PlayerbotWorldBossOptions WorldBosses { get; set; } = new();
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Groups";
@@ -67,5 +70,7 @@ public sealed class PlayerbotGroupOptions
         Cooperation.Validate();
         if (DungeonRuns is null) throw new InvalidOperationException($"{section}:DungeonRuns is missing.");
         DungeonRuns.Validate();
+        if (WorldBosses is null) throw new InvalidOperationException($"{section}:WorldBosses is missing.");
+        WorldBosses.Validate();
     }
 }

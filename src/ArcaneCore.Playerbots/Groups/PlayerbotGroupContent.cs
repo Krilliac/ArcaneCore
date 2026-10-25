@@ -23,6 +23,9 @@ internal enum PlayerbotGroupGoalKind : byte
 
     /// <summary>A GM-ordered siege: bot-led raids march a shared way and kill an objective (<c>PlayerbotGroupCoordinator.Siege.cs</c>).</summary>
     Siege,
+
+    /// <summary>A raid on a world boss of the open world (<c>PlayerbotGroupCoordinator.WorldBoss.cs</c>): mustered from free bots, walks to a rally near the boss, pulls it once the players have had their chance.</summary>
+    WorldBoss,
 }
 
 /// <summary>A member's job in its group (vmangos CombatBotRoles, folded into the three a group is built from).</summary>

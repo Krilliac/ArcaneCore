@@ -482,6 +482,8 @@ internal sealed class PlayerbotGroupAI
                     return;
                 }
                 if (group.Run is { CurrentBoss: null }) { Step = "lead:hold-loot"; HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
+                if (group.WorldBoss is { KilledAtMs: not 0 }) { Step = "lead:hold-loot"; HoldRun(player); return; } // the boss is down: the coordinator lets the loot settle
+                if (group.WorldBoss is { PullHeld: true }) { Step = "lead:hold-worldboss"; HoldRun(player); return; } // the pull waits for the players, or for the raid
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
                 if (!Ready(player)) { Step = "lead:hold-not-ready"; HoldRun(player); return; }
@@ -796,7 +798,10 @@ internal sealed class PlayerbotGroupAI
     /// the group is not a dungeon run that fights through (which only walks, <see cref="ShouldCatchUp"/>).
     /// </summary>
     internal bool CanCatchUp(PlayerbotGroupCoordinator.BotGroup group)
-        => _options.Party.TeleportToLeader && _session.IsManaged && !(group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance);
+        => _options.Party.TeleportToLeader && _session.IsManaged && !(group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance) && !WalksOnly(group);
+
+    /// <summary>A world-boss raid walks to its rally unless <see cref="PlayerbotWorldBossOptions.CatchUpTeleport"/> lets the catch-up teleport a straggler.</summary>
+    private bool WalksOnly(PlayerbotGroupCoordinator.BotGroup group) => group.WorldBoss is not null && !_options.Groups.WorldBosses.CatchUpTeleport;
 
     /// <summary>
     /// Bring this bot (<paramref name="player"/>) to the group's leader now, to end the wait for it (<see cref="TrackLag"/>, the gathering's bound):
@@ -876,7 +881,7 @@ internal sealed class PlayerbotGroupAI
         // Gathering still walks (the leader holds until the members arrive on foot). A fight-through run never teleports.
         if (ShouldCatchUp(new PlayerbotGroupCatchUpFacts(group.State, distance, player.Combat.IsInCombat, leader.Combat.IsInCombat,
                 _options.Party.TeleportToLeader && _session.IsManaged, _options.Follow.CatchUpMode, _options.Follow.TeleportDistanceYards,
-                _options.Follow.LeaderCombatRangeYards, group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance))
+                _options.Follow.LeaderCombatRangeYards, group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance || WalksOnly(group)))
             && TryCatchUp(player, leader))
         {
             Step = "follow:catch-up";
@@ -993,6 +998,8 @@ internal sealed class PlayerbotGroupAI
             return current ?? FindObstacle(player, group, TravelPoint(group));
         }
 
+        // A world-boss raid pulls only once its coordinator has released the pull, and not after the kill.
+        if (isLeader && group.WorldBoss is { PullHeld: true } or { KilledAtMs: not 0 }) return null;
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
             && Ready(player))
         {
