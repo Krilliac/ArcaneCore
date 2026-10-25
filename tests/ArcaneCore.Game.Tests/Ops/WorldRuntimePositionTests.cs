@@ -26,8 +26,13 @@ public sealed class WorldRuntimePositionTests
             writerStarted.Set();
             while (!stop.IsCancellationRequested)
             {
+                // A short spin after each publish stands in for the work the world thread does between publishes. Publishing
+                // back to back left a reader on a two-core CI runner almost no window between writes, so reads ran out their time
+                // budget there (6 of 398 on 2026-10-25) although no read was torn. Writes still overlap reads all the time.
                 world.SetPosition(TickPhase.Features, marker, FeaturesSince);
+                Thread.SpinWait(32);
                 world.SetPosition(TickPhase.Idle, null, 0);
+                Thread.SpinWait(32);
             }
         }) { IsBackground = true, Name = "position-writer" };
         writer.Start();

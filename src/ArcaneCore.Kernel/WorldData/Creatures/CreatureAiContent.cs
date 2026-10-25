@@ -102,6 +102,7 @@ public sealed class CreatureAiContent
     private readonly Dictionary<int, CreatureAiText> _texts;
     private readonly Dictionary<uint, CreatureAiSummon> _summons;
     private readonly Dictionary<uint, CreatureAiTextChoice[]> _textTemplates;
+    private readonly HashSet<uint> _deathPreventedOnSpawn;
 
     public CreatureAiContent(
         IEnumerable<CreatureAiEvent> events,
@@ -120,6 +121,7 @@ public sealed class CreatureAiContent
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureAiEvent>)[.. g.OrderBy(e => e.Id)]);
         _guidEvents = all.Where(e => e.CreatureGuid != 0).GroupBy(e => e.CreatureGuid)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureAiEvent>)[.. g.OrderBy(e => e.Id)]);
+        _deathPreventedOnSpawn = BuildDeathPreventedOnSpawn(_events);
         _texts = texts.ToDictionary(t => t.Id);
         _summons = (summons ?? []).ToDictionary(s => s.Id);
         _textTemplates = (textTemplates ?? []).GroupBy(row => row.TemplateId)
@@ -157,6 +159,42 @@ public sealed class CreatureAiContent
 
     /// <summary>The EventAI rows of a creature entry, in id order.</summary>
     public IReadOnlyList<CreatureAiEvent> GetEvents(uint entry) => _events.GetValueOrDefault(entry) ?? [];
+
+    private const byte EventSpellHit = 8;
+    private const byte EventSpawned = 11;
+    private const byte ActionSetDeathPrevention = 42;
+
+    /// <summary>
+    /// Whether creatures of <paramref name="entry"/> spawn unkillable by an ordinary attack: a row on the spawned event (11) runs the
+    /// set-death-prevention action (42) with a nonzero first parameter (damage never takes the creature below 1 health), and no row
+    /// of the entry lifts it (action 42 with parameter 0) on an event other than a spell hit (8), which only a particular spell
+    /// satisfies (Blasted Lands servants 7668-7671 of quest 2681: Shackle Shatter). A spell-hit row with spell id 0 matches a hit by any spell of its school (cmangos CreatureEventAI.cpp:1673-1675), so it counts as an ordinary lift. Computed once at load from the entry-keyed rows only: rows keyed by spawn guid (negative creature_id, <see cref="GetGuidEvents"/>) are ignored, which fails open (the creature stays a kill objective and the bot's combat watch catches it). cmangos-dialect rows only.
+    /// </summary>
+    public bool IsInvincibleUntilSpellHit(uint entry) => _deathPreventedOnSpawn.Contains(entry);
+
+    private static HashSet<uint> BuildDeathPreventedOnSpawn(Dictionary<uint, IReadOnlyList<CreatureAiEvent>> events)
+    {
+        HashSet<uint> entries = [];
+        foreach ((uint entry, IReadOnlyList<CreatureAiEvent> rows) in events)
+        {
+            bool preventsOnSpawn = false;
+            bool liftedOrdinarily = false;
+            foreach (CreatureAiEvent row in rows)
+            {
+                if (row.Chance == 0) continue;
+                foreach (CreatureAiAction action in row.Actions)
+                {
+                    if (action.Type != ActionSetDeathPrevention) continue;
+                    if (action.Param1 != 0) preventsOnSpawn |= row.EventType == EventSpawned;
+                    else liftedOrdinarily |= row.EventType != EventSpellHit || row.Param1 == 0;
+                }
+            }
+
+            if (preventsOnSpawn && !liftedOrdinarily) entries.Add(entry);
+        }
+
+        return entries;
+    }
 
     /// <summary>The EventAI rows keyed to one spawn guid (a negative <c>creature_id</c>), in id order.</summary>
     public IReadOnlyList<CreatureAiEvent> GetGuidEvents(uint spawnGuid) => _guidEvents.GetValueOrDefault(spawnGuid) ?? [];

@@ -1,5 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Kernel.Characters;
@@ -194,13 +196,29 @@ public sealed class PlayerbotRecruitWorldTests
             options.Groups.Cooperation.RecruitRadiusYards = 1500;
             options.Groups.Cooperation.RefusalMemoryMinutes = 1;
             options.Groups.FormationTimeoutSeconds = 3_600;
+            options.Chat.Voice.Enabled = false; // a bot's LFG answer (OfferLfg, offer:true) skips the refusal memory and adds a bonus; its post time is unseeded
         });
-        var (tank, _) = await WaitingPairAsync(world);
+        var (tank, mage) = await WaitingPairAsync(world);
+
+        // The pair waits for a group of three for the whole test, which runs for minutes of game time. Left alone they would solo-grind the
+        // elite they wait on (separate behaviour), and the mage can die in that fight, leaving no second live waiting bot to recruit for. So the
+        // fight cannot happen: the ogre is made unattackable (it stays on the map, so the pair keeps waiting where it is; despawned, the pair wanders off to explore and out of the healer's radius) and the combat dice are pinned to a fixed seed.
+        await world.OnWorldAsync(() =>
+        {
+            Game.Maps.Map map = world.Player(tank.Id).Map!;
+            map.Combat.Random = new ArcaneCore.World.Tests.Playerbots.Risk.RiskTestWorld.SeededDice(7);
+            CreatureMapSystem creatures = map.FindUpdater<CreatureMapSystem>()!;
+            foreach (Creature ogre in creatures.Creatures.Where(c => c.Entry == OgreEntry))
+                ogre.UnitFlags |= UnitFlags.NotAttackable1 | UnitFlags.NonAttackable2 | UnitFlags.ImmuneToPlayer | UnitFlags.NotSelectable;
+            return true;
+        });
+
         var healer = await world.AddBotAsync("Refusepr", Human, Priest, 10, [LesserHeal, Smite], new Vector3(StartX, StartY - 1450f, StartZ)); // at the edge of the 1500 yard radius, hours of walking from the quest
         uint period = (uint)world.Options.Groups.Cooperation.RefusalMemoryMinutes * 60_000u;
         int gid = await world.OnWorldAsync(() => world.Coordinator.WaitingGroupIdOf(tank.Id));
-        uint phase = PlayerbotRecruitment.RefusalPhase(period, healer.Id, gid);
-        uint WindowOf(uint ms) => PlayerbotRecruitment.RefusalWindow(ms, period, healer.Id, gid);
+        ulong healerGuid = await world.OnWorldAsync(() => world.Player(healer.Id).Guid.Value);
+        uint phase = PlayerbotRecruitment.RefusalPhase(period, healerGuid, gid);
+        uint WindowOf(uint ms) => PlayerbotRecruitment.RefusalWindow(ms, period, healerGuid, gid);
         uint UntilNextWindow(uint ms) => period - (unchecked(ms + phase) % period);
 
         // Wait for a window whose roll refuses (above the chance, below 0.9) and whose next window's roll comes (below 0.9): the rolls are fixed per
@@ -253,10 +271,14 @@ public sealed class PlayerbotRecruitWorldTests
         double next = await world.OnWorldAsync(() => PlayerbotRecruitment.Roll(world.Player(healer.Id).Guid.Value, PlayerbotRecruitment.RollGroup(gid, window + 1)));
         Assert.InRange(next, 0.0, 0.9);
         uint refusedAt = await world.OnWorldAsync(() => world.Coordinator.RefusedAtMs(healer.Id, gid));
-        Assert.InRange(refusedAt, 10_000u, (uint)world.World.Host.World.NowMs); // the time of the refusal, not a window number
+        // the time of the refusal, not a window number
+        Assert.True(refusedAt >= 10_000u && refusedAt <= (uint)world.World.Host.World.NowMs, $"refused at {refusedAt} ms, now {world.World.Host.World.NowMs} ms, roll {roll} in window {window}" + Environment.NewLine + await world.TraceAsync());
         long untilExpiry = await world.OnWorldAsync(() => (long)refusedAt + period - 6_000 - world.World.Host.World.NowMs);
         Assert.True(untilExpiry > 0, $"the refusal memory ran out before the check ({untilExpiry} ms left)");
         await world.RunAsync((uint)untilExpiry);
+        Assert.True(await world.OnWorldAsync(() => world.Player(mage.Id).IsAlive), "the mage died while waiting: only one live waiting bot is left, so no group can form" + Environment.NewLine + await world.TraceAsync());
+        Assert.True(await world.OnWorldAsync(() => !world.Player(tank.Id).Combat.IsInCombat && !world.Player(mage.Id).Combat.IsInCombat),
+            "a waiting bot is in combat: the pair was meant to wait undisturbed" + Environment.NewLine + await world.TraceAsync());
         Assert.False(world.Coordinator.Groups.Any(g => g.Find(healer.Id) is not null), "asked again before the refusal memory ran out: " + await world.TraceAsync());
         bool walkedIn = false; // the healer must be recruited, not arrive at the quest and wait for a group itself
         Assert.True(await world.RunUntilAsync(30_000, () =>
@@ -271,23 +293,40 @@ public sealed class PlayerbotRecruitWorldTests
     public async Task TheAnswer_IsTheRuleOfTheCandidateAndTheGroup_NothingElse()
     {
         // Default chance: whether the healer comes is exactly the pure rule's answer for (healer, first group), whichever way it falls.
+        // The refusal window is keyed on the candidate's guid, so it is the same on every run. The coordinator asks once, a few seconds after the
+        // healer appears (RecruitWaitSeconds 5): the expected answer is computed at the time of the decision itself, the refusal's own time
+        // (RefusedAtMs) or the moment the group stands, so a window boundary between "now" and the ask cannot change it. Which branch is taken
+        // depends on the guid; the decline branch is covered whatever the guid by ACandidateThatRefusedAGroup_... (it forces a refusal).
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
         {
             Still(options);
             options.Groups.Cooperation.RecruitWaitSeconds = 5;
+            options.Chat.Voice.Enabled = false; // a stray LFG answer skips the refusal rule (PlanWithRecruits offer:true)
         });
         var (tank, _) = await WaitingPairAsync(world);
         var healer = await world.AddBotAsync("Detheal", Human, Priest, 10, [LesserHeal, Smite], South);
+        int groupId = await world.OnWorldAsync(() => world.Coordinator.WaitingGroupIdOf(tank.Id)); // the waiting group's own id, whatever other groups there are
+        Assert.NotEqual(0, groupId);
+        uint decidedAt = 0;
+        bool formed = false;
+        Assert.True(await world.RunUntilAsync(90_000, () =>
+        {
+            uint refusedAt = world.Coordinator.RefusedAtMs(healer.Id, groupId);
+            if (refusedAt != 0) { decidedAt = refusedAt; return true; }
+            if (world.Coordinator.Groups.Count == 0) return false;
+            formed = true;
+            decidedAt = (uint)world.World.Host.World.NowMs;
+            return true;
+        }), "the healer was neither recruited nor refused" + Environment.NewLine + await world.TraceAsync());
+
         bool expected = await world.OnWorldAsync(() =>
         {
             Player player = world.Player(healer.Id);
-            int groupId = world.Coordinator.WaitingGroupIdOf(tank.Id); // the waiting group's own id, whatever other groups there are
-            Assert.NotEqual(0, groupId);
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, 0, 0, false, FillsRole: true, false, false);
-            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow((uint)world.World.Host.World.NowMs, (uint)world.Options.Groups.Cooperation.RefusalMemoryMinutes * 60_000u, healer.Id, groupId)), facts);
+            uint period = (uint)world.Options.Groups.Cooperation.RefusalMemoryMinutes * 60_000u;
+            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value,
+                PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(decidedAt, period, player.Guid.Value, groupId)), facts);
         });
-
-        bool formed = await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Count > 0);
         Assert.Equal(expected, formed);
         if (formed) Assert.NotNull(world.Coordinator.Groups.Single().Find(healer.Id));
     }

@@ -47,6 +47,12 @@ public sealed record CreatureTemplate
 
     public uint TrainerSpell { get; init; }
 
+    /// <summary>
+    /// ClassicDB <c>EquipmentTemplateId</c> / vmangos <c>equipment_id</c>: the <c>creature_equip_template</c> entry whose items the
+    /// creature holds (<see cref="CreatureContent.FindEquipment"/>); 0 = no equipment. Added by CreatureEquipmentDataModule (world 56).
+    /// </summary>
+    public uint EquipmentTemplateId { get; init; }
+
     public uint UnitFlags { get; init; }
 
     public uint DynamicFlags { get; init; }
@@ -228,12 +234,22 @@ public sealed record CreatureWaypointPath(CreatureWaypointOrigin Origin, IReadOn
 /// <summary>Per-display model data (cmangos creature_model_info, vmangos creature_display_info_addon).</summary>
 public sealed record CreatureModelInfo(uint DisplayId, float BoundingRadius, float CombatReach, byte Gender, uint DisplayIdOtherGender);
 
+/// <summary>
+/// One <c>creature_equip_template</c> row: the item entries (not display ids) a creature holds in its main hand, off hand and ranged
+/// slot (cmangos <c>equipentry1..3</c>, vmangos <c>item1..3</c>); 0 = empty slot.
+/// </summary>
+public sealed record CreatureEquipment(uint Entry, uint MainHand, uint OffHand, uint Ranged)
+{
+    /// <summary>The item entry of virtual item slot 0 (main hand), 1 (off hand) or 2 (ranged).</summary>
+    public uint ItemOf(int slot) => slot switch { 0 => MainHand, 1 => OffHand, 2 => Ranged, _ => 0 };
+}
+
 /// <summary>Per-spawn extras (cmangos/vmangos creature_addon).</summary>
 public sealed record CreatureAddon(uint Guid, uint MountDisplayId, byte StandState, byte SheathState, uint EmoteState);
 
 /// <summary>
 /// The replaceable half of a <see cref="CreatureContent"/>: templates, model infos, addons,
-/// waypoints and EventAI. Immutable; obtained from <see cref="CreatureContent.SwapDefinitions"/>
+/// equipment, waypoints and EventAI. Immutable; obtained from <see cref="CreatureContent.SwapDefinitions"/>
 /// to undo a swap.
 /// </summary>
 public sealed class CreatureDefinitions
@@ -245,8 +261,10 @@ public sealed class CreatureDefinitions
         Dictionary<uint, IReadOnlyList<CreatureWaypoint>> waypoints,
         CreatureAiContent ai,
         Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> entryWaypoints,
-        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> scriptWaypoints)
+        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> scriptWaypoints,
+        Dictionary<uint, CreatureEquipment> equipment)
     {
+        Equipment = equipment;
         Templates = templates;
         Models = models;
         Addons = addons;
@@ -261,6 +279,8 @@ public sealed class CreatureDefinitions
     internal Dictionary<uint, CreatureModelInfo> Models { get; }
 
     internal Dictionary<uint, CreatureAddon> Addons { get; }
+
+    internal Dictionary<uint, CreatureEquipment> Equipment { get; }
 
     internal Dictionary<uint, IReadOnlyList<CreatureWaypoint>> Waypoints { get; }
 
@@ -303,7 +323,8 @@ public sealed class CreatureContent
         IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null,
         IEnumerable<CreatureLink>? links = null,
-        IEnumerable<CreatureTemplateLink>? templateLinks = null)
+        IEnumerable<CreatureTemplateLink>? templateLinks = null,
+        IEnumerable<CreatureEquipment>? equipment = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -318,7 +339,8 @@ public sealed class CreatureContent
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
             (scriptWaypoints ?? [])
                 .GroupBy(w => (w.Entry, w.PathId))
-                .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]));
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
+            (equipment ?? []).ToDictionary(e => e.Entry));
         _spawnEntries = (spawnEntries ?? [])
             .GroupBy(e => e.SpawnGuid)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
@@ -368,6 +390,12 @@ public sealed class CreatureContent
     public CreatureModelInfo? FindModel(uint displayId) => _definitions.Models.GetValueOrDefault(displayId);
 
     public CreatureAddon? FindAddon(uint spawnGuid) => _definitions.Addons.GetValueOrDefault(spawnGuid);
+
+    /// <summary>The <c>creature_equip_template</c> row for an <see cref="CreatureTemplate.EquipmentTemplateId"/> (0 and unknown ids: null).</summary>
+    public CreatureEquipment? FindEquipment(uint equipmentId) => equipmentId == 0 ? null : _definitions.Equipment.GetValueOrDefault(equipmentId);
+
+    /// <summary>Number of <c>creature_equip_template</c> rows loaded.</summary>
+    public int EquipmentCount => _definitions.Equipment.Count;
 
     public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
 

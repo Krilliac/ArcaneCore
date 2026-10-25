@@ -791,16 +791,16 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Cluster/Supervision/ClusterHostSupervisor.cs:712` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
 | `src/ArcaneCore.World/Cluster/Supervision/ClusterHostSupervisor.cs:729` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.World/Cluster/Supervision/SupervisedOutputMultiplexer.cs:143` | all exceptions | by-design | documented in place: "Best-effort flush on supervisor shutdown." |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:165` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "Already disposed during shutdown race." |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:169` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:201` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "Already disposed during shutdown race." |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:205` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:266` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:321` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:365` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:369` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:380` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:420` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:175` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "Already disposed during shutdown race." |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:179` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:211` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "Already disposed during shutdown race." |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:215` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:287` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:342` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:386` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:390` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:401` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:441` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Creatures/AreaTriggerScriptsFeature.cs:74` | InvalidOperationException | by-design | documented in place: "The teleport feature is not attached (a bare test container); the player's position stands in for the centre." |
 | `src/ArcaneCore.World/Creatures/CreatureAiServicesBinder.cs:57` | Exception | by-design | inferred from the exception type; no comment at the site |
 | `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:132` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "stopping" |

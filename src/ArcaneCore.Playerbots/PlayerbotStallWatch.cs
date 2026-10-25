@@ -247,6 +247,22 @@ internal sealed partial class PlayerbotStallWatch
         return Ledger.Strikes(key) >= PinStallsToEscalate && Ledger.IsDeferred(key, LedgerTime(nowMs));
     }
 
+    /// <summary>The pins every bot of the world shares (<see cref="PlayerbotSharedPins"/>), or null (a watch used alone).</summary>
+    internal PlayerbotSharedPins? SharedPins { get; set; }
+
+    /// <summary>
+    /// Whether other bots' dead-end pins made the cell containing <c>(x, y)</c> a world pin at world time <paramref name="nowMs"/>. Not part of
+    /// <see cref="IsDeadEndPin"/>: route planning keeps the per-bot rule; world pins only steer exploring and a first stall's escalation.
+    /// </summary>
+    internal bool IsWorldPin(uint mapId, uint instanceId, float x, float y, uint nowMs)
+        => SharedPins?.IsWorldPin(mapId, instanceId, x, y, nowMs) == true;
+
+    /// <summary>
+    /// This bot dead-end-pinned the cell containing <c>(x, y)</c>: tell the world. Returns what newly became a world pin, or null.
+    /// </summary>
+    internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs)
+        => SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs);
+
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
     /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.

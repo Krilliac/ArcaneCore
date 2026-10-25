@@ -146,8 +146,8 @@ internal sealed class QaProcessRunner : IQaProcessRunner
 /// The <c>gh</c> command-line transport of bot QA. Each call runs the resolved <c>gh</c> executable with an argument list (no shell), in a neutral working directory (the
 /// temp folder), with a timeout (30 seconds by default), with <c>GITHUB_TOKEN</c> and <c>GH_TOKEN</c> removed from the child unless a token was handed in on purpose,
 /// <c>GH_PROMPT_DISABLED</c> set so it never waits for input, and output parsed as JSON. Bodies go through a temp file (<c>--body-file</c>, deleted afterwards), never
-/// the command line. The list is one <c>gh api</c> call per REST page of 100 (<see cref="ListIndexAsync"/>), each under its own timeout; there is no search, so an issue
-/// outside the label is only found by number. A create is never resent: a timeout or failure throws a transient exception and the next pass's list settles it. One instance
+/// the command line. The list is one <c>gh api</c> call per REST page of 100 (<see cref="ListIndexAsync"/>), each under its own timeout; an issue beyond
+/// the listed pages or outside the label is found by <see cref="SearchByMarkerAsync"/> (<c>gh api search/issues</c>) or by number. A create is never resent: a timeout or failure throws a transient exception and the next pass's list settles it. One instance
 /// serves one publish pass; calls are sequential. Failure text is redacted before it leaves.
 /// </summary>
 internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
@@ -186,7 +186,11 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         _timeout = timeout ?? CallTimeout;
     }
 
-    public bool SupportsSearch => false;
+    // Issues this instance created: the search index lags behind a create by seconds to minutes, so the instance answers for its own issues itself.
+    private readonly List<(string Body, QaIssueRef Issue)> _created = [];
+    private bool _searchRateLimited;
+
+    public bool SupportsSearch => true;
 
     public void Dispose()
     {
@@ -273,7 +277,60 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
         return ToRef(doc.RootElement) is { } issue ? (issue, BodyOf(doc.RootElement)) : null;
     }
 
-    public Task<QaIssueRef?> SearchByMarkerAsync(string id, CancellationToken cancellationToken) => Task.FromResult<QaIssueRef?>(null);
+    /// <summary>
+    /// The issue whose body holds the marker of <paramref name="id"/>, by <c>gh api search/issues</c> (same query as the REST client: any label, so an issue whose label was
+    /// removed by hand is found, and an issue beyond <see cref="PlayerbotQaGitHubOptions.MaxListPages"/> is found too). The query goes as one <c>-f q=...</c> argument (gh
+    /// encodes it; no shell), the marker phrase quoted with its quotes and backslashes escaped. Null means "searched, none": an unknown outcome is never null, it throws a transient
+    /// exception so the finding stays pending instead of being created twice: a rate-limited search (the first one is remembered, later ones in this instance do not call
+    /// gh), a failed or timed-out call, and a reply GitHub flags <c>incomplete_results</c> (timed out on its side). An issue this instance created is answered from memory.
+    /// </summary>
+    public async Task<QaIssueRef?> SearchByMarkerAsync(string id, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        string marker = PlayerbotQaIssueComposer.MarkerOf(id);
+        foreach ((string body, QaIssueRef issue) in _created)
+        {
+            if (body.Contains(marker, StringComparison.Ordinal)) return issue;
+        }
+
+        if (_searchRateLimited) throw new PlayerbotQaPublishException("gh search is rate limited; the finding stays pending", transient: true);
+        string phrase = EscapePhrase("arcanecore-bot-qa:" + id);
+        string query = $"repo:{_repository} is:issue in:body \"{phrase}\"";
+        QaProcessResult result;
+        try
+        {
+            result = await RunAsync(["api", "--method", "GET", "search/issues", "-f", "q=" + query, "-f", "per_page=30"], "issue search", cancellationToken).ConfigureAwait(false);
+        }
+        catch (PlayerbotQaPublishException ex) when (ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase))
+        {
+            _searchRateLimited = true; // the search quota (30 per minute) is gone: stop asking for the rest of this pass
+            throw;
+        }
+
+        using JsonDocument doc = Parse(result.StdOut);
+        JsonElement root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("items", out JsonElement items) || items.ValueKind != JsonValueKind.Array)
+        {
+            throw new PlayerbotQaPublishException("gh api did not print a search result", transient: true);
+        }
+
+        foreach (JsonElement item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || item.TryGetProperty("pull_request", out _)) continue;
+            if (BodyOf(item).Contains(marker, StringComparison.Ordinal) && ToRestRef(item) is { } issue) return issue;
+        }
+
+        if (root.TryGetProperty("incomplete_results", out JsonElement incomplete) && incomplete.ValueKind == JsonValueKind.True)
+        {
+            throw new PlayerbotQaPublishException("the GitHub search result was incomplete; the finding stays pending", transient: true);
+        }
+
+        return null;
+    }
+
+    /// <summary>Escapes the characters that end or break a quoted search phrase (backslash, double quote, line breaks).</summary>
+    internal static string EscapePhrase(string text)
+        => text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace('\r', ' ').Replace('\n', ' ');
 
     public async Task<QaIssueRef> CreateIssueAsync(string title, string body, IReadOnlyList<string> labels, CancellationToken cancellationToken)
     {
@@ -307,7 +364,9 @@ internal sealed partial class PlayerbotQaGhCliClient : IQaIssueTransport
                 throw new PlayerbotQaPublishException("gh created an issue but printed no issue URL", transient: true);
             }
 
-            return new QaIssueRef(number, true, last);
+            var created = new QaIssueRef(number, true, last);
+            _created.Add((body, created));
+            return created;
         }
         finally
         {

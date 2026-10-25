@@ -93,7 +93,7 @@ internal static class PlayerbotChatPrompts
             text.Append(c, $" You are a member of the guild {topic.GuildName} and you are writing one short line in your guild's chat. Nobody spoke to you.");
         }
 
-        return new BotChatPrompt(StaticSystem, text.ToString(), [new BotChatTurn(true, Clean(topic.Instruction, MaxLineLength))]);
+        return new BotChatPrompt(StaticSystem, text.ToString(), [new BotChatTurn(true, Clean(topic.Instruction, MaxLineLength))]) { ExpectsJson = true };
     }
 
     /// <summary>Where a <see cref="BotSpeech"/> is said, in words for the model.</summary>
@@ -189,18 +189,16 @@ internal static class PlayerbotChatPrompts
         int open = answer.IndexOf('{', StringComparison.Ordinal);
         int close = answer.LastIndexOf('}');
         if (open < 0 || close <= open) return BotChatAction.None;
-        try
+        using JsonDocument? document = PlayerbotChatJson.TryParseObject(answer, out string? error);
+        if (document is null)
         {
-            using JsonDocument document = JsonDocument.Parse(answer.AsMemory(open, close - open + 1));
-            return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("intent", out JsonElement intent)
-                && intent.ValueKind == JsonValueKind.String ? Action(intent.GetString()) : BotChatAction.None;
-        }
-        catch (JsonException error)
-        {
-            FaultLedger.Shared.Record("playerbot.chat-prompts", error);
-            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error.Message);
+            // the model's output, not a server fault: an anomaly only
+            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error ?? "unreadable");
             return BotChatAction.None; // not the JSON asked for: no action
         }
+
+        return document.RootElement.TryGetProperty("intent", out JsonElement intent) && intent.ValueKind == JsonValueKind.String
+            ? Action(intent.GetString()) : BotChatAction.None;
     }
 
     /// <summary>The model's intent word as an action (none and anything else: <see cref="BotChatAction.None"/>).</summary>
@@ -224,7 +222,7 @@ internal static class PlayerbotChatPrompts
         var messages = new List<BotChatTurn>(memory.Count + 1);
         messages.AddRange(memory);
         messages.Add(new BotChatTurn(true, Clean(ask.Text, MaxLineLength)));
-        return new BotChatPrompt(StaticSystem, DynamicSystem(ask), messages);
+        return new BotChatPrompt(StaticSystem, DynamicSystem(ask), messages) { ExpectsJson = true };
     }
 
     /// <summary>
@@ -262,24 +260,20 @@ internal static class PlayerbotChatPrompts
         int close = answer.LastIndexOf('}');
         if (open < 0) return (answer.Contains("\"reply\"", StringComparison.Ordinal) ? null : Sanitize(answer), null);
         if (close <= open) return (null, null); // a cut-off object (the token limit): never said half-JSON
-        try
+        using JsonDocument? document = PlayerbotChatJson.TryParseObject(answer, out string? error);
+        if (document is null)
         {
-            using JsonDocument document = JsonDocument.Parse(answer.AsMemory(open, close - open + 1));
-            JsonElement root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return (null, null);
-            string? reply = root.TryGetProperty("reply", out JsonElement value) && value.ValueKind == JsonValueKind.String ? Sanitize(value.GetString()) : null;
-            PlayerbotPartyCommand? command = root.TryGetProperty("intent", out JsonElement intent) && intent.ValueKind == JsonValueKind.String
-                ? Intent(intent.GetString())
-                : null;
-            return (reply, command);
-        }
-        catch (JsonException error)
-        {
-            // the model's answer was not the JSON asked for: no reply and no command, the bot says nothing
-            FaultLedger.Shared.Record("playerbot.chat-prompts", error);
-            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error.Message);
+            // the model's answer was not the JSON asked for: no reply and no command, the bot says nothing (an anomaly, not a server fault)
+            AnomalyLedger.Shared.Report("bot-chat", "prompt-json-invalid", "chat-prompts", error ?? "unreadable");
             return (null, null);
         }
+
+        JsonElement root = document.RootElement;
+        string? reply = root.TryGetProperty("reply", out JsonElement value) && value.ValueKind == JsonValueKind.String ? Sanitize(value.GetString()) : null;
+        PlayerbotPartyCommand? command = root.TryGetProperty("intent", out JsonElement intent) && intent.ValueKind == JsonValueKind.String
+            ? Intent(intent.GetString())
+            : null;
+        return (reply, command);
     }
 
     /// <summary>The model's intent word as a party command (none and anything else: null).</summary>

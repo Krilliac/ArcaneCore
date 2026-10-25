@@ -3,7 +3,7 @@ namespace ArcaneCore.Game.WorldState.Events;
 /// <summary>What a running game event changes about one creature spawn (a <c>game_event_creature_data</c> row).</summary>
 /// <param name="EntryId">The creature_template entry to take instead of the spawn's (0: keep).</param>
 /// <param name="ModelId">The display id to force (0: keep).</param>
-/// <param name="EquipmentId">Equipment id (read, not applied: creatures have no equipment model yet).</param>
+/// <param name="EquipmentId">The <c>creature_equip_template</c> entry to hold instead of the template's own (0: keep); the creature system resolves it to all three slots.</param>
 /// <param name="SpellStart">Spell cast at the creature when the event starts (read, not applied: needs the aura engine).</param>
 /// <param name="SpellEnd">Spell cast when the event ends (same).</param>
 public sealed record GameEventCreatureOverride(uint EntryId, uint ModelId, uint EquipmentId, uint SpellStart, uint SpellEnd);

@@ -3,7 +3,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.WorldState;
+using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -12,7 +14,8 @@ namespace ArcaneCore.Game.Tests.WorldState;
 
 /// <summary>
 /// Game-event creature data (<c>game_event_creature_data</c>): while an event runs, listed creatures take its <c>entry_id</c> and <c>modelid</c>
-/// (vmangos Creature::UpdateEntry with event data, GameEventMgr.cpp:961-1021); equipment and spells are counted, not applied.
+/// (vmangos Creature::UpdateEntry with event data, GameEventMgr.cpp:961-1021); <c>equipment_id</c> is a <c>creature_equip_template</c> entry that
+/// fills all three virtual item slots; the spells are counted, not applied.
 /// </summary>
 public sealed class GameEventCreatureDataTests
 {
@@ -23,6 +26,11 @@ public sealed class GameEventCreatureDataTests
     private const uint Reskinned = 101; // spawn guid whose model the event forces
     private const uint Casting = 102;   // spawn guid with only spells and equipment (not applied)
     private const uint Plain = 103;
+    private const uint EventEquipment = 5; // creature_equip_template entry: sword, shield, bow
+
+    private static readonly ArcaneCore.Kernel.Items.ItemTemplate Sword = new() { Entry = 1899, Class = 2, SubClass = 7, DisplayId = 7420, Material = 1, InventoryType = 13, Sheath = 3 };
+    private static readonly ArcaneCore.Kernel.Items.ItemTemplate Shield = new() { Entry = 143, Class = 4, SubClass = 6, DisplayId = 18730, Material = 1, InventoryType = 14, Sheath = 4 };
+    private static readonly ArcaneCore.Kernel.Items.ItemTemplate Bow = new() { Entry = 2551, Class = 2, SubClass = 2, DisplayId = 8105, Material = 2, InventoryType = 15, Sheath = 2 };
 
     private sealed class Clock(DateTimeOffset now)
     {
@@ -37,10 +45,12 @@ public sealed class GameEventCreatureDataTests
             Map = World.GetMap(0);
             Creatures = new CreatureMapSystem(
                 Map,
-                Content(
+                new CreatureContent(
                     [Template(Day, b => { b.Name = "Day Wolf"; b.DisplayIds = [903]; b.MinLevel = 2; b.MaxLevel = 2; }), Template(Night, b => { b.Name = "Night Wolf"; b.DisplayIds = [905]; b.MinLevel = 9; b.MaxLevel = 9; b.MinLevelHealth = 400; b.MaxLevelHealth = 400; })],
-                    [Spawn(Swapped, Day, 10, 0), Spawn(Reskinned, Day, 12, 0), Spawn(Casting, Day, 14, 0), Spawn(Plain, Day, 16, 0)]),
-                random: new Random(1));
+                    [Spawn(Swapped, Day, 10, 0), Spawn(Reskinned, Day, 12, 0), Spawn(Casting, Day, 14, 0), Spawn(Plain, Day, 16, 0)],
+                    [], [], [], equipment: [new CreatureEquipment(EventEquipment, Sword.Entry, Shield.Entry, Bow.Entry)]),
+                random: new Random(1),
+                aiServices: new CreatureAiServices { ItemTemplateOf = entry => entry == Sword.Entry ? Sword : entry == Shield.Entry ? Shield : entry == Bow.Entry ? Bow : null });
             Map.AddUpdater(Creatures);
             var events = new GameEventContent(
                 [new GameEventRecord(27, 1, 1440, 120, 0, 0, "Nights"), new GameEventRecord(28, 1, 1440, 120, 0, 0, "Second")],
@@ -51,7 +61,7 @@ public sealed class GameEventCreatureDataTests
                     [
                         new GameEventCreatureDataRecord(Swapped, 27, Night, 0, 0, 0, 0),
                         new GameEventCreatureDataRecord(Reskinned, 27, 0, Forced, 0, 0, 0),
-                        new GameEventCreatureDataRecord(Casting, 27, 0, 0, 5, 7671, 7671),
+                        new GameEventCreatureDataRecord(Casting, 27, 0, 0, EventEquipment, 7671, 7671),
                         new GameEventCreatureDataRecord(Swapped, 28, Day, 0, 0, 0, 0),
                     ],
                 ],
@@ -195,7 +205,7 @@ public sealed class GameEventCreatureDataTests
     }
 
     [Fact]
-    public void EquipmentAndSpellRows_AreCounted_NotApplied()
+    public void TheEventsEquipmentId_ResolvesToAllThreeSlotsAndTheirInfo_AndTheEventsSpellsAreCounted()
     {
         using var rig = new Rig();
         var castLog = new List<(uint Guid, uint SpellId)>();
@@ -212,15 +222,29 @@ public sealed class GameEventCreatureDataTests
         Assert.Equal(1, rig.Data.SpellRows);
         Assert.Equal(Day, casting.Entry);
         Assert.Equal(903u, casting.DisplayId);
-        Assert.Equal(5u, rig.Data.AppliedEquipmentByGuid[Casting]);
-        Assert.Equal(5u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+        Assert.Equal(EventEquipment, rig.Data.AppliedEquipmentByGuid[Casting]);
+        Assert.Equal(EventEquipment, casting.EventEquipmentId);
+        Assert.Equal([Sword.DisplayId, Shield.DisplayId, Bow.DisplayId],
+            Enumerable.Range(0, 3).Select(slot => casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot))); // the item displays, not the raw id
+        Assert.Equal(new byte[] { 2, 7, 1, 13 }, Enumerable.Range(0, 4).Select(i => casting.GetByte(UpdateFields.UnitVirtualItemInfo, i)));
+        Assert.Equal(new byte[] { 4, 6, 1, 14 }, Enumerable.Range(0, 4).Select(i => casting.GetByte(UpdateFields.UnitVirtualItemInfo + 2, i)));
+        Assert.Equal(new byte[] { 2, 2, 2, 15 }, Enumerable.Range(0, 4).Select(i => casting.GetByte(UpdateFields.UnitVirtualItemInfo + 4, i)));
+        Assert.Equal(3u, casting.GetUInt32(UpdateFields.UnitVirtualItemInfo + 1));
+        Assert.Equal(4u, casting.GetUInt32(UpdateFields.UnitVirtualItemInfo + 3));
+        Assert.Equal(2u, casting.GetUInt32(UpdateFields.UnitVirtualItemInfo + 5));
         Assert.Equal(7671u, rig.Data.LastSpellCastByGuid[Casting]);
         Assert.Equal([(Casting, 7671u)], castLog);
 
         rig.At(14, 30);
 
         Assert.False(rig.Data.AppliedEquipmentByGuid.ContainsKey(Casting));
-        Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay));
+        Assert.Equal(0u, casting.EventEquipmentId);
+        for (int slot = 0; slot < 3; slot++)
+        {
+            Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemSlotDisplay + slot));
+            Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2)));
+            Assert.Equal(0u, casting.GetUInt32(UpdateFields.UnitVirtualItemInfo + (slot * 2) + 1));
+        }
         Assert.Equal([(Casting, 7671u), (Casting, 7671u)], castLog);
     }
 
@@ -235,5 +259,41 @@ public sealed class GameEventCreatureDataTests
         rig.At(12, 30);
 
         Assert.Equal(Day, rig.Spawned(Swapped).Entry);
+    }
+
+    private sealed class AlwaysActive : IGameEventState
+    {
+        public bool IsActiveEvent(ushort eventId) => true;
+
+        public bool IsActiveHoliday(uint holidayId) => false;
+
+        public IReadOnlyCollection<ushort> ActiveEvents { get; } = [];
+    }
+
+    [Fact]
+    public void For_IsReadOnly_SoConcurrentGridSpawnsOnDifferentMapThreadsDoNotMutateTheSingleton()
+    {
+        const int guids = 512;
+        var rows = new GameEventRows
+        {
+            CreatureData = new Dictionary<ushort, IReadOnlyList<GameEventCreatureDataRecord>>
+            {
+                [27] = [.. Enumerable.Range(1, guids).Select(g => new GameEventCreatureDataRecord((uint)g, 27, 0, 0, (uint)(g % 7) + 1, 0, 0))],
+            },
+        };
+        var data = new GameEventCreatureData(new AlwaysActive(), rows, () => []);
+
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
+        {
+            for (int round = 0; round < 50; round++)
+            {
+                for (uint g = 1; g <= guids; g++)
+                {
+                    Assert.NotNull(data.For(g));
+                }
+            }
+        });
+
+        Assert.Empty(data.AppliedEquipmentByGuid);
     }
 }

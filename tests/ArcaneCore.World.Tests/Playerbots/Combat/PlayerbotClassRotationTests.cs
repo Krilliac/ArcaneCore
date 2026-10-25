@@ -338,6 +338,19 @@ public sealed class PlayerbotClassRotationTests
         Assert.Equal(PlayerbotClassRotation.CasterRange, Druid.PreferredRange(State(Druid, DruidBook, Self(11), null, PlayerbotRole.Healer)));
     }
 
+    // Frenzied Regeneration heals rage * amount / 10 per tick (DruidScripts): with no rage it heals nothing and burns the cooldown (bot QA SpellNoEffect).
+    [Fact]
+    public void Druid_BearCastsFrenziedRegenerationOnlyWithRage()
+    {
+        SpellInfo[] book = [.. DruidBook, SelfSpell("Frenzied Regeneration")];
+        RotationState NoRage() => State(Druid, book, Self(11, 20f), Victim(3f), PlayerbotRole.Tank, power: 0, more: s => s.Form = Form.Bear);
+        RotationState Rage() => State(Druid, book, Self(11, 20f), Victim(3f), PlayerbotRole.Tank, power: PlayerbotDruidRotation.FrenziedRegenerationMinRage,
+            more: s => s.Form = Form.Bear);
+
+        Assert.Equal("Maul", Next(Druid.InCombat(NoRage())));
+        Assert.Equal("Frenzied Regeneration", Next(Druid.InCombat(Rage())));
+    }
+
     // --- emergencies -----------------------------------------------------------------------------------------------------
 
     [Fact]

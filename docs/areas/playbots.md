@@ -821,6 +821,25 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   (`PlayerbotRisk.GroupSignal`); the coordinator matches by objective and, with `World:Playerbots:Groups:InvitePlayers`, invites a nearby real player.
 * **Stolen kills.** A corpse that is not the bot's to loot (another player's tap, or no credit) gets no loot request and no 10-second wait; the
   spawn is left alone for the memory window.
+* **Invincible targets.** Some creatures cannot be killed by a plain attack. Their EventAI holds them at 1 health from spawn (event 11,
+  action 42 `SET_DEATH_PREVENTION` with a nonzero first parameter, `Unit.InvincibilityHpThreshold` 1) until a particular spell hits them: the
+  Blasted Lands servants 7668-7671 of quest 2681 "The Stones That Bind Us" die only to Shackle Shatter (10805, 10834, 10835, 10836; rows
+  766801 and 766803 and the like). Two layers keep bots off them. (1) Quest side: `CreatureAiContent.IsInvincibleUntilSpellHit(entry)`, built
+  once at load from the entry's rows, is true when a spawn row sets the prevention and no row of the entry lifts it (action 42, parameter 0)
+  on an event other than a spell hit (a health or timer lift a plain attack can reach keeps the creature killable). `IsKillObjective` is then
+  false, so `CanExecuteObjectives` refuses the quest at acceptance and `Huntable` never picks those entries for a quest already in the log.
+  (2) Combat safety net: `PlayerbotInvincibleWatch` (one per brain, called from the fight step beside `FightGoesNowhere`) counts how long the
+  held target has stayed alive with `InvincibilityHpThreshold != 0` and health at or below it; after
+  `World:Playerbots:Contention:InvincibleTargetAbandonSeconds` (8, 1..600, live) the bot sets that creature aside exactly like a fight that
+  goes nowhere (`MarkUnreachable` for `StalledTargetMs`, `MarkFruitless`, then explores) and reports the anomaly `bot-combat` /
+  `invincible-target-abandoned` once per creature entry per bot, again only after 10 minutes, doubling up to 6 hours. A creature with a
+  threshold but health above it, or at low health with no threshold, is never abandoned, nor is any target on a dungeon or raid map (scripted
+  boss phases hold at 1 health) or a `NotSelectable` one. The brain resets the watch whenever it chooses a target afresh. Also: `IsSkipped` drops
+  these entries from solo grind and hunt target choice; a spell-hit lift with spell id 0 (any spell of its school) counts as an ordinary lift;
+  rows keyed by spawn guid are ignored (fail open, the watch catches them); and a bot that already holds such a quest in its log abandons
+  it through the client packet (`PlayerbotQuestGoals.UnkillableQuestToShed`, checked each quest update outside combat, set aside afterwards).
+  The anomaly key is `bot-combat/invincible-target-abandoned`. Follow-up, not done: using the quest's stone
+  and casting Shackle Shatter (quest 2681's real mechanic) so a bot could complete these objectives.
 * **No credit.** A quest creature that gained no credit (kill or quest item) in three minutes of *contested hunting* is set aside for the bot for
   `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among
   its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
@@ -1523,6 +1542,7 @@ itself and plain game mechanics, never invented lore.
 | `MaxTokens` | The reply limit, 16..1024 (150). |
 | `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
 | `ReasoningEffort` | OpenAICompatible: sent as `reasoning_effort` when set: `none`, `minimal`, `low`, `medium`, `high` or `xhigh` (any case); empty (default) sends nothing. Set `none` for a thinking model (below). The `Classify` moderation call inherits it, and defaults to `none` for a server on this machine when it is empty. `omit` never sends the field, to the reply or to the classifier call (for a server that rejects it). |
+| `JsonResponseFormat` | OpenAICompatible: send `response_format: {"type":"json_object"}` with the reply prompts, so the server constrains the model to a JSON object (`true` by default; Ollama and OpenAI support it). Set `false` for a server that rejects the field: LM Studio answers 400 to `json_object` (it only takes `json_schema`), which shows as `failed: rejected` and a cooldown; the warning then names this option. A reply that is still not readable JSON (fenced, escaped, trailing text are tolerated) is reported as the `bot-chat/prompt-json-invalid` anomaly and the next provider answers; it is not a server fault. |
 | `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
 | `Moderation`, `ModerationBaseUrl`, `ModerationModel`, `ModerationApiKeyEnvironmentVariable` | The optional moderation step before a line is sent to this provider: `None` (default), `Endpoint` or `Classify` (see Safety and provider policies). |
 

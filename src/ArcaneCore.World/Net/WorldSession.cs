@@ -344,13 +344,18 @@ public sealed partial class WorldSession : IPlayerSession
                 return;
             }
 
+            // Observed before the header is encrypted and the frame is queued: the writer loop does not take _sendLock, so once TryWrite
+            // returns the client can already hold this packet, and an observer that records state "at the moment of the send" would race the
+            // client. Running it ahead of EncryptHeader means a throwing observer cannot advance the header cipher and desync the stream.
+            // The completed-channel TryWrite failure below is defensive (the writer is only completed under _sendLock after _state = Closed,
+            // which is checked above), so an observed-but-unqueued packet is not expected in practice.
+            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
             _crypt.EncryptHeader(frame.AsSpan(0, headerLength));
             if (!_outbound.Writer.TryWrite(frame))
             {
                 return;
             }
 
-            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
             CapturePacket(false, opcode, payload);
         }
 

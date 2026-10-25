@@ -1107,7 +1107,10 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
 
         if (changed)
             _logger.LogWarning("Bot chat provider #{Index} ({Provider}) failed: {Error}; the next provider answers{Hint}", index, provider.Label, error,
-                error == "reasoning-only" ? " (the model spent its tokens thinking; set ReasoningEffort=none for this provider)" : string.Empty);
+                error == "reasoning-only" ? " (the model spent its tokens thinking; set ReasoningEffort=none for this provider)"
+                : error == "rejected" && provider is { Kind: PlayerbotChatProviderKind.OpenAICompatible, JsonResponseFormat: true }
+                    ? " (the server may reject response_format json_object, e.g. LM Studio; set JsonResponseFormat=false for this provider)"
+                    : string.Empty);
     }
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;

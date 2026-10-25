@@ -1719,6 +1719,42 @@ Cluster.Fencing.Enabled = false
 # Cluster.Fencing.TakeoverIncarnation =
 
 #----------------------------------------------------------------------------
+# Cluster:NodeBridge
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.NodeBridge.Enabled
+#        Description: true starts the node bridge: the World connects to each endpoint in Endpoints,
+#                     logs node connection events and heartbeats, and syncs live worker placement.
+#                     false, the default, does nothing at all: no sockets, no log lines, no
+#                     background task. Read once when the daemon starts.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternodebridge
+#
+Cluster.NodeBridge.Enabled = false
+
+#
+#    Cluster.NodeBridge.Endpoints
+#        Description: The nodes the bridge monitors, as ;-separated entries of
+#                     nodeId|role|host:port|maps, where maps is a comma list of map ids or - for a
+#                     realm-wide node. The default is the seven local nodes: worker:EK 19081,
+#                     worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085,
+#                     coordinator 19086, supervisor 19087. A blank value means the seven default
+#                     nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set,
+#                     replaces it but does not turn the bridge on (a warning is logged when Enabled
+#                     is false). Only read when Enabled is true.
+#        Type: string
+#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternodebridge
+#
+Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
+
+#----------------------------------------------------------------------------
 # Cluster:Worker
 #----------------------------------------------------------------------------
 
@@ -12632,8 +12668,9 @@ World.Playerbots.Chat.PerPlayerCooldownSeconds = 8
 #                     listed, and when listed it must be last. See docs/areas/playbots.md for the
 #                     provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers,
 #                     MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort,
-#                     InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
-#                     ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
+#                     JsonResponseFormat, InputUsdPerMillionTokens, OutputUsdPerMillionTokens,
+#                     Moderation, ModerationBaseUrl, ModerationModel,
+#                     ModerationApiKeyEnvironmentVariable).
 #        Type: PlayerbotChatProviderOptions[]
 #        Default: (empty list)
 #        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys
@@ -13472,6 +13509,21 @@ World.Playerbots.Contention.ContentionSuspendMinutes = 5
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Contention.HelpChance = 0.35
+
+#
+#    World.Playerbots.Contention.InvincibleTargetAbandonSeconds
+#        Description: Seconds a bot may hold a target whose health stays at or below its
+#                     death-prevention threshold (InvincibilityHpThreshold: a creature an EventAI
+#                     script keeps at 1 health until some condition is met, such as the Blasted
+#                     Lands servants of quest 2681) before it sets the creature aside as one it
+#                     cannot kill (1..600).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number from 1 to 600 (seconds)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 
 #
 #    World.Playerbots.Contention.SomeoneElsesMemorySeconds
@@ -15803,6 +15855,23 @@ World.Playerbots.Population.SecondaryStayMaxMinutes = 90
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Population.SecondaryStayMinMinutes = 30
+
+#
+#    World.Playerbots.Population.SpawnsPerBot
+#        Description: Zone capacity: a zone takes no new or relocated bot once its assigned bots
+#                     reach the zone's level-fitting outdoor creature spawns (on the surface, not
+#                     indoors or underground, hostile to the bot's faction) divided by this many
+#                     (0..100; 0 turns the cap off). Keeps a small zone such as Deadwind Pass (47
+#                     surface spawns, 600 s respawn) from taking a hundred bots that find every
+#                     creature dead. The spawn survey runs off the world thread; until it is in, no
+#                     zone is capped.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.SpawnsPerBot = 3
 
 #
 #    World.Playerbots.Population.TargetOnline

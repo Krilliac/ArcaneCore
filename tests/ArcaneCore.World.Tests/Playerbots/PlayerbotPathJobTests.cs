@@ -148,6 +148,7 @@ public sealed class PlayerbotPathJobTests
             PlayerbotPathJobTotals totals = h.Jobs.Totals;
             Assert.Equal(0, totals.Applied);
             Assert.Equal(1, totals.Stale);
+            Assert.Equal(1, totals.StaleJoinsFrom);
             Assert.Equal(2, h.Runner.Submitted.Count);
             return true;
         });
@@ -300,6 +301,7 @@ public sealed class PlayerbotPathJobTests
             Assert.True(IsPending(h.Ask(h.Far())));
             Assert.Equal(0, h.Jobs.Totals.Applied);
             Assert.Equal(1, h.Jobs.Totals.Stale);
+            Assert.Equal(1, h.Jobs.Totals.StaleInvalid);
             Assert.Equal(2, h.Runner.Submitted.Count);
             Assert.Equal(0, h.Nav.OwnerCalls);
             return true;
@@ -582,6 +584,93 @@ public sealed class PlayerbotPathJobTests
             Assert.False(IsPending(h.Ask(h.Far())));
             Assert.Equal(1, h.Nav.OwnerCalls);
             Assert.Equal(1, h.Jobs.Totals.Faulted);
+            return true;
+        });
+    }
+
+    // ---- 7b. long-wait reports and escalation reasons ---------------------------------------------------------------------------------
+
+    /// <summary>After an applied answer the refresh job is the bot's own new job: asking again while it runs is not a wait since the clock's zero.</summary>
+    [Fact]
+    public async Task AskingAgainWhileTheRefreshJobRuns_AfterAnAppliedAnswer_ReportsNoLongWait()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(h.Far(260)))); // applied; a refresh job for the destination now is queued
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(2, h.Runner.Submitted.Count);
+
+            h.Wall += 1_000;
+            h.Clock += 500;
+            Assert.True(IsPending(h.Ask(h.Far(260)))); // finds the running refresh job
+            Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "job-wait-long")));
+            return true;
+        });
+    }
+
+    private static string EscalationDetail(AnomalyCapture cap)
+    {
+        AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == PlayerbotAnomalies.Key("nav", "job-escalated"));
+        return notice.Detail;
+    }
+
+    /// <summary>Re-installs another pathfinder object, so the finished answer is stale when asked for.</summary>
+    private static void MakeFinishedAnswerStale(Harness h, RiskTestWorld world)
+    {
+        h.Runner.CompleteAll();
+        WorldCollision.Of(world.Host.World).Install(pathfinder: new ManualSharedPathSearch());
+    }
+
+    [Fact]
+    public async Task ThreeStaleAnswers_EscalateWithTheStaleReason_NotACancelReason()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            for (int i = 0; i < 2; i++)
+            {
+                MakeFinishedAnswerStale(h, world);
+                Assert.True(IsPending(h.Ask(h.Far())));
+            }
+
+            MakeFinishedAnswerStale(h, world);
+            Assert.False(IsPending(h.Ask(h.Far())));
+            Assert.Equal(3, h.Jobs.Totals.Stale);
+            Assert.Equal(3, h.Jobs.Totals.StaleInvalid);
+            Assert.Equal(0, h.Jobs.Totals.Canceled);
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            string detail = EscalationDetail(cap);
+            Assert.Contains("3 stale, 0 canceled", detail);
+            Assert.DoesNotContain("repeatedly canceled", detail);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task MixedStaleAndCanceledFailures_EscalateNamingBothCounts()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            Assert.True(h.Runner.CancelNext());
+            Assert.True(IsPending(h.Ask(h.Far())));
+            MakeFinishedAnswerStale(h, world);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            MakeFinishedAnswerStale(h, world);
+            Assert.False(IsPending(h.Ask(h.Far())));
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            Assert.Contains("2 stale, 1 canceled", EscalationDetail(cap));
             return true;
         });
     }
