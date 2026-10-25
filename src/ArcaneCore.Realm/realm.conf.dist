@@ -26,16 +26,16 @@
 
 # SECTIONS
 #
-#   AUTH                        15 keys
-#   DATABASE                    18 keys
-#   DIAGNOSTICS                 10 keys
-#   LOGGING                     16 keys
-#   NET                         16 keys
-#   OPS                         46 keys
-#   REALM                       1 keys
-#   REALMS                      1 keys
-#   RESILIENCE                  14 keys
-#   STARTUP                     1 keys
+#   AUTH
+#   DATABASE
+#   DIAGNOSTICS
+#   LOGGING
+#   NET
+#   OPS
+#   REALM
+#   REALMS
+#   RESILIENCE
+#   STARTUP
 #
 ###############################################################################
 
