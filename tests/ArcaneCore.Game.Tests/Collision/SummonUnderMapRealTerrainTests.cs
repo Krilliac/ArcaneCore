@@ -362,7 +362,22 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
             query: GroundHeight.Walker,
             modelTolerance: CreatureMapSystem.GroundModelToleranceYards,
             cornersOnMesh: true);
-        float worst = 0f;
+        List<Vector3> uncapped = GroundHeight.DrapePath(
+            collision,
+            start,
+            [.. path.Points.Skip(1)],
+            step: CreatureMapSystem.GroundSampleYards,
+            tolerance: CreatureMapSystem.GroundToleranceYards,
+            maxPoints: 100000,
+            query: GroundHeight.Walker,
+            modelTolerance: CreatureMapSystem.GroundModelToleranceYards,
+            cornersOnMesh: true);
+        Assert.True(uncapped.Count > 32, $"the path must need more than the 32-point cap or the test proves nothing (uncapped {uncapped.Count})");
+        Assert.True(draped.Count <= 32, $"the capped drape stays within the cap (got {draped.Count})");
+        Assert.Contains(draped, p => p.X < 1385f);
+        Assert.Contains(draped, p => p.X > 1490f);
+        float worst = float.NegativeInfinity;
+        int inWindow = 0;
         Vector3 prev = start;
         foreach (Vector3 p in draped)
         {
@@ -378,13 +393,15 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
                 if (float.IsFinite(floor))
                 {
                     worst = MathF.Max(worst, floor - s.Z);
+                    inWindow++;
                 }
             }
 
             prev = p;
         }
 
-        output.WriteLine($"{draped.Count} points; worst depth under the tunnel floor {worst:F2}");
+        output.WriteLine($"{draped.Count} points (uncapped {uncapped.Count}); {inWindow} tunnel samples; worst depth under the tunnel floor {worst:F2}");
+        Assert.True(inWindow >= 100, $"the draped path was sampled through the tunnel (only {inWindow} samples with a tunnel floor)");
         Assert.InRange(worst, -10f, 1.25f); // HEAD measured: 7.06 at x 1439.6
     }
 }
