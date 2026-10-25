@@ -11,6 +11,24 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Longest a single DevTools request may take; a loaded machine is slow, a wedged browser never answers. */
 const COMMAND_TIMEOUT_MS = 60_000;
 
+/**
+ * Kills the process trees of every process whose command line carries this launch's own `--user-data-dir` profile path
+ * (a relaunched browser re-quotes the argument, so the unique path itself is matched, not the flag text).
+ * A launcher that relaunched itself (pending browser update) exits, leaving the real browser outside the child's tree.
+ * The profile dir is unique per launch, so nothing else can match; processes are never selected by image name.
+ */
+async function killProfileOwners(profile) {
+    const escaped = profile.replace(/'/g, "''");
+    const script = "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf('" + escaped + "', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { $_.ProcessId }";
+    const output = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true }, (_error, stdout) => resolve(String(stdout ?? ''))));
+    for (const line of output.split(/\r?\n/)) {
+        const owner = Number(line.trim());
+        if (Number.isInteger(owner) && owner > 0) {
+            await new Promise((resolve) => execFile('taskkill', ['/PID', String(owner), '/T', '/F'], () => resolve()));
+        }
+    }
+}
+
 export class Browser {
     static async launch(executable, { width = 1440, height = 900 } = {}) {
         const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-browser-'));
@@ -33,7 +51,8 @@ export class Browser {
         const portFile = path.join(profile, 'DevToolsActivePort');
         const deadline = Date.now() + 30_000;
         while (!fs.existsSync(portFile)) {
-            if (Date.now() > deadline || child.exitCode !== null) {
+            // A launcher may relaunch itself (pending browser update) and exit 0; the real browser still writes the port file.
+            if (Date.now() > deadline || (child.exitCode !== null && child.exitCode !== 0)) {
                 await browser.close();
                 throw new Error('The browser did not start a DevTools endpoint.');
             }
@@ -54,7 +73,7 @@ export class Browser {
                     throw error;
                 }
             }
-            if (Date.now() > deadline || child.exitCode !== null) {
+            if (Date.now() > deadline || (child.exitCode !== null && child.exitCode !== 0)) {
                 await browser.close();
                 throw new Error('The browser did not publish a DevTools port.');
             }
@@ -99,6 +118,9 @@ export class Browser {
             } else {
                 this.child.kill('SIGKILL');
             }
+        }
+        if (process.platform === 'win32') {
+            await killProfileOwners(this.profile);
         }
         for (let i = 0; i < 20; i++) {
             try {
