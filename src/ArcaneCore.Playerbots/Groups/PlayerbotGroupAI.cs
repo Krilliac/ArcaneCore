@@ -104,8 +104,16 @@ internal sealed class PlayerbotGroupAI
     private readonly float _followAngle;
     private readonly float _followDistance;
     private bool _retreatStarted;
-    /// <summary>Consecutive thinks the wipe exit walk found no path; past <see cref="WipeExitGiveUp"/> the bot falls back to the retreat.</summary>
+    /// <summary>
+    /// Consecutive thinks the instance-exit walk found no path (or stood on an exit that did not fire); past <see cref="WipeExitGiveUp"/> a wiped
+    /// bot falls back to the retreat, and a bot in the retry regroup falls back to the regroup's own think (it fights back where it stands, or
+    /// with no target follows its leader), the count kept for the rest of that regroup.
+    /// It restarts at a death (the bot is revived somewhere else) and when the retry regroup begins.
+    /// </summary>
     private int _wipeExitFails;
+
+    /// <summary>Whether this bot's last think was in the retry regroup (<see cref="PlayerbotRunStep.Retry"/> while Gathering), to see it begin.</summary>
+    private bool _wipeExitRetry;
     private const int WipeExitGiveUp = 5;
     private long _resurrectAtMs;
     private PlayerbotRoute? _runRoute;
@@ -285,6 +293,7 @@ internal sealed class PlayerbotGroupAI
             _lootActions.Clear();
             _spells.Reset();
             ForgetFight();
+            _wipeExitFails = 0; // revived, it stands somewhere else (the landing): a give-up on the exit from where it died does not hold there
             _deathRetired = true;
         }
 
@@ -332,8 +341,12 @@ internal sealed class PlayerbotGroupAI
         // The same holds once the run is on its Retry step and the group regroups (Gathering): the leader walks out to regroup at the entrance
         // (Lead), and a member revived at the landing that the surviving trash engages (it attacks the unit it hits, vmangos
         // Creature::OnEnterCombat -> AttackedBy) leaves through the exit too rather than fighting it at half health with no wipe check running.
-        // Past WipeExitGiveUp it fights back where it stands (SelectTarget), as it would have without an exit.
+        // Past WipeExitGiveUp it goes on as it would have without an exit: it fights back where it stands (SelectTarget), or follows its leader.
         bool retryRegroup = group.State == PlayerbotGroupState.Gathering && group.Run is { Step: PlayerbotRunStep.Retry };
+        // A give-up reached while wiped does not carry into the regroup: the Wiped state keeps the count (the reset below skips it), and a
+        // survivor that found no way out then may well have one now, after its retreat.
+        if (retryRegroup && !_wipeExitRetry) _wipeExitFails = 0;
+        _wipeExitRetry = retryRegroup;
         if ((group.State == PlayerbotGroupState.Wiped || retryRegroup) && player.Combat.IsInCombat && player.MapId == group.Goal.MapId
             && WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
             && _wipeExitFails < WipeExitGiveUp
@@ -377,7 +390,7 @@ internal sealed class PlayerbotGroupAI
         else
         {
             _retreatStarted = false;
-            if (!retryRegroup) _wipeExitFails = 0; // a bot that gave up on the exit during the retry regroup keeps fighting instead of trying it again every other think
+            if (!retryRegroup) _wipeExitFails = 0; // a bot that gave up on the exit during the retry regroup stays given up instead of trying it again every other think
         }
 
         Player? leader = group.LeaderPlayer(_session.World);
