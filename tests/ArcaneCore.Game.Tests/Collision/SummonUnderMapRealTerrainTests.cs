@@ -377,6 +377,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         Assert.Contains(draped, p => p.X < 1385f);
         Assert.Contains(draped, p => p.X > 1490f);
         float worst = float.NegativeInfinity;
+        float worstX = float.NaN;
         int inWindow = 0;
         Vector3 prev = start;
         foreach (Vector3 p in draped)
@@ -392,7 +393,12 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
                 float floor = TunnelFloor(collision, s.X, s.Y);
                 if (float.IsFinite(floor))
                 {
-                    worst = MathF.Max(worst, floor - s.Z);
+                    if (floor - s.Z > worst)
+                    {
+                        worst = floor - s.Z;
+                        worstX = s.X;
+                    }
+
                     inWindow++;
                 }
             }
@@ -400,8 +406,8 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
             prev = p;
         }
 
-        output.WriteLine($"{draped.Count} points (uncapped {uncapped.Count}); {inWindow} tunnel samples; worst depth under the tunnel floor {worst:F2}");
+        output.WriteLine($"{draped.Count} points (uncapped {uncapped.Count}); {inWindow} tunnel samples; worst depth under the tunnel floor {worst:F2} at x {worstX:F1}");
         Assert.True(inWindow >= 100, $"the draped path was sampled through the tunnel (only {inWindow} samples with a tunnel floor)");
-        Assert.InRange(worst, -10f, 1.25f); // HEAD measured: 7.06 at x 1439.6
+        Assert.InRange(worst, -10f, 1.25f); // the pre-fix code (stride doubled at the cap) measured 7.10 at x 1438.6 (RED); the fix measures 0.72
     }
 }

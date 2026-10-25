@@ -196,8 +196,10 @@ public static class GroundHeight
     /// the steepest rolling ground measured). Each sample is looked for near the ground before it, so a hill the straight chord misses by
     /// more than the window is followed. A sample with no floor in the window is looked for where the mesh walk from the last sample
     /// arrives (<see cref="MapCollision.TryWalkMeshSurface"/>: a floor far under the chord, such as the top of a tunnel ramp); one with none
-    /// there either (another storey, a hole) is left out. Insertion never takes the result past <paramref name="maxPoints"/> points: when it
-    /// would, the inserted points furthest from the chord of their neighbours are kept first, so a bend stays sampled; corners are never dropped. The
+    /// there either (another storey, a hole) is left out. That fallback is a safety net: on the real WSG tunnel leg the result is the same with or
+    /// without it. Insertion never takes the result past <paramref name="maxPoints"/> points: when it would, the inserted points furthest from the
+    /// chord of their neighbours are kept first, so a bend stays sampled rather than being dropped by a coarser stride (the change that keeps that
+    /// leg on the tunnel floor); corners are never dropped. The
     /// client draws a leg as straight chords between points, so the sent points are the only ground it follows.
     /// </summary>
     /// <param name="query">The floor query; the walker default (<see cref="Walker"/>) when null.</param>
