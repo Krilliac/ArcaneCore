@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 namespace ArcaneCore.World.Commands;
 
 /// <summary>
-/// The commands only the true server console may run (design 1.7, docs/areas/atlas-actions.md): paths as the command table resolves them
+/// The commands only the true server console may run (design 1.7, docs/ops/remote-admin.md): paths as the command table resolves them
 /// (<c>CommandLookup.Path</c>, for example <c>server remote token rotate</c>), a path also covering the commands below it. There is no Console
 /// account level, so a command a plan marks Console-only is listed here, and the action channel refuses it with <c>console-only</c> for every
 /// tool actor (the local actor and web actors run through <c>CommandContext.ForRemote</c>, never as the console) before it executes, even when the
