@@ -48,7 +48,7 @@ internal static class WorldBossTestKit
     internal static CreatureTemplate Unbeatable(byte level = 60) => Boss(level: level, health: 20_000_000, damage: 5000f);
 
     /// <summary>A boss that hits for nothing and never dies: it holds whoever tapped it for as long as the test wants.</summary>
-    internal static CreatureTemplate Passive() => Boss(health: 5_000_000, damage: 0f);
+    internal static CreatureTemplate Passive() => Boss(health: 5_000_000, damage: 0f) with { MeleeBaseAttackTime = 3_600_000 }; // a swing an hour: damage 0 still lands the level-60 attack-power part, which kills a level-1 player in half a minute
 
     internal static void Tune(PlayerbotOptions options, Action<PlayerbotWorldBossOptions>? boss)
     {
@@ -141,7 +141,7 @@ internal static class WorldBossTestKit
         {
             _listener.InstrumentPublished = (instrument, listener) =>
             {
-                if (ReferenceEquals(instrument.Meter, PlayerbotWorldBossMeters.Meter) && instrument.Name == PlayerbotWorldBossMeters.Raids.Name) listener.EnableMeasurementEvents(instrument);
+                if (instrument.Meter.Name == "ArcaneCore.Playerbots.WorldBosses" && instrument.Name == "arcanecore.playerbot.worldboss_raids") listener.EnableMeasurementEvents(instrument);
             };
             _listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
             {

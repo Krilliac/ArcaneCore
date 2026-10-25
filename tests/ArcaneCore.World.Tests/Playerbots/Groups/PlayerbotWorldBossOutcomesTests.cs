@@ -96,7 +96,7 @@ public sealed class PlayerbotWorldBossOutcomesTests
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (ReferenceEquals(instrument.Meter, PlayerbotWorldBossMeters.Meter) && instrument.Name == PlayerbotWorldBossMeters.Raids.Name) l.EnableMeasurementEvents(instrument);
+            if (instrument.Meter.Name == "ArcaneCore.Playerbots.WorldBosses" && instrument.Name == "arcanecore.playerbot.worldboss_raids") l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
         {

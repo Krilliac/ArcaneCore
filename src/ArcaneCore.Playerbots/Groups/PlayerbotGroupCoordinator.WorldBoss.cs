@@ -47,6 +47,9 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>The least time between two engage decisions of one raid (the boss is looked at a few times a second, not every tick).</summary>
     internal const uint WorldBossCheckMs = 200;
 
+    /// <summary>How long another player's claim on the boss lingers after it was last seen: a boss that evades and is tapped again a moment later is one claim, not a free pull.</summary>
+    internal const uint WorldBossClaimLingerMs = 5_000;
+
     /// <summary>The least time between two muster attempts of one boss while its muster is open.</summary>
     internal const uint WorldBossMusterRetryMs = 10_000;
 
@@ -484,6 +487,7 @@ public sealed partial class PlayerbotGroupCoordinator
         raid.Waiting = false;
         raid.Hold = PlayerbotWorldBossHold.None;
         raid.ClaimSinceMs = 0;
+        raid.ClaimSeenMs = 0;
         raid.GateSinceMs = 0;
         raid.CheckedMs = 0;
     }
@@ -633,7 +637,10 @@ public sealed partial class PlayerbotGroupCoordinator
                 raid.SawAlive = true;
                 fightingUs = FightsRaid(group, boss);
                 tappedByRaid = tapIsRaid;
-                othersClaim = !fightingUs && PlayerbotBrain.IsSomeoneElses(leader, boss, GroupManagerOrNull());
+                bool tapped = !fightingUs && PlayerbotBrain.IsSomeoneElses(leader, boss, GroupManagerOrNull());
+                // A claim that blinks (the boss evades and its player taps it again a moment later) is one claim: it lingers for WorldBossClaimLingerMs after it was last seen.
+                if (tapped) raid.ClaimSeenMs = Math.Max(1u, now);
+                othersClaim = tapped || !fightingUs && raid.ClaimSeenMs != 0 && unchecked(now - raid.ClaimSeenMs) < WorldBossClaimLingerMs;
                 if (engaging && o.PlayersNearYards > 0f) playersNear = map.CountPlayersWithin(at.X, at.Y, o.PlayersNearYards, includeBots: false);
             }
             else corpseTapByRaid = tapIsRaid;

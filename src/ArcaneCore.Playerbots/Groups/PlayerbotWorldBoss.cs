@@ -671,6 +671,9 @@ internal sealed class PlayerbotWorldBossRaid(PlayerbotWorldBossEntry boss, strin
     /// <summary>World ms since when somebody else's claim has lasted without a break (0: none).</summary>
     internal uint ClaimSinceMs { get; set; }
 
+    /// <summary>World ms another player's claim on the boss was last seen (0: never).</summary>
+    internal uint ClaimSeenMs { get; set; }
+
     /// <summary>World ms since when the raid has waited at the gate (0: not waiting).</summary>
     internal uint GateSinceMs { get; set; }
 

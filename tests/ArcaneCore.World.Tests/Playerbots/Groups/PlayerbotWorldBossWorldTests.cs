@@ -167,21 +167,22 @@ public sealed class PlayerbotWorldBossWorldTests
 
         PlayerbotGroupCoordinator.BotGroup? group = null;
         bool held = false, memberOnThreat = false;
+        string threatTrace = string.Empty;
         Assert.True(await world.RunUntilAsync(900_000, () =>
         {
             group ??= Raid(world);
+            if (boss.IsAlive && world.World.Host.World.NowMs % 1000 < 50) player.Map!.Combat.DealDamage(player, boss, 1); // keep the tap fresh from the start, before the raid forms
             if (group is not null && boss.IsAlive)
             {
                 held |= LeaderStep(world, group) == "lead:hold-worldboss" && group.WorldBoss!.PullHeld;
-                memberOnThreat |= ThreatenedByAnyOf(boss, MembersOf(world, group));
-                if (world.World.Host.World.NowMs % 1000 < 50) player.Map!.Combat.DealDamage(player, boss, 1); // keep the tap fresh
+                if (!memberOnThreat && ThreatenedByAnyOf(boss, MembersOf(world, group))) { memberOnThreat = true; threatTrace = world.Trace(); }
             }
 
             return group is not null && world.Coordinator.Groups.Count == 0;
         }), await world.TraceAsync());
 
         Assert.True(held, "the leader never held at the rally: " + await world.TraceAsync());
-        Assert.False(memberOnThreat, "a raid member got on the boss's threat list");
+        Assert.False(memberOnThreat, "a raid member got on the boss's threat list: " + threatTrace);
         Assert.True(Noted(world, "disbanded (boss-taken)"), await world.TraceAsync());
         Assert.False(Noted(world, "stalled"), "the stall watch ended a holding raid: " + await world.TraceAsync());
         Assert.False(group!.SuccessNoted);
@@ -205,11 +206,11 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.True(await world.RunUntilAsync(900_000, () =>
         {
             group ??= Raid(world);
+            if (boss.IsAlive && world.World.Host.World.NowMs % 1000 < 50) player.Map!.Combat.DealDamage(player, boss, 1); // keep the tap fresh from the start, before the raid forms
             if (group is not null && boss.IsAlive)
             {
                 if (group.WorldBoss!.Waiting && holdStartedMs == 0) holdStartedMs = (uint)world.World.Host.World.NowMs;
                 if (holdStartedMs != 0 && world.World.Host.World.NowMs - holdStartedMs >= 40_000) heldFortySeconds = true;
-                if (world.World.Host.World.NowMs % 1000 < 50) player.Map!.Combat.DealDamage(player, boss, 1);
             }
 
             return heldFortySeconds || group is not null && world.Coordinator.Groups.Count == 0;
@@ -473,8 +474,8 @@ public sealed class PlayerbotWorldBossWorldTests
     public async Task TooFewWillingBots_LetTheMusterWindowRunOut_AsMusterFailed_AndBackToWatchWithACooldown()
     {
         using var counts = new OutcomeCounts();
-        // Nobody agrees to come (a RefuseAffinity of 100 turns every stranger away), so the open muster ends with its window.
-        await using GroupTestWorld world = await StartAsync(boss => { boss.MusterWindowSeconds = 30; boss.RetrySeconds = 600; }, options => options.Groups.Cooperation.RefuseAffinity = 100);
+        // Nobody agrees to come (a RefuseAffinity of 0 turns every stranger (affinity 0) away), so the open muster ends with its window.
+        await using GroupTestWorld world = await StartAsync(boss => { boss.MusterWindowSeconds = 30; boss.RetrySeconds = 600; }, options => options.Groups.Cooperation.RefuseAffinity = 0);
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         await SpawnAsync(world, bots[0].Id, Boss(), BossAt);
 
