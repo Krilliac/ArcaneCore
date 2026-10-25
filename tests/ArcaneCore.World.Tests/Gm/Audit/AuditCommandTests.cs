@@ -1,11 +1,13 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Gm;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Audit;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -327,6 +329,61 @@ public sealed class AuditCommandTests
         Assert.Equal("free again", (await listener.ReadChatAsync()).Text);
         Assert.Equal("GM mode: off Chat: enabled Ticket: none", (await LinesAsync(gm, ".pinfo targetone"))[3]);
         Assert.Equal("Player's chat is already enabled.", await ReplyAsync(gm, ".unmute targetone"));
+    }
+
+    [Fact]
+    public async Task Unmute_ClearsTheChatRestrictionServiceMuteToo_AndIsNotAlreadyEnabledWhileOnlyThatMuteIsInForce()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient target = await host.EnterWorldAsync("TARGET", "Targetone");
+        await gm.CollectAsync();
+        await target.CollectAsync();
+        ChatRestrictionService restrictions = host.WorldServices.GetRequiredService<ChatRestrictionFeature>().Service;
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        int account = await AccountIdAsync(host, "TARGET");
+
+        // The social lane's mute table, a third place a mute lives besides the audit mute and the chat lane's session mute.
+        await host.OnWorldAsync(() => restrictions.Mute(account, clock.UnixNow + 600));
+        Assert.Null(audit.MuteOf(account));
+        Assert.Equal(600, await host.OnWorldAsync(() => restrictions.MuteRemaining(account)));
+
+        Assert.Equal($"You have enabled {Link("Targetone")}'s chat.", await ReplyAsync(gm, ".unmute targetone"));
+
+        Assert.Equal(0, await host.OnWorldAsync(() => restrictions.MuteRemaining(account)));
+        Assert.Equal(0, await host.OnWorldAsync(() => restrictions.MuteCount));
+        Assert.Equal("Player's chat is already enabled.", await ReplyAsync(gm, ".unmute targetone"));
+    }
+
+    [Fact]
+    public async Task Unmute_ClearsTheAuditAndRestrictionMutes_OfAnOfflineCharacter_AndLeavesOtherAccountsMuted()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADM", "Admiral", AccountSecurity.Administrator);
+        byte[] key = await host.AddAccountAsync("SLEEPER");
+        await using WorldTestClient sleeper = await host.ConnectAsync();
+        await sleeper.AuthenticateAsync("SLEEPER", key);
+        await sleeper.CreateCharacterAsync("Sleepyhead");   // created, never logged in: offline
+        await using WorldTestClient bystander = await host.EnterWorldAsync("BYSTANDER", "Bystander");
+        await admin.CollectAsync();
+        ChatRestrictionService restrictions = host.WorldServices.GetRequiredService<ChatRestrictionFeature>().Service;
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        int account = await AccountIdAsync(host, "SLEEPER");
+        int otherAccount = await AccountIdAsync(host, "BYSTANDER");
+        audit.Mute(account, 3600, "Someone", AccountSecurity.Moderator, "left muted");
+        await host.OnWorldAsync(() =>
+        {
+            restrictions.Mute(account, clock.UnixNow + 600);
+            restrictions.Mute(otherAccount, clock.UnixNow + 600);
+        });
+
+        Assert.Equal($"You have enabled {Link("Sleepyhead")}'s chat.", await ReplyAsync(admin, ".unmute sleepyhead"));
+
+        Assert.Null(audit.MuteOf(account));
+        Assert.Equal(0, await host.OnWorldAsync(() => restrictions.MuteRemaining(account)));
+        Assert.Equal(600, await host.OnWorldAsync(() => restrictions.MuteRemaining(otherAccount)));
     }
 
     [Fact]
