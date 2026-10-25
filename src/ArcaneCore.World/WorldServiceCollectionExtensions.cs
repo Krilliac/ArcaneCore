@@ -50,6 +50,7 @@ public static class WorldServiceCollectionExtensions
     {
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<CharacterFencingOptions>(configuration.GetSection(CharacterFencingOptions.SectionName));
+        services.Configure<Cluster.Tooling.ClusterNodeBridgeOptions>(configuration.GetSection(Cluster.Tooling.ClusterNodeBridgeOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));

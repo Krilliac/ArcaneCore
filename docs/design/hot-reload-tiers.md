@@ -494,7 +494,7 @@ Source: Tier 3 research (static reading, no real client used).
 | `ITransferDecisionStore` | In-memory, plus the durable `EfTransferDecisionStore` in the characters database since `claude/hr3-standby` (section 5.6) |
 | `PlayerTransferBundle` | Record only; nothing captures or installs it; lacks group, pet, threat, cast, reputation, skills, talents, binds |
 | `GatewayWorkerTransport` (envelope with generation, epoch, sequence; loopback TCP) | Hosted only by tests; not connected to `OpcodeTable` or `WorldSession` |
-| `ClusterNodeBridgeFeature` | A monitor with a probe character; routes no traffic |
+| `ClusterNodeBridgeFeature` | A monitor with a probe character; routes no traffic. Off by default (`Cluster:NodeBridge:Enabled`, start-up only): with it off it opens no sockets, logs nothing and starts no task |
 | Character fencing (epoch compare-and-swap, save-time token check), durable ID ranges | **Production-wired, opt-in** (`Cluster:Fencing:Enabled`, off by default); **mandatory in worker mode** since `claude/hr3-standby` |
 | `CharacterPersistenceBarrier.TryFlushCharacterAsync` | Production; the flush primitive for a handoff |
 | `ManagedWorldSession` | Production socketless session; the template for a gateway-backed session |

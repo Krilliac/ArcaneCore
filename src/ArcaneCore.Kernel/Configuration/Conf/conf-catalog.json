@@ -2262,6 +2262,38 @@
       "isCollection": false
     },
     {
+      "path": "Cluster:NodeBridge:Enabled",
+      "section": "Cluster:NodeBridge",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "`true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#clusternodebridge",
+      "isCollection": false
+    },
+    {
+      "path": "Cluster:NodeBridge:Endpoints",
+      "section": "Cluster:NodeBridge",
+      "type": "string",
+      "kind": "scalar",
+      "elementType": "string",
+      "enumValues": null,
+      "default": "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The nodes the bridge monitors, as `;`-separated entries of `nodeId|role|host:port|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true.",
+      "allowed": "text",
+      "docs": "docs/reference/configuration.md#clusternodebridge",
+      "isCollection": false
+    },
+    {
       "path": "Cluster:Worker:BindAddress",
       "section": "Cluster:Worker",
       "type": "string",
