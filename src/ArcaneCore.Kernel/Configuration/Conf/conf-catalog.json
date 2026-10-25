@@ -20471,6 +20471,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Social:PassBudgetMs",
+      "section": "World:Playerbots",
+      "type": "double",
+      "kind": "scalar",
+      "elementType": "double",
+      "enumValues": null,
+      "default": "4",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply carries on (the next one starts when it has finished). The per-bot lanes stop between bots once the budget is spent (a tick may overshoot by one bot); the lanes that work on the whole population run whole.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Social:WarMode:ClearOnDisable",
       "section": "World:Playerbots",
       "type": "bool",
