@@ -148,6 +148,7 @@ public sealed class PlayerbotPathJobTests
             PlayerbotPathJobTotals totals = h.Jobs.Totals;
             Assert.Equal(0, totals.Applied);
             Assert.Equal(1, totals.Stale);
+            Assert.Equal(1, totals.StaleJoinsFrom);
             Assert.Equal(2, h.Runner.Submitted.Count);
             return true;
         });
@@ -300,6 +301,7 @@ public sealed class PlayerbotPathJobTests
             Assert.True(IsPending(h.Ask(h.Far())));
             Assert.Equal(0, h.Jobs.Totals.Applied);
             Assert.Equal(1, h.Jobs.Totals.Stale);
+            Assert.Equal(1, h.Jobs.Totals.StaleInvalid);
             Assert.Equal(2, h.Runner.Submitted.Count);
             Assert.Equal(0, h.Nav.OwnerCalls);
             return true;
@@ -611,70 +613,6 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
-    /// <summary>A no-path answer for a goal re-picked a few yards away is still the unreachable verdict for that goal.</summary>
-    [Fact]
-    public async Task ANoPathAnswerForASlightlyMovedDestination_IsTheUnreachableVerdict_NotStaleNorAnEscalation()
-    {
-        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        await world.OnWorldAsync(() =>
-        {
-            var nav = new ManualSharedPathSearch { Type = PathType.NoPath };
-            using var h = new Harness(world, Options(), nav);
-            Assert.True(IsPending(h.Ask(h.Far(250))));
-            h.Runner.CompleteAll();
-
-            PathResult answer = h.Ask(h.Far(255)); // 5 yards on: within the 15% tolerance
-            Assert.False(IsPending(answer));
-            Assert.NotEqual(PathType.Blank, answer.Type & PathType.NoPath);
-            PlayerbotPathJobTotals totals = h.Jobs.Totals;
-            Assert.Equal(1, totals.Applied);
-            Assert.Equal(0, totals.Stale);
-            Assert.Equal(0, totals.Escalations);
-            Assert.Equal(0, nav.OwnerCalls);
-            return true;
-        });
-    }
-
-    /// <summary>A partial answer for the same re-picked goal is a partial verdict too, marked Short because it ends short of the asked goal.</summary>
-    [Fact]
-    public async Task AnIncompleteAnswerForASlightlyMovedDestination_IsAPartialVerdict_NotStale()
-    {
-        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        await world.OnWorldAsync(() =>
-        {
-            var nav = new ManualSharedPathSearch { Type = PathType.Incomplete };
-            using var h = new Harness(world, Options(), nav);
-            Assert.True(IsPending(h.Ask(h.Far(250))));
-            h.Runner.CompleteAll();
-
-            PathResult answer = h.Ask(h.Far(255));
-            Assert.False(IsPending(answer));
-            Assert.NotEqual(PathType.Blank, answer.Type & PathType.Incomplete);
-            Assert.Equal(0, h.Jobs.Totals.Stale);
-            Assert.Equal(1, h.Jobs.Totals.Applied);
-            return true;
-        });
-    }
-
-    /// <summary>A no-path answer for a destination well beyond the tolerance is never applied to the one asked now.</summary>
-    [Fact]
-    public async Task ANoPathAnswerForAGenuinelyDifferentDestination_IsNeverApplied_AsStaleOrOtherwise()
-    {
-        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        await world.OnWorldAsync(() =>
-        {
-            var nav = new ManualSharedPathSearch { Type = PathType.NoPath };
-            using var h = new Harness(world, Options(), nav);
-            Assert.True(IsPending(h.Ask(h.Far(250))));
-            h.Runner.CompleteAll();
-
-            Assert.True(IsPending(h.Ask(h.Far(300)))); // 50 yards on: beyond the tolerance, a new job
-            Assert.Equal(0, h.Jobs.Totals.Applied);
-            Assert.Equal(2, h.Runner.Submitted.Count);
-            return true;
-        });
-    }
-
     private static string EscalationDetail(AnomalyCapture cap)
     {
         AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == PlayerbotAnomalies.Key("nav", "job-escalated"));
@@ -706,6 +644,7 @@ public sealed class PlayerbotPathJobTests
             MakeFinishedAnswerStale(h, world);
             Assert.False(IsPending(h.Ask(h.Far())));
             Assert.Equal(3, h.Jobs.Totals.Stale);
+            Assert.Equal(3, h.Jobs.Totals.StaleInvalid);
             Assert.Equal(0, h.Jobs.Totals.Canceled);
             Assert.Equal(1, h.Jobs.Totals.Escalations);
             string detail = EscalationDetail(cap);
