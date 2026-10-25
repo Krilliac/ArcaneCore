@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.World.Cluster.Tooling;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -9,10 +10,25 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Tooling;
 
+/// <summary>Sets (or clears, with null) ARCANECORE_CLUSTER_ENDPOINTS for the process and restores the previous value on dispose; users share the "ClusterEndpointsEnv" collection so they never overlap.</summary>
+internal sealed class EndpointsEnv : IDisposable
+{
+    public const string Name = "ARCANECORE_CLUSTER_ENDPOINTS";
+
+    private readonly string? _previous = Environment.GetEnvironmentVariable(Name);
+
+    private EndpointsEnv(string? value) => Environment.SetEnvironmentVariable(Name, value);
+
+    public static EndpointsEnv Set(string? value) => new(value);
+
+    public void Dispose() => Environment.SetEnvironmentVariable(Name, _previous);
+}
+
 /// <summary>
 /// <c>Cluster:NodeBridge:Enabled</c> (off by default): with it off the bridge opens no sockets, logs nothing, starts no task and syncs no
 /// placement, and its status consumers say it is disabled; with it on it connects to the configured endpoints as before.
 /// </summary>
+[Collection("ClusterEndpointsEnv")]
 public sealed class ClusterNodeBridgeSwitchTests
 {
     private sealed class ListLogger : ILogger<ClusterNodeBridgeFeature>
@@ -67,6 +83,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     [Fact]
     public async Task Disabled_OpensNoConnection_LogsNothing_AndStartsNoTask()
     {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -87,8 +104,67 @@ public sealed class ClusterNodeBridgeSwitchTests
     }
 
     [Fact]
+    public async Task Disabled_WithEndpointsEnvironmentVariableSet_WarnsOnceAndStaysOff()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        using EndpointsEnv env = EndpointsEnv.Set(ProbeSpec(1));
+        var logger = new ListLogger();
+        using ClusterNodeBridgeFeature bridge = CreateFeature(new ClusterNodeBridgeOptions { Enabled = false }, logger);
+
+        bridge.Attach(host.World);
+
+        Assert.False(bridge.IsEnabled);
+        Assert.False(bridge.IsActive);
+        Assert.Equal(
+            "ARCANECORE_CLUSTER_ENDPOINTS is set but Cluster:NodeBridge:Enabled is false; the node bridge is off",
+            Assert.Single(logger.Lines));
+    }
+
+    [Fact]
+    public async Task Enabled_WithOnlyInvalidEndpoints_WarnsPerDroppedEntry_AndOnceForNone()
+    {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
+        await using WorldTestHost host = WorldTestHost.Start();
+        var logger = new ListLogger();
+        using ClusterNodeBridgeFeature bridge = CreateFeature(new ClusterNodeBridgeOptions { Enabled = true, Endpoints = "garbage;a|b|not-an-endpoint" }, logger);
+
+        bridge.Attach(host.World);
+
+        Assert.True(bridge.IsEnabled);
+        Assert.False(bridge.IsActive);
+        Assert.Empty(bridge.SnapshotNodes());
+        Assert.Equal(2, logger.Lines.Count(l => l.Contains("dropped an invalid endpoint entry", StringComparison.Ordinal)));
+        Assert.Contains(logger.Lines, l => l.Contains("garbage", StringComparison.Ordinal));
+        Assert.Contains(logger.Lines, l => l.Contains("a|b|not-an-endpoint", StringComparison.Ordinal));
+        Assert.Single(logger.Lines, l => l.Contains("no valid endpoints were parsed", StringComparison.Ordinal));
+        Assert.Equal(3, logger.Lines.Length);
+    }
+
+    [Fact]
+    public async Task StartingAWorld_WithNodeBridgeEnabledInHostConfiguration_TurnsTheBridgeOn()
+    {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:NodeBridge:Enabled"] = "true",
+            ["Cluster:NodeBridge:Endpoints"] = ProbeSpec(port),
+        }).Build();
+
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.Configure<ClusterNodeBridgeOptions>(configuration.GetSection(ClusterNodeBridgeOptions.SectionName)));
+
+        var bridge = host.WorldServices.GetRequiredService<ClusterNodeBridgeFeature>();
+        Assert.True(bridge.IsEnabled);
+        Assert.Equal("probe", Assert.Single(bridge.SnapshotNodes()).NodeId);
+    }
+
+    [Fact]
     public async Task Enabled_ConnectsToTheConfiguredEndpoints_AndReportsAnUnansweringNode()
     {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;

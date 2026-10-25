@@ -9,6 +9,7 @@ using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Cluster.Tooling;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -17,6 +18,7 @@ using static ArcaneCore.World.Tests.Gm.Audit.TicketTests;
 namespace ArcaneCore.World.Tests.Cluster.Tooling;
 
 /// <summary>Tests for the <c>.cluster</c> and <c>.arcane cluster</c> GM/operator inspection commands.</summary>
+[Collection("ClusterEndpointsEnv")]
 public sealed class ClusterCommandTests
 {
     private static WorldTestHost StartWithClusterServices(
@@ -255,6 +257,28 @@ public sealed class ClusterCommandTests
         Assert.Contains("effectiveToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", nodeLines[3], StringComparison.Ordinal);
 
         Assert.Equal("Player not found!", (await LinesAsync(gm, ".cluster node NobodyHere"))[0]);
+    }
+
+    [Fact]
+    public async Task ClusterStatus_AndNodes_SayEnabledWithNoValidEndpoints_WhenTheBridgeIsOnButNothingParsed()
+    {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:NodeBridge:Enabled"] = "true",
+            ["Cluster:NodeBridge:Endpoints"] = "garbage",
+        }).Build();
+        await using WorldTestHost host = StartWithClusterServices(more: services =>
+            services.Configure<ClusterNodeBridgeOptions>(configuration.GetSection(ClusterNodeBridgeOptions.SectionName)));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMN", "Admnone");
+
+        string[] statusLines = await LinesAsync(admin, ".cluster status", StatusLines);
+        Assert.Equal(ClusterCommands.BridgeNoEndpointsLine, statusLines[5]);
+        Assert.Equal("Cluster bridge: enabled, no valid endpoints", ClusterCommands.BridgeNoEndpointsLine);
+
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 6);
+        Assert.Contains(ClusterCommands.BridgeNoEndpointsLine, nodesLines);
+        Assert.DoesNotContain(ClusterCommands.BridgeDisabledLine, nodesLines);
     }
 
     [Fact]

@@ -139,19 +139,25 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
 
         // Cluster:NodeBridge:Enabled (off by default, read once at start): disabled means no sockets, no log lines, no task, no placement sync.
         ClusterNodeBridgeOptions options = services.GetService<IOptions<ClusterNodeBridgeOptions>>()?.Value ?? new ClusterNodeBridgeOptions();
+        string? explicitSpec = Environment.GetEnvironmentVariable("ARCANECORE_CLUSTER_ENDPOINTS");
         if (!options.Enabled)
         {
+            if (!string.IsNullOrWhiteSpace(explicitSpec))
+            {
+                logger.LogWarning("ARCANECORE_CLUSTER_ENDPOINTS is set but Cluster:NodeBridge:Enabled is false; the node bridge is off");
+            }
+
             return;
         }
 
         IsEnabled = true;
-        string? explicitSpec = Environment.GetEnvironmentVariable("ARCANECORE_CLUSTER_ENDPOINTS");
         string spec = !string.IsNullOrWhiteSpace(explicitSpec) ? explicitSpec
             : string.IsNullOrWhiteSpace(options.Endpoints) ? DefaultEndpointsSpec
             : options.Endpoints;
         ParseSpec(spec);
         if (_nodes.Count == 0)
         {
+            logger.LogWarning("Cluster:NodeBridge:Enabled is true but no valid endpoints were parsed; the node bridge monitors nothing");
             return;
         }
 
@@ -222,6 +228,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             string[] parts = rawEntry.Split('|', 4, StringSplitOptions.TrimEntries);
             if (parts.Length < 3 || !IPEndPoint.TryParse(parts[2], out IPEndPoint? ep))
             {
+                logger.LogWarning("Cluster node bridge dropped an invalid endpoint entry (expected nodeId|role|host:port|maps): {Entry}", rawEntry);
                 continue;
             }
 

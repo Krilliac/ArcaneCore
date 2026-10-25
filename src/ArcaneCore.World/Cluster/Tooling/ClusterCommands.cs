@@ -158,6 +158,9 @@ public sealed class ClusterCommands : ICommandGroup
     /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say instead of a node list while the node bridge is switched off.</summary>
     internal const string BridgeDisabledLine = "Cluster bridge: disabled (Cluster:NodeBridge:Enabled = false); no cluster nodes are monitored";
 
+    /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say when the node bridge is on but no endpoint entry parsed.</summary>
+    internal const string BridgeNoEndpointsLine = "Cluster bridge: enabled, no valid endpoints";
+
     internal static bool Status(CommandContext context, string args)
     {
         if (args.Trim().Length != 0)
@@ -240,6 +243,10 @@ public sealed class ClusterCommands : ICommandGroup
             else if (!bridge.IsEnabled)
             {
                 context.Reply(BridgeDisabledLine);
+            }
+            else
+            {
+                context.Reply(BridgeNoEndpointsLine);
             }
         }
 
@@ -431,6 +438,10 @@ public sealed class ClusterCommands : ICommandGroup
             else if (!bridge.IsEnabled)
             {
                 context.Reply(BridgeDisabledLine);
+            }
+            else
+            {
+                context.Reply(BridgeNoEndpointsLine);
             }
         }
 
