@@ -161,16 +161,26 @@ public sealed class MapFeedActionsSettleTests
             ActionSpies spies = ActionSpies.Install(world.Host);
             FeedClient client = await world.ConnectAsync();
 
-            // The world thread is busy for 600 ms before the action can start.
+            // The world thread stays busy until the refusal has been received (a fixed sleep raced a slow first request on a loaded machine:
+            // the query timeout then started after the thread was free and the command ran). The 60 s cap only bounds a broken run.
             using var busy = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
             world.Host.World.Post(() =>
             {
                 busy.Set();
-                Thread.Sleep(600);
+                release.Wait(TimeSpan.FromSeconds(60));
             });
             Assert.True(busy.Wait(TimeSpan.FromSeconds(10)));
 
-            JsonElement result = await ActionWire.ActAsync(client, 1, ActionWire.Local(), command: ".zspy");
+            JsonElement result;
+            try
+            {
+                result = await ActionWire.ActAsync(client, 1, ActionWire.Local(), command: ".zspy");
+            }
+            finally
+            {
+                release.Set();
+            }
 
             result.AssertRefused("timeout");
             Assert.EndsWith("-> timeout", Assert.Single(world.ActionLog).Message, StringComparison.Ordinal);
