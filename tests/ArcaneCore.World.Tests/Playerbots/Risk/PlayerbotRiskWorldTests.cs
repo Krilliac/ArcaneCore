@@ -82,11 +82,7 @@ public sealed class PlayerbotRiskWorldTests
     [Fact]
     public async Task ABotLosingAFight_RetreatsPastTheLeash_TheCreaturesEvade_ItRecovers_AndLaterReengages()
     {
-        // Retreat at half health: three aligned blows (up to 12 of the bot's 60 health, more with a crit) can carry the bot from just
-        // above the default 35% line to under 20% in one swing round, where the retreat is no longer survivable (cornered-no-escape)
-        // and it fights on to its death ("the bot fought on against three"). On fixed dice seeds 7 and 8 of the first 30 did that at the
-        // default line; at half health none of 100 seeds did.
-        await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => { options.Risk.DangerMemorySeconds = 20; options.Risk.RetreatHealthPct = 50; });
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.DangerMemorySeconds = 20);
         // Slow runners (4 yards a second against the bot's 7), so the chase cannot end the bot before the leash does.
         CreatureTemplate template = RiskTestWorld.Template(991021, health: 60, minDamage: 3, maxDamage: 4, runSpeed: 0.6f);
         Vector3 start = await world.OnWorldAsync(() => new Vector3(world.Player.X, world.Player.Y, world.Player.Z));

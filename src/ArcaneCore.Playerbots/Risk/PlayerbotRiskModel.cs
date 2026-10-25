@@ -129,8 +129,11 @@ internal sealed record PlayerbotPursuit(float EscapeYards, float BotRunSpeed, IR
 
 /// <summary>Everything one in-combat estimate reads.</summary>
 /// <param name="Pursuit">What a retreat would face; null when the caller does not know (the retreat is then never refused).</param>
+/// <param name="RoundDamage">The most one swing round can take: one blow from each live enemy attacking the bot, at that enemy's
+/// maximum melee damage (0 when unknown). The mean <c>DpsIn</c> lags a burst of aligned blows, so a bot just above the retreat
+/// line retreats when a round would carry it to or below the line while a retreat can still succeed.</param>
 internal readonly record struct PlayerbotFightFacts(uint BotHealth, uint BotMaxHealth, float DpsIn, float DpsOut, uint EnemyHealth,
-    int Enemies, float TargetHealthPct, bool Lethal = false, PlayerbotPursuit? Pursuit = null);
+    int Enemies, float TargetHealthPct, bool Lethal = false, PlayerbotPursuit? Pursuit = null, float RoundDamage = 0f);
 
 /// <summary>The in-combat verdict: the times to kill and to die and whether to retreat.</summary>
 internal readonly record struct PlayerbotFightVerdict(bool Retreat, float TimeToKill, float TimeToDie, string Reason)
@@ -400,7 +403,9 @@ internal static class PlayerbotRiskModel
     /// <summary>
     /// The in-combat verdict from the observed damage rates: time to kill (the enemies' health over the bot's damage per second)
     /// against time to die (the bot's health over the damage it takes). A losing bot (time to die times Tolerance below the time to
-    /// kill) retreats at <see cref="PlayerbotRiskOptions.RetreatHealthPct"/> or when it would die within 4 seconds; a single enemy at
+    /// kill) retreats at <see cref="PlayerbotRiskOptions.RetreatHealthPct"/>, when one more swing round
+    /// (<see cref="PlayerbotFightFacts.RoundDamage"/>) would leave it at or below that line, or when it would die within 4 seconds
+    /// (whether the retreat can succeed is judged at the current health); a single enemy at
     /// <see cref="PlayerbotRiskOptions.NearlyWonHealthPct"/> or less is finished unless the bot would die in half the time.
     /// </summary>
     internal static PlayerbotFightVerdict Judge(PlayerbotFightFacts facts, PlayerbotRiskOptions options)
@@ -416,7 +421,11 @@ internal static class PlayerbotRiskModel
             return new(false, ttk, ttd, "nearly-won");
         bool losing = ttd * options.Tolerance < ttk;
         if (!losing) return new(false, ttk, ttd, "winning");
-        if (healthPct <= options.RetreatHealthPct || ttd < 4f)
+        // The mean rate lags a burst: also leave when one round of aligned blows would end at or under the line (still a retreat
+        // the bot can survive now, which a round later it may not be).
+        bool roundBelowLine = facts.RoundDamage > 0f && facts.BotMaxHealth != 0
+            && (facts.BotHealth - Math.Min(facts.BotHealth, facts.RoundDamage)) * 100f / facts.BotMaxHealth <= options.RetreatHealthPct;
+        if (healthPct <= options.RetreatHealthPct || roundBelowLine || ttd < 4f)
         {
             // A retreat that cannot break contact before the bot dies is only a death with no blow dealt on the way: fight on.
             if (facts.Pursuit is { } pursuit && !RetreatSucceeds(pursuit, facts.BotHealth, facts.DpsIn))

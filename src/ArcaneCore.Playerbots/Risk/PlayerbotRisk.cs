@@ -1197,7 +1197,7 @@ internal sealed partial class PlayerbotRisk
         uint now = _session.World.NowMs;
         bool knownDanger = enemies.Any(e => Memory.RememberedBefore(e.Guid, _fightSinceMs, now));
         PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, now, priorIn, priorOut)
-            with { Lethal = knownDanger || enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)) };
+            with { Lethal = knownDanger || enemies.Any(e => SpellThreat(e).IsLethalTo(player.MaxHealth)), RoundDamage = RoundDamage(player) };
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);
         if (verdict.Retreat && !facts.Lethal)
         {
@@ -1225,6 +1225,31 @@ internal sealed partial class PlayerbotRisk
         if (!verdict.Retreat) return false;
         StartRetreat(player, enemies, verdict.Reason);
         return true;
+    }
+
+    /// <summary>
+    /// The most one swing round can take (<see cref="PlayerbotFightFacts.RoundDamage"/>): one blow from each live, non-evading creature
+    /// attacking the bot, at its template's maximum melee damage (already read for the damage rate, so no extra lookup); a template
+    /// with no damage counts its estimated rate over one attack time (2 seconds when the template has none). A few float additions.
+    /// </summary>
+    private static float RoundDamage(Player player)
+    {
+        float total = 0f;
+        foreach (Unit unit in player.Combat.Attackers)
+        {
+            if (unit is not Creature { IsAlive: true, IsInEvadeMode: false } creature || !ReferenceEquals(creature.Map, player.Map)) continue;
+            CreatureTemplate t = creature.Template;
+            float blow = t.MaxMeleeDamage;
+            if (!(float.IsFinite(blow) && blow > 0f))
+            {
+                float swing = t.MeleeBaseAttackTime > 0 ? t.MeleeBaseAttackTime / 1000f : 2f;
+                blow = PlayerbotRiskModel.CreatureDps(t.MinMeleeDamage, t.MaxMeleeDamage, t.MeleeBaseAttackTime, creature.Level, t.Rank is 1 or 2 or 3) * swing;
+            }
+
+            total += blow;
+        }
+
+        return total;
     }
 
     /// <summary>The refusal of a retreat is counted once per fight (<see cref="Track"/> clears it out of combat).</summary>
