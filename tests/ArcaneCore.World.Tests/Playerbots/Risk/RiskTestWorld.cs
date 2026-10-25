@@ -52,8 +52,13 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     /// Off by default: without it the AI's hostility is empty and no creature aggroes on sight (the hooks' hostility, which the risk
     /// reads, is the faction catalog's either way).
     /// </param>
+    /// <param name="dice">
+    /// The map's combat dice (hit table, crits, damage, regeneration remainders). Default: <see cref="SeededDice"/> on a fixed seed, so a
+    /// test's fights play out the same every run instead of on <see cref="Random.Shared"/>, where a lucky streak kept a losing bot
+    /// above its retreat threshold now and then.
+    /// </param>
     public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null,
-        bool aggroOnSight = false)
+        bool aggroOnSight = false, ICombatRandom? dice = null)
     {
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
@@ -74,6 +79,7 @@ internal sealed class RiskTestWorld : IAsyncDisposable
         CreatureMapSystem creatures = await host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
+            player.Map!.Combat.Random = dice ?? new SeededDice(7);
             WorldCollision.Of(host.World).Install(lineOfSight: new FlatGround(player.Z));
             if (player.Map!.FindUpdater<CreatureMapSystem>() is { } existing)
                 return aggroOnSight ? throw new InvalidOperationException("the map already has a creature system: aggroOnSight cannot apply") : existing;
@@ -156,6 +162,16 @@ internal sealed class RiskTestWorld : IAsyncDisposable
         Session.Kick();
         await Session.ManagedClosed;
         await Host.DisposeAsync();
+    }
+
+    /// <summary>A fixed-seed <see cref="ICombatRandom"/>; world thread only (<see cref="Random"/> is not thread-safe).</summary>
+    private sealed class SeededDice(int seed) : ICombatRandom
+    {
+        private readonly Random _random = new(seed);
+
+        public int Next(int minInclusive, int maxInclusive) => _random.Next(minInclusive, maxInclusive + 1);
+
+        public float NextFloat(float min, float max) => min + ((float)_random.NextDouble() * (max - min));
     }
 
     private sealed class AiStore(CreatureAiContent ai) : ICreatureDataStore
