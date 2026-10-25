@@ -155,7 +155,9 @@ public sealed class PlayerbotRunClearWorldTests
         Assert.Equal(1, run.Wipes);
 
         // The group regroups on the Retry step with the leader revived back inside: the moment the run's own state says so, the surviving trash
-        // hits one of the revived members, as it does when they come back within its reach.
+        // hits one of the revived members, as it does when they come back within its reach. Each creature then attacks that member (vmangos
+        // Creature::OnEnterCombat -> AttackedBy) and keeps at it, as dungeon trash does not leash: the members in combat walk out through the
+        // exit with the leader instead of fighting it there.
         Assert.True(await world.RunUntilAsync(180_000, () => group.State == PlayerbotGroupState.Gathering && run.Step == PlayerbotRunStep.Retry
             && bots.Take(2).All(b => world.Player(b.Id) is { IsAlive: true, MapId: GroupRfcContent.Map })), await world.TraceAsync());
         await world.OnWorldAsync(() =>

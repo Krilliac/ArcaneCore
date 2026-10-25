@@ -16,10 +16,9 @@ namespace ArcaneCore.Game.Tests.Creatures;
 /// <summary>
 /// vmangos parity: Unit::SetInCombatState calls Creature::OnEnterCombat -> AttackedBy for a creature entering combat (Unit.cpp:5942-5946,
 /// Creature.cpp:3652-3653), so a creature whose own hit puts it in combat attacks the unit it hit instead of sitting in combat with no victim
-/// and evading. The scenarios use a synthetic direct school-damage spell, not a periodic aura. Live Firemane mobs (4328/4329/4331) showed this
-/// evade loop in the world log from 2026-10-23 to 2026-10-24: from 01:43 on, the creature/evade-loop reports for 4329 and 4331 read
-/// "SelectHostileTarget(no victim, 0 att, Waypoint, by DealSpellDamage/SetInCombatWithVictim x1)", i.e. the creature was put in combat as the
-/// attacker by its own spell damage and had no victim and no attackers, which is the state these scenarios reproduce.
+/// and evading. The scenarios use a synthetic direct school-damage spell, not a periodic aura. Firemane mobs (4328/4329/4331) showed this
+/// evade loop live: their creature/evade-loop anomaly reports named DealSpellDamage/SetInCombatWithVictim as the caller with no victim and no
+/// attackers, i.e. the creature was put in combat as the attacker by its own spell damage, which is the state these scenarios reproduce.
 /// Each scenario owns an entry (the anomaly ledger is process-wide).
 /// </summary>
 public sealed class CreatureAttackerCombatEntryTests
