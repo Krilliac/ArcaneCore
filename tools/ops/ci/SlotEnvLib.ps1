@@ -23,7 +23,6 @@ function Resolve-SlotClientEnv {
         foreach ($dir in $WorkDir, $LanesRoot) {
             $cfg = Join-Path $dir 'slot-env.local.json'
             if (-not (Test-Path -LiteralPath $cfg -PathType Leaf)) { continue }
-            $filesSeen++
             $j = $null
             try {
                 $j = Get-Content -LiteralPath $cfg -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
@@ -32,9 +31,14 @@ function Resolve-SlotClientEnv {
                 $messages.Add("ignoring unreadable $cfg ($($_.Exception.Message))")
                 continue
             }
+            $filesSeen++
             foreach ($key in 'clientDir', 'clientFilesDir') {
                 $prop = $j.PSObject.Properties[$key]
-                if ($null -eq $prop -or $prop.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($prop.Value)) { continue }
+                if ($null -eq $prop) { continue }
+                if ($prop.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($prop.Value)) {
+                    $messages.Add("ignoring $key in $cfg (not a non-empty string)")
+                    continue
+                }
                 if ($key -eq 'clientDir' -and -not $clientDir) { $clientDir = $prop.Value.Trim() }
                 if ($key -eq 'clientFilesDir' -and -not $clientFilesDir) { $clientFilesDir = $prop.Value.Trim() }
             }
@@ -51,8 +55,9 @@ function Resolve-SlotClientEnv {
 function ConvertTo-PsSingleQuoted {
     <#
     .SYNOPSIS
-      The value as a PowerShell single-quoted string literal (embedded apostrophes doubled).
+      The value as a PowerShell single-quoted string literal. Every character PowerShell reads as a single quote is doubled: the ASCII
+      apostrophe and the typographic U+2018-U+201B, which are legal in Windows paths.
     #>
     param([Parameter(Mandatory)][string]$Value)
-    return "'" + ($Value -replace "'", "''") + "'"
+    return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
 }

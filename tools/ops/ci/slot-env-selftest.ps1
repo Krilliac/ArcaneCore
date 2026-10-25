@@ -1,6 +1,7 @@
 # Self-test of SlotEnvLib.ps1 (client-data env resolution of run-in-slot.ps1). Exit 0 = all checks passed, 1 = a check failed.
 #   pwsh -NoProfile -File tools/ops/ci/slot-env-selftest.ps1
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\OpsEnv.ps1')   # the same StrictMode run-in-slot.ps1 runs under, whatever the lib sets
 . (Join-Path $PSScriptRoot 'SlotEnvLib.ps1')
 $base = Join-Path ([IO.Path]::GetTempPath()) "slot-env-selftest-$PID"
 $script:pass = 0; $script:fail = 0
@@ -44,6 +45,11 @@ try {
     $d = New-Dirs 'wrongtype' '{"clientDir":5,"clientFilesDir":["a"]}' $null
     $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
     Check 'non-string values ignored' ($null -eq $r.ClientDir -and $null -eq $r.ClientFilesDir)
+    Check 'non-string values reported per key' (@($r.Messages | Where-Object { $_ -like 'ignoring client*Dir in*not a non-empty string*' }).Count -eq 2)
+
+    $d = New-Dirs 'onlybad' '[]' $null
+    $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
+    Check 'unreadable file only: no-file wording' (@($r.Messages | Where-Object { $_ -like '*unset and no slot-env.local.json found*' }).Count -eq 2)
 
     $d = New-Dirs 'both' "{`"clientDir`":`"$rj`",`"clientFilesDir`":`"$rj`"}" $null
     $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
@@ -70,6 +76,13 @@ try {
 
     # Quoting.
     Check 'single-quote escaping' ((ConvertTo-PsSingleQuoted "a'b") -eq "'a''b'")
+    # Every character PowerShell reads as a single quote must round-trip through a parsed child script.
+    foreach ($q in 0x27, 0x2018, 0x2019, 0x201A, 0x201B) {
+        $v = 'C:\a' + [char]$q + 'b\c'
+        $back = $null
+        try { $back = & ([scriptblock]::Create('$x = ' + (ConvertTo-PsSingleQuoted $v) + '; $x')) } catch { }
+        Check ('quote U+{0:X4} round-trips through a parsed script' -f $q) ($back -eq $v)
+    }
 }
 finally {
     Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
