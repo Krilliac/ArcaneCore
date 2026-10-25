@@ -58,6 +58,15 @@ public sealed class ToolsLiftCommands : ICommandExtension
     private static GameObject? FindLift(CommandContext context, uint counter, out GameObjectMapSystem? system)
         => GmGameObjectTarget.Find(context, counter, out system, GameObjectType.Transport, NearestLiftRadius);
 
+    /// <summary>The schedule override of <paramref name="go"/> as one line: its speed, whether it is frozen, and where it stands.</summary>
+    private static string Schedule(GameObjectMapSystem system, GameObject go)
+    {
+        ElevatorControlInfo control = system.GetElevatorControl(go);
+        return control.Overridden
+            ? string.Create(C, $"x{control.ResumeScale:0.###}{(control.Frozen ? " frozen" : string.Empty)} at {go.PathProgress} ms")
+            : string.Create(C, $"default schedule at {go.PathProgress} ms");
+    }
+
     private static string Progress(GameObject go) => string.Create(C, $"{go.PathProgress}");
 
     private static void Audit(CommandContext context, GameObject go, string field, string oldValue, string newValue)
@@ -184,7 +193,11 @@ public sealed class ToolsLiftCommands : ICommandExtension
                 return NoSchedule(context, go);
             }
 
-            Audit(context, go, "frozen", wasFrozen ? "true" : "false", "true");
+            if (!wasFrozen)
+            {
+                // Freezing a frozen lift changes nothing and resends nothing, so there is no write to record.
+                Audit(context, go, "frozen", "false", "true");
+            }
 
             context.Reply(string.Create(C, $"{Name(go)} frozen at {go.PathProgress} ms on the server."));
             WarnOthers(context, system, go);
@@ -195,6 +208,7 @@ public sealed class ToolsLiftCommands : ICommandExtension
         => WithLift(context, text, (system, go) =>
         {
             bool wasFrozen = system.GetElevatorControl(go).Frozen;
+            // Recorded even when the lift was not frozen: the resume still resends the lift to every viewer.
             if (!system.ResumeElevator(go))
             {
                 return NoSchedule(context, go);
@@ -244,13 +258,14 @@ public sealed class ToolsLiftCommands : ICommandExtension
     private static bool Reset(CommandContext context, string text)
         => WithLift(context, text, (system, go) =>
         {
-            bool wasOverridden = system.GetElevatorControl(go).Overridden;
+            string undone = Schedule(system, go);
             if (!system.ResetElevator(go))
             {
                 return NoSchedule(context, go);
             }
 
-            Audit(context, go, "schedule overridden", wasOverridden ? "true" : "false", "false");
+            // Recorded even when the lift was already on its default schedule: the reset still resends the lift to every viewer.
+            Audit(context, go, "schedule", undone, "default schedule");
 
             context.Reply(string.Create(C, $"{Name(go)} back on its default schedule, at {go.PathProgress} ms; resent to {Resent(system, go, context)}."));
             return true;

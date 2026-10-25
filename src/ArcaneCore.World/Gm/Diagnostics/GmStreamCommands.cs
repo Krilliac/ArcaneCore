@@ -47,6 +47,21 @@ public sealed class GmStreamCommands : ICommandExtension
         return stream;
     }
 
+    private static DateTimeOffset? ExpiryOf(GmStream stream, ObjectGuid gm, string channel)
+    {
+        foreach ((string followed, DateTimeOffset expiresAt) in stream.Subscriptions(gm))
+        {
+            if (followed.Equals(channel, StringComparison.OrdinalIgnoreCase))
+            {
+                return expiresAt;
+            }
+        }
+
+        return null;
+    }
+
+    private static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("u", CultureInfo.InvariantCulture);
+
     private static bool On(CommandContext context, string args)
     {
         string channel = args.Trim();
@@ -60,13 +75,23 @@ public sealed class GmStreamCommands : ICommandExtension
             return true;
         }
 
-        if (!stream.Subscribe(context.Player.Guid, channel))
+        ObjectGuid self = context.Player.Guid;
+        DateTimeOffset? before = ExpiryOf(stream, self, channel);
+        if (!stream.Subscribe(self, channel))
         {
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"You already follow {stream.Options.MaxChannelsPerGm} channels; turn one off first."));
             return true;
         }
 
-        DebugWrite.Record(context, "gm stream " + channel, "subscribed", "off", "on", DebugWriteScope.Live);
+        if (before is { } previous && ExpiryOf(stream, self, channel) is { } renewed)
+        {
+            DebugWrite.Record(context, "gm stream " + channel, "expires", Stamp(previous), Stamp(renewed), DebugWriteScope.Live);
+        }
+        else
+        {
+            DebugWrite.Record(context, "gm stream " + channel, "subscribed", "off", "on", DebugWriteScope.Live);
+        }
+
         context.Reply(string.Create(CultureInfo.InvariantCulture, $"Following [{channel}]; it turns off after {stream.Options.AutoOffAfter.TotalMinutes:0.##} min or when you log out."));
         return true;
     }
@@ -87,10 +112,11 @@ public sealed class GmStreamCommands : ICommandExtension
         ObjectGuid gm = context.Player.Guid;
         if (channel.Equals("all", StringComparison.OrdinalIgnoreCase))
         {
+            IReadOnlyList<(string Channel, DateTimeOffset ExpiresAt)> followed = stream.Subscriptions(gm);
             int stopped = stream.UnsubscribeAll(gm);
-            if (stopped > 0)
+            foreach ((string followedChannel, _) in followed)
             {
-                DebugWrite.Record(context, "gm stream all", "subscribed", stopped.ToString(CultureInfo.InvariantCulture) + " channel(s)", "off", DebugWriteScope.Live);
+                DebugWrite.Record(context, "gm stream " + followedChannel, "subscribed", "on", "off", DebugWriteScope.Live);
             }
 
             context.Reply(string.Create(CultureInfo.InvariantCulture, $"Stopped {stopped} channel(s)."));
