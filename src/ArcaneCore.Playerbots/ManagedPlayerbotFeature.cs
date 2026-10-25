@@ -2774,6 +2774,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotThinkProbe.Phase("party");
             uint partyRenewals = PlayerbotMotion.RenewalsOf(driven);
             active.Party.Update(driven, sinceLast);
+            PlayerbotThinkProbe.Phase("settle");
             PlayerbotMotion.SettleAfterDriver(active.Session, driven, partyRenewals, sinceLast);
             return "party AI";
         }
@@ -2782,7 +2783,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotGoalKind goalBefore = active.Brain.Goal;
             uint renewals = PlayerbotMotion.RenewalsOf(driven);
             active.Brain.Update(sinceLast);
+            PlayerbotThinkProbe.Phase("settle");
             SettleMotion(active.Session, active.Brain, driven, goalBefore, renewals, sinceLast);
+            PlayerbotThinkProbe.Phase("stall log");
             string? report = active.Brain.StallReport;
             bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
                 && !driven.RepopDestinationResolved;

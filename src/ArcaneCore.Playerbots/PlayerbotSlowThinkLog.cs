@@ -45,16 +45,20 @@ internal sealed class PlayerbotSlowThinkLog(ILogger logger)
         Slow++;
         if (!probe.SlowAnomalyReported && _slowEpisode.Add(botId))
         {
+            // A think that is over the threshold only because the collector paused the process is not the bot's slowness: counted apart.
+            bool gcStall = probe.ElapsedMs - probe.GcPauseMs < thresholdMs;
+            string anomalyKey = gcStall ? "think-gc-stall" : "think-slow";
+            (int g0, int g1, int g2) = probe.GcCollections;
             string anomalyDetail = string.Create(CultureInfo.InvariantCulture,
-                $"think {probe.ElapsedMs:F1} ms (over {thresholdMs:F1} ms) driver={driver} goal={goal} slowestPhase={probe.SlowestPhase}");
+                $"think {probe.ElapsedMs:F1} ms (over {thresholdMs:F1} ms) driver={driver} goal={goal} slowestPhase={probe.SlowestPhase} gc={probe.GcPauseMs:F1} ms ({g0}/{g1}/{g2})");
             if ((player ?? probe.Player) is { } subjectPlayer)
             {
-                PlayerbotAnomalies.Report(subjectPlayer, "brain", "think-slow", anomalyDetail, AnomalySeverity.Warning);
+                PlayerbotAnomalies.Report(subjectPlayer, "brain", anomalyKey, anomalyDetail, AnomalySeverity.Warning);
             }
             else
             {
                 string subject = string.IsNullOrWhiteSpace(name) ? $"bot {botId}" : $"bot {name} (id {botId})";
-                AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "brain", "think-slow", subject, anomalyDetail, AnomalySeverity.Warning);
+                AnomalyLedger.Shared.Report(PlayerbotAnomalies.Prefix + "brain", anomalyKey, subject, anomalyDetail, AnomalySeverity.Warning);
             }
             probe.SlowAnomalyReported = true;
         }
