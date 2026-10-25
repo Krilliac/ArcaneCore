@@ -1,5 +1,6 @@
 // Drives a headless Chromium (Chrome or Edge) over the DevTools protocol, using only node's built-in WebSocket client.
-// The browser is a child process this module starts and always kills (the whole tree on Windows) in close().
+// The browser is a child process this module starts and always kills (the whole tree on Windows) in close(); on Windows
+// close() also sweeps any msedge.exe/chrome.exe that owns this launch's profile dir, since a self-relaunching launcher exits.
 
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -12,21 +13,29 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const COMMAND_TIMEOUT_MS = 60_000;
 
 /**
- * Kills the process trees of every process whose command line carries this launch's own `--user-data-dir` profile path
- * (a relaunched browser re-quotes the argument, so the unique path itself is matched, not the flag text).
+ * PIDs of the msedge.exe/chrome.exe processes whose command line passes this launch's own profile dir as the
+ * `--user-data-dir` value (optionally quoted: a relaunched browser re-quotes it). Windows only; null elsewhere.
  * A launcher that relaunched itself (pending browser update) exits, leaving the real browser outside the child's tree.
- * The profile dir is unique per launch, so nothing else can match; processes are never selected by image name.
+ * Other processes, even ones that merely mention the path, are never selected. The path reaches PowerShell through
+ * the environment, not through the script text, so no quoting can break the query.
  */
-async function killProfileOwners(profile) {
-    const escaped = profile.replace(/'/g, "''");
-    const script = "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf('" + escaped + "', [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { $_.ProcessId }";
-    const output = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true }, (_error, stdout) => resolve(String(stdout ?? ''))));
-    for (const line of output.split(/\r?\n/)) {
-        const owner = Number(line.trim());
-        if (Number.isInteger(owner) && owner > 0) {
-            await new Promise((resolve) => execFile('taskkill', ['/PID', String(owner), '/T', '/F'], () => resolve()));
-        }
+async function profileOwners(profile) {
+    if (process.platform !== 'win32') {
+        return null;
     }
+    const script = [
+        "$p = [regex]::Escape($env:ATLAS_BROWSER_PROFILE)",
+        "$re = '--user-data-dir=\"?' + $p + '(\"|\\s|$)'",
+        "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -match $re } | ForEach-Object { $_.ProcessId }",
+    ].join('; ');
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const output = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+        { windowsHide: true, timeout: 15_000, env: { ...process.env, ATLAS_BROWSER_PROFILE: profile } }, (_error, stdout) => resolve(String(stdout ?? ''))));
+    return output.split(/\r?\n/).map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+async function killTree(pid) {
+    await new Promise((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 15_000 }, () => resolve()));
 }
 
 export class Browser {
@@ -50,11 +59,24 @@ export class Browser {
         const browser = new Browser(child, profile);
         const portFile = path.join(profile, 'DevToolsActivePort');
         const deadline = Date.now() + 30_000;
+        let exitedAt;
         while (!fs.existsSync(portFile)) {
             // A launcher may relaunch itself (pending browser update) and exit 0; the real browser still writes the port file.
             if (Date.now() > deadline || (child.exitCode !== null && child.exitCode !== 0)) {
                 await browser.close();
                 throw new Error('The browser did not start a DevTools endpoint.');
+            }
+            if (child.exitCode === 0) {
+                // Exit 0 means the launcher handed off to another process; give it ~2 s, then fail fast if nothing owns the profile.
+                exitedAt ??= Date.now();
+                if (Date.now() - exitedAt > 2000) {
+                    const owners = await profileOwners(profile);
+                    if (owners !== null && owners.length === 0 && !fs.existsSync(portFile)) {
+                        await browser.close();
+                        throw new Error('The browser launcher exited and no browser process owns the profile, so no DevTools endpoint will appear.');
+                    }
+                    exitedAt = Date.now();
+                }
             }
             await sleep(100);
         }
@@ -114,13 +136,15 @@ export class Browser {
         const pid = this.child.pid;
         if (pid && this.child.exitCode === null) {
             if (process.platform === 'win32') {
-                await new Promise((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => resolve()));
+                await killTree(pid);
             } else {
                 this.child.kill('SIGKILL');
             }
         }
         if (process.platform === 'win32') {
-            await killProfileOwners(this.profile);
+            for (const owner of await profileOwners(this.profile)) {
+                await killTree(owner);
+            }
         }
         for (let i = 0; i < 20; i++) {
             try {
