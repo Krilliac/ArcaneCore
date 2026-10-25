@@ -27,6 +27,11 @@ internal enum TravelMeans : byte
 
     /// <summary>A portal a mage bot opened on request, clicked by the requester (<see cref="PlayerbotMageService"/>).</summary>
     MagePortal,
+
+    /// <summary>
+    /// An area trigger whose teleport leads to another place of the same map (Teldrassil and Rut'theran): the bot walks into its volume and the server's teleport carries it (<see cref="PlayerbotAreaTriggers"/>). Appended: the values above are not renumbered.
+    /// </summary>
+    AreaTrigger,
 }
 
 /// <summary>Which faction may use a transport route.</summary>
@@ -50,6 +55,9 @@ internal sealed record TravelLeg(TravelMeans Means, TravelPlace From, TravelPlac
     public uint TransportEntry { get; init; }
     public uint SpellId { get; init; }
     public ulong MageGuid { get; init; }
+
+    /// <summary>The area trigger of an <see cref="TravelMeans.AreaTrigger"/> leg.</summary>
+    public uint TriggerId { get; init; }
 }
 
 /// <summary>A whole planned trip: its legs in order, their total time and copper.</summary>
@@ -67,6 +75,9 @@ internal sealed record ShipRoute(uint Entry, TravelMeans Means, TravelAccess Acc
 
 /// <summary>A portal some mage of the bot's faction near it can open (<see cref="PlayerbotPortalBoard"/>): where it leads, where the mage stands, and its fee.</summary>
 internal readonly record struct PortalOffer(ulong MageGuid, uint PortalSpellId, TravelPlace MagePlace, TravelPlace Destination, uint FeeCopper);
+
+/// <summary>A same-map area trigger the bot may walk into (<c>areatrigger_teleport</c>): its id, where its volume is (its centre) and where the teleport leads.</summary>
+internal readonly record struct TravelTrigger(uint Id, TravelPlace Place, TravelPlace Target);
 
 /// <summary>A Teleport spell the bot (a mage) knows and can cast now, with the place it leads to (<c>spell_target_position</c>).</summary>
 internal readonly record struct OwnTeleport(uint SpellId, TravelPlace Destination);
@@ -94,6 +105,9 @@ internal sealed record TravelFacts
 
     /// <summary>Portals mages near the bot offer now (empty with the service off).</summary>
     public IReadOnlyList<PortalOffer> Portals { get; init; } = [];
+
+    /// <summary>The same-map area triggers the bot may take now (<see cref="PlayerbotTravel.TravelTriggerIds"/>, none excluded by a failed leg).</summary>
+    public IReadOnlyList<TravelTrigger> Triggers { get; init; } = [];
 
     /// <summary>The boat and zeppelin routes the bot may ride now (faction and the Boats/Zeppelins switches applied).</summary>
     public IReadOnlyList<ShipRoute> Ships { get; init; } = [];

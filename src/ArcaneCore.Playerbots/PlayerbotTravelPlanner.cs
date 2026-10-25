@@ -23,6 +23,9 @@ internal static class PlayerbotTravelPlanner
     /// <summary>Seconds a requester waits for a mage to cast a portal (20) and load through it (5).</summary>
     internal const float PortalSeconds = 25f;
 
+    /// <summary>Seconds an area trigger takes: the walk into its volume ends the leg, the teleport and its loading screen follow.</summary>
+    internal const float TriggerSeconds = 5f;
+
     /// <summary>Own teleports beyond this many are ignored (each needs a bit of the used-mask).</summary>
     private const int MaxTeleports = 62;
 
@@ -71,6 +74,7 @@ internal static class PlayerbotTravelPlanner
         int teleportCount = Math.Min(facts.OwnTeleports.Count, MaxTeleports);
         for (int i = 0; i < teleportCount; i++) Node(facts.OwnTeleports[i].Destination);
         foreach (PortalOffer o in facts.Portals) { Node(o.MagePlace); Node(o.Destination); }
+        foreach (TravelTrigger t in facts.Triggers) { Node(t.Place); Node(t.Target); }
 
         PriorityQueue<Label, (float Seconds, int Legs, uint Copper, int Order)> open = new();
         Dictionary<(int Node, bool LastWalk, ulong Used), List<Label>> kept = [];
@@ -122,6 +126,13 @@ internal static class PlayerbotTravelPlanner
                     Step(cur, index[s.PortB], new TravelLeg(s.Means, s.PortA, s.PortB, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
                 if (s.PortB == here && !(justRode && cur.Leg!.From == s.PortA))
                     Step(cur, index[s.PortA], new TravelLeg(s.Means, s.PortB, s.PortA, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
+            }
+
+            // An area trigger, from the place its volume is at.
+            foreach (TravelTrigger t in facts.Triggers)
+            {
+                if (t.Place != here || t.Target == here) continue;
+                Step(cur, index[t.Target], new TravelLeg(TravelMeans.AreaTrigger, t.Place, t.Target, TriggerSeconds, 0) { TriggerId = t.Id }, false, cur.Used);
             }
 
             // The hearthstone, once, from anywhere.

@@ -161,6 +161,7 @@ internal sealed class TravelExclusions
     public HashSet<uint> Ships { get; } = [];
     public HashSet<ulong> Mages { get; } = [];
     public HashSet<uint> Teleports { get; } = [];
+    public HashSet<uint> Triggers { get; } = [];
     public bool Hearthstone { get; set; }
     public bool Flights { get; set; }
 }
@@ -567,6 +568,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             OwnTeleports = teleports,
             Portals = portals,
             Ships = ships,
+            Triggers = TriggersFor(session, player, excluded),
             Walkable = WalkableFor(player, ships),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
@@ -924,6 +926,10 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 return StepResult.Traveling;
             }
 
+            case TravelMeans.AreaTrigger:
+                journey.LegStarted = true;
+                PlayerbotAreaTriggers.ClearTeleportRefusal(player);
+                return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Hearthstone:
                 if (!PlayerbotHearthstone.TryBegin(session, player, options, out why)) return StepResult.Failed;
                 journey.LegStarted = true;
@@ -996,6 +1002,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 return StepResult.Failed;
             }
 
+            case TravelMeans.AreaTrigger:
+                if (player.Combat.IsInCombat) return StepResult.Yield;
+                return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Hearthstone:
             {
                 TravelCastLeg? cast = PlayerbotHearthstone.LegOf(player);
@@ -1040,6 +1049,14 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         why = null;
         bool handOff = journey.LegIndex + 1 < journey.Legs.Count
             && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal;
+        // The walk into a trigger's volume fired it before the leg ended: the bot is on the trigger's target, not where the walk was going.
+        if (journey.LegIndex + 1 < journey.Legs.Count && journey.Legs[journey.LegIndex + 1] is { Means: TravelMeans.AreaTrigger } next
+            && player.MapId == next.To.MapId && TravelPlace.Of(player).DistanceTo(next.To) <= TriggerArriveYards
+            && TravelPlace.Of(player).DistanceTo(next.From) > TriggerArriveYards)
+        {
+            return StepResult.Next;
+        }
+
         if (player.MapId != leg.To.MapId)
         {
             if (PlayerbotTram.IsTraveling(player) || (player.MapId == TramNetwork.TramMapId && leg.To.MapId != TramNetwork.TramMapId))
@@ -1183,6 +1200,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         {
             TravelMeans.Boat or TravelMeans.Zeppelin => string.Create(CultureInfo.InvariantCulture, $"{leg.Means} {leg.TransportEntry}"),
             TravelMeans.MageTeleport => string.Create(CultureInfo.InvariantCulture, $"MageTeleport {leg.SpellId}"),
+            TravelMeans.AreaTrigger => string.Create(CultureInfo.InvariantCulture, $"AreaTrigger {leg.TriggerId}"),
             TravelMeans.MagePortal => string.Create(CultureInfo.InvariantCulture, $"MagePortal {leg.SpellId} by {leg.MageGuid:X}"),
             _ => leg.Means.ToString(),
         };
