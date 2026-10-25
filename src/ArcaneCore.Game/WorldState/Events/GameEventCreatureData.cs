@@ -59,8 +59,8 @@ public sealed class GameEventCreatureData : ICreatureEventData, IGameEventEffect
 
     /// <summary>
     /// The data of the first running event that lists <paramref name="spawnGuid"/>, or null. Read-only: it is called from every grid spawn on whichever
-    /// map thread runs it during the parallel map phase, so it must not write any state of this world-wide singleton (the applied-equipment record is
-    /// kept by <see cref="UpdateCreatureData"/>, which runs on the world tick).
+    /// map thread updates that map. Today every caller holds the world serial gate, so two calls never overlap, but it writes no state of this
+    /// world-wide singleton so that ungating spawn creation cannot race (the applied-equipment record is kept by <see cref="UpdateCreatureData"/>).
     /// </summary>
     public GameEventCreatureOverride? For(uint spawnGuid)
     {
