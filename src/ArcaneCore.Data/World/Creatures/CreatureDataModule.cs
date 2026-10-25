@@ -61,6 +61,9 @@ public sealed class CreatureTemplateRow
     /// <summary>ClassicDB VendorTemplateId / vmangos vendor_id; shared npc_vendor_template entry.</summary>
     public uint VendorTemplateId { get; set; }
 
+    /// <summary>ClassicDB EquipmentTemplateId / vmangos equipment_id; the <c>creature_equip_template</c> entry. Added by <see cref="CreatureEquipmentDataModule"/>.</summary>
+    public uint EquipmentTemplateId { get; set; }
+
     public uint UnitFlags { get; set; }
 
     public uint DynamicFlags { get; set; }

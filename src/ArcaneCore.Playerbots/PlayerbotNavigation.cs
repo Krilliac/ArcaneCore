@@ -283,6 +283,14 @@ internal static class PlayerbotNavigation
         => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.World is { } world
             && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
+    /// <summary>
+    /// Whether <paramref name="point"/> lies in a cell the bots of the world found a dead end (<see cref="PlayerbotSharedPins"/>). Asked by the
+    /// explore filter only: unlike <see cref="IsDeadEndPin"/> it never makes a plan refuse a destination, so an NPC standing there stays reachable.
+    /// </summary>
+    internal static bool IsWorldPin(Player player, Vector3 point)
+        => StallWatches.TryGetValue(player, out PlayerbotStallWatch? watch) && watch.World is { } world
+            && watch.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, point.X, point.Y, world.NowMs);
+
     /// <summary>The detour offsets tried past a hazard on the way, on either side (yards beyond its radius).</summary>
     private static readonly float[] HazardDetourYards = [5f, 15f, 28f];
 

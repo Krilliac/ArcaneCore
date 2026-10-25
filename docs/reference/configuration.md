@@ -25,6 +25,7 @@ How to read the tables:
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
+- [`Cluster:NodeBridge`](#clusternodebridge)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
@@ -303,6 +304,13 @@ How to read the tables:
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
+
+## `Cluster:NodeBridge`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
+| `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;social\|Social\|127.0.0.1:19085\|-;coordinator\|Coordinator\|127.0.0.1:19086\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
 
 ## `Cluster:Worker`
 
@@ -1461,7 +1469,7 @@ How to read the tables:
 | `World:Playerbots:Chat:MemoryExchanges` | `int` | `4` | live | Earlier exchanges with the same player a bot remembers and sends with a model request (0..16). |
 | `World:Playerbots:Chat:NaturalLanguageCommands` | `bool` | `true` | live | Let the party master's plain-language orders ("follow me", "wait here", "attack my target") drive the party commands (on by default). Only the master's lines are read for orders; the one-word commands work either way. |
 | `World:Playerbots:Chat:PerPlayerCooldownSeconds` | `int` | `8` | live | Seconds after a reply before the same player gets another one from any bot (0..3600; lines in between are not answered). |
-| `World:Playerbots:Chat:Providers` | `PlayerbotChatProviderOptions[]` | `[]` | live | The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation, ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable). |
+| `World:Playerbots:Chat:Providers` | `PlayerbotChatProviderOptions[]` | `[]` | live | The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, JsonResponseFormat, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation, ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable). |
 | `World:Playerbots:Chat:Safety:AllowOptOut` | `bool` | `true` | live | Let a player whisper a bot "ai off" (built-in replies only) or "ai on" (on). |
 | `World:Playerbots:Chat:Safety:AutoMute` | `bool` | `false` | live | Also mute a player's chat (the account mute of `.mute`) when they are cut off (off). |
 | `World:Playerbots:Chat:Safety:AutoMuteMinutes` | `int` | `30` | live | The automatic mute's length in minutes (1..10080). |

@@ -322,6 +322,7 @@ public static partial class ContentImporterCli
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
+        Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
@@ -439,6 +440,17 @@ public static partial class ContentImporterCli
                     if (relays.HasVendorTemplateIdColumn && !vendorStockRejected)
                     {
                         counts["creature_template (VendorTemplateId)"] = linksChanged;
+                    }
+
+                    (int equipRows, int equipLinks) = await relays.RefreshEquipmentAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasEquipTemplateTable)
+                    {
+                        counts[CreatureEquipmentDataModule.EquipTemplateTable] = equipRows;
+                    }
+
+                    if (relays.HasEquipmentTemplateIdColumn)
+                    {
+                        counts["creature_template (EquipmentTemplateId)"] = equipLinks;
                     }
 
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);

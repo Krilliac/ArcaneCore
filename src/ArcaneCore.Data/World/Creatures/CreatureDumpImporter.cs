@@ -45,6 +45,9 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_ai_summons</c> rows.</summary>
     public int AiSummons { get; init; }
 
+    /// <summary><c>creature_equip_template</c> rows (item entries per equipment id; world schema 56).</summary>
+    public int Equipment { get; init; }
+
     /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
     public int SpawnEntries { get; init; }
 
@@ -101,6 +104,9 @@ public sealed class CreatureDumpImporter
 
     private readonly Dictionary<uint, (int Patch, CreatureTemplateRow Row, VMangosStats? Stats)> _templates = [];
     private bool _sawVendorTemplateIdColumn;
+    private bool _sawEquipmentTemplateIdColumn;
+    private bool _sawEquipTemplateTable;
+    private readonly Dictionary<uint, (uint Probability, CreatureEquipmentRow Row)> _equipment = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
@@ -138,6 +144,50 @@ public sealed class CreatureDumpImporter
     public IReadOnlyDictionary<uint, string> ScriptNames => _templates.ToDictionary(pair => pair.Key, pair => pair.Value.Row.ScriptName);
 
     public bool HasVendorTemplateIdColumn => _sawVendorTemplateIdColumn;
+
+    /// <summary>The dump's creature_template carries an equipment id column (ClassicDB <c>EquipmentTemplateId</c>, vmangos <c>equipment_id</c>).</summary>
+    public bool HasEquipmentTemplateIdColumn => _sawEquipmentTemplateIdColumn;
+
+    /// <summary>The dump carried a <c>creature_equip_template</c> table.</summary>
+    public bool HasEquipTemplateTable => _sawEquipTemplateTable;
+
+    /// <summary>The <c>creature_equip_template</c> rows that would be written (for inspection and tests).</summary>
+    public IReadOnlyCollection<CreatureEquipmentRow> EquipmentSnapshot() => [.. _equipment.Values.Select(e => e.Row)];
+
+    /// <summary>
+    /// Content refresh of creature equipment (world schema 56): replace <c>creature_equip_template</c> with the rows read, and set
+    /// <c>creature_template.EquipmentTemplateId</c> of the templates already in the world from the dump. Each half runs only when the
+    /// dump carried it (the table; the template column), so a dump without either leaves the world as it is. Runs inside the caller's
+    /// <see cref="Content.Import.ImportTransaction"/>. Returns the equipment rows written and the template links changed.
+    /// </summary>
+    public async Task<(int Rows, int Links)> RefreshEquipmentAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        int rows = 0;
+        if (_sawEquipTemplateTable && _equipment.Count > 0)
+        {
+            await db.Set<CreatureEquipmentRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _equipment.Values.Select(e => e.Row), cancellationToken).ConfigureAwait(false);
+            rows = _equipment.Count;
+        }
+
+        int links = 0;
+        if (_sawEquipmentTemplateIdColumn && _templates.Count > 0)
+        {
+            foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (_templates.TryGetValue(template.Entry, out var source) && template.EquipmentTemplateId != source.Row.EquipmentTemplateId)
+                {
+                    template.EquipmentTemplateId = source.Row.EquipmentTemplateId;
+                    links++;
+                }
+            }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return (rows, links);
+    }
 
     /// <summary>Refresh only ScriptName on templates already in the world; other creature fields keep their current values.</summary>
     public async Task<int> RefreshScriptNamesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
@@ -249,6 +299,9 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_addon":
                     ReadAddon(row);
+                    break;
+                case "creature_equip_template":
+                    ReadEquipment(row);
                     break;
                 case "creature_classlevelstats":
                     ReadClassLevelStats(row);
@@ -373,6 +426,7 @@ public sealed class CreatureDumpImporter
                     await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await DbScriptDumpImporter.DeleteAllAsync(db, ct).ConfigureAwait(false);
                     await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureEquipmentRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
@@ -394,6 +448,7 @@ public sealed class CreatureDumpImporter
                 await InsertBatchedAsync(db, _movementTemplates.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _spawnEntries.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _addons.Values, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _equipment.Values.Select(e => e.Row), ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiScripts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiTexts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _broadcastTexts.Values, ct).ConfigureAwait(false);
@@ -435,6 +490,7 @@ public sealed class CreatureDumpImporter
     public CreatureImportReport BuildReport() => new(
         Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. ReportWarnings()])
     {
+        Equipment = _equipment.Count,
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
         ScriptTexts = _scriptTextEntries.Count,
@@ -653,6 +709,7 @@ public sealed class CreatureDumpImporter
     private void ReadTemplate(DumpRow row)
     {
         _sawVendorTemplateIdColumn |= row.Has("VendorTemplateId") || row.Has("vendor_id");
+        _sawEquipmentTemplateIdColumn |= row.Has("EquipmentTemplateId") || row.Has("equipment_id");
         bool vmangos = row.Has("level_min");
         SetDialect(vmangos ? CreatureDumpDialect.VMangos : CreatureDumpDialect.CMangos);
 
@@ -695,6 +752,7 @@ public sealed class CreatureDumpImporter
             TrainerRace = U8(row, "TrainerRace", "trainer_race"),
             TrainerSpell = U32(row, "TrainerSpell", "trainer_spell"),
             VendorTemplateId = U32(row, "VendorTemplateId", "vendor_id"),
+            EquipmentTemplateId = U32(row, "EquipmentTemplateId", "equipment_id"),
             UnitFlags = U32(row, "UnitFlags"),
             DynamicFlags = U32(row, "DynamicFlags"),
             TypeFlags = U32(row, "CreatureTypeFlags"),
@@ -1017,6 +1075,35 @@ public sealed class CreatureDumpImporter
             EmoteState = U32(row, "emote", "emote_state"),
         };
         _addons[addon.Guid] = addon;
+    }
+
+    /// <summary>
+    /// <c>creature_equip_template</c>: ClassicDB / cmangos <c>equipentry1..3</c> or vmangos <c>item1..3</c> (ObjectMgr::LoadEquipmentTemplates), item
+    /// entries. A vmangos entry can have several rows with a <c>probability</c> (the creature rolls one at spawn) and a patch range; only rows whose
+    /// range contains <see cref="MaxPatch"/> count, and the most probable row is kept (the first read on a tie) since one id holds one set here.
+    /// </summary>
+    private void ReadEquipment(DumpRow row)
+    {
+        _sawEquipTemplateTable = true;
+        if (row.Has("patch_min") && row.Has("patch_max") && (U32(row, "patch_min") > MaxPatch || U32Or(row, uint.MaxValue, "patch_max") < MaxPatch))
+        {
+            return;
+        }
+
+        uint entry = U32(row, "entry");
+        uint probability = U32(row, "probability");
+        if (_equipment.TryGetValue(entry, out var existing) && existing.Probability >= probability && row.Has("probability"))
+        {
+            return;
+        }
+
+        _equipment[entry] = (probability, new CreatureEquipmentRow
+        {
+            Entry = entry,
+            EquipEntry1 = U32(row, "equipentry1", "item1"),
+            EquipEntry2 = U32(row, "equipentry2", "item2"),
+            EquipEntry3 = U32(row, "equipentry3", "item3"),
+        });
     }
 
     // --- helpers ---------------------------------------------------------------------------

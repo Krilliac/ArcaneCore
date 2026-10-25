@@ -267,5 +267,7 @@ refreshed with another amount, as vmangos' HandleStatModifier does).
 
 Limits: the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
 SCHOOL_DAMAGE spells (Shield Slam and the like) still take only the DAMAGE spell mod, not the non-weapon branch of `MeleeDamageBonusDone`; creature
-damage fields are recomputed for the main hand only (creatures carry no off-hand data), and without creature equipment rows
-(`creature_equip_template`, not in the repository) no creature holds a weapon, so the 40% disarm factor needs that data to show in play.
+damage fields are recomputed for the main hand only (creatures carry no off-hand data). Creatures hold their `creature_equip_template` items since world
+schema 56 (see [content import](content-import.md), creature equipment), so `CreatureDamageStats.HasWeapon` (main-hand virtual item of class weapon) is
+true for the roughly half of the classic-db creatures that carry a weapon and the 40% disarm factor applies to them in play; a world imported before
+schema 56 (or never refreshed) has no equipment rows and keeps the old no-weapon behaviour.

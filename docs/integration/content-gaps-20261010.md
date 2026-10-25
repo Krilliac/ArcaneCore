@@ -30,5 +30,5 @@ trivial merge), `CreatureAiServices.cs`, `CreatureAiServicesBinder.cs`, `Creatur
 ## Limits
 * No replay of classic-db `Updates/`; 4498's new AQ War Effort piles (gameobject 155000-155054) are not added here.
 * MOVE_DYNAMIC: no terrain/LoS z adjustment and no in-combat test; SET_HOVER fly-anim flag not modelled; SET_EQUIPMENT reset restores the
-  pre-script slots (no `creature_equip_template` in ArcaneCore); FORMATION (51) still skipped.
+  pre-script slots (a creature's own set is `creature_equip_template`, world schema 56); FORMATION (51) still skipped.
 * Locally only SQLite ran for the provider matrix; MariaDB/PostgreSQL run on hosted CI.

@@ -19,10 +19,11 @@ public sealed partial class Creature
     /// Set or clear the event overrides. A living creature is re-initialised at once (vmangos <c>UpdateEntry</c> re-runs the level and
     /// stat setup); a dead one only remembers them for its respawn.
     /// </summary>
-    internal void ApplyEventOverride(CreatureTemplate? template, uint displayId)
+    internal void ApplyEventOverride(CreatureTemplate? template, uint displayId, uint equipmentId = 0)
     {
         EventTemplate = template;
         EventDisplayId = displayId;
+        EventEquipmentId = equipmentId;
         if (DeathState == CreatureDeathState.Alive)
         {
             InitializeFields();

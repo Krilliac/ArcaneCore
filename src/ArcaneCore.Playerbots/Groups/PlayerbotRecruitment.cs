@@ -82,12 +82,12 @@ internal static class PlayerbotRecruitment
     /// The offset of one (candidate, group) pair's refusal windows, in [0, <paramref name="periodMs"/>): a hash of the pair, so the windows of
     /// different pairs do not all start at the same instant.
     /// </summary>
-    internal static uint RefusalPhase(uint periodMs, Guid botId, int groupId)
-        => (uint)(PlayerbotContention.Mix((ulong)(uint)botId.GetHashCode(), (ulong)(uint)groupId) % periodMs);
+    internal static uint RefusalPhase(uint periodMs, ulong candidateGuid, int groupId)
+        => (uint)(PlayerbotContention.Mix(candidateGuid, (ulong)(uint)groupId) % periodMs);
 
     /// <summary>The refusal window of the pair at <paramref name="nowMs"/>: time plus the pair's phase, divided by the period (<see cref="RollGroup"/>'s <c>window</c>).</summary>
-    internal static uint RefusalWindow(uint nowMs, uint periodMs, Guid botId, int groupId)
-        => unchecked(nowMs + RefusalPhase(periodMs, botId, groupId)) / periodMs;
+    internal static uint RefusalWindow(uint nowMs, uint periodMs, ulong candidateGuid, int groupId)
+        => unchecked(nowMs + RefusalPhase(periodMs, candidateGuid, groupId)) / periodMs;
 
     /// <summary>The candidate's roll for the group: a fixed number in [0, 1) for the pair, whoever asks and whenever.</summary>
     internal static double Roll(ulong candidateGuid, int groupId)

@@ -177,6 +177,7 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
             ["stream"] = false,
         };
         if (provider.ReasoningEffortToSend is { } effort) body["reasoning_effort"] = effort;
+        if (prompt.ExpectsJson && provider.JsonResponseFormat) body["response_format"] = new JsonObject { ["type"] = "json_object" };
         return body;
     }
 

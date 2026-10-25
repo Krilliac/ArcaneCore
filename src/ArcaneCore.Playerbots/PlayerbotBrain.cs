@@ -144,6 +144,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private uint _exploreLastMap;
     private bool _exploreHasPosition;
     private Player? _exploreSearchPlayer;
+    private bool _exploreSearchSkipIndoor;
     private CreatureContent? _exploreSearchContent;
     private PlayerbotExploreAtlas? _exploreSearchAtlas;
     private FactionTemplateCatalog? _exploreSearchFactions;
@@ -1752,12 +1753,26 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
+        // Asked before this bot reports: a cell other bots already found a dead end is one at this bot's first stall.
+        bool worldPin = _stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now);
         int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
-        bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
-        if (deadEndPin)
+        bool ownPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
+        bool deadEndPin = ownPin || worldPin;
+        if (ownPin)
+        {
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
+            if (CanShareDeadEndPin(player)
+                && _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now) is { } newPin)
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+        }
+        else if (worldPin)
+        {
+            PlayerbotAnomalies.Report(player, "brain", "world-pin-escape",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stalled inside a world dead-end pin within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} and leaving"));
+        }
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
@@ -1770,7 +1785,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (deadEndPin)
                 {
                     _suspensions.SuspendEntryEscalating(TargetEntry, now);
-                    if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+                    if (ownPin && QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
                         _suspensions.MarkUnreachableQuest(QuestId, now);
                 }
                 else
@@ -1845,7 +1860,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_goal != PlayerbotGoalKind.Quest && QuestId != 0)
         {
             _suspensions.SuspendQuest(QuestId, now);
-            if (deadEndPin && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+            // Only the bot's own pin says the quest is unreachable; a first stall in a world pin leaves with the suspension alone.
+            if (ownPin && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
                 _suspensions.MarkUnreachableQuest(QuestId, now);
         }
 
@@ -1862,7 +1878,34 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
-        EscapeIsland(player, out _, deadEndPin);
+        EscapeIsland(player, out _, deadEndPin, worldPinOnly: !ownPin && worldPin);
+    }
+
+    /// <summary>
+    /// Whether this bot's dead-end pin may count towards a world pin: only on an open-world map (never a dungeon, raid or battleground, whose
+    /// stalls are the instance's) and outside a capital or city, where bots crowd round quest givers and vendors and stall for reasons that
+    /// say nothing about the ground. Fails closed when the area table is missing.
+    /// </summary>
+    private bool CanShareDeadEndPin(Player player)
+    {
+        if (player.Map is not { } map || map.Template is not { } template || template.Instanceable) return false;
+        ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
+        uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
+        return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+    }
+
+    /// <summary>
+    /// The rule of <see cref="CanShareDeadEndPin(Player)"/> on its inputs: an open-world map (not instanceable), a known zone, and neither
+    /// the zone nor the sub-area (<paramref name="areaId"/>, 0 when unknown) flagged as a capital, city or town
+    /// (<c>Capital</c>, <c>City</c>, <c>SlaveCapital</c>, <c>SlaveCapital2</c>), so Goldshire, Sentinel Hill or Booty Bay inside an open zone do not pin.
+    /// </summary>
+    internal static bool CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
+    {
+        if (template is null || template.Instanceable || zoneId == 0 || areas.GetById(zoneId) is not { } zone) return false;
+        const uint townFlags = (uint)(ArcaneCore.Game.WorldState.Zones.AreaFlags.Capital | ArcaneCore.Game.WorldState.Zones.AreaFlags.City
+            | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital2);
+        if ((zone.Flags & townFlags) != 0) return false;
+        return areaId == 0 || areas.GetById(areaId) is not { } area || (area.Flags & townFlags) == 0;
     }
 
     /// <summary>
@@ -1928,7 +1971,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIslandCore(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
+    private bool EscapeIslandCore(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null,
+        bool worldPinOnly = false)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
@@ -1969,7 +2013,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         bool bindEscapes = player.Home != default && (player.Home.MapId != player.MapId
             || System.Numerics.Vector3.Distance(playerPos, new System.Numerics.Vector3(player.Home.X, player.Home.Y, player.Home.Z)) > PlayerbotStallWatch.ProgressYards);
         if (bindEscapes && TryTeleportToBindPoint(player,
-                deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
+                deadEndPin && !island ? (worldPinOnly ? "first stall in a world dead-end pin" : "stalled repeatedly at a dead-end pin") : "stalled on ground no route leaves",
                 urgent: deadEndPin, safety: true))
             return true;
 
@@ -1996,10 +2040,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <see cref="EscapeIslandCore"/>, remembering the zone the bot left when it was moved so the population can veto relocating it back
     /// there (<see cref="TakeEscapedZones"/>).
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null,
+        bool worldPinOnly = false)
     {
         uint zone = player.ZoneId;
-        bool moved = EscapeIslandCore(player, out onIsland, deadEndPin, confinedFrom);
+        bool moved = EscapeIslandCore(player, out onIsland, deadEndPin, confinedFrom, worldPinOnly);
         if (moved) RememberEscapedZone(zone);
         return moved;
     }
@@ -3733,6 +3778,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
             if (self is null) return false;
             _exploreSearchPlayer = player;
+            _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
             _exploreSearchContent = content;
             _exploreSearchAtlas = atlas;
             _exploreSearchFactions = factions;
@@ -3824,6 +3870,22 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private bool ExploreHostileFaction(uint faction)
         => _exploreSearchFactions?.Find(faction) is { } npc && _exploreSearchSelf is { } self && npc.IsHostileTo(self);
 
+    /// <summary>
+    /// Whether an explore candidate at <paramref name="point"/> is worth walking to: not in a dead-end pin of this bot or of the world, and not
+    /// indoors or underground when the bot stands outdoors (live 2026-10-25: spawns in a sealed Deadwind Pass crypt sent bots on searches that
+    /// ended at the node cap). Exploring is optional, so such spawns are simply left out. A dungeon or battleground is all indoors and is not judged.
+    /// </summary>
+    internal static bool ExploreSpotUsable(Player player, System.Numerics.Vector3 point, bool skipIndoor)
+    {
+        if (PlayerbotNavigation.IsDeadEndPin(player, point) || PlayerbotNavigation.IsWorldPin(player, point)) return false;
+        return !skipIndoor || player.Map is not { } map || PlayerbotNavigation.IsOutdoorsOnSurface(map, point);
+    }
+
+    /// <summary>Whether this bot's explore leaves out indoor spots: it stands outdoors on the surface of a map that is not a dungeon or battleground. Judged once per search.</summary>
+    internal static bool ExploreSkipsIndoor(Player player)
+        => player.Map is { } map && map.Template is not ({ IsDungeon: true } or { IsBattleground: true })
+            && PlayerbotNavigation.IsOutdoorsOnSurface(map, PlayerbotMotion.CurrentPosition(player));
+
     private bool ExploreEligible(PlayerbotExploreAtlas.Candidate candidate)
     {
         if (_exploreSearchPlayer is not { } player
@@ -3843,10 +3905,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _exploreSearchHome is { } home && home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
-        if (PlayerbotNavigation.IsDeadEndPin(player, point))
-            return false;
         foreach (PlayerbotHazard hazard in _exploreSearchHazards)
             if (hazard.Covers(point)) return false;
+        if (!ExploreSpotUsable(player, point, _exploreSearchSkipIndoor))
+            return false;
         if (atlas.HasStrongHazard(candidate, player.Level, threatFilter))
             return false;
         if (_exploreSearchHome is { } clippedHome && !clippedHome.Contains(spawn))

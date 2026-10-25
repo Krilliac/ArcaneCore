@@ -154,6 +154,17 @@ public sealed class HttpBotChatClientTests
     }
 
     [Fact]
+    public void OpenAIBody_AsksForAJsonObject_OnlyForJsonPrompts_AndWhenEnabled()
+    {
+        var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://localhost:11434/v1", Model = "m" };
+        BotChatPrompt json = Prompt with { ExpectsJson = true };
+        Assert.Equal("json_object", HttpBotChatClient.OpenAIBody(provider, json)["response_format"]!["type"]!.GetValue<string>());
+        Assert.False(HttpBotChatClient.OpenAIBody(provider, Prompt).ContainsKey("response_format"));
+        provider.JsonResponseFormat = false;
+        Assert.False(HttpBotChatClient.OpenAIBody(provider, json).ContainsKey("response_format"));
+    }
+
+    [Fact]
     public void OpenAIBody_CarriesReasoningEffort_OnlyWhenSet()
     {
         var provider = new PlayerbotChatProviderOptions { Kind = PlayerbotChatProviderKind.OpenAICompatible, BaseUrl = "http://localhost:11434/v1", Model = "qwen3.5:4b" };
