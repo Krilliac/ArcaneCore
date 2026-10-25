@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using ArcaneCore.Atlas.Live;
+using GameClass = ArcaneCore.Game.Class;
+using GameRace = ArcaneCore.Game.Race;
 
 namespace ArcaneCore.Atlas.Host.Public;
 
@@ -58,7 +60,7 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
     /// <summary>A links answer older than this many frames is stale.</summary>
     public const int MaxLinksAgeFrames = 2;
 
-    /// <summary>The label of a real player shown without a name.</summary>
+    /// <summary>The label of a real player shown without a name when race or class is unknown; otherwise <see cref="Label"/> gives "Race Class".</summary>
     public const string PlayerLabel = "Player";
 
     private readonly Dictionary<ulong, long> _hiddenUntil = [];
@@ -281,6 +283,44 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
 
     private static double Round(double value) => Math.Round(value, 2);
 
+    /// <summary>
+    /// The label of a real player shown without a name: <c>"&lt;Race&gt; &lt;Class&gt;"</c> (for example <c>Human Warrior</c>), or <see cref="PlayerLabel"/>
+    /// when either id is not a playable race or class. Built from the two ids only, so it can never carry the character name, level or guild.
+    /// </summary>
+    internal static string Label(byte race, byte playerClass)
+    {
+        string? raceName = RaceName(race);
+        string? className = ClassName(playerClass);
+        return raceName is null || className is null ? PlayerLabel : string.Concat(raceName, " ", className);
+    }
+
+    private static string? RaceName(byte race) => (GameRace)race switch
+    {
+        GameRace.Human => "Human",
+        GameRace.Orc => "Orc",
+        GameRace.Dwarf => "Dwarf",
+        GameRace.NightElf => "Night Elf",
+        GameRace.Undead => "Undead",
+        GameRace.Tauren => "Tauren",
+        GameRace.Gnome => "Gnome",
+        GameRace.Troll => "Troll",
+        _ => null,
+    };
+
+    private static string? ClassName(byte playerClass) => (GameClass)playerClass switch
+    {
+        GameClass.Warrior => "Warrior",
+        GameClass.Paladin => "Paladin",
+        GameClass.Hunter => "Hunter",
+        GameClass.Rogue => "Rogue",
+        GameClass.Priest => "Priest",
+        GameClass.Shaman => "Shaman",
+        GameClass.Mage => "Mage",
+        GameClass.Warlock => "Warlock",
+        GameClass.Druid => "Druid",
+        _ => null,
+    };
+
     private bool FailClosedDrops(LiveEntity entity) => entity.Kind switch
     {
         LiveKind.Bot => true,
@@ -298,7 +338,7 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
             _ => GuestKind.Creature,
         };
         string? name = entity.Kind == LiveKind.Player
-            ? (options.ShowPlayerNames && showPlayers ? entity.Name : PlayerLabel)
+            ? (options.ShowPlayerNames && showPlayers ? entity.Name : Label(entity.Race, entity.Class))
             : entity.Name;
         string? motion = entity.Motion switch
         {

@@ -55,6 +55,8 @@ internal struct FeedEntity
     public float HealthPercent;
     public bool InCombat;
     public uint DisplayId;
+    public byte Race;
+    public byte Class;
     public FeedEntityKind Kind;
     public byte Motion;
     public FeedEntityParts Parts;
