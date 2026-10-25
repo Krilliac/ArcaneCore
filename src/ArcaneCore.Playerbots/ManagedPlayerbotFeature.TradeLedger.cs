@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,6 +13,9 @@ public sealed partial class ManagedPlayerbotFeature
     // One writer at a time for every bot's ledger rows: a save and a forget never replace the same bot's rows concurrently, and each takes its snapshot inside
     // the gate, so the last writer holds the newest rows. The ledger changes rarely (a completed trade), so one gate costs nothing.
     private readonly SemaphoreSlim _tradeLedgerGate = new(1, 1);
+
+    // Deleted bots whose stored rows are gone (set after the delete went through: a failed one is tried again by the next forget).
+    private readonly ConcurrentDictionary<Guid, byte> _retiredTradeBots = new();
 
     /// <summary>Load every stored trade ledger row (startup). A failure is recorded at <c>playerbot.social-memory</c>; the bots then start with no ledger.</summary>
     private async Task LoadTradeLedgerAsync(IServiceProvider provider, CancellationToken cancellationToken)
@@ -84,30 +88,43 @@ public sealed partial class ManagedPlayerbotFeature
                 foreach (int characterId in characterIds)
                     if (characterId > 0) survivors.UnionWith(ledger.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
             if (provider.GetService<IPlayerbotTradeRecordStore>() is not { } store) return;
+            // One item's failure never skips the others: a survivor's rewrite must still run when a deleted bot's DELETE failed.
             foreach (Guid botId in gone)
             {
-                await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
-                try { await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false); }
-                finally { _tradeLedgerGate.Release(); }
+                if (_retiredTradeBots.ContainsKey(botId)) continue; // its stored rows were deleted by an earlier forget
+                try
+                {
+                    await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
+                    try { await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false); }
+                    finally { _tradeLedgerGate.Release(); }
+                    _retiredTradeBots[botId] = 0;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { ReportLedgerForgetFault(ex); }
             }
 
             foreach (Guid other in survivors)
             {
-                await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
                 try
                 {
-                    long version = ledger.Version(other); // before the snapshot: the saved version never runs ahead of the rows
-                    IReadOnlyList<PlayerbotTradeRecord> rows = ledger.Snapshot(other);
-                    await RetryTransientBusyAsync(() => store.ReplaceAsync(other, rows), CancellationToken.None).ConfigureAwait(false);
-                    if (_active.TryGetValue(other, out ActiveBot? active)) Volatile.Write(ref active.SavedTradeVersion, version);
+                    await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        long version = ledger.Version(other); // before the snapshot: the saved version never runs ahead of the rows
+                        IReadOnlyList<PlayerbotTradeRecord> rows = ledger.Snapshot(other);
+                        await RetryTransientBusyAsync(() => store.ReplaceAsync(other, rows), CancellationToken.None).ConfigureAwait(false);
+                        if (_active.TryGetValue(other, out ActiveBot? active)) Volatile.Write(ref active.SavedTradeVersion, version);
+                    }
+                    finally { _tradeLedgerGate.Release(); }
                 }
-                finally { _tradeLedgerGate.Release(); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { ReportLedgerForgetFault(ex); }
             }
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
-            logger.LogWarning(ex, "Playerbot trade ledger of deleted bots could not be removed ({Type})", ex.GetType().Name);
-        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { ReportLedgerForgetFault(ex); }
+    }
+
+    private void ReportLedgerForgetFault(Exception ex)
+    {
+        FaultLedger.Shared.Record(BotSocial.PlayerbotSocialRecorder.FaultSite, ex);
+        logger.LogWarning(ex, "Playerbot trade ledger of deleted bots could not be removed ({Type})", ex.GetType().Name);
     }
 }

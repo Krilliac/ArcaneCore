@@ -62,7 +62,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     public void Note(ObjectGuid bot, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!other.IsPlayer || !TryBot(bot, out Guid botId, out int characterId)) return;
-        Guarded(() => FeedLedger(botId, characterId, other.Value, e)); // the ledger is fed whether or not the memory is on: scam safety does not depend on that switch
+        if (IsLedgerEvent(e)) Guarded((Recorder: this, botId, characterId, Other: other.Value, e), static s => s.Recorder.FeedLedger(s.botId, s.characterId, s.Other, s.e)); // the ledger is fed whether or not the memory is on: scam safety does not depend on that switch
         if (!Enabled) return;
         Guarded(() =>
         {
@@ -73,6 +73,9 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
 
     // The events that belong in the trade ledger as well as in the memory. A gift's once-a-day rule is the ledger's: the caller that counts gifts asks it (NoteGiftReceived)
     // before recording, and this stamp then finds the day already taken. A flake stays a memory event only.
+    private static bool IsLedgerEvent(PlayerbotSocialEvent e)
+        => e is PlayerbotSocialEvent.FairDeal or PlayerbotSocialEvent.TradeScam or PlayerbotSocialEvent.NinjaLoot or PlayerbotSocialEvent.GiftReceived;
+
     private void FeedLedger(Guid botId, int characterId, ulong other, PlayerbotSocialEvent e)
     {
         if (Ledger is not { } ledger || !_managed.ContainsKey((uint)characterId)) return; // a bot that left (deleted) must not bring its ledger back
@@ -89,7 +92,7 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
     public void NoteById(Guid botId, ObjectGuid botGuid, ObjectGuid other, PlayerbotSocialEvent e, bool otherFaction = false)
     {
         if (!other.IsPlayer || other == botGuid) return;
-        Guarded(() => FeedLedger(botId, (int)botGuid.Low, other.Value, e)); // the ledger is fed whether or not the memory is on
+        if (IsLedgerEvent(e)) Guarded((Recorder: this, botId, CharacterId: (int)botGuid.Low, Other: other.Value, e), static s => s.Recorder.FeedLedger(s.botId, s.CharacterId, s.Other, s.e)); // the ledger is fed whether or not the memory is on
         if (!Enabled) return;
         Guarded(() =>
         {

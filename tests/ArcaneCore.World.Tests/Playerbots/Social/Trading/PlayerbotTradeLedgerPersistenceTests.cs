@@ -138,14 +138,19 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
     {
         private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _emptied = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _heldOnce;
         public Task Entered => _entered.Task;
+
+        /// <summary>Set when any other bot's rows are replaced by none (the deletion cleanup's first write).</summary>
+        public Task Emptied => _emptied.Task;
         public void Release() => _release.TrySetResult();
 
         public Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default) => inner.LoadAllAsync(cancellationToken);
 
         public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
         {
+            if (botId != held() && rows.Count == 0) _emptied.TrySetResult();
             if (botId == held() && rows.Count > 0 && Interlocked.Exchange(ref _heldOnce, 1) == 0)
             {
                 _entered.TrySetResult();
@@ -184,8 +189,9 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
 
         // The deletion cleanup runs meanwhile: it forgets the row in memory and rewrites the running bot's rows without it. Both writes must queue behind the first.
         Task forgetting = feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
-        await Task.Delay(300);
-        bool queued = !forgetting.IsCompleted; // not gated: it would have written already and the in-flight write would then land last, bringing the row back
+        // Not gated, its first write (the deleted bot's rows replaced by none) would be entered at once and the in-flight write would then land last, bringing the row back.
+        Task timeout = Task.Delay(1500);
+        bool queued = ReferenceEquals(await Task.WhenAny(store.Emptied, forgetting, timeout), timeout);
         store.Release(); // before any assertion: a failing one must not leave the stop hanging the host's disposal
 
         Assert.True((await stopping.WaitAsync(TimeSpan.FromSeconds(30))).Success);
