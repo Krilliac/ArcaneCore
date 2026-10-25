@@ -16692,6 +16692,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Contention:InvincibleTargetAbandonSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "8",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Seconds a bot may hold a target whose health stays at or below its death-prevention threshold (`InvincibilityHpThreshold`: a creature an EventAI script keeps at 1 health until some condition is met, such as the Blasted Lands servants of quest 2681) before it sets the creature aside as one it cannot kill (1..600).",
+      "allowed": "a whole number from 1 to 600 (seconds)",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Contention:SomeoneElsesMemorySeconds",
       "section": "World:Playerbots",
       "type": "int",
@@ -19760,6 +19776,22 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "The shortest time in minutes (5..1440) a bot stays at its level-band town before it heads to the capital. Each bot's stay is fixed per bot (by its id) between this and SecondaryStayMaxMinutes, so a fleet does not move in step.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Population:SpawnsPerBot",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Zone capacity: a zone takes no new or relocated bot once its assigned bots reach the zone's level-fitting outdoor creature spawns (on the surface, not indoors or underground, hostile to the bot's faction) divided by this many (0..100; 0 turns the cap off). Keeps a small zone such as Deadwind Pass (47 surface spawns, 600 s respawn) from taking a hundred bots that find every creature dead. The spawn survey runs off the world thread; until it is in, no zone is capped.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
