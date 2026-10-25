@@ -124,9 +124,9 @@ See [player resurrection](../integration/player-resurrection-20261004.md).
   aura are not ported (`SpellSystem.AreaAuras.cs` belongs to the spell-breadth lane).
 - Active targeting inherits the combat core's faction/reputation and controlling-player limitations. Ordinary
   `Creature` does not expose `IPlayerControlledUnit`, so same-faction duel reaction parity is not claimed. The PvP-flag
-  rule is ported through the controlling player (`CombatHooks.CanAttack` via `DuelRules.ControllingPlayer`, as vmangos
-  `GetAffectingPlayer`): against an unflagged enemy player, a player's pet, guardian or
-  totem is attackable, and attacks, only within a duel. Stealth uses the installed registry; separate invisibility masks are not implemented.
+  rule is ported through the controlling player (`CombatHooks.CanAttack` via `DuelRules.ControllingPlayer`, as
+  vmangos `GetAffectingPlayer`): outside a duel, a player's pet, guardian or totem neither attacks nor can be
+  attacked by an unflagged enemy player. Stealth uses the installed registry; separate invisibility masks are not implemented.
 - Retail selection does not prefilter ordinary visible units by LOS: a nearest enemy behind a wall can remain selected
   and prevent casts while a farther enemy is reachable. Normal spell casting refuses the blocked bolt.
 
