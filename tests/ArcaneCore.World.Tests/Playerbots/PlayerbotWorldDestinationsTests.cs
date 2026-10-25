@@ -545,7 +545,8 @@ public sealed class PlayerbotWorldDestinationsTests
                     Assert.Equal(6u, destinations.TargetEntry);
                 }
 
-                Assert.True(destinations.EntryListRebuilds <= 3, $"{destinations.EntryListRebuilds} rebuilds");
+                // One build for the hunt list and one for the quest-giver list (the advisory window is separate and not counted).
+                Assert.Equal(2, destinations.EntryListRebuilds);
                 Assert.True(eastSearches == pathfinder.Ends.Count(end => end.X > player.X + 100), string.Join(" ; ", pathfinder.Ends.Select(e => $"{e.X:F1}")) + $" player {player.X:F1}"); // the refused east spawn was never searched again
                 return true;
             });
@@ -606,6 +607,84 @@ public sealed class PlayerbotWorldDestinationsTests
             });
         }
         finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Every think starts over budget (an earlier phase spent 30 ms of the probe clock): the steps are deferred, but at most
+    /// <see cref="PlayerbotWorldDestinations.MaxConsecutiveDeferrals"/> thinks in a row. Only the first of the streak counts as "planning" to
+    /// the stall watch; the next think plans whatever the budget (before, a think that began over budget deferred forever and, being
+    /// "planning", kept resetting the stall watch).
+    /// </summary>
+    [Fact]
+    public async Task EveryThinkOverBudget_DefersAtMostThreeTimes_ThenPlans_AndOnlyTheFirstDeferralCountsAsPlanning()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "objective", DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 32001, Entry = 6, MapId = 0, X = startX + 300, Y = -132.49f, Z = 83.53f }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content)));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                var player = session.Player!;
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                var probe = new PlayerbotThinkProbe(clock);
+                var planning = new List<bool>();
+                int plannedAtThink = -1;
+                for (int think = 0; think < 6 && plannedAtThink < 0; think++)
+                {
+                    probe.Begin();
+                    try
+                    {
+                        clock.Advance(30); // the think began over budget
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        destinations.Update(player, 6, 500);
+                        planning.Add(destinations.IsPlanning);
+                        if (pathfinder.Calls > 0) plannedAtThink = think;
+                    }
+                    finally { probe.End(); }
+                }
+
+                Assert.Equal(PlayerbotWorldDestinations.MaxConsecutiveDeferrals, plannedAtThink);
+                Assert.Equal([true, false, false, false], planning);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public void SelectNearest_MatchesAFullSortReference_OnRandomizedInput()
+    {
+        var random = new Random(20261025);
+        foreach (int size in new[] { 0, 1, 5, PlayerbotWorldDestinations.MaxEntryScan, PlayerbotWorldDestinations.MaxEntryScan + 1, 700 })
+        {
+            var catalog = new List<PlayerbotWorldDestinations.DestinationEntry>();
+            var distances = new float[size];
+            for (int i = 0; i < size; i++)
+            {
+                // Few distinct distances so ties (broken by guid) are common; guids are not in catalog order.
+                catalog.Add(new PlayerbotWorldDestinations.DestinationEntry(1, new CreatureSpawn { Guid = (uint)(size * 3 - i * 3 + random.Next(0, 3)), Entry = 1, MapId = 0, X = 0, Y = 0, Z = 0 }));
+                distances[i] = random.Next(0, 40) * 25f;
+            }
+
+            var picked = new List<PlayerbotWorldDestinations.DestinationEntry>();
+            PlayerbotWorldDestinations.SelectNearest(catalog, distances, new PlayerbotWorldDestinations.GiverKey[PlayerbotWorldDestinations.MaxEntryScan],
+                picked, out bool truncated, out float farthest, out float nearestDropped);
+
+            var reference = Enumerable.Range(0, size).OrderBy(i => distances[i]).ThenBy(i => catalog[i].Spawn.Guid).ToList();
+            int keep = Math.Min(PlayerbotWorldDestinations.MaxEntryScan, size);
+            Assert.Equal(reference.Take(keep).Select(i => catalog[i]), picked);
+            Assert.Equal(size > keep, truncated);
+            Assert.Equal(keep == 0 ? 0f : distances[reference[keep - 1]], farthest);
+            Assert.Equal(size > keep ? distances[reference[keep]] : float.PositiveInfinity, nearestDropped);
+        }
     }
 
     private sealed class BlockEastPathfinder : IPathfinder

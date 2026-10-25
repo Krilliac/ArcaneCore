@@ -192,11 +192,15 @@ public sealed class DebugQueueCommands : ICommandExtension
         AnomalySnapshot? slowThink = AnomalyLedger.Shared.Find("bot-brain/think-slow");
         long slowCount = slowThink?.Count ?? 0;
         string slowSubjects = slowThink?.SubjectsCountText ?? "0";
+        AnomalySnapshot? gcStall = AnomalyLedger.Shared.Find("bot-brain/think-gc-stall");
 
         context.Reply(string.Create(C,
             $"Playerbot think: {running} running ({loggedIn} logged in, {snapshot.Count} registered), split-brain {(splitBrain ? "YES" : "no")}, feature tick {featureCost}"));
         context.Reply(string.Create(C,
             $"  slow thinks (bot-brain/think-slow): {slowCount} total across {slowSubjects} bot(s)"));
+        if (gcStall is not null)
+            context.Reply(string.Create(C,
+                $"  thinks over the threshold only for GC pauses (bot-brain/think-gc-stall, Info): {gcStall.Count} total across {gcStall.SubjectsCountText} bot(s)"));
         if (slowThink is { RecentDetails.Count: > 0 })
         {
             foreach (string detail in slowThink.RecentDetails)

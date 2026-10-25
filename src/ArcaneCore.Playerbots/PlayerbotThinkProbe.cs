@@ -42,7 +42,7 @@ internal sealed class PlayerbotThinkProbe
         _time = time;
     }
 
-    private const int MaxPhases = 32;
+    private const int MaxPhases = 48;
     private readonly string[] _names = new string[MaxPhases];
     private readonly long[] _ticks = new long[MaxPhases];
     private int _phases;

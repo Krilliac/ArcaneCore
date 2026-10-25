@@ -657,7 +657,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         foreach ((uint entry, CreatureSpawn spawn, Vector3 target) in candidates)
         {
             if (Suspensions?.IsEntrySuspended(entry, now) == true) continue;
-            if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && (RepairQueryBudgetSpent() || PlayerbotThinkProbe.Active is { ElapsedMs: >= 20.0 })) return false;
+            if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && (RepairQueryBudgetSpent() || PlayerbotThinkProbe.Active is { RunningMs: >= 20.0 })) return false;
             _repairPlansThisThink++;
             PlayerbotRoute? walk = null;
             if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))

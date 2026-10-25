@@ -53,13 +53,9 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
         Assert.Contains($"bot Slowunit (id {id})", notice.Subject, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AThinkSlowOnlyForTheCollectorsPause_IsCountedAsAGcStall_NotAsThinkSlow()
+    /// <summary>A think over <paramref name="threshold"/> whose time minus its GC pause is under it (null if the machine never gave one).</summary>
+    private static PlayerbotThinkProbe? GcStallThink(double threshold)
     {
-        var log = new PlayerbotSlowThinkLog(NullLogger.Instance);
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => (n.Key == ThinkSlow || n.Key == ThinkGcStall) && n.Subject.Contains("bot Slowgc ", StringComparison.Ordinal));
-        const double threshold = 2.0;
-        PlayerbotThinkProbe? probe = null;
         for (int attempt = 0; attempt < 10; attempt++)
         {
             var candidate = new PlayerbotThinkProbe();
@@ -68,8 +64,42 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
             do GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
             while (candidate.RunningMs < threshold + 1);
             candidate.End();
-            if (candidate.ElapsedMs - candidate.GcPauseMs < threshold) { probe = candidate; break; }
+            if (candidate.ElapsedMs - candidate.GcPauseMs < threshold) return candidate;
         }
+
+        return null;
+    }
+
+    [Fact]
+    public void AGcStallThink_DoesNotOpenOrCloseTheThinkSlowEpisode_AndIsInfoSoBotQaDoesNotQualifyIt()
+    {
+        var log = new PlayerbotSlowThinkLog(NullLogger.Instance);
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => (n.Key == ThinkSlow || n.Key == ThinkGcStall) && n.Subject.Contains("bot Slowmix ", StringComparison.Ordinal));
+        Guid id = Guid.NewGuid();
+        PlayerbotThinkProbe? stall = GcStallThink(2.0);
+        Assert.NotNull(stall);
+
+        // The first slow think of the episode is a GC stall; the real slow think right after it is still a think-slow report.
+        Assert.True(log.Observe(stall, 2.0, 1, id, "Slowmix", "its brain", "Grind"));
+        Assert.True(log.Observe(ThinkOf(30), 2.0, 2, id, "Slowmix", "its brain", "Grind"));
+        Assert.Equal(1, capture.Count(ThinkGcStall));
+        Assert.Equal(1, capture.Count(ThinkSlow));
+        Assert.Equal(AnomalySeverity.Info, capture.Notices.Single(n => n.Key == ThinkGcStall).Severity);
+        Assert.Equal(AnomalySeverity.Warning, capture.Notices.Single(n => n.Key == ThinkSlow).Severity);
+
+        // The QA feed takes Warning and above: the stall is not a finding, the real slow think (given the thresholds) is.
+        var feed = new ArcaneCore.World.Playerbots.Qa.PlayerbotQaAnomalyFeed(AnomalyLedger.Shared, minCount: 1, minDistinctSubjects: 1);
+        Assert.False(feed.Qualifies(AnomalyLedger.Shared.Find(ThinkGcStall)!));
+        Assert.True(feed.Qualifies(AnomalyLedger.Shared.Find(ThinkSlow)!));
+    }
+
+    [Fact]
+    public void AThinkSlowOnlyForTheCollectorsPause_IsCountedAsAGcStall_NotAsThinkSlow()
+    {
+        var log = new PlayerbotSlowThinkLog(NullLogger.Instance);
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => (n.Key == ThinkSlow || n.Key == ThinkGcStall) && n.Subject.Contains("bot Slowgc ", StringComparison.Ordinal));
+        const double threshold = 2.0;
+        PlayerbotThinkProbe? probe = GcStallThink(threshold);
 
         Assert.NotNull(probe);
         Assert.True(probe.GcPauseMs > 0, $"pause {probe.GcPauseMs} ms");
@@ -147,7 +177,7 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
 
         Guid slowId = Assert.IsType<Guid>((await feature.CreateAsync("Slowfire", 1, 1)).BotId);
         Guid fastId = Assert.IsType<Guid>((await feature.CreateAsync("Slowquiet", 1, 1)).BotId);
-        Assert.True((await feature.StartScriptedAsync(slowId.ToString(), new Spinning(300))).Success);
+        Assert.True((await feature.StartScriptedAsync(slowId.ToString(), new Spinning(300, once: true))).Success);
         Assert.True((await feature.StartScriptedAsync(fastId.ToString(), new Spinning(0))).Success);
 
         // 300 ms against a 30 ms threshold: the collector pauses of a busy test run (GcPauseMs is process-wide) cannot account for all of it.
@@ -160,10 +190,14 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
         await feature.ShutdownBeforeWorldStopAsync();
     }
 
-    private sealed class Spinning(double ms) : IPlayerbotController
+    private sealed class Spinning(double ms, bool once = false) : IPlayerbotController
     {
+        private bool _spun;
+
         public void Tick(PlayerbotControllerContext context, uint elapsedMs)
         {
+            if (once && _spun) return;
+            _spun = true;
             long until = Stopwatch.GetTimestamp() + (long)(ms * Stopwatch.Frequency / 1000);
             while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
         }

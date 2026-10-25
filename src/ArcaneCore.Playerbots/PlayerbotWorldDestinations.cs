@@ -65,6 +65,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private readonly List<DestinationEntry> _noEntries = [];
     private readonly List<DestinationEntry> _giverCatalog = [];
     private readonly List<DestinationEntry> _advisoryEntries = [];
+    // Spawns this bot found unreachable. Spawn guids are global, so the set outlives goal and list changes (a blocked spawn stays blocked
+    // while the bot alternates between hunting, quest-giver and return identities); it is cleared when every spawn is blocked, when the
+    // back-off ends, when the map or content changes, or when a list is rebuilt for a changed environment.
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, uint> _farBlockedUntil = [];
     private readonly Dictionary<uint, uint> _visited = [];
@@ -103,7 +106,16 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private bool _planningDeferred;
     private int _permanentlyStopped;
 
-    internal bool IsPlanning => _navigationPlan is not null || _planningDeferred;
+    // Planning deferred for want of think budget (DeferStep): only the first of a streak counts as "planning" to the stall watch, so a
+    // deferral that repeats is seen (and given up) as the stall it is.
+    private bool _budgetDeferred;
+    private int _deferrals;
+    private bool _forcedStep;
+
+    /// <summary>The most thinks in a row a step may be deferred for budget; the next one runs its step whatever the budget (progress is guaranteed).</summary>
+    internal const int MaxConsecutiveDeferrals = 3;
+
+    internal bool IsPlanning => _navigationPlan is not null || _planningDeferred && (!_budgetDeferred || _deferrals <= 1);
 
     internal void Stop()
     {
@@ -237,7 +249,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         for (int rank = 0; rank < ranked.Count; rank++)
         {
             if (++scanned > MaxEntryScan
-                || PlayerbotThinkProbe.Active is { RunningMs: >= StepProbeMs } or { HasOptionalPlanBudget: false }
+                || (rank > 0 && PlayerbotThinkProbe.Active is { RunningMs: >= StepProbeMs } or { HasOptionalPlanBudget: false })
                 || (rank > 0 && PlayerbotThinkProbe.MsSince(started) >= 12.0))
                 break;
             DestinationEntry entry = ranked[rank];
@@ -401,6 +413,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         // Transient guards (disabled, not in the world for a moment, no map, a zero step) leave the route and the trip alone, as before the lanes.
         if (!_options.Enabled || !player.IsInWorld || player.Map is not { } map || elapsedMs == 0) return false;
         _planningDeferred = false;
+        if (!_budgetDeferred) _deferrals = 0; // the last Update did not defer for budget: the streak is over
+        _budgetDeferred = false;
+        _forcedStep = false;
         uint now = _session.World.NowMs;
         if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue) return false;
         if (_backoffUntil != 0) _backoffUntil = 0;
@@ -588,7 +603,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // Across the Deeprun Tram (Stormwind and Ironforge sides of the continent): the brain drives the trip from the next think,
             // and the destination plans again from the other platform's exit (PlayerbotTram). A low-level bot with no home takes no
             // tram or lift trip (TransitAllowed): the live fresh launch sent about 76 level 1 bots to Stormwind quests by the tram.
-            if (StepBudgetSpent(started)) return DeferStep(entry.Spawn.Guid);
+            if (StepBudgetSpent(started, rank > firstRank)) return DeferStep(entry.Spawn.Guid);
             bool transit = TransitAllowed(Home, player.Level, _options.Population);
             PlayerbotThinkProbe.ScopeToken transitScope = PlayerbotThinkProbe.Scope("destinations transit");
             if (_navigationPlan is null && transit && PlayerbotTram.TryBegin(_session, player, destination, TramZoneAt))
@@ -647,7 +662,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             // return (the hazard and set-aside rules there are their own). The skip costs no path search, so the next spawn is judged in
             // this think; when no other spawn of the entry is left to try, the entry and the quest are set aside at once without
             // counting towards abandoning the quest (PlayerbotSuspensions.SuspendQuest).
-            if (route is null && _navigationPlan is null && StepBudgetSpent(started)) return DeferStep(entry.Spawn.Guid);
+            if (route is null && _navigationPlan is null && StepBudgetSpent(started, rank > firstRank)) return DeferStep(entry.Spawn.Guid);
             if (route is null && _navigationPlan is null && SkipUnreachable(player, entry.Entry, entry.Spawn.Guid, destination, questId, now, returning, out bool entrySetAside))
             {
                 // Only when every objective of the quest is set aside too is the quest: another creature of it may still be reachable.
@@ -692,7 +707,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 // again, so the wait (_tileWait) runs on from its first hold and is bounded by TileWait.MaxMs.
                 if (planned != PlanOutcome.Pending) ClearNavigation();
             }
-            else if (planned != PlanOutcome.Route && StepBudgetSpent(started))
+            else if (planned != PlanOutcome.Route && StepBudgetSpent(started, rank > firstRank))
             {
                 return DeferStep(entry.Spawn.Guid);
             }
@@ -772,7 +787,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (waterGoal is { } water)
         {
-            if (StepBudgetSpent(started)) return DeferStep(0);
+            if (StepBudgetSpent(started, true)) return DeferStep(0);
             bool journeyed;
             using (PlayerbotThinkProbe.Scope("destinations journey"))
                 journeyed = TryJourneyToGoal(player, water.Entry, water.Quest, map.MapId, water.To, now);
@@ -802,11 +817,20 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>
     /// Whether this think has spent what an optional destination step may use: the think is past <see cref="StepProbeMs"/>, this loop is past
     /// <see cref="StepLoopMs"/> since <paramref name="loopStarted"/> (<see cref="PlayerbotThinkProbe.Timestamp"/>), or it has made too many
-    /// path queries (<see cref="PlayerbotThinkProbe.HasOptionalPlanBudget"/>). Checked before each costly step, never inside one.
+    /// path queries (<see cref="PlayerbotThinkProbe.HasOptionalPlanBudget"/>). The loop clock counts only once a candidate was judged
+    /// (<paramref name="loopJudged"/>: the first one is always looked at, as the old loop timer did with its rank guard). Checked before each costly step,
+    /// never inside one.
     /// </summary>
-    private static bool StepBudgetSpent(long loopStarted)
-        => PlayerbotThinkProbe.Active is { } probe && (probe.RunningMs >= StepProbeMs || !probe.HasOptionalPlanBudget)
-            || PlayerbotThinkProbe.MsSince(loopStarted) >= StepLoopMs;
+    private bool StepBudgetSpent(long loopStarted, bool loopJudged)
+    {
+        if (_forcedStep) return false;
+        bool spent = PlayerbotThinkProbe.Active is { } probe && (probe.RunningMs >= StepProbeMs || !probe.HasOptionalPlanBudget)
+            || loopJudged && PlayerbotThinkProbe.MsSince(loopStarted) >= StepLoopMs;
+        if (!spent) return false;
+        // Progress: after MaxConsecutiveDeferrals thinks in a row that deferred, this Update's steps run whatever the budget.
+        if (_deferrals >= MaxConsecutiveDeferrals) _forcedStep = true;
+        return !_forcedStep;
+    }
 
     /// <summary>
     /// The step budget ran out before a costly step: no verdict was reached, so nothing is stored against the spawn (no back-off, no spawn
@@ -815,6 +839,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private bool DeferStep(uint spawnGuid)
     {
         _planningDeferred = true;
+        _budgetDeferred = true;
+        _deferrals++;
         _resumeList = spawnGuid != 0 ? _activeList : null;
         _resumeVersion = _activeList?.Version ?? 0;
         _resumeSpawn = spawnGuid;
@@ -1436,6 +1462,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         internal bool Truncated;
         internal float FarthestKeptDistSq;
         internal float NearestDroppedDistSq = float.PositiveInfinity;
+        internal int GiverEpoch;
         internal long Used;
         internal int Version;
     }
@@ -1468,6 +1495,10 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint[] allowed = services.Options.OrdinaryRewardQuestIds;
         uint level = player.Level;
         float maxDeliveryYards = Home is null ? _options.MaxDeliveryYards : 0;
+        // The quest-giver list is a window on the giver catalog, which is keyed on more than the list is (loot, class, race, faction): its
+        // epoch is part of the list's environment.
+        bool giverList = preferredCreatureEntry == 0 && returnQuestId == 0;
+        if (giverList) EnsureGiverCatalog(player, mapId, content, services, quests, mode, allowed, level, maxDeliveryYards);
         // The route belongs to the identity it was planned under: another identity asking for its list drops it.
         bool keyChanged = _activeList is null || _activePreferred != preferredCreatureEntry || _activeReturn != returnQuestId;
         EntryList? slot = null;
@@ -1483,13 +1514,19 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool sameEnvironment = slot is not null && slot.MapId == mapId && ReferenceEquals(slot.Content, content)
             && slot.ContentVersion == content.DefinitionsVersion && ReferenceEquals(slot.Quests, quests)
             && ReferenceEquals(slot.Home, Home) && slot.RewardMode == mode && slot.Level == level
-            && slot.MaxDeliveryYards == maxDeliveryYards && slot.RewardQuestIds.AsSpan().SequenceEqual(allowed);
+            && slot.MaxDeliveryYards == maxDeliveryYards && slot.RewardQuestIds.AsSpan().SequenceEqual(allowed)
+            && (!giverList || slot.GiverEpoch == _giverCatalogEpoch);
         bool contentChanged = _mapId != mapId || !ReferenceEquals(_content, content) || _contentVersion != content.DefinitionsVersion;
         _mapId = mapId;
         _content = content;
         _quests = quests;
         _contentVersion = content.DefinitionsVersion;
-        if (contentChanged) _farBlockedUntil.Clear();
+        if (contentChanged)
+        {
+            // Whichever list is asked for, another map or other content starts the blocks over.
+            _farBlockedUntil.Clear();
+            _blockedSpawns.Clear();
+        }
         // Moving does not by itself abandon the walk: the list is chosen again, and the route is kept when its spawn is still
         // the nearest one. Clearing it on every small step (the gap between the 128th and 129th spawn is often a yard) replanned
         // the same camp every think and the not-closing clock then gave the camp up.
@@ -1514,7 +1551,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint carriedTarget = movementOnly ? _routeTarget : 0;
         // Spawn guids are global, so another identity's list does not forget which spawns this bot found unreachable: only a change of
         // the world the list was built from (the map, the content, the level, the home) starts the blocks over.
-        if (contentChanged || slot.Valid && !movementOnly) _blockedSpawns.Clear();
+        if (slot.Valid && !movementOnly) _blockedSpawns.Clear();
         slot.PreferredEntry = preferredCreatureEntry;
         slot.ReturnQuestId = returnQuestId;
         slot.MapId = mapId;
@@ -1526,6 +1563,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         slot.Level = level;
         slot.MaxDeliveryYards = maxDeliveryYards;
         slot.RewardQuestIds = [.. allowed];
+        slot.GiverEpoch = giverList ? _giverCatalogEpoch : 0;
         slot.Valid = true;
         slot.Version++;
         slot.Entries.Clear();
@@ -1716,29 +1754,44 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         }
     }
 
-    /// <summary>One giver's distance key while the nearest <see cref="MaxEntryScan"/> are selected (<see cref="SelectNearestGivers"/>).</summary>
-    private readonly record struct GiverKey(float DistSq, uint Guid, int Index);
+    /// <summary>One giver's distance key while the nearest <see cref="MaxEntryScan"/> are selected (<see cref="SelectNearest"/>).</summary>
+    internal readonly record struct GiverKey(float DistSq, uint Guid, int Index);
 
     private static bool Before(in GiverKey a, in GiverKey b) => a.DistSq < b.DistSq || a.DistSq == b.DistSq && a.Guid < b.Guid;
 
+    private float[]? _giverDistances;
+
     /// <summary>
     /// The nearest <see cref="MaxEntryScan"/> givers of the catalog, nearest first (ties by spawn guid). Each distance (a spawn position
-    /// resolved) is computed once, into a sorted buffer of the kept ones that a nearer spawn enters by insertion: the catalog is
-    /// neither sorted nor measured again per comparison (it was: every compare of a sort resolved two spawn positions).
+    /// resolved) is computed once, here; the catalog is neither sorted nor measured again per comparison (it was: every compare of a sort
+    /// resolved two spawn positions).
     /// </summary>
     private void SelectNearestGivers(Player player, List<DestinationEntry> target, out bool truncated, out float farthestKeptSq, out float nearestDroppedSq)
     {
-        int keep = Math.Min(MaxEntryScan, _giverCatalog.Count);
+        int count = _giverCatalog.Count;
+        float[] distances = _giverDistances is { } scratch && scratch.Length >= count ? scratch : _giverDistances = new float[Math.Max(count, 256)];
+        for (int i = 0; i < count; i++) distances[i] = DistanceSquared(player, _giverCatalog[i].Spawn);
+        SelectNearest(_giverCatalog, distances, _giverKept ??= new GiverKey[MaxEntryScan], target, out truncated, out farthestKeptSq, out nearestDroppedSq);
+    }
+
+    /// <summary>
+    /// The pure selection of <see cref="SelectNearestGivers"/>: the <see cref="MaxEntryScan"/> nearest of <paramref name="catalog"/> by
+    /// <paramref name="distancesSq"/> (ties by spawn guid) into <paramref name="target"/>, nearest first, by insertion into the sorted
+    /// <paramref name="kept"/> buffer (at least <see cref="MaxEntryScan"/> long). <paramref name="nearestDroppedSq"/> is the nearest distance
+    /// of a spawn left out (infinity when none was).
+    /// </summary>
+    internal static void SelectNearest(IReadOnlyList<DestinationEntry> catalog, ReadOnlySpan<float> distancesSq, GiverKey[] kept,
+        List<DestinationEntry> target, out bool truncated, out float farthestKeptSq, out float nearestDroppedSq)
+    {
+        int keep = Math.Min(MaxEntryScan, catalog.Count);
         farthestKeptSq = 0f;
         nearestDroppedSq = float.PositiveInfinity;
-        truncated = _giverCatalog.Count > keep;
+        truncated = catalog.Count > keep;
         if (keep == 0) return;
-        GiverKey[] kept = _giverKept ??= new GiverKey[MaxEntryScan];
         int count = 0;
-        for (int i = 0; i < _giverCatalog.Count; i++)
+        for (int i = 0; i < catalog.Count; i++)
         {
-            CreatureSpawn spawn = _giverCatalog[i].Spawn;
-            var key = new GiverKey(DistanceSquared(player, spawn), spawn.Guid, i);
+            var key = new GiverKey(distancesSq[i], catalog[i].Spawn.Guid, i);
             if (count == keep)
             {
                 if (!Before(key, kept[count - 1]))
@@ -1765,7 +1818,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         for (int i = 0; i < count; i++)
         {
             if (kept[i].DistSq > farthestKeptSq) farthestKeptSq = kept[i].DistSq;
-            target.Add(_giverCatalog[kept[i].Index]);
+            target.Add(catalog[kept[i].Index]);
         }
     }
 
@@ -2130,7 +2183,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         return Vector3.DistanceSquared(new(player.X, player.Y, player.Z), pos);
     }
 
-    private sealed record DestinationEntry(uint Entry, CreatureSpawn Spawn);
+    internal sealed record DestinationEntry(uint Entry, CreatureSpawn Spawn);
 
     /// <summary>Whether every entry (of <paramref name="preferredCreatureEntry"/> when not 0) is blocked; true when there is none.</summary>
     private bool AllBlocked(uint preferredCreatureEntry, uint now)
