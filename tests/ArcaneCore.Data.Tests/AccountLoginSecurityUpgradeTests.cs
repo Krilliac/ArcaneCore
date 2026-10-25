@@ -31,7 +31,7 @@ public sealed class AccountLoginSecurityUpgradeTests : IAsyncLifetime
         {
             await using AuthDbContext db = TestContexts.Create<AuthDbContext>(connection);
             await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema);
-            Assert.Equal(5, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+            Assert.Equal(AuthDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
             Account row = await db.Accounts.SingleAsync();
             Assert.Equal("KEEPER", row.Username);
             Assert.Equal(AccountLockFlags.None, row.LockFlags);
