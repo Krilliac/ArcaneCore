@@ -8,6 +8,9 @@ import path from 'node:path';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Longest a single DevTools request may take; a loaded machine is slow, a wedged browser never answers. */
+const COMMAND_TIMEOUT_MS = 60_000;
+
 export class Browser {
     static async launch(executable, { width = 1440, height = 900 } = {}) {
         const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-browser-'));
@@ -66,7 +69,7 @@ export class Browser {
     }
 
     async #json(route, method = 'GET') {
-        const response = await fetch(`${'http'}://127.0.0.1:${this.port}${route}`, { method });
+        const response = await fetch(`${'http'}://127.0.0.1:${this.port}${route}`, { method, signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS) });
         return response.json();
     }
 
@@ -120,9 +123,10 @@ export class Page {
 
     connect() {
         return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('The DevTools socket did not open in time.')), COMMAND_TIMEOUT_MS);
             this.ws = new WebSocket(this.url);
-            this.ws.onopen = () => resolve();
-            this.ws.onerror = () => reject(new Error('Could not open the DevTools socket.'));
+            this.ws.onopen = () => { clearTimeout(timer); resolve(); };
+            this.ws.onerror = () => { clearTimeout(timer); reject(new Error('Could not open the DevTools socket.')); };
             this.ws.onmessage = (event) => this.#message(JSON.parse(event.data));
         });
     }
@@ -165,10 +169,19 @@ export class Page {
         }
     }
 
-    send(method, params = {}) {
+    /** Sends a DevTools command; rejects after `timeoutMs` so a stalled browser fails this test instead of hanging the run. */
+    send(method, params = {}, timeoutMs = COMMAND_TIMEOUT_MS) {
         const id = this.nextId++;
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject, method });
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error(`${method}: no answer from the browser within ${timeoutMs} ms`));
+            }, timeoutMs);
+            this.pending.set(id, {
+                method,
+                resolve: (value) => { clearTimeout(timer); resolve(value); },
+                reject: (error) => { clearTimeout(timer); reject(error); },
+            });
             this.ws.send(JSON.stringify({ id, method, params }));
         });
     }

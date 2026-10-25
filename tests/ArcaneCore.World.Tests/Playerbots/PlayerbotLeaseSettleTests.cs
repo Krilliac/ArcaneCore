@@ -479,7 +479,9 @@ public sealed class PlayerbotLeaseSettleTests
     private static bool RenewedNow(WorldSession session, Player bot)
     {
         Assert.True(PlayerbotMotion.TryGetState(bot, out PlayerbotMotion.MotionState? state));
-        return state!.RenewedMs == session.World.NowMs;
+        // The world clock is the real one here, so it can tick between the settle's reading and this one: "just now" is a few ms, while a
+        // renewal the settle did not make is at least one elapsed step (seconds) old.
+        return unchecked(session.World.NowMs - state!.RenewedMs) < 250u;
     }
 
     /// <summary>

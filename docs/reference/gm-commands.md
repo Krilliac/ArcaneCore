@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 380 |
-| `Administrator` | 6 | 576 |
+| `GameMaster` | 3 | 390 |
+| `Administrator` | 6 | 590 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -244,6 +244,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server anomalies` | 3 | GameMaster | stored level through the map | Syntax: .server anomalies [$subsystem \| show $key \| reset] Summarize outcome anomalies by subsystem and top keys; list keys for one subsystem; show one key in full; reset (administrator) clears the ledger. |
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
+| `.server config` ... | 3 | GameMaster | stored level through the map | Server options. Syntax: .server config [list\|get\|set\|reset\|diff\|sources\|dump] |
+| `.server config list` | 3 | GameMaster | stored level through the map | Syntax: .server config list [$filter] [page #n] List the server options (value, apply class: live, next-load or restart, and whether read-only or overridden). $filter: part of a path, alias or description (maps, xp, anticheat...). 25 rows per page. |
+| `.server config get` | 3 | GameMaster | stored level through the map | Syntax: .server config get $key Show one option: value, type and bounds, apply class, aliases and, when overridden, its baseline and who changed it. $key: a path (World:Maps:GridUnload), a rate name or an alias. |
+| `.server config set` | 6 | Administrator | declared retail level | Syntax: .server config set $key $value [$reason] Change a live or next-load option for everyone until .reload config or restart (PacketHeuristics and pack options: until restart; not saved to any file). Restart-only keys are read-only. $value is checked against the key's type and bounds; quote a text value that has spaces. $reason is logged with the change. |
+| `.server config reset` | 6 | Administrator | declared retail level | Syntax: .server config reset [$key\|all] Put one option (or all overridden ones, the default) back to the value it had before the first change. |
+| `.server config diff` | 3 | GameMaster | stored level through the map | Syntax: .server config diff List the options changed since start or the last .reload config (PacketHeuristics and pack options: since start): baseline, value now, who and why. |
+| `.server config sources` | 6 | Administrator | declared retail level | Syntax: .server config sources [$filter] [page #n] List the configuration providers (last one wins) and, for each option matching $filter, which provider supplies its value, or whether it is a built-in default or overridden. |
+| `.server config dump` | 6 | Administrator | declared retail level | Syntax: .server config dump $section [page #n] Print the effective value of every option whose path starts with $section (World:Maps, Rate, AntiCheat...), secrets masked. |
 | `.server wiring` | 6 | Administrator | declared retail level | Syntax: .server wiring List what the running server declares but does not wire: client opcodes that arrived with no handler (counted since start), options that a class asks for but nothing configures, config checks that check-config never runs, handlers registered for server-only opcodes. |
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
@@ -410,6 +418,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
@@ -641,6 +653,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
 | `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |
 | `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
+| `.rates history` | 3 | GameMaster | stored level through the map | Syntax: .rates history [#n] The last n rate changes (set, reset, reload), newest first, with who and why (25 by default, at most 25; the server keeps the last 100). |
+| `.rates overrides` | 3 | GameMaster | stored level through the map | Syntax: .rates overrides The .rates set lines that recreate every overridden rate, with the configured value each one would return to. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

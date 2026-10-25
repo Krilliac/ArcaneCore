@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -303,7 +304,7 @@ public sealed class AntiCheatCommands : ICommandGroup
 
     private static bool Set(CommandContext context, string text)
     {
-        if (FeatureOf(context) is not { } feature)
+        if (FeatureOf(context) is null)
         {
             return true;
         }
@@ -316,73 +317,24 @@ public sealed class AntiCheatCommands : ICommandGroup
             return false;
         }
 
-        AntiCheatOptions options = feature.Options.Clone();
-        bool parsed = field switch
+        // The same set as .server config set (the keys answer to anticheat.<field>), run in World.Post: one parser, one validation, one record of the change.
+        string name = "anticheat." + (field == "enable" ? "enabled" : field);
+        ServerConfigCommands.PostSet(context, name, value, null, outcome =>
         {
-            "enabled" or "enable" => TryBool(value, b => options.Enabled = b),
-            "action" => Enum.TryParse(value, ignoreCase: true, out AntiCheatAction action) && Enum.IsDefined(action) && Assign(() => options.Action = action),
-            "alert" => TryFloat(value, f => options.ScoreGmAlert = f),
-            "rubberband" => TryFloat(value, f => options.ScoreRubberband = f),
-            "kick" => TryFloat(value, f => options.ScoreKick = f),
-            "decay" => TryFloat(value, f => options.DecayPerSecond = f),
-            "speedtolerance" => TryFloat(value, f => options.SpeedTolerancePercent = f),
-            "teleport" => TryFloat(value, f => options.TeleportDistance = f),
-            "terrain" => TryBool(value, b => options.TerrainChecks = b),
-            "persist" => TryBool(value, b => options.Log.Persist = b),
-            "autoban" => TryBool(value, b => options.Autoban.Enabled = b),
-            _ => false,
-        };
-
-        if (!parsed)
-        {
-            context.Reply($"AntiCheat: cannot set '{field}' to '{value}'. Fields: enabled, action (none|log|gmalert|rubberband|kick), alert, rubberband, kick, decay, speedtolerance, teleport, terrain, persist, autoban.");
-            return true;
-        }
-
-        IReadOnlyList<string> problems = options.Validate();
-        if (problems.Count > 0)
-        {
-            context.Reply("AntiCheat: refused: " + string.Join(" ", problems));
-            return true;
-        }
-
-        feature.ApplyOptions(options);
-        context.Session.Logger.LogInformation("AntiCheat: {Gm} set {Field} = {Value} (live until the next .reload config)", context.InvokerName, field, value);
-        context.Reply($"AntiCheat: {field} = {value} (live until the next .reload config or restart).");
-        return true;
-    }
-
-    private static bool Assign(Action assign)
-    {
-        assign();
-        return true;
-    }
-
-    private static bool TryBool(string text, Action<bool> assign)
-    {
-        bool? value = text.ToLowerInvariant() switch
-        {
-            "1" or "on" or "true" or "yes" => true,
-            "0" or "off" or "false" or "no" => false,
-            _ => null,
-        };
-        if (value is not { } b)
-        {
-            return false;
-        }
-
-        assign(b);
-        return true;
-    }
-
-    private static bool TryFloat(string text, Action<float> assign)
-    {
-        if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value))
-        {
-            return false;
-        }
-
-        assign(value);
+            if (outcome.Result == OptionSetResult.Ok)
+            {
+                context.Session.Logger.LogInformation("AntiCheat: {Gm} set {Field} = {Value} (live until the next .reload config)", context.InvokerName, field, value);
+                context.Reply($"AntiCheat: {field} = {value} (live until the next .reload config or restart).");
+            }
+            else if (outcome.Key is { } key && outcome.Result == OptionSetResult.Invalid && key.TryParse(value, out _, out _))
+            {
+                context.Reply("AntiCheat: refused: " + outcome.Error); // a value of the right type that the settings together do not allow
+            }
+            else
+            {
+                context.Reply($"AntiCheat: cannot set '{field}' to '{value}'. Fields: enabled, action (none|log|gmalert|rubberband|kick), alert, rubberband, kick, decay, speedtolerance, teleport, terrain, persist, autoban.");
+            }
+        });
         return true;
     }
 
