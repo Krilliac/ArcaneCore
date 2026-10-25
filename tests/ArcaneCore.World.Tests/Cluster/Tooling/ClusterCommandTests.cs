@@ -23,7 +23,8 @@ public sealed class ClusterCommandTests
         ClusterMapPlacementTable? placement = null,
         IRealmAuthorityLeaseStore? leases = null,
         IRealmPresenceDirectory? presence = null,
-        bool fencingEnabled = true)
+        bool fencingEnabled = true,
+        Action<IServiceCollection>? more = null)
     {
         placement ??= CreateDefaultPlacement();
         leases ??= CreateDefaultLeases();
@@ -44,6 +45,7 @@ public sealed class ClusterCommandTests
             services.AddSingleton(leases);
             services.AddSingleton(presence);
             services.AddSingleton<IClusterSocialRouter>(router);
+            more?.Invoke(services);
         });
     }
 
@@ -146,7 +148,7 @@ public sealed class ClusterCommandTests
 
         var drained = new ClusterNodeDescriptor("n", nameof(ClusterRole.Combined), Guid.NewGuid(), ClusterNodeLifecycleState.Drained,
             ClusterNodeManifest.CurrentContractVersion, schema.Auth, schema.Characters, schema.World, "rev", IsFencedWriter: true);
-        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
+        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
 
         Assert.Equal(schema.Auth, snapshot.AuthSchemaVersion);
         Assert.Equal(schema.Characters, snapshot.CharactersSchemaVersion);
@@ -157,6 +159,59 @@ public sealed class ClusterCommandTests
         // A drained, fenced, write-free realm at this build's own schema must read as safe to roll back.
         ClusterRollbackVerdict verdict = new ClusterRollbackCoordinator().VerifySafeRollbackToLocal(snapshot);
         Assert.True(verdict.SafeToRollback, string.Join(" | ", verdict.BlockingReasons));
+    }
+
+    [Fact]
+    public async Task ClusterDiag_ReportsTheAggregateUnresolvedTransferCount_NotAHardCodedZero()
+    {
+        var store = new InMemoryTransferDecisionStore();
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(store));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMT", "Admtransfer");
+
+        string[] none = await LinesAsync(admin, ".cluster diag");
+        Assert.Contains("xferPending=0", none[0], StringComparison.Ordinal);
+
+        // Two characters mid-transfer, a third whose transfer was aborted (resolved).
+        var a = new WorkerNodeId("worker:EK");
+        var b = new WorkerNodeId("worker:Kalimdor");
+        Guid aborted = Guid.NewGuid();
+        await store.CreateReservationAsync(Guid.NewGuid(), 101, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:101", 1, Guid.NewGuid()));
+        await store.CreateReservationAsync(Guid.NewGuid(), 102, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:102", 1, Guid.NewGuid()));
+        await store.CreateReservationAsync(aborted, 103, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:103", 1, Guid.NewGuid()));
+        await store.AbortPreCommitAsync(aborted, "test");
+
+        string[] two = await LinesAsync(admin, ".cluster diag");
+        Assert.Contains("xferPending=2", two[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClusterDiag_WhenTheStoreCannotCount_RepliesThatTheCountIsUnavailable_InsteadOfFaulting()
+    {
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(new UncountableTransferStore()));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMU", "Admuncount");
+
+        string[] lines = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Single(lines);
+        Assert.Contains("Cluster diagnostics unavailable", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("xferPending", lines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>A decision store whose aggregate count fails, as a database fault would.</summary>
+    private sealed class UncountableTransferStore : ITransferDecisionStore
+    {
+        public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<int>(new InvalidOperationException("store offline"));
+
+        public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => throw new NotSupportedException();
+        public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CreateReservationAsync(Guid transferId, ulong characterGuid, int accountId, long sessionGeneration, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, uint sourceMapId, uint sourceInstanceId, uint targetMapId, uint targetInstanceId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AbortPreCommitAsync(Guid transferId, string reason, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord?> GetDecisionAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<TransferDecisionRecord>> GetUnresolvedForCharacterAsync(ulong characterGuid, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     [Theory]

@@ -191,6 +191,7 @@ public sealed class CreatureRespawnQueueTests
         // An inline retry would have been 3 attempts each, with 600 ms of back-off.
         Assert.Equal(2, store.Attempts); // one attempt per write: the lock wait was not repeated inline
         Assert.Equal(2, queue.RetainedCount);
+        Assert.Equal(["spawn:0/1", "spawn:0/2"], queue.RetainedKeys);
 
         store.Locked = false;
         Assert.True(queue.PostRetainedSweepForTest());

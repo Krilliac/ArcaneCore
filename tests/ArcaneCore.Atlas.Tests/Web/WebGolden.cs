@@ -15,7 +15,7 @@ namespace ArcaneCore.Atlas.Tests.Web;
 /// <see cref="ViewState"/> answer, so the browser code is held to the C# core's numbers (within 1e-9) instead of to a
 /// restatement of them. Everything is synthetic and deterministic (no random numbers, no client data).
 /// </summary>
-internal static class WebGolden
+internal static partial class WebGolden
 {
     /// <summary>The environment variable the JS tests read for the golden directory.</summary>
     public const string Variable = "ARCANECORE_ATLAS_GOLDEN";
@@ -76,8 +76,13 @@ internal static class WebGolden
             corrupt.Add(new JsonObject { ["name"] = name, ["file"] = "corrupt-" + name + ".bin" });
         }
 
+        JsonArray v2Chunks = ExportV2(directory);
+        JsonObject textures = ExportTextures(directory);
+
         var root = new JsonObject
         {
+            ["v2"] = v2Chunks,
+            ["textures"] = textures,
             ["chunks"] = chunks,
             ["envelope"] = new JsonObject { ["file"] = "envelope.bin", ["parts"] = envelopeNames },
             ["corrupt"] = corrupt,
@@ -107,7 +112,7 @@ internal static class WebGolden
         list.Add(("magic", magic));
 
         byte[] version = (byte[])good.Clone();
-        BinaryPrimitives.WriteUInt16LittleEndian(version.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(version.AsSpan(4), 3);
         list.Add(("version", version));
 
         byte[] length = (byte[])good.Clone();

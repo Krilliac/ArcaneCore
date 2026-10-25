@@ -35,7 +35,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <see cref="PlayerbotNavigation.TryPlan"/> for <see cref="LoopBlacklistMs"/>, so its goals pick something else.
 /// </para>
 /// </summary>
-internal static class PlayerbotMotion
+internal static partial class PlayerbotMotion
 {
     /// <summary>A real client heartbeats about every 500 ms while moving.</summary>
     internal const uint HeartbeatIntervalMs = 500;

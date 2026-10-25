@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Maps.Collision;
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
 [DefaultMapUpdater(Order = 1000)]
-public sealed class MapCollision : IMapUpdater, IUnderMapClassifier
+public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
 {
     /// <summary>vmangos <c>DEFAULT_HEIGHT_SEARCH</c>: how far below a point a floor is searched.</summary>
     public const float DefaultHeightSearch = 50.0f;
