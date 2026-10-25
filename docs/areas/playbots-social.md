@@ -337,7 +337,19 @@ One pass every second of world time. A pass does a constant number of dictionary
 gathered once per pass and only when something needs it; an event handler's pass gathers none), drains only the guild-invite,
 charter-signature and battleground-win packets of each bot's capture queue, and makes at most one chat admission per guild. The rate
 limiters and the boss and battleground-win maps are bounded and swept; a pass that throws is logged (the first five in full) and the world
-carries on. Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
+carries on.
+
+**The pass is incremental** (`World:Playerbots:Social:PassBudgetMs`, default 4; 0 = no limit). A pass starts when its interval has passed and no
+pass is in flight, takes a snapshot of the running bots (a bot that leaves the world meanwhile is dropped from it) and walks its stages in
+order, at most the budget per world tick (plus one slice): the packet intake, the injected test lanes, then the lanes in their usual order.
+The lanes that act on one bot at a time and independently of the others (`answer-invites`, `emotes`) run on slices of the snapshot and stop
+between slices once the budget is spent; the next tick resumes at the next bot. Every other lane is population-wide (it has its own cursor
+and per-pass quota, or reasons about guilds, charters and the set of running bots) and runs whole as one stage, so the registry check, the
+intake and these lanes keep their once-per-pass meaning. A stage never starts before the one before it has finished, a pass that outlasts
+its interval is simply followed by the next as soon as it ends (no catch-up passes), and a pass in flight for more than 20 intervals is
+reported once to the anomaly ledger (`bot-social` / `pass-starved`).
+
+Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
 state is in memory or read back from it.
 
 ## Tests

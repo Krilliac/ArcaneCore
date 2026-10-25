@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Battlegrounds;
 /// (<see cref="IBattlegroundHost.AddBattlegroundObject"/>) whose type is re-rolled when one is taken.
 /// <para>Not modelled (vmangos does not either): the peons of an occupied node ("TODO: working, scripted peons spawning").</para>
 /// </summary>
-public sealed class ArathiBasin : Battleground
+public sealed partial class ArathiBasin : Battleground
 {
     /// <summary>Number of nodes (vmangos <c>BG_AB_NODES_MAX</c>).</summary>
     public const int NodeCount = 5;

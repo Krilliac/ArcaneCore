@@ -27,7 +27,7 @@ namespace ArcaneCore.World.OutdoorPvP;
 /// <c>HandlePlayerEnterZone/LeaveZone</c>, Player.cpp:6596-6598), logout (Player.cpp:2215), area triggers, the Silithyst flag drop on
 /// mount or stealth (Unit.cpp:5802-5810, SpellAuras.cpp:3637-3645), the world tick and SMSG_INIT_WORLD_STATES. World thread.
 /// </summary>
-public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<OutdoorPvPFeature> logger)
+public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger<OutdoorPvPFeature> logger)
     : IWorldFeature, IPlayerLocationListener, IAreaTriggerListener, IWorldStateProvider, IGraveyardLinkSource
 {
     private readonly Dictionary<Map, OutdoorPvPZoneScript> _scripts = new(ReferenceEqualityComparer.Instance);

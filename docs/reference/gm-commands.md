@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 380 |
-| `Administrator` | 6 | 576 |
+| `GameMaster` | 3 | 378 |
+| `Administrator` | 6 | 574 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -394,14 +394,6 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.creature despawntemp` | 3 | GameMaster | declared retail level | Syntax: .creature despawntemp [#radius] Remove the temporary creatures (clones, .npc add without save, script summons; not pets, guardians, totems or database spawns) within #radius yards of you (default 30, at most 200). |
 | `.creature clone` | 3 | GameMaster | declared retail level | Syntax: .creature clone [#count] Place #count (default 1, at most 25) temporary copies of the selected creature's template around you. They are not saved and do not respawn. |
 | `.creature spawnmany` | 3 | GameMaster | declared retail level | Syntax: .creature spawnmany #entry #count [#radius] Place #count (1-200) temporary creatures of #entry spread evenly over a disc of #radius yards around you (default 15, 2-100) at ground height. Not saved; remove them with .creature despawntemp. |
-| `.atlas` ... | 3 | GameMaster | stored level through the map | Atlas tool commands (used by the map tool's action templates). |
-| `.atlas place` ... | 3 | GameMaster | stored level through the map | Place a temporary creature or game object at a point. |
-| `.atlas place creature` | 3 | GameMaster | declared retail level | Syntax: .atlas place creature #entry #map $x $y $z [$o] Place a temporary creature (not saved) at the point on the map. |
-| `.atlas place gobject` | 3 | GameMaster | declared retail level | Syntax: .atlas place gobject #entry #map $x $y $z [$o] Place a temporary game object (not saved) at the point on the map. |
-| `.atlas tele` | 3 | GameMaster | declared retail level | Syntax: .atlas tele 0xGUID #map $x $y $z Teleport the player to the point. A GameMaster may move characters of their own account only; another account's character needs Administrator. |
-| `.atlas moveto` | 3 | GameMaster | declared retail level | Syntax: .atlas moveto 0xGUID $x $y $z Walk the creature to the point. |
-| `.atlas debug` | 3 | GameMaster | declared retail level | Syntax: .atlas debug 0xGUID Print one JSON object with the creature's aggro radius, leash, home, spawn, current path points, threat list and AI. |
-| `.atlas spawns` | 3 | GameMaster | declared retail level | Syntax: .atlas spawns #map $x $y $radius Print one JSON object listing the creature and game object spawn points within the radius (at most 500 rows). |
 | `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
 | `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
@@ -410,6 +402,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |

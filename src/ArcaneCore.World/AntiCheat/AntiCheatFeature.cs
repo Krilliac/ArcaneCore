@@ -37,7 +37,7 @@ namespace ArcaneCore.World.AntiCheat;
 /// world thread; only the log flush and the ban run on the thread pool.
 /// </para>
 /// </summary>
-public sealed class AntiCheatFeature(IServiceProvider services, ILogger<AntiCheatFeature> logger) : IWorldFeature
+public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<AntiCheatFeature> logger) : IWorldFeature
 {
     /// <summary>The author written into an autoban row (also how earlier autobans are counted).</summary>
     public const string BanAuthor = "AntiCheat";

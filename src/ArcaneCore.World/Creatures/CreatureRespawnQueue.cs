@@ -85,6 +85,23 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    /// <summary>The retained writes by key (<c>spawn:INSTANCE/GUID</c>, or <c>instance:ID</c> for an instance-wide delete), ordinal order.</summary>
+    public IReadOnlyList<string> RetainedKeys
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_retained.Count == 0) return [];
+                string[] keys = [.. _retained.Keys.Select(k => k.InstanceWide
+                    ? $"instance:{k.InstanceId}"
+                    : $"spawn:{k.InstanceId}/{k.SpawnGuid}")];
+                Array.Sort(keys, StringComparer.Ordinal);
+                return keys;
+            }
+        }
+    }
+
     /// <summary>Tests: queue one retained-write sweep now, as a timer tick would; false when one is already queued or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest()
         => _consumer is not null && Interlocked.CompareExchange(ref _sweepQueued, 1, 0) == 0 && _channel.Writer.TryWrite(RetrySweep);
