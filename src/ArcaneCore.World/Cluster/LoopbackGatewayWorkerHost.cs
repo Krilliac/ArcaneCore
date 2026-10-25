@@ -29,6 +29,9 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
     private sealed class ClientConnection : IAsyncDisposable
     {
+        private static readonly TimeSpan SendDrainTimeout = TimeSpan.FromSeconds(2);
+
+        public required LoopbackGatewayWorkerHost Owner { get; init; }
         public required int Id { get; init; }
         public required TcpClient Tcp { get; init; }
         public required NetworkStream Stream { get; init; }
@@ -37,9 +40,51 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         public Task? SendTask { get; set; }
         public volatile bool Admitted;
 
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync() => DisposeCoreAsync(awaitReceiveTask: true);
+
+        /// <summary>
+        /// Disposal entry point for the receive loop's own <c>finally</c>. It must not await
+        /// <see cref="ReceiveTask"/>: that task is the caller and cannot complete until this returns.
+        /// </summary>
+        public ValueTask DisposeFromReceiveLoopAsync() => DisposeCoreAsync(awaitReceiveTask: false);
+
+        private async ValueTask DisposeCoreAsync(bool awaitReceiveTask)
         {
+            Owner.DisposeStartedForTest?.Invoke();
             SendChannel.Writer.TryComplete();
+
+            // Drain queued frames (notably the HelloAck rejection) before closing: closing first would discard
+            // the unsent ack or turn the close into an RST that the peer sees before it reads the ack.
+            if (SendTask is not null)
+            {
+                try
+                {
+                    await SendTask.WaitAsync(SendDrainTimeout).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    if (ex is not (TimeoutException or OperationCanceledException or ObjectDisposedException or SocketException or IOException))
+                    {
+                        FaultLedger.Shared.Record("cluster.transport", ex);
+                    }
+                }
+            }
+
+            try
+            {
+                // Graceful FIN after the last queued byte, so the peer reads everything before seeing EOF.
+                // This avoids a reset only when no unread incoming data is pending; closing a socket that still
+                // holds unread received bytes makes the OS send an RST regardless.
+                Tcp.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (ex is not (ObjectDisposedException or SocketException or IOException or InvalidOperationException))
+                {
+                    FaultLedger.Shared.Record("cluster.transport", ex);
+                }
+            }
+
             try
             {
                 Tcp.Close();
@@ -67,7 +112,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                 }
             }
 
-            if (ReceiveTask is not null)
+            if (awaitReceiveTask && ReceiveTask is not null)
             {
                 try
                 {
@@ -83,6 +128,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             }
 
             Tcp.Dispose();
+            Owner.DisposeCompletedForTest?.Invoke();
         }
     }
 
@@ -101,6 +147,15 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         _localTransport.OutboundPacketForConnectionReceived += OnWorkerOutboundPacket;
         _localTransport.SessionDetachedForConnection += OnWorkerSessionDetached;
     }
+
+    /// <summary>Test seam (instance state): awaited by the send loop before each frame is written.</summary>
+    internal Func<Task>? BeforeSendFrameForTest { get; set; }
+
+    /// <summary>Test seam (instance state): invoked when a connection's disposal starts.</summary>
+    internal Action? DisposeStartedForTest { get; set; }
+
+    /// <summary>Test seam (instance state): invoked after a connection's socket has been fully disposed.</summary>
+    internal Action? DisposeCompletedForTest { get; set; }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
 
@@ -148,6 +203,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
             var conn = new ClientConnection
             {
+                Owner = this,
                 Id = id,
                 Tcp = client,
                 Stream = client.GetStream(),
@@ -160,12 +216,17 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         }
     }
 
-    private static async Task SendLoopAsync(ClientConnection conn, CancellationToken ct)
+    private async Task SendLoopAsync(ClientConnection conn, CancellationToken ct)
     {
         try
         {
             await foreach (byte[] frame in conn.SendChannel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                if (BeforeSendFrameForTest is { } gate)
+                {
+                    await gate().ConfigureAwait(false);
+                }
+
                 await WriteFrameAsync(conn.Stream, frame, ct).ConfigureAwait(false);
             }
         }
@@ -305,7 +366,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             if (_connections.TryRemove(conn.Id, out _))
             {
                 await _localTransport.DetachAllForConnectionAsync(conn.Id, CancellationToken.None).ConfigureAwait(false);
-                await conn.DisposeAsync().ConfigureAwait(false);
+                await conn.DisposeFromReceiveLoopAsync().ConfigureAwait(false);
             }
         }
     }
