@@ -46,7 +46,7 @@ public sealed partial class Creature : Unit, ICombatCreature
     // statRates: the Rate.Creature.* rates (Creatures:Rates) the creature's health and damage are scaled with, at spawn and every
     // respawn; null (pets) is 1 everywhere.
     public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit, uint guidEntry = 0, Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null,
-        CreatureStatRates? statRates = null)
+        CreatureStatRates? statRates = null, Func<uint, ArcaneCore.Kernel.Items.ItemTemplate?>? itemResolver = null)
         : base(ObjectGuid.WithEntry(highGuid, guidEntry != 0 ? guidEntry : template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
     {
         ArgumentNullException.ThrowIfNull(template);
@@ -60,6 +60,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         _random = random;
         _displayModelResolver = displayModelResolver;
         _statRates = statRates;
+        _itemResolver = itemResolver;
 
         if (spawn is not null)
         {
@@ -480,6 +481,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetUInt32(UpdateFields.UnitDynamicFlags, t.DynamicFlags);
 
         SelectLevel();
+        ApplyEquipment(); // the weapons, shield and ranged item of creature_equip_template (vmangos UpdateEntry: LoadEquipment)
         ApplyAddon();
         ReactState = CreatureAggro.InitialReactState(t);
         SetUInt64(UpdateFields.UnitFieldTarget, 0);
