@@ -40,12 +40,19 @@ public sealed partial class CreatureMapSystem
         GameEventCreatureOverride? data = _eventData?.For(spawn.Guid);
         CreatureTemplate? template = data is { EntryId: not 0 } ? _content.FindTemplate(data.EntryId) : null;
         uint display = data?.ModelId ?? 0;
+        uint equipment = data?.EquipmentId ?? 0;
         if (ReferenceEquals(creature.EventTemplate, template) && creature.EventDisplayId == display)
         {
+            // Only the equipment can differ: show it without re-rolling the level and health an entry or model change would.
+            if (creature.EventEquipmentId != equipment)
+            {
+                creature.SetEventEquipment(equipment);
+            }
+
             return;
         }
 
-        creature.ApplyEventOverride(template, display);
+        creature.ApplyEventOverride(template, display, equipment);
     }
 
     /// <summary>

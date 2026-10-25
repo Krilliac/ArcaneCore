@@ -21,6 +21,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureSpawnEntryRow> spawnEntries = await db.Set<CreatureSpawnEntryRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureMovementTemplateRow> entryPaths = await db.Set<CreatureMovementTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureModelInfoRow> models = await db.Set<CreatureModelInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureEquipmentRow> equipment = await db.Set<CreatureEquipmentRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiScriptRow> scripts = await db.Set<CreatureAiScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -81,7 +82,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
             scriptWaypoints.Select(DbScriptDataModule.ToWaypoint),
             links.Select(r => new CreatureLink(r.SlaveGuid, r.MasterGuid, r.Flags)),
-            templateLinks.Select(r => new CreatureTemplateLink(r.SlaveEntry, r.MapId, r.MasterEntry, r.Flags, r.SearchRange)))
+            templateLinks.Select(r => new CreatureTemplateLink(r.SlaveEntry, r.MapId, r.MasterEntry, r.Flags, r.SearchRange)),
+            equipment.Select(e => new CreatureEquipment(e.Entry, e.EquipEntry1, e.EquipEntry2, e.EquipEntry3)))
         {
             SpawnGroups = spawnGroups,
             Pools = pools,
@@ -125,6 +127,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         TrainerClass = r.TrainerClass,
         TrainerRace = r.TrainerRace,
         TrainerSpell = r.TrainerSpell,
+        EquipmentTemplateId = r.EquipmentTemplateId,
         UnitFlags = r.UnitFlags,
         DynamicFlags = r.DynamicFlags,
         TypeFlags = r.TypeFlags,
