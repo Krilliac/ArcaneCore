@@ -60,8 +60,8 @@ public sealed class RepoAssetGuardTests
     public void TheGuard_CatchesAPlantedBlp2_ByMagicEvenUnderAnInnocentName()
     {
         using var directory = new TestDirectory();
-        directory.Write("src\\notes.txt", Encoding.ASCII.GetBytes("BLP2").Concat(new byte[64]).ToArray());
-        directory.Write("src\\fine.txt", "hello"u8.ToArray());
+        directory.Write("src/notes.txt", Encoding.ASCII.GetBytes("BLP2").Concat(new byte[64]).ToArray());
+        directory.Write("src/fine.txt", "hello"u8.ToArray());
 
         string[] hits = Violations(directory.Path, Walk(directory.Path)).ToArray();
 
@@ -71,15 +71,28 @@ public sealed class RepoAssetGuardTests
     }
 
     [Theory]
-    [InlineData("a\\b\\Wolf.blp")]
-    [InlineData("a\\Wolf.M2")]
-    [InlineData("data\\CreatureDisplayInfo.dbc")]
-    [InlineData("data\\patch.MPQ")]
-    [InlineData("shot\\Probe.tga")]
+    [InlineData("a/b/Wolf.blp")]
+    [InlineData("a/Wolf.M2")]
+    [InlineData("data/CreatureDisplayInfo.dbc")]
+    [InlineData("data/patch.MPQ")]
+    [InlineData("shot/Probe.tga")]
     public void TheGuard_CatchesAClientExtension_EvenWhenTheFileIsEmpty(string relative)
     {
         using var directory = new TestDirectory();
         directory.Write(relative, []);
+
+        string[] hits = Violations(directory.Path, Walk(directory.Path)).ToArray();
+
+        Assert.Single(hits);
+        Assert.Contains("extension", hits[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheGuard_CatchesABackslashNamedClientAsset_OnEveryOs()
+    {
+        // On Linux this is one file whose name contains a backslash; on Windows it is a\x.blp. Either way it must be reported, not skipped.
+        using var directory = new TestDirectory();
+        directory.Write("a\\x.blp", []);
 
         string[] hits = Violations(directory.Path, Walk(directory.Path)).ToArray();
 
@@ -123,11 +136,11 @@ public sealed class RepoAssetGuardTests
     public void TheWalk_SkipsBuildOutputAndVcsDirectories_ButNotSources()
     {
         using var directory = new TestDirectory();
-        directory.Write("bin\\Debug\\x.blp", []);
-        directory.Write("obj\\x.blp", []);
-        directory.Write("node_modules\\p\\x.blp", []);
-        directory.Write(".git\\objects\\x.blp", []);
-        directory.Write("tests\\x.blp", []);
+        directory.Write("bin/Debug/x.blp", []);
+        directory.Write("obj/x.blp", []);
+        directory.Write("node_modules/p/x.blp", []);
+        directory.Write(".git/objects/x.blp", []);
+        directory.Write("tests/x.blp", []);
 
         string[] walked = Walk(directory.Path).ToArray();
 
@@ -138,8 +151,8 @@ public sealed class RepoAssetGuardTests
     public void TheWalk_SkipsTestResults()
     {
         using var directory = new TestDirectory();
-        directory.Write("TestResults\\run\\x.blp", []);
-        directory.Write("tests\\y.txt", "y"u8.ToArray());
+        directory.Write("TestResults/run/x.blp", []);
+        directory.Write("tests/y.txt", "y"u8.ToArray());
 
         Assert.Equal(["tests/y.txt"], Walk(directory.Path).ToArray());
     }
@@ -259,7 +272,8 @@ public sealed class RepoAssetGuardTests
         string[] skipped = ["bin", "obj", "node_modules", ".git", "TestResults"];
         foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
-            string relative = System.IO.Path.GetRelativePath(root, file).Replace('\\', '/');
+            string relative = System.IO.Path.GetRelativePath(root, file)
+                .Replace(System.IO.Path.DirectorySeparatorChar, '/'); // never '\\' on Linux: there it is a filename character, and rewriting it hides the file from File.Exists
             if (relative.Split('/').SkipLast(1).Any(part => skipped.Contains(part, StringComparer.OrdinalIgnoreCase)))
             {
                 continue;
