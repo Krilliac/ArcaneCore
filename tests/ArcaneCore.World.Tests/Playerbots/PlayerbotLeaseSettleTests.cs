@@ -476,12 +476,20 @@ public sealed class PlayerbotLeaseSettleTests
         return (uint)PlayerbotMotion.SettleBoundMs(state!);
     }
 
-    private static bool RenewedNow(WorldSession session, Player bot)
+    /// <summary>
+    /// <see cref="PlayerbotMotion.SettleAfterDriver"/> after a gate-only think, and whether that settle renewed the lease: whether it moved
+    /// RenewedMs to a world-clock reading taken during the call. The world clock is the real one here, so a check against "now" read after the
+    /// settle (a tolerance of some ms) fails whenever the test thread is descheduled past the tolerance between the two readings, as a loaded
+    /// runner does. A renewal the settle did not make is at least one elapsed step (seconds) older than the reading before it.
+    /// </summary>
+    private static bool Settle(WorldSession session, Player bot, uint renewalsBefore, uint sinceLast, out bool renewed)
     {
+        uint from = session.World.NowMs;
+        bool stopped = PlayerbotMotion.SettleAfterDriver(session, bot, renewalsBefore, sinceLast);
+        uint to = session.World.NowMs;
         Assert.True(PlayerbotMotion.TryGetState(bot, out PlayerbotMotion.MotionState? state));
-        // The world clock is the real one here, so it can tick between the settle's reading and this one: "just now" is a few ms, while a
-        // renewal the settle did not make is at least one elapsed step (seconds) old.
-        return unchecked(session.World.NowMs - state!.RenewedMs) < 250u;
+        renewed = unchecked(state!.RenewedMs - from) <= unchecked(to - from);
+        return stopped;
     }
 
     /// <summary>
@@ -506,17 +514,17 @@ public sealed class PlayerbotLeaseSettleTests
         uint renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
         Assert.Equal(renewals, PlayerbotMotion.RenewalsOf(bot));
-        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate)); // nothing is released: never stops the bot itself
+        Assert.False(Settle(rig.Bot, bot, renewals, gate, out bool renewed)); // nothing is released: never stops the bot itself
         Assert.True(PlayerbotMotion.IsActive(bot));
-        Assert.True(RenewedNow(rig.Bot, bot));
+        Assert.True(renewed);
 
         // Past it: not renewed, so the walk is past the lease of the first settle's renewal once that much more time has passed.
         PlayerbotMotion.ElapseForTests(bot, bound / 2 + 100);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
-        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
+        Assert.False(Settle(rig.Bot, bot, renewals, gate, out renewed));
         Assert.False(route.Released);
-        Assert.False(RenewedNow(rig.Bot, bot), "a settle renewed a route that had gone its whole bound without a Follow");
+        Assert.False(renewed, "a settle renewed a route that had gone its whole bound without a Follow");
         uint lease2 = PlayerbotMotion.LeaseMsOf(bot);
         Assert.False(WalksAfter(rig.Bot, lease2 + 100), "the unrenewed route outlived its lease");
         Assert.False(PlayerbotMotion.IsActive(bot));
@@ -543,8 +551,8 @@ public sealed class PlayerbotLeaseSettleTests
         PlayerbotMotion.ElapseForTests(bot, bound / 2 + 100);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
-        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
-        Assert.False(RenewedNow(rig.Bot, bot), "the settle renewed past the bound");
+        Assert.False(Settle(rig.Bot, bot, renewals, gate, out bool renewed));
+        Assert.False(renewed, "the settle renewed past the bound");
 
         // One decided think re-asserts the route through Follow (the leader has not moved: the same route).
         uint followed = PlayerbotMotion.RenewalsOf(bot);
@@ -555,8 +563,8 @@ public sealed class PlayerbotLeaseSettleTests
         PlayerbotMotion.ElapseForTests(bot, BoundOf(bot) / 2);
         renewals = PlayerbotMotion.RenewalsOf(bot);
         rig.Think(gate);
-        Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
-        Assert.True(RenewedNow(rig.Bot, bot), "the time bound was not started over by a Follow");
+        Assert.False(Settle(rig.Bot, bot, renewals, gate, out renewed));
+        Assert.True(renewed, "the time bound was not started over by a Follow");
         Assert.Same(route, PlayerbotMotion.RouteOf(bot));
         return true;
     }));
@@ -585,9 +593,9 @@ public sealed class PlayerbotLeaseSettleTests
             PlayerbotMotion.ElapseForTests(bot, step);
             uint renewals = PlayerbotMotion.RenewalsOf(bot);
             rig.Think(gate);
-            Assert.False(PlayerbotMotion.SettleAfterDriver(rig.Bot, bot, renewals, gate));
-            if (i < 3) Assert.True(RenewedNow(rig.Bot, bot), $"unfollowed settle {i} was not renewed (bound {bound} ms)");
-            else Assert.False(RenewedNow(rig.Bot, bot), $"the settle past the bound ({bound} ms) renewed");
+            Assert.False(Settle(rig.Bot, bot, renewals, gate, out bool renewed));
+            if (i < 3) Assert.True(renewed, $"unfollowed settle {i} was not renewed (bound {bound} ms)");
+            else Assert.False(renewed, $"the settle past the bound ({bound} ms) renewed");
         }
 
         Assert.False(route.Released);
