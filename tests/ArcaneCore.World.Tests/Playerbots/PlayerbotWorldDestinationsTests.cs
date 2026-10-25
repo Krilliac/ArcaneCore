@@ -588,7 +588,7 @@ public sealed class PlayerbotWorldDestinationsTests
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.False(destinations.Update(player, 6, 500));
                     Assert.False(destinations.LastPlanRefused);
-                    Assert.True(destinations.IsPlanning);
+                    Assert.False(destinations.IsPlanning); // a budget deferral is not planning to the stall watch
                     Assert.Equal(1, pathfinder.Calls); // no search was started
                 }
                 finally { probe.End(); }
@@ -611,7 +611,7 @@ public sealed class PlayerbotWorldDestinationsTests
 
     /// <summary>
     /// Every think starts over budget (an earlier phase spent 30 ms of the probe clock): the steps are deferred, but at most
-    /// <see cref="PlayerbotWorldDestinations.MaxConsecutiveDeferrals"/> thinks in a row. Only the first of the streak counts as "planning" to
+    /// <see cref="PlayerbotWorldDestinations.MaxConsecutiveDeferrals"/> thinks in a row. A budget deferral never counts as "planning" to
     /// the stall watch; the next think plans whatever the budget (before, a think that began over budget deferred forever and, being
     /// "planning", kept resetting the stall watch).
     /// </summary>
@@ -652,7 +652,55 @@ public sealed class PlayerbotWorldDestinationsTests
                 }
 
                 Assert.Equal(PlayerbotWorldDestinations.MaxConsecutiveDeferrals, plannedAtThink);
-                Assert.Equal([true, false, false, false], planning);
+                Assert.Equal([false, false, false, false], planning);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// A bot over budget on every think plans for real once in four thinks (the forced step), and a budget deferral is never "planning" to the
+    /// stall watch: <see cref="PlayerbotWorldDestinations.IsPlanning"/> is false on every think here, so the brain's watch is not reset and can fire.
+    /// Before, the forced think restarted the streak and every fourth think counted as planning, resetting the watch for good.
+    /// </summary>
+    [Fact]
+    public async Task OverBudgetOnEveryThink_NeverCountsAsPlanning_AcrossSeveralForcedCycles()
+    {
+        const float startX = -8949.95f;
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 6, Name = "objective", DisplayIds = [49] }],
+            [.. Enumerable.Range(0, 6).Select(i => new CreatureSpawn { Guid = (uint)(33001 + i), Entry = 6, MapId = 0, X = startX + 300 + i * 5, Y = -132.49f, Z = 83.53f })], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content)));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var pathfinder = new BlockEastPathfinder();
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                var player = session.Player!;
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                var probe = new PlayerbotThinkProbe(clock);
+                int forcedThinks = 0;
+                for (int think = 0; think < 12; think++)
+                {
+                    probe.Begin();
+                    try
+                    {
+                        clock.Advance(30);
+                        int before = pathfinder.Calls;
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        destinations.Update(player, 6, 500);
+                        Assert.False(destinations.IsPlanning, $"think {think}");
+                        if (pathfinder.Calls > before) forcedThinks++;
+                    }
+                    finally { probe.End(); }
+                }
+
+                Assert.True(forcedThinks >= 3, $"{forcedThinks} thinks planned for real");
                 return true;
             });
         }

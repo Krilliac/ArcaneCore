@@ -106,8 +106,8 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private bool _planningDeferred;
     private int _permanentlyStopped;
 
-    // Planning deferred for want of think budget (DeferStep): only the first of a streak counts as "planning" to the stall watch, so a
-    // deferral that repeats is seen (and given up) as the stall it is.
+    // Planning deferred for want of think budget (DeferStep) is never "planning" to the stall watch (IsPlanning): a bot that is over budget
+    // on every think makes no real progress, and the watch must be able to see (and give up) that stall. An async plan pending still counts.
     private bool _budgetDeferred;
     private int _deferrals;
     private bool _forcedStep;
@@ -115,7 +115,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// <summary>The most thinks in a row a step may be deferred for budget; the next one runs its step whatever the budget (progress is guaranteed).</summary>
     internal const int MaxConsecutiveDeferrals = 3;
 
-    internal bool IsPlanning => _navigationPlan is not null || _planningDeferred && (!_budgetDeferred || _deferrals <= 1);
+    internal bool IsPlanning => _navigationPlan is not null || _planningDeferred && !_budgetDeferred;
 
     internal void Stop()
     {
@@ -1538,6 +1538,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         }
 
         bool movementOnly = slot is not null && sameEnvironment;
+        bool found = slot is not null;
         if (slot is null)
         {
             foreach (EntryList candidate in _lists)
@@ -1551,7 +1552,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         uint carriedTarget = movementOnly ? _routeTarget : 0;
         // Spawn guids are global, so another identity's list does not forget which spawns this bot found unreachable: only a change of
         // the world the list was built from (the map, the content, the level, the home) starts the blocks over.
-        if (slot.Valid && !movementOnly) _blockedSpawns.Clear();
+        if (found && !movementOnly) _blockedSpawns.Clear(); // the same identity rebuilt for a changed environment; evicting another identity keeps the blocks
         slot.PreferredEntry = preferredCreatureEntry;
         slot.ReturnQuestId = returnQuestId;
         slot.MapId = mapId;

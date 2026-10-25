@@ -13,6 +13,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <see cref="PlayerbotOptions.SlowThinkLogMs"/>: through the unit (a probe of known length) and through the real feature with a controller
 /// that burns its think budget. The ledger is process-wide, so captures filter on a bot name of their own.
 /// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class GcStallSerialCollection
+{
+    internal const string Name = "GcStallSerial";
+}
+
+[Collection(GcStallSerialCollection.Name)] // its forced gen-2 collections would disturb the timing tests running beside it
 public sealed class ManagedPlayerbotSlowThinkAnomalyTests
 {
     private static readonly string ThinkSlow = PlayerbotAnomalies.Key("brain", "think-slow");
