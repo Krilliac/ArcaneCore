@@ -461,6 +461,50 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    [Fact]
+    public async Task AQueryThatIsAlwaysCutShort_IsRetriedOnlyAFewTimes_ThenItsCappedAnswerStands()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { WorkerHitsDeadline = true };
+            using var h = new Harness(world, Options(), nav);
+            Vector3 goal = h.Far();
+            Assert.True(IsPending(h.Ask(goal)));
+            for (int round = 0; round < PlayerbotPathJobs.MaxCappedRetries; round++)
+            {
+                h.Runner.CompleteAll();
+                Assert.False(IsPending(h.Ask(goal)), "the capped answer is used for this ask");
+                Assert.True(IsPending(h.Ask(goal)), "and the next ask searches again");
+            }
+
+            Assert.Equal(PlayerbotPathJobs.MaxCappedRetries + 1, h.Runner.Submitted.Count);
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(goal)));
+            Assert.False(IsPending(h.Ask(goal)), "after the limit the capped answer is kept, no job is queued for it");
+            Assert.Equal(PlayerbotPathJobs.MaxCappedRetries + 1, h.Runner.Submitted.Count);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ACappedAnswerWhoseMissedTilesHaveNoData_IsKeptAtOnce()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { WorkerHitsDeadline = true, Missed = [(1, 1)], Verdict = SharedMissVerdict.None };
+            using var h = new Harness(world, Options(), nav);
+            Vector3 goal = h.Far();
+            Assert.True(IsPending(h.Ask(goal)));
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(goal)));
+            Assert.False(IsPending(h.Ask(goal)));
+            Assert.Single(h.Runner.Submitted);
+            return true;
+        });
+    }
+
     // ---- 6/7. a wait always ends, and never as "unreachable" ----------------------------------------------------------------------
 
     [Fact]

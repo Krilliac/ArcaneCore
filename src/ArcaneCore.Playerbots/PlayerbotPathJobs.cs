@@ -102,6 +102,9 @@ internal sealed class PlayerbotPathJobs
     /// <summary>The bot must stand within this of the answer's early legs to be spliced onto it (<see cref="PlayerbotMotion.OffLegYards"/>).</summary>
     internal const float RejoinYards = PlayerbotMotion.OffLegYards;
 
+    /// <summary>Consecutive deadline-capped answers of one bot that are dropped so the next ask searches again; after them the capped answer is kept.</summary>
+    internal const int MaxCappedRetries = 3;
+
     /// <summary>A wait longer than this (wall ms) is reported once (<c>nav/job-wait-long</c>).</summary>
     internal const long WaitLongMs = 5_000;
 
@@ -385,6 +388,7 @@ internal sealed class PlayerbotPathJobs
             state.Remove(entry);
         }
 
+        LeaveLine(t_botId);
         _totals = _totals with { Escalations = _totals.Escalations + 1 };
         how = JobAnswer.Escalated;
         if (player.IsInWorld)
@@ -464,9 +468,23 @@ internal sealed class PlayerbotPathJobs
 
         carry = default;
 
-        // An answer cut short by the worker's time bound or a deadline (Incomplete, with no tile missed to explain it) says how far the
-        // search got in that time, not what the route is: it is used for this ask only. The next ask searches again.
-        if ((result.Type & PathType.Incomplete) != 0 && job.Search.DeadlineHits > 0 && job.MissedTiles.Count == 0) state.Remove(entry);
+        // An answer cut short by the worker's time bound or a deadline (Incomplete) says how far the search got in that time, not what
+        // the route is: it is used for this ask only and the next ask searches again, up to MaxCappedRetries in a row for the bot. A
+        // query that is always cut keeps its capped answer after that (as before), so it escalates, reports its wait and does not feed
+        // the pool forever. A missed tile that resolved to None (no data, out of bounds) explains the cut: that answer is kept too.
+        // A full answer ends the run.
+        if ((result.Type & PathType.Incomplete) != 0 && job.Search.DeadlineHits > 0 && job.MissedTiles.Count == 0)
+        {
+            if (state.CappedStreak < MaxCappedRetries)
+            {
+                state.CappedStreak++;
+                state.Remove(entry);
+            }
+        }
+        else
+        {
+            state.CappedStreak = 0;
+        }
 
         return result with
         {
@@ -659,8 +677,8 @@ internal sealed class PlayerbotPathJobs
         if (_active.Count > 0 && _activeNodes + nodes > _options.PathJobsMaxInFlightNodes) return false;
         if (!_lineNodes.TryGetValue(botId, out LinkedListNode<Guid>? mine)) return _line.Count < free;
 
-        // Among the first `free` waiters? The walk stops after `free` steps, so it is bounded by the free slots (few while a line
-        // exists), never by the number of waiters.
+        // Among the first `free` waiters? The walk stops after `free` steps, so it is bounded by the free slots (at most
+        // PathJobsMaxInFlight), never by the number of waiters.
         int position = 0;
         for (LinkedListNode<Guid>? n = _line.First; n is not null && position < free; n = n.Next, position++)
         {
@@ -838,6 +856,9 @@ internal sealed class PlayerbotPathJobs
     {
         internal readonly List<Entry> Entries = [];
         internal uint LastAskMs;
+
+        /// <summary>Consecutive deadline-capped answers dropped for a retry; reset by a full answer.</summary>
+        internal int CappedStreak;
 
         /// <summary>Wall ms when the bot's current run of pending answers began (0 = not waiting); ended by an applied answer or an escalation.</summary>
         internal long PendingSinceWallMs;
