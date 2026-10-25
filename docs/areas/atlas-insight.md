@@ -34,7 +34,8 @@ when the playerbot pack's route seam is attached, the bot's route and goal. Spel
 Request: `{"kind":"anomalies","since":S,"max":K}`. The answer lists the notices with a sequence number above `S`, oldest first, at
 most `K`, plus `latest` (the newest sequence issued) and `lost` (notices that fell out of the ring between `S` and the oldest kept).
 When `S` is above `latest` (the daemon restarted, so the sequence numbers started over) the answer is empty and carries `"reset":true`
-(omitted otherwise); `live.anomalies` then asks again from 0 and reports `reset:true`.
+(omitted otherwise); `live.anomalies` then asks again from 0 and reports `reset:true`. Detection is best effort: a daemon that
+restarts and then issues more notices than `S` before the next query is not noticed, and the caller silently misses the first `S` of them.
 Each item has `seq`, `t`, `key`, `subsystem`, `code`, `severity`, `subject`, `detail`, `count` and, when the subject names a live
 object, `pos:"current"`, `map`, `instance` and `p`. Positions are the subject's position at query time, not at report time.
 

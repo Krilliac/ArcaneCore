@@ -63,11 +63,6 @@ public sealed class MapFeedStreamTests
     [WindowsFact]
     public async Task TheCapture_CarriesRevisionTwo_TheCombatFlagAndTheDisplayId_OfRealUnits()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup { Content = true });
         await world.AddPlayerAsync("Feedalice");
         await WaitForSpawnsAsync(world, 1, 1);

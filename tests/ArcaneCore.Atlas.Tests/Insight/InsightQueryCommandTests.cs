@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Insight;
 using ArcaneCore.Atlas.Tests.Live;
+using ArcaneCore.TestFixtures;
 using Xunit;
 using WdbcTestBuilder = ArcaneCore.Atlas.Tests.Reference.Mpq.WdbcTestBuilder;
 
@@ -413,20 +414,13 @@ public sealed class InsightQueryCommandTests
         Assert.Contains("combat needs feed rev 2", result.ErrorMessage, StringComparison.Ordinal);
     }
 
-    // The two lines are what the world's own writer produces (tests/ArcaneCore.World.Tests/Ops/MapFeed/MapFeedJsonTests.cs pins the same
-    // literals against MapFeedJson.HelloLine and MapFeedJson.WriteFrame), so this proves the consumer against the producer, not a fake.
-    private const string WorldHelloLine =
-        """{"op":"hello","protocol":1,"rev":2,"sha":"abc123","pid":4242,"maps":[{"map":0,"instance":0,"players":0,"creatures":3}]}""";
-
-    private const string WorldFrameLine =
-        """{"op":"frame","seq":1,"clockMs":1000,"map":0,"instance":0,"grids":[[32,48]],"counters":{"players":0,"bots":0,"creatures":2,"gameobjects":1,"emitted":3,"truncated":0,"nonFinite":0,"pathsOmitted":0,"dropped":0,"online":0,"diffMs":0,"deferredPaths":0,"directFallbackPaths":0,"noPathPaths":0,"homePathTeleports":0},"entities":[{"g":"F13000012B000001","k":"creature","e":299,"n":"Wolf","x":10,"y":10,"z":5,"o":0,"hp":75,"cb":true,"d":1234,"mt":"chase"},{"g":"F13000012B000002","k":"creature","e":299,"n":"Wolf","x":250,"y":10,"z":5,"o":0,"hp":100,"d":55,"mt":"idle"},{"g":"F110000000000001","k":"gameobject","e":2843,"n":"Chest","x":1,"y":2,"z":3,"o":0}]}""";
-
+    // The two lines are the ones tests/Shared/MapFeedWireFixture.cs holds, which ArcaneCore.World.Tests asserts the real writer produces byte for byte.
     [WindowsFact]
     public async Task Heatmap_OfCombat_OverTheLinesTheWorldsOwnWriterEmits_CountsTheCreatureInCombat()
     {
         await using InsightRig rig = await InsightRig.StartAsync(connect: false);
-        await rig.ConnectWithHelloAsync(JsonNode.Parse(WorldHelloLine)!.AsObject());
-        await rig.SendFrameLineAsync(1, JsonNode.Parse(WorldFrameLine)!.AsObject());
+        await rig.ConnectWithHelloAsync(JsonNode.Parse(MapFeedWireFixture.RevisionTwoHelloLine)!.AsObject());
+        await rig.SendFrameLineAsync(1, JsonNode.Parse(MapFeedWireFixture.RevisionTwoFrameLine)!.AsObject());
 
         CommandResult result = await rig.RunAsync("live.heatmap", new JsonObject { ["metric"] = "combat", ["cellSize"] = 100, ["map"] = 0 });
 
