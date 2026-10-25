@@ -274,7 +274,6 @@ public sealed class SqliteWriteGate
     {
         double waited = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
         var hold = new Hold(this, owner);
-        Volatile.Write(ref _current, hold);
         Interlocked.Increment(ref _acquiredTotal);
         lock (_stats)
         {
@@ -285,6 +284,7 @@ public sealed class SqliteWriteGate
         }
 
         hold.WaitedMs = waited;
+        Volatile.Write(ref _current, hold); // last: nothing after this can throw and leave an orphan hold published
         return hold;
     }
 

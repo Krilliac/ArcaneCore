@@ -220,46 +220,85 @@ public sealed class SqliteWriteGateFairnessTests
     }
 
     [Fact]
-    public async Task ManyMixedWaiters_WithRandomCancelAndTimeout_LeaveAnIdleTakeableGate()
+    public async Task ManyMixedWaiters_WithCancelAndTimeout_LeaveAnIdleTakeableGate_WithAtMostOneHolder()
     {
         SqliteWriteGate gate = NewGate();
         var random = new Random(12345);
         var tasks = new List<Task>();
-        using var cts = new CancellationTokenSource();
-        for (int i = 0; i < 120; i++)
+        var tokens = new List<CancellationTokenSource>();
+        int holders = 0, maxHolders = 0, granted = 0, timedOut = 0, canceled = 0;
+        SqliteWriteGate.Hold blocker = gate.Enter(0, "blocker", 0)!;
+        try
         {
-            bool sync = random.Next(2) == 0;
-            bool cancels = !sync && random.Next(3) == 0;
-            int timeoutMs = random.Next(3) == 0 ? random.Next(1, 40) : 20_000;
-            int holdMs = random.Next(0, 3);
-            int cancelAfterMs = random.Next(0, 30);
-            CancellationToken token = cancels ? cts.Token : CancellationToken.None;
-            if (cancels) cts.CancelAfter(cancelAfterMs);
-            tasks.Add(sync
-                ? Task.Factory.StartNew(() => UseGate(gate.Enter(timeoutMs, "s" + i, 0), holdMs), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
-                : Task.Run(async () =>
+            for (int i = 0; i < 120; i++)
+            {
+                int id = i;
+                bool sync = id % 2 == 0;
+                bool cancels = !sync && id % 3 == 0;
+                int timeoutMs = id % 5 == 0 ? random.Next(1, 40) : 20_000;
+                int holdMs = random.Next(0, 3);
+                CancellationTokenSource? cts = null;
+                if (cancels)
                 {
-                    try
+                    cts = new CancellationTokenSource();
+                    cts.CancelAfter(random.Next(1, 30));
+                    tokens.Add(cts);
+                }
+
+                CancellationToken token = cts?.Token ?? CancellationToken.None;
+                tasks.Add(sync
+                    ? Task.Factory.StartNew(() => Use(gate.Enter(timeoutMs, "s" + id, 0), holdMs), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                    : Task.Run(async () =>
                     {
-                        UseGate(await gate.EnterAsync(timeoutMs, "a" + i, 0, token), holdMs);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                    }
-                }));
+                        try
+                        {
+                            Use(await gate.EnterAsync(timeoutMs, "a" + id, 0, token), holdMs);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            Interlocked.Increment(ref canceled);
+                        }
+                    }));
+            }
+
+            // Everyone queues behind the blocker, so the short timeouts and the cancels fire while it is held; then the survivors are served one at a time.
+            await Task.Delay(150);
+        }
+        finally
+        {
+            blocker.Release();
         }
 
         await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(60));
+        foreach (CancellationTokenSource source in tokens) source.Dispose();
         Assert.Equal(0, gate.Waiting);
         Assert.Null(gate.Current);
+        Assert.Equal(1, Volatile.Read(ref maxHolders));
+        Assert.True(Volatile.Read(ref granted) > 0, "no waiter was granted");
+        Assert.True(Volatile.Read(ref timedOut) > 0, "no waiter timed out");
+        Assert.True(Volatile.Read(ref canceled) > 0, "no waiter was canceled");
+        Assert.Equal(120, granted + timedOut + canceled);
         SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
         Assert.NotNull(fresh);
         fresh.Release();
 
-        static void UseGate(SqliteWriteGate.Hold? hold, int holdMs)
+        void Use(SqliteWriteGate.Hold? hold, int holdMs)
         {
-            if (hold is null) return;
+            if (hold is null)
+            {
+                Interlocked.Increment(ref timedOut);
+                return;
+            }
+
+            int now = Interlocked.Increment(ref holders);
+            int seen;
+            while ((seen = Volatile.Read(ref maxHolders)) < now && Interlocked.CompareExchange(ref maxHolders, now, seen) != seen)
+            {
+            }
+
+            Interlocked.Increment(ref granted);
             if (holdMs > 0) Thread.Sleep(holdMs);
+            Interlocked.Decrement(ref holders);
             hold.Release();
         }
     }
@@ -291,12 +330,24 @@ public sealed class SqliteWriteGateFairnessTests
         SqliteWriteGate gate = NewGate();
         SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
         long timeouts = gate.TimeoutsTotal;
-        var clock = Stopwatch.StartNew();
-        SqliteWriteGate.Hold? asyncHold = await gate.EnterAsync(300, "async", 0, CancellationToken.None);
-        SqliteWriteGate.Hold? syncHold = await Task.Run(() => gate.Enter(300, "sync", 0));
-        Assert.Null(asyncHold);
-        Assert.Null(syncHold);
-        Assert.True(clock.ElapsedMilliseconds < 5000, $"took {clock.ElapsedMilliseconds} ms");
+        // Each wait is timed inside its own task, so pool scheduling delay is excluded. A 300 ms bound must be honoured by the 1 s wake slice
+        // (Math.Min(remaining, 1000)): a fixed 1 s slice would take about 1000 ms, an instant null would take about 0.
+        (SqliteWriteGate.Hold? Hold, double Ms) asyncResult = await Task.Run(async () =>
+        {
+            long start = Stopwatch.GetTimestamp();
+            SqliteWriteGate.Hold? hold = await gate.EnterAsync(300, "async", 0, CancellationToken.None);
+            return (hold, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        });
+        (SqliteWriteGate.Hold? Hold, double Ms) syncResult = await Task.Run(() =>
+        {
+            long start = Stopwatch.GetTimestamp();
+            SqliteWriteGate.Hold? hold = gate.Enter(300, "sync", 0);
+            return (hold, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        });
+        Assert.Null(asyncResult.Hold);
+        Assert.Null(syncResult.Hold);
+        Assert.InRange(asyncResult.Ms, 250, 800);
+        Assert.InRange(syncResult.Ms, 250, 800);
         Assert.Equal(0, gate.Waiting);
         Assert.Equal(timeouts + 2, gate.TimeoutsTotal);
         h.Release();
