@@ -90,9 +90,23 @@ public sealed record ViewState(
     int LoadRadiusTiles,
     Theme Theme,
     bool ShowHud,
-    string? FollowGuid)
+    string? FollowGuid,
+    int TextureRadius = ViewState.DefaultTextureRadius,
+    int TextureBudgetMb = ViewState.DefaultTextureBudgetMb)
 {
     public const int MaxLoadRadiusTiles = 4;
+
+    /// <summary>Tiles around the focus tile whose textured layers load (0 none, 2 at most); others fall back to the untextured layer.</summary>
+    public const int DefaultTextureRadius = 1;
+
+    public const int MaxTextureRadius = 2;
+
+    /// <summary>Browser GPU budget for every texture the viewer holds, in MiB.</summary>
+    public const int DefaultTextureBudgetMb = 384;
+
+    public const int MinTextureBudgetMb = 64;
+
+    public const int MaxTextureBudgetMb = 2048;
 
     /// <summary>
     /// Eastern Kingdoms, inside the Lion's Pride Inn in Goldshire (the real-terrain test anchor,
@@ -143,6 +157,8 @@ public sealed record ViewState(
             ["theme"] = Name(Theme),
             ["hud"] = ShowHud,
             ["follow"] = FollowGuid,
+            ["textureRadius"] = TextureRadius,
+            ["textureBudgetMb"] = TextureBudgetMb,
         };
     }
 
@@ -236,7 +252,21 @@ public sealed record ViewState(
             (int)radius,
             Enum<Theme>(json, "theme"),
             Bool(json, "hud"),
-            follow);
+            follow,
+            OptionalWhole(json, "textureRadius", 0, MaxTextureRadius, DefaultTextureRadius),
+            OptionalWhole(json, "textureBudgetMb", MinTextureBudgetMb, MaxTextureBudgetMb, DefaultTextureBudgetMb));
+    }
+
+    /// <summary>A whole number within [min, max]; the default when the field is absent (older clients do not send it).</summary>
+    private static int OptionalWhole(JsonObject json, string name, int min, int max, int fallback)
+    {
+        if (json[name] is null)
+        {
+            return fallback;
+        }
+
+        double value = Num(json, name, min, max);
+        return Math.Floor(value) == value ? (int)value : throw Bad($"{name} must be a whole number");
     }
 
     /// <summary>Applies a JSON merge patch (RFC 7396) and validates the result; invalid patches throw <see cref="CommandException"/>.</summary>

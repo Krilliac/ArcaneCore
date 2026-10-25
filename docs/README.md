@@ -95,6 +95,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Collision and pathing | [collision-pathing](areas/collision-pathing.md) |
 | GM debug drawing (`.debug vis`: LoS, paths, waypoints, cells) | [debug-draw](areas/debug-draw.md) |
 | Atlas 3D map, collision, navmesh and live world visualizer (`arcane-atlas`) | [atlas](areas/atlas.md) |
+| Atlas client textures, model packages and display tables (BLP, ATG1 v2, ATX1) | [atlas-models](areas/atlas-models.md) |
 | Atlas browser-side client-file reader (local game folder, cache, Workers) | [atlas-client-files](areas/atlas-client-files.md) |
 | World daemon live map feed (`\\.\pipe\arcanecore-mapfeed-{pid}`) | [map-feed](areas/map-feed.md) |
 | Locomotion, falls and environment | [locomotion](areas/locomotion.md) |
