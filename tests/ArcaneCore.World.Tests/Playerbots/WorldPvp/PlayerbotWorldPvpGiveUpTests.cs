@@ -250,6 +250,103 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         Assert.Equal(1UL, await world.OnWorldAsync(() => world.Zone.PickupsTotal));
     }
 
+    // --- the geyser cache -----------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AGeyserInAGridThatLoadsAfterTheFirstSeek_IsFoundWithoutWaitingForACacheRenewal()
+    {
+        await using SilithystWorld world = await StartAsync(farGeyser: true);
+        Guid bot = await world.AddBotAsync("Dustfar", 1);
+        ulong near = GuidOf(Geyser, GeyserSpawn).Value;
+        await world.OnWorldAsync(() => { world.BrainOf(bot).WorldPvp.Ledger.Defer(near, world.World.Host.World.NowMs); return true; });
+
+        // The first seek reads the geysers of the map: the near one is set aside, the far one's grid is not loaded.
+        Assert.False(await world.RunUntilAsync(10_000, () => world.BrainOf(bot).WorldPvp.Active), "the bot went for a geyser it should not have");
+        Assert.Null(await world.OnWorldAsync(() => world.PlayerOf(bot).Map!.FindObject(GuidOf(Geyser, FarGeyserSpawn))));
+
+        await world.MoveBotAsync(bot, FarGeyserAt - new Vector3(30f, 0f, 0f));
+        Assert.True(await world.RunUntilAsync(30_000, () => world.BrainOf(bot).WorldPvp.ActiveKey == GuidOf(Geyser, FarGeyserSpawn).Value || world.BrainOf(bot).WorldPvp.Pickups > 0),
+            "the bot never found the geyser whose grid loaded");
+    }
+
+    // --- a turn-in the server never takes -----------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ATurnInTheServerRefuses_IsReportedOnce_AfterThreeEntries_AndTheFlagIsCancelled()
+    {
+        await using SilithystWorld world = await StartAsync();
+        // Out of the zone script: the area trigger handler ignores the bot, so the flag is never taken.
+        Guid bot = await world.AddBotAsync("Dustrefuse", 1, inZone: false);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        using AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.PlayerOf(bot)));
+
+        Assert.True(await world.RunUntilAsync(180_000, () => world.BrainOf(bot).WorldPvp.LastOutcome == "no-turn-in"),
+            "the refused turn-in was not given up; " + await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Description) + " " + capture.Describe());
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.Equal(0, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Deliveries));
+        Assert.Equal(0UL, await world.OnWorldAsync(() => world.Zone.TurnInsTotal));
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
+
+        await world.RunUntilAsync(20_000, () => false);
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Active));
+    }
+
+    // --- the flag on the spell rows of the real data ---------------------------------------------------------------
+
+    [Fact]
+    public async Task AGivenUpCarry_CancelsTheFlag_OnTheSpellRowsOfTheRealData()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false, realFlag: true);
+        Guid bot = await world.AddBotAsync("Dustreal", 1);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        Assert.True(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the real flag rows did not apply");
+        await RemoveTriggersAsync(world);
+        (PlayerbotWorldPvpObjectives run, _, Action<uint> advance) = await ControllerAsync(world, bot);
+
+        await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.Equal("no-trigger", run.LastOutcome);
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag of the real rows cannot be cancelled");
+        advance(200);
+        Assert.False((await world.OnWorldAsync(() => Step(world, bot, run))).Busy);
+    }
+
+    // --- a flag with no controller ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ABotHoldingTheFlagWithTheOptionOff_IsStillTakenUp_AndDelivers()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustgm", 1);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Zone.TurnInsTotal > 0), "a flag the bot holds with the option off was never turned in");
+    }
+
+    // --- the retreat's view of the bot -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TheRetreatsSituation_SaysARogueCarriesTheFlag_AndItsEscapeSkipsVanish()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustrogue", 1, cls: 4);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.PlayerOf(bot);
+            EscapeSituation carrying = PlayerbotRetreat.SituationOf(player, [], out _) with { InCombat = true, HasVictim = true, VictimInMelee = true };
+            Assert.Equal(Class.Rogue, carrying.Class);
+            Assert.True(carrying.CarriesSilithyst);
+            Assert.NotEqual(PlayerbotEscapes.Vanish, PlayerbotEscapes.Choose(carrying, _ => true)?.Spell);
+            world.RemoveAura(player, Flag);
+            EscapeSituation free = PlayerbotRetreat.SituationOf(player, [], out _) with { InCombat = true, HasVictim = true, VictimInMelee = true };
+            Assert.False(free.CarriesSilithyst);
+            Assert.Equal(PlayerbotEscapes.Vanish, PlayerbotEscapes.Choose(free, _ => true)?.Spell);
+            return true;
+        });
+    }
+
     // --- the escape ----------------------------------------------------------------------------------------------------
 
     [Theory]

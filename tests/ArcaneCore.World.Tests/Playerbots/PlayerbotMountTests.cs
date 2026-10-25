@@ -726,6 +726,38 @@ public sealed class PlayerbotMountTests
     }
 
     [Fact]
+    public async Task CancelPendingMountCast_StopsTheMountUpCast_SoItNeverLands()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            var options = new PlayerbotOptions { Enabled = true };
+
+            Assert.False(PlayerbotMount.CancelPendingMountCast(session, player), "a cancel was sent with no mount-up cast running");
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+
+            Assert.True(PlayerbotMount.CancelPendingMountCast(session, player));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            feature.System.Update(3000);
+            Assert.False(MountService.IsMounted(player), "the cancelled mount-up cast still landed");
+            return true;
+        }));
+    }
+
+    [Fact]
     public async Task RidingTrip_StartsWhenDue_AndWalksTowardTheTrainer()
     {
         await RunAsync(new MountFixture { SpawnOffset = 130 }, (host, session) => host.OnWorldAsync(() =>

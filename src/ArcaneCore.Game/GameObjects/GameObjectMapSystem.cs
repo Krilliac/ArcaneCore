@@ -1215,6 +1215,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         => _spawnEntries.TryGetValue(spawnGuid, out uint entry)
             ? _objects.GetValueOrDefault(SpawnObjectGuid(entry, spawnGuid)) : null;
 
+    /// <summary>
+    /// The guids the database spawns of <paramref name="entry"/> on this map have (their objects exist only while their grids are loaded):
+    /// complete whatever grids are loaded, in spawn table order. Allocates the array; callers cache it.
+    /// </summary>
+    public ObjectGuid[] SpawnGuidsOf(uint entry)
+    {
+        var guids = new List<ObjectGuid>();
+        foreach (GameObjectSpawn spawn in _content.GetSpawns(Map.MapId))
+        {
+            if (spawn.Entry == entry) guids.Add(SpawnObjectGuid(entry, spawn.Guid));
+        }
+
+        return [.. guids];
+    }
+
     /// <summary>The guid of the object of a database spawn (<see cref="GameObject.HighGuidOf"/>: elevators and trams are HIGHGUID_TRANSPORT).</summary>
     internal ObjectGuid SpawnObjectGuid(uint entry, uint spawnGuid)
         => ObjectGuid.WithEntry(GameObject.HighGuidOf(_content.FindTemplate(entry)?.Type ?? 0), entry, spawnGuid);

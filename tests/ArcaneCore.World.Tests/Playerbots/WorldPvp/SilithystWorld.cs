@@ -35,7 +35,7 @@ namespace ArcaneCore.World.Tests.Playerbots.WorldPvp;
 internal sealed class SilithystWorld : IAsyncDisposable
 {
     internal const uint Geyser = 181598, Mound = 181597;
-    internal const uint GeyserSpawn = 1, MoundSpawn = 2;
+    internal const uint GeyserSpawn = 1, MoundSpawn = 2, FarGeyserSpawn = 3;
 
     /// <summary>The goober's spell: 29518 "Silithus Flag Click (DND)", whose script gives the flag aura 29519.</summary>
     internal const uint ClickSpell = 29518;
@@ -44,6 +44,9 @@ internal sealed class SilithystWorld : IAsyncDisposable
     internal static readonly Vector3 Start = new(StartX, StartY, StartZ);
 
     internal static readonly Vector3 GeyserAt = new(StartX + 30f, StartY, StartZ);
+    /// <summary>A second geyser two grids away from the first (a grid is 533 yards): its object exists only once a bot is near it.</summary>
+    internal static readonly Vector3 FarGeyserAt = new(StartX + 1500f, StartY, StartZ);
+
     internal static readonly Vector3 MoundAt = new(StartX + 30f, StartY + 12f, StartZ);
     internal static readonly Vector3 AllianceTrigger = new(StartX - 60f, StartY, StartZ);
     internal static readonly Vector3 HordeTrigger = new(StartX, StartY + 60f, StartZ);
@@ -64,15 +67,15 @@ internal sealed class SilithystWorld : IAsyncDisposable
 
     internal static ObjectGuid GuidOf(uint entry, uint spawn) => ObjectGuid.WithEntry(HighGuid.GameObject, entry, spawn);
 
-    internal static async Task<SilithystWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool mound = false, bool brokenClick = false)
+    internal static async Task<SilithystWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool mound = false, bool brokenClick = false, bool farGeyser = false, bool realFlag = false)
     {
         var options = new PlayerbotOptions { Enabled = true, MaxBots = 16, AllowedMaps = [0, 1], ThinkIntervalMs = 200, MaxActionsPerTick = 16 };
         options.WorldPvp.Silithyst.ParticipationChance = 1f;
         configure?.Invoke(options);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
         {
-            services.AddScoped<IGameObjectDataStore>(_ => new Content(mound, brokenClick));
-            services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells()));
+            services.AddScoped<IGameObjectDataStore>(_ => new Content(mound, brokenClick, farGeyser));
+            services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells(realFlag)));
             services.AddSingleton<IOptions<PlayerbotOptions>>(Microsoft.Extensions.Options.Options.Create(options));
         });
         await world.UseFlatFloorAsync();
@@ -127,6 +130,17 @@ internal sealed class SilithystWorld : IAsyncDisposable
         return id;
     }
 
+    /// <summary>Moves a started bot to <paramref name="spot"/> on Kalimdor (loading the grids there) and keeps it in the Silithus zone.</summary>
+    internal async Task MoveBotAsync(Guid id, Vector3 spot)
+    {
+        bool teleporting = await World.Host.OnWorldAsync(() =>
+            World.Services.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports.TeleportTo(PlayerOf(id), 1, spot.X, spot.Y, spot.Z, 0f));
+        Assert.True(teleporting, "the teleport was refused");
+        Assert.True(await World.Host.World.AdvanceClockUntilAsync(10_000, () => Vector3.Distance(new Vector3(PlayerOf(id).X, PlayerOf(id).Y, PlayerOf(id).Z), spot) < 5f),
+            "the bot never arrived");
+        await World.Host.OnWorldAsync(() => { PlayerOf(id).ZoneId = SilithusCatalog.SilithusZone; return true; });
+    }
+
     internal Player PlayerOf(Guid id) => World.Bots.FindSession(id)?.Player ?? throw new InvalidOperationException("bot not running");
 
     internal PlayerbotBrain BrainOf(Guid id) => World.Bots.FindBrain(id) ?? throw new InvalidOperationException("bot not running");
@@ -146,7 +160,24 @@ internal sealed class SilithystWorld : IAsyncDisposable
 
     // --- content ----------------------------------------------------------------------------------------------------
 
-    private static SpellContent Spells()
+    /// <summary>
+    /// The spell rows 29519 (Silithyst) and 30176 as world.db has them: Attributes 0, AttributesEx 0x04018000, aura interrupt 0x3A0000,
+    /// permanent (duration index 21), an aura 37 (misc 85) and an aura 139 (misc 950) at target 25 and a periodic trigger of 30176 on the caster.
+    /// </summary>
+    private static SpellTemplateRow[] RealFlagRows() =>
+    [
+        new SpellTemplateRow
+        {
+            Id = SilithusCatalog.SpellSilithystFlag, SpellName = "Silithyst", Attributes = 0, AttributesEx = 0x04018000, AuraInterruptFlags = 0x3A0000,
+            RangeIndex = 1, DurationIndex = 21,
+            Effect1 = 6, EffectApplyAuraName1 = 37, EffectMiscValue1 = 85, EffectImplicitTargetA1 = 25,
+            Effect2 = 6, EffectApplyAuraName2 = 139, EffectMiscValue2 = 950, EffectImplicitTargetA2 = 25,
+            Effect3 = 6, EffectApplyAuraName3 = 23, EffectImplicitTargetA3 = 1, EffectTriggerSpell3 = 30176, EffectAmplitude3 = 5000,
+        },
+        new SpellTemplateRow { Id = 30176, SpellName = "Silithyst tick", RangeIndex = 1 },
+    ];
+
+    private static SpellContent Spells(bool realFlag = false)
     {
         SpellContent baseContent = ScenarioTestContent.Spells();
         return baseContent with
@@ -160,7 +191,7 @@ internal sealed class SilithystWorld : IAsyncDisposable
                     Id = ClickSpell, SpellName = "Silithus Flag Click (DND)", Attributes = 0x100, AttributesEx2 = 4, CastingTimeIndex = 1,
                     RangeIndex = 6, Effect1 = 3, EffectImplicitTargetA1 = 25,
                 },
-                Aura(SilithusCatalog.SpellSilithystFlag, "Silithyst", durationIndex: 21),
+                .. (realFlag ? RealFlagRows() : [Aura(SilithusCatalog.SpellSilithystFlag, "Silithyst", durationIndex: 21)]),
                 Aura(SilithusCatalog.SpellTracesOfSilithyst, "Traces of Silithyst", durationIndex: 4),
                 Aura(SilithusCatalog.SpellFlagDrop, "Silithyst drop", durationIndex: 4),
             ],
@@ -180,7 +211,7 @@ internal sealed class SilithystWorld : IAsyncDisposable
     };
 
     /// <summary>The geyser (and the mound) as type 10 goobers casting 29518 (data10), unlocked, with the spawns of the test.</summary>
-    private sealed class Content(bool mound, bool brokenClick) : IGameObjectDataStore
+    private sealed class Content(bool mound, bool brokenClick, bool farGeyser) : IGameObjectDataStore
     {
         public Task<GameObjectContent> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -196,6 +227,7 @@ internal sealed class SilithystWorld : IAsyncDisposable
                 => new() { Guid = spawn, Entry = entry, MapId = 1, X = at.X, Y = at.Y, Z = at.Z, SpawnTimeSeconds = 300 };
 
             GameObjectSpawn[] spawns = mound ? [Spawn(GeyserSpawn, Geyser, GeyserAt), Spawn(MoundSpawn, Mound, MoundAt)] : [Spawn(GeyserSpawn, Geyser, GeyserAt)];
+            if (farGeyser) spawns = [.. spawns, Spawn(FarGeyserSpawn, Geyser, FarGeyserAt)];
             return Task.FromResult(new GameObjectContent([Goober(Geyser, "Silithyst Geyser"), Goober(Mound, "Silithyst Mound")], spawns, [], [], []));
         }
     }

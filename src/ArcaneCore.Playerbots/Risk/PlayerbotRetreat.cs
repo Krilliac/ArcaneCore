@@ -495,7 +495,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     }
 
     /// <summary>What <see cref="PlayerbotEscapes"/> reads about the retreat; <paramref name="victim"/> is the nearest living enemy.</summary>
-    private static EscapeSituation SituationOf(Player player, IReadOnlyList<Creature> enemyList, out Creature? victim)
+    internal static EscapeSituation SituationOf(Player player, IReadOnlyList<Creature> enemyList, out Creature? victim)
     {
         victim = enemyList.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map)).OrderBy(e => Distance(player, e)).FirstOrDefault();
         int within8 = 0, within10 = 0;

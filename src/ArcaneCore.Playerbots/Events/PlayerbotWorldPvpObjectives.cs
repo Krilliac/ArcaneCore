@@ -43,7 +43,8 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
 /// drops the dust when it does. The carry timer counts only the time this rung runs (not rest or fights). <b>Deliver</b> is done when the flag
 /// is gone near the trigger and Traces of Silithyst was newly put on by this turn-in (an older one still running does not count).</item>
 /// <item><b>Give-up</b>: a taken geyser, a lost flag away from the trigger, a death, no route, a refused turn-in or a timeout ends the episode;
-/// the geyser is set aside in the ledger (60 s, doubling to 5 min for faults). A carry given up while the flag is still held cancels the
+/// the geyser is set aside in the ledger (60 s, doubling to 5 min for faults); a death while carrying only ends the run (the flag dies with
+/// the bot and the geyser is spent anyway). A carry given up while the flag is still held cancels the
 /// flag (CMSG_CANCEL_AURA, <see cref="MaxDropAttempts"/> tries) and does not take it up again for <see cref="GiveUpBackoffMs"/>: the aura never
 /// expires, so without that the next think would open the same failing carry again. The fault is reported once per held flag. After a
 /// delivery or any give-up no new run starts for <see cref="RunCooldownMs"/>.</item>
@@ -56,10 +57,12 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
 /// once per episode; nothing on success or on an early loss of the flag.
 /// </para>
 /// Thread affinity: world thread only, owned by one brain. Cost: while the bot is eligible in Silithus and not cooling down, a seek every
-/// <see cref="ScanEveryMs"/> that does one dictionary lookup per cached geyser/mound spawn (16 in the real data; no enumerator, no allocation).
-/// The spawn guids of a map are found by one scan of its game objects, shared by its bots in a per-map weak table and renewed every
-/// <see cref="GeyserCacheRefreshMs"/> (a grid that loads in between is seen at the next renewal; 30 s when every cached geyser is in an
-/// unloaded grid). Nothing per think otherwise but an options read and a zone test; a carrier adds an aura-list walk per think.
+/// <see cref="ScanEveryMs"/> that does one dictionary lookup per geyser spawn of the map (16 in the real data; no enumerator, no allocation).
+/// The geyser guids come from the map's spawn table, so they are complete whichever grids are loaded (an unloaded one is skipped at the lookup
+/// and found as soon as its grid loads); the table is read once per map, shared by its bots in a per-map weak table, and again every
+/// <see cref="GeyserCacheRefreshMs"/>. Mounds are not in the spawn table: the loaded objects of the map are scanned for them every
+/// <see cref="MoundScanMs"/> (one enumerator per map per minute), so a mound in a grid that loads in between is seen up to a minute late.
+/// Nothing per think otherwise but an options read and a zone test; a carrier adds an aura-list walk per think.
 /// </summary>
 internal sealed class PlayerbotWorldPvpObjectives
 {
@@ -114,8 +117,12 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// <summary>Arrived at the trigger centre; the area trigger has long fired.</summary>
     internal const float ArrivedYards = 1.5f;
 
-    /// <summary>A bot that picked the flag up inside the trigger volume walks out to this far beyond its radius, then back in: the trigger fires on entering.</summary>
-    internal const float ExitMarginYards = 3f;
+    /// <summary>
+    /// A bot that picked the flag up inside the trigger volume walks out to this far beyond its radius, then back in: the trigger fires on
+    /// entering. Far enough that the exit point and the centre are not one goal to the route plan watch (10 yards), or the walk back in is
+    /// refused as a replan loop.
+    /// </summary>
+    internal const float ExitMarginYards = 8f;
 
     /// <summary>Times the bot walks into the volume with the flag still on afterwards before it reports the turn-in as refused.</summary>
     internal const int MaxEntries = 2;
@@ -132,11 +139,11 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// <summary>The gap between two attempts to cancel the flag.</summary>
     internal const uint DropRetryMs = 1_000;
 
-    /// <summary>The geyser spawns of a map are looked up again (a full scan of its game objects) after this.</summary>
+    /// <summary>The geyser spawn table of a map is read again after this (a content reload).</summary>
     internal const uint GeyserCacheRefreshMs = 600_000;
 
-    /// <summary>A map whose cached geysers all lie in unloaded grids is looked up again after this.</summary>
-    internal const uint GeyserCacheRetryMs = 30_000;
+    /// <summary>The mounds loaded on a map (they are not in the spawn table) are looked up again after this.</summary>
+    internal const uint MoundScanMs = 60_000;
 
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
@@ -162,9 +169,12 @@ internal sealed class PlayerbotWorldPvpObjectives
 
     private sealed class GeyserCache
     {
-        public ObjectGuid[] Guids = [];
-        public uint BuiltMs;
-        public bool Built;
+        public ObjectGuid[] Geysers = [];
+        public uint GeysersBuiltMs;
+        public bool GeysersBuilt;
+        public ObjectGuid[] Mounds = [];
+        public uint MoundsBuiltMs;
+        public bool MoundsBuilt;
     }
 
     internal PlayerbotWorldPvpObjectives(WorldSession session, PlayerbotOptions options, PlayerbotClaims? claims)
@@ -335,27 +345,11 @@ internal sealed class PlayerbotWorldPvpObjectives
 
     private void Begin(Player player, Map map, uint now, PlayerbotSilithystOptions options)
     {
-        ObjectGuid[] guids = GeysersOf(map, now);
+        GeyserCache cache = CacheOf(map, now);
         GameObject? best = null;
         float nearest = float.MaxValue;
-        int live = 0;
-        for (int i = 0; i < guids.Length; i++)
-        {
-            if (map.FindObject(guids[i]) is not GameObject go || go.Entry is not (GeyserEntry or MoundEntry)) continue;
-            live++;
-            if (!go.IsSpawned) continue;
-            if (_ledger.IsDeferred(go.Guid.Value, now) || !IsReady(go)) continue;
-            if (_claims.OthersOf(go.Guid.Value, mine: false, now) >= options.MaxBotsPerGeyser) continue;
-            float dx = go.X - player.X, dy = go.Y - player.Y, dz = go.Z - player.Z;
-            float distance = (dx * dx) + (dy * dy) + (dz * dz);
-            if (distance < nearest)
-            {
-                nearest = distance;
-                best = go;
-            }
-        }
-
-        if (live == 0 && guids.Length > 0 && GeyserCaches.TryGetValue(map, out GeyserCache? stale)) stale.BuiltMs = unchecked(now - GeyserCacheRefreshMs + GeyserCacheRetryMs); // every grid unloaded: look again soon
+        Consider(cache.Geysers, map, player, now, options, ref best, ref nearest);
+        Consider(cache.Mounds, map, player, now, options, ref best, ref nearest);
         if (best is not { } chosen) return;
         ulong key = chosen.Guid.Value;
         uint epoch = _claims.Join(key, player.Guid.Value, now);
@@ -373,31 +367,55 @@ internal sealed class PlayerbotWorldPvpObjectives
         };
     }
 
+    /// <summary>One dictionary lookup per guid (<see cref="Map.FindObject"/>; an object in an unloaded grid is skipped); no allocation.</summary>
+    private void Consider(ObjectGuid[] guids, Map map, Player player, uint now, PlayerbotSilithystOptions options, ref GameObject? best, ref float nearest)
+    {
+        for (int i = 0; i < guids.Length; i++)
+        {
+            if (map.FindObject(guids[i]) is not GameObject go || go.Entry is not (GeyserEntry or MoundEntry) || !go.IsSpawned) continue;
+            if (_ledger.IsDeferred(go.Guid.Value, now) || !IsReady(go)) continue;
+            if (_claims.OthersOf(go.Guid.Value, mine: false, now) >= options.MaxBotsPerGeyser) continue;
+            float dx = go.X - player.X, dy = go.Y - player.Y, dz = go.Z - player.Z;
+            float distance = (dx * dx) + (dy * dy) + (dz * dz);
+            if (distance < nearest)
+            {
+                nearest = distance;
+                best = go;
+            }
+        }
+    }
+
     /// <summary>
-    /// The guids of the geyser and mound objects of <paramref name="map"/>: one scan of the map's game objects when first needed and again every
-    /// <see cref="GeyserCacheRefreshMs"/> (a grid that loads later is seen at the next one), shared by the bots of the map. A scan afterwards is
-    /// one dictionary lookup per guid (<see cref="Map.FindObject"/>), none of which allocates.
+    /// The geyser and mound guids of <paramref name="map"/>, shared by the bots of the map. The geysers come from the spawn table
+    /// (<see cref="GameObjectMapSystem.SpawnGuidsOf"/>): complete whichever grids are loaded, read again every <see cref="GeyserCacheRefreshMs"/>
+    /// (a content reload). Mounds are not in the spawn table (the server puts them down at run time), so they come from the objects loaded now,
+    /// scanned again every <see cref="MoundScanMs"/>: a mound in a grid that loads in between is seen at the next scan.
     /// </summary>
-    private static ObjectGuid[] GeysersOf(Map map, uint now)
+    private static GeyserCache CacheOf(Map map, uint now)
     {
         GeyserCache cache = GeyserCaches.GetValue(map, static _ => new GeyserCache());
-        if (cache.Built && unchecked((int)(now - cache.BuiltMs - GeyserCacheRefreshMs)) < 0) return cache.Guids;
-        cache.Built = true;
-        cache.BuiltMs = now;
-        if (map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) return cache;
+        if (!cache.GeysersBuilt || unchecked((int)(now - cache.GeysersBuiltMs - GeyserCacheRefreshMs)) >= 0)
         {
-            cache.Guids = [];
-            return cache.Guids;
+            cache.GeysersBuilt = true;
+            cache.GeysersBuiltMs = now;
+            cache.Geysers = objects.SpawnGuidsOf(GeyserEntry);
         }
 
-        var found = new List<ObjectGuid>();
-        foreach (GameObject go in objects.GameObjects)
+        if (!cache.MoundsBuilt || unchecked((int)(now - cache.MoundsBuiltMs - MoundScanMs)) >= 0)
         {
-            if (go.Entry is GeyserEntry or MoundEntry) found.Add(go.Guid);
+            cache.MoundsBuilt = true;
+            cache.MoundsBuiltMs = now;
+            var found = new List<ObjectGuid>();
+            foreach (GameObject go in objects.GameObjects)
+            {
+                if (go.Entry == MoundEntry) found.Add(go.Guid);
+            }
+
+            cache.Mounds = [.. found];
         }
 
-        cache.Guids = [.. found];
-        return cache.Guids;
+        return cache;
     }
 
     private bool TooMany(ulong key, ulong self, uint now, PlayerbotSilithystOptions options)
@@ -599,7 +617,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             episode.ExitFirst = distance <= volume;
         }
 
-        if (episode.ExitFirst && distance > volume + 1f) episode.ExitFirst = false;
+        if (episode.ExitFirst && distance >= volume + ExitMarginYards - 1f) episode.ExitFirst = false; // at the exit point: the walk back in plans from there
         if (!episode.ExitFirst && distance <= ArrivedYards)
         {
             // At the centre with the flag still on: the entry did not turn it in. Out and in again, a few times, then it is reported.
@@ -631,14 +649,20 @@ internal sealed class PlayerbotWorldPvpObjectives
             goal = episode.ExitPoint;
         }
 
+        // Out and in again between the same two places is what the motion's loop guard refuses and blacklists; here it is the plan.
+        if (episode.Entries > 0 || episode.ExitFirst) PlayerbotMotion.Unblacklist(player, goal);
         switch (WalkTo(player, goal, elapsedMs, now))
         {
             case WalkResult.Failed:
-                ReportAnomaly(player, episode, "silithyst-unreachable-trigger", $"no route to the turn-in trigger {trigger.Id} ({distance:F0} yards away)");
-                return GiveUp(player, episode, "no-route", now, carries);
+                ReportAnomaly(player, episode, "silithyst-unreachable-trigger", episode.ExitFirst
+                    ? $"no route out of the turn-in trigger {trigger.Id} volume to walk back in ({distance:F0} yards from its centre)"
+                    : $"no route to the turn-in trigger {trigger.Id} ({distance:F0} yards away)");
+                return GiveUp(player, episode, episode.ExitFirst ? "no-exit" : "no-route", now, carries);
             case WalkResult.Stuck when ++episode.WalkFailures >= MaxWalkFailures:
-                ReportAnomaly(player, episode, "silithyst-unreachable-trigger", $"the walk to the turn-in trigger {trigger.Id} stopped {MaxWalkFailures} times ({distance:F0} yards away)");
-                return GiveUp(player, episode, "no-route", now, carries);
+                ReportAnomaly(player, episode, "silithyst-unreachable-trigger", episode.ExitFirst
+                    ? $"the walk out of the turn-in trigger {trigger.Id} volume stopped {MaxWalkFailures} times ({distance:F0} yards from its centre)"
+                    : $"the walk to the turn-in trigger {trigger.Id} stopped {MaxWalkFailures} times ({distance:F0} yards away)");
+                return GiveUp(player, episode, episode.ExitFirst ? "no-exit" : "no-route", now, carries);
         }
 
         return Busy(episode);

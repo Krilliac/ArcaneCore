@@ -2145,7 +2145,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private bool TakeWorldPvp(Player player, uint interval, bool mayBegin)
     {
         // Nothing to do (and nothing allocated) for a bot with no run that is away from Silithus or has the objective off.
-        if (_worldPvp is null && (!mayBegin || !_options.WorldPvp.Silithyst.Enabled || !PlayerbotWorldPvpObjectives.Eligible(player))) return false;
+        // A bot holding the flag with no run (the option is off, or a GM or a script gave it) is still taken up, so the carry or its give-up
+        // (drop and back-off) runs instead of the dust staying on forever.
+        if (_worldPvp is null
+            && !(player.MapId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.MapId && PlayerbotWorldPvpObjectives.Carries(player))
+            && (!mayBegin || !_options.WorldPvp.Silithyst.Enabled || !PlayerbotWorldPvpObjectives.Eligible(player))) return false;
         WorldPvpStep step = WorldPvp.Update(player, interval, mayBegin);
         if (!step.Busy) return false;
         RetireIdleCombatRoute();
