@@ -48,7 +48,14 @@ public sealed class PlayerbotWorldBossFormingWorldTests
         {
             world.Options.Groups.WorldBosses.MinRaidSize = size - minLeftAfter;
             List<Guid> chosen = [.. group.Members.Where(m => !m.Real && m.Role == PlayerbotGroupRole.Damage && m.BotId != group.LeaderBotId).Select(m => m.BotId).TakeLast(silent)];
-            foreach (Guid id in chosen) world.Bots.FindPartyAI(id)!.AcceptsBotGroup = (_, _) => false;
+            foreach (Guid id in chosen)
+            {
+                PlayerbotPartyAI ai = world.Bots.FindPartyAI(id)!;
+                ai.AcceptsBotGroup = (_, _) => false;
+                // The default invite policy (Affinity) takes a well-known inviter (affinity the bots built up over the run's game time) or one of the same goal
+                // on top of the hook, so a "silent" bot would join anyway on a run where the leader is well known to it. A rival is never taken.
+                ai.InviteStanding = (_, _) => new PlayerbotGroupInvites.Standing(Rival: true, WellKnown: false, SharesGoal: false);
+            }
             return chosen;
         });
         Assert.Equal(silent, mute.Count);

@@ -260,4 +260,40 @@ public sealed class GameEventCreatureDataTests
 
         Assert.Equal(Day, rig.Spawned(Swapped).Entry);
     }
+
+    private sealed class AlwaysActive : IGameEventState
+    {
+        public bool IsActiveEvent(ushort eventId) => true;
+
+        public bool IsActiveHoliday(uint holidayId) => false;
+
+        public IReadOnlyCollection<ushort> ActiveEvents { get; } = [];
+    }
+
+    [Fact]
+    public void For_IsReadOnly_SoConcurrentGridSpawnsOnDifferentMapThreadsDoNotMutateTheSingleton()
+    {
+        const int guids = 512;
+        var rows = new GameEventRows
+        {
+            CreatureData = new Dictionary<ushort, IReadOnlyList<GameEventCreatureDataRecord>>
+            {
+                [27] = [.. Enumerable.Range(1, guids).Select(g => new GameEventCreatureDataRecord((uint)g, 27, 0, 0, (uint)(g % 7) + 1, 0, 0))],
+            },
+        };
+        var data = new GameEventCreatureData(new AlwaysActive(), rows, () => []);
+
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
+        {
+            for (int round = 0; round < 50; round++)
+            {
+                for (uint g = 1; g <= guids; g++)
+                {
+                    Assert.NotNull(data.For(g));
+                }
+            }
+        });
+
+        Assert.Empty(data.AppliedEquipmentByGuid);
+    }
 }

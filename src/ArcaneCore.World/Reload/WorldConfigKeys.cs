@@ -447,6 +447,8 @@ public static class WorldConfigKeys
             (o, v) => o.Contention.SomeoneElsesMemorySeconds = v, PlayerbotContentionOptions.CheckMemory),
         LivePlayerbotsValue("Contention:ContentionSuspendMinutes", o => o.Contention.ContentionSuspendMinutes,
             (o, v) => o.Contention.ContentionSuspendMinutes = v, PlayerbotContentionOptions.CheckSuspend),
+        LivePlayerbotsValue("Contention:InvincibleTargetAbandonSeconds", o => o.Contention.InvincibleTargetAbandonSeconds,
+            (o, v) => o.Contention.InvincibleTargetAbandonSeconds = v, PlayerbotContentionOptions.CheckMemory),
 
         // Not vmangos keys: autonomous flight-path use by bots (docs/areas/playbots.md, Flight paths). PlayerbotTaxi reads the shared
         // PlayerbotOptions.Taxi at each decision.
@@ -499,6 +501,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Population:ZoneLevelSlackMaxFloor", o => o.Population.ZoneLevelSlackMaxFloor, (o, v) => o.Population.ZoneLevelSlackMaxFloor = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 1, Playerbots.Population.PlayerbotPopulationOptions.MaxLevel)),
         LivePlayerbotsValue("Population:CreatureLevelMargin", o => o.Population.CreatureLevelMargin, (o, v) => o.Population.CreatureLevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
         LivePlayerbotsValue("Population:CreatureSurveyRadius", o => o.Population.CreatureSurveyRadius, (o, v) => o.Population.CreatureSurveyRadius = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 300)),
+        LivePlayerbotsValue("Population:SpawnsPerBot", o => o.Population.SpawnsPerBot, (o, v) => o.Population.SpawnsPerBot = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 100)),
         LivePlayerbotsValue("Population:OutlevelMargin", o => o.Population.OutlevelMargin, (o, v) => o.Population.OutlevelMargin = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 10)),
         LivePlayerbotsValue("Population:Relocation", o => o.Population.Relocation, (o, v) => o.Population.Relocation = v, Playerbots.Population.PlayerbotPopulationOptions.CheckDefined),
         LivePlayerbotsValue("Population:MaxRelocationsPerInterval", o => o.Population.MaxRelocationsPerInterval, (o, v) => o.Population.MaxRelocationsPerInterval = v, v => Playerbots.Population.PlayerbotPopulationOptions.CheckRange(v, 0, 50)),
