@@ -194,9 +194,10 @@ public static class GroundHeight
     /// <paramref name="tolerance"/> yd off the ground at a sample (a sliding window from the last kept point), so a flat leg gains nothing
     /// and a hill gains the points it needs; between samples the ground's own curvature adds a little (about 0.07 yd on a 4 yd step over
     /// the steepest rolling ground measured). Each sample is looked for near the ground before it, so a hill the straight chord misses by
-    /// more than the window is followed. A sample with no floor in the window (another storey, a hole) is left out and no point moves more
-    /// than the query's Up/Down. Insertion never takes the result past <paramref name="maxPoints"/> points: when it would, the step doubles
-    /// (up to six times) and the leg is redone, so the whole leg is coarser rather than cut off; corners alone are never dropped. The
+    /// more than the window is followed. A sample with no floor in the window is looked for where the mesh walk from the last sample
+    /// arrives (<see cref="MapCollision.TryWalkMeshSurface"/>: a floor far under the chord, such as the top of a tunnel ramp); one with none
+    /// there either (another storey, a hole) is left out. Insertion never takes the result past <paramref name="maxPoints"/> points: when it
+    /// would, the inserted points furthest from the chord of their neighbours are kept first, so a bend stays sampled; corners are never dropped. The
     /// client draws a leg as straight chords between points, so the sent points are the only ground it follows.
     /// </summary>
     /// <param name="query">The floor query; the walker default (<see cref="Walker"/>) when null.</param>
@@ -232,26 +233,20 @@ public static class GroundHeight
             return corners; // nothing to insert: a leg that already fills the cap would only redo the whole sampling up to six times
         }
 
-        float stride = MathF.Max(step, 0.5f);
-        for (int attempt = 0; attempt <= MaxStepDoublings; attempt++, stride *= 2f)
-        {
-            if (TryInsertGroundPoints(collision, start, corners, stride, tolerance, modelTolerance ?? tolerance, maxPoints, q) is { } draped)
-            {
-                return draped;
-            }
-        }
-
-        return corners;
+        return InsertGroundPoints(collision, start, corners, MathF.Max(step, 0.5f), tolerance, modelTolerance ?? tolerance, maxPoints, q);
     }
 
-    /// <summary>The most times <see cref="DrapePath"/> doubles its step to fit <c>maxPoints</c> before it gives up on insertion.</summary>
-    private const int MaxStepDoublings = 6;
-
-    /// <summary>The snapped <paramref name="corners"/> with ground points inserted every <paramref name="step"/> yd where the chord misses; null when they would pass <paramref name="maxPoints"/>.</summary>
-    private static List<Vector3>? TryInsertGroundPoints(
+    /// <summary>
+    /// The snapped <paramref name="corners"/> with ground points inserted every <paramref name="step"/> yd where the chord misses. When that
+    /// is more than <paramref name="maxPoints"/> points, the corners and the inserted points that deviate most from the chord between their
+    /// neighbours are kept (Douglas-Peucker order) until the cap is reached, so a place where the ground bends, such as the top of a ramp, stays
+    /// sampled at the fine step rather than being coarsened with the rest of the leg.
+    /// </summary>
+    private static List<Vector3> InsertGroundPoints(
         MapCollision collision, Vector3 start, List<Vector3> corners, float step, float tolerance, float modelTolerance, int maxPoints, in GroundQuery q)
     {
         var result = new List<Vector3>(corners.Count + 8);
+        var isCorner = new List<bool>(corners.Count + 8);
         var nodes = new List<(float At, Vector3 Point, float Tol)>(16);
         Vector3 prev = start;
         for (int i = 0; i < corners.Count; i++)
@@ -263,7 +258,8 @@ public static class GroundHeight
             if (float.IsFinite(length) && length > step)
             {
                 // The ground every `length / pieces` (<= step) yd along the segment, each looked for near the ground before it (a hill the chord
-                // misses by more than the window is still followed); a sample with no floor is left out.
+                // misses by more than the window is still followed). A sample with no floor near that height is looked for where the mesh walk
+                // from the last sample arrives (the same storey, however far under the chord the floor has fallen); left out only if that fails too.
                 int pieces = (int)MathF.Ceiling(length / step);
                 nodes.Clear();
                 nodes.Add((0f, prev, tolerance));
@@ -276,7 +272,13 @@ public static class GroundHeight
                     (float lastAt, Vector3 last, _) = nodes[^1];
                     float expected = last.Z + ((corner.Z - last.Z) * ((at - lastAt) / (length - lastAt)));
                     float guardZ = (at - lastAt) <= (length - at) ? last.Z : corner.Z; // the nearer end: the last sample, or the corner when it is the nearer one
-                    if (TrySnap(collision, x, y, expected, guardZ, q, out float ground, out GroundSource source))
+                    bool snapped = TrySnap(collision, x, y, expected, guardZ, q, out float ground, out GroundSource source);
+                    if (!snapped && collision.TryWalkMeshSurface(last, new Vector3(x, y, expected), out float walked))
+                    {
+                        snapped = TrySnap(collision, x, y, walked, guardZ, q, out ground, out source);
+                    }
+
+                    if (snapped)
                     {
                         nodes.Add((at, new Vector3(x, y, ground), source is GroundSource.Model or GroundSource.Mesh ? modelTolerance : tolerance));
                     }
@@ -294,21 +296,104 @@ public static class GroundHeight
                         continue;
                     }
 
-                    if (result.Count + 1 + (corners.Count - i) > maxPoints)
-                    {
-                        return null;
-                    }
-
                     kept = end - 1;
                     result.Add(nodes[kept].Point);
+                    isCorner.Add(false);
                 }
             }
 
             result.Add(corner);
+            isCorner.Add(true);
             prev = corner;
         }
 
-        return result;
+        return result.Count > maxPoints ? KeepMostDeviating(start, result, isCorner, maxPoints) : result;
+    }
+
+    /// <summary>
+    /// <paramref name="points"/> cut to <paramref name="maxPoints"/> (more than the corners): every corner is kept, then the point whose height
+    /// is furthest from the chord between the kept points on either side of it, again and again until the cap. The chord is by horizontal
+    /// distance along the polyline from <paramref name="start"/>, which is always an end and is not returned.
+    /// </summary>
+    private static List<Vector3> KeepMostDeviating(Vector3 start, List<Vector3> points, List<bool> isCorner, int maxPoints)
+    {
+        int n = points.Count;
+        var along = new float[n];
+        Vector3 before = start;
+        float run = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            float ex = points[i].X - before.X;
+            float ey = points[i].Y - before.Y;
+            run += MathF.Sqrt((ex * ex) + (ey * ey));
+            along[i] = run;
+            before = points[i];
+        }
+
+        var keep = new bool[n];
+        int count = 0;
+        for (int i = 0; i < n; i++)
+        {
+            keep[i] = isCorner[i];
+            count += keep[i] ? 1 : 0;
+        }
+
+        var next = new int[n];
+        while (count < maxPoints)
+        {
+            int following = -1; // the nearest kept point after i; the last point is a corner, so a point that is not kept always has one
+            for (int i = n - 1; i >= 0; i--)
+            {
+                next[i] = following;
+                if (keep[i])
+                {
+                    following = i;
+                }
+            }
+
+            int best = -1;
+            float bestDeviation = 0f;
+            float previousAlong = 0f;
+            float previousZ = start.Z;
+            for (int i = 0; i < n; i++)
+            {
+                if (keep[i])
+                {
+                    previousAlong = along[i];
+                    previousZ = points[i].Z;
+                    continue;
+                }
+
+                int nx = next[i];
+                float span = along[nx] - previousAlong;
+                float chordZ = span > 0f ? previousZ + ((points[nx].Z - previousZ) * ((along[i] - previousAlong) / span)) : previousZ;
+                float deviation = MathF.Abs(points[i].Z - chordZ);
+                if (deviation > bestDeviation)
+                {
+                    bestDeviation = deviation;
+                    best = i;
+                }
+            }
+
+            if (best < 0)
+            {
+                break; // every other point lies on its chord
+            }
+
+            keep[best] = true;
+            count++;
+        }
+
+        var kept = new List<Vector3>(count);
+        for (int i = 0; i < n; i++)
+        {
+            if (keep[i])
+            {
+                kept.Add(points[i]);
+            }
+        }
+
+        return kept;
     }
 
     /// <summary>Whether the chord from <c>nodes[from]</c> to <c>nodes[to]</c> passes within each node's own tolerance (in z) of every node between them.</summary>

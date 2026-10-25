@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -341,5 +342,49 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         Assert.True(toOwner <= 6f, $"the pet followed its owner to the end of the ramp (ended {toOwner:F1} yd away)");
         Assert.InRange(worst, 0f, 1.25f);
         Assert.Empty(capture.Notices);
+    }
+
+    [RealTerrainFact]
+    public void APathFromFlagRoomToFlagRoom_DrapedForACreature_NeverPassesUnderTheAllianceTunnelFloor()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        InstallRealCollision(world, Wsg, 1230f, 1460f); // 3x3 tiles cover both flag rooms
+        MapCollision collision = world.GetMap(Wsg).Collision;
+        var start = new Vector3(916.0f, 1434.8f, 345.4f);
+        PathResult path = collision.FindPath(start, new Vector3(1540.0f, 1481.0f, 352.7f));
+        Assert.True(path.HasPath);
+        List<Vector3> draped = GroundHeight.DrapePath(
+            collision,
+            start,
+            [.. path.Points.Skip(1)],
+            step: CreatureMapSystem.GroundSampleYards,
+            tolerance: CreatureMapSystem.GroundToleranceYards,
+            query: GroundHeight.Walker,
+            modelTolerance: CreatureMapSystem.GroundModelToleranceYards,
+            cornersOnMesh: true);
+        float worst = 0f;
+        Vector3 prev = start;
+        foreach (Vector3 p in draped)
+        {
+            for (float t = 0f; t <= 1f; t += 0.01f)
+            {
+                Vector3 s = Vector3.Lerp(prev, p, t);
+                if (s.X is < 1385f or > 1490f || MathF.Abs(s.Y - 1461f) > 3f)
+                {
+                    continue;
+                }
+
+                float floor = TunnelFloor(collision, s.X, s.Y);
+                if (float.IsFinite(floor))
+                {
+                    worst = MathF.Max(worst, floor - s.Z);
+                }
+            }
+
+            prev = p;
+        }
+
+        output.WriteLine($"{draped.Count} points; worst depth under the tunnel floor {worst:F2}");
+        Assert.InRange(worst, -10f, 1.25f); // HEAD measured: 7.06 at x 1439.6
     }
 }

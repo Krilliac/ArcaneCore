@@ -308,9 +308,12 @@ public sealed partial class CreatureMapSystem
     /// 60 yd (a tunnel or cellar ceiling sits between it and the terrain, which <see cref="TryRecoverClippedUnderTerrain"/> declines):
     /// it is put on that floor (when it is more than a yard below it). Reported once per episode: the episode stays open until a later sample
     /// finds the creature on the floor, so a mover that keeps putting it back under is lifted again without a new report.
-    /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a
-    /// stranded creature; it does not prevent whatever put it there. The cause is NOT established: live logs show warlock imps (entry 416) 15-36 yd under the terrain surface on several
-    /// maps (6.6 yd under the tunnel floor in WSG) with no placement context, and the summon placement and ramp-follow tests here do not reproduce it, so this stays a heal until a reproducing placement is captured.
+    /// A running spline is stopped first (it would carry the creature on from its own, wrong, heights), and the creature's movement generator launches a fresh one. This heals a stranded creature; the cause is fixed in GroundHeight.DrapePath. Live 2026-10-16..23: 928 entry-416 (imp) reports,
+    /// 15.0-376.8 yd under the terrain surface (map 0: 801, p50 132 yd; map 1: 88, p50 27 yd; map 489: 39, 15.1-23.9 yd). On map 489 they
+    /// lie in the two base tunnels (y 1456-1466): 7 on the tunnel floor (older classifiers), 27 at 2.2-4.6 yd and 2 (2026-10-23) at
+    /// 6.5-6.7 yd under it, on the chord of a navmesh leg from the foot of the tunnel ramp to its far end. A path long enough to hit
+    /// DrapePath's point cap doubled the sample stride; samples more than the walker window under the ramp's top were dropped, and the
+    /// draped leg (1399.0, 1461.2, 328.2)-(1491.2, 1461.3, 342.8) ran 7.1 yd under the floor (z 336.0 at x 1448.2; logged 335.9).
     /// </summary>
     private bool TryLiftOntoFloorAbove(Creature creature)
     {
