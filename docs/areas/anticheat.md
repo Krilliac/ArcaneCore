@@ -63,8 +63,18 @@ Weights follow the fork. A finding adds its weight (clamped 0..100) to the chara
 | Climbed into the air | Vertical | 15 | a steep climb (dz > 1 and > 2 × horizontal) on the ground that ends more than 3 yd above the floor | no terrain and vmap data |
 | Through a wall | Physics | 15 | a ground step over 4 yd without line of sight, twice within five seconds (one can be a corner) | no vmap tile at both ends |
 | Unknown spell | Spell | 10 | `CMSG_CAST_SPELL` refused as `NotKnown` by the spell system | |
-| Trade-window item | Item | 30 | `CMSG_USE_ITEM` of an item offered in the trade (vmangos "cheat way only") | |
+| Trade-window item | Item | 30 | `CMSG_USE_ITEM` of an item offered in the trade (vmangos "cheat way only"); also `CMSG_SWAP_ITEM`, `CMSG_SWAP_INV_ITEM`, `CMSG_AUTOEQUIP_ITEM`, `CMSG_AUTOSTORE_BAG_ITEM`, `CMSG_SPLIT_ITEM`, `CMSG_DESTROYITEM` and `CMSG_SELL_ITEM` whose **source** is an offered item | |
 | Far interaction | Interact | 15 | `CMSG_GAMEOBJ_USE` refused as too far, and more than 20 yd + run speed × 2 × latency away | at the edge of the range |
+
+**Offered items cannot change while a trade is open.** The trade settles from the live item count, so anything that changes an
+offered stack after the first accept would hand the partner a different amount than they saw. The move opcodes above are refused
+with `ItemLocked` (a vendor sale with `CantSellItem`). Destination-side hits are refused the same way but **not scored**:
+vmangos never checks the destination, so a client that lets a drop onto an offered stack through must not be charged. These are
+a swap, split or auto-store whose destination, or whose automatic target (a merge into a partial stack), is an offered item, and
+`CMSG_WRAP_ITEM` / `CMSG_OPEN_ITEM` on an offered item or offered wrapping paper. This is deliberately stricter than vmangos,
+which sets `Item::IsInTrade` only while a trade completes and so refuses only `Player::SplitItem` (silently, scored). Only the six
+traded slots count; the enchant-target slot is never moved. One helper, `EconomyFeature.IsOffered`, answers the question for the
+item handlers, the vendor, crafting reagents and use-item.
 
 The allowed speed is the highest of the player's five speeds and of every speed change still waiting for its ack. When it
 drops (a speed decrease acknowledged, a mount gone), the previous speed still counts for `SpeedChangeGraceMs` plus the latency

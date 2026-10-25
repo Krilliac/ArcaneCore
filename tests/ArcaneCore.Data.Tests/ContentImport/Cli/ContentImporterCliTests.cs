@@ -453,6 +453,7 @@ public sealed class ContentImporterCliTests : IDisposable
         string database = Db("world.db");
         Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("iq.sql", ItemsAndQuests), "--database", database)).Code);
 
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int code, string output, _) = await RunAsync("verify", "--database", database);
 
         Assert.Equal(ExitCodes.Verify, code);
@@ -473,6 +474,7 @@ public sealed class ContentImporterCliTests : IDisposable
 
         (int plan, string planOutput, _) = await RunAsync("plan", dump);
         (int import, string importOutput, _) = await RunAsync("import", dump, "--database", database);
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
 
         Assert.Equal(ExitCodes.Ok, plan);
@@ -616,6 +618,7 @@ public sealed class ContentImporterCliTests : IDisposable
         string database = Db("world.db");
         Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("pc.sql", PlayerCreateDump), "--database", database)).Code);
 
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int code, string output, _) = await RunAsync("verify", "--database", database);
 
         Assert.Equal(ExitCodes.Ok, code);
@@ -641,6 +644,7 @@ public sealed class ContentImporterCliTests : IDisposable
 
         (_, string plan, _) = await RunAsync("plan", dump);
         (int import, string output, _) = await RunAsync("import", dump, "--database", database);
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
 
         Assert.Contains("required_item", TableLine(plan, "areatrigger_teleport").Mapped, StringComparison.Ordinal);
@@ -665,6 +669,7 @@ public sealed class ContentImporterCliTests : IDisposable
 
         (_, string plan, _) = await RunAsync("plan", dump);
         (int import, string output, _) = await RunAsync("import", dump, "--database", database);
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
 
         Assert.Contains("areatrigger_involvedrelation", plan, StringComparison.Ordinal);
@@ -714,6 +719,213 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("Spell.dbc", err, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The setup path (import, then import-dbc on the client directory) must leave map_template and area_template filled: the World skips every
+    /// instance portal and .gps keeps the login zone without them. A second run keeps the rows the world already has.
+    /// </summary>
+    [Fact]
+    public async Task ImportDbc_WithMapAndAreaDbcs_FillsTheMapTables_AndKeepsExistingRowsOnARerun()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+        uint[] mapZero = new uint[42];
+        mapZero[4] = 1;
+        uint[] mapOne = new uint[42];
+        mapOne[0] = 1;
+        mapOne[4] = 1;
+        uint[] area = new uint[25];
+        area[0] = 12;
+        area[3] = 12;
+        area[11] = 1;
+        File.WriteAllBytes(Path.Combine(dbc, "Map.dbc"), Dbc(42, [mapZero, mapOne], "\0fixture\0"));
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTable.dbc"), Dbc(25, [area], "\0fixture\0"));
+
+        (int code, string output, string error) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.True(code == ExitCodes.Ok, error);
+        Assert.Contains("Imported 2 maps and 1 areas", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(database))
+        {
+            Assert.Equal(2, await db.Set<MapTemplateRow>().CountAsync());
+            Assert.Equal(1, await db.Set<AreaTemplateRow>().CountAsync());
+        }
+
+        (int again, string rerun, string rerunError) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.True(again == ExitCodes.Ok, rerunError);
+        Assert.Contains("already have rows", rerun, StringComparison.Ordinal);
+        await using WorldDbContext after = Open(database);
+        Assert.Equal(2, await after.Set<MapTemplateRow>().CountAsync());
+    }
+
+    [Fact]
+    public async Task ImportDbc_WithoutMapDbcs_SaysTheMapTablesWereNotFilled()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+
+        (int code, string output, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("map_template and area_template were not filled", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(0, await db.Set<MapTemplateRow>().CountAsync());
+    }
+
+    /// <summary>
+    /// The documented setup (import, import-dbc, verify) must end with a clean verify: import-dbc fills the five geography tables from the
+    /// client directory, and a rerun keeps the rows the world already has.
+    /// </summary>
+    [Fact]
+    public async Task DocumentedSetup_ImportThenImportDbcThenVerify_ExitsOk()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+        uint[] map = new uint[42];
+        map[4] = 1;
+        uint[] mapOne = new uint[42];
+        mapOne[0] = 1;
+        mapOne[4] = 1;
+        uint[] area = new uint[25];
+        area[0] = 12;
+        area[3] = 12;
+        area[11] = 1;
+        uint[] trigger = new uint[10];
+        trigger[0] = 45;
+        uint[] node = new uint[16];
+        node[0] = 1;
+        uint[] path = [1u, 1u, 2u, 100u];
+        File.WriteAllBytes(Path.Combine(dbc, "Map.dbc"), Dbc(42, [map, mapOne], " fixture "));
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTable.dbc"), Dbc(25, [area], " fixture "));
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTrigger.dbc"), Dbc(10, [trigger], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiNodes.dbc"), Dbc(16, [node], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [path], " "));
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
+
+        (int importCode, string importOutput, string importError) = await RunAsync("import-dbc", dbc, "--database", database);
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.True(importCode == ExitCodes.Ok, importError);
+        Assert.Contains("Imported 1 area triggers", importOutput, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("no missing references", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(database))
+        {
+            Assert.Equal(1, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+            Assert.Equal(1, await db.Set<TaxiNode>().CountAsync());
+            Assert.Equal(1, await db.Set<TaxiPath>().CountAsync());
+        }
+
+        (int again, string rerun, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, again);
+        Assert.Contains("areatrigger_template, taxi_nodes, taxi_path already have rows", rerun, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A TaxiPath.dbc with a duplicate id fails its insert; the area-trigger and taxi-node writes before it roll back too, so a rerun
+    /// does not mistake a half-filled table for a complete one.
+    /// </summary>
+    [Fact]
+    public async Task ImportDbc_FailedTaxiPathInsert_RollsBackEveryGeographyTable()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient");
+        Directory.CreateDirectory(dbc);
+        WriteSpellDbcs(dbc);
+        uint[] trigger = new uint[10];
+        trigger[0] = 45;
+        uint[] node = new uint[16];
+        node[0] = 1;
+        File.WriteAllBytes(Path.Combine(dbc, "AreaTrigger.dbc"), Dbc(10, [trigger], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiNodes.dbc"), Dbc(16, [node], " "));
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [[1u, 1u, 2u, 100u], [1u, 2u, 1u, 100u]], " "));
+
+        (int code, _, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.NotEqual(ExitCodes.Ok, code);
+        await using (WorldDbContext failed = Open(database))
+        {
+            Assert.Equal(0, await failed.Set<AreaTriggerTemplateRow>().CountAsync());
+            Assert.Equal(0, await failed.Set<TaxiNode>().CountAsync());
+            Assert.Equal(0, await failed.Set<TaxiPath>().CountAsync());
+        }
+
+        // The rerun with the file fixed imports all three: nothing was left behind to be mistaken for a finished import.
+        File.WriteAllBytes(Path.Combine(dbc, "TaxiPath.dbc"), Dbc(4, [[1u, 1u, 2u, 100u]], " "));
+        (int rerunCode, _, _) = await RunAsync("import-dbc", dbc, "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, rerunCode);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(1, await db.Set<AreaTriggerTemplateRow>().CountAsync());
+        Assert.Equal(1, await db.Set<TaxiNode>().CountAsync());
+        Assert.Equal(1, await db.Set<TaxiPath>().CountAsync());
+    }
+
+    private static void WriteSpellDbcs(string dbc)
+    {
+        uint[] spell = new uint[SpellDbcImporter.SpellFieldCount];
+        spell[0] = 133;
+        spell[120] = 1;
+        File.WriteAllBytes(Path.Combine(dbc, "Spell.dbc"), Dbc(SpellDbcImporter.SpellFieldCount, [spell], "\0Fireball\0"));
+        File.WriteAllBytes(Path.Combine(dbc, "SpellCastTimes.dbc"), Dbc(4, [[5u, 3500u, 0u, 3500u]], "\0"));
+        File.WriteAllBytes(Path.Combine(dbc, "SpellDuration.dbc"), Dbc(4, [[21u, unchecked((uint)-1), 0u, unchecked((uint)-1)]], "\0"));
+        File.WriteAllBytes(Path.Combine(dbc, "SpellRange.dbc"), Dbc(22, [[4u, 0u, BitConverter.SingleToUInt32Bits(30f), 0u, .. new uint[18]]], "\0"));
+        File.WriteAllBytes(Path.Combine(dbc, "SpellRadius.dbc"), Dbc(4, [[7u, BitConverter.SingleToUInt32Bits(2f), 0u, BitConverter.SingleToUInt32Bits(2f)]], "\0"));
+    }
+
+    /// <summary>
+    /// A world with content but without the map, area, area-trigger and taxi tables (import then import-dbc without the map DBCs) used to
+    /// verify clean while the World skipped every instance portal. It now fails, naming each empty table and the command that fills it.
+    /// </summary>
+    [Fact]
+    public async Task Verify_FailsWhenTheMapAreaTriggerAndTaxiTablesAreEmpty_NamingTheCommandThatFillsThem()
+    {
+        string database = Db("world.db");
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
+
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Equal(ExitCodes.Verify, code);
+        Assert.DoesNotContain("no missing references", output, StringComparison.Ordinal);
+        foreach (string table in new[] { "map_template", "area_template", "areatrigger_template", "taxi_nodes", "taxi_path" })
+        {
+            Assert.Contains($"problem: {table} is empty", output, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("import-map-dbc", output, StringComparison.Ordinal);
+        Assert.Contains("refresh <dump> --dbc-dir", output, StringComparison.Ordinal);
+
+        await VerifyWorldSeed.AddGeographyAsync(database);
+        (int fixedCode, string fixedOutput, _) = await RunAsync("verify", "--database", database);
+        Assert.Equal(ExitCodes.Ok, fixedCode);
+        Assert.Contains("no missing references", fixedOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verify_NamesOnlyTheEmptyGeographyTable()
+    {
+        string database = Db("world.db");
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
+        await VerifyWorldSeed.AddGeographyAsync(database);
+        await using (WorldDbContext db = Open(database))
+        {
+            await db.Set<TaxiPath>().ExecuteDeleteAsync();
+        }
+
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Equal(ExitCodes.Verify, code);
+        Assert.Contains("problem: taxi_path is empty", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("problem: map_template", output, StringComparison.Ordinal);
+    }
+
     // --- verify -----------------------------------------------------------------------------------------------
 
     [Fact]
@@ -722,6 +934,7 @@ public sealed class ContentImporterCliTests : IDisposable
         string database = Db("world.db");
         Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
 
+        await VerifyWorldSeed.AddGeographyAsync(database);
         (int clean, string output, _) = await RunAsync("verify", "--database", database);
         Assert.Equal(ExitCodes.Ok, clean);
         Assert.Contains("creature_template", output, StringComparison.Ordinal);

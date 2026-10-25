@@ -551,19 +551,20 @@ public sealed partial class PlayerbotTaxiTests
         await world.Host.World.InvokeAsync(() =>
         {
             var provisioner = new PopulationProvisioner(world.Host.WorldServices) { AreaLevelSource = _ => 1 };
+            PopulationPlacementFacts facts = PopulationProvisionerTests.FactsFor(world, safeAt);
             Player bot = world.Bots.FindSession(id)!.Player!;
             float startX = bot.X;
             float startY = bot.Y;
 
             bot.UnitFlags |= UnitFlags.TaxiFlight;
             Assert.True(PlayerbotTaxi.IsFlying(bot));
-            string? refusal = provisioner.Relocate(id, safeAt);
+            string? refusal = provisioner.Relocate(id, safeAt, facts);
             Assert.NotNull(refusal);
             Assert.Equal(startX, bot.X);
             Assert.Equal(startY, bot.Y);
 
             bot.UnitFlags &= ~UnitFlags.TaxiFlight;
-            Assert.Null(provisioner.Relocate(id, safeAt));
+            Assert.Null(provisioner.Relocate(id, safeAt, facts));
             return true;
         });
     }
