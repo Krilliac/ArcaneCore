@@ -136,6 +136,21 @@ public sealed class WorldHost(
                     .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
                 directory.Load(identities);
 
+                // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
+                // grid spawns) resolve their creature_equip_template items through it, and an unloaded store would warn and leave the slots empty.
+                // A failed load is not fatal here: it is not cached, the next request (a login) retries and fails closed itself.
+                if (scope.ServiceProvider.GetService<Items.ItemsFeature>() is { } itemsFeature)
+                {
+                    try
+                    {
+                        await itemsFeature.EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+                    {
+                        logger.LogWarning(ex, "Item templates could not be loaded at startup; they load on first use and creature equipment resolves after that");
+                    }
+                }
+
                 // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
                 _attached = true;
                 scope.ServiceProvider.AttachWorldFeatures(world);
