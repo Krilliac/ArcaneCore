@@ -439,7 +439,7 @@ after `HoldSeconds` of that the attempt ends as `boss-taken`. The leader's pull 
 scans. A member carrying Mark of Frost (23182) does not fight again and holds at the rally. A pull with some real players near (fewer than `PlayersNearCount`) is
 recorded as the `worldboss-pull-near-players` anomaly. The kill counts only with the raid's own tap (a raid member or a member's pet holds
 `LootTapper`): a corpse tapped by others is `boss-taken`. After `MaxWipes` wipes the raid ends as `wiped` (an anomaly at full size); a raid
-lasts at most `MaxRaidMinutes`; its step limits reuse `DungeonRuns:TravelTimeoutMinutes`.
+lasts at most `MaxRaidMinutes`; its step limits reuse `World:Playerbots:Groups:DungeonRuns:TravelTimeoutMinutes`.
 
 **Keys** (all under `World:Playerbots:Groups:WorldBosses`; defaults and ranges in `docs/reference/configuration.md`):
 
