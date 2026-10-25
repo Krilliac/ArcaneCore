@@ -10363,6 +10363,21 @@ World.GameEvents.YearlyRebase = SpanNewYear
 #----------------------------------------------------------------------------
 
 #
+#    World.GmCommands.AllowDangerousDebug
+#        Description: ArcaneCore only: allow the debug commands that can hurt a running world (time
+#                     offset, inject, opcode disable, stall, combat RNG override, forced acks,
+#                     map/grid unload, watchdog dumps) behind DangerousDebugGate. Off by default;
+#                     changing it needs a restart. On the live server (ARCANECORE_LIVE_SERVER=1) the
+#                     commands are refused whatever this says.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommands
+#
+World.GmCommands.AllowDangerousDebug = false
+
+#
 #    World.GmCommands.AuditTailSize
 #        Description: How many of the latest audit lines .arcane gmlog can show (ArcaneCore only;
 #                     the lines are the ones LogCommands writes, kept in memory, lost on restart). 0

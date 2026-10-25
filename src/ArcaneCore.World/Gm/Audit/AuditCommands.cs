@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Gm;
@@ -9,6 +10,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Audit;
@@ -29,7 +31,7 @@ public sealed class AuditCommands : ICommandGroup
     [
         new ChatCommand("pinfo", AccountSecurity.GameMaster, "Syntax: .pinfo [$playername]\nShow account, level, position, chat-mute and ticket state of the named character (online or not), the selected player, or yourself.", Pinfo),
         new ChatCommand("mute", AccountSecurity.Moderator, "Syntax: .mute [$playername] $duration [$reason]\nDisable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online.", Mute),
-        new ChatCommand("unmute", AccountSecurity.Moderator, "Syntax: .unmute [$playername]\nEnable the chat of the player's account again. The character may be offline.", Unmute),
+        new ChatCommand("unmute", AccountSecurity.Moderator, "Syntax: .unmute [$playername]\nEnable the chat of the player's account again, clearing the GM mute, the flood mute and the chat restriction mute. The character may be offline.", Unmute),
         new ChatCommand("gmannounce", AccountSecurity.Moderator, "Syntax: .gmannounce $message\nSend a chat message to every staff member online.", GmAnnounce),
         new ChatCommand("gmnotify", AccountSecurity.Moderator, "Syntax: .gmnotify $message\nSend an on-screen notification to every staff member online.", GmNotify),
     ];
@@ -195,10 +197,12 @@ public sealed class AuditCommands : ICommandGroup
             return true;
         }
 
-        // vmangos .unmute clears m_muteTime entirely, so the chat lane's own flood mute goes too (it is keyed by account,
-        // so an offline character's account is covered); "already enabled" is only said when neither mute was in force.
+        // vmangos .unmute clears m_muteTime entirely, so the chat lane's own flood mute and the social lane's explicit mute table
+        // go too (both are keyed by account, so an offline character's account is covered); "already enabled" is only said
+        // when none of the three mutes was in force.
         bool floodMuteCleared = context.Session.Services.GetRequiredService<ChatFeature>().ClearMute(accountId);
-        if (mute is null && !floodMuteCleared)
+        bool restrictionMuteCleared = ClearRestrictionMute(context.Session.Services, accountId);
+        if (mute is null && !floodMuteCleared && !restrictionMuteCleared)
         {
             context.Reply(GmAuditStrings.ChatAlreadyEnabled);
             return true;
@@ -212,6 +216,20 @@ public sealed class AuditCommands : ICommandGroup
         target?.SendSystemMessage(GmAuditStrings.YourChatEnabled);
         context.Reply(GmAuditStrings.YouEnableChat(GmStrings.PlayerLink(target?.Name ?? offline!.Name)));
         return true;
+    }
+
+    /// <summary>Ends the account's mute in the social lane's <see cref="ChatRestrictionService"/>; true when one was in force.</summary>
+    private static bool ClearRestrictionMute(IServiceProvider services, int accountId)
+    {
+        ChatRestrictionService? restrictions = services.GetService<ChatRestrictionFeature>()?.Service;
+        if (restrictions is null)
+        {
+            return false;
+        }
+
+        bool inForce = restrictions.MuteRemaining(accountId) > 0;
+        restrictions.Unmute(accountId);
+        return inForce;
     }
 
     /// <summary>A reason on one line, at most 255 characters (the column), control characters turned into spaces.</summary>

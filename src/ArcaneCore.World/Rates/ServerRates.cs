@@ -24,6 +24,9 @@ public enum RateChangeKind
 /// </summary>
 public readonly record struct RateChange(RateDefinition Rate, float Old, float New, RateChangeKind Kind, string Actor, string? Reason);
 
+/// <summary>One entry of <see cref="ServerRates.History"/>: when (UTC) a rate changed, and the change.</summary>
+public readonly record struct RateHistoryEntry(DateTimeOffset At, RateChange Change);
+
 /// <summary>The services one rate operation resolves its option objects from (world thread).</summary>
 public readonly record struct RateScope(IServiceProvider Services, WorldRuntime World, ILogger Logger);
 
@@ -125,9 +128,29 @@ public sealed class ServerRates
 {
     private static readonly ConditionalWeakTable<WorldRuntime, ServerRates> s_perWorld = new();
 
+    /// <summary>How many changes <see cref="History"/> keeps; the oldest are dropped.</summary>
+    public const int HistoryCapacity = 100;
+
     private readonly Dictionary<RateDefinition, Override> _baselines = [];
 
+    private readonly List<RateHistoryEntry> _history = [];
+
     private sealed record Override(float Display, Action[] Restores);
+
+    /// <summary>
+    /// A copy of the newest changes (set, reset, reload) of this world, oldest first, at most <see cref="HistoryCapacity"/>. The list is
+    /// guarded by a lock, so a change from a map's thread and a read cannot meet.
+    /// </summary>
+    public IReadOnlyList<RateHistoryEntry> History
+    {
+        get
+        {
+            lock (_history)
+            {
+                return _history.ToArray();
+            }
+        }
+    }
 
     /// <summary>Raised after every change (set, reset, reload) with the old and new value. A handler that throws is logged and skipped.</summary>
     public event Action<RateChange>? RateChanged;
@@ -291,6 +314,15 @@ public sealed class ServerRates
 
     private void Publish(RateScope scope, RateChange change)
     {
+        lock (_history)
+        {
+            _history.Add(new RateHistoryEntry(DateTimeOffset.UtcNow, change));
+            if (_history.Count > HistoryCapacity)
+            {
+                _history.RemoveAt(0);
+            }
+        }
+
         scope.Logger.LogInformation(
             "Rate {Rate} {Kind}: {Old} -> {New} by {Actor}{Reason}",
             change.Rate.Name, change.Kind, Show(change.Old), Show(change.New), change.Actor,

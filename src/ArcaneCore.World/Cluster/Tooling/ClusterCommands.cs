@@ -26,6 +26,7 @@ using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
 
@@ -83,7 +84,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "diag",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0.",
+                    "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered.",
                     Diag),
             ]),
     ];
@@ -536,6 +537,17 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
+        int pendingTransfers;
+        try
+        {
+            pendingTransfers = CountUnresolvedTransfers(services);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
+            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
+            return true;
+        }
 
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
@@ -588,7 +600,7 @@ public sealed class ClusterCommands : ICommandGroup
             OwnershipEpoch: worldToken?.Epoch ?? 0,
             OperationId: "gm-cluster-diag");
 
-        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
+        ClusterRollbackSnapshot snapshot = BuildRollbackSnapshot(realmId, nodes, pendingTransfers, pendingWrites, retainedFailures, fencing.Enabled, worldToken is not null, schema);
 
         ClusterDiagnosticsReport report = collector.Collect(
             correlation,
@@ -611,6 +623,7 @@ public sealed class ClusterCommands : ICommandGroup
     internal static ClusterRollbackSnapshot BuildRollbackSnapshot(
         int realmId,
         IReadOnlyList<ClusterNodeDescriptor> nodes,
+        int pendingTransfers,
         int pendingWrites,
         int retainedFailures,
         bool fencingEnabled,
@@ -619,7 +632,7 @@ public sealed class ClusterCommands : ICommandGroup
         => new(
             RealmId: realmId,
             ClusterNodes: nodes,
-            PendingTransfers: 0,
+            PendingTransfers: pendingTransfers,
             PendingCharacterWrites: pendingWrites,
             RetainedWriteFailures: retainedFailures,
             ActiveUnfencedWriters: fencingEnabled ? 0 : 1,
@@ -725,6 +738,12 @@ public sealed class ClusterCommands : ICommandGroup
     // The core bot registry (logged in and running), not the playerbot pack's feature: World does not reference the pack (tier 2b).
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command; the EF store's query is a COUNT over the indexed state column); a store failure propagates to the caller.</summary>
+    private static int CountUnresolvedTransfers(IServiceProvider services)
+        => services.GetService<ITransferDecisionStore>() is { } store
+            ? store.CountUnresolvedAsync().GetAwaiter().GetResult()
+            : 0;
 
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {

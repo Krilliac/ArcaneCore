@@ -4,6 +4,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
 
 namespace ArcaneCore.World.Gm.Tools;
@@ -32,22 +33,22 @@ public sealed class ToolsLiftCommands : ICommandExtension
             [
                 new("phase", AccountSecurity.Administrator,
                     "Syntax: .debug lift phase #ms [#guid]\nJump the elevator to #ms into its cycle (taken modulo the cycle) and resend it to the players who have it. Not saved; ends when its grid unloads (a map-wide tram car: with reset, or when the map has no players).\nA player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified.",
-                    Phase),
+                    Phase, IsWrite: true),
                 new("stop", AccountSecurity.Administrator,
                     "Syntax: .debug lift stop #n [#guid]\nJump the elevator to the start of its Nth stationary run (see .debug lift) and resend it to the players who have it.\nA player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified.",
-                    Stop),
+                    Stop, IsWrite: true),
                 new("freeze", AccountSecurity.Administrator,
                     "Syntax: .debug lift freeze [#guid]\nHold the elevator where it is on the server (bots, anti-cheat). Players who have it keep the normal animation on their clients and see it out of sync until .debug lift reset. Refused for map-wide trams (Deeprun Tram).",
-                    Freeze),
+                    Freeze, IsWrite: true),
                 new("resume", AccountSecurity.Administrator,
                     "Syntax: .debug lift resume [#guid]\nContinue a frozen elevator from where it stands at its previous speed and resend it to the players who have it.\nA player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified.",
-                    Resume),
+                    Resume, IsWrite: true),
                 new("speed", AccountSecurity.Administrator,
                     "Syntax: .debug lift speed #factor [#guid]\nRun the elevator at #factor times its speed (0.1 to 10; the reply says when it was clamped) on the server and resend it. Players who have it keep the normal speed on their clients (they see it out of sync) until .debug lift reset. Refused for map-wide trams (Deeprun Tram).",
-                    Speed),
+                    Speed, IsWrite: true),
                 new("reset", AccountSecurity.Administrator,
                     "Syntax: .debug lift reset [#guid]\nPut the elevator back on its normal schedule (the time since it was created) and resend it to the players who have it.\nA player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified.",
-                    Reset),
+                    Reset, IsWrite: true),
             ],
             RetailLevel: 3),
     ];
@@ -56,6 +57,20 @@ public sealed class ToolsLiftCommands : ICommandExtension
 
     private static GameObject? FindLift(CommandContext context, uint counter, out GameObjectMapSystem? system)
         => GmGameObjectTarget.Find(context, counter, out system, GameObjectType.Transport, NearestLiftRadius);
+
+    /// <summary>The schedule override of <paramref name="go"/> as one line: its speed, whether it is frozen, and where it stands.</summary>
+    private static string Schedule(GameObjectMapSystem system, GameObject go)
+    {
+        ElevatorControlInfo control = system.GetElevatorControl(go);
+        return control.Overridden
+            ? string.Create(C, $"x{control.ResumeScale:0.###}{(control.Frozen ? " frozen" : string.Empty)} at {go.PathProgress} ms")
+            : string.Create(C, $"default schedule at {go.PathProgress} ms");
+    }
+
+    private static string Progress(GameObject go) => string.Create(C, $"{go.PathProgress}");
+
+    private static void Audit(CommandContext context, GameObject go, string field, string oldValue, string newValue)
+        => DebugWrite.Record(context, Name(go), field, oldValue, newValue, DebugWriteScope.Live);
 
     private static string Name(GameObject go) => string.Create(C, $"{go.Template.Name} (entry {go.Entry}, guid {go.Guid.Counter})");
 
@@ -119,11 +134,13 @@ public sealed class ToolsLiftCommands : ICommandExtension
             return true;
         }
 
+        string before = Progress(go);
         if (!system.SetElevatorPhase(go, ms))
         {
             return NoSchedule(context, go);
         }
 
+        Audit(context, go, "phase ms", before, Progress(go));
         context.Reply(string.Create(C, $"{Name(go)} now at {go.PathProgress} ms of {system.ElevatorCycle(go)}; resent to {Resent(system, go, context)}."));
         return true;
     }
@@ -151,11 +168,13 @@ public sealed class ToolsLiftCommands : ICommandExtension
         }
 
         ElevatorStop stop = stops[(int)number - 1];
+        string beforeStop = Progress(go);
         if (!system.SetElevatorPhase(go, stop.StartMs))
         {
             return NoSchedule(context, go);
         }
 
+        Audit(context, go, "phase ms", beforeStop, Progress(go));
         context.Reply(string.Create(C, $"{Name(go)} at the start of stop {stop.Number} ({stop.StartMs} ms, stays {stop.DurationMs} ms); resent to {Resent(system, go, context)}."));
         return true;
     }
@@ -168,9 +187,16 @@ public sealed class ToolsLiftCommands : ICommandExtension
                 return RefuseMapWide(context, go, "freeze");
             }
 
+            bool wasFrozen = system.GetElevatorControl(go).Frozen;
             if (!system.FreezeElevator(go))
             {
                 return NoSchedule(context, go);
+            }
+
+            if (!wasFrozen)
+            {
+                // Freezing a frozen lift changes nothing and resends nothing, so there is no write to record.
+                Audit(context, go, "frozen", "false", "true");
             }
 
             context.Reply(string.Create(C, $"{Name(go)} frozen at {go.PathProgress} ms on the server."));
@@ -181,10 +207,14 @@ public sealed class ToolsLiftCommands : ICommandExtension
     private static bool Resume(CommandContext context, string text)
         => WithLift(context, text, (system, go) =>
         {
+            bool wasFrozen = system.GetElevatorControl(go).Frozen;
+            // Recorded even when the lift was not frozen: the resume still resends the lift to every viewer.
             if (!system.ResumeElevator(go))
             {
                 return NoSchedule(context, go);
             }
+
+            Audit(context, go, "frozen", wasFrozen ? "true" : "false", "false");
 
             context.Reply(string.Create(C, $"{Name(go)} running again from {go.PathProgress} ms; resent to {Resent(system, go, context)}."));
             return true;
@@ -208,12 +238,14 @@ public sealed class ToolsLiftCommands : ICommandExtension
             return RefuseMapWide(context, go, "speed");
         }
 
+        double oldScale = system.GetElevatorControl(go).ResumeScale;
         if (!system.SetElevatorScale(go, factor))
         {
             return NoSchedule(context, go);
         }
 
         ElevatorControlInfo control = system.GetElevatorControl(go);
+        Audit(context, go, "speed scale", oldScale.ToString("0.###", C), control.ResumeScale.ToString("0.###", C));
         string clamped = factor is < (float)GameObjectMapSystem.MinElevatorScale or > (float)GameObjectMapSystem.MaxElevatorScale
             ? string.Create(C, $" (requested x{factor:0.###}, clamped to {GameObjectMapSystem.MinElevatorScale}-{GameObjectMapSystem.MaxElevatorScale})")
             : string.Empty;
@@ -226,10 +258,14 @@ public sealed class ToolsLiftCommands : ICommandExtension
     private static bool Reset(CommandContext context, string text)
         => WithLift(context, text, (system, go) =>
         {
+            string undone = Schedule(system, go);
             if (!system.ResetElevator(go))
             {
                 return NoSchedule(context, go);
             }
+
+            // Recorded even when the lift was already on its default schedule: the reset still resends the lift to every viewer.
+            Audit(context, go, "schedule", undone, "default schedule");
 
             context.Reply(string.Create(C, $"{Name(go)} back on its default schedule, at {go.PathProgress} ms; resent to {Resent(system, go, context)}."));
             return true;

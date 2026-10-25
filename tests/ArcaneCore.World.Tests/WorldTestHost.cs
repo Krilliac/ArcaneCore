@@ -109,6 +109,12 @@ internal sealed class WorldTestHost : IAsyncDisposable
         }
 
         _services.AttachWorldFeatures(World);
+        // A write handler whose command is not marked IsWrite fails its test instead of logging an error (debug-commands plan 1.5).
+        if (_services.GetService<ArcaneCore.World.Gm.Audit.GmAuditFeature>() is { } audit)
+        {
+            audit.DebugWrites.Strict = true;
+        }
+
         // The harness runs with weather off (vmangos ActivateWeather=0) so an SMSG_WEATHER after every zone
         // entry does not shift the packet sequences of unrelated tests; weather tests switch it on.
         ArcaneCore.Game.WorldState.WorldStateHooks.For(World).WeatherSettings.Enabled = false;
