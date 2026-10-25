@@ -1,8 +1,10 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Groups;
@@ -107,7 +109,7 @@ public sealed class PlayerbotWorldBossWorldTests
         await SpawnAsync(world, low[0].Id, boss63, BossAt);
 
         Assert.False(await world.RunUntilAsync(120_000, () => Raid(world) is not null), "level-57 bots were mustered for a level-63 boss");
-        Assert.Empty(world.Coordinator.Groups.Where(g => g.WorldBoss is not null));
+        Assert.DoesNotContain(world.Coordinator.Groups, g => g.WorldBoss is not null);
     }
 
     [Fact]
@@ -300,7 +302,7 @@ public sealed class PlayerbotWorldBossWorldTests
             {
                 // Before the pull: the player taps the boss and kills it.
                 player.Map!.Combat.DealDamage(player, boss, 1);
-                player.Map.Combat.DealDamage(player, boss, 1_000_000);
+                player.Map!.Combat.DealDamage(player, boss, 1_000_000);
                 killed = true;
             }
 
@@ -463,7 +465,7 @@ public sealed class PlayerbotWorldBossWorldTests
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         await SpawnAsync(world, bots[0].Id, Boss(), BossAt);
         await world.RunAsync(150_000);
-        Assert.Empty(world.Coordinator.Groups.Where(g => g.WorldBoss is not null));
+        Assert.DoesNotContain(world.Coordinator.Groups, g => g.WorldBoss is not null);
         Assert.Empty(world.Coordinator.Groups);
     }
 

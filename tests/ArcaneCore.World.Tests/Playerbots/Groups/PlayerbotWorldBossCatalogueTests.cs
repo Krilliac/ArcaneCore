@@ -33,7 +33,7 @@ public sealed class PlayerbotWorldBossCatalogueTests
         Assert.Equal(21, Rank3ContinentSpawns.Length); // the world database's rank-3 spawns on maps 0 and 1: nothing dropped from the fixture
         Assert.All(Rank3ContinentSpawns, r => Assert.True(r.Rank == 3 && r.MapId is 0 or 1));
 
-        Assert.Equal([Teremus, Azuregos, Kazzak].Order(), Derived(Content()));
+        Assert.Equal(new uint[] { Teremus, Azuregos, Kazzak }.Order(), Derived(Content()));
     }
 
     /// <summary>Every other rank-3 continent row the content has is left out, whatever rule drops it (leaders, Benedictus, Varimathras, Anachronos, the Spirit, Rajaxx, the Colossi).</summary>

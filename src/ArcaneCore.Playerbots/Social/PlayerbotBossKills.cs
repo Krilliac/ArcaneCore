@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.World.Playerbots.Groups;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 

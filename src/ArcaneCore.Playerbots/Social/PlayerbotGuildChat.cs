@@ -67,6 +67,9 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
     /// <summary>Topics waiting for a guild (tests and status).</summary>
     internal int Waiting(int guildId) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count : 0;
 
+    /// <summary>The topics waiting for a guild, in queue order (tests).</summary>
+    internal IReadOnlyList<PlayerbotGuildTopic> Queued(int guildId) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.ToArray() : [];
+
     /// <summary>Topics with this <paramref name="key"/> waiting for a guild (tests and status).</summary>
     internal int Waiting(int guildId, string key) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count(topic => topic.Key == key) : 0;
 

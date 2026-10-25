@@ -62,6 +62,9 @@ internal sealed class PlayerbotConversations
 
     /// <summary>Conversations running now (tests).</summary>
     internal int Active => _active.Count;
+    /// <summary>The remarks waiting to be told (tests).</summary>
+    internal IReadOnlyCollection<(ulong Player, BotChatEventKind Kind, string Value, string? Where)> Noticed => _noticed;
+
 
     /// <summary>Conversations started so far.</summary>
     internal int Started { get; private set; }

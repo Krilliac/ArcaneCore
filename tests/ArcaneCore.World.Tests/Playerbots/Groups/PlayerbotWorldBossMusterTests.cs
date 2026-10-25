@@ -52,7 +52,7 @@ public sealed class PlayerbotWorldBossMusterTests
 
     private static PlayerbotGroupCandidate Bot(ulong guid, Class cls, byte level = 60, uint team = Alliance, uint map = 1, float distance = 100f, uint need = 0)
         => new(new Guid((int)guid, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]), guid, "Bot" + guid, cls, level, team, map, BossAt + new Vector3(distance, 0f, 0f),
-            cls == Class.Warrior ? PlayerbotRole.Tank : cls == Class.Priest ? PlayerbotRole.Healer : PlayerbotRole.RangedDps, 1f, need);
+            cls == Class.Warrior ? PlayerbotRole.Tank : cls == Class.Priest ? PlayerbotRole.Healer : PlayerbotRole.RangeDps, 1f, need);
 
     /// <summary>A pool of accepting bots: the given counts of warriors (tanks), priests (healers) and mages (damage), each nearer the boss than the last.</summary>
     private static List<PlayerbotGroupCandidate> Pool(int seed, int tanks, int healers, int damage, byte level = 60)

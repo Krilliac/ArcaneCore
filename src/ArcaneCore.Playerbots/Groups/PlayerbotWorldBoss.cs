@@ -273,7 +273,7 @@ internal enum PlayerbotWorldBossPhase : byte
 }
 
 /// <summary>Why a boss may or may not be opened for a muster (<see cref="PlayerbotWorldBossCampaign.MayOpen"/>).</summary>
-internal enum PlayerbotWorldBossOpening : byte
+public enum PlayerbotWorldBossOpening : byte
 {
     Ok,
     Disabled,
@@ -410,7 +410,7 @@ internal static class PlayerbotWorldBossMuster
     internal static byte LevelFloor(PlayerbotWorldBossOptions options, byte bossLevel)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return (byte)Math.Max(1, Math.Min(bossLevel, PlayerLevelCap) - options.LevelGap);
+        return (byte)Math.Max(1, Math.Min((int)bossLevel, PlayerLevelCap) - options.LevelGap);
     }
 
     /// <summary>The willingness seed of a (boss, UTC day, team): fixed for the day.</summary>
@@ -622,7 +622,7 @@ internal static class PlayerbotWorldBossEngage
 // --- the raid ---------------------------------------------------------------------------------------------------------------------
 
 /// <summary>The raid warnings a world-boss raid's leader gives.</summary>
-internal enum PlayerbotWorldBossWarning : byte
+public enum PlayerbotWorldBossWarning : byte
 {
     /// <summary>The raid has formed (names the rally zone).</summary>
     Form,

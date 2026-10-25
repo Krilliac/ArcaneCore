@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Numerics;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
 using Xunit;

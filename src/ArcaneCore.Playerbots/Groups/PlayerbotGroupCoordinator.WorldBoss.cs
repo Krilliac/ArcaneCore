@@ -5,13 +5,16 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.WorldState.Events;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Combat;
 using ArcaneCore.World.Creatures;
@@ -21,6 +24,7 @@ using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
 namespace ArcaneCore.World.Playerbots.Groups;
 
@@ -475,10 +479,10 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>The unit is a raid member, or a pet or charm of one.</summary>
-    private static bool BelongsToRaid(BotGroup group, Unit unit) => IsMember(group, unit.Guid) || unit.CharmerOrOwnerGuid.IsPlayer && IsMember(group, unit.CharmerOrOwnerGuid);
+    private static bool BelongsToRaid(BotGroup group, Unit unit) => IsMember(group, unit.Guid) || DuelRules.ControllingPlayer(unit) is { } owner && IsMember(group, owner.Guid);
 
     private static bool TapIsRaid(Map map, BotGroup group, ObjectGuid tap)
-        => !tap.IsEmpty && (IsMember(group, tap) || map.FindObject(tap) is Unit pet && pet.CharmerOrOwnerGuid.IsPlayer && IsMember(group, pet.CharmerOrOwnerGuid));
+        => !tap.IsEmpty && (IsMember(group, tap) || map.FindObject(tap) is Unit pet && DuelRules.ControllingPlayer(pet) is { } owner && IsMember(group, owner.Guid));
 
     private static bool FightsRaid(BotGroup group, Creature boss)
     {
