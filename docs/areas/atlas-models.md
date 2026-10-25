@@ -63,7 +63,9 @@ sets the state and uniforms of one batch (returning false skips it). The rendere
 `impl.programs` and its vertex array from `impl.layout`.
 
 `TextureStore` fetches `/api/bin/texture`, uploads RGBA8 or S3TC levels, keeps a byte budget (`textureBudgetMb`, default 384) with
-frame pinning, evicts least recently used first, dedupes in-flight requests (four at a time) and answers at once with a placeholder
+two-frame pinning (textures used this frame or the last are never evicted to make room for a generated array; at the end of a frame the
+budget is a hard limit, so there only this frame's textures are protected and a texture used one frame ago goes after every older one),
+evicts least recently used first, dedupes in-flight requests (four at a time) and answers at once with a placeholder
 while a texture loads. Nothing is written to browser storage. `renderer.stats` carries `textures`, `textureBytes`, `texturesPending`,
 `texturesMissing`, `texturesEvicted`, `textureOverBudget` and `arrayReallocs`. It is the only allocator of GPU textures: a texture with
 several layers uploads as a `TEXTURE_2D_ARRAY`, and a lane that generates textures calls `acquireArray(key, {width, height, layers})`,

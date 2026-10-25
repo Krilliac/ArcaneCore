@@ -367,6 +367,32 @@ test('TextureStore evicts the least recently used texture first', async () => {
     store.dispose();
 });
 
+test('TextureStore does not evict textures used one frame ago to make room for a generated array, but does once they are two frames idle', async () => {
+    const gl = new FakeGl();
+    const MB = 1024 * 1024;
+    const store = new TextureStore({ gl, fetchTexture: async () => rgba(512, 512), budgetBytes: 3 * MB });
+    for (const key of ['client:a', 'client:b', 'client:c']) {
+        store.beginFrame();
+        store.get(key);
+        store.endFrame();
+        await store.whenIdle();
+    }
+    store.beginFrame();
+    for (const key of ['client:a', 'client:b', 'client:c']) {
+        store.get(key);
+    }
+    store.endFrame();
+    store.beginFrame(); // all three were used one frame ago and the budget is full
+    assert.equal(store.acquireArray('gen:one-ago', { width: 16, height: 16 }), null, 'one-frame-old textures are pinned');
+    assert.equal(store.stats().evictions, 0);
+    store.endFrame();
+    store.beginFrame(); // now they are two frames idle
+    assert.ok(store.acquireArray('gen:two-ago', { width: 16, height: 16 }), 'two-frame-idle textures give way');
+    assert.equal(store.stats().evictions, 1);
+    store.endFrame();
+    store.dispose();
+});
+
 test('TextureStore keeps a texture used one frame ago over one unused for two frames or more', async () => {
     const gl = new FakeGl();
     const MB = 1024 * 1024;

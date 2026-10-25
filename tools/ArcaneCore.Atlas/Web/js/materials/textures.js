@@ -5,7 +5,9 @@
 //     fetched once however many batches ask for it, at most four fetches run at a time, and a key the host does not have is
 //     remembered as missing (and drawn as a magenta and black checker) instead of being asked for again.
 //   beginFrame()/endFrame() bracket a frame. At endFrame the store evicts down to the budget: textures the frame did not use go
-//     first, least recently used first. When the frame's own textures exceed the budget the newest arrivals are dropped and their
+//     first, least recently used first (a texture used one frame ago goes after every older one, so it is the last unused one to go).
+//     Making room for a generated array (acquireArray/growArray) is stricter: textures used this frame or the one before are pinned
+//     and are not evicted for it; the budget at endFrame is a hard limit, so there the pin yields to LRU order. When the frame's own textures exceed the budget the newest arrivals are dropped and their
 //     keys marked starved (drawn flat, not fetched again) so a working set that does not fit settles instead of being fetched,
 //     evicted and fetched again every frame. Starved keys are retried when the working set shrinks or the budget grows.
 //   Memory is counted as the bytes the levels occupy on the wire (compressed size for DXT): what the host sent is what is resident.
@@ -529,13 +531,16 @@ export class TextureStore {
         entry.dirty = false;
     }
 
-    /** Evicts unused, unowned textures (least recently used first) until `extra` more bytes fit; false when they cannot. */
+    /**
+     * Evicts unowned textures idle for two frames or more (least recently used first) until `extra` more bytes fit; false when they
+     * cannot. Textures used by this frame or the one before are pinned: the two-frame pin of the design.
+     */
     #makeRoom(extra) {
         if (this.#bytes + extra <= this.#budget) {
             return true;
         }
         const idle = [...this.#entries.values()]
-            .filter((e) => e.ready && !e.owned && e.lastUsed !== this.#frame)
+            .filter((e) => e.ready && !e.owned && e.lastUsed < this.#frame - 1)
             .sort((a, b) => a.lastUsed - b.lastUsed || a.arrival - b.arrival);
         for (const entry of idle) {
             if (this.#bytes + extra <= this.#budget) {
