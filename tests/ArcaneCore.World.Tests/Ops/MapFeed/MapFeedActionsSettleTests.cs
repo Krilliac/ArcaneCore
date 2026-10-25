@@ -204,7 +204,7 @@ public sealed class MapFeedActionsSettleTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup
             {
                 Terrain = true,

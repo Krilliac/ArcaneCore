@@ -441,7 +441,7 @@ public sealed class MapFeedActionsTests
     private static Task<int> MovingWolvesAsync(FeedWorld world) => world.Host.OnWorldAsync(() =>
         world.Host.World.FindMap(0, 0)!.FindUpdater<CreatureMapSystem>()!.Creatures.Count(c => c.Spline is not null));
 
-    private static async Task<FeedWorld> BulkWorldAsync(ManualTimeProvider time, FakeFeedTickets? tickets = null)
+    private static async Task<FeedWorld> BulkWorldAsync(FeedTestClock time, FakeFeedTickets? tickets = null)
     {
         FeedWorldSetup setup = tickets is null ? LocalWorld(time: time, content: true, extraCreatures: 1) : WebWorld(tickets, time: time, content: true, extraCreatures: 1);
         FeedWorld world = await FeedWorld.StartAsync(setup);
@@ -457,7 +457,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         await using FeedWorld world = await BulkWorldAsync(time);
         FeedClient client = await world.ConnectAsync();
         string[] targets = TwoWolves();
@@ -487,7 +487,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         await using FeedWorld world = await BulkWorldAsync(time);
         FeedClient client = await world.ConnectAsync();
 
@@ -506,7 +506,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         await using FeedWorld world = await BulkWorldAsync(time);
         FeedClient client = await world.ConnectAsync();
         string[] targets = TwoWolves();
@@ -532,7 +532,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         await using FeedWorld world = await BulkWorldAsync(time);
         FeedClient client = await world.ConnectAsync();
         string[] targets = TwoWolves();
@@ -563,7 +563,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         FakeFeedTickets tickets = new FakeFeedTickets()
             .Set("T-A", 71, "WEBA", AccountSecurity.GameMaster)
             .Set("T-B", 72, "WEBB", AccountSecurity.GameMaster);
@@ -593,7 +593,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         FakeFeedTickets tickets = new FakeFeedTickets()
             .Set("T-A", 71, "WEBA", AccountSecurity.GameMaster)
             .Set("T-B", 72, "WEBB", AccountSecurity.GameMaster);
@@ -631,7 +631,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         await using FeedWorld world = await FeedWorld.StartAsync(LocalWorld(o =>
         {
             o.LocalPerSecond = 1;
@@ -678,7 +678,7 @@ public sealed class MapFeedActionsTests
             return;
         }
 
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         FakeFeedTickets tickets = new FakeFeedTickets().Set("T-GM", 77, "WEBGM", AccountSecurity.GameMaster);
         await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(tickets, time: time));
         ActionSpies spies = ActionSpies.Install(world.Host);
