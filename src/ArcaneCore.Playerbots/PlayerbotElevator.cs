@@ -475,7 +475,7 @@ internal sealed class ElevatorTrip(ElevatorLift lift, ElevatorLevel from, Vector
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-internal static class PlayerbotElevator
+internal static partial class PlayerbotElevator
 {
     /// <summary>
     /// Half the car's width: the collision bounds of Elevatorcar.m2 (GameObjectDisplayInfo 360, every "Mesa Elevator"; vmaps

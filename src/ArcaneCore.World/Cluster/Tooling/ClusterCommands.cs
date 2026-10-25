@@ -18,6 +18,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Diagnostics;
 using ArcaneCore.World.Gm.Lookup;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Persistence;
@@ -468,20 +469,13 @@ public sealed class ClusterCommands : ICommandGroup
         context.Reply(FormatLeasesSummaryLine(services, fencing.OwnerNode, worldToken));
 
         var queues = new List<string>();
-        if (services.GetService<CharacterSaveQueue>() is { } charSaves)
-            queues.Add(string.Create(c, $"charSaves={charSaves.Pending}"));
-        if (services.GetService<SocialFeature>() is { } social)
-            queues.Add(string.Create(c, $"social={social.PendingWrites}"));
-        if (services.GetService<ReputationFeature>() is { } rep)
-            queues.Add(string.Create(c, $"reputation={rep.PendingWrites}"));
-        if (services.GetService<InstanceFeature>() is { } inst)
-            queues.Add(string.Create(c, $"instances={inst.PendingWrites}"));
-        if (services.GetService<CreatureRespawnFeature>() is { } respawns)
-            queues.Add(string.Create(c, $"respawns={respawns.PendingWrites}"));
-        if (services.GetService<ExploredZonesPersistence>() is { } explored)
-            queues.Add(string.Create(c, $"explored={explored.Writes.Pending}"));
-        if (services.GetService<GmAuditFeature>() is { } audit)
-            queues.Add(string.Create(c, $"gmAudit={audit.Writes.Pending}(retained={audit.Writes.RetainedKeys.Count})"));
+        foreach (PersistenceQueueSnapshot queue in QueueRegistry(services).Snapshot())
+        {
+            int retainedKeys = queue.RetainedKeys?.Count ?? 0;
+            queues.Add(retainedKeys > 0
+                ? string.Create(c, $"{queue.Name}={queue.Pending}(retained={retainedKeys})")
+                : string.Create(c, $"{queue.Name}={queue.Pending}"));
+        }
 
         context.Reply("Write-behind queues: " + (queues.Count > 0 ? string.Join(", ", queues) : "none registered"));
         return true;
@@ -755,26 +749,18 @@ public sealed class ClusterCommands : ICommandGroup
     {
         int pending = 0;
         int retained = 0;
-        if (services.GetService<CharacterSaveQueue>() is { } charSaves)
-            pending += charSaves.Pending;
-        if (services.GetService<SocialFeature>() is { } social)
-            pending += social.PendingWrites;
-        if (services.GetService<ReputationFeature>() is { } rep)
-            pending += rep.PendingWrites;
-        if (services.GetService<InstanceFeature>() is { } inst)
-            pending += inst.PendingWrites;
-        if (services.GetService<CreatureRespawnFeature>() is { } respawns)
-            pending += respawns.PendingWrites;
-        if (services.GetService<ExploredZonesPersistence>() is { } explored)
-            pending += explored.Writes.Pending;
-        if (services.GetService<GmAuditFeature>() is { } audit)
+        foreach (PersistenceQueueSnapshot queue in QueueRegistry(services).Snapshot())
         {
-            pending += audit.Writes.Pending;
-            retained += audit.Writes.RetainedKeys.Count;
+            pending += queue.Pending;
+            retained += queue.RetainedKeys?.Count ?? 0;
         }
 
         return (pending, retained);
     }
+
+    // The singleton registry when the world daemon registered one, else the built-in queues resolved against the same services.
+    private static PersistenceProbeRegistry QueueRegistry(IServiceProvider services)
+        => services.GetService<PersistenceProbeRegistry>() ?? WorldPersistenceProbes.CreateRegistry(services);
 
     private static string FormatLeasesSummaryLine(IServiceProvider services, string fallbackNode, CharacterOwnershipToken? worldToken)
     {

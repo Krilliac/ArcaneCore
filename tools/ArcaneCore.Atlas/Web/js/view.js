@@ -1,6 +1,6 @@
 // Helpers over the view JSON (ViewState.ToJson in tools/ArcaneCore.Atlas/Core/ViewState.cs):
 //   {map, camera:{target:[x,y,z], distance, yaw, pitch, fov, mode}, layers:{id:{visible,color,opacity,mode,colorByAttribute}},
-//    compare, split, loadRadius, theme, hud, follow}
+//    compare, split, loadRadius, theme, hud, follow, textureRadius, textureBudgetMb}
 // Enum values are lower-case names: modes orbit|fly|top, layer modes wire|fill|both|xray, compare server|reference|split|diff,
 // themes graphite|vellum.
 
@@ -13,6 +13,9 @@ export const LAYER_MODES = ['wire', 'fill', 'both', 'xray'];
 export const COMPARE_MODES = ['server', 'reference', 'split', 'diff'];
 export const THEMES = ['graphite', 'vellum'];
 export const MAX_LOAD_RADIUS = 4;
+export const MAX_TEXTURE_RADIUS = 2;
+export const MIN_TEXTURE_BUDGET_MB = 64;
+export const MAX_TEXTURE_BUDGET_MB = 2048;
 
 /** ViewState.Default: Goldshire's Lion's Pride Inn (tests/ArcaneCore.Game.Tests/Collision/RealTerrainDataTests.cs:57). */
 export function defaultView() {
@@ -36,6 +39,8 @@ export function defaultView() {
         theme: 'graphite',
         hud: true,
         follow: null,
+        textureRadius: 1,
+        textureBudgetMb: 384,
     };
 }
 
@@ -85,6 +90,10 @@ export function normalizeView(json, base = defaultView()) {
     out.loadRadius = isFiniteNumber(json.loadRadius) ? clamp(Math.trunc(json.loadRadius), 0, MAX_LOAD_RADIUS) : out.loadRadius;
     out.theme = pick(json.theme, THEMES, out.theme);
     out.hud = typeof json.hud === 'boolean' ? json.hud : out.hud;
+    out.textureRadius = isFiniteNumber(json.textureRadius) ? clamp(Math.trunc(json.textureRadius), 0, MAX_TEXTURE_RADIUS) : out.textureRadius;
+    out.textureBudgetMb = isFiniteNumber(json.textureBudgetMb)
+        ? clamp(Math.trunc(json.textureBudgetMb), MIN_TEXTURE_BUDGET_MB, MAX_TEXTURE_BUDGET_MB)
+        : out.textureBudgetMb;
     out.follow = typeof json.follow === 'string' && json.follow !== '' ? json.follow : json.follow === null ? null : out.follow;
     return out;
 }

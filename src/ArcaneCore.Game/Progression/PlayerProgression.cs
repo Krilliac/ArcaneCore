@@ -14,7 +14,7 @@ namespace ArcaneCore.Game.Progression;
 /// aura modifiers already on the player compose with them. Characters held by a pending quest
 /// reward receive no experience (the settlement owns their state until it is published).
 /// </summary>
-public sealed class PlayerProgression : IQuestExperience
+public sealed partial class PlayerProgression : IQuestExperience
 {
     /// <summary>PLAYER_BYTES_2 byte 3 REST_STATE_RESTED / REST_STATE_NORMAL.</summary>
     public const byte RestStateRested = 0x01;
