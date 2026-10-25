@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -85,6 +86,69 @@ public sealed class LiftCommandTests
         string[] exact = await RunAsync(gm, $".debug lift speed 4 {id}");
         Assert.Contains(exact, l => l.Contains("speed x4;", StringComparison.Ordinal) && !l.Contains("clamped", StringComparison.Ordinal));
         Assert.Equal(["No transport game object with guid 999999 on this map."], await RunAsync(gm, ".debug lift 999999"));
+    }
+
+    [Fact]
+    public async Task EachChange_RecordsOneDebugWriteWithItsOldAndNewValue_AndAFreezeOfAFrozenLiftRecordsNothing()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        await using WorldTestClient gm = await world.ObserverAsync("LIFTGM", "Liftgm", TopCar + new Vector3(8f, 0f, 2f), AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        GameObjectMapSystem system = world.Objects()!;
+        GameObject car = await world.OnWorldAsync(() => system.GameObjects.Single(g => g.Spawn!.Guid == TopCarSpawn));
+        uint id = car.Guid.Counter;
+        DebugWriteLog log = world.Host.WorldServices.GetRequiredService<GmAuditFeature>().DebugWrites;
+        DebugWriteEntry[] Writes() => [.. log.Tail(100).Where(e => e.Command.Contains("debug lift", StringComparison.Ordinal))];
+        DebugWriteEntry Next(string verb, int expectedCount)
+        {
+            DebugWriteEntry[] all = Writes();
+            Assert.Equal(expectedCount, all.Length);
+            DebugWriteEntry entry = all[^1];
+            Assert.EndsWith("debug lift " + verb, entry.Command, StringComparison.Ordinal);
+            Assert.StartsWith($"Mesa Elevator (entry {car.Entry}, guid {id})", entry.Target, StringComparison.Ordinal);
+            Assert.Equal(DebugWriteScope.Live, entry.Scope);
+            return entry;
+        }
+
+        await RunAsync(gm, $".debug lift phase 12000 {id}");
+        DebugWriteEntry phase = Next("phase", 1);
+        Assert.Equal(("phase ms", "12000"), (phase.Field, phase.NewValue));
+        Assert.NotEmpty(phase.OldValue);
+
+        await RunAsync(gm, $".debug lift stop 2 {id}");
+        DebugWriteEntry stop = Next("stop", 2);
+        Assert.Equal(("phase ms", "12000", "15000"), (stop.Field, stop.OldValue, stop.NewValue));
+
+        await RunAsync(gm, $".debug lift freeze {id}");
+        DebugWriteEntry freeze = Next("freeze", 3);
+        Assert.Equal(("frozen", "false", "true"), (freeze.Field, freeze.OldValue, freeze.NewValue));
+
+        await RunAsync(gm, $".debug lift freeze {id}");
+        Assert.Equal(3, Writes().Length);
+
+        await RunAsync(gm, $".debug lift speed 2.5 {id}");
+        DebugWriteEntry speed = Next("speed", 4);
+        Assert.Equal(("speed scale", "1", "2.5"), (speed.Field, speed.OldValue, speed.NewValue));
+
+        await RunAsync(gm, $".debug lift resume {id}");
+        DebugWriteEntry resume = Next("resume", 5);
+        Assert.Equal(("frozen", "true", "false"), (resume.Field, resume.OldValue, resume.NewValue));
+
+        await RunAsync(gm, $".debug lift reset {id}");
+        DebugWriteEntry reset = Next("reset", 6);
+        Assert.Equal(("schedule", "default schedule"), (reset.Field, reset.NewValue));
+        Assert.Matches(@"^x2\.5 at \d+ ms$", reset.OldValue);
+
+        await RunAsync(gm, $".debug lift freeze {id}");
+        await RunAsync(gm, $".debug lift reset {id}");
+        DebugWriteEntry resetFrozen = Writes()[^1];
+        Assert.Matches(@"^x1 frozen at \d+ ms$", resetFrozen.OldValue);
+
+        // A refused or failed change records nothing.
+        int count = Writes().Length;
+        await RunAsync(gm, $".debug lift stop 9 {id}");
+        await RunAsync(gm, ".debug lift phase");
+        Assert.Equal(count, Writes().Length);
     }
 
     [Fact]

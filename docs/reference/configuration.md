@@ -1264,6 +1264,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:GmCommands:AllowDangerousDebug` | `bool` | `false` | - | ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps) behind `DangerousDebugGate`. Off by default; changing it needs a restart. On the live server (`ARCANECORE_LIVE_SERVER=1`) the commands are refused whatever this says. |
 | `World:GmCommands:AuditTailSize` | `int` | `200` | - | How many of the latest audit lines `.arcane gmlog` can show (ArcaneCore only; the lines are the ones `LogCommands` writes, kept in memory, lost on restart). 0 keeps none. |
 | `World:GmCommands:ExactNameFirst` | `bool` | `false` | - | A command word matching a command name exactly wins over a longer name that starts with it (the behaviour before the retail table work). Retail (false) takes the first table entry the word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order. |
 | `World:GmCommands:HideUnavailable` | `bool` | `false` | - | Treat a command above the invoker's level as if it did not exist ("There is no such command", the behaviour before the retail table work). Retail (false) resolves the command first and answers "This command is not available to you." (Chat.cpp:1884-1888). |
