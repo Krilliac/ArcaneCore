@@ -627,7 +627,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     internal bool HasOptionalThinkBudget(double maxElapsedMs = 15.0)
         => (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
-            && PlayerbotThinkProbe.Active is not { ElapsedMs: >= 15.0 }
+            && !(PlayerbotThinkProbe.Active is { } running && running.RunningMs >= maxElapsedMs)
             && (_thinkStartedAt == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(_thinkStartedAt).TotalMilliseconds < maxElapsedMs);
 
     private void UpdateCore(Player player, uint elapsedMs)

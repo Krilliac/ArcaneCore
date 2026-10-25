@@ -42,7 +42,7 @@ internal sealed class PlayerbotThinkProbe
         _time = time;
     }
 
-    private const int MaxPhases = 32;
+    private const int MaxPhases = 48;
     private readonly string[] _names = new string[MaxPhases];
     private readonly long[] _ticks = new long[MaxPhases];
     private int _phases;
@@ -51,6 +51,8 @@ internal sealed class PlayerbotThinkProbe
     private long _started;
     private long _elapsed;
     private PathSearchTotals _searchBefore;
+    private TimeSpan _gcPauseBefore;
+    private int _gc0Before, _gc1Before, _gc2Before;
 
     /// <summary>The probe of the think running on this thread, if any.</summary>
     internal static PlayerbotThinkProbe? Active => t_active;
@@ -159,6 +161,27 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>The think's time in milliseconds (after <see cref="End"/>).</summary>
     internal double ElapsedMs => _elapsed * 1000.0 / Stopwatch.Frequency;
 
+    /// <summary>
+    /// The process-wide garbage-collector pause time in milliseconds between <see cref="Begin"/> and <see cref="End"/>
+    /// (<see cref="GC.GetTotalPauseDuration"/>): time the world thread may have been suspended without the think doing anything.
+    /// </summary>
+    internal double GcPauseMs { get; private set; }
+
+    /// <summary>Gen 0, gen 1 and gen 2 collections between <see cref="Begin"/> and <see cref="End"/> (process-wide).</summary>
+    internal (int Gen0, int Gen1, int Gen2) GcCollections { get; private set; }
+
+    /// <summary>
+    /// The time in milliseconds the running think has taken so far (<see cref="ElapsedMs"/> is only set by <see cref="End"/>, so it reads 0
+    /// during the think: the budget checks that read it never fired).
+    /// </summary>
+    internal double RunningMs => (_time.GetTimestamp() - _started) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>The clock of the running think (its probe's, so a test's manual clock holds), else <see cref="Stopwatch.GetTimestamp"/>.</summary>
+    internal static long Timestamp() => t_active is { } probe ? probe._time.GetTimestamp() : Stopwatch.GetTimestamp();
+
+    /// <summary>Milliseconds since <paramref name="timestamp"/> (<see cref="Timestamp"/>) on the clock of the running think.</summary>
+    internal static double MsSince(long timestamp) => (Timestamp() - timestamp) * 1000.0 / Stopwatch.Frequency;
+
     /// <summary>Start a think on this thread.</summary>
     internal void Begin()
     {
@@ -181,6 +204,12 @@ internal sealed class PlayerbotThinkProbe
         Player = null;
         SlowAnomalyReported = false;
         _elapsed = 0;
+        GcPauseMs = 0;
+        GcCollections = default;
+        _gcPauseBefore = GC.GetTotalPauseDuration();
+        _gc0Before = GC.CollectionCount(0);
+        _gc1Before = GC.CollectionCount(1);
+        _gc2Before = GC.CollectionCount(2);
         _searchBefore = PathSearchCounters.Current;
         PathSearchCounters.BeginTileCapture();
         _started = _phaseStarted = _time.GetTimestamp();
@@ -193,6 +222,8 @@ internal sealed class PlayerbotThinkProbe
         long now = _time.GetTimestamp();
         Close(now);
         _elapsed = now - _started;
+        GcPauseMs = (GC.GetTotalPauseDuration() - _gcPauseBefore).TotalMilliseconds;
+        GcCollections = (GC.CollectionCount(0) - _gc0Before, GC.CollectionCount(1) - _gc1Before, GC.CollectionCount(2) - _gc2Before);
         Search = PathSearchCounters.Current - _searchBefore;
         SlowestTile = PathSearchCounters.SlowestTile;
         PathSearchCounters.EndTileCapture();
@@ -204,6 +235,27 @@ internal sealed class PlayerbotThinkProbe
     internal static void Phase(string name)
     {
         if (t_active is { } probe) probe.Mark(name);
+    }
+
+    /// <summary>
+    /// The running think is in phase <paramref name="name"/> (a constant string) until the returned token is disposed, which restores
+    /// the phase that was current when the scope began (nested scopes nest). Nothing off a think. A struct: <c>using</c> allocates nothing.
+    /// </summary>
+    internal static ScopeToken Scope(string name)
+    {
+        if (t_active is not { } probe) return default;
+        string previous = probe._phase;
+        probe.Mark(name);
+        return new ScopeToken(probe, previous);
+    }
+
+    /// <summary>The scope of <see cref="Scope"/>.</summary>
+    internal readonly struct ScopeToken(PlayerbotThinkProbe? probe, string? previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (probe is not null && previous is not null && ReferenceEquals(t_active, probe)) probe.Mark(previous);
+        }
     }
 
     /// <summary>The current phase of the running think (null off one).</summary>
@@ -438,6 +490,8 @@ internal sealed class PlayerbotThinkProbe
             any = true;
         }
 
+        if (GcPauseMs > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; gc={GcPauseMs:F1} ms ({GcCollections.Gen0}/{GcCollections.Gen1}/{GcCollections.Gen2})");
         text.Append(CultureInfo.InvariantCulture,
             $"; path {Queries} queries {Ms(QueryTicks):F1} ms, {Search.Searches} searches, {Search.Nodes} nodes, {Search.Expansions} expanded, {Search.Capped} at the node cap");
         if (Largest.Nodes > 0)
