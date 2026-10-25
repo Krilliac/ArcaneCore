@@ -39,7 +39,7 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     {
         string root = RepositoryRoot();
 
-        (IReadOnlyList<string> files, string mode) = ListFiles(root);
+        (IReadOnlyList<string> files, string mode) = ListFiles(root, r => GitList(r, null), InCi());
         output.WriteLine($"listing mode: {mode}; {files.Count} files");
 
         Assert.True(files.Count > 1000, $"only {files.Count} files listed: the guard is not looking at the repository");
@@ -53,6 +53,8 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         // In a git checkout the working tree also holds untracked and gitignored files (extracted client data on a developer box), which
         // are not part of the repository, so the walk runs over a real archive of HEAD (git archive, zip) instead of the live tree.
         // In a source archive (no .git) the tree itself is the archive and is walked directly.
+        // git archive honours export-ignore, so export-ignored paths are covered by the ls-files mode (NoTrackedFile_IsAClientAsset)
+        // but not by this walk.
         string root = RepositoryRoot();
         using var extracted = new TestDirectory();
         string walkRoot = root;
@@ -60,7 +62,7 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         {
             string zip = extracted.NewName(".zip");
             walkRoot = extracted.NewName(string.Empty);
-            RunGit(root, null, "archive", "--format=zip", "-o", zip, "HEAD");
+            RunGit(root, null, null, "archive", "--format=zip", "-o", zip, "HEAD");
             ZipFile.ExtractToDirectory(zip, walkRoot);
             File.Delete(zip);
         }
@@ -236,20 +238,86 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         Assert.Throws<InvalidOperationException>(() => CountBinary(directory.Path, ["gone/file.bin"]));
     }
 
-    [Fact]
+    /// <summary>A fact that is skipped, visibly, when git is not on PATH (a source archive without git).</summary>
+    private sealed class GitFactAttribute : FactAttribute
+    {
+        public GitFactAttribute()
+        {
+            if (!GitAvailable())
+            {
+                Skip = "git is not on PATH, so a throwaway repository cannot be created.";
+            }
+        }
+    }
+
+    private static bool GitAvailable()
+    {
+        try
+        {
+            var info = new ProcessStartInfo("git", ["--version"]) { RedirectStandardOutput = true, UseShellExecute = false };
+            using Process process = Process.Start(info)!;
+            process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Variables that override <c>git -C</c>; git exports them to hooks and linked worktrees, so they must never reach a test's git.</summary>
+    private static readonly string[] GitRedirectingVariables =
+    [
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+    ];
+
+    /// <summary>
+    /// A git process rooted at <paramref name="workDir"/> with every redirecting variable removed. <paramref name="pollution"/> simulates a
+    /// parent environment that carries such variables (set first, then scrubbed), so a test can prove the scrub; it never touches this process.
+    /// </summary>
+    private static ProcessStartInfo GitStartInfo(string workDir, IReadOnlyDictionary<string, string>? pollution, params string[] arguments)
+    {
+        var info = new ProcessStartInfo("git", ["-C", workDir, .. arguments])
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        if (pollution is not null)
+        {
+            foreach ((string key, string value) in pollution)
+            {
+                info.Environment[key] = value;
+            }
+        }
+
+        foreach (string variable in GitRedirectingVariables)
+        {
+            info.Environment.Remove(variable);
+        }
+
+        return info;
+    }
+
+    /// <summary>Commits (to the index) a client asset named 0xFF.blp, a name no .NET file API can create on Linux, and returns the listing.</summary>
+    private static List<string>? ListInvalidUtf8Repository(string directory, IReadOnlyDictionary<string, string>? pollution)
+    {
+        RunGit(directory, null, pollution, "init", "-q");
+        string blob = RunGit(directory, "payload"u8.ToArray(), pollution, "hash-object", "-w", "--stdin").Trim();
+
+        // ls-files reads the index, so no commit is made: nothing here can run a hook or need a signing key.
+        byte[] entry = [.. Encoding.ASCII.GetBytes("100644 " + blob + "\t"), 0xFF, .. ".blp"u8.ToArray(), 0];
+        RunGit(directory, entry, pollution, "update-index", "-z", "--add", "--index-info");
+        return GitList(directory, pollution);
+    }
+
+    [GitFact]
     public void TheGuard_CatchesATrackedClientAsset_WhoseNameIsNotValidUtf8()
     {
-        // A name like <0xFF>.blp cannot be created through .NET file APIs on Linux, so it is committed straight into a throwaway
-        // repository's index with raw bytes. The listing decodes it to U+FFFD.blp, which does not exist on disk.
+        // The name is written into a throwaway repository's index with raw bytes. The listing decodes it to U+FFFD.blp, which does not exist on disk.
         using var directory = new TestDirectory();
-        RunGit(directory.Path, null, "init", "-q");
-        string blob = RunGit(directory.Path, "payload"u8.ToArray(), "hash-object", "-w", "--stdin").Trim();
 
-        byte[] entry = [.. Encoding.ASCII.GetBytes("100644 " + blob + "\t"), 0xFF, .. ".blp"u8.ToArray(), 0];
-        RunGit(directory.Path, entry, "update-index", "-z", "--add", "--index-info");
-        RunGit(directory.Path, null, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x");
-
-        List<string>? listed = GitList(directory.Path);
+        List<string>? listed = ListInvalidUtf8Repository(directory.Path, null);
 
         Assert.NotNull(listed);
         Assert.Single(listed);
@@ -258,15 +326,56 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         Assert.Contains("extension", hits[0], StringComparison.Ordinal);
     }
 
-    private static string RunGit(string workDir, byte[]? stdin, params string[] arguments)
+    [GitFact]
+    public void TheTempRepositoryFlow_IgnoresGitEnvironmentVariables_ThatWouldRedirectIt()
     {
-        var info = new ProcessStartInfo("git", ["-C", workDir, .. arguments])
+        // Simulates a hook or linked-worktree parent: GIT_DIR and friends point at another repository. The flow must not touch it.
+        using var decoyDirectory = new TestDirectory();
+        using var directory = new TestDirectory();
+        RunGit(decoyDirectory.Path, null, null, "init", "-q");
+        string decoyGit = System.IO.Path.Combine(decoyDirectory.Path, ".git");
+        var pollution = new Dictionary<string, string>
         {
-            RedirectStandardInput = stdin is not null,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
+            ["GIT_DIR"] = decoyGit,
+            ["GIT_WORK_TREE"] = decoyDirectory.Path,
+            ["GIT_INDEX_FILE"] = System.IO.Path.Combine(decoyGit, "index"),
+            ["GIT_OBJECT_DIRECTORY"] = System.IO.Path.Combine(decoyGit, "objects"),
+            ["GIT_COMMON_DIR"] = decoyGit,
         };
+
+        List<string>? listed = ListInvalidUtf8Repository(directory.Path, pollution);
+
+        Assert.NotNull(listed);
+        Assert.Single(listed);
+        Assert.False(File.Exists(System.IO.Path.Combine(decoyGit, "index")), "the decoy repository's index was written");
+        string objects = System.IO.Path.Combine(decoyGit, "objects");
+        Assert.Empty(Directory.EnumerateFiles(objects, "*", SearchOption.AllDirectories));
+        Assert.Empty(RunGit(decoyDirectory.Path, null, null, "ls-files", "-z"));
+    }
+
+    [Fact]
+    public void TheListing_FailsInCi_WhenGitCannotListACheckout_AndWalksOtherwise()
+    {
+        using var directory = new TestDirectory();
+        Directory.CreateDirectory(System.IO.Path.Combine(directory.Path, ".git"));
+        directory.Write("a.txt", "x"u8.ToArray());
+
+        Assert.Throws<InvalidOperationException>(() => ListFiles(directory.Path, _ => null, inCi: true));
+
+        (IReadOnlyList<string> files, string mode) = ListFiles(directory.Path, _ => null, inCi: false);
+        Assert.Contains("git listing unavailable", mode, StringComparison.Ordinal);
+        Assert.Contains("a.txt", files);
+
+        (IReadOnlyList<string> listed, string listedMode) = ListFiles(directory.Path, _ => ["only.txt"], inCi: true);
+        Assert.Equal("git ls-files", listedMode);
+        Assert.Equal(["only.txt"], listed);
+    }
+
+    private static string RunGit(string workDir, byte[]? stdin, IReadOnlyDictionary<string, string>? pollution, params string[] arguments)
+    {
+        ProcessStartInfo info = GitStartInfo(workDir, pollution, arguments);
+        info.RedirectStandardInput = stdin is not null;
+        info.RedirectStandardError = true;
         using Process process = Process.Start(info)!;
         Task<string> error = process.StandardError.ReadToEndAsync();
         if (stdin is not null)
@@ -275,10 +384,10 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
             process.StandardInput.Close();
         }
 
-        string output = process.StandardOutput.ReadToEnd();
+        string result = process.StandardOutput.ReadToEnd();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, $"git {string.Join(' ', arguments)} failed: {error.Result}");
-        return output;
+        return result;
     }
 
     private static readonly string[] BinaryExtensions = [".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".7z", ".gz", ".dll", ".exe"];
@@ -333,7 +442,7 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
             if (!File.Exists(full))
             {
                 // Never skipped: an unreadable listed file is an unscanned file, and an unscanned file must fail the guard.
-                yield return $"{relative}: listed but not on disk, so it could not be scanned (non-UTF-8 name, skip-worktree/sparse entry, or staged deletion)";
+                yield return $"{relative}: listed but not on disk, so it could not be scanned (non-UTF-8 name, skip-worktree/sparse entry, or a file deleted from disk but still in the index)";
                 continue;
             }
 
@@ -361,26 +470,33 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     private static bool IsCheckout(string root) =>
         Directory.Exists(System.IO.Path.Combine(root, ".git")) || File.Exists(System.IO.Path.Combine(root, ".git"));
 
-    /// <summary>The files to scan and how they were listed. In CI a checkout must be listed by git: falling back to a walk is a failure.</summary>
-    private static (IReadOnlyList<string> Files, string Mode) ListFiles(string root)
+    /// <summary>
+    /// The files to scan and how they were listed. <paramref name="lister"/> and <paramref name="inCi"/> are parameters so the CI refusal
+    /// can be tested: in CI a checkout must be listed by git, and falling back to a walk is a failure.
+    /// </summary>
+    private static (IReadOnlyList<string> Files, string Mode) ListFiles(string root, Func<string, List<string>?> lister, bool inCi)
     {
         if (!IsCheckout(root))
         {
             return ([.. Walk(root)], "directory walk (not a git checkout)");
         }
 
-        List<string>? tracked = GitList(root);
+        List<string>? tracked = lister(root);
         if (tracked is not null)
         {
             return (tracked, "git ls-files");
         }
 
-        Assert.False(InCi(), "git ls-files is unavailable in CI: refusing to fall back to a directory walk that would also scan untracked files");
+        if (inCi)
+        {
+            throw new InvalidOperationException("git ls-files is unavailable in CI: refusing to fall back to a directory walk that would also scan untracked files");
+        }
+
         return ([.. Walk(root)], "directory walk (git listing unavailable)");
     }
 
     /// <summary>Tracked files via git, or null when this is not a checkout (a source archive) or git is unavailable.</summary>
-    private static List<string>? GitList(string root)
+    private static List<string>? GitList(string root, IReadOnlyDictionary<string, string>? pollution)
     {
         if (!IsCheckout(root))
         {
@@ -389,11 +505,7 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
 
         try
         {
-            var info = new ProcessStartInfo("git", ["-C", root, "ls-files", "-z"])
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-            };
+            ProcessStartInfo info = GitStartInfo(root, pollution, "ls-files", "-z");
             using Process process = Process.Start(info)!;
             using var raw = new MemoryStream();
             process.StandardOutput.BaseStream.CopyTo(raw); // raw bytes: names need not be UTF-8
@@ -417,7 +529,8 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     /// <summary>
     /// Whether a directory named <paramref name="name"/> inside <paramref name="parent"/> is build or VCS output that is not part of a
     /// source archive: bin/obj/TestResults at the root or beside a project file, node_modules at the root or beside package.json, and
-    /// the root .git. Anywhere else (tools/Bin, src/bin without a project) the directory is scanned.
+    /// the root .git. The bin/obj/TestResults names are matched case-sensitively because the SDK emits exactly those, which also keeps
+    /// tools/Bin scanned on a case-insensitive file system. Anywhere else (tools/Bin, src/bin without a project) the directory is scanned.
     /// </summary>
     private static bool IsBuildOutput(string parent, bool parentIsRoot, string name)
     {
@@ -439,6 +552,10 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         return false;
     }
 
+    /// <summary>
+    /// Walks a directory tree as a source archive. It skips root-level bin/obj/TestResults/node_modules even when tracked; that is
+    /// acceptable only because the ls-files mode (NoTrackedFile_IsAClientAsset) lists and scans tracked files there.
+    /// </summary>
     private static IEnumerable<string> Walk(string root) => WalkDirectory(root, string.Empty, isRoot: true);
 
     private static IEnumerable<string> WalkDirectory(string directory, string prefix, bool isRoot)
