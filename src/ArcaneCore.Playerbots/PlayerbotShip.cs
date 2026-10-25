@@ -1034,12 +1034,22 @@ internal static partial class PlayerbotShip
     /// </summary>
     internal static Vector3 ResolveDockTarget(Map map, Vector3 portPos, Vector3 toward)
     {
-        map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
-        if (map.Collision.MeshPoints is null || OnDryDockMesh(map, portPos))
-            return portPos;
+        // The probes below are the cost (navigation queries around the port); their answer depends on the port and the data only, so it is kept
+        // (the candidates, not the pick: the pick is the one nearest to where the bot comes from). Only a decided answer is kept: the port is itself
+        // on the dry mesh (no candidates), or the first ring around it with dry floor.
+        Dictionary<(uint Map, Vector3 Port), Vector3[]> known = DockFloors.GetValue(map.Collision.PathfinderForMap, static _ => []);
+        if (known.TryGetValue((map.MapId, portPos), out Vector3[]? kept)) return Nearest(kept, portPos, toward);
 
-        Vector3? best = null;
-        float bestDist = float.PositiveInfinity;
+        map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
+        if (map.Collision.MeshPoints is null)
+            return portPos;
+        if (OnDryDockMesh(map, portPos))
+        {
+            Remember(known, map.MapId, portPos, []);
+            return portPos;
+        }
+
+        List<Vector3> candidates = [];
         foreach (float radius in DockSearchRadiiYards)
         {
             for (int i = 0; i < StepOffDirections; i++)
@@ -1047,23 +1057,50 @@ internal static partial class PlayerbotShip
                 float angle = i * MathF.Tau / StepOffDirections;
                 float x = portPos.X + (MathF.Cos(angle) * radius);
                 float y = portPos.Y + (MathF.Sin(angle) * radius);
-                if (!TryResolveDockPoint(map, x, y, portPos, out Vector3 candidate))
-                    continue;
-                float dist = Flat(candidate, toward);
-                if (dist < bestDist)
-                {
-                    best = candidate;
-                    bestDist = dist;
-                }
+                if (TryResolveDockPoint(map, x, y, portPos, out Vector3 candidate))
+                    candidates.Add(candidate);
             }
 
-            if (best is { } found)
-                return found;
+            if (candidates.Count > 0)
+            {
+                Vector3[] found = [.. candidates];
+                Remember(known, map.MapId, portPos, found);
+                return Nearest(found, portPos, toward);
+            }
         }
 
         return portPos;
     }
 
+    /// <summary>The dock floors found around a port, per navigation data (the pathfinder of the map) and port: a port is resolved once, not at every think of every bot walking to it.</summary>
+    private static readonly ConditionalWeakTable<IPathfinder, Dictionary<(uint Map, Vector3 Port), Vector3[]>> DockFloors = [];
+
+    /// <summary>More ports than any world has; past it the table starts over rather than grow without bound.</summary>
+    private const int MaxKeptDockFloors = 256;
+
+    private static void Remember(Dictionary<(uint Map, Vector3 Port), Vector3[]> known, uint mapId, Vector3 portPos, Vector3[] candidates)
+    {
+        if (known.Count >= MaxKeptDockFloors) known.Clear();
+        known[(mapId, portPos)] = candidates;
+    }
+
+    private static Vector3 Nearest(Vector3[] candidates, Vector3 portPos, Vector3 toward)
+    {
+        if (candidates.Length == 0) return portPos;
+        Vector3 best = candidates[0];
+        float bestDist = Flat(best, toward);
+        for (int i = 1; i < candidates.Length; i++)
+        {
+            float dist = Flat(candidates[i], toward);
+            if (dist < bestDist)
+            {
+                best = candidates[i];
+                bestDist = dist;
+            }
+        }
+
+        return best;
+    }
     private static bool TryResolveDockPoint(Map map, float x, float y, Vector3 portPos, out Vector3 point)
     {
         float portZ = portPos.Z;

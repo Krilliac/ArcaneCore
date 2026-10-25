@@ -567,53 +567,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             OwnTeleports = teleports,
             Portals = portals,
             Ships = ships,
-            Walkable = WalkableFor(player),
+            Walkable = WalkableFor(player, ships),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
-        };
-    }
-
-    private static readonly PathOptions WalkingLocate = new()
-    {
-        Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true,
-    };
-
-    private static readonly PathOptions DryWalkingLocate = new()
-    {
-        IncludeFlags = NavTerrain.Ground, ExcludeFlags = NavTerrain.SteepSlopes | NavTerrain.Water, LoadTiles = true, NonBlockingTiles = true,
-    };
-
-    /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
-    private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
-    {
-        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
-        var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
-        (int Component, bool Decides) Locate(TravelPlace place)
-        {
-            if (components.TryGetValue(place, out (int, bool) known)) return known;
-            (int, bool) found = (-1, false);
-            if (place.Position.IsFinite() && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
-            {
-                int region = nav.RegionAt(graph, place.Position, DryWalkingLocate);
-                if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
-                {
-                    Vector3 resolved = PlayerbotShip.ResolveDockTarget(map, place.Position, new Vector3(player.X, player.Y, player.Z));
-                    if (resolved != place.Position)
-                        region = nav.RegionAt(graph, resolved, WalkingLocate);
-                }
-
-                if (region >= 0 && graph.ComponentPolygons(region) > PlayerbotNavigation.FragmentPolygons) found = (graph.ComponentOf(region), true);
-            }
-
-            components[place] = found;
-            return found;
-        }
-
-        return (a, b) =>
-        {
-            if (a.MapId != b.MapId) return false;
-            (int ca, bool da) = Locate(a);
-            (int cb, bool db) = Locate(b);
-            return !da || !db || ca == cb;
         };
     }
 

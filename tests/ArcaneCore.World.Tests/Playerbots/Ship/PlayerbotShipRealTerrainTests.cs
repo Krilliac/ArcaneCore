@@ -1,4 +1,6 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 using Xunit.Abstractions;
@@ -54,5 +56,45 @@ public sealed class PlayerbotShipRealTerrainTests : RealTerrainNavigationTestBas
                 + $"{Vector2.Distance(new(target.X, target.Y), new(GromGolPort.X, GromGolPort.Y)):F1}); PlanToward {outcome}; route end {(route is null ? "none" : route.Points[^1].ToString())}");
             Assert.NotEqual(PlanOutcome.Pending, outcome);
         }
+    }
+
+    // The top of Teldrassil (map 1) and the Auberdine port of boat 176310 (map 1, z 0 in the harbour water, 2 800 yards south-west across the sea).
+    private static readonly Vector3 TeldrassilTop = new(9053.6f, 1599.0f, 1335.4f);
+    private static readonly Vector3 AuberdinePort = new(6406.2f, 823.1f, 0f);
+
+    /// <summary>
+    /// The top of Teldrassil does not "walk" to Auberdine's port: the port's tile was never read, it placed nowhere and counted as joined to
+    /// every place of the map (the planner then took the Rut'theran boat and back). Placed with blocking reads, the port lies on the
+    /// mainland near Auberdine, a different component. The Grom'gol tower stairs still walk to the tower's node (the route is not lost).
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task TheTopOfTeldrassil_IsNotJoinedByFootToAuberdinesPort_AndTheGromGolStairsAreJoinedToTheirTower()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(TeldrassilTop, map: 1);
+        var nav = (ArcaneCore.Game.Maps.Collision.MMaps.NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
+        Task<ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?> build = nav.RegionGraphTask(1, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+        await build.WaitAsync(TimeSpan.FromMinutes(5));
+        var auberdine = new TravelPlace(1, AuberdinePort);
+        var tower = new TravelPlace(0, GromGolPort);
+        ShipRoute[] ships = [new(176310, TravelMeans.Boat, TravelAccess.Both, new TravelPlace(0, new Vector3(-3900f, -750f, 0f)), auberdine, 300f), new(175080, TravelMeans.Zeppelin, TravelAccess.Both, tower, new TravelPlace(0, new Vector3(1600f, 400f, 0f)), 300f)];
+        (bool top, int[] components) = await terrain.Host.OnWorldAsync(() =>
+        {
+            Func<TravelPlace, TravelPlace, bool> walkable = PlayerbotTravel.WalkableFor(terrain.Player, ships);
+            return (walkable(TravelPlace.Of(terrain.Player), auberdine),
+                PlayerbotTravel.PortComponents(nav, build.Result!, auberdine));
+        });
+        output.WriteLine($"top of Teldrassil walks to Auberdine's port: {top}; the port's components: [{string.Join(", ", components)}]");
+        Assert.False(top);
+        Assert.NotEmpty(components);
+
+        await terrain.PlaceAsync(TowerStairs);
+        var nav0 = (ArcaneCore.Game.Maps.Collision.MMaps.NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
+        await nav0.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!.WaitAsync(TimeSpan.FromMinutes(5));
+        (bool stairs, int[] towerComponents) = await terrain.Host.OnWorldAsync(() =>
+            (PlayerbotTravel.WalkableFor(terrain.Player, ships)(TravelPlace.Of(terrain.Player), tower),
+                PlayerbotTravel.PortComponents(nav0, nav0.RegionGraph(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!, tower)));
+        output.WriteLine($"Grom'gol stairs walk to the tower's node: {stairs}; the node's components: [{string.Join(", ", towerComponents)}]");
+        Assert.True(stairs);
     }
 }
