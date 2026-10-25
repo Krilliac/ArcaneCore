@@ -470,7 +470,11 @@ public sealed class PlayerbotRunClearWorldTests
         // The exit is a few yards away and the trash hits for 2-3 every 2 s: both survivors are out, alive and out of combat, long before they
         // could die (a survivor chased east by the leash retreat is still inside, in combat, at this point).
         Assert.True(await world.RunUntilPacedAsync(() => survivors.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat), 30_000), await world.TraceAsync());
-        Assert.True(await world.RunUntilPacedAsync(() => run.Step == PlayerbotRunStep.Retry, 180_000, TimeSpan.FromSeconds(240)), await world.TraceAsync());
+        // Retry is a transient step (it lasts through the regroup's gathering, about 1.3 s of game time here, then Enter and Clear): when the survivors take a few seconds to get out, the run has
+        // already passed through it by the time this wait starts, so wait for the run to leave Wiped (Retry is the only way out of it) and require it
+        // to have done so on the single wipe rather than by giving up.
+        Assert.True(await world.RunUntilPacedAsync(() => run.Step != PlayerbotRunStep.Wiped, 180_000, TimeSpan.FromSeconds(240)), await world.TraceAsync());
+        Assert.True(await world.OnWorldAsync(() => run is { Wipes: 1, Step: not PlayerbotRunStep.GiveUp }), await world.TraceAsync());
     }
 
     /// <summary>

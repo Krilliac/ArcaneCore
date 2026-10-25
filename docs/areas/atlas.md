@@ -6,8 +6,10 @@ export, and screenshot works identically from the browser UI, the command line (
 Model Context Protocol server (`mcp`).
 
 Code: `tools/ArcaneCore.Atlas`. Tests: `tests/ArcaneCore.Atlas.Tests`. Live world-daemon feed:
-[map-feed](map-feed.md) (`src/ArcaneCore.World/Ops/MapFeed`). Browser-side reader for a local game folder:
-[atlas-client-files](atlas-client-files.md).
+[map-feed](map-feed.md) (`src/ArcaneCore.World/Ops/MapFeed`). Real client textures and models (BLP/M2/display tables, ATG1 v2, ATX1):
+[atlas-models](atlas-models.md); the lanes that build on it: [terrain textures](atlas-terrain-textures.md),
+[WMO and M2 materials](atlas-model-materials.md), [live models and characters](atlas-live-models.md).
+Browser-side reader for a local game folder: [atlas-client-files](atlas-client-files.md).
 
 ## Delivered
 
@@ -34,7 +36,7 @@ The per-request ASP.NET Core lines (`Microsoft.AspNetCore`: "Request starting" /
 ### 2. Views, compare modes, and layer catalog (`LayerCatalog`)
 
 Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`, `Split`, `Diff`), five layer data views
-(`LayerView`: `Server`, `Client`, `DotRecast`, `Diff`, `Live`), and 32 layers across eight panel groups (`LayerGroup`:
+(`LayerView`: `Server`, `Client`, `DotRecast`, `Diff`, `Live`), and 35 layers across eight panel groups (`LayerGroup`:
 `World`, `Terrain`, `Liquid`, `Collision`, `Navmesh`, `Reference`, `Diff`, `Live`):
 
 | Layer ID | Group | View | Title & Description |
@@ -58,6 +60,9 @@ Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`,
 | `ref.wmo` | `Reference` | `Client` | **Client WMOs**: every WMO group triangle from the client, split into collidable (`collide`) and render-only (`render`) faces. |
 | `ref.m2.collision` | `Reference` | `Client` | **Client M2 collision**: M2 bounding (collision) triangles from the client. |
 | `ref.m2.render` | `Reference` | `Client` | **Client M2 meshes**: M2 render meshes from the client, for seeing what has no collision. |
+| `ref.terrain.tex` | `Reference` | `Client` | **Client terrain (textured)**: reserved for lane A2 (terrain textures); listed with `hasSource: false` until then. |
+| `ref.wmo.tex` | `Reference` | `Client` | **Client WMOs (textured)**: reserved for lane A3 (WMO materials); listed with `hasSource: false` until then. |
+| `ref.m2.tex` | `Reference` | `Client` | **Client M2 models (textured)**: reserved for lane A3 (static M2 doodads); listed with `hasSource: false` until then. |
 | `ref.nav.poly` | `Reference` | `DotRecast` | **DotRecast polygons**: the same navmesh tiles read by `DotRecast.Detour`. |
 | `ref.nav.links` | `Reference` | `DotRecast` | **DotRecast links**: Detour links between polygons, including off-mesh connections the server skips. |
 | `diff.terrain` | `Diff` | `Diff` | **Terrain difference**: server height minus client height at every sample; holes that disagree (`only-ref`, `only-server`, `expected`). |
@@ -72,13 +77,13 @@ Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`,
 | `live.trails` | `Live` | `Live` | **Trails**: recent entity positions, fading with age (untiled). |
 | `live.grids` | `Live` | `Live` | **Loaded grids**: grids the world daemon has loaded on this map (untiled). |
 
-### 3. Command catalog (58 commands)
+### 3. Command catalog (63 commands)
 
 Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":...,"data":{...}}` or `{"command":"...","ok":false,"elapsedMs":...,"error":{"code":"...","message":"..."}}`.
 
 #### Host, view, camera, picking, capture, and bookmarks (`Host/`)
 - `status`, `help` (`command?`), `layers.list`, `maps.list`, `tiles.status` (`map`, `x?`, `y?`, `layer?`, `radius?`), `cache.clear` (`layer?`).
-- `view.get`, `view.set` (`map?`, `camera?`, `layers?`, `compare?`, `split?`, `loadRadius?`, `theme?`, `hud?`, `follow?`), `layer.set` (`id`, `visible?`, `color?`, `opacity?`, `mode?`, `colorByAttribute?`).
+- `view.get`, `view.set` (`map?`, `camera?`, `layers?`, `compare?`, `split?`, `loadRadius?`, `theme?`, `hud?`, `follow?`, `textureRadius?`, `textureBudgetMb?`), `layer.set` (`id`, `visible?`, `color?`, `opacity?`, `mode?`, `colorByAttribute?`).
 - `camera.goto` (`map?`, `at?`, `x?`, `y?`, `z?`, `yaw?`, `pitch?`, `distance?`, `mode?`), `camera.frame` (`tile?`, `bounds?`, `guid?`, `map?`).
 - `bookmarks.list`, `bookmark.go` (`name`), `bookmark.add` (`name`, `note?`), `bookmark.remove` (`name`).
 - `query.pick` (`map?`, `ray` or `at`, `layers?`, `maxDistance?`): exact ray/triangle and point/line picking across visible layers (`ChunkPicker`).
@@ -98,6 +103,11 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 - `ref.adt.info` (`map`, `x`, `y`), `ref.query.height` (`map`, `x`, `y`): client `.wdt` (`MPHD`, `MAIN`, `MODF`) and `.adt` (`MHDR`, `MCNK`, `MCVT`, `MCLQ`, `MDDF`, `MODF`) parsers and exact client triangle height/hole/liquid interpolation (`ClientTerrainService`).
 - `ref.model.info` (`path`), `ref.query.los` (`map`, `a`, `b`, `includeSkipped?`), `ref.query.floorstack` (`map`, `x`, `y`, `zMin?`, `zMax?`, `includeSkipped?`): client WMO v17 root/group (`WmoRootReader`, `WmoGroupReader`) and M2 v256 (`M2Reader`) readers, `MODF`/`MDDF`/`MODD` placement transforms (`ClientTransforms`), raycast LoS, and vertical column floor stack (`ReferenceModelQueries`).
 - `ref.nav.tile` (`map`, `x`, `y`), `ref.query.path` (`map`, `a`, `b`, `includeFlags?`, `excludeFlags?`, `extents?`), `ref.query.nearest` (`map`, `at`, `includeFlags?`, `excludeFlags?`, `extents?`): independent `DotRecast.Detour` reader (`MmapFileReader`, `ReferenceNavMeshService`) over `.mmap`/`.mmtile` files.
+
+#### Client textures, model packages and display tables (`Textures/`, `Reference/Client/Models/Packages/`, `Reference/Dbc/`)
+- `texture.get` (`key` or `path`, `fmt?`, `maxSize?`, `mip?`, `out?`), `texture.stats`: BLP2 decode and the texture cache; see [atlas-models](atlas-models.md).
+- `model.info` (`path` or `kind` + `id`), `model.package` (`key` or `path`, `view?`, `out?`): M2 model package summary and its ATG1 v2 bytes.
+- `display.resolve` (`kind`, `id`, `gender?`): the DBC display chain of a creature (with scale and humanoid extra), game object, item or race (with `gender`) down to model and texture files.
 
 #### Server vs client diff (`Diff/`)
 - `diff.terrain` (`map`, `x`, `y`, `radius?`): compares every `129x129` V9 and `128x128` V8 height sample and `16x16` chunk hole mask between `.map` and client `.adt` (`TerrainDiff`), classifying documented extractor rules (`flat-no-height-tile`, `clamped-at-minus-500`) under `expectedCount` (`ColorKeys.Expected`) and any other discrepancy above `1e-3` yd or hole mismatch under `unexplainedCount` (`ColorKeys.OnlyServer` / `ColorKeys.OnlyReference`).
@@ -158,6 +168,10 @@ Browser and headless consumers read tile geometry chunks in the compact `ATG1` l
 - 48-byte header (`GeometryWire.HeaderBytes`): `u32 magic` `0x31475441` (`"ATG1"`), `u16 version` `1`, `u16 flags` (`bit0` triangles, `bit1` lines, `bit2` points), `f64 originX`, `f64 originY`, `f64 originZ` (subtracted before `float32` vertex encoding to preserve sub-millimeter precision across the 34,133 yd map), `u32 vertexCount`, `u32 triangleCount`, `u32 lineCount`, `u32 pointCount`.
 - 4-byte-aligned payload arrays: `f32[3 * vertexCount] positions`, `u32[3 * triangleCount] triangles`, `u32[triangleCount] triangleAttributes`, `u32[2 * lineCount] lines`, `u32[lineCount] lineAttributes`, `u32[pointCount] points`, `u32[pointCount] pointAttributes`, followed by `u32 jsonBytes` and `jsonBytes` of UTF-8 JSON metadata (`{"layer","tile":[map,x,y],"part","attributes":{"id":{...}},"stats":{...}}`).
 
+Chunks that carry normals, texture coordinates, vertex colours, skinning data or material batches are written as `ATG1` version 2
+(a 64-byte header with a stream mask and a batch count; chunks without any of these stay byte-identical version 1). The texture
+wire (`ATX1`) and the binary route `GET /api/bin/{name}` that serves both are described in [atlas-models](atlas-models.md).
+
 ### 6. Security and loopback posture
 
 - `serve` binds strictly to `127.0.0.1` (`AtlasServer`) and validates the `Host` and `Origin` headers against `127.0.0.1:<port>` / `localhost:<port>`.
@@ -189,5 +203,5 @@ Browser and headless consumers read tile geometry chunks in the compact `ATG1` l
 
 ## Limits
 
-- Textured WMO/M2 rendering is not implemented: Atlas renders untextured attribute-colored collision, bounding, and render geometry with surface-normal shading and wireframe overlays.
+- Textured terrain, WMO and M2 layers are not implemented yet (lanes A2 and A3 of [atlas-models](atlas-models.md)): the shipped layers render untextured attribute-colored collision, bounding, and render geometry with surface-normal shading and wireframe overlays. The texture, material and model-package foundation is in place.
 - `live.connect` discovery of running daemons requires Windows when `pid` is omitted because the world daemon's map feed uses Windows named pipes (`\\.\pipe\arcanecore-mapfeed-{pid}` with `ControlPipeSecurity` and `PIPE_REJECT_REMOTE_CLIENTS`). All offline server, client, diff, render, export, and MCP commands are cross-platform.
