@@ -34,6 +34,22 @@ public sealed class FrameParserTests
         Assert.Equal(expectedClass, e.Class);
     }
 
+    [Theory]
+    [InlineData("\"r\":4,\"cl\":11", (byte)4, (byte)11)]
+    [InlineData("\"r\":\"4\",\"cl\":\"11\"", (byte)0, (byte)0)]
+    [InlineData("\"r\":4.5,\"cl\":11.5", (byte)0, (byte)0)]
+    [InlineData("\"r\":null,\"cl\":true", (byte)0, (byte)0)]
+    [InlineData("\"r\":256,\"cl\":-1", (byte)0, (byte)0)]
+    public void APlayerEntityParsedFromJsonText_ReadsRaceAndClass_AndAWrongTypeIsUnknown(string fields, byte expectedRace, byte expectedClass)
+    {
+        JsonObject entity = Raw("{\"g\":\"0x1A2B\",\"k\":\"player\",\"n\":\"Alice\",\"x\":1,\"y\":2,\"z\":3," + fields + "}");
+
+        LiveEntity e = Assert.Single(Parse(Wire.Frame(1, 0, 9, entity)).Frame.Entities);
+
+        Assert.Equal(expectedRace, e.Race);
+        Assert.Equal(expectedClass, e.Class);
+    }
+
     [Fact]
     public void AnEntityWithoutRaceAndClass_ReadsThemAsUnknown()
     {

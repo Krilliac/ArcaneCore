@@ -141,8 +141,8 @@ public sealed record LiveRoute(IReadOnlyList<WorldPoint> Points, int Next, IRead
 /// <param name="Home">The creature's home point.</param>
 /// <param name="Spline">The movement spline in progress.</param>
 /// <param name="Route">The bot route in progress.</param>
-/// <param name="Race">The player's race id (<c>r</c>, feed rev 3); 0 when the server did not send one. Players and bots only.</param>
-/// <param name="Class">The player's class id (<c>cl</c>, feed rev 3); 0 when the server did not send one. Players and bots only.</param>
+/// <param name="Race">The player's race id (<c>r</c>, an optional feed field; the feed revision is unchanged); 0 when the server did not send one. Players and bots only.</param>
+/// <param name="Class">The player's class id (<c>cl</c>, an optional feed field; the feed revision is unchanged); 0 when the server did not send one. Players and bots only.</param>
 public sealed record LiveEntity(
     ulong Id,
     LiveKind Kind,

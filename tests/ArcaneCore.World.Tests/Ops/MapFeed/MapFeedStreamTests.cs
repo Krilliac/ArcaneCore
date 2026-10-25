@@ -135,8 +135,18 @@ public sealed class MapFeedStreamTests
         Assert.True(player.TryGetProperty("hp", out _));
         Assert.False(player.TryGetProperty("e", out _), "a player has no entry");
         Assert.False(player.TryGetProperty("mt", out _), "only creatures have a motion");
+        (byte race, byte playerClass) = await world.Host.OnWorldAsync(() =>
+        {
+            Player real = world.Host.World.FindMap(0, 0)!.Players.Single();
+            return ((byte)real.Race, (byte)real.Class);
+        });
+        Assert.NotEqual(0, race);
+        Assert.NotEqual(0, playerClass);
+        Assert.Equal(race, player.GetProperty("r").GetByte());
+        Assert.Equal(playerClass, player.GetProperty("cl").GetByte());
 
         JsonElement wolf = frame.Entity(FeedWorld.WolfGuid);
+        Assert.False(wolf.TryGetProperty("r", out _), "a creature carries no race");
         Assert.Equal("creature", wolf.GetProperty("k").GetString());
         Assert.Equal(FeedWorld.WolfEntry, wolf.GetProperty("e").GetUInt32());
         Assert.Equal("Young Wolf", wolf.GetProperty("n").GetString());
