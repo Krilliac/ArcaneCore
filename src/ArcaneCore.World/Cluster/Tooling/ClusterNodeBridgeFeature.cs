@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
-using ArcaneCore.Data.ClientData;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
@@ -9,9 +8,9 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Features;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Cluster.Tooling;
 
@@ -29,8 +28,9 @@ public sealed record ConnectedClusterNodeStatus(
     DateTimeOffset? ConnectedAtUtc);
 
 /// <summary>
-/// World feature that connects the running <c>ArcaneCore.World</c> server to the local cluster node processes
-/// (<c>worker:EK</c> on 19081, <c>worker:Kalimdor</c> on 19082, <c>worker:instances</c> on 19083, <c>gateway</c> on 19084,
+/// World feature that, only when <c>Cluster:NodeBridge:Enabled</c> is true (off by default; with it off the feature does nothing),
+/// connects the running <c>ArcaneCore.World</c> server to the cluster node processes (by default the local
+/// <c>worker:EK</c> on 19081, <c>worker:Kalimdor</c> on 19082, <c>worker:instances</c> on 19083, <c>gateway</c> on 19084,
 /// <c>social</c> on 19085, <c>coordinator</c> on 19086, <c>supervisor</c> on 19087), logs node connection events and
 /// periodic topology heartbeats in the WorldServer console, and synchronizes live worker placement in
 /// <see cref="Placement"/>.
@@ -100,6 +100,12 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
 
     public bool IsActive => _monitorTask is not null;
 
+    /// <summary>True once <see cref="Attach"/> found <c>Cluster:NodeBridge:Enabled</c> on; false means the bridge is switched off and does nothing.</summary>
+    public bool IsEnabled { get; private set; }
+
+    /// <summary>How long the monitor waits for WorldHost to finish startup before its first connect pass (a test seam; set before <see cref="Attach"/>).</summary>
+    internal TimeSpan StartupDelay { get; init; } = TimeSpan.FromSeconds(2);
+
     public ClusterMapPlacementTable Placement { get; } = new();
 
     public IReadOnlyList<ConnectedClusterNodeStatus> SnapshotNodes()
@@ -131,20 +137,18 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
 
-        IConfiguration? config = services.GetService<IConfiguration>();
-        string? explicitSpec = Environment.GetEnvironmentVariable("ARCANECORE_CLUSTER_ENDPOINTS");
-
-        // Activate automatically in the production World daemon (where ClientDataReport is registered and World:Port != 0),
-        // or when ARCANECORE_CLUSTER_ENDPOINTS is explicitly set. Unit test fixtures (WorldTestHost / WiringAuditTests) stay passive.
-        bool isProductionDaemon = services.GetService<ClientDataReport>() is not null
-            && !string.Equals(config?["World:Port"], "0", StringComparison.Ordinal);
-
-        if (!isProductionDaemon && string.IsNullOrWhiteSpace(explicitSpec))
+        // Cluster:NodeBridge:Enabled (off by default, read once at start): disabled means no sockets, no log lines, no task, no placement sync.
+        ClusterNodeBridgeOptions options = services.GetService<IOptions<ClusterNodeBridgeOptions>>()?.Value ?? new ClusterNodeBridgeOptions();
+        if (!options.Enabled)
         {
             return;
         }
 
-        string spec = string.IsNullOrWhiteSpace(explicitSpec) ? DefaultEndpointsSpec : explicitSpec;
+        IsEnabled = true;
+        string? explicitSpec = Environment.GetEnvironmentVariable("ARCANECORE_CLUSTER_ENDPOINTS");
+        string spec = !string.IsNullOrWhiteSpace(explicitSpec) ? explicitSpec
+            : string.IsNullOrWhiteSpace(options.Endpoints) ? DefaultEndpointsSpec
+            : options.Endpoints;
         ParseSpec(spec);
         if (_nodes.Count == 0)
         {
@@ -271,7 +275,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         // Wait briefly for WorldHost to finish initial startup before logging node connections.
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            await Task.Delay(StartupDelay, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

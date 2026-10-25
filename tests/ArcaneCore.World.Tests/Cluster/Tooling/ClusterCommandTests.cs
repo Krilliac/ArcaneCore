@@ -84,7 +84,7 @@ public sealed class ClusterCommandTests
     }
 
     /// <summary>The lines of <c>.cluster status</c> (and of a bare <c>.cluster</c>) for one player on map 0 with every lease held.</summary>
-    private const int StatusLines = 5;
+    private const int StatusLines = 6;
 
     private static readonly System.Text.RegularExpressions.Regex ActiveMaps = new(@"^Active maps matching filter: (\d+) loaded,", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
@@ -239,7 +239,8 @@ public sealed class ClusterCommandTests
         await using WorldTestClient gm = await Staff(host, AccountSecurity.GameMaster, "GMA", "Gmaaa");
 
         string[] statusLines = await LinesAsync(gm, ".cluster status", StatusLines);
-        Assert.Equal(5, statusLines.Length);
+        Assert.Equal(6, statusLines.Length);
+        Assert.Equal(ClusterCommands.BridgeDisabledLine, statusLines[5]);
         Assert.Contains("Cluster node: world-node-alpha | role=Combined", statusLines[0], StringComparison.Ordinal);
         Assert.Contains("Ownership fence: enabled | worldToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", statusLines[1], StringComparison.Ordinal);
         Assert.Contains("You / target: Gmaaa", statusLines[2], StringComparison.Ordinal);
@@ -273,7 +274,8 @@ public sealed class ClusterCommandTests
         Assert.DoesNotContain(filteredRoutes, l => l.Contains("route static map 1", StringComparison.Ordinal));
         Assert.Contains(filteredRoutes, l => l.Contains("route static map 0", StringComparison.Ordinal));
 
-        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 5);
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 6);
+        Assert.Contains(ClusterCommands.BridgeDisabledLine, nodesLines);
         Assert.Contains(nodesLines, l => l.StartsWith("Local host: node=world-node-alpha role=Combined state=Active", StringComparison.Ordinal));
         Assert.Contains("Registered placement workers: 3", nodesLines);
         Assert.Contains(nodesLines, l => l.StartsWith("worker worker:EK: ready=True draining=False players=478/1200", StringComparison.Ordinal));

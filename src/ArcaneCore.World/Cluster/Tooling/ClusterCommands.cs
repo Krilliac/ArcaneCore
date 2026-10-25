@@ -155,6 +155,9 @@ public sealed class ClusterCommands : ICommandGroup
         return false;
     }
 
+    /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say instead of a node list while the node bridge is switched off.</summary>
+    internal const string BridgeDisabledLine = "Cluster bridge: disabled (Cluster:NodeBridge:Enabled = false); no cluster nodes are monitored";
+
     internal static bool Status(CommandContext context, string args)
     {
         if (args.Trim().Length != 0)
@@ -224,14 +227,20 @@ public sealed class ClusterCommands : ICommandGroup
 
         context.Reply(FormatLeasesSummaryLine(services, nodeId, worldToken));
 
-        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge
-            && bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
+        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge)
         {
-            int connected = bridgeNodes.Count(n => n.IsConnected);
-            string nodeSummary = string.Join(", ", bridgeNodes.Select(n => $"{n.NodeId}@{n.EndPoint.Port}:{(n.IsConnected ? "UP" : "DOWN")}"));
-            context.Reply(string.Create(
-                c,
-                $"Cluster bridge: {connected}/{bridgeNodes.Count} node(s) connected to WorldServer [{nodeSummary}]"));
+            if (bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
+            {
+                int connected = bridgeNodes.Count(n => n.IsConnected);
+                string nodeSummary = string.Join(", ", bridgeNodes.Select(n => $"{n.NodeId}@{n.EndPoint.Port}:{(n.IsConnected ? "UP" : "DOWN")}"));
+                context.Reply(string.Create(
+                    c,
+                    $"Cluster bridge: {connected}/{bridgeNodes.Count} node(s) connected to WorldServer [{nodeSummary}]"));
+            }
+            else if (!bridge.IsEnabled)
+            {
+                context.Reply(BridgeDisabledLine);
+            }
         }
 
         return true;
@@ -406,16 +415,22 @@ public sealed class ClusterCommands : ICommandGroup
             c,
             $"Local host: node={localNodeId} role={localRole} state=Active ready=true draining=false players={onlineCount} ({onlineCount - botNames.Count}h/{botNames.Count}b) maps={mapCount}"));
 
-        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge
-            && bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
+        if (services.GetService<ClusterNodeBridgeFeature>() is { } bridge)
         {
-            int connected = bridgeNodes.Count(n => n.IsConnected);
-            context.Reply(string.Create(c, $"Connected cluster nodes: {connected}/{bridgeNodes.Count}"));
-            foreach (ConnectedClusterNodeStatus n in bridgeNodes)
+            if (bridge.SnapshotNodes() is { Count: > 0 } bridgeNodes)
             {
-                context.Reply(string.Create(
-                    c,
-                    $"node {n.NodeId}: role={n.RoleLabel} endpoint={n.EndPoint} state={(n.IsConnected ? "CONNECTED" : "DISCONNECTED")} maps=[{n.MapsSummary}] epoch={n.WorkerOwnerEpoch} heartbeats={n.RpcHeartbeats}"));
+                int connected = bridgeNodes.Count(n => n.IsConnected);
+                context.Reply(string.Create(c, $"Connected cluster nodes: {connected}/{bridgeNodes.Count}"));
+                foreach (ConnectedClusterNodeStatus n in bridgeNodes)
+                {
+                    context.Reply(string.Create(
+                        c,
+                        $"node {n.NodeId}: role={n.RoleLabel} endpoint={n.EndPoint} state={(n.IsConnected ? "CONNECTED" : "DISCONNECTED")} maps=[{n.MapsSummary}] epoch={n.WorkerOwnerEpoch} heartbeats={n.RpcHeartbeats}"));
+                }
+            }
+            else if (!bridge.IsEnabled)
+            {
+                context.Reply(BridgeDisabledLine);
             }
         }
 
