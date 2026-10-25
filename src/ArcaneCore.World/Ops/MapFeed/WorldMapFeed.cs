@@ -5,7 +5,9 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Bots;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Ops.Control;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -129,6 +131,34 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>Whether this is the live server (null: read <see cref="WorldPacketToolsOptions.LiveServerVariable"/>); tests set it instead of the process environment.</summary>
     internal bool? LiveServer { get; init; }
 
+    /// <summary>The ring of this world's anomalies (docs/areas/atlas-insight.md): attached while the feed listens, null before and after.</summary>
+    internal MapFeedAnomalyRing? AnomalyRing { get; private set; }
+
+    /// <summary>The spell system, whose aura holders an <c>inspect</c> lists (null when the spell feature is not attached).</summary>
+    internal SpellSystem? Spells => _services.GetService<SpellFeature>()?.System;
+
+    /// <summary>The playerbot pack's route seam (null without managed bots or without the pack).</summary>
+    internal IBotRouteSource? RouteSource => _services.GetService<ManagedBotRegistry>()?.RouteSource;
+
+    /// <summary>Whether <paramref name="guid"/> is a managed bot's player (world thread).</summary>
+    internal bool IsBot(ulong guid)
+    {
+        if (_services.GetService<ManagedBotRegistry>() is not { Count: > 0 } registry)
+        {
+            return false;
+        }
+
+        foreach (ManagedBot bot in registry.Bots)
+        {
+            if (bot.Session.Player is { } player && player.Guid.Value == guid)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
 
@@ -205,10 +235,17 @@ public sealed class WorldMapFeed : IHostedService
             return Task.CompletedTask;
         }
 
+        // The ring exists before the pipe does, so a tool that connects at once never finds the anomalies query unanswerable.
+        AnomalyRing = new MapFeedAnomalyRing(AnomalyLedger.Shared, _world.Identity, _options.AnomaliesUnowned);
         Listen(name);
         if (PipeName is not null)
         {
             EnableTools();
+        }
+        else
+        {
+            AnomalyRing.Dispose();
+            AnomalyRing = null;
         }
 
         return Task.CompletedTask;
@@ -664,6 +701,8 @@ public sealed class WorldMapFeed : IHostedService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
+        AnomalyRing?.Dispose();
+        AnomalyRing = null;
         lock (_gate)
         {
             Volatile.Write(ref _subscriptions, []);
