@@ -3,6 +3,7 @@
 import { adoptToken, forgetToken, rememberToken } from './api.js';
 import { createApp } from './app.js';
 import { installHotkeys, showShortcuts } from './hotkeys.js';
+import { installDevUi } from './ui/devui.js';
 import { Inspector } from './ui/inspector.js';
 import { LayersRail } from './ui/layers.js';
 import { LivePanel } from './ui/livepanel.js';
@@ -151,6 +152,7 @@ function start(token) {
     viewport.init();
     const removeHotkeys = installHotkeys({ app, viewport, topbar, toggleRail });
     app.captureHandler = (message) => viewport.handleCaptureRequest(message);
+    installDevUi({ app, viewport });
 
     const applyTheme = () => {
         document.documentElement.dataset.theme = app.view.theme === 'vellum' ? 'vellum' : 'graphite';
