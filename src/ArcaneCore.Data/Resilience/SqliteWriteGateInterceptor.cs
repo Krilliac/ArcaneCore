@@ -423,9 +423,9 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         GateStats stats = gate.TakeStats();
         if (stats.Acquired == 0 && stats.Timeouts == 0 && stats.Forced == 0) return;
         _logger.LogInformation(
-            "SQLite write gate {File}: {Writes} writes in the last {IntervalS} s, {Contended} queued (wait mean {WaitMeanMs:0.0} ms, max {WaitMaxMs:0} ms), longest hold {HoldMaxMs:0} ms by {HoldOwner}, {Timeouts} timed out, {Forced} stuck holds released; {Waiting} waiting now (lifetime {Total} writes, {TotalTimeouts} timeouts, {TotalDead} ended unseen)",
+            "SQLite write gate {File}: {Writes} writes in the last {IntervalS} s, {Contended} queued (wait mean {WaitMeanMs:0.0} ms, max {WaitMaxMs:0} ms), longest hold {HoldMaxMs:0} ms by {HoldOwner}, {Timeouts} timed out, {Forced} stuck holds released; {Waiting} waiting now (lifetime {Total} writes, {TotalTimeouts} timeouts, {TotalDead} ended unseen, {HandlerFaults} log handler faults, first: {FirstHandlerFault})",
             Path.GetFileName(stats.Path), stats.Acquired, _options.StatsIntervalMs / 1000, stats.Contended, stats.WaitMsMean, stats.WaitMsMax, stats.HoldMsMax, stats.HoldMaxOwner ?? "-",
-            stats.Timeouts, stats.Forced, stats.Waiting, stats.AcquiredTotal, stats.TimeoutsTotal, gate.DeadTotal);
+            stats.Timeouts, stats.Forced, stats.Waiting, stats.AcquiredTotal, stats.TimeoutsTotal, gate.DeadTotal, stats.HandlerFaultsTotal, stats.FirstHandlerFault ?? "-");
     }
 
     private void OnStuckReleased(SqliteWriteGate.Hold hold)

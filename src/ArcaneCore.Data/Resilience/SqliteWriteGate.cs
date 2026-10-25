@@ -114,11 +114,11 @@ public sealed class SqliteWriteGate
             }
 
             // Time is up: leave the queue, unless the hand-off got there first.
-            return Withdraw(waiter!) ? Granted(start, owner, contended: true) : TimedOut();
+            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
         }
         catch
         {
-            if (Withdraw(waiter!)) HandOff();
+            if (Withdraw(waiter!) == WaiterState.Granted) HandOff();
             throw;
         }
     }
@@ -148,12 +148,12 @@ public sealed class SqliteWriteGate
                 remaining = Remaining(start, timeoutMs);
             }
 
-            return Withdraw(waiter!) ? Granted(start, owner, contended: true) : TimedOut();
+            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
         }
         catch
         {
             // Canceled or faulted: leave the queue, and if the grant raced us, pass it on instead of orphaning it.
-            if (Withdraw(waiter!)) HandOff();
+            if (Withdraw(waiter!) == WaiterState.Granted) HandOff();
             throw;
         }
     }
@@ -173,7 +173,7 @@ public sealed class SqliteWriteGate
             }
 
             waiter = new Waiter(runContinuationsAsynchronously);
-            waiter.Node = _queue.AddLast(waiter);
+            waiter.Node = _queue.AddLast(waiter); // State starts as Queued
             Interlocked.Increment(ref _waiting);
             return false;
         }
@@ -194,33 +194,53 @@ public sealed class SqliteWriteGate
             _queue.RemoveFirst();
             Waiter next = head.Value;
             next.Node = null;
+            next.State = WaiterState.Granted;
             Interlocked.Decrement(ref _waiting);
             next.TrySetResult(true);
         }
     }
 
-    /// <summary>Removes <paramref name="waiter"/> from the queue. False: it was still queued (never granted). True: the gate had already been handed to it.</summary>
-    private bool Withdraw(Waiter waiter)
+    /// <summary>
+    /// Takes <paramref name="waiter"/> out of the queue and returns its final state. <see cref="WaiterState.Granted"/>: the gate had already been handed to it (the caller
+    /// owns it now and must use or pass it on). <see cref="WaiterState.Withdrawn"/>: it left the queue without ever being granted (also when it had already withdrawn, so a
+    /// repeated call can never be mistaken for a grant).
+    /// </summary>
+    private WaiterState Withdraw(Waiter waiter)
     {
         lock (_queueLock)
         {
-            if (waiter.Node is not { } node) return true;
-            _queue.Remove(node);
-            waiter.Node = null;
-            Interlocked.Decrement(ref _waiting);
-            return false;
+            if (waiter.State == WaiterState.Queued)
+            {
+                _queue.Remove(waiter.Node!);
+                waiter.Node = null;
+                waiter.State = WaiterState.Withdrawn;
+                Interlocked.Decrement(ref _waiting);
+            }
+
+            return waiter.State;
         }
+    }
+
+    private enum WaiterState
+    {
+        Queued,
+        Granted,
+        Withdrawn,
     }
 
     private sealed class Waiter : TaskCompletionSource<bool>
     {
-        // Async waiters resume on the pool; a blocking waiter is woken inline by the releaser so it never depends on a free pool thread.
+        // Async waiters resume on the pool, so the releaser (which holds the queue lock while it completes the task) never runs their continuation inline.
+        // A blocking waiter has no continuation: it waits on the task itself and is released by the completion, but it still needs its own thread, which under
+        // thread-pool starvation may not exist; the queue does not depend on it (the waiter's own timeout still applies).
         public Waiter(bool runContinuationsAsynchronously)
             : base(runContinuationsAsynchronously ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None)
         {
         }
 
         public LinkedListNode<Waiter>? Node;
+
+        public WaiterState State; // guarded by _queueLock
     }
 
     /// <summary>The busy error a timed-out waiter reports: SQLITE_BUSY (5), so every existing "locked: retain and retry" path treats it as before.</summary>
@@ -239,7 +259,7 @@ public sealed class SqliteWriteGate
         lock (_stats)
         {
             var stats = new GateStats(Path, _acquired, _contended, _acquired == 0 ? 0 : _waitMsTotal / _acquired, _waitMsMax, _holdMsMax, _holdMaxOwner, _timeouts, _forced, Waiting,
-                AcquiredTotal, TimeoutsTotal, ForcedTotal);
+                AcquiredTotal, TimeoutsTotal, ForcedTotal, HandlerFaultsTotal, FirstHandlerFault);
             _acquired = _contended = _timeouts = _forced = 0;
             _waitMsTotal = _waitMsMax = _holdMsMax = 0;
             _holdMaxOwner = null;
@@ -309,17 +329,26 @@ public sealed class SqliteWriteGate
     private void NotifyHandler(Action<Hold>? handler, Hold holder)
     {
         if (handler is null) return;
-        try
+        // Each subscriber runs on its own: one that throws must not suppress the ones after it (each interceptor subscribes separately).
+        foreach (Delegate subscriber in handler.GetInvocationList())
         {
-            handler(holder);
-        }
-        catch (Exception)
-        {
-            Interlocked.Increment(ref _handlerFaultsTotal);
+            try
+            {
+                ((Action<Hold>)subscriber)(holder);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _handlerFaultsTotal);
+                Interlocked.CompareExchange(ref _firstHandlerFault, ex.GetType().Name + ": " + ex.Message, null);
+            }
         }
     }
 
     private long _handlerFaultsTotal;
+    private string? _firstHandlerFault;
+
+    /// <summary>The type and message of the first release-notification fault since start, or null when none occurred.</summary>
+    public string? FirstHandlerFault => Volatile.Read(ref _firstHandlerFault);
 
     /// <summary>Lifetime number of release notifications whose subscriber threw (swallowed so the waiter that ran them is not failed).</summary>
     public long HandlerFaultsTotal => Interlocked.Read(ref _handlerFaultsTotal);
@@ -415,4 +444,4 @@ public sealed class SqliteWriteGate
 /// <summary>Interval statistics of one <see cref="SqliteWriteGate"/> (see <see cref="SqliteWriteGate.TakeStats"/>).</summary>
 public readonly record struct GateStats(
     string Path, long Acquired, long Contended, double WaitMsMean, double WaitMsMax, double HoldMsMax, string? HoldMaxOwner, long Timeouts, long Forced, int Waiting,
-    long AcquiredTotal, long TimeoutsTotal, long ForcedTotal);
+    long AcquiredTotal, long TimeoutsTotal, long ForcedTotal, long HandlerFaultsTotal, string? FirstHandlerFault);

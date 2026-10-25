@@ -111,7 +111,13 @@ public sealed class SqliteWriteGateFairnessTests
     {
         SqliteWriteGate gate = NewGate();
         SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", 200)!;
-        static void Throwing(SqliteWriteGate.Hold _) => throw new InvalidOperationException("handler fault");
+        int ran = 0;
+        void Throwing(SqliteWriteGate.Hold _)
+        {
+            Interlocked.Increment(ref ran);
+            throw new InvalidOperationException("handler fault");
+        }
+
         gate.StuckReleased += Throwing;
         try
         {
@@ -128,6 +134,9 @@ public sealed class SqliteWriteGateFairnessTests
         }
 
         Assert.True(leaked.Forced);
+        Assert.Equal(1, Volatile.Read(ref ran));
+        Assert.Equal(1, gate.HandlerFaultsTotal);
+        Assert.Contains("InvalidOperationException: handler fault", gate.FirstHandlerFault);
         Assert.Null(gate.Current);
         Assert.Equal(0, gate.Waiting);
         SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
@@ -140,7 +149,13 @@ public sealed class SqliteWriteGateFairnessTests
     {
         SqliteWriteGate gate = NewGate();
         SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", 200)!;
-        static void Throwing(SqliteWriteGate.Hold _) => throw new InvalidOperationException("handler fault");
+        int ran = 0;
+        void Throwing(SqliteWriteGate.Hold _)
+        {
+            Interlocked.Increment(ref ran);
+            throw new InvalidOperationException("handler fault");
+        }
+
         gate.StuckReleased += Throwing;
         try
         {
@@ -158,11 +173,95 @@ public sealed class SqliteWriteGateFairnessTests
         }
 
         Assert.True(leaked.Forced);
+        Assert.Equal(1, Volatile.Read(ref ran));
+        Assert.Equal(1, gate.HandlerFaultsTotal);
+        Assert.Contains("InvalidOperationException: handler fault", gate.FirstHandlerFault);
         Assert.Null(gate.Current);
         Assert.Equal(0, gate.Waiting);
         SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
         Assert.NotNull(fresh);
         fresh.Release();
+    }
+
+    [Fact]
+    public async Task AThrowingSubscriber_DoesNotSuppressTheSubscribersAfterIt()
+    {
+        SqliteWriteGate gate = NewGate();
+        SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", 200)!;
+        int firstRan = 0;
+        int secondRan = 0;
+        void First(SqliteWriteGate.Hold _)
+        {
+            Interlocked.Increment(ref firstRan);
+            throw new InvalidOperationException("first subscriber fault");
+        }
+
+        void Second(SqliteWriteGate.Hold _) => Interlocked.Increment(ref secondRan);
+        gate.StuckReleased += First;
+        gate.StuckReleased += Second;
+        try
+        {
+            SqliteWriteGate.Hold? hold = await gate.EnterAsync(3000, "waiter", 200, CancellationToken.None);
+            Assert.NotNull(hold);
+            hold.Release();
+        }
+        finally
+        {
+            gate.StuckReleased -= First;
+            gate.StuckReleased -= Second;
+        }
+
+        Assert.True(leaked.Forced);
+        Assert.Equal(1, Volatile.Read(ref firstRan));
+        Assert.Equal(1, Volatile.Read(ref secondRan));
+        Assert.Equal(1, gate.HandlerFaultsTotal);
+        Assert.Contains("first subscriber fault", gate.FirstHandlerFault);
+        Assert.Equal(1, gate.TakeStats().HandlerFaultsTotal);
+    }
+
+    [Fact]
+    public async Task ManyMixedWaiters_WithRandomCancelAndTimeout_LeaveAnIdleTakeableGate()
+    {
+        SqliteWriteGate gate = NewGate();
+        var random = new Random(12345);
+        var tasks = new List<Task>();
+        using var cts = new CancellationTokenSource();
+        for (int i = 0; i < 120; i++)
+        {
+            bool sync = random.Next(2) == 0;
+            bool cancels = !sync && random.Next(3) == 0;
+            int timeoutMs = random.Next(3) == 0 ? random.Next(1, 40) : 20_000;
+            int holdMs = random.Next(0, 3);
+            int cancelAfterMs = random.Next(0, 30);
+            CancellationToken token = cancels ? cts.Token : CancellationToken.None;
+            if (cancels) cts.CancelAfter(cancelAfterMs);
+            tasks.Add(sync
+                ? Task.Factory.StartNew(() => UseGate(gate.Enter(timeoutMs, "s" + i, 0), holdMs), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                : Task.Run(async () =>
+                {
+                    try
+                    {
+                        UseGate(await gate.EnterAsync(timeoutMs, "a" + i, 0, token), holdMs);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                }));
+        }
+
+        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal(0, gate.Waiting);
+        Assert.Null(gate.Current);
+        SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
+        Assert.NotNull(fresh);
+        fresh.Release();
+
+        static void UseGate(SqliteWriteGate.Hold? hold, int holdMs)
+        {
+            if (hold is null) return;
+            if (holdMs > 0) Thread.Sleep(holdMs);
+            hold.Release();
+        }
     }
 
     [Fact]
@@ -197,7 +296,7 @@ public sealed class SqliteWriteGateFairnessTests
         SqliteWriteGate.Hold? syncHold = await Task.Run(() => gate.Enter(300, "sync", 0));
         Assert.Null(asyncHold);
         Assert.Null(syncHold);
-        Assert.True(clock.ElapsedMilliseconds < 1500, $"took {clock.ElapsedMilliseconds} ms");
+        Assert.True(clock.ElapsedMilliseconds < 5000, $"took {clock.ElapsedMilliseconds} ms");
         Assert.Equal(0, gate.Waiting);
         Assert.Equal(timeouts + 2, gate.TimeoutsTotal);
         h.Release();

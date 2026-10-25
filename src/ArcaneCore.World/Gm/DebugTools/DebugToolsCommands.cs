@@ -291,7 +291,7 @@ public sealed class DebugToolsCommands : ICommandExtension
                 ? "free"
                 : string.Create(C, $"held {hold.HeldMs:F0} ms by {hold.Owner} (waited {hold.WaitedMs:F0} ms)");
             context.Reply(string.Create(C,
-                $"{System.IO.Path.GetFileName(gate.Path)}: {gate.AcquiredTotal} writes, {gate.TimeoutsTotal} timeouts, {gate.ForcedTotal} forced and {gate.DeadTotal} dead releases since start; {gate.Waiting} waiting; {holder}"));
+                $"{System.IO.Path.GetFileName(gate.Path)}: {gate.AcquiredTotal} writes, {gate.TimeoutsTotal} timeouts, {gate.ForcedTotal} forced and {gate.DeadTotal} dead releases and {gate.HandlerFaultsTotal} release-handler faults{(gate.HandlerFaultsTotal == 0 ? "" : " (first: " + gate.FirstHandlerFault + ")")} since start; {gate.Waiting} waiting; {holder}"));
         }
 
         return true;
