@@ -472,7 +472,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // Stale old-session callbacks cannot save or remove this player by GUID alone.
         // Resume before the last login packets: the client treats SMSG_INIT_WORLD_STATES as the
         // end of login, so a client that sees itself in the world can rely on its saves having
-        // resumed. All of this runs on the world thread, so no save can interleave here.
+        // resumed. This runs on the world thread, so no state capture can interleave. The save
+        // consumer may write the resumed slot at once, but the slot is empty at this point.
         session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(character.Id);
         session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(character.Id);
         LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
