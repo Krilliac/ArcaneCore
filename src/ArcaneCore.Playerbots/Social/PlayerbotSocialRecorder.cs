@@ -30,6 +30,15 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
 
     public bool Enabled => Memory.Enabled;
 
+    /// <summary>
+    /// Whether a character is in a group-coordinator siege group (wired by the managed feature; null: none is). A kill with either side in one is organised
+    /// PvP, not a grudge, unless <see cref="PlayerbotSocialMemoryOptions.OrganisedPvpKills"/> is on. Read on every PvP kill, any thread.
+    /// </summary>
+    public Func<ObjectGuid, bool>? InSiegeGroup { get; set; }
+
+    /// <summary>The server-wide "rivals off" store the social feature owns (wired by the managed feature; null: bots take no such whisper).</summary>
+    public PlayerbotRivalryOptOut? RivalryOptOut { get; set; }
+
     /// <summary>A managed bot logged in (or was adopted by this feature): its events are now recorded against its id.</summary>
     public void Track(Guid botId, int characterId)
     {
@@ -184,10 +193,15 @@ internal sealed class PlayerbotSocialRecorder(PlayerbotSocialMemory memory, ILog
         Player? slayer = DuelRules.ControllingPlayer(killer);
         if (slayer is null || ReferenceEquals(slayer, dead) || DuelRules.IsInDuelWith(slayer, dead) || DuelRules.IsInDuelWith(dead, slayer)) return;
         if (!IsManaged(slayer.Guid) && !IsManaged(dead.Guid)) return;
+        if (!Memory.OrganisedPvpKills && IsOrganised(slayer, dead)) return;
         bool crossFaction = slayer.Team != dead.Team;
         Note(dead.Guid, slayer.Guid, PlayerbotSocialEvent.KilledBy, crossFaction);
         Note(slayer.Guid, dead.Guid, PlayerbotSocialEvent.KilledThem, crossFaction);
     }
+
+    // A battleground map, or either side in a coordinator siege group: organised PvP (a match, a GM-ordered siege), not a personal grudge.
+    private bool IsOrganised(Player slayer, Player dead)
+        => (dead.Map ?? slayer.Map)?.Template is { IsBattleground: true } || InSiegeGroup is { } inSiege && (inSiege(slayer.Guid) || inSiege(dead.Guid));
 
     /// <summary>A character left combat: the help credits it is part of end with its fight, so the next fight can earn them again.</summary>
     public void EndFight(ObjectGuid character)

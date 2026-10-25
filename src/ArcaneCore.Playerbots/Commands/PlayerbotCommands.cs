@@ -184,6 +184,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
                      guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, memory.NowMs))
             context.Reply(line);
         if (feature.Social.Mood.Enabled) context.Reply(MoodLine(feature.Social.Mood.Get(botId)));
+        if (memory.Enabled) context.Reply(string.Create(CultureInfo.InvariantCulture, $"rivals={memory.Snapshot(botId).Count(row => (row.Flags & PlayerbotRelationFlags.Rival) != 0 && (row.Flags & PlayerbotRelationFlags.WarOnly) == 0)}"));
         if (EventLine(feature.EventBoard, botId) is { } eventLine) context.Reply(eventLine);
         return true;
     }

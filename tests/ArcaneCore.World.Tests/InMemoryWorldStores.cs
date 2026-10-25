@@ -117,8 +117,8 @@ internal sealed class InMemoryWorldDataStore : IWorldDataStore
         => Task.FromResult<StartPosition?>(IsValid(race, cls) ? new StartPosition(0, 12, -8949.95f, -132.493f, 83.5312f, 0f) : null);
 
     public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
-        => Task.FromResult<RaceInfo?>(race == 2
-            ? new RaceInfo(gender == 0 ? 51u : 52u, 2)   // orc: Orgrimmar faction template
+        => Task.FromResult<RaceInfo?>(race is 2 or 5
+            ? new RaceInfo(gender == 0 ? 51u : 52u, 2)   // orc (and undead, the Horde race that starts beside the humans): Horde faction template
             : new RaceInfo(gender == 0 ? 49u : 50u, 1)); // human: Stormwind
 
     public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default)
@@ -127,9 +127,9 @@ internal sealed class InMemoryWorldDataStore : IWorldDataStore
     public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default)
         => Task.FromResult(IsValid(race, cls));
 
-    // Human and orc warriors (one per faction), plus dwarf warriors (a second Alliance race for racial-language tests),
+    // Human and orc warriors (one per faction), plus dwarf warriors (a second Alliance race for racial-language tests) and undead warriors (a Horde race on the humans' map),
     // all starting at the same spot so tests can put the factions side by side.
-    private static bool IsValid(byte race, byte cls) => race is 1 or 2 or 3 && cls == 1;
+    private static bool IsValid(byte race, byte cls) => race is 1 or 2 or 3 or 5 && cls == 1;
 }
 
 internal sealed class InMemoryAccountDataStore : IAccountDataStore

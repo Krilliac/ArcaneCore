@@ -109,6 +109,12 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>Trust (permille) change toward the member who died first in a wipe (-500..500).</summary>
     public int TrustPerFirstDeathInWipe { get; set; } = -30;
 
+    /// <summary>
+    /// Count a PvP kill in organised play as a grudge (off by default). Off: a kill on a battleground map, or with either side in a group-coordinator
+    /// siege group, records neither KilledBy nor KilledThem, so players met in a battleground or a GM-ordered siege are not taunted or remembered
+    /// as rivals in the open world. On: those kills are recorded like any other.
+    /// </summary>
+    public bool OrganisedPvpKills { get; set; }
     /// <summary>Affinity gained when a trade deal completes at the agreed terms (0..30).</summary>
     public int AffinityPerFairDeal { get; set; } = 3;
 

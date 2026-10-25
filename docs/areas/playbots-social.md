@@ -204,7 +204,7 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   positive war affinity halves on its half-life while dormant and, with `NeverForget` off, so does negative war affinity (with it on, a
   war grudge keeps its value). It comes back as it has drifted when War Mode is switched on again, war-only rows included, unless
   `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
-  never force-flags anyone for PvP and a player's opt-out still applies (the rivalry that acts on this memory is a later phase).
+  never force-flags anyone for PvP and a player's opt-out still applies (the first rivalry that acts on this memory is Rivalry (P6a) below: emotes only; hunting parties are a later phase).
 
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
@@ -314,6 +314,60 @@ penalty; only a positive reply clears the back-off.
 within 60 yards, a festival that started since the last pass (see World events, below), four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
 simplified and in memory only: a player of level 40 or more seen on foot and later seen mounted (nothing is persisted, and there is no spellbook or skill check, so a restart forgets who was seen on foot).
 Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one per bot per `CommentBotGapMinutes` (10) and one per zone per `CommentZoneGapSeconds` (60).
+
+## Rivalry (P6a, `World:Playerbots:Social:Rivalry`, live)
+
+`PlayerbotRivalryLane` (lane `rivalry`, `Social/PlayerbotRivalry.cs`; design phase P6, first slice: emotes and the rival stance, **no combat**). Two switches
+share a name and are not the same: `World:Playerbots:Social:Emotes:Enabled` is the same-faction wave (lane `emotes`, above);
+`World:Playerbots:Social:Rivalry:Emotes:Enabled` is this lane, the **cross-faction** greetings and rude emotes. `World:Playerbots:Social:Rivalry:Enabled` switches everything here off at once
+(replies go back to the old table; recorded opt-outs are kept).
+
+**Stance.** One pure function, `PlayerbotRivalryRules.StanceOf(relation, layer)`, reads one layer of the bot's memory: `Rival` (that layer's Rival flag), `Disliked`
+(affinity below 0), `Friendly` (affinity at least `World:Playerbots:Social:Rivalry:Emotes:FriendlyAffinity`, default 20), otherwise `Neutral` (a stranger too).
+**Toward another bot the normal layer decides, War Mode or not**; toward a real player the lane's own emotes read the layer the memory's decisions read (the war layer
+while War Mode is on), and replies to a real player read the normal layer (a reply is budgeted speech). Every emote the lane sends is a direct, unbudgeted `CMSG_TEXT_EMOTE`,
+rolls are hashes of bot, target and the half hour, and limiters are kept apart for bot targets and player targets, so what War Mode makes a bot do to a player never
+changes what it does to a bot (test: `PlayerbotRivalryWarParityWorldTests`).
+
+**Greetings.** Each pass up to 24 idle bots (autonomous, alive, out of combat, not in a battleground or instance, round robin) look at characters of the **other** team within
+`min(Emotes:RangeYards, World:ListenRangeTextEmote)` (20 yards by default; the listen range is read every pass), alive, out of combat, not ignoring the bot. A `Neutral` or `Friendly`
+target is greeted when its roll passes: a stranger with `World:Playerbots:Social:Rivalry:Emotes:GreetStrangerChance` (0.25) times the bot's sociability, a known neutral half the sociability, a friend always;
+a failed roll leaves that target out for the half hour and the walk goes on to the next. A friend gets a wave, bow, salute, cheer or hail, anyone else a wave, nod or bow. Limits (world
+time, apart from the same-faction wave's): once per bot and target in 30 minutes, once per target in 10, once per bot in 5, and `World:Playerbots:Social:Rivalry:Emotes:EmotesPerMinute` (12) for all bots,
+counted separately for bot targets and player targets. A bot is only greeted where a real player is within the listen range of the greeter (`World:Playerbots:Social:Rivalry:Emotes:BotToBot`).
+
+**Rude emotes.** A `Rival` gets one of rude, chicken, threaten, mock or violin (`RivalEmotes`), at most once per bot and target in `RudePairGapMinutes` (30), once per bot in 10 minutes
+and **once per target in `RudePerTargetMinutes` (30) from all bots together**; they count against `EmotesPerMinute`. Never at a player who opted out (below); with
+`World:Playerbots:Social:Rivalry:Emotes:RudeRequiresOptIn` only at players who whispered `rivals on`. Never at a bot unless `World:Playerbots:Social:Rivalry:Emotes:RudeAtBots` (off by default). Never while the bot or the target stands in a
+capital, in a `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` area (area ids, default the six towns with a guard post for both factions: Booty Bay 35, Ratchet 392, Gadgetzan 976, Everlook 2255, Nighthaven 2361,
+Light's Hope Chapel 2268) or anywhere the zone table cannot place (zone 0 or a zone it does not hold): the check fails closed, greetings are unaffected. The first rude emote a real
+player receives in a login is followed by one system notice that says how to stop them.
+
+**Replies.** An emote aimed at a bot is answered by `PlayerbotRivalryRules.ReplyTo(stance, emote, toBot, roll, rudeAtBots, optedOut)` (only while bot chat is on, as before):
+
+| The bot's stance toward the emoter | Friendly emote | Rude emote | Other |
+|---|---|---|---|
+| Rival | to a player a rude emote or nothing; to a bot a shrug or nothing | to a player a rude emote; to a bot a shrug or a sigh | as before |
+| Disliked | a shrug or nothing | to a player a rude emote; to a bot a shrug or a sigh | as before |
+| Friendly | as before | a shrug or a sigh | as before |
+| Neutral | as before | as before to a player; to a bot a shrug or a sigh | as before |
+
+**Toward a bot, an answer that classifies as rude is replaced by a shrug unless `RudeAtBots` is on**, in every stance (this also stops the old one-in-three rude answer to a rude emote and the
+chicken answer to a threat): two bots with different opinions of each other can then never trade rude emotes, so no exchange between bots lowers an affinity. A player who opted out is not
+answered at all until `rivals on`. **A rude answer to a real player keeps the lane's safeguards**: with `RudeRequiresOptIn` it needs a `rivals on`, and when either character
+stands in a capital, a safe area or a place the zone table cannot place it becomes a shrug (the per-target and per-pair rude caps belong to the lane; a reply is limited by `EmoteReplyGapSeconds` and the speech budget). A rival bot can
+still answer a real player's friendly emote rudely (the table above): the owner's ruling R11 covers it.
+
+**Opting out.** Whisper any bot of **your own faction** `rivals off`: the server drops a whisper between factions unless `World:AllowTwoSideChat`, but the choice is server-wide, one store shared by every
+bot of both factions, and holds for the whole account. `rivals on` undoes it and `rivals` alone tells the status; the line is read as the "ai off" command is (letters and spaces, any case), answered by a
+system message at most once per 10 seconds, and consumed (the chat service never hears it). It works with bot chat off and when the bot ignores you. **The choice lasts until the server restarts**
+(it is kept in memory); the answers say so. The store holds 8192 players: past that the oldest `rivals on` is dropped to make room, an opt-out is never dropped, and a new choice made while every slot holds an opt-out is refused (the player is told, and the optouts meter counts `refused`). A bare `rivals` whispered to a bot is consumed even while `World:Playerbots:Social:Rivalry:Enabled` is off, so a player can opt out beforehand. `World:Playerbots:Social:Rivalry:AllowOptOut` (on) only decides whether the line is parsed (it is also parsed while `RudeRequiresOptIn` is on); a choice already recorded is always honoured.
+
+**Organised kills.** `World:Playerbots:Social:Memory:OrganisedPvpKills` (off): a PvP kill on a battleground map, or with either side in a GM-ordered siege group, records no `KilledBy` or `KilledThem`, so players met
+in a match are not remembered as rivals in the open world. On, they are recorded like any other.
+
+Meters: `arcanecore_playerbot_rivalry_emotes_total{kind}` (`greet`, `rude`, `reply_rude`, `reply_shrug`) and `arcanecore_playerbot_rivalry_optouts_total{change}` (`off`, `on`, `refused`; docs/ops/metrics.md); `.playerbot social $bot` ends with `rivals=N`, the
+number of rivals in the bot's normal layer. Faults go to `playerbot.social`.
 
 ## World events: festivals (`World:Playerbots:Social:Events`, live)
 

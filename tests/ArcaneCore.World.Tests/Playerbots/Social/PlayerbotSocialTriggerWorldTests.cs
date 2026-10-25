@@ -348,9 +348,10 @@ public sealed class PlayerbotSocialTriggerWorldTests
         await world.AddBotAsync("Socialempty");
         await using WorldTestClient admin = await world.Host.EnterWorldAsync("QUILLADMINB", "Quillbranch", AccountSecurity.Administrator);
 
-        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 3);
+        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 4);
         Assert.StartsWith("Socialempty: sociability ", reply[0]);
         Assert.Equal("No relations yet.", reply[1]);
+        Assert.Equal("rivals=0", reply[3]); // the line P6a adds, after the mood line
 
         Assert.Equal(["Playerbot not found."], await FleetWorld.SayAsync(admin, ".playerbot social Nosuchbot"));
     }

@@ -74,6 +74,9 @@ internal sealed partial class PlayerbotSocialMemory
 
     internal bool Enabled => _options.Enabled;
 
+    /// <summary>Whether a PvP kill in organised play (a battleground, a siege group) is noted like any other (<see cref="PlayerbotSocialMemoryOptions.OrganisedPvpKills"/>).</summary>
+    internal bool OrganisedPvpKills => _options.OrganisedPvpKills;
+
     /// <summary>The memory's own clock, in unix ms (what every age and decay here is measured against).</summary>
     internal long NowMs => _clock();
 

@@ -2,8 +2,11 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -268,6 +271,18 @@ internal sealed class SocialWorld : IAsyncDisposable
     /// <summary>One client packet from a bot, through its managed session as its own action (world thread). False when refused.</summary>
     public Task<bool> SendAsync(string bot, WorldOpcode opcode, byte[]? payload = null)
         => Host.OnWorldAsync(() => PlayerbotSocialPackets.Send((WorldSession)Host.World.FindOnlinePlayer(bot)!.Session, opcode, payload ?? []));
+
+    /// <summary>
+    /// Replace the world's area table with <paramref name="areas"/> on the world thread (as <c>LiveFxCommandTests</c> does), for the tests that read
+    /// a zone's flags (a capital) through <see cref="Player.ZoneId"/>. The previous table is not restored: a world belongs to one test.
+    /// </summary>
+    public Task SetAreasAsync(params AreaTemplate[] areas)
+        => Host.OnWorldAsync(() =>
+        {
+            WorldMaps maps = WorldMaps.Of(Host.World);
+            maps.Terrain.Areas = new AreaTable(areas, maps.Registry);
+            return true;
+        });
 
     public Task<Guild?> GuildOfAsync(string player) => Host.OnWorldAsync(() => SocialTestKit.GuildOf(Host, player));
 

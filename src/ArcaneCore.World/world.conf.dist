@@ -17206,6 +17206,21 @@ World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair = 20
 World.Playerbots.Social.Memory.MaxRelationsPerBot = 256
 
 #
+#    World.Playerbots.Social.Memory.OrganisedPvpKills
+#        Description: Count a PvP kill in organised play as a grudge (off by default). Off: a kill
+#                     on a battleground map, or with either side in a group-coordinator siege group,
+#                     records neither KilledBy nor KilledThem, so players met in a battleground or a
+#                     GM-ordered siege are not taunted or remembered as rivals in the open world.
+#                     On: those kills are recorded like any other.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.OrganisedPvpKills = false
+
+#
 #    World.Playerbots.Social.Memory.RivalAffinity
 #        Description: At or below this affinity the Rival flag is set; above it again, the flag is
 #                     cleared (-100..0).
@@ -17315,6 +17330,185 @@ World.Playerbots.Social.Mood.HalfLifeMinutes = 30
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.PassBudgetMs = 4
+
+#
+#    World.Playerbots.Social.Rivalry.AllowOptOut
+#        Description: Parse the whispered commands "rivals off", "rivals on" and "rivals" (on by
+#                     default); they are also parsed while
+#                     PlayerbotSocialRivalryEmoteOptions.RudeRequiresOptIn is on. Off: the line is
+#                     not a command and goes on to ordinary whisper handling. It never undoes an
+#                     opt-out already recorded: a player who opted out stays out whatever this says.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.AllowOptOut = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.BotToBot
+#        Description: Let bots greet each other across factions when a real player is close enough
+#                     to see it (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.BotToBot = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.EmotesPerMinute
+#        Description: The most greetings and rude emotes the lane sends in a minute, from all bots,
+#                     counted apart for bot targets and player targets (0..120; 0 silences the lane;
+#                     default 12). Replies are not counted.
+#        Type: int
+#        Default: 12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.EmotesPerMinute = 12
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.Enabled
+#        Description: Let idle bots greet characters of the other faction and send rude emotes at
+#                     rivals (lane "rivalry"; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.Enabled = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.FriendlyAffinity
+#        Description: The affinity from which a bot regards a character as a friend (0..100; default
+#                     20).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.FriendlyAffinity = 20
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.GreetStrangerChance
+#        Description: The chance (0..1, times the bot's sociability) that a bot greets a stranger of
+#                     the other faction; a known neutral is greeted at half the bot's sociability, a
+#                     friend always (default 0.25).
+#        Type: double
+#        Default: 0.25
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.GreetStrangerChance = 0.25
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RangeYards
+#        Description: How close, in yards, a character of the other faction must stand to be greeted
+#                     or taunted (5..25; default 20). The range actually used is never more than
+#                     World:ListenRangeTextEmote, which is read at every pass.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RangeYards = 20
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RivalEmotes
+#        Description: Send rude emotes at rivals and let a rival or a disliked character be answered
+#                     rudely or not at all (on by default). Off: every reply is by a neutral stance.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RivalEmotes = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudeAtBots
+#        Description: Let rude emotes and rude replies reach other bots (off by default). Off:
+#                     nothing the rivalry stage sends to a bot is ever rude, a rude emote aimed at a
+#                     bot is met with a shrug or a sigh, so no exchange between two bots can lower
+#                     an affinity.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudeAtBots = false
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudePairGapMinutes
+#        Description: The least time, in minutes, between two rude emotes from one bot to one
+#                     character (1..1440; default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudePairGapMinutes = 30
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudePerTargetMinutes
+#        Description: The least time, in minutes, between two rude emotes at one character from all
+#                     bots together (1..1440; default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudePerTargetMinutes = 30
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudeRequiresOptIn
+#        Description: Send rude emotes only to real players who whispered "rivals on" (off by
+#                     default: they go to every real rival who has not opted out).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudeRequiresOptIn = false
+
+#
+#    World.Playerbots.Social.Rivalry.Enabled
+#        Description: The master switch (on by default). Off: the lane sends nothing and an emote is
+#                     answered as before the stance existed. Recorded opt-outs are kept.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Enabled = true
+
+#
+#    World.Playerbots.Social.Rivalry.Safeguards.SafeAreas
+#        Description: Area ids (comma separated; the sub-zone a character stands in, not its zone)
+#                     where no rude emote is sent, on top of every capital city, which is always
+#                     quiet. The default is the six neutral towns with a guard post for both
+#                     factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361
+#                     Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals.
+#        Type: string
+#        Default: "35,392,976,2255,2361,2268"
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Safeguards.SafeAreas = "35,392,976,2255,2361,2268"
 
 #
 #    World.Playerbots.Social.Trading.AcceptGifts

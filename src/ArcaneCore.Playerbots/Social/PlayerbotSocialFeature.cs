@@ -238,6 +238,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
+    private readonly PlayerbotRivalryLane _rivalry = new(new PlayerbotRivalryOptOut());
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
@@ -297,6 +298,12 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal PlayerbotGuildChat GuildChat => _chat;
 
     internal PlayerbotSocialEmotes Emotes => _emotes;
+
+    /// <summary>The cross-faction rivalry lane (tests and status).</summary>
+    internal PlayerbotRivalryLane Rivalry => _rivalry;
+
+    /// <summary>The one server-wide store of "rivals off" choices, read by the lane and by every bot's party AI.</summary>
+    internal PlayerbotRivalryOptOut RivalryOptOut => _rivalry.OptOut;
 
     /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
     internal PlayerbotHelpLane Help => _help;
@@ -776,7 +783,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private static readonly string[] LaneNames =
     [
         "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
-        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "prune",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "rivalry", "prune",
     ];
 
     /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
@@ -809,6 +816,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 case 15: _worldChatter.Run(pass); break;
                 case 16: _voice.Run(pass); break;
                 case 17: Events.Run(pass); break;
+                case 18: _rivalry.Run(pass); break;
                 default: _membership.Prune(pass); break;
             }
         }

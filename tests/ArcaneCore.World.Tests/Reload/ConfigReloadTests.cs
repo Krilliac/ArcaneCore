@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Reload;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Reload;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -450,6 +451,35 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.True(risk.Enabled);
         Assert.Equal(1f, risk.Tolerance);
         Assert.Equal(300, risk.DangerMemorySeconds);
+    }
+
+    [Fact]
+    public async Task PlayerbotRivalry_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The rivalry lane and the party AIs read World:Playerbots:Social:Rivalry from this options object at every pass and every emote.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Rivalry": { "Enabled": false, "AllowOptOut": false, "Emotes": { "RudeAtBots": true, "RangeYards": 10 }, "Safeguards": { "SafeAreas": "35,392" } }, "Memory": { "OrganisedPvpKills": true } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotSocialRivalryOptions rivalry = playerbots.Social.Rivalry;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(rivalry, playerbots.Social.Rivalry); // changed in place: the running lane holds this object
+        Assert.False(rivalry.Enabled);
+        Assert.False(rivalry.AllowOptOut);
+        Assert.True(rivalry.Emotes.RudeAtBots);
+        Assert.Equal(10, rivalry.Emotes.RangeYards);
+        Assert.Equal("35,392", rivalry.Safeguards.SafeAreas);
+        Assert.True(playerbots.Social.Memory.OrganisedPvpKills);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Rivalry": { "Emotes": { "RangeYards": 99 } } } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(10, rivalry.Emotes.RangeYards);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(rivalry.Enabled);
+        Assert.False(rivalry.Emotes.RudeAtBots);
+        Assert.False(playerbots.Social.Memory.OrganisedPvpKills);
     }
 
     [Fact]
@@ -899,6 +929,20 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialInitiativeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Initiative:{property.Name}");
+        }
+        // Rivalry (P6a): the switches, the emote rules and the safeguards are live key by key (docs/areas/playbots-social.md, Rivalry).
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalryOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(PlayerbotSocialRivalryEmoteOptions) && p.PropertyType != typeof(PlayerbotSocialRivalrySafeguardOptions)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalryEmoteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:Emotes:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalrySafeguardOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:Safeguards:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEventsOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotHolidayOptions)))
