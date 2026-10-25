@@ -224,9 +224,11 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         (13, 10, new CellTile(3, 0, 0, 120, 8, 8, Size: 5) { LinkedSides = [4] }),
     ];
 
+    private CreatureContent _content = null!;
+
     private async Task<SyntheticNavWorld> ExploreWorldAsync((int X, int Y, CellTile Tile)[] tiles, ILineOfSight lineOfSight, params Vector3[] spawns)
     {
-        var content = new CreatureContent(
+        CreatureContent content = _content = new CreatureContent(
             [new CreatureTemplate { Entry = 99010, Name = "right", MinLevel = 8, MaxLevel = 8, Faction = 14 }],
             [.. spawns.Select((at, index) => new CreatureSpawn { Guid = (uint)(1 + index), Entry = 99010, MapId = 0, X = at.X, Y = at.Y, Z = at.Z })], [], [], []);
         SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, tiles, lineOfSight, configureServices: services =>
@@ -271,6 +273,25 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
             return candidate?.Spawn.Guid;
         });
 
+    /// <summary>
+    /// What the brain's own explore filter says about the world's one spawn: a think of Explore first sets the search up (the filter is the one it
+    /// hands the atlas), then the atlas's candidate for that spawn is judged by it directly, whatever the plan to it would do after.
+    /// </summary>
+    private Task<bool> ExploreEligibleAsync(SyntheticNavWorld world, PlayerbotBrain brain)
+        => world.Host.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            player.Level = 8;
+            PlayerbotNavigation.SetStallWatch(player, brain.StallWatch);
+            world.Session.ManagedBudget = new ManagedActionBudget(1);
+            typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(brain, [player, 500u]);
+            var filter = (Func<PlayerbotExploreAtlas.Candidate, bool>)typeof(PlayerbotBrain)
+                .GetField("_exploreEligibleFilter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain)!;
+            PlayerbotExploreAtlas.Candidate candidate = Assert.IsType<PlayerbotExploreAtlas.Candidate>(
+                new PlayerbotExploreAtlas(_content).Find(0, 8, Start, _ => true, (_, _) => false, out _));
+            return filter(candidate);
+        });
+
     private static PlayerbotOptions ExploreOptions => new() { Enabled = true, Risk = { Enabled = false } };
 
     [Fact]
@@ -302,6 +323,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         await WaitForRegionsAsync(world, FarSpawn);
         Assert.True(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, FarSpawn, out _, out _)),
             "no walk of any slope joins the sealed room");
+        Assert.False(await ExploreEligibleAsync(world, new PlayerbotBrain(world.Session, ExploreOptions)));
         Assert.Null(await ExploreChoiceAsync(world, new PlayerbotBrain(world.Session, ExploreOptions)));
     }
 
@@ -317,7 +339,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         });
         Assert.NotEqual(from, to); // the slope-excluded graph splits the stairs (the control for the exemption)
         Assert.False(unreachable, "the all-terrain graph joins them");
-        Assert.Equal(1u, await ExploreChoiceAsync(world, new PlayerbotBrain(world.Session, ExploreOptions)));
+        Assert.True(await ExploreEligibleAsync(world, new PlayerbotBrain(world.Session, ExploreOptions)));
     }
 
     [Fact]
