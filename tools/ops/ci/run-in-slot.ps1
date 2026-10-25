@@ -5,6 +5,8 @@
 # - Runs the command in a child pwsh at BelowNormal (its children inherit it), output to <LanesRoot>\slot-logs\<lane>-<n>.log.
 # - The child gets DOTNET_ROOT (default %USERPROFILE%\.dotnet) and, when ARCANECORE_DATA_ROOT (or ARCANECORE_TERRAIN_DIR /
 #   ARCANECORE_DBC_DIR) is set, ARCANECORE_TEST_TERRAIN_DIR / ARCANECORE_TEST_DBC_DIR, so real-data tests run instead of skipping.
+# - ARCANECORE_TEST_CLIENT_DIR / ARCANECORE_TEST_CLIENT_FILES_DIR are passed through when set; otherwise filled from the optional gitignored
+#   slot-env.local.json ({"clientDir": "...", "clientFilesDir": "..."}) in WorkDir or LanesRoot; if still unset one line says client-data tests skip.
 # - Always releases the slot (finally). A slot file whose holder pwsh is dead (or older than $StaleMin minutes) is abandoned and removed.
 # - Exit code = the command's exit code (124 on timeout). Prints the log path and the log's last 60 lines.
 param(
@@ -29,6 +31,13 @@ $terrainDir = Get-OpsEnv 'ARCANECORE_TERRAIN_DIR'
 if (-not $terrainDir -and $dataRoot) { $terrainDir = Join-Path $dataRoot 'terrain-5875' }
 $dbcDir = Get-OpsEnv 'ARCANECORE_DBC_DIR'
 if (-not $dbcDir -and $dataRoot) { $dbcDir = Join-Path $dataRoot 'client-dbc-5875' }
+# Client-data tests: ARCANECORE_TEST_CLIENT_DIR / _CLIENT_FILES_DIR when exported, else the optional gitignored slot-env.local.json
+# ({ "clientDir": "...", "clientFilesDir": "..." }) found in WorkDir, then in LanesRoot.
+. (Join-Path $PSScriptRoot 'SlotEnvLib.ps1')
+$clientEnv = Resolve-SlotClientEnv -EnvClientDir (Get-OpsEnv 'ARCANECORE_TEST_CLIENT_DIR') -EnvClientFilesDir (Get-OpsEnv 'ARCANECORE_TEST_CLIENT_FILES_DIR') -WorkDir $WorkDir -LanesRoot $LanesRoot
+$clientDir = $clientEnv.ClientDir
+$clientFilesDir = $clientEnv.ClientFilesDir
+foreach ($m in $clientEnv.Messages) { "[$Lane] $m" }
 
 function Get-AvailableMB { [int]((Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue) }
 
@@ -65,9 +74,11 @@ $log = Join-Path $logs "$Lane-$n.log"
 "[$Lane] holding $(Split-Path $held -Leaf) after ${waited}s; log $log"
 $rc = 1
 try {
-    $setup = "Set-Location -LiteralPath '$WorkDir'`n`$env:DOTNET_ROOT='$dotnetRoot'`n`$env:PATH=`"`$env:DOTNET_ROOT;`$env:PATH`"`n"
-    if ($terrainDir) { $setup += "`$env:ARCANECORE_TEST_TERRAIN_DIR='$terrainDir'`n" }
-    if ($dbcDir) { $setup += "`$env:ARCANECORE_TEST_DBC_DIR='$dbcDir'`n" }
+    $setup = "Set-Location -LiteralPath $(ConvertTo-PsSingleQuoted $WorkDir)`n`$env:DOTNET_ROOT=$(ConvertTo-PsSingleQuoted $dotnetRoot)`n`$env:PATH=`"`$env:DOTNET_ROOT;`$env:PATH`"`n"
+    if ($terrainDir) { $setup += "`$env:ARCANECORE_TEST_TERRAIN_DIR=$(ConvertTo-PsSingleQuoted $terrainDir)`n" }
+    if ($dbcDir) { $setup += "`$env:ARCANECORE_TEST_DBC_DIR=$(ConvertTo-PsSingleQuoted $dbcDir)`n" }
+    if ($clientDir) { $setup += "`$env:ARCANECORE_TEST_CLIENT_DIR=$(ConvertTo-PsSingleQuoted $clientDir)`n" }
+    if ($clientFilesDir) { $setup += "`$env:ARCANECORE_TEST_CLIENT_FILES_DIR=$(ConvertTo-PsSingleQuoted $clientFilesDir)`n" }
     $script = "$setup$Command`nexit `$LASTEXITCODE"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"

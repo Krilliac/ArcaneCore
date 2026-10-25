@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.TestSupport;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -345,5 +348,88 @@ public sealed class CreaturePathJobTests
         Assert.True(s.Wolf.IsMoving, "the deferred result was lost");
         Assert.Equal(1, s.System.PathJobsApplied);
         Assert.Equal(0, s.System.PathJobsInFlight);
+    }
+
+    [Fact]
+    public void AnUngatedDrape_IsTimedInsideTheGate_SoTheWaitForAnotherMapIsNotChargedToThePathBudget()
+    {
+        const int HoldMs = 50;
+        using var world = new WorldRuntime(
+            new WorldRuntimeOptions
+            {
+                UpdateCompressionThreshold = 0,
+                AutosaveIntervalMs = 0,
+                CommandTimeBudgetMs = 0,
+                Parallel = new ParallelMapOptions { MapUpdateThreads = 2, Ungated = "CreatureMapSystem", CreatureSplinePass = true },
+            },
+            new RecordingSaveQueue(),
+            NullLogger<WorldRuntime>.Instance);
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 5, 0, movementType: 1, wander: 5)]);
+        (_, _, CreatureMapSystem system) = CreateAiSystem(content, world: world);
+        var paths = new RecordingPathfinder();
+        WorldCollision.Of(world).Install(pathfinder: paths);
+        using var pool = new NavJobSystem(threads: 2);
+        system.PathJobs = pool;
+        (Player player, _) = AddPlayer(world, 1, 0, 0);
+        world.GetMap(1, 0); // a second map: the maps phase runs on the map threads (and the serial gate is real) only with two or more
+        using Scene s = new(world, system, player, Assert.Single(system.Creatures), paths, pool);
+
+        // The wander leg is searched on the pool, held there until the test lets it finish.
+        s.Paths.Gate.Reset();
+        for (int i = 0; i < 300 && s.System.PathJobsSubmitted == 0; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        s.Paths.Gate.Set();
+        WaitForPool(s, 1);
+
+        // Another thread holds the serial gate for HoldMs each time the maps phase runs (as another map's gated work would), queued
+        // behind this map's own gated stages: its next hold starts as the map leaves the gate for the ungated wander pass.
+        using var stop = new CancellationTokenSource();
+        var holder = new Thread(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                if (!s.World.IsParallelPhase)
+                {
+                    Thread.Yield();
+                    continue;
+                }
+
+                using (s.World.EnterSerial())
+                {
+                    Thread.Sleep(HoldMs);
+                }
+            }
+        })
+        { IsBackground = true };
+        holder.Start();
+        long ticksOfApplyingUpdate = -1;
+        bool ranUngated = false;
+        try
+        {
+            for (int i = 0; i < 20 && ticksOfApplyingUpdate < 0; i++)
+            {
+                long applied = s.System.PathJobsApplied;
+                s.World.RunTick(50);
+                if (s.System.PathJobsApplied > applied)
+                {
+                    ticksOfApplyingUpdate = s.System.PathTicksThisTick;
+                    ranUngated = ((IMapUpdateBreakdown)s.System).DescribeLastUpdate().Contains(" wanderers outside the gate", StringComparison.Ordinal);
+                }
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            holder.Join();
+        }
+
+        Assert.True(ticksOfApplyingUpdate >= 0, "the finished path job was never applied");
+        Assert.True(ranUngated, "the result was not applied by a wanderer outside the gate");
+        double chargedMs = ticksOfApplyingUpdate * 1000.0 / Stopwatch.Frequency;
+        Assert.True(chargedMs < HoldMs / 2.0, $"the drape was charged {chargedMs:F1} ms of path time, including the wait for the serial gate ({HoldMs} ms hold)");
     }
 }

@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Playerbots;
 /// Per-bot ring buffer of recent decision, route, and loop transitions plus a single-line diagnostic snapshot
 /// formatter for stall, death-loop, unreachable-goal, and action-fault log lines.
 /// </summary>
-internal sealed class PlayerbotTraceLog
+internal sealed partial class PlayerbotTraceLog
 {
     internal const int Capacity = 10;
     private const int MaxRenderedTraceEntries = 8;

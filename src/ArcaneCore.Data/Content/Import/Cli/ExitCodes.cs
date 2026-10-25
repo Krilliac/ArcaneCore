@@ -21,6 +21,6 @@ public static class ExitCodes
     /// <summary>The database or report path is inside a git work tree and not git-ignored (GPL data must stay out of the repository).</summary>
     public const int RepositoryPath = 5;
 
-    /// <summary><c>verify</c> found rows that reference content that does not exist.</summary>
+    /// <summary><c>verify</c> found rows that reference content that does not exist, or an empty map, area, area-trigger or taxi table.</summary>
     public const int Verify = 6;
 }

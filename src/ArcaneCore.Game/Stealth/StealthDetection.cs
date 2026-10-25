@@ -43,7 +43,7 @@ public readonly record struct StealthDetectionResult(bool Detected, bool Alert, 
 /// distance is 5 yards beyond the aggro distance. The tests prove the code equals those measurements; they cannot prove
 /// retail behaves so (docs/areas/rogue.md).
 /// </summary>
-public static class StealthDetection
+public static partial class StealthDetection
 {
     /// <summary>Below this distance the target is always detected (Unit.cpp:6585 "collision").</summary>
     public const float CollisionDistance = 1.5f;

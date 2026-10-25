@@ -188,7 +188,7 @@ internal enum PlayerbotSpiritHealerStep
 /// from one revive spot to the next, is not, so a body that stays camped for a minute is given up for the healer.</description></item>
 /// </list>
 /// </summary>
-internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions options)
+internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotOptions options)
 {
     /// <summary>
     /// The risk's hazards as threats (<see cref="PlayerbotRisk.HazardThreats"/>): a revive inside a remembered death or retreat, or

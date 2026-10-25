@@ -349,7 +349,7 @@ internal sealed class JourneyWalk
 /// Thread affinity: world thread, except <see cref="CanReachStatic(bool, uint, Vector3, uint, Vector3, PlayerbotTravelOptions)"/>. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/>
 /// keyed by the player; the service instance holds only its options and ship-route source.
 /// </summary>
-internal sealed class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTravel
+internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlayerbotTravel
 {
     /// <summary>The anomaly area of a failed journey (subsystem <c>bot-travel</c>).</summary>
     internal const string AnomalyArea = "travel";

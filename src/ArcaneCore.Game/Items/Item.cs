@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Items;
 /// (vmangos Item::AddToClientUpdateList → owner's map; Item::BuildUpdateData → owner only).
 /// <para>Thread affinity: world thread once its owner is in the world.</para>
 /// </summary>
-public class Item : WorldObject
+public partial class Item : WorldObject
 {
     /// <summary>Spell-charge fields (ITEM_FIELD_SPELL_CHARGES, 5 values).</summary>
     public const int SpellChargeSlots = 5;

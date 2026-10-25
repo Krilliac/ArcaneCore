@@ -19,7 +19,7 @@ internal static class CommandFaultLogging
     /// <summary>Record <paramref name="error"/> at <paramref name="site"/> and log it with <paramref name="what"/> (a short name of the command) and invoker state.</summary>
     internal static void Log(CommandContext context, string site, Exception error, string what)
     {
-        ILogger logger = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(Category) ?? NullLogger.Instance;
+        ILogger logger = context.Session.Services?.GetService<ILoggerFactory>()?.CreateLogger(Category) ?? NullLogger.Instance;
         if (context.IsConsole)
         {
             logger.LogFault(
