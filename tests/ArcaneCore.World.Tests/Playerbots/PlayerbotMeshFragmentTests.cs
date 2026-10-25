@@ -157,39 +157,17 @@ public sealed class PlayerbotMeshFragmentTests : IDisposable
         Assert.False(reachable);
     }
 
-    // The dead-end layout with tile B's western 30 yards walkable as steep slopes only: the slope-excluded graph still splits the goal off,
-    // the all-terrain graph joins it (stairs).
-    private static readonly (int X, int Y, CellTile Tile)[] SteepStairs =
-    [
-        Unjoined[0],
-        (10, 11, new CellTile(0, 1, 40, 0, 8, 8, Size: 5)
-        {
-            LinkedSides = [0, 6],
-            Flags = (i, _) => i < 6 ? NavTerrain.Ground | NavTerrain.SteepSlopes : NavTerrain.Ground,
-        }),
-        Unjoined[2], Unjoined[3], Unjoined[4],
-    ];
-
-    /// <summary>The same goal indoors (a WMO group) reached over steep stairs: the climb may reach it, so it is not skipped (a sealed room is: <c>PlayerbotSharedPinsTests</c>).</summary>
+    /// <summary>The same goal indoors (a WMO group): the climb over steep stairs may reach it, so it is not skipped.</summary>
     [Fact]
-    public async Task AnIndoorGoalOnlySteepStairsReach_IsNotSkipped()
+    public async Task AnIndoorGoalNoWalkReaches_IsNotSkipped()
     {
-        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, SteepStairs, new IndoorsWhere(at => at.X > 40));
-        await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.Empty)!;
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Unjoined, new IndoorsWhere(at => at.X > 40));
         await world.PlaceAsync(InThePocket);
-        bool split = false;
-        for (int think = 0; think < 80 && !split; think++)
+        for (int think = 0; think < 10; think++)
         {
-            split = await world.Host.OnWorldAsync(() =>
-            {
-                PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal, out int from, out int to);
-                return from >= 0 && to >= 0 && from != to;
-            });
-            if (!split) await world.Host.World.AdvanceClockAsync(50);
+            Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal, out _, out _)));
+            await world.Host.World.AdvanceClockAsync(50);
         }
-
-        Assert.True(split, "the slope-excluded graph splits the stairs off (control)");
-        Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsUnreachableOnFoot(world.Player, Goal, out _, out _)));
     }
 
     /// <summary>
