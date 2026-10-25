@@ -590,4 +590,24 @@ public sealed class LiveActionCommandsTests
         CommandResult bad = await rig.RunAsync("action.log", """{"limit":0}""");
         Assert.False(bad.Ok);
     }
+
+    [Fact]
+    public async Task ReadOnlyOverlayRefreshes_NeitherEvictTheUndoableLog_NorBroadcast()
+    {
+        DevUiRig rig = Rig();
+        await rig.DataAsync("action.on", $$"""{"template":"kill","guid":"{{Hex(Wolf)}}"}""");
+        long killId = Assert.Single(rig.Actions.Log.Recent(10)).Id;
+        int broadcastBefore = rig.Published.Count(p => p.Topic == "devui.action");
+
+        for (int i = 0; i < 1000; i++)
+        {
+            JsonObject refresh = await rig.DataAsync("action.on", $$"""{"template":"debug","guid":"{{Hex(Wolf)}}"}""");
+            Assert.False(refresh["logged"]!.GetValue<bool>());
+        }
+
+        ActionEntry entry = Assert.Single(rig.Actions.Log.Recent(ActionLog.Capacity));
+        Assert.Equal(killId, entry.Id);
+        Assert.Equal(broadcastBefore, rig.Published.Count(p => p.Topic == "devui.action"));
+        Assert.NotNull(rig.Actions.Log.Find(killId));
+    }
 }

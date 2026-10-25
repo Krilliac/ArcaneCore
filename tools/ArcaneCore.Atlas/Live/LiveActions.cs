@@ -728,10 +728,14 @@ public sealed class LiveActions
             }
         }
 
+        // A successful read-only catalog action (the AI overlay's 2 Hz "debug" refresh, "spawns") changes nothing and has nothing to
+        // undo; logging each one would evict the 500-entry log's real, undoable actions and flood devui.action. It still returns its
+        // overlay; only the log entry and the broadcast are skipped.
+        bool recorded = !(ok && plan.Action is { Write: false } && writes.Count == 0);
         string actor = caps.Operator ?? "atlas-local";
         var entry = new ActionEntry
         {
-            Id = Log.NextId(),
+            Id = recorded ? Log.NextId() : 0,
             At = _clock.GetUtcNow(),
             Actor = actor,
             Action = plan.Name,
@@ -746,14 +750,17 @@ public sealed class LiveActions
             NoUndoReason = inverse.Count == 0 ? noUndo : null,
             UndoOf = undoOf,
         };
-        Log.Add(entry);
-        JsonObject entryJson = entry.ToJson();
-        _events?.Publish("devui.action", entryJson);
+        if (recorded)
+        {
+            Log.Add(entry);
+            _events?.Publish("devui.action", entry.ToJson());
+        }
 
         var result = new JsonObject
         {
             ["id"] = entry.Id,
-            ["logId"] = entry.Id,
+            ["logId"] = recorded ? entry.Id : null,
+            ["logged"] = recorded,
             ["ok"] = ok,
             ["action"] = plan.Name,
             ["lines"] = new JsonArray([.. lines.Select(l => (JsonNode)l)]),
