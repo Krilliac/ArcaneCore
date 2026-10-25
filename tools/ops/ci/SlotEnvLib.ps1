@@ -44,7 +44,7 @@ function Resolve-SlotClientEnv {
             }
         }
     }
-    $where = if ($filesSeen -gt 0) { 'unset and not set in slot-env.local.json' } else { 'unset and no slot-env.local.json found' }
+    $where = if ($filesSeen -gt 0) { 'unset and not set in slot-env.local.json' } else { 'unset and no readable slot-env.local.json found' }
     if (-not $clientDir) { $messages.Add("client-data tests will skip: ARCANECORE_TEST_CLIENT_DIR $where (docs/ops/tooling.md)") }
     elseif (-not (Test-Path -LiteralPath $clientDir)) { $messages.Add("warning: client dir '$clientDir' does not exist; its tests will skip") }
     if (-not $clientFilesDir) { $messages.Add("client-data tests will skip: ARCANECORE_TEST_CLIENT_FILES_DIR $where (docs/ops/tooling.md)") }

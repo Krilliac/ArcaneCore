@@ -49,7 +49,7 @@ try {
 
     $d = New-Dirs 'onlybad' '[]' $null
     $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
-    Check 'unreadable file only: no-file wording' (@($r.Messages | Where-Object { $_ -like '*unset and no slot-env.local.json found*' }).Count -eq 2)
+    Check 'unreadable file only: no-readable-file wording' (@($r.Messages | Where-Object { $_ -like '*unset and no readable slot-env.local.json found*' }).Count -eq 2)
 
     $d = New-Dirs 'both' "{`"clientDir`":`"$rj`",`"clientFilesDir`":`"$rj`"}" $null
     $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
@@ -57,7 +57,7 @@ try {
 
     $d = New-Dirs 'none' $null $null
     $r = Resolve-SlotClientEnv -WorkDir $d.Work -LanesRoot $d.Lanes
-    Check 'no file: no-file wording' (@($r.Messages | Where-Object { $_ -like '*unset and no slot-env.local.json found*' }).Count -eq 2)
+    Check 'no file: no-file wording' (@($r.Messages | Where-Object { $_ -like '*unset and no readable slot-env.local.json found*' }).Count -eq 2)
 
     # Precedence: env, then WorkDir, then LanesRoot (per variable).
     $d = New-Dirs 'prec' '{"clientDir":"W-dir","clientFilesDir":"W-files"}' '{"clientDir":"L-dir","clientFilesDir":"L-files"}'
