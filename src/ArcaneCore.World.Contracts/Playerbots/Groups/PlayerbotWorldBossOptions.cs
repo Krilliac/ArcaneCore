@@ -160,18 +160,18 @@ public sealed class PlayerbotWorldBossOptions
         => Tokens(value).All(t => TryParseEntry(t, out _)) ? null : "must be creature entry numbers";
 
     /// <summary>The non-empty, trimmed items of a comma separated list.</summary>
-    internal static IEnumerable<string> Tokens(string? csv)
+    public static IEnumerable<string> Tokens(string? csv)
     {
         if (string.IsNullOrWhiteSpace(csv)) yield break;
         foreach (string part in csv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)) yield return part;
     }
 
     /// <summary>A creature entry: digits only, above zero.</summary>
-    internal static bool TryParseEntry(string token, out uint entry)
+    public static bool TryParseEntry(string token, out uint entry)
         => uint.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out entry) && entry != 0;
 
     /// <summary><c>entry:size</c> with a size of 5..40.</summary>
-    internal static bool TryParseSizeOverride(string token, out uint entry, out int size)
+    public static bool TryParseSizeOverride(string token, out uint entry, out int size)
     {
         entry = 0;
         size = 0;
@@ -181,7 +181,7 @@ public sealed class PlayerbotWorldBossOptions
     }
 
     /// <summary><c>entry</c> (<paramref name="map"/> null) or <c>entry@map</c> with map 0 or 1.</summary>
-    internal static bool TryParseIncluded(string token, out uint entry, out uint? map)
+    public static bool TryParseIncluded(string token, out uint entry, out uint? map)
     {
         entry = 0;
         map = null;
