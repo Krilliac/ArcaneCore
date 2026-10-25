@@ -12,8 +12,9 @@ namespace ArcaneCore.Game.Creatures;
 /// <param name="MaxMilliseconds">
 /// Wall time the update's searches may spend before no further search starts (the search that crosses it still finishes). Nodes do
 /// not bound time: a search that reopens nodes, crosses tile borders or runs while the host is busy can cost tens of milliseconds
-/// for the same node count (live 2026-10-16, map 0: one creature's searches took 65-425 ms of a map update). Infinite by default so
-/// a hand-built budget (tests) stays a count-only, deterministic budget.
+/// for the same node count (live 2026-10-16, map 0: one creature's searches took 65-425 ms of a map update). Infinite when omitted, so
+/// a hand-built budget (tests) is count-only and deterministic; <see cref="Default"/> sets 12 ms, which makes what a map does in an
+/// update depend on host load.
 /// </param>
 public readonly record struct CreaturePathBudget(int MaxSearches, long MaxNodes, double MaxMilliseconds = double.PositiveInfinity)
 {

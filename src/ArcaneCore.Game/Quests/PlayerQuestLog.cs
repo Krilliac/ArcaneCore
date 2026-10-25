@@ -28,7 +28,7 @@ public sealed class QuestStatusData
 /// a count/state word (6-bit counters at bit 6·i, state flags in byte 3) and the timer.
 /// Changes are tracked per quest for delta persistence. World thread only.
 /// </summary>
-public sealed class PlayerQuestLog(Player player)
+public sealed partial class PlayerQuestLog(Player player)
 {
     private readonly Dictionary<uint, QuestStatusData> _statuses = [];
     private readonly HashSet<uint> _changed = [];
