@@ -19,14 +19,12 @@ public sealed class PlayerbotWorldBossStatusTests
     {
         PlayerbotWorldBossStatus status = PlayerbotWorldBossStatus.Resolve(new PlayerbotWorldBossFacts
         {
-            Living = true, Position = Spot, InCombat = true, TappedOrFightingOthers = true, RealPlayersNear = 4, GridLoaded = true,
+            Living = true, Position = Spot, TappedOrFightingOthers = true, GridLoaded = true,
         }, Now);
 
         Assert.Equal(PlayerbotWorldBossState.Up, status.State);
         Assert.Equal(Spot, status.Position);
-        Assert.True(status.InCombat);
         Assert.True(status.TappedOrFightingOthers);
-        Assert.Equal(4, status.RealPlayersNear);
     }
 
     [Fact]

@@ -188,13 +188,14 @@ public sealed partial class PlayerbotGroupCoordinator
             }
         }
 
-        int active = _groups.Count(g => g.WorldBoss is not null) + _wbCampaigns.Values.Count(c => c.Phase == PlayerbotWorldBossPhase.Open);
+        int active = -1; // counted on the first boss that may open a muster: most passes have none
         foreach (PlayerbotWorldBossEntry entry in catalogue.Entries)
         {
             if (!_wbSeen.TryGetValue(entry.Entry, out WorldBossSeen? seen) || seen.Status.State != PlayerbotWorldBossState.Up) continue;
             PlayerbotWorldBossCampaign campaign = CampaignOf(entry.Entry);
             if (campaign.Phase != PlayerbotWorldBossPhase.Open)
             {
+                if (active < 0) active = ActiveWorldBossCount();
                 var load = new PlayerbotWorldBossLoad(active, OwnGroupCount, QuestGroupSlotFree());
                 PlayerbotWorldBossOpening verdict = campaign.MayOpen(o, _options.Groups.MaxGroups, load, unix);
                 _wbOpening[entry.Entry] = verdict;
@@ -216,6 +217,17 @@ public sealed partial class PlayerbotGroupCoordinator
                 _wbMusterTriedMs[entry.Entry] = Now; // the next try waits its interval: a fault does not repeat every scan
             }
         }
+    }
+
+    /// <summary>The world-boss raids standing plus the musters open: the load a new muster is weighed against.</summary>
+    private int ActiveWorldBossCount()
+    {
+        int active = 0;
+        foreach (BotGroup group in _groups)
+            if (group.WorldBoss is not null) active++;
+        foreach (PlayerbotWorldBossCampaign campaign in _wbCampaigns.Values)
+            if (campaign.Phase == PlayerbotWorldBossPhase.Open) active++;
+        return active;
     }
 
     /// <summary>One muster step of a boss whose campaign is open: try for a raid now and then, give the muster up when its window has run out.</summary>
@@ -412,14 +424,11 @@ public sealed partial class PlayerbotGroupCoordinator
         {
             var at = new Vector3(living.X, living.Y, living.Z);
             live = live with { Locator = live.Locator with { Position = at } };
-            int near = Wb.PlayersNearYards > 0f ? map.CountPlayersWithin(at.X, at.Y, Wb.PlayersNearYards, includeBots: false) : 0;
             return PlayerbotWorldBossStatus.Resolve(new PlayerbotWorldBossFacts
             {
                 Living = true,
                 Position = at,
-                InCombat = living.Combat.IsInCombat,
                 TappedOrFightingOthers = !living.LootTapper.IsEmpty && !IsAnyRaidTap(map, living.LootTapper) || living.Combat.Victim is Player victim && !IsAnyRaidTap(map, victim.Guid),
-                RealPlayersNear = near,
                 GridLoaded = true,
             }, unix);
         }

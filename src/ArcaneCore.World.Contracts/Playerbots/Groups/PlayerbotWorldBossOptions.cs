@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// <c>World:Playerbots:Groups:WorldBosses</c>: bot raids that muster for a world boss that stands up on a continent (Azuregos, Lord Kazzak,
-/// Teremus the Devourer and the four Dragons of Nightmare while their event runs; docs/areas/playbots-groups.md, World-boss raids). The
+/// the four Dragons of Nightmare while their event runs, and what the content rule derives, Teremus the Devourer among it; docs/areas/playbots-groups.md, World-boss raids). The
 /// coordinator watches each catalogued boss, and once one has been up for <see cref="PlayerGraceMinutes"/> with no player at it, the bots of
 /// one team near it are asked, a raid forms, walks to the boss, holds back while players have a claim on it, pulls and kills it. Every key is
 /// live: <c>.reload config</c> changes this object in place and the coordinator reads it at every decision. The raid's willingness rolls are

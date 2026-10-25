@@ -409,8 +409,8 @@ machine forms, gathers and walks it; only the Engaging step is its own (`Advance
 `World:Playerbots:Groups:RaidsEnabled`; raids count in `MaxGroups` and in the quest-group limit.
 
 **Catalogue.** Azuregos, Kazzak, the four Emerald Dragons (a dragon is looked for at its portal while the Nightmare Dragons event runs and its
-portal's dragon is not killed), Teremus, and with `DeriveFromContent` every rank-3 creature with a spawn on map 0 or 1 that is no faction
-leader, not friendly and not an event-gated spawn; `IncludedEntries` adds (`entry`, or `entry@map` for a boss placed by something other
+portal's dragon is not killed), and with `DeriveFromContent` every rank-3 creature with a spawn on map 0 or 1 that is no faction
+leader, not friendly and not an event-gated spawn (Teremus the Devourer is in the catalogue only this way, not by the fixed list); `IncludedEntries` adds (`entry`, or `entry@map` for a boss placed by something other
 than a database spawn), `ExcludedEntries` removes and wins. An `entry@map` with no creature template is ignored with a warning. The entry
 set is frozen as a snapshot (`IsWorldBossEntry`) that the kill talk reads from the map threads.
 
@@ -431,7 +431,7 @@ the cooperation roll (a hash of boss, UTC day and team: a refusal holds for the 
 A bot that is silent or refuses an invitation is dropped and forming goes on while `MinRaidSize` remain (other groups still end on one
 silent bot). The raid walks by default; `CatchUpTeleport` turns the leader's teleport of stragglers on.
 
-**Engage.** The raid gathers `RallyYards` short of the boss and the leader warns the raid ("Raid forming ...", "Pulling ...", "... is dead!").
+**Engage.** The raid gathers `RallyYards` short of the boss and the leader warns the raid ("Raid forming ...", "Pulling ...", "... is down. Well done.").
 The pull is released when `PresentFraction` of the members stand at the rally and none rests, or after `PullWaitSeconds` with at least
 `MinRaidSize` there (fewer: `not-enough`). It is held, and the stall watch leaves the raid alone, while another player's tap or fight is on
 the boss (a claim that blinks for a few seconds counts as one claim) or `PlayersNearCount` real players stand within `PlayersNearYards`;
@@ -762,7 +762,7 @@ taking the lead back (the coordinator lets go, the party AI drives, the bots sta
 from its list (the boss dead, the clear line, the lead back with the player), and a raid of ten in two subgroups adopted whole with its
 subgroups kept.
 
-World-boss raids (`PlayerbotWorldBoss*Tests`, `WorldBossTestKit`, `WorldBossRealRows`): the options and their ranges; the catalogue on the real world.db rows (the knownbosses, the derived ones, the faction leaders left out, operator entries); the status and campaign rules; the muster (level floor, caller, size,roles); the engage decision and the outcome and meter names; and on the group test world with the manual clock a full kill, a level-63 bossagainst level-60 bots, the holds that put players first (another's tap, real players near, a player's kill, the stall watch), the wipe counter,the catch-up guard, the caps, a battleground never taking a raid member, and a forming raid that drops silent invitees (`PlayerbotWorldBossFormingWorldTests`).
+World-boss raids (`PlayerbotWorldBoss*Tests`, `WorldBossTestKit`, `WorldBossRealRows`): the options and their ranges; the catalogue on the real world.db rows (the known bosses, the derived ones, the faction leaders left out, operator entries); the status and campaign rules; the muster (level floor, caller, size, roles); the engage decision and the outcome and meter names; and on the group test world with the manual clock a full kill, a level-63 boss against level-60 bots, the holds that put players first (another's tap, real players near, a player's kill, the stall watch), the wipe counter, the catch-up guard, the caps, a battleground never taking a raid member, and a forming raid that drops silent invitees (`PlayerbotWorldBossFormingWorldTests`).
 
 ## Live replay (2026-10-08)
 

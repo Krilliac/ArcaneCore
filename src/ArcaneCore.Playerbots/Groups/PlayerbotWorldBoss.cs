@@ -220,12 +220,8 @@ internal sealed record PlayerbotWorldBossFacts
 
     public Vector3 Position { get; init; }
 
-    public bool InCombat { get; init; }
-
     /// <summary>The boss is tapped by a player, or fights one.</summary>
     public bool TappedOrFightingOthers { get; init; }
-
-    public int RealPlayersNear { get; init; }
 
     /// <summary>The grid at the boss's place is loaded, so a boss that is not there is not there.</summary>
     public bool GridLoaded { get; init; }
@@ -235,7 +231,7 @@ internal sealed record PlayerbotWorldBossFacts
 }
 
 /// <summary>The watch's conclusion for one boss.</summary>
-internal sealed record PlayerbotWorldBossStatus(PlayerbotWorldBossState State, Vector3 Position, bool InCombat, bool TappedOrFightingOthers, int RealPlayersNear, long? DeadUntilUnix)
+internal sealed record PlayerbotWorldBossStatus(PlayerbotWorldBossState State, Vector3 Position, bool TappedOrFightingOthers, long? DeadUntilUnix)
 {
     /// <summary>
     /// A living creature is Up (a stale ledger entry never beats it). Otherwise a respawn in the future is Dead until then, wherever the grid is; with none, a
@@ -245,10 +241,10 @@ internal sealed record PlayerbotWorldBossStatus(PlayerbotWorldBossState State, V
     {
         ArgumentNullException.ThrowIfNull(facts);
         if (facts.Living)
-            return new PlayerbotWorldBossStatus(PlayerbotWorldBossState.Up, facts.Position, facts.InCombat, facts.TappedOrFightingOthers, facts.RealPlayersNear, null);
+            return new PlayerbotWorldBossStatus(PlayerbotWorldBossState.Up, facts.Position, facts.TappedOrFightingOthers, null);
         if (facts.PendingRespawnUnix > nowUnix)
-            return new PlayerbotWorldBossStatus(PlayerbotWorldBossState.Dead, facts.Position, false, false, 0, facts.PendingRespawnUnix);
-        return new PlayerbotWorldBossStatus(facts.GridLoaded ? PlayerbotWorldBossState.Dead : PlayerbotWorldBossState.Unknown, facts.Position, false, false, 0, null);
+            return new PlayerbotWorldBossStatus(PlayerbotWorldBossState.Dead, facts.Position, false, facts.PendingRespawnUnix);
+        return new PlayerbotWorldBossStatus(facts.GridLoaded ? PlayerbotWorldBossState.Dead : PlayerbotWorldBossState.Unknown, facts.Position, false, null);
     }
 
     /// <summary>

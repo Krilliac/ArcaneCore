@@ -1532,8 +1532,11 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
     private TileWait _tileWait;
 
-    /// <summary>The Mark of Frost a player gets when Azuregos or Kazzak kills it (AzuregosKazzakAI.SpellMarkOfFrostPlayer): a marked member sits the rest of the fight out.</summary>
+    /// <summary>The Mark of Frost a player gets when Azuregos kills it (AzuregosKazzakAI.SpellMarkOfFrostPlayer; Kazzak does not apply it): a marked member sits the rest of the fight out.</summary>
     internal const uint MarkOfFrost = 23182;
+
+    /// <summary>The world's spell service, resolved on the first world-boss think (a singleton for the session's life).</summary>
+    private SpellFeature? _spellFeature;
 
     /// <summary>
     /// A raid member carrying the Mark of Frost does not fight again: it stops, and holds at the rally (the leader's approach point) until the mark is gone.
@@ -1541,7 +1544,7 @@ internal sealed class PlayerbotGroupAI
     /// </summary>
     private bool SitOutMark(Player player, PlayerbotGroupCoordinator.BotGroup group, uint interval)
     {
-        if (group.WorldBoss is null || _session.Services.GetService<SpellFeature>()?.System.HasAura(player, MarkOfFrost) != true) return false;
+        if (group.WorldBoss is null || (_spellFeature ??= _session.Services.GetService<SpellFeature>())?.System.HasAura(player, MarkOfFrost) != true) return false;
         if (_target is not null)
         {
             if (_attacking) StopAttacking(player);
