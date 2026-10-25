@@ -194,7 +194,15 @@ internal static class PublicConfigCheck
             if (host is not null && bind.Port > 0)
             {
                 string bracketed = host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
-                result.Origin = new Uri(string.Create(CultureInfo.InvariantCulture, $"{expectedScheme}://{bracketed}:{bind.Port}"));
+                // A wildcard certificate name (*.example.org) is not a host a browser visits: refuse it cleanly instead of throwing.
+                if (Uri.TryCreate(string.Create(CultureInfo.InvariantCulture, $"{expectedScheme}://{bracketed}:{bind.Port}"), UriKind.Absolute, out Uri? derivedOrigin) && !host.Contains('*', StringComparison.Ordinal))
+                {
+                    result.Origin = derivedOrigin;
+                }
+                else
+                {
+                    result.Errors.Add($"Atlas:Public:Origin cannot be derived from '{host}' (a wildcard or malformed name): set Atlas:Public:Origin to the public address, for example https://atlas.example.org.");
+                }
             }
         }
         else

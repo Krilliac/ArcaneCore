@@ -27,6 +27,9 @@ export function statusText({ socketState, model, loginAvailable }) {
     if (!model.connected || !model.hasFrame) {
         return { text: 'Waiting for the server…', level: 'info' };
     }
+    if (model.detail === 'throttled') {
+        return { text: 'Updates are slowed to stay within the data limit for your address.', level: 'warn' };
+    }
     if (model.reduced) {
         return { text: 'Live, with some entities hidden while the server catches up.', level: 'warn' };
     }

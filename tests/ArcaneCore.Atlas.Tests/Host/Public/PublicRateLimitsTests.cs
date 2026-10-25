@@ -106,6 +106,20 @@ public sealed class PublicRateLimitsTests
     }
 
     [Fact]
+    public void AnAddressThatFloods_CannotDrainTheGlobalBudget_ForEveryoneElse()
+    {
+        var time = new ManualTime();
+        var limits = new PublicRateLimits(new PublicOptions(), time); // global 50 per second, 5 per address
+
+        // One address, many sessions (HTTP plus sockets), four times the global rate in one instant.
+        int allowed = Enumerable.Range(0, 200).Count(i => limits.AllowWorldCall("flood" + i, "6.6.6.6"));
+
+        Assert.Equal(5, allowed);
+        // Another address still gets its own five calls: the flood was charged to its address, not to the global bucket.
+        Assert.Equal(5, Enumerable.Range(0, 20).Count(i => limits.AllowWorldCall("other" + i, "7.7.7.7")));
+    }
+
+    [Fact]
     public void SocketMessages_AreTenPerSecondPerSocket_AndInfoIsTwoPerSecondPerSession()
     {
         var time = new ManualTime();

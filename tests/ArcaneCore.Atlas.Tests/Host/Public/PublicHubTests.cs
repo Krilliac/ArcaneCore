@@ -185,6 +185,101 @@ public sealed class PublicHubTests
         Assert.Equal(1, rig.Runtime.Stats.FramesDropped);
     }
 
+    [Fact]
+    public async Task AnHttpAnswerOverTheAddressesByteBudget_IsRefusedWith429_AndTheSameAnswerPassesWithTheDefaultBudget()
+    {
+        var time = new ManualTime();
+        await using PublicRig small = await PublicRig.StartAsync(o => o.Guest.MaxBytesPerSecond = 4096, time: time);
+        await using PublicRig normal = await PublicRig.StartAsync(time: time);
+        var args = Json("""{"map":0}""");
+        foreach (PublicRig rig in new[] { small, normal })
+        {
+            AllowLinks(rig, 1);
+            rig.Runtime.Frames.Ingest(FrameOfBoars(1, 60));
+        }
+
+        Visitor visitor = await normal.VisitAsync();
+        Reply big = await normal.PostAsync("/api/public/command", visitor, new JsonObject { ["name"] = "live.entities", ["args"] = args.DeepClone() });
+        Visitor smallVisitor = await small.VisitAsync();
+        Reply refused = await small.PostAsync("/api/public/command", smallVisitor, new JsonObject { ["name"] = "live.entities", ["args"] = args.DeepClone() });
+        Reply control = await small.PostAsync("/api/public/command", smallVisitor, new JsonObject { ["name"] = "guest.maps" });
+
+        Assert.Equal(200, big.Status);
+        Assert.True(big.Text.Length > 4096, $"the answer is {big.Text.Length} bytes: the budget below must be smaller than it");
+        Assert.Equal(429, refused.Status);
+        Assert.Equal("rate-limited", refused.Code);
+        Assert.NotNull(refused.Header("Retry-After"));
+        Assert.Equal(200, control.Status); // a small answer still fits: it is the budget, not the route
+    }
+
+    [Fact]
+    public async Task TheByteBudgetIsSharedByHttpAndTheSockets()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(o => o.Guest.MaxBytesPerSecond = 4096, time: time);
+        Visitor visitor = await rig.VisitAsync();
+
+        // Spend the address's budget over HTTP with small answers until one is refused, then see a socket of the same address feel it.
+        int served = 0;
+        Reply last;
+        do
+        {
+            last = await rig.PostAsync("/api/public/command", visitor, new JsonObject { ["name"] = "guest.help" });
+            served += last.Status == 200 ? 1 : 0;
+        }
+        while (last.Status == 200 && served < 35);
+
+        Assert.Equal(429, last.Status);
+        Assert.True(served > 0);
+        using ClientWebSocket socket = await OpenAsync(rig, visitor); // hello and status are charged but still delivered
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "command", ["id"] = 7, ["name"] = "guest.help" });
+        JsonNode result = (await socket.ReceiveUntilAsync("result"))!;
+        Assert.Equal(7, result["id"]!.GetValue<long>());
+        Assert.False(result["result"]!["ok"]!.GetValue<bool>());
+        Assert.Equal("rate-limited", result["result"]!["error"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AWebSocketCommandResultOverTheByteBudget_IsReplacedByARateLimitedRefusal()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(o => o.Guest.MaxBytesPerSecond = 4096, time: time);
+        Visitor visitor = await rig.VisitAsync();
+        using ClientWebSocket socket = await OpenAsync(rig, visitor);
+        AllowLinks(rig, 1);
+        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 60));
+
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "command", ["id"] = 1, ["name"] = "live.entities", ["args"] = Json("""{"map":0}""") });
+        JsonNode refused = (await socket.ReceiveUntilAsync("result"))!;
+
+        Assert.Equal(1, refused["id"]!.GetValue<long>());
+        Assert.False(refused["result"]!["ok"]!.GetValue<bool>());
+        Assert.Equal("rate-limited", refused["result"]!["error"]!["code"]!.GetValue<string>());
+        Assert.True(refused.ToJsonString().Length < 600);
+    }
+
+    [Fact]
+    public async Task AGuestWhoseFrameWasDroppedForSize_IsToldSoInTheNextStatusNote()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(o => { o.Guest.MaxBytesPerSecond = 4096; o.Guest.FeedHz = 2; }, time: time);
+        using ClientWebSocket socket = await OpenAsync(rig, await rig.VisitAsync());
+        AllowLinks(rig, 1);
+
+        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 80)); // about 9 KiB: the budget can never pay for it
+        Assert.True(await WaitAsync(() => rig.Runtime.Stats.FramesDropped == 1), "the oversized frame was not counted as dropped");
+
+        DateTime end = DateTime.UtcNow.AddSeconds(10);
+        string detail = string.Empty;
+        while (detail != "throttled" && DateTime.UtcNow < end)
+        {
+            JsonNode status = (await socket.ReceiveUntilAsync("event", "live.status"))!;
+            detail = status["data"]!["detail"]!.GetValue<string>();
+        }
+
+        Assert.Equal("throttled", detail);
+    }
+
     private static async Task<bool> GotFrameAsync(ClientWebSocket socket)
     {
         try

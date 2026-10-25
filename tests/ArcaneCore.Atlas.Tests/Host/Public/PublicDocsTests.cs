@@ -71,7 +71,7 @@ public sealed partial class PublicDocsTests
         HashSet<string> real = new(Leaves(typeof(PublicOptions), string.Empty), StringComparer.OrdinalIgnoreCase);
         // A "Group:A / B" row shares its prefix between the two names.
         var documented = new List<string>();
-        foreach (Match row in Row().Matches(DocText()[DocText().IndexOf("## Configuration", StringComparison.Ordinal)..DocText().IndexOf("\n## TLS", StringComparison.Ordinal)]))
+        foreach (Match row in Row().Matches(ConfigurationTable()))
         {
             string prefix = string.Empty;
             foreach (string part in row.Groups["keys"].Value.Split('/'))
@@ -98,8 +98,7 @@ public sealed partial class PublicDocsTests
     [Fact]
     public void EverySettingOfPublicOptions_IsInTheConfigurationTable()
     {
-        string text = DocText();
-        string table = text[text.IndexOf("## Configuration", StringComparison.Ordinal)..text.IndexOf("\n## TLS", StringComparison.Ordinal)];
+        string table = ConfigurationTable();
 
         string[] missing = [.. Leaves(typeof(PublicOptions), string.Empty).Where(k => !table.Contains("`" + k + "`", StringComparison.OrdinalIgnoreCase) && !MentionedInGroup(table, k))];
 

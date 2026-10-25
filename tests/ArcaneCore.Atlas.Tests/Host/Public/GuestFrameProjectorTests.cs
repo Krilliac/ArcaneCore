@@ -275,6 +275,28 @@ public sealed class GuestFrameProjectorTests
     }
 
     [Fact]
+    public void WhenLinksWasNeverSupported_EveryCreatureNearAHiddenPlayerIsDropped_BecauseNoTemplateSetIsKnown()
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime());
+        LiveFrame frame = Frames.Frame(
+            10,
+            Player(Zed, "Zed", 100.25, 100.5),
+            Frames.Entity(500, LiveKind.Creature, "IdlePet", 103.125, 101.5, motion: "idle", entry: 17), // an idle pet beside the hidden player
+            Frames.Entity(501, LiveKind.Creature, "Totem", 112.75, 95.5, entry: 18), // a totem planted a few yards off
+            Frames.Entity(502, LiveKind.Creature, "Boar", 4000.5, 4001.5, entry: 5)); // nowhere near
+
+        GuestProjection projection = projector.Project(frame, LinksSnapshot.Unsupported); // never any earlier answer: no summon set
+        string text = Bytes(projection);
+
+        Assert.True(projection.Reduced);
+        Assert.Equal([502UL], Guids(projection));
+        foreach (string x in new[] { "103.12", "112.75", "100.25", "100.5" })
+        {
+            AssertPositionAbsent(text, x);
+        }
+    }
+
+    [Fact]
     public void WithNoOwnedObjectListYet_AFailClosedProjectionDropsEveryGameObject_AndAStaleLinksAnswerIsTheSame()
     {
         var projector = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime());

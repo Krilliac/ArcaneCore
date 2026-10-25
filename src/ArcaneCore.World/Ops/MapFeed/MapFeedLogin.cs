@@ -185,7 +185,10 @@ internal sealed class MapFeedLogin : IFeedExtension
 
         if (!_audit.Preflight())
         {
-            await connection.QueueAsync(FeedExtensionJson.Refused(id, Kind, ActionCodes.AuditUnavailable, "the audit file cannot be written; login is refused")).ConfigureAwait(false);
+            // Every check has passed, so a distinct answer here would tell a stranger the password was right. The caller sees the ordinary
+            // login-failed; the audit fault is logged here (and by Preflight) for the operator.
+            _logger.LogError("web login refused for account={Account} ref={Ref}: the durable audit file cannot be written", LogSafe.Escape(name), reference);
+            await FailAsync(connection, id, name, clientIp, key, network, "audit file unwritable", reference).ConfigureAwait(false);
             return true;
         }
 

@@ -165,6 +165,9 @@ internal sealed class PublicSessions(PublicOptions options, TimeProvider time)
     private readonly Dictionary<string, PublicSession> _byHash = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 
+    // Sessions that expired inside Find or a guest-creation sweep: their world tickets still have to be ended, which the next Sweep reports.
+    private readonly List<EndedSession> _pendingEnded = [];
+
     /// <summary>Sessions held now.</summary>
     public int Count
     {
@@ -233,6 +236,11 @@ internal sealed class PublicSessions(PublicOptions options, TimeProvider time)
             {
                 _byHash.Remove(hash);
                 session.CloseSockets("expired");
+                if (session.Ticket is not null)
+                {
+                    _pendingEnded.Add(new EndedSession(session, session.Ticket));
+                }
+
                 return null;
             }
 
@@ -287,12 +295,15 @@ internal sealed class PublicSessions(PublicOptions options, TimeProvider time)
         }
     }
 
-    /// <summary>Removes idle-expired and over-age sessions; returns their tickets for the world.</summary>
+    /// <summary>Removes idle-expired and over-age sessions; returns the sessions with a world ticket that expired since the last call (by this sweep, or inside <see cref="Find"/> or a guest creation) so the world can end the tickets.</summary>
     public IReadOnlyList<EndedSession> Sweep()
     {
         lock (_gate)
         {
-            return SweepLocked(time.GetUtcNow());
+            SweepLocked(time.GetUtcNow());
+            EndedSession[] ended = [.. _pendingEnded];
+            _pendingEnded.Clear();
+            return ended;
         }
     }
 
@@ -317,16 +328,18 @@ internal sealed class PublicSessions(PublicOptions options, TimeProvider time)
     private bool Expired(PublicSession session, DateTimeOffset now)
         => now - session.LastUse > TimeSpan.FromMinutes(options.Session.IdleMinutes) || now - session.Created > TimeSpan.FromHours(options.Session.MaxHours);
 
-    private List<EndedSession> SweepLocked(DateTimeOffset now)
+    private void SweepLocked(DateTimeOffset now)
     {
         List<PublicSession> expired = [.. _byHash.Values.Where(s => Expired(s, now))];
         foreach (PublicSession session in expired)
         {
             _byHash.Remove(session.HashKey);
             session.CloseSockets("expired");
+            if (session.Ticket is not null)
+            {
+                _pendingEnded.Add(new EndedSession(session, session.Ticket));
+            }
         }
-
-        return [.. expired.Select(s => new EndedSession(s, s.Ticket))];
     }
 
     private bool EvictIdlestGuestLocked(Func<PublicSession, bool> within)

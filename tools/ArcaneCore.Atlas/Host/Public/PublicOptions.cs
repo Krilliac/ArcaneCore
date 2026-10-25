@@ -211,7 +211,8 @@ public sealed class PublicOptions
                 options.Guest.Maps.Clear(); // the binder appends to a list; a configured list replaces the defaults
             }
 
-            root.GetSection(Section).Bind(options, binder => binder.ErrorOnUnknownConfiguration = false);
+            // A misspelled security setting must not be silently ignored (the operator would believe a limit was set): an unknown key is an error.
+            root.GetSection(Section).Bind(options, binder => binder.ErrorOnUnknownConfiguration = true);
             return options;
         }
         catch (Exception e) when (e is InvalidOperationException or FormatException or IOException)

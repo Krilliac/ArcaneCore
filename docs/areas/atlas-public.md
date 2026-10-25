@@ -36,8 +36,8 @@ Settings live in the `Atlas:Public` section of `atlas.json`, then `ARCANECORE_AT
 | `Guest:MaxSessions` / `MaxSessionsPerIp` | 5000 / 20 | Guest session caps. |
 | `Guest:Maps` | Eastern Kingdoms (0), Kalimdor (1) | Maps guests may view: `{ "Id": 0, "Name": "..." }`. Continents only (0 or 1). The names are yours, never client strings. |
 | `Guest:FeedHz` | 2 | Frames per second, 0.2 to 10. |
-| `Guest:MaxBytesPerSecond` | 65536 | Per-socket frame byte budget, at least 4096. |
-| `Guest:ShowPlayers` | `false` | Show real players to guests, as coarse delayed cells. |
+| `Guest:MaxBytesPerSecond` | 65536 | Byte budget per client address (IPv6 by /64), at least 4096, shared by every socket and every HTTP answer of that address; see "Byte budget". |
+| `Guest:ShowPlayers` | `false` | `true` shows real players to guests as live individual positions. `false` (the default) shows none: guests get only coarse, delayed cells with a minimum count. |
 | `Guest:ShowPlayerNames` | `false` | Only meaningful with `ShowPlayers`; see the policy table. |
 | `Guest:PlayerCellYards` | 250 | Cell size. |
 | `Guest:PlayerDelaySeconds` | 120 | How old the player cells are. |
@@ -57,7 +57,9 @@ Three modes:
 - **Proxy**: `BehindProxy=true`, `Bind` a literal `127.0.0.1` or `[::1]` port, `TrustedProxies` set to the proxy, `Origin` set to the public https address. The proxy must forward `Host` and `X-Forwarded-For`, and must pass WebSocket upgrades on `/api/public/ws`.
 - **Insecure dev**: `AllowInsecureDev=true` on a loopback or private address. Never expose it.
 
-Reverse-proxy recipe (Caddy):
+Send HSTS from the proxy as well (`Strict-Transport-Security: max-age=31536000`): the listener sends it in TLS and proxy modes, but the proxy's own error pages and redirects need it too, and the browser only honours it over HTTPS.
+
+Reverse-proxy recipe (Caddy, which adds HSTS with `header Strict-Transport-Security "max-age=31536000"`):
 
 ```
 atlas.example.org {
@@ -66,6 +68,8 @@ atlas.example.org {
 ```
 
 with `BehindProxy=true`, `Bind=127.0.0.1:8443`, `TrustedProxies=["127.0.0.1"]`, `Origin=https://atlas.example.org`. nginx needs `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $remote_addr;` and the usual `Upgrade`/`Connection` headers on the `/api/public/ws` location.
+
+IIS with Application Request Routing: install the URL Rewrite and ARR modules and enable the proxy in ARR ("Enable proxy"); enable the WebSocket Protocol Windows feature; add a rewrite rule that forwards `{R:0}` to `http://127.0.0.1:8443/{R:0}`; keep "Preserve host header" (the `Host` must stay the public name) and set the server variable `HTTP_X_FORWARDED_FOR` to `{REMOTE_ADDR}` (allow it under "View Server Variables" first); add the custom response header `Strict-Transport-Security: max-age=31536000`. Use the site's HTTPS binding for TLS.
 
 HTTP/2 note: WebSockets over HTTP/2 need extended CONNECT. Whether the Kestrel version in use accepts it is not verified here; if a proxy speaks HTTP/2 to the listener and the socket fails, make the proxy use HTTP/1.1 upstream (the default for both recipes above).
 
@@ -92,7 +96,20 @@ HTTP/2 note: WebSockets over HTTP/2 need extended CONNECT. Whether the Kestrel v
 
 Anything not on the list of allowed commands answers one generic error, `not-available`, for every cause (unknown name, wrong tier, disabled), so the answer does not map the command set.
 
-`pick.public` returns only what the page shows: name, type, level, faction, health percent, motion. The "Player" label for characters is a deliberate deviation from "Race Class": a projected frame carries neither race nor class for characters, and adding them would be a data leak, so the page labels every character "Player".
+`pick.public` returns only what the page shows: name, type, level, faction, health percent, motion. The "Player" label for characters is a deliberate deviation from the design's "Race Class": the live entity the feed delivers (`LiveEntity`) has no race or class field, so there is nothing to build that label from, and the page labels every character "Player".
+
+When the world's `links` answer has never been available (an older daemon), the projector also has no list of pet and totem templates. It then drops every creature within 50 yards of a hidden player, because an idle pet or totem beside a hidden player would show where the player stands. The page says some entities are hidden while this holds.
+
+## Byte budget
+
+`Guest:MaxBytesPerSecond` is one bucket per client address, spent by:
+
+- live frames: a frame the bucket cannot pay for is dropped (never queued) and the guest sees "Updates are slowed to stay within the data limit";
+- HTTP answers of `/api/public/` (status, me, login, logout, command results): an answer the bucket cannot pay for is replaced by `429 rate-limited` with `Retry-After`;
+- WebSocket command results: replaced by a small `rate-limited` result;
+- hello, status notes and other small control messages: charged but always sent (the bucket may go one second into debt).
+
+The page itself (`public.html`, scripts and styles) is not charged; the HTTP request rate limit covers it.
 
 ## Staff view
 
@@ -103,7 +120,10 @@ An Account session whose security is Moderator or higher gets the staff projecti
 `POST /api/public/login` with `{ user, password, code? }`. The world checks the SRP6 verifier (the same check as the remote-admin console), the account's ban state, and the TOTP code when the account has one.
 
 - One answer for every failure: `login-failed`, whatever the cause (unknown account, wrong password, banned, wrong code). Log text of the user-supplied name is escaped.
-- Attempts are limited per address (`Login:PerIpPerMinute`) and per account (`Login:PerAccountPer15Min`). The in-memory bookkeeping is not persisted.
+- Attempts are limited per address (`Login:PerIpPerMinute`) and per account name (`Login:PerAccountPer15Min`). Every attempt is charged, not only failed ones, and the bookkeeping is in memory and not persisted.
+- The per-name bucket is global: it counts attempts from every address. The cost is that a stranger who knows a staff account's name can use up its budget and make the real owner wait for a refill (the answer is the same `login-failed` with `Retry-After`). The benefit is a hard ceiling on guessing for that name from a spread of addresses. The world adds its own lockout keyed by account and network, which does not have this property.
+- Give every staff account a second factor (a TOTP authenticator; a fixed PIN is weaker): only staff accounts can sign in by default, and a password alone is all that stands between the Internet and a GM account.
+- An account whose `LockFlags` include the realm's IP lock cannot sign in on the web: the lock binds the game client's address, which a browser session cannot satisfy. The answer is the ordinary `login-failed`.
 - A TOTP step is consumed only by a successful login. A wrong password with a right code does not burn the step, and a step accepted once cannot be replayed (the claim is atomic).
 - A password is never logged, stored or put in a URL; the form empties the password field as it sends it.
 - A successful login ties a ticket to the session; the ticket is the only thing the action channel resolves an actor from.

@@ -478,7 +478,7 @@ public sealed class MapFeedLoginTests
     }
 
     [WindowsFact]
-    public async Task AnUnwritableAudit_RefusesTheLogin_AndIssuesNoTicket()
+    public async Task AnUnwritableAudit_RefusesTheLogin_WithTheOrdinaryLoginFailed_AndIssuesNoTicket()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -496,7 +496,7 @@ public sealed class MapFeedLoginTests
 
             JsonElement refused = await LoginAsync(web, 1, "STAFF", Password);
 
-            refused.AssertRefused("audit-unavailable");
+            refused.AssertRefused("login-failed"); // not "audit-unavailable": that would say the password was right
             Assert.Equal(0, world.Host.WorldServices.GetRequiredService<MapFeedActorTicketStore>().Count);
         }
         finally

@@ -105,6 +105,24 @@ public sealed class PublicSessionsTests
     }
 
     [Fact]
+    public void AnAccountSessionThatExpiresInsideFind_StillHasItsWorldTicketEnded_BySweep()
+    {
+        var time = new ManualTime();
+        var sessions = new PublicSessions(Options(), time);
+        (IssuedSession account, _) = sessions.Login(null, "1.1.1.1", "1.1.1.1", "GM", 1, "ticket-1");
+        IssuedSession guest = sessions.CreateGuest("2.2.2.2", "2.2.2.2")!;
+
+        time.Advance(TimeSpan.FromMinutes(31));
+        Assert.Null(sessions.Find(account.Cookie)); // expired by the lookup, not by a sweep
+        IReadOnlyList<EndedSession> ended = sessions.Sweep();
+
+        EndedSession end = Assert.Single(ended);
+        Assert.Equal("ticket-1", end.Ticket);
+        Assert.Empty(sessions.Sweep()); // reported once
+        Assert.Null(sessions.Find(guest.Cookie));
+    }
+
+    [Fact]
     public void Login_RotatesTheSession_TheOldCookieDies_ItsSocketsCloseAndItsTicketIsReturned()
     {
         var sessions = new PublicSessions(Options(), new ManualTime());

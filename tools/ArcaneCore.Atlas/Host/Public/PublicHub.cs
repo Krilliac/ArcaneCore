@@ -51,6 +51,7 @@ internal sealed class PublicHub
         public long LastSent = long.MinValue;
         public long LastStatusAt = long.MinValue;
         public string LastStatus = string.Empty;
+        public volatile bool Throttled;
     }
 
     private readonly PublicRuntime _runtime;
@@ -169,12 +170,14 @@ internal sealed class PublicHub
             }
 
             PublicMapStatus status = _runtime.Frames.Status(map);
-            string statusText = StatusJson(status);
+            string statusText = StatusJson(status, state.Throttled);
             if (statusText != state.LastStatus || now - state.LastStatusAt >= StatusRepeat.TotalSeconds * _runtime.Time.TimestampFrequency)
             {
                 state.LastStatus = statusText;
                 state.LastStatusAt = now;
-                state.Frames.Writer.TryWrite(Encoding.UTF8.GetBytes(statusText));
+                byte[] statusBytes = Encoding.UTF8.GetBytes(statusText);
+                _runtime.Limits.ChargeBytes(state.Session.IpKey, statusBytes.Length);
+                state.Frames.Writer.TryWrite(statusBytes);
             }
 
             if (status.For(state.Session) is not { } projection || projection.Seq == state.LastSeq && projection.Map == map && state.LastSeq >= 0)
@@ -194,9 +197,11 @@ internal sealed class PublicHub
             if (!_runtime.Limits.AllowBytes(state.Session.IpKey, buffer.WrittenCount))
             {
                 _runtime.Stats.Dropped();
+                state.Throttled = true; // the next status note tells the guest a frame was dropped for size
                 continue;
             }
 
+            state.Throttled = false;
             state.Frames.Writer.TryWrite(buffer.WrittenSpan.ToArray());
         }
     }
@@ -229,7 +234,7 @@ internal sealed class PublicHub
 
     // ---- per socket ---------------------------------------------------------------------------------------------------------------
 
-    private static string StatusJson(PublicMapStatus status)
+    private static string StatusJson(PublicMapStatus status, bool throttled)
         => new JsonObject
         {
             ["op"] = "event",
@@ -237,7 +242,7 @@ internal sealed class PublicHub
             ["data"] = new JsonObject
             {
                 ["connected"] = status.Connected && status.Projection is not null,
-                ["detail"] = status.Busy ? "busy" : status.Connected ? (status.Reduced ? "reduced" : string.Empty) : "waiting",
+                ["detail"] = status.Busy ? "busy" : status.Connected ? (throttled ? "throttled" : status.Reduced ? "reduced" : string.Empty) : "waiting",
                 ["map"] = status.Map,
             },
         }.ToJsonString();
@@ -367,7 +372,16 @@ internal sealed class PublicHub
         JsonObject result = name is null
             ? PublicCommandRunner.Failure("?", "bad-args", System.Diagnostics.Stopwatch.GetTimestamp())
             : await _runner.RunAsync(state.Session, name, args, cancellationToken).ConfigureAwait(false);
-        await SendTextAsync(state, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result }.ToJsonString(), cancellationToken).ConfigureAwait(false);
+        byte[] answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result }.ToJsonString());
+        if (!_runtime.Limits.AllowBytes(state.Session.IpKey, answer.Length))
+        {
+            // Over the address's byte budget: the answer is replaced by a small refusal instead of being sent.
+            JsonObject refusal = PublicCommandRunner.Failure(name ?? "?", PublicCommandRunner.RateLimited, System.Diagnostics.Stopwatch.GetTimestamp());
+            answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = refusal }.ToJsonString());
+            _runtime.Limits.ChargeBytes(state.Session.IpKey, answer.Length);
+        }
+
+        await SendBytesAsync(state, answer, cancellationToken).ConfigureAwait(false);
     }
 
     private static bool TryParse(byte[] message, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out JsonObject? root)
@@ -435,8 +449,13 @@ internal sealed class PublicHub
         }
     }
 
+    /// <summary>Sends a small control message (hello, pong, error); it counts against the address's byte budget but is not refused.</summary>
     private Task SendTextAsync(SocketState state, string text, CancellationToken cancellationToken)
-        => SendBytesAsync(state, Encoding.UTF8.GetBytes(text), cancellationToken);
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(text);
+        _runtime.Limits.ChargeBytes(state.Session.IpKey, bytes.Length);
+        return SendBytesAsync(state, bytes, cancellationToken);
+    }
 
     private async Task SendBytesAsync(SocketState state, byte[] bytes, CancellationToken cancellationToken)
     {

@@ -537,6 +537,9 @@ test('the status line follows the socket and the map: waiting, busy, reduced, re
     assert.equal(statusText({ socketState: 'open', model }).text, 'Waiting for the server…');
     model.applyStatus({ connected: false, detail: 'busy', map: 0 });
     assert.match(statusText({ socketState: 'open', model }).text, /in use/);
+    model.applyStatus({ connected: true, detail: 'throttled', map: 0 });
+    model.applyFrame(frame());
+    assert.match(statusText({ socketState: 'open', model }).text, /slowed/);
     model.applyStatus({ connected: true, detail: '', map: 0 });
     model.applyFrame({ ...frame(), reduced: true });
     assert.match(statusText({ socketState: 'open', model }).text, /hidden/);

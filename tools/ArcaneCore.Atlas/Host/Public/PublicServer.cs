@@ -637,7 +637,7 @@ internal sealed class PublicServer : IAsyncDisposable
 
         JsonObject status = GuestCommands.Status(_rt);
         status["ok"] = true;
-        await WriteJsonAsync(http, StatusCodes.Status200OK, status).ConfigureAwait(false);
+        await WriteJsonAsync(http, StatusCodes.Status200OK, status, context).ConfigureAwait(false);
     }
 
     private async Task MeAsync(HttpContext http, RequestContext context)
@@ -649,7 +649,7 @@ internal sealed class PublicServer : IAsyncDisposable
             return;
         }
 
-        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(session)).ConfigureAwait(false);
+        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(session), context).ConfigureAwait(false);
     }
 
     private JsonObject SessionJson(PublicSession session)
@@ -798,7 +798,7 @@ internal sealed class PublicServer : IAsyncDisposable
 
                 SetCookie(http, issued.Cookie);
                 _rt.Log.LogInformation("login ok account={Account} ip={Ip} ref={Ref}", issued.Session.Account, context.Client, issued.Session.Ref);
-                await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(issued.Session)).ConfigureAwait(false);
+                await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(issued.Session), context).ConfigureAwait(false);
                 break;
             case WorldLoginKind.Off:
                 await ErrorAsync(http, StatusCodes.Status403Forbidden, "login-disabled", context).ConfigureAwait(false);
@@ -865,7 +865,7 @@ internal sealed class PublicServer : IAsyncDisposable
         }
 
         SetCookie(http, result.Issued.Cookie);
-        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(result.Issued.Session)).ConfigureAwait(false);
+        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(result.Issued.Session), context).ConfigureAwait(false);
     }
 
     private async Task CommandAsync(HttpContext http, RequestContext context)
@@ -900,7 +900,7 @@ internal sealed class PublicServer : IAsyncDisposable
         }
 
         JsonObject result = await _runner.RunAsync(session, name, request["args"] as JsonObject ?? [], http.RequestAborted).ConfigureAwait(false);
-        await WriteJsonAsync(http, StatusCodes.Status200OK, result).ConfigureAwait(false);
+        await WriteJsonAsync(http, StatusCodes.Status200OK, result, context).ConfigureAwait(false);
     }
 
     private async Task WebSocketAsync(HttpContext http, RequestContext context)
@@ -990,13 +990,24 @@ internal sealed class PublicServer : IAsyncDisposable
         return body;
     }
 
-    private static Task WriteJsonAsync(HttpContext http, int status, JsonNode body)
+    /// <summary>
+    /// Writes a JSON body. With <paramref name="charge"/> the body is charged to the address's byte budget (<c>Guest:MaxBytesPerSecond</c>, shared with
+    /// the sockets) and a body the budget cannot pay for is replaced by a 429 <c>rate-limited</c> refusal. Error bodies are small and not charged.
+    /// </summary>
+    private async Task WriteJsonAsync(HttpContext http, int status, JsonNode body, RequestContext? charge = null)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
+        if (charge is not null && !_rt.Limits.AllowBytes(charge.IpKey, bytes.Length))
+        {
+            http.Response.Headers.RetryAfter = "1";
+            await ErrorAsync(http, StatusCodes.Status429TooManyRequests, "rate-limited", charge).ConfigureAwait(false);
+            return;
+        }
+
         http.Response.StatusCode = status;
         http.Response.ContentType = "application/json; charset=utf-8";
         http.Response.ContentLength = bytes.Length;
-        return http.Response.Body.WriteAsync(bytes, http.RequestAborted).AsTask();
+        await http.Response.Body.WriteAsync(bytes, http.RequestAborted).ConfigureAwait(false);
     }
 
     private static string NewRef() => Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();

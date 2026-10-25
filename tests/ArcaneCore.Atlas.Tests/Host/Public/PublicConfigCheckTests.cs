@@ -233,6 +233,37 @@ public sealed class PublicConfigCheckTests
     }
 
     [Fact]
+    public void AnUnknownKeyInTheSettings_IsAnError_NotSilentlyIgnored()
+    {
+        string file = Path.Combine(Path.GetTempPath(), $"atlas-public-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(file, """{"Atlas":{"Public":{"Guest":{"MaxBytesPerSecnd":1}}}}""");
+            InvalidDataException typo = Assert.Throws<InvalidDataException>(() => PublicOptions.Load(file));
+            Assert.Contains("MaxBytesPerSecnd", typo.Message, StringComparison.Ordinal);
+
+            File.WriteAllText(file, """{"Atlas":{"Public":{"Guest":{"MaxBytesPerSecond":8192}}}}""");
+            Assert.Equal(8192, PublicOptions.Load(file).Guest.MaxBytesPerSecond);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+
+        var environment = new Hashtable { ["ARCANECORE_ATLAS_PUBLIC__Bnd"] = "127.0.0.1:1" };
+        Assert.Throws<InvalidDataException>(() => PublicOptions.Load(Path.Combine(Path.GetTempPath(), "missing-atlas.json"), environment));
+    }
+
+    [Fact]
+    public void AWildcardCertificateName_IsAConfigurationError_NotAnException()
+    {
+        PublicConfigResult wildcard = PublicConfigCheck.Evaluate(Tls(o => o.Bind = "[::]:8443"), Env(dns: "*.example.org"));
+
+        Assert.False(wildcard.Ok);
+        Assert.Contains(wildcard.Errors, e => e.Contains("Atlas:Public:Origin cannot be derived", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void AMissingSettingsFile_GivesTheDefaults_AndABrokenOneIsInvalidData()
     {
         PublicOptions defaults = PublicOptions.Load(Path.Combine(Path.GetTempPath(), "missing-atlas.json"));

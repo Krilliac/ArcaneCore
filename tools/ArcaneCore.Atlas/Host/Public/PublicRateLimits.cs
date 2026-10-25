@@ -66,6 +66,36 @@ internal sealed class KeyedTokenBuckets(double ratePerSecond, double burst, Time
         }
     }
 
+    /// <summary>
+    /// Spends <paramref name="cost"/> tokens even when the bucket holds fewer (the balance goes negative, at most one burst into debt, and refills with
+    /// time): for small messages that must be sent, such as a status note, but still count against the budget.
+    /// </summary>
+    public void Spend(string key, double cost)
+    {
+        long now = time.GetTimestamp();
+        lock (_gate)
+        {
+            if (!_buckets.TryGetValue(key, out Bucket? bucket))
+            {
+                if (_buckets.Count >= maxKeys)
+                {
+                    Prune(now);
+                }
+
+                bucket = new Bucket { Tokens = _burst, Stamp = now };
+                _buckets[key] = bucket;
+            }
+            else
+            {
+                double elapsed = (now - bucket.Stamp) / (double)time.TimestampFrequency;
+                bucket.Tokens = Math.Min(_burst, bucket.Tokens + (elapsed * _rate));
+                bucket.Stamp = now;
+            }
+
+            bucket.Tokens = Math.Max(-_burst, bucket.Tokens - cost);
+        }
+    }
+
     /// <summary>Spends one token; the wait is not needed.</summary>
     public bool TryTake(string key) => TryTake(key, out _);
 
@@ -148,15 +178,21 @@ internal sealed class PublicRateLimits
     public bool AllowBytes(string ipKey, int bytes) => _bytes.TryTake(ipKey, out _, bytes);
 
     /// <summary>
+    /// Charges <paramref name="bytes"/> to the address's byte budget without refusing (status notes, hello and small control messages that must be
+    /// sent); the budget can go into debt by up to one second's worth, so what follows is throttled instead.
+    /// </summary>
+    public void ChargeBytes(string ipKey, int bytes) => _bytes.Spend(ipKey, bytes);
+
+    /// <summary>
     /// A call that touches the world (<c>live.find</c>, <c>pick.public</c>): per session and per address 5 per second and globally
-    /// <c>Guest:WorldCallsPerSecond</c>; the strictest wins. All three buckets are charged even when one refuses, so a refused caller does not get free retries.
+    /// <c>Guest:WorldCallsPerSecond</c>; the strictest wins. The session and address buckets are both charged (a refused caller gets no free retries there), but the
+    /// global bucket is charged only for a call the other two let through: one flooding address must not drain the global budget and starve every other guest.
     /// </summary>
     public bool AllowWorldCall(string sessionRef, string ipKey)
     {
         bool session = _worldSession.TryTake(sessionRef);
         bool ip = _worldIp.TryTake(ipKey);
-        bool global = _worldGlobal.TryTake("*");
-        return session && ip && global;
+        return session && ip && _worldGlobal.TryTake("*");
     }
 
     /// <summary><c>info.public</c> asks: 2 per second per session on top of <see cref="AllowWorldCall"/>.</summary>
