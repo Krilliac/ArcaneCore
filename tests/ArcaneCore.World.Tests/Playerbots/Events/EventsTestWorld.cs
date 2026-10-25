@@ -2,6 +2,7 @@ using ArcaneCore.World.Bots;
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -9,6 +10,7 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Tests.GridTerrain;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
@@ -102,6 +104,14 @@ internal sealed class EventsTestWorld : IAsyncDisposable
             services.AddSingleton<IOptions<PlayerbotOptions>>(Microsoft.Extensions.Options.Options.Create(options));
         });
         await world.UseFlatFloorAsync();
+        // The map fixture of the teleport tests puts a "Test shortcut" trigger (a teleport to the capital) 10 yards east of the start, on the line most
+        // festival walks take: a bot crossing it was sent 690 yards away and walked back. No trigger belongs in these worlds.
+        await world.Host.OnWorldAsync(() =>
+        {
+            WorldMaps maps = WorldMaps.Of(world.Host.World);
+            maps.ReplaceAreaTriggerTables(maps.BuildAreaTriggerTables(InMemoryMapDataStore.Content with { AreaTriggers = [], AreaTriggerTeleports = [] }));
+            return true;
+        });
         await world.Host.OnWorldAsync(() =>
         {
             WorldCollision.Of(world.Host.World).Install(pathfinder: new OpenPathfinder());

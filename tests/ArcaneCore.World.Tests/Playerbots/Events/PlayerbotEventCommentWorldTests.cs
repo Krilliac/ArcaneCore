@@ -151,6 +151,7 @@ public sealed class PlayerbotEventCommentWorldTests
         await ScanAsync(world, WinterVeil, now + (40 * Minute), Attempts, until: 2);
 
         Assert.Equal(2, Comments(world));
+        await HelpTestKit.UntilAsync(() => !model.Calls.IsEmpty, "the model call of the ordinary listener's remark"); // a chat worker makes it, after the scan
         Assert.NotEmpty(model.Calls);
     }
 

@@ -149,7 +149,8 @@ public sealed class PlayerbotFestivalTalkWorldTests
     {
         var model = new FakeBotChatClient();
         // The same bot arrives twice 199 seconds apart: its own gap is shortened so it is not what holds the second line back.
-        await using SocialWorld world = await StartAsync(model, options => options.Social.Events.Holidays.TalkBotGapMinutes = 1);
+        // (The speech limiter keeps its own bot gap on the real chat clock, which the two arrivals, seconds apart in real time, would also hit.)
+        await using SocialWorld world = await StartAsync(model, options => { options.Social.Events.Holidays.TalkBotGapMinutes = 1; options.Chat.Speech.BotGapSeconds = 0; });
         await StartEventAsync(world, WinterVeil);
         (ulong botGuid, string bot) = await BotAsync(world, "Aioffbot");
         Eager(world);
