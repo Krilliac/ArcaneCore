@@ -154,6 +154,29 @@ public sealed class CreatureRespawnQueueTests
     }
 
     [Fact]
+    public async Task TryGetPendingIsAPointLookup_PerMapInstance_AndSeesEverySaveAndDelete()
+    {
+        await using ServiceProvider sp = Build(new FakeStore());
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.LoadInitial([new CreatureRespawnRecord(0, 0, 9, Now + 50), new CreatureRespawnRecord(409, 3, 9, Now + 60)]);
+
+        Assert.True(queue.TryGetPending(0, 0, 9, out long world));
+        Assert.Equal(Now + 50, world);
+        Assert.True(queue.TryGetPending(409, 3, 9, out long instance));
+        Assert.Equal(Now + 60, instance); // the same guid in another instance
+        Assert.False(queue.TryGetPending(0, 0, 10, out long none));
+        Assert.Equal(0, none);
+        Assert.False(queue.TryGetPending(1, 1, 9, out _)); // a map with no times
+
+        queue.Save(0, 0, 10, Now + 70);
+        Assert.True(queue.TryGetPending(0, 0, 10, out long saved));
+        Assert.Equal(Now + 70, saved);
+        queue.Delete(0, 0, 9);
+        Assert.False(queue.TryGetPending(0, 0, 9, out _));
+        await queue.StopAsync();
+    }
+
+    [Fact]
     public async Task TheInitialRowsAreServedAndGetPendingReturnsACopy()
     {
         await using ServiceProvider sp = Build(new FakeStore());

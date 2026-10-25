@@ -14288,6 +14288,294 @@ World.Playerbots.Groups.MinTank = 1
 World.Playerbots.Groups.RaidsEnabled = true
 
 #
+#    World.Playerbots.Groups.WorldBosses.CatchUpTeleport
+#        Description: Teleport a straggler to the raid (off by default: members walk). The follow
+#                     options' own teleport rules still apply when on.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.CatchUpTeleport = false
+
+#
+#    World.Playerbots.Groups.WorldBosses.DefaultRaidSize
+#        Description: The raid size asked for when a boss has no entry in SizeOverrides (5..40; the
+#                     cooperation raid cap bounds it).
+#        Type: int
+#        Default: 40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.DefaultRaidSize = 40
+
+#
+#    World.Playerbots.Groups.WorldBosses.DeriveFromContent
+#        Description: Add every rank-3 creature on a continent that is no faction leader, flagged
+#                     friendly or event placed to the catalogue (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.DeriveFromContent = true
+
+#
+#    World.Playerbots.Groups.WorldBosses.Enabled
+#        Description: Let bots raid world bosses (on by default). Off: no raid forms; raids under
+#                     way finish.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.Enabled = true
+
+#
+#    World.Playerbots.Groups.WorldBosses.ExcludedEntries
+#        Description: Entries removed from the catalogue, comma separated; wins over every other
+#                     source.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.ExcludedEntries = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.HoldSeconds
+#        Description: Seconds the raid holds back while somebody else has a claim on the boss
+#                     (another's tap or fight, real players near) before it gives the attempt up as
+#                     taken (10..1800). Waiting for its own members does not count.
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.HoldSeconds = 180
+
+#
+#    World.Playerbots.Groups.WorldBosses.IncludedEntries
+#        Description: Further bosses, comma separated: entry (the creature needs a spawn on map 0 or
+#                     1) or entry@map (map 0 or 1; the boss is placed by something other than a
+#                     database spawn and is looked for on that map).
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.IncludedEntries = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.LevelGap
+#        Description: Levels below the lower of the boss's level and the player level cap that a bot
+#                     may stand (0..20), so a level-60 bot qualifies for a level-63 boss at the
+#                     default 2 (floor 58).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.LevelGap = 2
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxAttemptsPerDay
+#        Description: The most raids per boss and UTC day that reached the walk to the boss (0..24;
+#                     0 opens none). A raid that never left the muster is not counted.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxAttemptsPerDay = 3
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxConcurrentRaids
+#        Description: The most world-boss raids at once, server wide (0..8; 0 opens none).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxConcurrentRaids = 1
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxRaidMinutes
+#        Description: Minutes a raid may last from its formation (10..480).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxRaidMinutes = 90
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxWipes
+#        Description: Wipes the raid recovers from before it gives up (1..10).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxWipes = 2
+
+#
+#    World.Playerbots.Groups.WorldBosses.MinRaidSize
+#        Description: The fewest members a raid may start with (5..40; not above DefaultRaidSize).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MinRaidSize = 30
+
+#
+#    World.Playerbots.Groups.WorldBosses.MusterRadiusYards
+#        Description: The farthest from the boss, in yards, a bot may stand and still be asked to
+#                     muster (300..20000). The raid walks there.
+#        Type: float
+#        Default: 3000
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MusterRadiusYards = 3000
+
+#
+#    World.Playerbots.Groups.WorldBosses.MusterWindowSeconds
+#        Description: Seconds an open muster waits for enough willing bots before it gives up
+#                     (30..1800).
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MusterWindowSeconds = 180
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayerGraceMinutes
+#        Description: Minutes a boss must have been seen up before the bots go for it, so a player
+#                     gets the first chance (0..240; 0 opens at the first sighting). The clock
+#                     restarts when the boss is killed or its grid unloads.
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayerGraceMinutes = 15
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayersNearCount
+#        Description: The number of real players within PlayersNearYards that holds the pull
+#                     (1..40).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayersNearCount = 3
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayersNearYards
+#        Description: The distance, in yards, within which a real player counts as "at the boss" for
+#                     the holds below (0..400; 0 turns the player hold off).
+#        Type: float
+#        Default: 100
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayersNearYards = 100
+
+#
+#    World.Playerbots.Groups.WorldBosses.PresentFraction
+#        Description: The fraction of the raid that must stand at the rally before it pulls
+#                     (0.5..1).
+#        Type: float
+#        Default: 0.8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PresentFraction = 0.8
+
+#
+#    World.Playerbots.Groups.WorldBosses.PullWaitSeconds
+#        Description: Seconds the raid waits at the rally for PresentFraction (10..900). Past it the
+#                     raid pulls with whoever is there when at least MinRaidSize are, and gives up
+#                     otherwise.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PullWaitSeconds = 120
+
+#
+#    World.Playerbots.Groups.WorldBosses.RallyYards
+#        Description: The distance from the boss, in yards, at which the raid gathers before the
+#                     pull (20..200).
+#        Type: float
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.RallyYards = 50
+
+#
+#    World.Playerbots.Groups.WorldBosses.RetrySeconds
+#        Description: Seconds before the same boss is mustered for again after a raid or a failed
+#                     muster (60..86400).
+#        Type: int
+#        Default: 1800
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.RetrySeconds = 1800
+
+#
+#    World.Playerbots.Groups.WorldBosses.SizeOverrides
+#        Description: Raid sizes per boss, comma separated entry:size pairs, size 5..40 (for example
+#                     6109:25,12397:40). Empty: every boss uses DefaultRaidSize.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.SizeOverrides = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.WatchSeconds
+#        Description: Seconds between looks at the catalogued bosses (5..600).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.WatchSeconds = 30
+
+#
 #    World.Playerbots.Home.DangerLevelMargin
 #        Description: Auto mode: the straight line from the bot to the centre crossing an area whose
 #                     AreaTable level (AreaLevel, the 1.12.1 AreaTable.dbc exploration level) is

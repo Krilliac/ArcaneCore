@@ -315,6 +315,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _siegeWaypoints.Clear();
             _siegeWaypointMap = 0;
             _siegeViews.Clear();
+            ResetWorldBosses();
             _groups.Clear();
             _memberOf.Clear();
             _waiting.Clear();
@@ -546,6 +547,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (group.Handoff is { } handoff)
                 text.Append(CultureInfo.InvariantCulture, $" handoff-from={handoff.HandedByName}{(handoff.Sweep is { } sweep ? $" clear-list={sweep.Remaining}/{sweep.Initial}" : string.Empty)}");
             if (group.Run is { } reported) text.Append(' ').Append(DescribeRun(reported));
+            if (group.WorldBoss is { } bossRaid)
+                text.Append(CultureInfo.InvariantCulture, $" worldboss={bossRaid.Boss.Name}:{(bossRaid.Released ? "pulling" : bossRaid.PullHeld ? "held-" + bossRaid.Hold.ToString().ToLowerInvariant() : "approaching")}:wipes{bossRaid.Wipes}");
             if (group.Siege is { } sieged)
                 text.Append(CultureInfo.InvariantCulture, $" siege={sieged.Siege.Id}:raid{sieged.Index}:{sieged.Order.ToString().ToLowerInvariant()}:step{sieged.Siege.Step}/{sieged.Siege.Waypoints.Count}");
             text.Append(" members=");
@@ -558,6 +561,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
 
         if (RunSummary() is { } runSummary) lines.Add(runSummary);
+        lines.AddRange(WorldBossReport());
         lines.Add(HandoffSummary());
         foreach ((Guid _, Waiting waiting) in _waiting.OrderBy(w => w.Value.SinceMs))
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"waiting {waiting.Name} {waiting.Goal} for {unchecked(Now - waiting.SinceMs) / 1000}s"));
@@ -688,6 +692,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (_options.Groups.Enabled) Match();
         if (_options.Groups.Enabled) MentorSafely();
         if (_options.Groups.Enabled) StartRuns();
+        ScanWorldBossesSafely();
     }
 
     /// <summary>The objective of <paramref name="goal"/> is still unfinished for the bot (or, without a quest, still wanted).</summary>
@@ -1245,7 +1250,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 AdvanceForming(group, leader, groupManager);
                 break;
             case PlayerbotGroupState.Gathering:
-                if (Gathered(group, leader) || CatchUpGathering(group, leader, now)) Enter(group, PlayerbotGroupState.Travelling);
+                if (Gathered(group, leader) || (group.WorldBoss is null ? CatchUpGathering(group, leader, now) : WorldBossGathered(group, leader, now))) Enter(group, PlayerbotGroupState.Travelling);
                 else if (group.StepTimedOut(now, stepLimit))
                 {
                     ReportTimeout(group, leader, "gather-timeout");
@@ -1254,6 +1259,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 break;
             case PlayerbotGroupState.Travelling:
                 if (CheckWipe(group, leader)) break;
+                if (group.WorldBoss is not null && AdvanceWorldBoss(group, leader, now)) break;
                 if (leader.MapId == group.Goal.MeetingMap && (group.ApproachReached || Arrived(leader, group.Approach, 5f) || WithinApproachRing(leader, group)) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
                 {
                     group.Run?.Apply(PlayerbotRunSignal.Arrived);
@@ -1287,6 +1293,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     break;
                 }
 
+                if (group.WorldBoss is not null)
+                {
+                    if (group.WorldBoss.KilledAtMs == 0 && CheckWipe(group, leader)) break;
+                    AdvanceWorldBoss(group, leader, now);
+                    break;
+                }
+
                 if (Complete(group))
                 {
                     Note($"group {group.Id} completed {group.Goal}");
@@ -1309,6 +1322,24 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                         Note($"group {group.Id} wiped ({wiped.Wipes}/{wiped.MaxWipes})");
                         if (wiped.Step == PlayerbotRunStep.GiveUp) Finish(group, success: false, wiped.Reason ?? "wiped");
                         else Enter(group, PlayerbotGroupState.Regrouping);
+                        break;
+                    }
+
+                    if (group.WorldBoss is { } raid)
+                    {
+                        group.Failures = ++raid.Wipes;
+                        Note($"group {group.Id} wiped ({raid.Wipes}/{Wb.MaxWipes})");
+                        if (raid.Wipes >= Wb.MaxWipes)
+                        {
+                            NoteWorldBossWipedOut(group, raid);
+                            Finish(group, success: false, "wiped");
+                        }
+                        else
+                        {
+                            ResetWorldBossPull(raid);
+                            Enter(group, PlayerbotGroupState.Regrouping);
+                        }
+
                         break;
                     }
 
@@ -1471,7 +1502,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 Note($"group {group.Id}: {member.Name} did not join");
             }
 
-        if (group.Members.Any(m => !m.Joined && (m.Refused || m.Invited && unchecked(now - m.InvitedMs) > InviteTimeoutMs)))
+        if (group.Members.Any(m => !m.Joined && (m.Refused || m.Invited && unchecked(now - m.InvitedMs) > InviteTimeoutMs))
+            && !(group.WorldBoss is not null && DropUnansweredInvitees(group, now)))
         {
             ReportUnansweredInvites(group, now);
             Finish(group, success: false, "invites-unanswered", setAside: false);
@@ -1503,8 +1535,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// <see cref="ApproachYards"/> short of the entrance trigger (outside its volume), on the side the leader comes from.
     /// </summary>
     internal static Vector3 ApproachPoint(PlayerbotGroupGoal goal, Vector3 from)
+        => ApproachPoint(goal, from, goal.InInstance ? ApproachYards : QuestApproachYards);
+
+    /// <summary>The approach point <paramref name="yards"/> short of the goal's meeting point on the side <paramref name="from"/> lies (<paramref name="from"/> itself when it is nearer).</summary>
+    internal static Vector3 ApproachPoint(PlayerbotGroupGoal goal, Vector3 from, float yards)
     {
-        float yards = goal.InInstance ? ApproachYards : QuestApproachYards;
         Vector3 flat = new(from.X - goal.Meeting.X, from.Y - goal.Meeting.Y, 0);
         if (flat.Length() < yards) return from;
         return goal.Meeting + (Vector3.Normalize(flat) * yards);
@@ -1558,7 +1593,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// </summary>
     private static bool WithinApproachRing(Player leader, BotGroup group)
     {
-        float yards = (group.Goal.InInstance ? ApproachYards : QuestApproachYards) + ApproachSlackYards;
+        float yards = (group.WorldBoss is { } raid ? raid.RallyYards : group.Goal.InInstance ? ApproachYards : QuestApproachYards) + ApproachSlackYards;
         float dx = leader.X - group.Goal.Meeting.X, dy = leader.Y - group.Goal.Meeting.Y;
         return (dx * dx) + (dy * dy) <= yards * yards && MathF.Abs(leader.Z - group.Goal.Meeting.Z) <= ApproachHeightYards;
     }
@@ -1650,7 +1685,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         // A handed-over group is watched although a real player is in it: the bots lead it, and the player is never waited for.
         if (_world is not { } world || group.Solo || group.Members.Any(m => m.Real) && group.Handoff is null || group.MissingSinceMs != 0
             || group.State is PlayerbotGroupState.Forming or PlayerbotGroupState.Gathering or PlayerbotGroupState.Regrouping
-                or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding)
+                or PlayerbotGroupState.Wiped or PlayerbotGroupState.Leaving or PlayerbotGroupState.Disbanding
+            || group.WorldBoss is { Waiting: true })
         {
             group.Stall.Reset();
             return false;
@@ -1767,6 +1803,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             group.ApproachReached = false;
             TeleportToEntranceIfConfigured(group);
         }
+
+        if (group.WorldBoss is not null) OnWorldBossState(group, state);
     }
 
     /// <summary>End the group: done, or given up (the goal is then set aside for every bot member unless <paramref name="setAside"/> is off).</summary>
@@ -1831,6 +1869,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         foreach (Member member in group.Members) _kicked.Remove(member.Guid); // a kick the scan never reached (the group ended first)
         _groups.Remove(group);
         NoteRunEnded(group);
+        NoteWorldBossEnded(group);
         Note($"group {group.Id} disbanded ({group.Reason})");
         logger.LogInformation("Playerbot group {Group} disbanded ({Reason})", group.Id, group.Reason);
     }
@@ -2067,6 +2106,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
         /// <summary>The siege raid this group is (<c>PlayerbotGroupCoordinator.Siege.cs</c>), else null.</summary>
         public PlayerbotSiegeRaid? Siege { get; set; }
+
+        /// <summary>The world-boss raid this group is (<c>PlayerbotGroupCoordinator.WorldBoss.cs</c>), else null.</summary>
+        public PlayerbotWorldBossRaid? WorldBoss { get; set; }
 
         /// <summary>A reason the group AI found that the run cannot go on (no path to the boss or the entrance); the coordinator gives the run up.</summary>
         public string? RunFault { get; set; }

@@ -731,7 +731,8 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
-            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)))
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotWorldBossOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
         }
@@ -761,6 +762,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotRaidRunOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{runsPath}:Raids:{property.Name}");
+        }
+
+        // World-boss raids are live key by key (docs/areas/playbots-groups.md, World-boss raids).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotWorldBossOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{nameof(PlayerbotGroupOptions.WorldBosses)}:{property.Name}");
         }
 
         // Following and catch-up is live key by key (docs/areas/playbots.md, Following and catch-up).

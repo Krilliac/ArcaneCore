@@ -399,6 +399,87 @@ packs left in sight along the path. A bot's status line ends with `group=3:tank:
 A live run needs the world database refreshed from a classic-db dump (the `instance_encounter` table) and terrain; the unit and world
 tests below run on real classic-db rows copied into `RunFixtures`, not on a live replay.
 
+## World-boss raids (`World:Playerbots:Groups:WorldBosses`, live)
+
+Bots raid the world bosses of the continents: a muster of up to 40 free bots walks to the boss and kills it, while real players keep the
+first claim. Files: `PlayerbotWorldBoss.cs` (pure: catalogue, status, campaign, muster, engage decision, outcomes, warning texts),
+`PlayerbotWorldBossMeters.cs`, `PlayerbotGroupCoordinator.WorldBoss.cs` (watch, muster, the raid's life) and
+`World.Contracts/Playerbots/Groups/PlayerbotWorldBossOptions.cs`. A raid is an ordinary bot-led group of the `WorldBoss` goal: the generic
+machine forms, gathers and walks it; only the Engaging step is its own (`AdvanceWorldBoss`). It needs `World:Playerbots:Groups:Enabled` and
+`World:Playerbots:Groups:RaidsEnabled`; raids count in `MaxGroups` and in the quest-group limit.
+
+**Catalogue.** Azuregos, Kazzak, the four Emerald Dragons (a dragon is looked for at its portal while the Nightmare Dragons event runs and its
+portal's dragon is not killed), and with `DeriveFromContent` every rank-3 creature with a spawn on map 0 or 1 that is no faction
+leader, not friendly and not an event-gated spawn (Teremus the Devourer is in the catalogue only this way, not by the fixed list); `IncludedEntries` adds (`entry`, or `entry@map` for a boss placed by something other
+than a database spawn), `ExcludedEntries` removes and wins. An `entry@map` with no creature template is ignored with a warning. The entry
+set is frozen as a snapshot (`IsWorldBossEntry`) that the kill talk reads from the map threads.
+
+**Watch.** Every `WatchSeconds` each boss is resolved: a living creature is Up (with its position, whether it is in combat, whether another
+player holds its tap or fights it, how many real players stand within `PlayersNearYards`); the respawn ledger gives a dead one's time; a
+boss whose grid is not loaded is Unknown, never Up on no evidence. A spawn is found by its spawn guid; a dragon or placed boss by entry, once,
+then by its cached guid (the cache is dropped when the lookup finds nothing or another entry).
+
+**Campaign** (per boss, in memory; a restart starts in Watch). A boss that has been Up for `PlayerGraceMinutes` opens a muster when
+`MaxConcurrentRaids`, `MaxAttemptsPerDay` (per UTC day; only a raid that reached the walk to the boss counts), `RetrySeconds` (also after a
+failed muster or a forming failure), `MaxGroups` and the quest-group slot allow it. The muster ends after `MusterWindowSeconds` without a
+raid.
+
+**Muster.** Free bots on the boss's map within `MusterRadiusYards`, level at least the lower of the boss's level and the player level cap
+minus `LevelGap`, one team (the team with more candidates first). The nearest to the boss calls the raid; each other candidate agrees by
+the cooperation roll (a hash of boss, UTC day and team: a refusal holds for the day). Size is `SizeOverrides` (`entry:size` pairs, 5..40) or
+`DefaultRaidSize`, capped by the cooperation raid cap; fewer than `MinRaidSize` agreeing, or roles that do not fit, keep the muster open.
+A bot that is silent or refuses an invitation is dropped and forming goes on while `MinRaidSize` remain (other groups still end on one
+silent bot). The raid walks by default; `CatchUpTeleport` turns the leader's teleport of stragglers on.
+
+**Engage.** The raid gathers `RallyYards` short of the boss and the leader warns the raid ("Raid forming ...", "Pulling ...", "... is down. Well done.").
+The pull is released when `PresentFraction` of the members stand at the rally and none rests, or after `PullWaitSeconds` with at least
+`MinRaidSize` there (fewer: `not-enough`). It is held, and the stall watch leaves the raid alone, while another player's tap or fight is on
+the boss (a claim that blinks for a few seconds counts as one claim) or `PlayersNearCount` real players stand within `PlayersNearYards`;
+after `HoldSeconds` of that the attempt ends as `boss-taken`. The leader's pull also refuses a boss that turns "someone else's" between two
+scans. A member carrying Mark of Frost (23182) does not fight again and holds at the rally. A pull with some real players near (fewer than `PlayersNearCount`) is
+recorded as the `worldboss-pull-near-players` anomaly. The kill counts only with the raid's own tap (a raid member or a member's pet holds
+`LootTapper`): a corpse tapped by others is `boss-taken`. After `MaxWipes` wipes the raid ends as `wiped` (an anomaly at full size); a raid
+lasts at most `MaxRaidMinutes`; its step limits reuse `World:Playerbots:Groups:DungeonRuns:TravelTimeoutMinutes`.
+
+**Keys** (all under `World:Playerbots:Groups:WorldBosses`; defaults and ranges in `docs/reference/configuration.md`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Enabled` | true | raids form; off: no muster opens and raids under way finish |
+| `WatchSeconds` | 30 | seconds between looks at the bosses |
+| `PlayerGraceMinutes` | 15 | minutes a boss must have been Up before bots go for it |
+| `PlayersNearYards` | 100 | radius in which real players hold the pull (0 turns it off) |
+| `PlayersNearCount` | 3 | real players within that radius that hold the pull |
+| `MusterRadiusYards` | 3000 | farthest a bot may stand and be asked to muster |
+| `LevelGap` | 2 | levels below the boss's (or the cap) a bot may be |
+| `MinRaidSize` | 30 | fewest members a raid starts with |
+| `DefaultRaidSize` | 40 | size asked for when `SizeOverrides` has no entry |
+| `SizeOverrides` | empty | `entry:size` pairs |
+| `MusterWindowSeconds` | 180 | how long an open muster waits for enough bots |
+| `MaxConcurrentRaids` | 1 | raids at once, server wide |
+| `MaxAttemptsPerDay` | 3 | attempts per boss and UTC day |
+| `RetrySeconds` | 1800 | wait before the same boss is mustered for again |
+| `RallyYards` | 50 | distance from the boss at which the raid gathers |
+| `PresentFraction` | 0.8 | share of the raid at the rally that releases the pull |
+| `PullWaitSeconds` | 120 | longest wait at the rally for that share |
+| `HoldSeconds` | 180 | longest hold on another's claim before `boss-taken` |
+| `MaxWipes` | 2 | wipes recovered from before giving up |
+| `MaxRaidMinutes` | 90 | longest a raid may last |
+| `CatchUpTeleport` | false | teleport stragglers to the raid |
+| `DeriveFromContent` | true | add the rank-3 creatures of the continents to the catalogue |
+| `IncludedEntries` | empty | further bosses (`entry` or `entry@map`) |
+| `ExcludedEntries` | empty | bosses removed from the catalogue |
+
+**Observability.** Counter `arcanecore.playerbot.worldboss_raids{outcome}` (`formed`, `killed`, `wiped`, `boss-taken`, `boss-gone`,
+`not-enough`, `forming-failed`, `abandoned`, `timeout`, `stalled`, `no-path`, `muster-failed`, `other`) and gauge
+`arcanecore.playerbot.worldboss_active`. Anomalies (area `group`): `worldboss-pull-near-players`, `worldboss-wiped-full-size`,
+`worldboss-corpse-tap-unseen` (a raid-tapped corpse the raid never saw alive). A raid that ends in a timeout, a wipe-out, a stall or without a path goes to bot QA as a `RunFailed`
+signal. Fault sites: `playerbot.groups.worldboss.watch`, `.muster`, `.advance`; `playerbot.social.bosskill` for the kill talk's zone name.
+The group report prints one `worldboss:` line per catalogued boss (state, phase, attempts, cooldown, last opening verdict).
+
+**Not in this phase.** Boss tactics beyond sitting out the Mark of Frost (Mark of Nature on the dragons is not handled: they may wipe the
+raid), players joining or leading bot raids, a faction contest, scouting Unknown bosses, spawning bosses.
+
 ## Leader handoff
 
 A real player who brings managed bots into a dungeon or raid and passes the lead to one of them (the ordinary "Promote to leader",
@@ -603,10 +684,11 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
 | `MinTank` | 1 | 0..5 | tanks a group of three or more needs |
 | `MinHealer` | 1 | 0..5 | healers a group of three or more needs |
 | `FormationTimeoutSeconds` | 300 | 30..86400 | how long a bot waits for partners before it sets the goal aside |
-| `RaidsEnabled` | true | | raid quests and raid instances as quest and instance goals (convert to a raid); it does not gate raid runs, which only `World:Playerbots:Groups:DungeonRuns:Raids:Enabled` switches |
+| `RaidsEnabled` | true | | raid quests and raid instances as quest and instance goals (convert to a raid), and world-boss raids; it does not gate raid runs, which only `World:Playerbots:Groups:DungeonRuns:Raids:Enabled` switches |
 | `InvitePlayers` | true | | invite a nearby real player on the group's goal into a short group (opted in to AI chat, or liked) |
 | `InvitePlayerAffinity` | 20 | -100..100 | affinity that lets the bots invite a player without an AI chat opt-in |
 | `InvitePlayerCooldownMinutes` | 30 | 0..1440 | minutes before the same player is invited again |
+| `WorldBosses:*` | see "World-boss raids" | | raids on the world bosses of the continents ("World-boss raids", above; 24 keys) |
 | `DungeonRuns:*` | see `docs/reference/configuration.md` | | dungeon and raid runs ("Dungeon and raid runs", above); `World:Playerbots:Groups:DungeonRuns:Raids:SkipPrerequisites` is the switch for the raids' key item, quest and condition |
 
 ## Where it shows
@@ -679,6 +761,8 @@ at `Clear`, the take-over line in party chat, the first pack killed), the same o
 taking the lead back (the coordinator lets go, the party AI drives, the bots stay in the group), the Deadmines without a route cleared
 from its list (the boss dead, the clear line, the lead back with the player), and a raid of ten in two subgroups adopted whole with its
 subgroups kept.
+
+World-boss raids (`PlayerbotWorldBoss*Tests`, `WorldBossTestKit`, `WorldBossRealRows`): the options and their ranges; the catalogue on the real world.db rows (the known bosses, the derived ones, the faction leaders left out, operator entries); the status and campaign rules; the muster (level floor, caller, size, roles); the engage decision and the outcome and meter names; and on the group test world with the manual clock a full kill, a level-63 boss against level-60 bots, the holds that put players first (another's tap, real players near, a player's kill, the stall watch), the wipe counter, the catch-up guard, the caps, a battleground never taking a raid member, and a forming raid that drops silent invitees (`PlayerbotWorldBossFormingWorldTests`).
 
 ## Live replay (2026-10-08)
 
