@@ -76,7 +76,7 @@
 #   TALENTS                     12 keys
 #   TOTEMS                      3 keys
 #   WARDEN                      15 keys
-#   WORLD                       738 keys
+#   WORLD                       739 keys
 #
 ###############################################################################
 
@@ -14475,9 +14475,10 @@ World.Playerbots.PathJobWorkerMaxMs = 1000
 #                     being read. A finished answer within 15% of the distance (10 to 40 yards) of a
 #                     destination that keeps moving is applied as a route cut short, spliced from
 #                     where the bot stands, and a refresh job for the new destination is queued in
-#                     the same think; a follower keeps walking its route while a re-plan is pending.
-#                     Off by default (rollout). Live: .reload config (jobs in flight finish and are
-#                     dropped or applied by the same checks).
+#                     the same think. Off by default (rollout). Separately from this switch, and on
+#                     whatever it says: a follower keeps walking its current route while a re-plan
+#                     is pending (it also covers a navigation tile still being read). Live: .reload
+#                     config (jobs in flight finish and are dropped or applied by the same checks).
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -14489,7 +14490,9 @@ World.Playerbots.PathJobs = false
 #
 #    World.Playerbots.PathJobsMaxInFlight
 #        Description: The most bot path jobs in flight together (1..1024); a bot past it waits in
-#                     line, oldest first, and never searches on the world thread instead.
+#                     line, oldest first, and answers "pending" until a slot frees; one held that
+#                     long still runs a single search on the world thread after PathJobWaitMaxMs,
+#                     held to SyncPathQueryMaxMs.
 #        Type: int
 #        Default: 64
 #        Allowed: a whole number from 1 to 1024
