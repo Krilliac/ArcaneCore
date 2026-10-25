@@ -56,7 +56,7 @@ internal readonly record struct OpportunityStep(bool Busy, Creature? Pull = null
 /// Thread affinity: world thread only, owned by one brain. Cost: a scan every 2 seconds over the visible objects (a type test each), a
 /// loot estimate for at most <see cref="MaxCandidates"/> finds, cached a minute; nothing per think while idle.
 /// </summary>
-internal sealed class PlayerbotOpportunities
+internal sealed partial class PlayerbotOpportunities
 {
     /// <summary>How often the visible objects are looked over.</summary>
     internal const uint ScanEveryMs = 2_000;

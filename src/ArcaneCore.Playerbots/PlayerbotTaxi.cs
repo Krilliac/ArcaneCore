@@ -393,7 +393,7 @@ internal static class PlayerbotTransitBackoff
 /// </para>
 /// Thread affinity: world thread; per-bot state hangs off the <see cref="Player"/> and goes with it.
 /// </summary>
-internal static class PlayerbotTaxi
+internal static partial class PlayerbotTaxi
 {
     /// <summary>A bot looks for a flight master to ask at most this often.</summary>
     internal const uint ScanIntervalMs = 2_000;

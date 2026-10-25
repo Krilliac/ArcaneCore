@@ -432,7 +432,7 @@ internal enum PlayerbotHomeState : byte
 /// </para>
 /// <para>Thread affinity: world thread, owned by one <see cref="PlayerbotBrain"/>.</para>
 /// </summary>
-internal sealed class PlayerbotHomeReturn
+internal sealed partial class PlayerbotHomeReturn
 {
     /// <summary>A walking-back bot that has not moved for this long plans again.</summary>
     internal const uint StuckMs = 5_000;

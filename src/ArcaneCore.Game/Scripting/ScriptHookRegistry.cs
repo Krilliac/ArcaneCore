@@ -20,7 +20,7 @@ namespace ArcaneCore.Game.Scripting;
 /// with nothing registered is a field load and a length check and allocates nothing. Registration happens before the world thread starts
 /// (<see cref="Maps.WorldRuntime.Start"/> freezes it); dispatch is world thread only. A throwing hook is logged and the others still run.
 /// </summary>
-public sealed class ScriptHookRegistry
+public sealed partial class ScriptHookRegistry
 {
     private readonly List<IScriptHooks> _registered = [];
     private bool _frozen;
