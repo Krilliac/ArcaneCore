@@ -129,6 +129,78 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
         }
     }
 
+    /// <summary>
+    /// Quest 2681 "The Stones That Bind Us": its kill objectives (Blasted Lands servants 7668-7671, ReqSpellCast 0) are creatures whose EventAI
+    /// holds them at 1 health from spawn (event 11, action 42) until Shackle Shatter hits them. A plain attack never kills them, so the bot
+    /// neither takes the quest nor hunts those entries. Controls: a servant whose death prevention is also lifted by an ordinary event (a health
+    /// threshold), and a plain hostile creature, stay killable.
+    /// </summary>
+    [Fact]
+    public async Task KillObjectivesOfCreaturesHeldInvincibleOnSpawn_AreNotAcceptedOrPursued()
+    {
+        var fixture = new InvincibleServantFixture();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IQuestContentStore>(fixture);
+            services.AddSingleton<ICreatureDataStore>(fixture);
+            services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
+            services.AddSingleton(new FactionTemplateCatalog(
+            [
+                new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 8),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.FriendlyFaction, 0, 0, OwnMask: 2, FriendlyMask: 3, HostileMask: 0),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.HostileFaction, 0, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 3),
+            ]));
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.WaitForWorldAsync(
+                () => session.Player!.Map?.FindObject(InvincibleServantFixture.GiverGuid) is Creature,
+                "quest giver spawned");
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player player = session.Player!;
+                QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+                CreatureContent content = host.WorldServices.GetRequiredService<CreatureWorldFeature>().Content!;
+
+                foreach (uint servant in InvincibleServantFixture.Servants)
+                {
+                    Assert.True(content.Ai.IsInvincibleUntilSpellHit(servant), $"servant {servant} is not read as held invincible");
+                    Assert.False(PlayerbotQuestGoals.IsKillObjective(session, player, services, content, servant), $"servant {servant}");
+                    Assert.True(content.GetSpawns(player.MapId, servant).Count > 0, "the servant has no reachable spawn: the test proves nothing");
+                }
+
+                Assert.False(PlayerbotQuestGoals.CanExecuteObjectives(
+                    session, player, services, content, services.Quests.Get(InvincibleServantFixture.StonesQuest)!));
+
+                // Controls: the checks still pass what a plain attack kills.
+                Assert.False(content.Ai.IsInvincibleUntilSpellHit(InvincibleServantFixture.LiftedByHealthEntry));
+                Assert.False(content.Ai.IsInvincibleUntilSpellHit(UnsupportedMechanicsFixture.HostileMobEntry));
+                Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(
+                    session, player, services, content, services.Quests.Get(InvincibleServantFixture.LiftedQuest)!));
+                Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(
+                    session, player, services, content, services.Quests.Get(InvincibleServantFixture.PlainQuest)!));
+
+                var options = new PlayerbotOptions { Enabled = true };
+                var goals = new PlayerbotQuestGoals(session, options);
+                services.Options.RewardMode = QuestRewardMode.AllowlistOnly;
+                services.Options.OrdinaryRewardQuestIds = [InvincibleServantFixture.StonesQuest];
+                player.VisibleObjects.Add(InvincibleServantFixture.GiverGuid);
+                Assert.False(goals.HasCandidate(player), "the bot would take quest 2681");
+
+                services.Options.OrdinaryRewardQuestIds = [InvincibleServantFixture.StonesQuest, InvincibleServantFixture.PlainQuest];
+                Assert.True(goals.HasCandidate(player), "the control quest is not offered: the test proves nothing");
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     [Fact]
     public async Task ItemUseCreatureQuest_WithSourceItem_IsAcceptedAndExecutedViaCmsgUseItem()
     {
@@ -463,6 +535,89 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 new CreatureSpawn { Guid = 940003, Entry = InstanceBossEntry, MapId = 289, X = 100f, Y = 100f, Z = 100f },
                 new CreatureSpawn { Guid = 940004, Entry = HostileMobEntry, MapId = 0, X = StartX + 50f, Y = StartY, Z = StartZ },
             ], [], [], []));
+    }
+
+    private sealed class InvincibleServantFixture : IQuestContentStore, ICreatureDataStore
+    {
+        internal const uint GiverEntry = UnsupportedMechanicsFixture.GiverEntry;
+        internal const uint StonesQuest = 2681;
+        internal const uint LiftedQuest = 940020;
+        internal const uint PlainQuest = 940021;
+        internal const uint LiftedByHealthEntry = 940030;
+        internal static readonly uint[] Servants = [7668, 7669, 7670, 7671];
+        internal static readonly ObjectGuid GiverGuid = ObjectGuid.WithEntry(HighGuid.Unit, GiverEntry, 942001);
+
+        public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            QuestTemplate[] templates =
+            [
+                new()
+                {
+                    Entry = StonesQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "The Stones That Bind Us",
+                    ReqCreatureOrGOId1 = 7668, ReqCreatureOrGOCount1 = 1, ReqCreatureOrGOId2 = 7669, ReqCreatureOrGOCount2 = 1,
+                    ReqCreatureOrGOId3 = 7670, ReqCreatureOrGOCount3 = 1, ReqCreatureOrGOId4 = 7671, ReqCreatureOrGOCount4 = 1,
+                },
+                new()
+                {
+                    Entry = LiftedQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Held Until Hurt",
+                    ReqCreatureOrGOId1 = (int)LiftedByHealthEntry, ReqCreatureOrGOCount1 = 1,
+                },
+                new()
+                {
+                    Entry = PlainQuest, Method = 2, MinLevel = 1, QuestLevel = 4, Title = "Vile Familiars",
+                    ReqCreatureOrGOId1 = (int)UnsupportedMechanicsFixture.HostileMobEntry, ReqCreatureOrGOCount1 = 1,
+                },
+            ];
+            CreatureQuestRelation[] relations =
+                [.. new[] { StonesQuest, LiftedQuest, PlainQuest }.Select(q => new CreatureQuestRelation { Id = GiverEntry, Quest = q })];
+            return Task.FromResult(new QuestContent(templates, relations, relations));
+        }
+
+        Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken)
+        {
+            // creature_ai_scripts rows 766801 and 766803: invincible at 1 HP on spawn (event 11, action 42 Param1 1), lifted only by a spell hit (event 8).
+            List<CreatureAiEvent> events = [];
+            foreach (uint servant in Servants)
+            {
+                events.Add(new CreatureAiEvent { Id = servant * 100 + 1, CreatureId = servant, EventType = 11, Action1 = new CreatureAiAction(42, 1, 0, 0) });
+                events.Add(new CreatureAiEvent
+                {
+                    Id = servant * 100 + 3, CreatureId = servant, EventType = 8, Param1 = 10805, Action1 = new CreatureAiAction(42, 0, 0, 0),
+                });
+            }
+
+            // Control: held on spawn, but an ordinary health-threshold event (2) lifts the prevention, which a plain attack reaches.
+            events.Add(new CreatureAiEvent { Id = 940031, CreatureId = LiftedByHealthEntry, EventType = 11, Action1 = new CreatureAiAction(42, 1, 0, 0) });
+            events.Add(new CreatureAiEvent
+            {
+                Id = 940032, CreatureId = LiftedByHealthEntry, EventType = 2, Param1 = 50, Action1 = new CreatureAiAction(42, 0, 0, 0),
+            });
+
+            List<CreatureTemplate> templates =
+            [
+                new() { Entry = GiverEntry, Name = "Foreman Thazz'ril", Faction = UnsupportedMechanicsFixture.FriendlyFaction, NpcFlags = 2, DisplayIds = [49] },
+                new() { Entry = LiftedByHealthEntry, Name = "Held Until Hurt", Faction = UnsupportedMechanicsFixture.HostileFaction, DisplayIds = [49] },
+                new() { Entry = UnsupportedMechanicsFixture.HostileMobEntry, Name = "Vile Familiar", Faction = UnsupportedMechanicsFixture.HostileFaction, DisplayIds = [49] },
+            ];
+            List<CreatureSpawn> spawns =
+            [
+                new() { Guid = 942001, Entry = GiverEntry, MapId = 0, X = StartX + 10f, Y = StartY, Z = StartZ },
+                new() { Guid = 942002, Entry = LiftedByHealthEntry, MapId = 0, X = StartX + 40f, Y = StartY, Z = StartZ },
+                new() { Guid = 942003, Entry = UnsupportedMechanicsFixture.HostileMobEntry, MapId = 0, X = StartX + 50f, Y = StartY, Z = StartZ },
+            ];
+            uint guid = 942010;
+            foreach (uint servant in Servants)
+            {
+                templates.Add(new CreatureTemplate
+                {
+                    Entry = servant, Name = "Servant " + servant, Faction = UnsupportedMechanicsFixture.HostileFaction, DisplayIds = [49],
+                    AIName = "EventAI",
+                });
+                spawns.Add(new CreatureSpawn { Guid = guid++, Entry = servant, MapId = 0, X = StartX + 60f, Y = StartY + (guid - 942010), Z = StartZ });
+            }
+
+            return Task.FromResult(new CreatureContent(templates, spawns, [], [], [], new CreatureAiContent(events, [])));
+        }
     }
 
     private sealed class FarReturnFixture : IQuestContentStore, ICreatureDataStore, INpcContentStore

@@ -32,6 +32,14 @@ public sealed class PlayerbotContentionOptions
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 120 (minutes)")]
     public int ContentionSuspendMinutes { get; set; } = 5;
 
+    /// <summary>
+    /// Seconds a bot may hold a target whose health stays at or below its death-prevention threshold (<c>InvincibilityHpThreshold</c>: a creature
+    /// an EventAI script keeps at 1 health until some condition is met, such as the Blasted Lands servants of quest 2681) before it sets the
+    /// creature aside as one it cannot kill (1..600).
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 600 (seconds)")]
+    public int InvincibleTargetAbandonSeconds { get; set; } = 8;
+
     /// <summary>Throws when a key is out of range (the reload refuses such a value with the same ranges).</summary>
     public void Validate()
     {
@@ -40,6 +48,7 @@ public sealed class PlayerbotContentionOptions
         if (CheckPenalty(ClaimPenaltyYards) is { } penalty) throw new InvalidOperationException($"{section}: ClaimPenaltyYards {penalty}.");
         if (CheckMemory(SomeoneElsesMemorySeconds) is { } memory) throw new InvalidOperationException($"{section}: SomeoneElsesMemorySeconds {memory}.");
         if (CheckSuspend(ContentionSuspendMinutes) is { } suspend) throw new InvalidOperationException($"{section}: ContentionSuspendMinutes {suspend}.");
+        if (CheckMemory(InvincibleTargetAbandonSeconds) is { } invincible) throw new InvalidOperationException($"{section}: InvincibleTargetAbandonSeconds {invincible}.");
     }
 
     internal static string? CheckChance(float value) => float.IsFinite(value) && value is >= 0f and <= 1f ? null : "must be 0..1";

@@ -177,6 +177,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private readonly Combat.PlayerbotInvincibleWatch _invincibleWatch = new();
     private PlayerbotPvpFight? _pvpFight;
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
@@ -1415,7 +1416,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return;
             }
 
-            if (FightGoesNowhere(player, target))
+            if (FightGoesNowhere(player, target) || FightsInvincibleTarget(player, target))
             {
                 // Neither a blow landed nor a step was made at this target for FightNoProgressMs: it stands where the bot cannot reach it
                 // (a ledge, a cave floor, deep water) or cannot hurt it (an evading creature). It is set aside (StalledTargetMs), also as an
@@ -2695,6 +2696,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _fightWatchTarget = default;
         return true;
     }
+
+    /// <summary>
+    /// The target's health has been held at its death-prevention threshold for <c>Contention.InvincibleTargetAbandonSeconds</c> (a creature
+    /// an EventAI script keeps at 1 health, quest 2681's servants): the bot cannot kill it. True once, with the anomaly reported; the caller
+    /// sets the creature aside the way it does a fight that goes nowhere (<see cref="Combat.PlayerbotInvincibleWatch"/>).
+    /// </summary>
+    private bool FightsInvincibleTarget(Player player, Creature target)
+        => _invincibleWatch.Observe(player, target, _session.World.NowMs,
+            (uint)Math.Clamp(_options.Contention.InvincibleTargetAbandonSeconds, 1, 600) * 1000u);
 
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;

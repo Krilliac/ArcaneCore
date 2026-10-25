@@ -1368,10 +1368,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     internal static bool IsKillObjective(WorldSession? session, Player player, QuestNpcServices services,
         ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, uint entry)
-        => (content ?? session?.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content)?.FindTemplate(entry) is not { } template
+    {
+        content ??= session?.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        if (content?.Ai.IsInvincibleUntilSpellHit(entry) == true) return false;
+        return content?.FindTemplate(entry) is not { } template
             || IsKillable(player, template.Faction,
                 session?.Services.GetService<QuestNpcFeature>()?.FactionTemplates ?? session?.Services.GetService<FactionTemplateCatalog>(),
                 services.Deps.Reputation as ArcaneCore.Game.Reputation.INpcReactionSource);
+    }
 
     /// <summary>
     /// Whether a creature of faction template <paramref name="npcFactionTemplate"/> is not friendly to <paramref name="player"/>
