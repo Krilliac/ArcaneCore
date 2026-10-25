@@ -421,8 +421,44 @@ public sealed class LiveFeed : IDisposable
         return data;
     }
 
+    /// <summary>
+    /// Sends one extension line (<c>caps</c> or <c>action</c>; any other op is a <c>bad-args</c> <see cref="CommandException"/>, because subscribe and
+    /// unsubscribe get no reply, the tools must go through <see cref="ToolAsync"/>'s checks, and a <c>hello</c> could change the connection's role)
+    /// as it is (the transport adds the <c>id</c>) and returns the daemon's whole answer object, <c>ok:false</c> refusals included: the caller
+    /// decides what a refusal means. Unlike <see cref="RequestAsync"/> it neither forces <c>op:query</c> nor strips the answer. Unavailable when
+    /// not connected or when the connection closes while waiting; a timeout (<paramref name="timeout"/>, else <see cref="LiveOptions.QueryTimeout"/>)
+    /// is a <c>failed</c> error; an id-carrying <c>op:"error"</c> reply is also a <c>failed</c> <see cref="CommandException"/>; cancellation (the
+    /// caller's, or this feed's disposal) throws <see cref="OperationCanceledException"/>. Any thread.
+    /// </summary>
+    public async Task<JsonObject> ExchangeAsync(JsonObject message, CancellationToken cancellationToken, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        string? op = message["op"] is JsonValue opValue && opValue.TryGetValue(out string? opText) ? opText : null;
+        if (op is not ("caps" or "action"))
+        {
+            throw new CommandException(CommandException.BadArguments, $"ExchangeAsync sends only the caps and action ops, not '{op}'.");
+        }
+
+        FeedSession session = RequireSession();
+        var line = (JsonObject)message.DeepClone();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        return await session.QueryAsync(line, linked.Token, timeout).ConfigureAwait(false);
+    }
+
     private static CommandException UnsupportedKind(string kind)
         => new(CommandException.Unavailable, $"the connected world daemon does not support the {kind} query (it predates live insight); update and restart it.");
+
+    /// <summary>Identifies the open connection (larger for a later one); 0 when not connected. A cache of per-connection facts keys on it.</summary>
+    public long ConnectionId
+    {
+        get
+        {
+            lock (_state)
+            {
+                return _session is { IsOpen: true } session ? session.Id : 0;
+            }
+        }
+    }
 
     /// <summary>The connected feed's revision (hello <c>rev</c>, 1 when absent); 1 when not connected.</summary>
     public int FeedRevision => _session?.FeedRevision ?? 1;
