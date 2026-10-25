@@ -185,12 +185,13 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
         // The deletion cleanup runs meanwhile: it forgets the row in memory and rewrites the running bot's rows without it. Both writes must queue behind the first.
         Task forgetting = feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
         await Task.Delay(300);
-        Assert.False(forgetting.IsCompleted); // not gated: it would have written already and the in-flight write would then land last, bringing the row back
+        bool queued = !forgetting.IsCompleted; // not gated: it would have written already and the in-flight write would then land last, bringing the row back
+        store.Release(); // before any assertion: a failing one must not leave the stop hanging the host's disposal
 
-        store.Release();
         Assert.True((await stopping.WaitAsync(TimeSpan.FromSeconds(30))).Success);
         await forgetting.WaitAsync(TimeSpan.FromSeconds(30));
 
+        Assert.True(queued);
         Assert.False(ledger.TryGet(runningId, aboutGone, out _));
         PlayerbotTradeRecord stored = Assert.Single(await backing.LoadAllAsync());
         Assert.Equal((runningId, 4242UL), (stored.BotId, stored.OtherGuid));
