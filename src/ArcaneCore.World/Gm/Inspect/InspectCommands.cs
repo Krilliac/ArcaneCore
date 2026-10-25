@@ -159,6 +159,7 @@ public sealed class InspectCommands : ICommandGroup
         context.Reply(string.Create(C, $"life {life}, alive {unit.IsAlive}, in combat {unit.Combat.IsInCombat}, target {target}"));
         (uint zone, uint area) = unit.Map is { } map ? map.GetZoneAndAreaId(unit.X, unit.Y, unit.Z) : (0u, 0u);
         context.Reply(string.Create(C, $"map {unit.MapId} instance {unit.Map?.InstanceId ?? 0}, zone {zone}, area {area}, at {unit.X:F2} {unit.Y:F2} {unit.Z:F2} facing {unit.Orientation:F2}"));
+        InspectSectionRegistry.Render(context, InspectLeaf.Unit, new InspectSubject(unit, unit.Map));
         return true;
     }
 
@@ -212,6 +213,13 @@ public sealed class InspectCommands : ICommandGroup
         if (args.Trim().Length != 0) return false;
         if (Target(context) is not { } unit) return true;
 
+        ThreatLines(context, unit);
+        InspectSectionRegistry.Render(context, InspectLeaf.Threat, new InspectSubject(unit, unit.Map));
+        return true;
+    }
+
+    private static void ThreatLines(CommandContext context, Unit unit)
+    {
         if (unit is Player player)
         {
             Unit[] holders = [.. player.Combat.ThreatenedBy.OrderByDescending(h => h.Combat.Threat.GetThreat(player))];
@@ -223,13 +231,13 @@ public sealed class InspectCommands : ICommandGroup
                 context.Reply(string.Create(C, $"  {Describe(holder)}: threat {list.GetThreat(player):F1}, {(rank >= 0 ? $"rank {rank + 1} of {list.Entries.Count}" : "offline")}{(ReferenceEquals(list.CurrentVictim, player) ? ", current victim" : string.Empty)}"));
             }
 
-            return true;
+            return;
         }
 
         if (!unit.Combat.HasThreatList)
         {
             context.Reply($"{Name(unit)} has an empty threat list.");
-            return true;
+            return;
         }
 
         ThreatList threat = unit.Combat.Threat;
@@ -244,8 +252,6 @@ public sealed class InspectCommands : ICommandGroup
         {
             context.Reply(string.Create(C, $"  offline {Describe(entry.Target)}: {entry.Threat:F1}"));
         }
-
-        return true;
     }
 
     private static bool Ai(CommandContext context, string args)
@@ -283,6 +289,7 @@ public sealed class InspectCommands : ICommandGroup
 
         context.Reply(string.Create(C,
             $"home {creature.Home.X:F2} {creature.Home.Y:F2} {creature.Home.Z:F2}, {Distance(creature, creature.Home.X, creature.Home.Y, creature.Home.Z):F1} yards away; movement type {creature.MovementType}, regenerates health {creature.RegeneratesHealth}"));
+        InspectSectionRegistry.Render(context, InspectLeaf.Ai, new InspectSubject(creature, creature.Map));
         return true;
     }
 
@@ -313,6 +320,7 @@ public sealed class InspectCommands : ICommandGroup
 
         context.Reply(string.Create(C,
             $"wander distance {creature.WanderDistance:F1}, home {creature.Home.X:F2} {creature.Home.Y:F2} {creature.Home.Z:F2}"));
+        InspectSectionRegistry.Render(context, InspectLeaf.Motion, new InspectSubject(creature, creature.Map));
         return true;
     }
 
@@ -407,6 +415,7 @@ public sealed class InspectCommands : ICommandGroup
             context.Reply("isolated after faults: " + string.Join(", ", isolated.Select(u => u.GetType().Name)));
         }
 
+        InspectSectionRegistry.Render(context, InspectLeaf.Map, new InspectSubject(null, map));
         return true;
     }
 
