@@ -101,7 +101,7 @@ The group's state (`PlayerbotGroupState`, in `.playerbot groups`):
 | State | Leader | Members |
 |---|---|---|
 | `forming` | holds | follow the leader; their intake accepts |
-| `gathering` | holds until every living member is within 20 yards (after `GatherCatchUpMs`, 60 s, missing members are brought to the leader by the follow catch-up teleport, or the gathering moves on without those that cannot be) | walk to it |
+| `gathering` | holds until every living member is within 20 yards (on a run's retry step a leader revived inside the instance instead walks out to the exit, and the group is not gathered while it is inside; if it finds no path it holds, and only the 60 s catch-up below moves the group on) (after `GatherCatchUpMs`, 60 s, missing members are brought to the leader by the follow catch-up teleport, or the gathering moves on without those that cannot be) | walk to it |
 | `travelling` | walks to the approach point (30 yards short of an open-world objective's spawn, 15 short of an entrance, snapped to the navigation mesh by `SnapToMesh` if a mesh ray hits a boundary; counts as reached after `ApproachNoProgressMs`, 45 s, without closing by more than 2 yards), keeping out of known hazards, waiting while a member lags more than 30 yards (after `LagCatchUpMs`, 30 s, laggards are teleported to the leader or the wait is waived) or rests | follow at 2-5 yards (vmangos `MoveFollow`) |
 | `entering` | walks into the entrance trigger (`PlayerbotAreaTriggers` reports it like a client; the coordinator gave every member the trigger consent) | when the leader is inside, walk into the same trigger: the group's instance (the group is bound to it) |
 | `engaging` | pulls the objective when it is in sight within 60 yards (preferring one on the leader's own level before a nearer one on another level, `Better`), else the nearest creature within 20 yards that would attack the group (not a civilian, on the leader's level, and its aggro reach touches the leader's route segment to the goal: `CountsAsObstacle`), else walks towards the objective's spawn; waits for laggards, resting members and its own recovery | fight by role (below) |
@@ -663,7 +663,9 @@ volumes, with compact test pack positions, scaled combat stats, an open corridor
 fixture links map 389 to its AreaTable.dbc area 2437 for graveyard lookup (the build-5875 Map.dbc linked zone, field 19, which production reads too).
 `StartRun(plan, bots)` starts a selected catalogue
 wing through the normal formation checks without the random roll. On a retry, a living member still inside walks through the exit to
-join an outside leader before the group gathers. This test does not establish an imported-world or real-terrain RFC clear.
+join an outside leader before the group gathers, and a leader revived inside walks out to the exit itself while the group stays in
+`gathering` (a regression test pins that the group does not leave `gathering` while the leader is inside, with trash hitting a revived
+member meanwhile). Without a path out the leader holds and the 60 s `GatherCatchUpMs` fallback is what moves the group on. This test does not establish an imported-world or real-terrain RFC clear.
 
 `PlayerbotGroupAiPvpTests` (a member assists the leader against a flagged player and leaves an unflagged one alone, defends the leader
 against a flagged attacker, follows the skull over the leader's victim and its own focus icon over the skull), `PlayerbotGroupLeadershipTests`

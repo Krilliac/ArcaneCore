@@ -35,7 +35,7 @@ public sealed record GraveyardChoice(WorldSafeLoc Location, GraveyardSource Sour
 /// graveyard leaves the ghost where it is. Registered as the world's <see cref="IGraveyardRepop"/> by the graveyard feature.
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class GraveyardRepopService(WorldRuntime world, Func<TeleportService?> teleports) : IGraveyardRepop
+public sealed partial class GraveyardRepopService(WorldRuntime world, Func<TeleportService?> teleports) : IGraveyardRepop
 {
     private readonly List<IGraveyardOverride> _overrides = [];
     private readonly List<IGraveyardLinkSource> _linkSources = [];

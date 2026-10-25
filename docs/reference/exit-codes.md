@@ -41,4 +41,4 @@ The `arcane-db` codes (0-8) are documented in one place, the table of the [datab
 | 3 | `Schema` | A source table has the wrong shape or dialect (`ImportSchemaException`) or is not in the dialect asked for. |
 | 4 | `Database` | The target database refused the connection or the write; nothing was changed. |
 | 5 | `RepositoryPath` | The database or report path is inside a git work tree and not git-ignored (GPL data must stay out of the repository). |
-| 6 | `Verify` | `verify` found rows that reference content that does not exist. |
+| 6 | `Verify` | `verify` found rows that reference content that does not exist, or an empty map, area, area-trigger or taxi table. |
