@@ -1,10 +1,13 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Tests.Docs;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Playerbots.Fakes;
 using ArcaneCore.World.Tests.Playerbots.Risk;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -128,8 +131,9 @@ public sealed class PlayerbotPathJobTests
 
     // ---- 2. stale answers are dropped ------------------------------------------------------------------------------------------------
 
+    /// <summary>Regression guard (green before the fix too): a bot that left its route is never given the answer asked where it stood.</summary>
     [Fact]
-    public async Task ABotThatMovedMoreThanAYard_NeverGetsTheOldAnswer_AndAsksAgain()
+    public async Task ABotThatWalkedOffItsRoute_NeverGetsTheOldAnswer()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         await world.OnWorldAsync(() =>
@@ -138,13 +142,109 @@ public sealed class PlayerbotPathJobTests
             Assert.True(IsPending(h.Ask(h.Far())));
             h.Runner.CompleteAll();
 
-            Vector3 moved = h.Origin + new Vector3(1.5f, 0, 0);
+            Vector3 moved = h.Origin + new Vector3(0, 12, 0); // 12 yards off the route (the route runs along x)
             h.Player.Relocate(moved.X, moved.Y, moved.Z);
             Assert.True(IsPending(h.Ask(h.Far(), from: moved)));
             PlayerbotPathJobTotals totals = h.Jobs.Totals;
             Assert.Equal(0, totals.Applied);
             Assert.Equal(1, totals.Stale);
             Assert.Equal(2, h.Runner.Submitted.Count);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AWalkingBot_CollectsItsRunningJob_SplicedFromWhereItStands()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 d = h.Far();
+            Assert.True(IsPending(h.Ask(d)));
+
+            Vector3 here = h.Origin + new Vector3(6, 0, 0);
+            h.Player.Relocate(here.X, here.Y, here.Z);
+            Assert.True(IsPending(h.Ask(d, from: here)));
+            Assert.Single(h.Runner.Submitted); // the job asked from the old spot is kept, not abandoned and asked again
+            h.Runner.CompleteAll();
+
+            Vector3 later = h.Origin + new Vector3(9, 0, 0);
+            h.Player.Relocate(later.X, later.Y, later.Z);
+            PathResult answer = h.Ask(d, from: later);
+            Assert.False(IsPending(answer));
+            Assert.Equal(later, answer.Points[0]);
+            Assert.Equal(d, answer.Points[^1]);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(0, h.Jobs.Totals.Stale);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ANearAnswerUnderPlanExact_IsARoute_WithoutAPathEndsShortAnomaly()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            var wait = new TileWait();
+            Vector3 far = h.Far(250);
+            Assert.Equal(PlanOutcome.Pending, h.Plan(far, ref wait, 1_000, out _));
+            h.Runner.CompleteAll();
+
+            Assert.Equal(PlanOutcome.Route, h.Plan(far + new Vector3(0, 20, 0), ref wait, 1_500, out PlayerbotRoute? route));
+            Assert.NotNull(route);
+            Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "path-ends-short")));
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            return true;
+        });
+    }
+
+    /// <summary>Covers a precedence that already holds (green before the fix): the navigation executor's plan answers before any path job.</summary>
+    [Fact]
+    public async Task InsideAnAsyncNavigationPlan_AFarQuerySubmitsNoPathJob()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            var plan = new PlayerbotAsyncNavigationPlan(h.Player.Map!.MapId, h.Origin);
+            using (plan.Activate())
+            {
+                h.Ask(h.Far());
+            }
+
+            Assert.Empty(h.Runner.Submitted);
+            Assert.Equal(0, h.Jobs.Totals.Submitted);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AJobHold_PausesTheTileWait_InsteadOfResettingIt()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            var wait = new TileWait();
+            foreach (uint at in new uint[] { 0, 4_000, 8_000 })
+            {
+                PlayerbotPathJobs.NoteTilePending();
+                Assert.True(wait.Hold(at));
+            }
+
+            // One think waits for a path job (a far plan whose job is queued): one second of the wait is not tile time.
+            Assert.Equal(PlanOutcome.Pending, h.Plan(h.Far(), ref wait, 9_000, out _));
+
+            PlayerbotPathJobs.NoteTilePending();
+            Assert.True(wait.Hold(13_000));
+            PlayerbotPathJobs.NoteTilePending();
+            Assert.False(wait.Hold(17_000), "16 s of tile wait, 1 s of job wait excluded: past the 15 s bound");
             return true;
         });
     }
@@ -533,8 +633,38 @@ public sealed class PlayerbotPathJobTests
             Assert.True(thinks <= 3, $"a moving destination needed {thinks} thinks");
             Assert.Equal(0, h.Jobs.Totals.Escalations);
             Assert.Equal(0, h.Nav.OwnerCalls);
-            Assert.Single(h.Runner.Submitted);
+            Assert.InRange(h.Runner.Submitted.Count, 1, 2); // the second is the refresh for the destination asked now
             Assert.Equal(1, h.Jobs.Totals.Applied);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ADestinationThatMovesEveryThink_WithJobLatency_GetsARouteWithinAFewThinks()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            PathResult? answer = null;
+            int thinks = 0;
+            for (int step = 0; step < 12 && answer is null; step++)
+            {
+                thinks++;
+                PathResult r = h.Ask(h.Far(120 + (3.5f * step))); // a leader running away at 7 yards per second, 500 ms thinks
+                if (!IsPending(r)) answer = r;
+                if (step % 3 == 2) h.Runner.CompleteAll(); // the job takes three thinks
+                h.Wall += 500;
+                h.Clock += 500;
+            }
+
+            Assert.NotNull(answer);
+            Assert.True(thinks <= 6, $"a moving destination needed {thinks} thinks");
+            Assert.Equal(0, h.Jobs.Totals.Escalations);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.True(h.Jobs.Totals.Applied >= 1);
+            Assert.True(h.Runner.Submitted.Count >= 2, "a refresh job for the destination asked now");
+            Assert.NotEqual(PathType.Normal, answer.Type & PathType.Short);
             return true;
         });
     }
@@ -565,7 +695,7 @@ public sealed class PlayerbotPathJobTests
             bool answered = false;
             for (int step = 0; step < 40 && !answered; step++)
             {
-                answered = !IsPending(h.Ask(h.Far(250 + (40 * step)))); // each ask is far from the last: always a new job, never a match
+                answered = !IsPending(h.Ask(h.Far(250 + (60 * step)))); // each ask is far from the last: always a new job, never a match
                 h.Runner.CompleteAll();
                 h.Wall += 2_000;
                 h.Clock += 500;
@@ -588,6 +718,11 @@ public sealed class PlayerbotPathJobTests
             var defaults = new PlayerbotOptions { Enabled = true, MaxPathPoints = 128, MaxRouteYards = 2000 };
             Assert.Equal(0, defaults.SyncPathQueryMaxMs);
             Assert.False(defaults.PathJobs);
+
+            // What a server started from the shipped configuration file gets (the C# default alone proves nothing about it).
+            IConfigurationRoot shipped = new ConfigurationBuilder()
+                .Add(new ConfConfigurationSource { Path = Path.Combine(RepoRoot.Find(), "src", "ArcaneCore.World", "world.conf.dist") }).Build();
+            Assert.Equal(0, PlayerbotOptions.Bind(shipped).SyncPathQueryMaxMs);
 
             var nav = new ManualSharedPathSearch();
             using var h = new Harness(world, defaults, nav);

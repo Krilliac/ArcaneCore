@@ -295,8 +295,20 @@ internal sealed class PlayerbotFollower
 
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > ReplanYards)
         {
-            if (HoldForTiles(player, Plan(player, goal, leaderAt))) return;
-            judge = true;
+            // A leader that moved on: the way planned a moment ago is still the best one while the new one waits for a tile or a path job.
+            bool movedGoal = _route is { Complete: false };
+            if (Plan(player, goal, leaderAt, keepRouteWhilePending: movedGoal))
+            {
+                if (_route is null)
+                {
+                    HoldForTiles(player, true);
+                    return;
+                }
+            }
+            else
+            {
+                judge = true;
+            }
         }
 
         float remaining = _route is { } walking ? Remaining(player, walking) : Distance(player, leader);
@@ -348,15 +360,33 @@ internal sealed class PlayerbotFollower
     /// a tile on the way is still being read: the way is not judged (a refusal would read as no route and teleport the follower to its
     /// leader), the caller holds and plans again (for <see cref="TileWait.MaxMs"/>, then the refusal stands).
     /// </summary>
-    private bool Plan(Player player, Vector3 goal, Vector3 leaderAt)
+    /// <remarks>
+    /// With <paramref name="keepRouteWhilePending"/> a pending answer leaves the route being walked (and the goal it was planned for) in
+    /// place and still returns true: the next think asks again, since the goal is still beyond <see cref="ReplanYards"/> of the old one,
+    /// and collects the answer then. Without it, or when the kept route is complete or stale, a pending answer clears the route.
+    /// </remarks>
+    private bool Plan(Player player, Vector3 goal, Vector3 leaderAt, bool keepRouteWhilePending = false)
     {
+        PlayerbotRoute? kept = _route;
+        Vector3 keptGoal = _routeGoal;
         _routeGoal = goal;
         _route = null;
+        bool Pending()
+        {
+            if (keepRouteWhilePending && kept is { Complete: false } && !kept.IsStaleFor(player.Map))
+            {
+                _route = kept;
+                _routeGoal = keptGoal;
+            }
+
+            return true;
+        }
+
         PlanOutcome beside = PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? route);
-        if (beside == PlanOutcome.Pending) return true;
+        if (beside == PlanOutcome.Pending) return Pending();
         PlanOutcome onLeader = beside == PlanOutcome.Route ? beside
             : PlayerbotNavigation.PlanExact(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out route);
-        if (onLeader == PlanOutcome.Pending) return true;
+        if (onLeader == PlanOutcome.Pending) return Pending();
         if (onLeader == PlanOutcome.Route)
         {
             _route = route;
@@ -364,7 +394,7 @@ internal sealed class PlayerbotFollower
         }
 
         PlanOutcome towardGoal = PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out route);
-        if (towardGoal == PlanOutcome.Pending) return true;
+        if (towardGoal == PlanOutcome.Pending) return Pending();
         if (towardGoal == PlanOutcome.Route)
         {
             _route = route;
@@ -372,7 +402,7 @@ internal sealed class PlayerbotFollower
         }
 
         PlanOutcome towardLeader = PlayerbotNavigation.PlanToward(player, leaderAt, _options, ref _tileWait, _session.World.NowMs, out route);
-        if (towardLeader == PlanOutcome.Pending) return true;
+        if (towardLeader == PlanOutcome.Pending) return Pending();
         if (towardLeader == PlanOutcome.Route)
         {
             _route = route;

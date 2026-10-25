@@ -137,11 +137,28 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>The bots' far path searches as pool jobs (<see cref="PlayerbotPathJobs"/>); created on first use, world thread.</summary>
     private PlayerbotPathJobs PathJobs => _pathJobs ??= new PlayerbotPathJobs(_options,
-        new NavJobSystemRunner(() => NavJobSystem.SharedIfStarted ?? NavJobSystem.Shared(PathJobDefaultThreads, logger)),
+        PathJobRunnerForTests ?? new NavJobSystemRunner(() => NavJobSystem.SharedIfStarted ?? NavJobSystem.Shared(PathJobThreads(), logger)),
         () => unchecked((uint)ClockMs), logger);
 
-    /// <summary>The pool's size when this feature is the first to start it (the creatures' <c>Creatures:Movement:PathJobThreads</c> default; a pool the creatures started keeps its own).</summary>
-    private const int PathJobDefaultThreads = 4;
+    /// <summary>Test seam: the runner the path-job service submits to instead of the shared pool. Set before the first think creates the service.</summary>
+    internal IPlayerbotPathJobRunner? PathJobRunnerForTests { get; set; }
+
+    /// <summary>
+    /// The pool's size when this feature is the first to start it: the creatures' <c>Creatures:Movement:PathJobThreads</c> from the
+    /// configuration (their default when unset), so a bot-first start does not size the pool the creatures would have. A pool already
+    /// running keeps its own size (<see cref="NavJobSystem.Shared"/> warns once when the counts differ).
+    /// </summary>
+    private int PathJobThreads()
+    {
+        var creatures = new ArcaneCore.Game.Creatures.CreatureOptions();
+        if (services.GetService<Microsoft.Extensions.Configuration.IConfiguration>() is { } configuration)
+        {
+            Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(
+                configuration.GetSection(ArcaneCore.Game.Creatures.CreatureOptions.SectionName), creatures);
+        }
+
+        return creatures.Movement.PathJobThreads;
+    }
 
     /// <summary>The bots' path-job service; null until a think or a test created it.</summary>
     internal PlayerbotPathJobs? PathJobsForTests => _pathJobs;

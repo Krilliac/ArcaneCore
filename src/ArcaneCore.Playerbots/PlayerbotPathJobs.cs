@@ -87,8 +87,20 @@ internal sealed class PlayerbotPathJobs
     /// <summary>One yard of <see cref="PlayerbotNavigation.SearchNodes"/>: a cached answer computed with at least this much less than asked is still the answer.</summary>
     internal const int NodeTolerance = 48;
 
-    /// <summary>How far a finished job's destination may lie from the destination now asked and still answer it: 5% of the distance, 2..25 yards.</summary>
-    internal static float DestinationTolerance(Vector3 from, Vector3 to) => Math.Clamp(Vector3.Distance(from, to) * 0.05f, 2f, 25f);
+    /// <summary>
+    /// How far a finished job's destination may lie from the destination now asked and still answer it: 15% of the distance, 10..40 yards
+    /// (a leader running at 7 yards per second drifts 7 to 14 yards over the 1 to 2 seconds a job takes to be asked, run and collected).
+    /// </summary>
+    internal static float DestinationTolerance(Vector3 from, Vector3 to) => Math.Clamp(Vector3.Distance(from, to) * 0.15f, 10f, 40f);
+
+    /// <summary>How far the bot may have walked from where its main query was asked and still collect the answer: 2 seconds at the walking speed, at least 15 yards.</summary>
+    internal static float MovedYards(PlayerbotOptions options) => MathF.Max(15f, options.MoveSpeed * 2f);
+
+    /// <summary>A destination farther than this from the applied answer's gets a refresh job in the same think (the follower's re-plan distance).</summary>
+    internal const float RefreshYards = 2f;
+
+    /// <summary>The bot must stand within this of the answer's early legs to be spliced onto it (<see cref="PlayerbotMotion.OffLegYards"/>).</summary>
+    internal const float RejoinYards = PlayerbotMotion.OffLegYards;
 
     /// <summary>A wait longer than this (wall ms) is reported once (<c>nav/job-wait-long</c>).</summary>
     internal const long WaitLongMs = 5_000;
@@ -297,8 +309,9 @@ internal sealed class PlayerbotPathJobs
 
             if (state.PendingSinceWallMs != 0 && unchecked(nowMs - state.LastAskMs) > UnaskedAbandonMs()) state.PendingSinceWallMs = 0; // an old episode
             state.LastAskMs = nowMs;
-            DropStale(state, new Vector3(player.X, player.Y, player.Z));
-            Entry? entry = state.Find(key, to, from, options.MaxSearchNodes);
+            var botPosition = new Vector3(player.X, player.Y, player.Z);
+            DropStale(state, botPosition);
+            Entry? entry = state.Find(key, to, from, botPosition, options.MaxSearchNodes, _options);
             Carry carry = default;
             JobAnswer settled = JobAnswer.Submitted;
             if (entry is not null)
@@ -307,11 +320,14 @@ internal sealed class PlayerbotPathJobs
                 carry = new Carry(entry.Failures);
                 if (entry.Job.IsDone)
                 {
-                    PathResult? applied = TryApply(shared, map, player, entry, to, wallMs, state, ref carry, out how, out settled);
+                    PathResult? applied = TryApply(shared, map, player, entry, to, from, wallMs, state, ref carry, out how, out settled);
                     if (applied is not null)
                     {
                         state.PendingSinceWallMs = 0;
                         job = entry.Job;
+                        // The answer is for where the destination was; the next one tracks where it is now.
+                        if (Vector3.DistanceSquared(entry.To, to) > RefreshYards * RefreshYards)
+                            TryRefresh(shared, map, player, botId, state, from, to, options, key, nowMs, wallMs);
                         return applied;
                     }
 
@@ -390,7 +406,7 @@ internal sealed class PlayerbotPathJobs
     }
 
     /// <summary>The applied answer of a finished job; null when it was dropped (<paramref name="settled"/> says what the caller does next).</summary>
-    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, Vector3 to, long wallMs,
+    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, Vector3 to, Vector3 from, long wallMs,
         BotState state, ref Carry carry, out JobAnswer how, out JobAnswer settled)
     {
         how = JobAnswer.Applied;
@@ -411,7 +427,9 @@ internal sealed class PlayerbotPathJobs
                 return null;
         }
 
-        if (job.Result is not { } result || !StillValid(shared, map, player, entry) || !ReachesAsked(entry, result, to))
+        List<Vector3> points = [];
+        if (job.Result is not { } result || !StillValid(shared, map, player, entry) || !ReachesAsked(entry, result, to, from)
+            || !JoinsFrom(entry, result, from, out points))
         {
             _totals = _totals with { Stale = _totals.Stale + 1 };
             state.Remove(entry);
@@ -443,16 +461,68 @@ internal sealed class PlayerbotPathJobs
         }
 
         carry = default;
-        return result with { Points = new List<Vector3>(result.Points) };
+        return result with
+        {
+            // A route to the destination of a moment ago ends short of the one asked now, by design: Short keeps it from being read as a
+            // route that fell short (nav/path-ends-short) and from being refused as a partial exact plan.
+            Type = entry.To == to ? result.Type : result.Type | PathType.Short,
+            Points = points,
+        };
     }
 
     /// <summary>An answer found for a destination near the asked one stands only if its route ends within the tolerance of the asked one.</summary>
-    private static bool ReachesAsked(Entry entry, PathResult result, Vector3 to)
+    private static bool ReachesAsked(Entry entry, PathResult result, Vector3 to, Vector3 from)
     {
         if (entry.To == to) return true;
         if (result.Points.Count == 0) return false;
-        float tolerance = DestinationTolerance(entry.Start, to);
+        float tolerance = DestinationTolerance(from, to);
         return Vector3.DistanceSquared(result.Points[^1], to) <= tolerance * tolerance;
+    }
+
+    /// <summary>
+    /// The points of <paramref name="result"/> as the route of a bot standing at <paramref name="from"/>. A query asked from there is its
+    /// own; a bot that walked on since (a main query, <see cref="Entry.IsMain"/>) is spliced onto the first leg it stands within
+    /// <see cref="RejoinYards"/> of, among the legs it can have walked (<see cref="MovedYards"/>): the route starts at the bot and goes on from that leg's end.
+    /// False when it stands off the route.
+    /// </summary>
+    private bool JoinsFrom(Entry entry, PathResult result, Vector3 from, out List<Vector3> points)
+    {
+        IReadOnlyList<Vector3> source = result.Points;
+        if (Vector3.DistanceSquared(entry.Start, from) <= 1f)
+        {
+            points = new List<Vector3>(source);
+            return true;
+        }
+
+        points = [];
+        float reach = MovedYards(_options);
+        float walked = 0f;
+        for (int i = 1; i < source.Count && walked <= reach; i++)
+        {
+            Vector3 a = source[i - 1], b = source[i];
+            if (FlatDistanceToSegment(from, a, b) <= RejoinYards)
+            {
+                int next = Vector2.DistanceSquared(new Vector2(b.X, b.Y), new Vector2(from.X, from.Y)) <= 0.3f * 0.3f ? i + 1 : i;
+                if (next >= source.Count) return false;
+                points = new List<Vector3>(source.Count - next + 1) { from };
+                for (int k = next; k < source.Count; k++) points.Add(source[k]);
+                return true;
+            }
+
+            walked += Vector3.Distance(a, b);
+        }
+
+        return false;
+    }
+
+    private static float FlatDistanceToSegment(Vector3 p, Vector3 a, Vector3 b)
+    {
+        var pp = new Vector2(p.X, p.Y);
+        var aa = new Vector2(a.X, a.Y);
+        Vector2 leg = new Vector2(b.X, b.Y) - aa;
+        float lengthSq = leg.LengthSquared();
+        float along = lengthSq <= 1e-6f ? 0f : Math.Clamp(Vector2.Dot(pp - aa, leg) / lengthSq, 0f, 1f);
+        return Vector2.Distance(pp, aa + (leg * along));
     }
 
     private static bool StillValid(ISharedTiledPathSearch shared, Map map, Player player, Entry entry)
@@ -490,6 +560,40 @@ internal sealed class PlayerbotPathJobs
             return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
         }
 
+        if (!TrySubmitCore(shared, map, player, state, from, to, options, key, carry.Failures, nowMs, wallMs))
+        {
+            JoinLine(botId);
+            _totals = _totals with { BudgetRefused = _totals.BudgetRefused + 1 };
+            return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
+        }
+
+        LeaveLine(botId);
+        return Pending(state, wallMs, from, JobAnswer.Submitted, out how);
+    }
+
+    /// <summary>
+    /// A job for the destination asked now, queued beside the answer just applied for the one asked a moment ago, so that the next answer
+    /// tracks a destination that keeps moving. Silent in every way <see cref="Submit"/> is not: no pending answer, no place in line, no
+    /// refusal counted; it does nothing when an endpoint tile is still being read, when the bot already has a job running or the pool's
+    /// limits are reached.
+    /// </summary>
+    private void TryRefresh(ISharedTiledPathSearch shared, Map map, Player player, Guid botId, BotState state, Vector3 from, Vector3 to,
+        PathOptions options, PathOptions key, uint nowMs, long wallMs)
+    {
+        if (!shared.PrepareShared(map.MapId, from, to)) return;
+        PruneActive();
+        int mine = 0;
+        foreach (Entry e in state.Entries)
+            if (!e.Job.IsDone) mine++;
+
+        if (mine >= _options.PathJobsMaxPerBot || !Admitted(botId, options.MaxSearchNodes)) return;
+        if (TrySubmitCore(shared, map, player, state, from, to, options, key, 0, nowMs, wallMs)) LeaveLine(botId);
+    }
+
+    /// <summary>Queue the job and record its entry; false when the runner refuses it (nothing recorded).</summary>
+    private bool TrySubmitCore(ISharedTiledPathSearch shared, Map map, Player player, BotState state, Vector3 from, Vector3 to,
+        PathOptions options, PathOptions key, int failures, uint nowMs, long wallMs)
+    {
         PathOptions jobOptions = options with
         {
             LoadTiles = false,
@@ -498,24 +602,17 @@ internal sealed class PlayerbotPathJobs
             CancellationToken = default,
         };
         var job = new NavJob(shared, map.MapId, from, to, jobOptions, urgent: false, trackMissedTiles: true) { SubmittedAtMs = nowMs };
-        if (!_runner.TrySubmit(job))
-        {
-            JoinLine(botId);
-            _totals = _totals with { BudgetRefused = _totals.BudgetRefused + 1 };
-            return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
-        }
-
-        LeaveLine(botId);
+        if (!_runner.TrySubmit(job)) return false;
         _active.Add(job);
         _activeNodes += options.MaxSearchNodes;
         _totals = _totals with { Submitted = _totals.Submitted + 1 };
         state.Add(new Entry(job, key, to, from, new Vector3(player.X, player.Y, player.Z), options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs)
         {
-            Failures = carry.Failures,
+            Failures = failures,
             LastAskMs = nowMs,
         });
         TrimEntries(state);
-        return Pending(state, wallMs, from, JobAnswer.Submitted, out how);
+        return true;
     }
 
     private void TrimEntries(BotState state)
@@ -584,15 +681,18 @@ internal sealed class PlayerbotPathJobs
     // ---- staleness, lifecycle ----------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Drops the entries asked while the bot stood more than a yard from <paramref name="position"/>: each is out of date. Judged by where the
-    /// bot was, not where the query started, so a fallback query that starts beside the bot or at a detour point leaves the others alone.
+    /// Drops the entries asked while the bot stood farther from <paramref name="position"/> than it may have walked since: a yard for a
+    /// fallback query, <see cref="MovedYards"/> for a main one (a walking bot still collects its answer; <see cref="JoinsFrom"/> refuses
+    /// one it has walked off). Judged by where the bot was, not where the query started, so a fallback query that starts beside the bot or at
+    /// a detour point leaves the others alone.
     /// </summary>
     private void DropStale(BotState state, Vector3 position)
     {
         for (int i = state.Entries.Count - 1; i >= 0; i--)
         {
             Entry e = state.Entries[i];
-            if (Vector3.DistanceSquared(e.BotPosition, position) <= 1f) continue;
+            float bound = e.IsMain ? MovedYards(_options) : 1f;
+            if (Vector3.DistanceSquared(e.BotPosition, position) <= bound * bound) continue;
             if (!e.Job.IsDone) e.Job.Abandon();
             _totals = _totals with { Stale = _totals.Stale + 1 };
             state.Entries.RemoveAt(i);
@@ -729,26 +829,41 @@ internal sealed class PlayerbotPathJobs
             }
         }
 
-        internal Entry? Find(PathOptions key, Vector3 to, Vector3 from, int nodes)
+        internal Entry? Find(PathOptions key, Vector3 to, Vector3 from, Vector3 botPosition, int nodes, PlayerbotOptions options)
         {
-            // An exact destination wins; otherwise the nearest one within the tolerance (a destination that keeps moving, such as a
-            // leader, still finds the job asked a think ago). TryApply re-validates a near match against the destination asked now.
+            // An exact destination wins; otherwise the nearest finished answer within the tolerance, else the nearest running job within it
+            // (a destination that keeps moving, such as a leader, still finds the job asked a few thinks ago; a finished answer near the
+            // goal beats waiting for a fresher one, the follower asks again next think anyway). The query is the entry's own when it starts
+            // where the entry's did; a main query of a bot that walked on since (from its own spot) also finds the entries asked from where
+            // the bot stood. TryApply re-validates a near match against the destination and the position asked now.
             float tolerance = DestinationTolerance(from, to);
-            Entry? best = null;
-            float bestSq = tolerance * tolerance;
+            float movedYards = MovedYards(options);
+            bool fromBot = Vector3.DistanceSquared(from, botPosition) <= 1f;
+            Entry? done = null, running = null;
+            float doneSq = tolerance * tolerance, runningSq = doneSq;
             foreach (Entry e in Entries)
             {
-                if (Vector3.DistanceSquared(e.Start, from) > 1f || e.MaxNodes < nodes - NodeTolerance || !e.Key.Equals(key)) continue;
+                if (e.MaxNodes < nodes - NodeTolerance || !e.Key.Equals(key)) continue;
+                bool sameStart = Vector3.DistanceSquared(e.Start, from) <= 1f;
+                if (!sameStart && !(fromBot && e.IsMain && Vector3.DistanceSquared(e.BotPosition, botPosition) <= movedYards * movedYards)) continue;
                 if (e.To == to) return e;
                 float d = Vector3.DistanceSquared(e.To, to);
-                if (d <= bestSq)
+                if (e.Job.IsDone)
                 {
-                    best = e;
-                    bestSq = d;
+                    if (d <= doneSq)
+                    {
+                        done = e;
+                        doneSq = d;
+                    }
+                }
+                else if (d <= runningSq)
+                {
+                    running = e;
+                    runningSq = d;
                 }
             }
 
-            return best;
+            return done ?? running;
         }
 
         internal void Add(Entry entry) => Entries.Add(entry);
@@ -770,6 +885,9 @@ internal sealed class PlayerbotPathJobs
         internal readonly object? Dataset = dataset;
         internal readonly long SubmittedWallMs = submittedWallMs;
         internal readonly Vector3 BotPosition = botPosition;
+
+        /// <summary>Asked from where the bot stood (a fallback query starts beside it or at a detour point and is not main).</summary>
+        internal bool IsMain => Vector3.DistanceSquared(Start, BotPosition) <= 1f;
         internal int Failures;
         internal uint LastAskMs;
         internal bool LongWaitReported;

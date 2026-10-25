@@ -200,6 +200,7 @@ internal struct TileWait
     private uint _since;
     private long _sinceRealTicks;
     private uint _lastHold;
+    private long _lastHoldRealTicks;
     private bool _started;
     private bool _realRead;
     private bool _spent;
@@ -215,25 +216,29 @@ internal struct TileWait
             _started = true;
             _since = now;
             _sinceRealTicks = RealNow();
+            _lastHold = now;
+            _lastHoldRealTicks = _sinceRealTicks;
             _realRead = false;
             _spent = false;
         }
 
         if (PlayerbotPathJobs.LastPendingWasJob)
         {
-            // Waiting for a path job (the pool is busy, the search runs) is not a tile read gone wrong: it neither spends this wait nor
-            // starts its clock (overloaded must not become unreachable). The job wait has its own bound (PathJobWaitMaxMs).
-            _since = now;
-            _sinceRealTicks = RealNow();
-            _realRead = false;
-            _spent = false;
+            // Waiting for a path job (the pool is busy, the search runs) is not a tile read gone wrong: the time spent in it neither spends this
+            // wait nor counts toward it (overloaded must not become unreachable), and the tile time already waited is kept: the wait's start
+            // moves forward by the time since the last hold. The job wait has its own bound (PathJobWaitMaxMs).
+            long realNow = RealNow();
+            _since = unchecked(_since + (now - _lastHold));
+            _sinceRealTicks += realNow - _lastHoldRealTicks;
             _lastHold = now;
+            _lastHoldRealTicks = realNow;
             return true;
         }
 
         _realRead |= PathSearchCounters.LastPendingWasRealRead;
 
         _lastHold = now;
+        _lastHoldRealTicks = RealNow();
         if (_spent) return false;
         if (unchecked(now - _since) <= MaxMs) return true;
         if (_realRead && (RealNow() - _sinceRealTicks) * 1000 / System.Diagnostics.Stopwatch.Frequency <= MaxMs) return true;

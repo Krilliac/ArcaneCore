@@ -385,15 +385,29 @@ public sealed class NavJobSystem : IDisposable
         }
     }
 
+    private static readonly HashSet<int> s_mismatchLogged = [];
+
     /// <summary>
-    /// The process's creature path-job pool, started on first use with <paramref name="threads"/> workers (later calls get the same pool
-    /// whatever they ask; the setting is read at start). Its threads are background threads and end with the process.
+    /// The process's path-job pool (creatures and playerbots), started on first use with <paramref name="threads"/> workers. Later calls get
+    /// the same pool whatever they ask (the first starter wins); a later starter that asked for another count is warned once per count.
+    /// Its threads are background threads and end with the process.
     /// </summary>
     public static NavJobSystem Shared(int threads, ILogger? logger = null)
     {
         lock (s_sharedGate)
         {
-            return s_shared ??= new NavJobSystem(Math.Clamp(threads, 1, 64), DefaultCapacity, logger);
+            int asked = Math.Clamp(threads, 1, 64);
+            if (s_shared is { } have)
+            {
+                if (have.Threads != asked && s_mismatchLogged.Add(asked))
+                {
+                    (logger ?? have._logger).LogWarning("Path-job pool already runs {Have} threads; a later starter asked for {Asked}, ignored (first starter wins)", have.Threads, asked);
+                }
+
+                return have;
+            }
+
+            return s_shared = new NavJobSystem(asked, DefaultCapacity, logger);
         }
     }
 }
