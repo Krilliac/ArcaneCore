@@ -92,4 +92,66 @@ public sealed class LiveFeedRequesterTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.WaitAsync(FakeFeedServer.Patience));
     }
+
+    [WindowsFact]
+    public async Task AnActionAnsweredAfterTheQueryTimeout_StillGetsItsAnswer()
+    {
+        await using var rig = new LiveRig(o => o with { QueryTimeout = TimeSpan.FromMilliseconds(300) });
+        FakeFeedServer daemon = await rig.ConnectAsync();
+        IFeedRequester requester = new LiveFeedRequester(rig.Feed);
+
+        Task<JsonObject> pending = requester.RequestAsync(new JsonObject { ["op"] = "action", ["command"] = "creature ai pause" }, CancellationToken.None);
+        JsonObject sent = await daemon.ReadAsync();
+        await Task.Delay(900);
+        Assert.False(pending.IsCompleted);
+        await daemon.WriteAsync(Wire.Result(sent["id"]!.GetValue<long>(), ("settled", false)));
+        JsonObject answer = await pending.WaitAsync(FakeFeedServer.Patience);
+
+        Assert.True(answer["ok"]!.GetValue<bool>());
+        Assert.False(answer["settled"]!.GetValue<bool>());
+    }
+
+    [WindowsFact]
+    public async Task ACapsRequestThatIsNotAnswered_FailsAfterTheQueryTimeout()
+    {
+        await using var rig = new LiveRig(o => o with { QueryTimeout = TimeSpan.FromMilliseconds(300) });
+        FakeFeedServer daemon = await rig.ConnectAsync();
+        IFeedRequester requester = new LiveFeedRequester(rig.Feed);
+
+        Task<JsonObject> pending = requester.RequestAsync(new JsonObject { ["op"] = "caps" }, CancellationToken.None);
+        _ = await daemon.ReadAsync();
+        CommandException e = await Assert.ThrowsAsync<CommandException>(() => pending.WaitAsync(FakeFeedServer.Patience));
+
+        Assert.Equal(CommandException.Failed, e.Code);
+        Assert.Contains("timed out", e.Message, StringComparison.Ordinal);
+    }
+
+    [WindowsFact]
+    public async Task ADisconnectDuringARequest_IsUnavailable()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer daemon = await rig.ConnectAsync();
+        IFeedRequester requester = new LiveFeedRequester(rig.Feed);
+
+        Task<JsonObject> pending = requester.RequestAsync(new JsonObject { ["op"] = "action" }, CancellationToken.None);
+        _ = await daemon.ReadAsync();
+        daemon.Drop();
+        CommandException e = await Assert.ThrowsAsync<CommandException>(() => pending.WaitAsync(FakeFeedServer.Patience));
+
+        Assert.Equal(CommandException.Unavailable, e.Code);
+    }
+
+    [Theory]
+    [InlineData("subscribe")]
+    [InlineData("unsubscribe")]
+    [InlineData("tap")]
+    [InlineData("hello")]
+    [InlineData("query")]
+    public async Task AnyOtherOp_IsRefusedBeforeItIsSent(string op)
+    {
+        await using var rig = new LiveRig();
+        IFeedRequester requester = new LiveFeedRequester(rig.Feed);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => requester.RequestAsync(new JsonObject { ["op"] = op }, CancellationToken.None));
+    }
 }

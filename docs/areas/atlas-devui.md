@@ -69,8 +69,18 @@ overlay layer. It refreshes on its own timer at no more than 2 Hz and stops when
 
 ## Not done
 
-* The transport: `LiveActions` sends through an `IFeedRequester` service. Binding it to the live feed (`LiveFeed.RequestAsync`) waits for the
-  branch that adds request/reply to the feed; without it the actions report `unavailable` and the menu shows only the local helpers.
+* (The transport is bound.) `LiveActions` sends through `IFeedRequester`; `LiveModule` registers `LiveFeedRequester`, which calls
+  `LiveFeed.ExchangeAsync`. That sends only the `caps` and `action` ops, adds the id, returns the whole answer (`ok:false` is an answer),
+  gives `unavailable` when not connected or when the connection closes mid-request, and throws `OperationCanceledException` on cancellation. It
+  is not `LiveFeed.RequestAsync`, which is the insight query path (it forces `op:query` and throws on a refusal). A `caps` request waits the
+  normal `LiveOptions.QueryTimeout` (5 s); an `action` waits `LiveFeedRequester.ActionWait` (625 s: the 10 s world-thread invoke, the longest
+  `SettleSeconds` of 600, and a margin), because the world answers an action only when the command settles (`settled:false` at the end of
+  `World:Control:MapFeed:Actions:SettleSeconds`, default 30). `caps` does not advertise that setting, hence the maximum.
+* The `catalog` branch of `LiveActions` is dead against the real daemon: the world never sets `catalog:true` in `caps` and `catalog` is not a
+  declared op, so sending it would be a protocol strike.
+* Late `op:"actionLine"` output (lines that arrive after the action's answer) is ignored by `FeedSession`.
+* `LiveActions` has no try/catch around a step: in a multi-step plan, an error in a later step loses the earlier steps that already ran from the
+  action log.
 * A run against a development daemon with screenshots has not been done.
 * Undo of a placed game object is not implemented (the reply format for its guid is unverified). Edits (set level, faction, speed) have no undo.
 * "Bookmark here" moves the camera, because bookmarks are made from the camera.

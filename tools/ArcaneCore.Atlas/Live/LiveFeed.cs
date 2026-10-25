@@ -422,18 +422,27 @@ public sealed class LiveFeed : IDisposable
     }
 
     /// <summary>
-    /// Sends one line of the map-feed protocol as it is (the transport adds the <c>id</c>) and returns the daemon's whole answer object,
-    /// <c>ok:false</c> refusals included: the caller decides what a refusal means. Unlike <see cref="RequestAsync"/> it neither forces
-    /// <c>op:query</c> nor strips the answer. Unavailable when not connected; a timeout is a <c>failed</c> error; cancellation (the caller's,
-    /// or this feed's disposal) throws <see cref="OperationCanceledException"/>. Any thread.
+    /// Sends one extension line (<c>caps</c> or <c>action</c>; any other op is an <see cref="ArgumentException"/>, because subscribe and
+    /// unsubscribe get no reply, the tools must go through <see cref="ToolAsync"/>'s checks, and a <c>hello</c> could change the connection's role)
+    /// as it is (the transport adds the <c>id</c>) and returns the daemon's whole answer object, <c>ok:false</c> refusals included: the caller
+    /// decides what a refusal means. Unlike <see cref="RequestAsync"/> it neither forces <c>op:query</c> nor strips the answer. Unavailable when
+    /// not connected or when the connection closes while waiting; a timeout (<paramref name="timeout"/>, else <see cref="LiveOptions.QueryTimeout"/>)
+    /// is a <c>failed</c> error; an id-carrying <c>op:"error"</c> reply is also a <c>failed</c> <see cref="CommandException"/>; cancellation (the
+    /// caller's, or this feed's disposal) throws <see cref="OperationCanceledException"/>. Any thread.
     /// </summary>
-    public async Task<JsonObject> ExchangeAsync(JsonObject message, CancellationToken cancellationToken)
+    public async Task<JsonObject> ExchangeAsync(JsonObject message, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(message);
+        string? op = message["op"] is JsonValue opValue && opValue.TryGetValue(out string? opText) ? opText : null;
+        if (op is not ("caps" or "action"))
+        {
+            throw new ArgumentException($"ExchangeAsync sends only the caps and action ops, not '{op}'.", nameof(message));
+        }
+
         FeedSession session = RequireSession();
         var line = (JsonObject)message.DeepClone();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        return await session.QueryAsync(line, linked.Token).ConfigureAwait(false);
+        return await session.QueryAsync(line, linked.Token, timeout).ConfigureAwait(false);
     }
 
     private static CommandException UnsupportedKind(string kind)
