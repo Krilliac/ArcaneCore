@@ -767,7 +767,8 @@ record comes from a build without it, or from a host with the tick monitor disab
     its own target when that is one of the enemies.
   - `retreat`: the retreat decision, null with risk scoring off. It is the verdict that ran (`retreat` 1) or the stay closest to
     running (`retreat` 0, the least time to die per time to kill). It holds `f` (`health`, `dps_in`, `dps_out`, `enemies`,
-    `time_to_kill`, `time_to_die`, `target_health`) and `reason`.
+    `time_to_kill`, `time_to_die`, `target_health`, `round_damage`: the non-crit max hit of each melee attacker added up, as a
+    share of the bot's maximum health) and `reason` (`losing-burst-N` is a retreat only the round-damage trigger caused).
   - `rest`: `f` (health, mana and resurrection sickness at the fight's end) and `rested` (1 when the bot's goal became `Rest` within
     5 s of the looting that followed the fight, or of the fight's end; `Rest` also covers waiting with no food and waiting sickness out,
     which `sick` helps tell apart).

@@ -89,7 +89,11 @@ stand. Then `time to kill = enemies' health / damage dealt`, `time to die = bot 
 * An enemy with a spell that kills outright: retreat at once (`lethal`) unless the fight ends within 2 seconds.
 * A single enemy at or below `NearlyWonHealthPct` (20%) is finished unless the bot would die in less than half the time it needs.
 * Winning (`time to die x Tolerance >= time to kill`): fight on.
-* Losing: retreat at `RetreatHealthPct` (35%) or when the bot would die within 4 seconds; until then fight on (`behind`).
+* Losing: retreat at `RetreatHealthPct` (35%), against more than one enemy when one more round would take the bot to or below that
+  line (`PlayerbotFightFacts.RoundDamage`: the non-crit max hit, `UnitFieldMaxdamage`, of each live, non-evading melee creature
+  attacking it, added up, so the mean damage rate cannot hide a burst of aligned blows that leaves the bot too weak to get away;
+  the retreat reason is `losing-burst-N`; a lone enemy keeps the plain line), or when the bot would die
+  within 4 seconds; until then fight on (`behind`). Whether the retreat can succeed is judged at the current health.
   A retreat that would not break contact before it kills the bot is no way out, and the bot fights on (`cornered-no-escape`,
   `PlayerbotRiskModel.RetreatSucceeds`): the damage predicted on the run must stay under 90% of the bot's health. A pursuer at
   least as fast as the bot (speed_run 1.14286 is 8 yards a second, an unbuffed bot 7) keeps hitting for the whole run and on
