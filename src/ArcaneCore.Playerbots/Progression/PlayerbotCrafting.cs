@@ -1278,6 +1278,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
                 || (!go.User.IsEmpty && go.User != player.Guid)
                 || go.Loot is { IsEmpty: true }
+                || go.Loot is { Viewers.Count: > 0 } // another looter holds the window: the cast is refused with CHEST_IN_USE (GatheringSpells)
                 || go.Template.GetData(GameObjectMapSystem.ChestLevelData) > player.Level + GameObjectMapSystem.ChestLevelLeeway
                 || (reqQuest != 0
                     && (goSystem?.Quests is { } goQuests
@@ -1548,14 +1549,25 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             if (packet.Payload.Length >= 6 && BitConverter.ToUInt32(packet.Payload, 0) == spellId && packet.Payload[4] != 0)
                 result = ((SpellCastResult)packet.Payload[5]).ToString();
         }
+        if (result == nameof(SpellCastResult.ChestInUse))
+        {
+            // Someone else holds the node's window: not a fault of the cast and not a streak to count. Leave it at once for the full back-off
+            // (the cast set it; it is not cleared for a retry) and let the holder finish or the server's loot audit close a stale window.
+            _failedLootCasts.Remove(target.Value);
+            _failedLootNonDice.Remove(target.Value);
+            _refusedUntil[target.Value] = unchecked(_session.World.NowMs + RefusalBackoffMs);
+            return;
+        }
         if (result is not null && result != nameof(SpellCastResult.TryAgain))
             _failedLootNonDice.Add(target.Value);
         int failures = _failedLootCasts.GetValueOrDefault(target.Value) + 1;
         if (failures < MaxGatherCasts)
         {
             if (_failedLootCasts.Count >= 64)
+            {
                 _failedLootCasts.Clear();
                 _failedLootNonDice.Clear();
+            }
             _failedLootCasts[target.Value] = failures;
             _refusedUntil.Remove(target.Value);
             return;
@@ -1621,6 +1633,10 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             ObjectGuid timedOutTarget = _gatheringTarget;
             EndLootWait();
+            // The window may be open server side with its reply lost: close it as the corpse loot timeout does (PlayerbotBrain), or the node
+            // stays "in use" and is never gatherable, despawned or respawned. A release of a window not held is answered and ignored.
+            if (!timedOutTarget.IsEmpty)
+                _session.TryManagedAction(WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(timedOutTarget.Value));
             if (timedOutTarget.High == HighGuid.GameObject)
             {
                 _refusedUntil[timedOutTarget.Value] = unchecked(now + RefusalBackoffMs);

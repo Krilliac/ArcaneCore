@@ -6,6 +6,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Teleport;
@@ -380,6 +381,15 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
             {
                 player.ClearEmoteState();
+            }
+
+            // vmangos HandleMovementOpcodes (MovementHandler.cpp:1104-1110): a block with MOVEFLAG_MASK_MOVING closes a loot window that is not an
+            // item's. Without it a looter whose client lost the window walks off and keeps the node "in use" for everyone. Managed bots
+            // move through the same handlers, so they are covered. The UnitFlags test keeps the common (not looting) case to one load.
+            if ((player.UnitFlags & UnitFlags.Looting) != 0 && (stored.Flags & MovementFlags.MaskMoving) != 0
+                && player.Map is { } lootMap)
+            {
+                session.Services.GetService<GameObjectLootFeature>()?.FindSystem(lootMap)?.Loot?.ReleaseOnMovement(player);
             }
         }
         finally

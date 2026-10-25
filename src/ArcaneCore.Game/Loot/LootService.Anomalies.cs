@@ -32,6 +32,9 @@ public sealed partial class LootService
     /// <summary>A roll was still running well past its timeout.</summary>
     public const string RollUnresolvedCode = "roll-unresolved";
 
+    /// <summary>Yards beyond the loot distance a looter may be before the audit treats the window as stale.</summary>
+    internal const float WindowAuditDistanceMargin = 5f;
+
     /// <summary>How often <see cref="AuditOpenWindows"/> runs from the roll manager's map update.</summary>
     internal const uint WindowAuditIntervalMs = 1000;
 
@@ -135,9 +138,25 @@ public sealed partial class LootService
         return entry.Source switch
         {
             Creature creature => !creature.IsInWorld || !ReferenceEquals(player.Map, creature.Map)
-                || (bag.ReleaseHandler is null && creature.DeathState != CreatureDeathState.Corpse),
-            GameObject go => !go.IsSpawned || !ReferenceEquals(player.Map, go.Map),
+                || (bag.ReleaseHandler is null && creature.DeathState != CreatureDeathState.Corpse)
+                || LooterCannotReach(player, creature, bag),
+            GameObject go => !go.IsSpawned || !ReferenceEquals(player.Map, go.Map) || LooterCannotReach(player, go, bag),
             _ => false, // an item's loot lives with its owner's inventory
         };
+    }
+
+    /// <summary>
+    /// The looter is dead, or further from the source than <see cref="Options"/>.LootDistance plus <see cref="WindowAuditDistanceMargin"/>.
+    /// A live looter holding a window open past that is one whose client lost it (vmangos releases it on movement, on a cast and on a
+    /// stun); left open it keeps a node "in use" for everyone else. Sources that ignore distance (a bobber's window) skip the distance test.
+    /// </summary>
+    private bool LooterCannotReach(Player player, WorldObject source, LootBag bag)
+    {
+        if (!player.IsAlive)
+        {
+            return true;
+        }
+
+        return !bag.IgnoreDistance && bag.SourceCheck is null && Distance3D(player, source) > Options.LootDistance + WindowAuditDistanceMargin;
     }
 }

@@ -1469,6 +1469,20 @@ public sealed partial class LootService : IViewerFieldFilter
         }
     }
 
+    /// <summary>
+    /// The player is moving (vmangos HandleMovementOpcodes, MovementHandler.cpp:1104-1110: a block with MOVEFLAG_MASK_MOVING closes a loot
+    /// window that is not an item's): a walking looter leaves the corpse or node, so its window must not keep the source "in use".
+    /// An item's window (a lockbox or a prospected stack) stays open while the owner moves.
+    /// </summary>
+    public void ReleaseOnMovement(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_open.TryGetValue(player, out LootBag? bag) && bag.Kind != LootSourceKind.Item)
+        {
+            Release(player, bag.Source);
+        }
+    }
+
     /// <summary>The player left the world or the map: close their window without a reply (vmangos logout DoLootRelease).</summary>
     public void OnPlayerLeft(Player player)
     {

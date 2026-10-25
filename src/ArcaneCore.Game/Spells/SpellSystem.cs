@@ -139,6 +139,14 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(targets);
+
+        // Casting spells interrupts looting (vmangos HandleCastSpellOpcode, SpellHandler.cpp:301-306): a window left open would also make
+        // the cast of a gather on the same node fail with CHEST_IN_USE against the caster's own stale window.
+        if ((player.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            ReleaseLoot?.Invoke(player);
+        }
+
         SpellInfo? spell = Store.Get(spellId);
         if (spell is null)
         {
