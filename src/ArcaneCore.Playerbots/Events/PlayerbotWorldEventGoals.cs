@@ -48,9 +48,9 @@ internal sealed class PlayerbotWorldEventGoals(Guid botId, PlayerbotWorldEventBo
     /// <summary>
     /// The spot area the bot should treat as its idle centre (a home of radius 0 around the spot, in the town's map), or null for the inn.
     /// Keeps a claim the bot holds while its festival runs; otherwise looks for a place (at most every <see cref="DecideGapMs"/>, or when the
-    /// festivals changed). Does not renew the claim: the brain renews it (<see cref="Renew"/>) once the town idle decided to stay.
+    /// festivals changed; never when <paramref name="mayDecide"/> is false, the town idle's explore window). Does not renew the claim: the brain renews it (<see cref="Renew"/>) once the town idle decided to stay.
     /// </summary>
-    internal PlayerbotHomeArea? Spot(Player player, PlayerbotHomeArea town)
+    internal PlayerbotHomeArea? Spot(Player player, PlayerbotHomeArea town, bool mayDecide = true)
     {
         try
         {
@@ -75,7 +75,8 @@ internal sealed class PlayerbotWorldEventGoals(Guid botId, PlayerbotWorldEventBo
                 _spotAnchor = null;
             }
 
-            return Decide(player, town, now, events.Holidays);
+            // A secondary town's explore window takes no place (it would be claimed and released every think, inflating festival_visit/done).
+            return mayDecide ? Decide(player, town, now, events.Holidays) : null;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
@@ -134,9 +135,17 @@ internal sealed class PlayerbotWorldEventGoals(Guid botId, PlayerbotWorldEventBo
     internal static float SpotDistance(Player player, PlayerbotHomeArea spot)
         => PlayerbotFestivalRules.SpotDistance(spot.DistanceTo(player.X, player.Y), player.Z - spot.Centre.Z);
 
-    /// <summary>Whether a bot at <paramref name="player"/>'s position is held at the spot (2D within the hold distance and on its floor).</summary>
-    internal static bool IsHeld(Player player, PlayerbotHomeArea spot)
-        => PlayerbotFestivalRules.IsHeldAtSpot(spot.DistanceTo(player.X, player.Y), player.Z - spot.Centre.Z);
+    /// <summary>
+    /// Whether a bot at <paramref name="player"/>'s position is held at the spot (2D within the hold distance, on its floor and at least
+    /// <see cref="PlayerbotFestivalRules.AnchorClearYards"/> from the anchor NPC: a stall next to the NPC is not a hold).
+    /// </summary>
+    internal bool IsHeld(Player player, PlayerbotHomeArea spot)
+    {
+        float anchorDistance = _spotAnchor is { } anchor
+            ? MathF.Sqrt(((player.X - anchor.Position.X) * (player.X - anchor.Position.X)) + ((player.Y - anchor.Position.Y) * (player.Y - anchor.Position.Y)))
+            : float.PositiveInfinity;
+        return PlayerbotFestivalRules.IsHeldAtSpot(spot.DistanceTo(player.X, player.Y), player.Z - spot.Centre.Z, anchorDistance);
+    }
 
     /// <summary>
     /// Whether the bot stands at the spot's ground position but on another floor (within the linger distance in 2D, beyond the height

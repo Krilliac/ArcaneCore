@@ -66,6 +66,9 @@ internal sealed class PlayerbotTownIdle
     internal const uint StallDeferMs = 180_000;
 
     private bool _exploring;
+
+    /// <summary>Whether the last decision put a secondary town's bot in its explore window (it leaves the town for now).</summary>
+    internal bool Exploring => _exploring;
     private uint _until;
     private TownIdleAction _last = TownIdleAction.Explore;
 

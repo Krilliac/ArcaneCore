@@ -121,8 +121,8 @@ internal sealed class EventsTestWorld : IAsyncDisposable
         return new EventsTestWorld(world, options);
     }
 
-    /// <summary>A bot of a capital town (Stay = Capital, 300 yards around the inn at the start), started and standing at the inn.</summary>
-    internal async Task<Guid> AddHomedBotAsync(string name)
+    /// <summary>A bot of a town (Stay = <paramref name="stay"/>, the capital by default; 300 yards around the inn at the start), started and standing at the inn.</summary>
+    internal async Task<Guid> AddHomedBotAsync(string name, TownStay stay = TownStay.Capital)
     {
         PlayerbotOperationResult created = await World.Bots.CreateAsync(name, 1, 1);
         Xunit.Assert.True(created.Success, created.Code);
@@ -132,7 +132,7 @@ internal sealed class EventsTestWorld : IAsyncDisposable
         await World.Host.OnWorldAsync(() =>
         {
             Player player = World.Bots.FindSession(bot)!.Player!;
-            World.Bots.FindBrain(bot)!.Home = new PlayerbotHomeArea(player.MapId, Inn, 300f, "town:stormwind") { Stay = TownStay.Capital };
+            World.Bots.FindBrain(bot)!.Home = new PlayerbotHomeArea(player.MapId, Inn, 300f, "town:stormwind") { Stay = stay };
             return true;
         });
         return bot;

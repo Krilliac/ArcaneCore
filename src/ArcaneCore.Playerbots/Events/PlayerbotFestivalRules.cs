@@ -142,7 +142,13 @@ internal static class PlayerbotFestivalRules
         return height <= SpotZToleranceYards ? distance2D : distance2D + height;
     }
 
-    /// <summary>Whether a bot <paramref name="distance2D"/> yards (ground plane) and <paramref name="dz"/> from its spot is held there.</summary>
-    internal static bool IsHeldAtSpot(float distance2D, float dz)
-        => distance2D <= PlayerbotTownIdle.HoldYards && MathF.Abs(dz) <= SpotZToleranceYards;
+    /// <summary>The NPC interaction distance: a held bot is never closer than this to its anchor (a stalled walk must not park it in a player's interaction disc).</summary>
+    internal const float AnchorClearYards = 5f;
+
+    /// <summary>
+    /// Whether a bot <paramref name="distance2D"/> yards (ground plane) and <paramref name="dz"/> from its spot is held there: within the
+    /// hold distance, on the spot's floor and at least <see cref="AnchorClearYards"/> (ground plane) from the anchor NPC.
+    /// </summary>
+    internal static bool IsHeldAtSpot(float distance2D, float dz, float anchorDistance2D)
+        => distance2D <= PlayerbotTownIdle.HoldYards && MathF.Abs(dz) <= SpotZToleranceYards && anchorDistance2D >= AnchorClearYards;
 }

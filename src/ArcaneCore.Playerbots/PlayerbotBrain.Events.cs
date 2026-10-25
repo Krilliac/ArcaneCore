@@ -35,7 +35,7 @@ internal sealed partial class PlayerbotBrain
         if (EventBoard is { } board)
         {
             _eventGoals ??= new PlayerbotWorldEventGoals(BotId, board);
-            centre = _eventGoals.Spot(player, town) ?? town;
+            centre = _eventGoals.Spot(player, town, mayDecide: !_townIdle.Exploring) ?? town;
         }
 
         NoteIdleCentre(centre);
@@ -62,7 +62,7 @@ internal sealed partial class PlayerbotBrain
         {
             if (idle == TownIdleAction.Explore) ReleaseEventSpot(PlayerbotEventMeters.Done);
             else if (PlayerbotWorldEventGoals.IsOnWrongFloor(player, centre)
-                || (idle == TownIdleAction.Linger && !PlayerbotWorldEventGoals.IsHeld(player, centre)))
+                || (idle == TownIdleAction.Linger && !_eventGoals!.IsHeld(player, centre)))
             {
                 // The walk to the spot came to nothing (stairs, a counter, a wall): the anchor is set aside and the bot goes back to the inn.
                 _eventGoals!.GiveUp(player);
@@ -75,7 +75,7 @@ internal sealed partial class PlayerbotBrain
             else _eventGoals!.Renew();
         }
 
-        if (idle == TownIdleAction.Linger && (spot ? PlayerbotWorldEventGoals.IsHeld(player, centre) : PlayerbotTownIdle.IsHeld(town.DistanceTo(player.X, player.Y))))
+        if (idle == TownIdleAction.Linger && (spot ? _eventGoals!.IsHeld(player, centre) : PlayerbotTownIdle.IsHeld(town.DistanceTo(player.X, player.Y))))
         {
             // Standing at the inn is what the idle rule asks for, not a stall: the watch starts afresh at every such think. Before, a bot
             // lingering at its inn was reported stalled every stall bound, gave up its goal (which freed nothing: it was not stuck) and, at

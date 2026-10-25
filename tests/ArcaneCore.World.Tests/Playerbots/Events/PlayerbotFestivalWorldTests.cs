@@ -79,6 +79,21 @@ public sealed class PlayerbotFestivalWorldTests
             $"the bot did not return to the inn ({await FromInnAsync(world, bot):F1} yards from it)");
     }
 
+    [Fact]
+    public async Task ASecondaryTownBot_InItsExploreWindow_ClaimsNoPlace_SoNoPlaceIsTakenAndReleasedEveryThink()
+    {
+        await using EventsTestWorld world = await EventsTestWorld.StartAsync([Reveler()], Quick);
+        Guid bot = await world.AddHomedBotAsync("Secbot", TownStay.Secondary);
+        await world.StartEventAsync(WinterVeil);
+
+        // The control: in its first (linger) window the bot takes a place.
+        Assert.True(await world.RunUntilAsync(bot, 60_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the bot never took a place in its linger window");
+
+        // The linger window (120 s from the first think) ends and the explore window (240 s) begins: from then on no place is held at any think.
+        Assert.True(await world.RunUntilAsync(bot, 150_000, () => !world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the bot kept its place into the explore window");
+        Assert.False(await world.RunUntilAsync(bot, 100_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the bot took a place again inside its explore window");
+    }
+
     public static TheoryData<string> SwitchesOff() => new() { "Events:Enabled", "Holidays:Enabled", "CelebrateChance=0" };
 
     [Theory]

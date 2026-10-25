@@ -92,7 +92,7 @@ internal sealed class PlayerbotEventLane(PlayerbotInitiativeLane initiative)
             if (!_byId.TryGetValue(claim.Bot, out PlayerbotSocialBot? bot) || board.FestivalOf(claim.Anchor.Root) is not { } festival) continue;
             Player self = bot.Player;
             if (!self.IsAlive || self.Combat.IsInCombat || self.Map is null) continue;
-            if (!PlayerbotFestivalRules.IsHeldAtSpot(Distance2D(self, claim.Spot), self.Z - claim.Spot.Z)) continue;
+            if (!PlayerbotFestivalRules.IsHeldAtSpot(Distance2D(self, claim.Spot), self.Z - claim.Spot.Z, Distance2D(self, claim.Anchor.Position))) continue;
             if (!_states.TryGetValue(claim.Bot, out BotState? state)) _states[claim.Bot] = state = new BotState();
             if (state.ArrivedSerial != claim.Serial)
             {

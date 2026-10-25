@@ -304,7 +304,16 @@ public sealed class PlayerbotFestivalRulesTests
     [InlineData(0f, float.NaN, false)]
     [InlineData(float.NaN, 0f, false)]
     public void ASpotIsHeldOnlyWithin2DHoldYards_AndFiveYardsOfHeight(float distance2D, float dz, bool held)
-        => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(distance2D, dz));
+        => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(distance2D, dz, 10f));
+
+    [Theory]
+    [InlineData(0f, false)]
+    [InlineData(4.99f, false)]
+    [InlineData(5f, true)]
+    [InlineData(12f, true)]
+    [InlineData(float.NaN, false)]
+    public void ASpotIsNotHeldWithinFiveYardsOfTheAnchor_ASoStalledWalkNeverParksInAnInteractionDisc(float anchorDistance, bool held)
+        => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(2f, 0f, anchorDistance));
 
     [Fact]
     public void TheSpotDistance_IsThe2DDistanceOnTheSameFloor_AndAddsTheHeightOnAnother()
@@ -326,6 +335,6 @@ public sealed class PlayerbotFestivalRulesTests
 
         Assert.True(distance > PlayerbotTownIdle.LingerYards);
         Assert.Equal(TownIdleAction.WalkToTown, idle.Decide(TownStay.Capital, distance, 0));
-        Assert.False(PlayerbotFestivalRules.IsHeldAtSpot(0f, 6f));
+        Assert.False(PlayerbotFestivalRules.IsHeldAtSpot(0f, 6f, 10f));
     }
 }
