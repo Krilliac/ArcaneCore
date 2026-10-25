@@ -12557,7 +12557,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\\atlas-public`). Required when `Enabled` is set; without it the pipe is not created.",
+      "meaning": "The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\\atlas-public`). Required when `Enabled` is set; without it the pipe is not created. A group or built-in principal is refused (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, `BUILTIN\\`, `NT AUTHORITY\\` and `NT SERVICE\\` names, `S-1-5-32-*`, any account with a RID below 1000), and so is the daemon's own account: `Problems` checks the text at start-up, the pipe checks the resolved SID.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#worldcontrolmapfeedweb",
       "isCollection": false

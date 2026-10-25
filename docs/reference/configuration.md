@@ -1196,7 +1196,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `World:Control:MapFeed:Web:ClientAccount` | `string` | `null` | - | The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\atlas-public`). Required when `Enabled` is set; without it the pipe is not created. |
+| `World:Control:MapFeed:Web:ClientAccount` | `string` | `null` | - | The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\atlas-public`). Required when `Enabled` is set; without it the pipe is not created. A group or built-in principal is refused (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, `BUILTIN\`, `NT AUTHORITY\` and `NT SERVICE\` names, `S-1-5-32-*`, any account with a RID below 1000), and so is the daemon's own account: `Problems` checks the text at start-up, the pipe checks the resolved SID. |
 | `World:Control:MapFeed:Web:Enabled` | `bool` | `false` | - | Serve the web pipe (World:Control:MapFeed:Enabled must be on too). Default off. |
 | `World:Control:MapFeed:Web:MaxConnections` | `int` | `2` | - | The most web connections at once, independent of the local pipe's count. 1 to 8. Default 2. |
 
