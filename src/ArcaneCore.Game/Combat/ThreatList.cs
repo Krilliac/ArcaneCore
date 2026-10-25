@@ -33,7 +33,7 @@ public sealed class ThreatEntry(Unit target, float threat)
 /// (<see cref="ThreatEntry.IsOnline"/>) are held apart in <see cref="OfflineEntries"/>
 /// (vmangos iThreatOfflineContainer).
 /// </summary>
-public sealed class ThreatList
+public sealed partial class ThreatList
 {
     private readonly Unit _owner;
     private readonly List<ThreatEntry> _entries = [];

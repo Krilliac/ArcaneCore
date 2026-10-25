@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Combat;
 /// the corpse, recent deaths and the PvP flag timer. Logic lives in <see cref="MapCombat"/>;
 /// everything here is touched on the world thread only.
 /// </summary>
-public sealed class UnitCombat
+public sealed partial class UnitCombat
 {
     private readonly uint[] _attackTimers = new uint[3];
     private ThreatList? _threat;

@@ -78,6 +78,18 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
     }
 
+    /// <summary>The failure of the first retained key (ascending), or null when nothing is retained.</summary>
+    public Exception? LastFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _keys.Where(k => k.Value.Failure is not null).OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => k.Value.Failure).FirstOrDefault();
+            }
+        }
+    }
+
     public void Start()
     {
         if (_consumer is not null)

@@ -10,7 +10,7 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// every member takes <see cref="Gate"/>, which is uncontended except for a finding racing the next packet.
 /// </para>
 /// </summary>
-internal sealed class PacketHeuristicsSession
+internal sealed partial class PacketHeuristicsSession
 {
     private const int ReplaySlots = 8;
     private const int HashedBytes = 256;

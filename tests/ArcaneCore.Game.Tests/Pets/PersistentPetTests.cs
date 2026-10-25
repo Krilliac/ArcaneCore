@@ -194,6 +194,36 @@ public sealed class PersistentPetTests
     }
 
     [Fact]
+    public async Task APetWriteThatFailed_ShowsAsRetainedForTheQueueProbe_UntilTheBarrierWritesIt()
+    {
+        using PetTestKit kit = new();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(player, PetTestKit.PetSpell);
+        int attempt = 0;
+        kit.Service.SavePersistence = (_, _) => Interlocked.Increment(ref attempt) == 1
+            ? throw new InvalidOperationException("synthetic failure")
+            : Task.CompletedTask;
+        Assert.Empty(kit.Service.RetainedPersistenceCharacters);
+        Assert.Equal(0, kit.Service.PendingPersistenceWrites);
+
+        kit.Service.QueueCurrentPetSave(player);
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (kit.Service.RetainedPersistenceCharacters.Count == 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the failed write was never retained");
+            await Task.Delay(5);
+        }
+
+        Assert.Equal([1], kit.Service.RetainedPersistenceCharacters);
+        Assert.Equal(0, kit.Service.PendingPersistenceWrites); // the attempt is over: retained, not in flight
+
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Empty(kit.Service.RetainedPersistenceCharacters);
+        await kit.Service.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
     public async Task FailedLogoutSave_FailsTheBarrierUntilStorageRecoversThenWritesTheRetainedSnapshot()
     {
         using PetTestKit kit = new();

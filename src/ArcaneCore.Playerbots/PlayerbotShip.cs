@@ -121,7 +121,7 @@ internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, Playerbo
 /// </para>
 /// <para>Thread affinity: world thread. Per-bot state lives in a <see cref="ConditionalWeakTable{TKey,TValue}"/> keyed by the player.</para>
 /// </summary>
-internal static class PlayerbotShip
+internal static partial class PlayerbotShip
 {
     internal const string AnomalyArea = "ship";
 

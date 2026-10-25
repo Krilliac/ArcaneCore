@@ -7,6 +7,7 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Gm.Audit;
 
@@ -15,6 +16,11 @@ namespace ArcaneCore.World.Gm.Audit;
 /// (vmangos Handlers/GMTicketHandler.cpp; the handler of the ticket status poll moved here from <see cref="PlayerHandlers"/>).
 /// The ticket belongs to the character; the position stored is the one the SERVER knows for the player, the position
 /// fields of the packet are skipped.
+/// <para>
+/// <c>CMSG_GMSURVEY_SUBMIT</c>, the survey the client offers after a ticket is answered (vmangos GMTicketHandler.cpp HandleGMSurveySubmitOpcode), is
+/// parsed by <see cref="GmSurveyPacket"/>, kept in memory by <see cref="GmAuditFeature.RecordSurvey"/> and logged without the free text; the server
+/// sends no reply. It shares the per-account packet limit with the ticket mutations and a malformed one is dropped, never a kick.
+/// </para>
 /// <para>
 /// Layouts are the 1.12 ones of vmangos Server/Packets/GmTicket.cpp and wow_messages <c>gamemaster/*.wowm</c>, which agree:
 /// create is <c>u8 type, u32 map, 3 x f32, cstring text, cstring reserved</c> (a harassment report may append chat data,
@@ -57,6 +63,7 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgGmticketCreate, HandleCreate);
         table.OnWorld(WorldOpcode.CmsgGmticketUpdatetext, HandleUpdateText);
         table.OnWorld(WorldOpcode.CmsgGmticketDeleteticket, HandleDeleteTicket);
+        table.OnWorld(WorldOpcode.CmsgGmsurveySubmit, HandleSurveySubmit);
     }
 
     /// <summary>
@@ -177,6 +184,27 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
             // Staff hear of a change, not of the same text sent again.
             NotifyStaff(session, GmAuditStrings.TicketUpdated(GmStrings.PlayerLink(player.Name), ticket.Id));
         }
+    }
+
+    /// <summary>
+    /// CMSG_GMSURVEY_SUBMIT: no reply exists. A packet over the account's limit or one that does not parse is dropped
+    /// silently (debug log only); the player is never disconnected for feedback.
+    /// </summary>
+    private static void HandleSurveySubmit(WorldSession session, Player player, byte[] payload)
+    {
+        GmAuditFeature audit = Audit(session);
+        if (!audit.TryAdmitTicketMutation(player.AccountId))
+        {
+            return;
+        }
+
+        if (!GmSurveyPacket.TryParse(payload, out GmSurveySubmission? survey) || survey is null)
+        {
+            session.Logger.LogDebug("Dropped a malformed GM survey ({Length} bytes)", payload.Length);
+            return;
+        }
+
+        audit.RecordSurvey((int)player.Guid.Low, survey);
     }
 
     /// <summary>vmangos HandleGMTicketDeleteTicketOpcode: with a ticket, TICKET_DELETED then the no-ticket status; without one, nothing.</summary>
