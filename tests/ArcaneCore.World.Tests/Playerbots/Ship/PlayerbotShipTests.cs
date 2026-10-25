@@ -358,6 +358,35 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
         Assert.Equal(0, capture.Count(ShipKey("dock-unreachable")));
     }
 
+    /// <summary>
+    /// Bot QA #1456 class 3 (Grom'gol, live): bots stop on the zeppelin tower stairs 41-45 yards from the platform's node, a few yards below
+    /// the platform; the walk to the dock floor is refused three times and the leg failed <c>dock-unreachable</c> although the bot stood on
+    /// the dock. A bot on the dock floor, within the relaxed reach of the port, waits for the ship there and boards.
+    /// </summary>
+    [Fact]
+    public async Task ToDock_WhenThePlansToTheDockFloorAreRefusedOnTheStairs44YardsOut_TheBotCountsAsDockedAndBoards()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        Vector3 port = ShipTestWorld.PortOnMap0.Position;
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: new PierFloor(port.Z),
+            pathfinder: new RefusingPierMesh(port, radiusFromPortMin: 10f)));
+        ShipRoute boat = Assert.Single(await world.OnWorldAsync(() => PlayerbotShipNetwork.Routes(world.Host.World)));
+        await world.PlaceAsync(0, port + new Vector3(-44f, 0f, -6f));
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        var options = new PlayerbotOptions { MaxPathPoints = 128 };
+        Assert.True(await world.OnWorldAsync(() => PlayerbotShip.TryBegin(world.Session, world.Player, boat, fromA: true, options, out _)));
+
+        bool aboardOnMap0 = false;
+        (TravelLegStep step, string? failure) = await world.DriveAsync(options, 240_000, observe: p =>
+            aboardOnMap0 |= p.IsInWorld && p.MapId == 0 && p.Transport?.Entry == 20808);
+
+        await TraceAsync(world, step, failure);
+        Assert.True(aboardOnMap0, $"the bot never boarded: {step} {failure}");
+        Assert.Equal(0, capture.Count(ShipKey("dock-unreachable")));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotShip.IsBackedOff(world.Player, 20808, fromA: true, world.Host.World.NowMs)));
+    }
+
     [Fact]
     public async Task ResolveDockTarget_WhenPortKeyframeIsOnWaterPolygon_ResolvesDryPierFloorInsteadOfWater()
     {
@@ -457,6 +486,34 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
             if (Vector2.Distance(new Vector2(end.X, end.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin)
                 return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
             return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = port.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(start.X, start.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin)
+                return ArcaneCore.Game.Maps.Collision.MeshRaycastResult.Unavailable(end);
+            return new ArcaneCore.Game.Maps.Collision.MeshRaycastResult(true, false, 1f, end with { Z = port.Z });
+        }
+    }
+
+    /// <summary>The pier mesh of <see cref="PierMeshOnly"/> where every plan with a distance to walk is refused (it ends at the start).</summary>
+    private sealed class RefusingPierMesh(Vector3 port, float radiusFromPortMin) : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (Vector2.Distance(new Vector2(end.X, end.Y), new Vector2(port.X, port.Y)) < radiusFromPortMin)
+                return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+            if (start == end)
+                return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = port.Z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+            return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.Incomplete, [start, start]);
         }
 
         public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)

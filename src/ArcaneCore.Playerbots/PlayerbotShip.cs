@@ -58,6 +58,13 @@ internal sealed class ShipTrip(ShipRoute route, bool fromA, uint nowMs, Playerbo
     /// <summary>Where the bot stood on the dock before stepping aboard (it steps back there when boarding fails).</summary>
     public Vector3 DockSpot { get; internal set; }
 
+    /// <summary>
+    /// How far (flat yards) from the port, and from the docked ship, the bot counts as at the dock: <see cref="PlayerbotShip.BoardReachYards"/>,
+    /// widened to <see cref="PlayerbotShip.RelaxedReachYards"/> once a plan to the dock floor was refused with the bot standing on it
+    /// (<see cref="PlayerbotShip.TryAcceptRelaxedDock"/>), so the wait does not bounce it back to the walk.
+    /// </summary>
+    public float DockReach { get; internal set; } = PlayerbotShip.BoardReachYards;
+
     /// <summary>The bot's place on the deck (offset from the ship's origin).</summary>
     public Vector3 Offset { get; internal set; }
 
@@ -127,6 +134,13 @@ internal static partial class PlayerbotShip
 
     /// <summary>A bot this close (flat yards) to a port, within <see cref="DockHeightYards"/> of its height, stands at the dock; and this close to the docked ship it may step aboard.</summary>
     internal const float BoardReachYards = 40f;
+
+    /// <summary>
+    /// The reach of a dock the walk could not finish: the port's flat distance a bot standing on the dock floor (within
+    /// <see cref="StepOffHeightYards"/> of it) may have once the plans to that floor were refused (Grom'gol tower stairs, 41-45 yards from the
+    /// platform's node): the boarding reach plus the half length of the deck, which it steps along anyway.
+    /// </summary>
+    internal const float RelaxedReachYards = BoardReachYards + DeckHalfLength;
 
     /// <summary>The height a dock may lie above or below the port's node (a pier above a boat at sea level; not the ground under a zeppelin tower).</summary>
     internal const float DockHeightYards = 25f;
@@ -412,7 +426,7 @@ internal static partial class PlayerbotShip
             return;
         }
 
-        if (AtPort(player, trip.From))
+        if (AtPort(player, trip.From, trip.DockReach))
         {
             PlayerbotMovementControl.Stop(session, player);
             trip.DockSpot = Position(player);
@@ -422,8 +436,38 @@ internal static partial class PlayerbotShip
 
         long pendingMark = PathSearchCounters.TilesPending;
         Vector3 dockTarget = ResolveDockTarget(map, trip.From.Position, Position(player));
-        if (!Walk(session, player, trip, dockTarget, options, elapsedMs, now, out string? why, pendingMark))
-            Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
+        if (Walk(session, player, trip, dockTarget, options, elapsedMs, now, out string? why, pendingMark)) return;
+        if (TryAcceptRelaxedDock(player, trip, dockTarget))
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            trip.DockSpot = Position(player);
+            Enter(trip, ShipStage.WaitShip, now);
+            return;
+        }
+
+        Fail(session, player, trip, now, "dock-unreachable", why!, backoff: true);
+    }
+
+    /// <summary>
+    /// A dock the plans to its floor were refused for (<see cref="MaxRefusedPlans"/> in a row) while the bot already stands on that floor:
+    /// within <see cref="BoardReachYards"/> of the resolved target, within <see cref="StepOffHeightYards"/> of its height (the ground under a
+    /// tower is far below), and within <see cref="RelaxedReachYards"/> flat of the port (the Grom'gol tower stairs stand 41-45 yards from the
+    /// platform's node, where a flat 40 would be the dock). The trip then widens its reach to that and waits for the ship there.
+    /// </summary>
+    internal static bool TryAcceptRelaxedDock(Player player, ShipTrip trip, Vector3 dockTarget)
+    {
+        if (trip.Refusals < MaxRefusedPlans || player.MapId != trip.From.MapId) return false;
+        Vector3 at = Position(player);
+        if (Vector3.Distance(at, dockTarget) > BoardReachYards
+            || MathF.Abs(at.Z - dockTarget.Z) > StepOffHeightYards
+            || Flat(at, trip.From.Position) > RelaxedReachYards
+            || MathF.Abs(at.Z - trip.From.Position.Z) > DockHeightYards)
+        {
+            return false;
+        }
+
+        trip.DockReach = RelaxedReachYards;
+        return true;
     }
 
     private static void WaitShip(WorldSession session, Player player, Map map, ShipTransport ship, ShipTrip trip, uint now)
@@ -434,7 +478,7 @@ internal static partial class PlayerbotShip
             return;
         }
 
-        if (map.MapId != trip.From.MapId || !AtPort(player, trip.From))
+        if (map.MapId != trip.From.MapId || !AtPort(player, trip.From, trip.DockReach))
         {
             // Pushed off the dock (a knock-back, a fear): walk back to it.
             Enter(trip, ShipStage.ToDock, now);
@@ -451,7 +495,7 @@ internal static partial class PlayerbotShip
         }
 
         if (!PlayerbotShipNetwork.DockedAt(ship, trip.From) || StopLeftMs(ship) < BoardMarginMs) return;
-        if (Flat(Position(player), new Vector3(ship.X, ship.Y, ship.Z)) > BoardReachYards) return;
+        if (Flat(Position(player), new Vector3(ship.X, ship.Y, ship.Z)) > trip.DockReach) return;
         if (!PlayerbotMovementControl.Stop(session, player)) return;
         trip.DockSpot = Position(player);
         trip.Offset = DeckOffset(ship, trip.DockSpot);
@@ -904,8 +948,11 @@ internal static partial class PlayerbotShip
         => !session.IsInChaosProbe && player.IsInWorld && !player.IsLoggingOut;
 
     /// <summary>Whether the bot stands at <paramref name="port"/>'s dock: its map, within <see cref="BoardReachYards"/> flat and <see cref="DockHeightYards"/> of height.</summary>
-    internal static bool AtPort(Player player, TravelPlace port)
-        => player.MapId == port.MapId && Flat(Position(player), port.Position) <= BoardReachYards
+    internal static bool AtPort(Player player, TravelPlace port) => AtPort(player, port, BoardReachYards);
+
+    /// <summary><see cref="AtPort(Player, TravelPlace)"/> with the trip's own flat reach (<see cref="ShipTrip.DockReach"/>).</summary>
+    internal static bool AtPort(Player player, TravelPlace port, float reach)
+        => player.MapId == port.MapId && Flat(Position(player), port.Position) <= reach
             && MathF.Abs(player.Z - port.Position.Z) <= DockHeightYards;
 
     /// <summary>How long a ship waiting at a stop stays there (ms; 0 while it moves).</summary>
