@@ -287,6 +287,24 @@ public sealed class PlayerbotTravelPlannerTests
         Assert.NotNull(r);
         Assert.Equal(2ul, r.Legs[0].MageGuid);
     }
+
+    /// <summary>
+    /// #1456: a walk wrongly taken as joined to the dock left the planner only one way to cross a gap, the ship there and straight back
+    /// (Teldrassil top "walked" to Auberdine, the boat ridden to Rut'theran and back). A ship is never taken straight back the way it came.
+    /// </summary>
+    [Fact]
+    public void AShipIsNeverTakenStraightBack_EvenWhenThatIsTheOnlyWayToSplitTwoWalks()
+    {
+        TravelPlace a = P(Kalimdor, 100), b = P(Kalimdor, 4000), start = P(Kalimdor, 3990), goal = P(Kalimdor, 3900);
+        TravelFacts f = Facts() with
+        {
+            Ships = [Ship(176244, TravelMeans.Boat, a, b, 300)],
+            // From the start only the near port is walkable; the goal cannot be walked to from the start or from the far port.
+            Walkable = (x, y) => x == start ? y == b : !(y == goal && x == a),
+        };
+        TravelRoute? r = PlayerbotTravelPlanner.Plan(f, start, goal);
+        Assert.Null(r); // the only route would be walk, boat there, boat back, walk
+    }
 }
 
 public sealed class PlayerbotTravelOptionsTests

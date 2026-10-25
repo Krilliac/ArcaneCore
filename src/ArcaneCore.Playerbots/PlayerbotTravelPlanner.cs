@@ -114,11 +114,13 @@ internal static class PlayerbotTravelPlanner
             }
 
             // Ships, in both directions, from a port the bot stands at.
+            // Never straight back on the ship just left (the same ship, the ends reversed): that only undoes the ride.
             foreach (ShipRoute s in facts.Ships)
             {
-                if (s.PortA == here)
+                bool justRode = cur.Leg is { } prev && prev.TransportEntry == s.Entry && prev.Means == s.Means && prev.To == here;
+                if (s.PortA == here && !(justRode && cur.Leg!.From == s.PortB))
                     Step(cur, index[s.PortB], new TravelLeg(s.Means, s.PortA, s.PortB, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
-                if (s.PortB == here)
+                if (s.PortB == here && !(justRode && cur.Leg!.From == s.PortA))
                     Step(cur, index[s.PortA], new TravelLeg(s.Means, s.PortB, s.PortA, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
             }
 
