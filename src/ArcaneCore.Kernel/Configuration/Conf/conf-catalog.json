@@ -20958,6 +20958,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Social:Invites:AllowOptOut",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Parse the whispered commands \"invites off\", \"invites on\" and \"invites\" (on by default). Off: the line is not a command and goes on to ordinary whisper handling. It never undoes an opt-out already recorded: a player who opted out stays out whatever this says.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Social:Lists:ChangeSpacingSeconds",
       "section": "World:Playerbots",
       "type": "int",

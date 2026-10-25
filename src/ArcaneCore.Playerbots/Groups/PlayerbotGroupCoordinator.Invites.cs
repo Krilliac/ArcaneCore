@@ -20,6 +20,9 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>The chat safety state (the players' AI chat choice, set by the feature; null without a chat service: nobody has opted in).</summary>
     internal PlayerbotChatSafety? ChatSafety { get; set; }
 
+    /// <summary>The "invites off" store (set by the social feature; null without it: nobody has opted out). An opted-out player is never invited unasked; a volunteer (who asked) still is.</summary>
+    internal BotSocial.PlayerbotInviteOptOut? InviteOptOut { get; set; }
+
     /// <summary>A player invited by the bots, until when they are not invited again (<see cref="PlayerbotGroupOptions.InvitePlayerCooldownMinutes"/>).</summary>
     private readonly Dictionary<ObjectGuid, uint> _invitedPlayers = [];
 
@@ -120,11 +123,13 @@ public sealed partial class PlayerbotGroupCoordinator
 
     /// <summary>
     /// Whether the waiting bots would invite <paramref name="real"/>: no waiting bot holds them as a rival or flagged NoWhispers, and they
-    /// either opted in to AI chat or are liked enough by one of the bots. <paramref name="role"/> receives the role flags the bots remember.
+    /// either opted in to AI chat or are liked enough by one of the bots; never a player who said "invites off" (<see cref="InviteOptOut"/>).
+    /// <paramref name="role"/> receives the role flags the bots remember.
     /// </summary>
     private bool PlayerWelcome(List<PlayerbotGroupCandidate> bots, Player real, PlayerbotGroupOptions groups, out PlayerbotRelationFlags role)
     {
         role = PlayerbotRelationFlags.None;
+        if (InviteOptOut?.IsOptedOut(real.Guid.Value, real.AccountId) == true) return false; // "invites off": never unasked (a volunteer asked, and is matched in MatchWithVolunteer)
         bool liked = ChatSafety?.Player(real.Name)?.AiReplies == true;
         if (Social?.Memory is not { } memory) return liked;
         const PlayerbotRelationFlags roles = PlayerbotRelationFlags.PrefersTank | PlayerbotRelationFlags.PrefersHealer | PlayerbotRelationFlags.PrefersDamage;

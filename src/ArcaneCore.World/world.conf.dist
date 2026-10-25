@@ -16804,6 +16804,20 @@ World.Playerbots.Social.Initiative.MaxOpeningsPerPass = 4
 World.Playerbots.Social.Initiative.OpeningCooldownMinutes = 30
 
 #
+#    World.Playerbots.Social.Invites.AllowOptOut
+#        Description: Parse the whispered commands "invites off", "invites on" and "invites" (on by
+#                     default). Off: the line is not a command and goes on to ordinary whisper
+#                     handling. It never undoes an opt-out already recorded: a player who opted out
+#                     stays out whatever this says.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Invites.AllowOptOut = true
+
+#
 #    World.Playerbots.Social.Lists.ChangeSpacingSeconds
 #        Description: The least seconds between two list changes of one bot (1..3600).
 #        Type: int

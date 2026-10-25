@@ -648,6 +648,7 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:Emotes:Enabled", o => o.Social.Emotes.Enabled, (o, v) => o.Social.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Enabled", o => o.Social.Rivalry.Enabled, (o, v) => o.Social.Rivalry.Enabled = v),
         LivePlayerbots("Social:Rivalry:AllowOptOut", o => o.Social.Rivalry.AllowOptOut, (o, v) => o.Social.Rivalry.AllowOptOut = v),
+        LivePlayerbots("Social:Invites:AllowOptOut", o => o.Social.Invites.AllowOptOut, (o, v) => o.Social.Invites.AllowOptOut = v),
         LivePlayerbots("Social:Rivalry:Emotes:Enabled", o => o.Social.Rivalry.Emotes.Enabled, (o, v) => o.Social.Rivalry.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Emotes:RivalEmotes", o => o.Social.Rivalry.Emotes.RivalEmotes, (o, v) => o.Social.Rivalry.Emotes.RivalEmotes = v),
         LivePlayerbots("Social:Rivalry:Emotes:RudeAtBots", o => o.Social.Rivalry.Emotes.RudeAtBots, (o, v) => o.Social.Rivalry.Emotes.RudeAtBots = v),

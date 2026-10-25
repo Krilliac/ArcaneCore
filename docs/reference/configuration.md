@@ -1791,6 +1791,7 @@ How to read the tables:
 | `World:Playerbots:Social:Initiative:Enabled` | `bool` | `true` | live | Let bots open conversations and comment on their surroundings (on by default). |
 | `World:Playerbots:Social:Initiative:MaxOpeningsPerPass` | `int` | `4` | live | The most openings (all bots together) in one pass of the social feature (1..64, default 4). |
 | `World:Playerbots:Social:Initiative:OpeningCooldownMinutes` | `int` | `30` | live | The minutes before any bot opens with the same real player again (1..1440, default 30); an opening they ignored doubles it each time. |
+| `World:Playerbots:Social:Invites:AllowOptOut` | `bool` | `true` | live | Parse the whispered commands "invites off", "invites on" and "invites" (on by default). Off: the line is not a command and goes on to ordinary whisper handling. It never undoes an opt-out already recorded: a player who opted out stays out whatever this says. |
 | `World:Playerbots:Social:Lists:ChangeSpacingSeconds` | `int` | `60` | live | The least seconds between two list changes of one bot (1..3600). |
 | `World:Playerbots:Social:Lists:Enabled` | `bool` | `true` | live | Let bots manage their friend and ignore lists by affinity (on by default). |
 | `World:Playerbots:Social:Lists:FriendAffinity` | `int` | `50` | live | The affinity at or above which a bot befriends a character (with `FriendMinFamiliarity`; -100..100). |

@@ -262,6 +262,50 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.True(await RunBesidePlayerUntilAsync(world, bot.Id, "Groupstrange", 30_000), await world.TraceAsync());
     }
 
+    /// <summary>
+    /// "invites off" (S4): a liked player on the goal, who would be invited unasked, is not once they opted out; asking ("inv" to the bot's LFG
+    /// call) is still consent and gets the ordinary invitation.
+    /// </summary>
+    [Fact]
+    public async Task AnOptedOutStranger_OnTheGoal_IsNeverInvitedUnasked_ButIsInvitedAfterWhisperingInv()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Groups.InvitePlayers = true;
+        });
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPOPTOUT", "Groupoptout", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askeroptout", Human, Warrior, 1, []);
+        await GivePlayerQuestAsync(world, "Groupoptout", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Groupoptout", 30); // liked and on the goal: invited unasked but for the opt-out
+        ArcaneCore.World.Playerbots.BotSocial.PlayerbotInviteOptOut store = world.World.Services.GetRequiredService<ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialFeature>().InviteOptOut;
+        Player real = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer("Groupoptout")!);
+        (ulong guid, int account) = (real.Guid.Value, real.AccountId);
+
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "invites off", bot.Name);
+        Assert.True(await world.RunUntilPacedAsync(() => store.IsOptedOut(guid, account), 10_000), $"the player opted out{Environment.NewLine}{await world.TraceAsync()}");
+        Assert.False(await RunBesidePlayerUntilAsync(world, bot.Id, "Groupoptout", 60_000), "an opted-out player is never invited unasked");
+
+        // Asking is consent: the bot has an LFG call out, the player whispers "inv", and the leader's ordinary invitation follows.
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), await world.TraceAsync());
+        await world.OnWorldAsync(() =>
+        {
+            ArcaneCore.World.Playerbots.Chat.PlayerbotChat chat = world.Bots.Chat!;
+            chat.Voice.Post(bot.Id, new ArcaneCore.World.Playerbots.Chat.PlayerbotVoicePost(ArcaneCore.World.Playerbots.Chat.PlayerbotVoicePostKind.LookingForGroup, chat.NowMs, "the duo quest", MinLevel: 1));
+            return true;
+        });
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "inv", bot.Name);
+        Assert.True(await world.RunUntilPacedAsync(() =>
+        {
+            Player them = world.World.Host.World.FindOnlinePlayer("Groupoptout")!;
+            world.Player(bot.Id).Relocate(them.X + 2, them.Y, them.Z, 0, world.World.Host.World.NowMs);
+            return PlayerInvited(world);
+        }, 60_000), $"the volunteer is invited{Environment.NewLine}{world.Bots.Chat!.Status()}{Environment.NewLine}{await world.TraceAsync()}");
+        byte[] invite = await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        Assert.Equal(bot.Name, new PacketReader(invite).ReadCString());
+        Assert.True(store.IsOptedOut(guid, account)); // asking did not undo the choice
+    }
+
     [Fact]
     public async Task APlayerOnAnotherGoal_AndANoWhispersPlayer_AreNeverInvited()
     {

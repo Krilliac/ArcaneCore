@@ -420,6 +420,14 @@ internal sealed class PlayerbotPartyAI
             if (rivalsLine.Answer is not null) Gm.Core.GmReplies.SendSystemMessage(sender, rivalsLine.Answer);
             return;
         }
+        // "invites off", "invites on" and "invites": the same, for unsolicited group and guild invitations (the store is the social feature's, shared by every bot).
+        if (sender is not null && !senderIsBot && sender.Guid != player.Guid && line.Type == ChatType.Whisper
+            && _session.Services.GetService<BotSocial.PlayerbotSocialFeature>()?.InviteOptOut is { } inviteOptOut
+            && inviteOptOut.Handle(sender.Guid.Value, sender.AccountId, line.Text, Now, _options.Social.Invites) is { Consumed: true } invitesLine)
+        {
+            if (invitesLine.Answer is not null) Gm.Core.GmReplies.SendSystemMessage(sender, invitesLine.Answer);
+            return;
+        }
 
         // A player on the bot's ignore list is not heard at all, as a client hides an ignored player's chat: no reply, no listener (so no
         // affinity from the talk). The master and a game master are never dropped.

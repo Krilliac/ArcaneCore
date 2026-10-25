@@ -239,6 +239,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotRivalryLane _rivalry = new(new PlayerbotRivalryOptOut());
+    private readonly PlayerbotInviteOptOut _inviteOptOut = new();
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
@@ -305,6 +306,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The one server-wide store of "rivals off" choices, read by the lane and by every bot's party AI.</summary>
     internal PlayerbotRivalryOptOut RivalryOptOut => _rivalry.OptOut;
 
+    /// <summary>The one server-wide store of "invites off" choices, read by the group coordinator, the guild invitations and every bot's party AI.</summary>
+    internal PlayerbotInviteOptOut InviteOptOut => _inviteOptOut;
+
     /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
     internal PlayerbotHelpLane Help => _help;
 
@@ -362,6 +366,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         // The kill talk asks the group coordinator's frozen world-boss snapshot (any thread) and names the zone a catalogued boss fell in.
         _chat.IsWorldBossEntry = _conversations.IsWorldBossEntry = IsWorldBossEntry;
         _chat.ZoneOf = _conversations.ZoneOf = ZoneNameOf;
+        WireInviteOptOut(_groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>());
     }
 
     /// <summary>Whether <paramref name="entry"/> is in the group coordinator's world-boss catalogue (read from the map threads: a volatile snapshot).</summary>
@@ -876,9 +881,17 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _channels.Run(_channelBotsScratch, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
     }
 
+    /// <summary>Hand the "invites off" store to the places that send an unsolicited invitation: the group coordinator and the guild membership lane.</summary>
+    private void WireInviteOptOut(PlayerbotGroupCoordinator? groups)
+    {
+        _membership.InviteOptOut = _inviteOptOut;
+        if (groups is not null) groups.InviteOptOut = _inviteOptOut;
+    }
+
     private List<PlayerbotSocialBot> Gather(ManagedPlayerbotFeature bots)
     {
         PlayerbotGroupCoordinator? groups = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>();
+        WireInviteOptOut(groups);
         bots.GatherSocialBots(groups, _socialBotsScratch);
         return _socialBotsScratch;
     }

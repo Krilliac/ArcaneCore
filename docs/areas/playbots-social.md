@@ -53,6 +53,14 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
   widens `GuildOrFriends`, `Anyone` and `Affinity`, never `None`. With the switch off bots invite and accept as before.
 * **Fail-closed declines.** With no invitation packet seen (the bounded capture queue may have dropped it) and no expectation, the
   answer is a decline; so it is when the inviter is offline, the guild name differs from the packet's, or the policy refuses.
+* **Opting out of unsolicited invitations** (`World:Playerbots:Social:Invites:AllowOptOut`, on). A real player whispers any bot of their faction
+  `invites off`, and from then on no bot sends them an unsolicited invitation: neither the group invitation a short bot group sends a nearby
+  player on its goal (`World:Playerbots:Groups:InvitePlayers`) nor the guild invitation by affinity above. `invites on` undoes it and `invites`
+  alone tells the status; the line is read as the "ai off" command is (letters and spaces, any case), answered by a system message at most once per
+  10 seconds, and consumed. Asking is still consent: a player who whispers "inv" to a bot's group call,, is invited
+  whatever this says, and the bots' own accept policy (how a bot answers an invitation) is unchanged. As with `rivals off`, **the choice lasts
+  until the server restarts** (it is kept in memory, per account, shared by every bot; the answers say so), the store holds 8192 players and
+  never drops an opt-out. `AllowOptOut` only decides whether the line is parsed; a choice already recorded is always honoured.
 
 ## Friend and ignore lists (`World:Playerbots:Social:Lists`, live)
 
