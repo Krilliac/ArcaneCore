@@ -278,6 +278,25 @@ public sealed class PublicFeedPoolTests
     }
 
     [Fact]
+    public async Task AWorldThatNeverAnswersLinks_IsAskedOncePerConnection_NotOncePerFrame()
+    {
+        var rig = new Rig();
+        rig.Feed.LinksSupported = false;
+        rig.Feed.LinksSilent = true; // a daemon whose refusal of the op carries no id: the query times out
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+
+        for (int seq = 1; seq <= 8; seq++)
+        {
+            connection.PushFrame(FrameOf(seq, boar));
+        }
+
+        Assert.Equal(1, connection.Ops.Count(o => o == "links")); // each unanswered ask is a refused line; five in a row close the connection
+    }
+
+    [Fact]
     public async Task AWorldThatAnswersUnknownOpToLinks_IsAskedOncePerConnection_NotOncePerFrame()
     {
         var rig = new Rig();

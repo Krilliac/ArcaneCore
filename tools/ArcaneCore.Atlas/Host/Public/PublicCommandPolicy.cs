@@ -38,6 +38,9 @@ internal static class PublicCommandPolicy
         "live.highlight",
     };
 
+    /// <summary>Whether <paramref name="command"/> is a name this policy lists at all (any tier). The only names a reply may echo: client text is never repeated otherwise.</summary>
+    public static bool IsKnown(string command) => GuestCommands.Contains(command) || AccountCommands.Contains(command) || ActionCommands.Contains(command);
+
     /// <summary>Whether a visitor may run <paramref name="command"/>. False for every name not listed above, including names no command has.</summary>
     /// <param name="command">The command name as sent.</param>
     /// <param name="tier">Guest or Account.</param>

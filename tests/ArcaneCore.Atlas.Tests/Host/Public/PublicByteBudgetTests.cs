@@ -154,39 +154,47 @@ public sealed class PublicByteBudgetTests
         using ClientWebSocket socket = await rig.ConnectAsync(visitor);
         await socket.SendJsonAsync(new JsonObject { ["op"] = "auth", ["csrf"] = visitor.Csrf });
 
-        for (int i = 0; i < 200; i++)
+        // 10 allowed in the first second, the next 100 refused, and the 111th is the flood that closes the socket: nothing is sent after the close.
+        for (int i = 0; i < 111; i++)
         {
-            try
-            {
-                await socket.SendJsonAsync(new JsonObject { ["op"] = "ping" });
-            }
-            catch (Exception e) when (e is WebSocketException or ObjectDisposedException or InvalidOperationException)
-            {
-                break; // the server has already closed
-            }
+            await socket.SendJsonAsync(new JsonObject { ["op"] = "ping" });
         }
 
         int pongs = 0;
         int errors = 0;
         int bytes = 0;
+        bool closeFrame = false;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var buffer = new byte[8192];
-        while (true)
+        try
         {
-            WebSocketReceiveResult result = await socket.ReceiveAsync(buffer, cts.Token);
-            if (result.MessageType == WebSocketMessageType.Close)
+            while (true)
             {
-                break;
-            }
+                WebSocketReceiveResult result = await socket.ReceiveAsync(buffer, cts.Token);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    closeFrame = true;
+                    break;
+                }
 
-            bytes += result.Count;
-            string text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            pongs += text.Contains("\"pong\"", StringComparison.Ordinal) ? 1 : 0;
-            errors += text.Contains("\"error\"", StringComparison.Ordinal) ? 1 : 0;
+                bytes += result.Count;
+                string text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                pongs += text.Contains("\"pong\"", StringComparison.Ordinal) ? 1 : 0;
+                errors += text.Contains("\"error\"", StringComparison.Ordinal) ? 1 : 0;
+            }
+        }
+        catch (WebSocketException)
+        {
+            // The server disposes the socket right after the close; on Windows a reset can overtake the Close frame. The replies were all read by then.
         }
 
-        string seen = $"pongs={pongs} errors={errors} bytes={bytes} close={socket.CloseStatus}/{socket.CloseStatusDescription}";
-        Assert.True(socket.CloseStatus == WebSocketCloseStatus.PolicyViolation && socket.CloseStatusDescription == "flood", seen);
+        string seen = $"pongs={pongs} errors={errors} bytes={bytes} closeFrame={closeFrame} close={socket.CloseStatus}/{socket.CloseStatusDescription}";
+        if (closeFrame)
+        {
+            Assert.True(socket.CloseStatus == WebSocketCloseStatus.PolicyViolation && socket.CloseStatusDescription == "flood", seen);
+        }
+
+        Assert.True(await WaitAsync(() => rig.Runtime.Stats.Sockets == 0), "the server should have closed the socket: " + seen); // the close, seen on the server's side
         Assert.True(pongs == 10, seen);
         Assert.True(errors is >= 1 and <= 2, seen);
         Assert.True(bytes < 2048, seen);
@@ -221,6 +229,101 @@ public sealed class PublicByteBudgetTests
         Reply answer = await rig.PostAsync("/api/public/command", visitor, new JsonObject { ["name"] = "guest.maps" });
 
         Assert.Equal(200, answer.Status);
+    }
+
+    // As large as a socket message may be once the JSON encoder has escaped every '<' to six bytes (the limit is 4096 bytes a message); echoed, it would not fit an essential message.
+    private static string Bomb => new string('<', 600);
+
+    [Fact]
+    public async Task AnUnknownCommandNameOf4KiB_IsAnsweredWithAtMostAnEssentialMessage_OnTheSocket()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(Options, time: time);
+        Visitor visitor = await rig.VisitAsync();
+        using ClientWebSocket socket = await OpenAsync(rig, visitor);
+
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "command", ["id"] = 7, ["name"] = Bomb });
+        JsonNode? reply = await socket.ReceiveUntilAsync("result");
+
+        Assert.NotNull(reply);
+        string text = reply!.ToJsonString();
+        Assert.True(Encoding.UTF8.GetByteCount(text) <= PublicRateLimits.MaxEssentialBytes, text.Length.ToString());
+        Assert.DoesNotContain("u003C", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("?", reply["result"]!["command"]!.GetValue<string>());
+        Assert.Equal("not-available", reply["result"]!["error"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AnUnknownCommandNameOf4KiB_WhileInDebt_IsRefusedWithAtMostAnEssentialMessage()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(Options, time: time);
+        Visitor visitor = await rig.VisitAsync();
+        using ClientWebSocket socket = await OpenAsync(rig, visitor);
+        for (int i = 0; i < 4; i++)
+        {
+            rig.Runtime.Limits.ChargeEssentialBytes(LoopbackKey, PublicRateLimits.MaxEssentialBytes);
+        }
+
+        Assert.True(rig.Runtime.Limits.InDebt(LoopbackKey, out _));
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "command", ["id"] = 8, ["name"] = Bomb });
+        JsonNode? reply = await socket.ReceiveUntilAsync("result");
+
+        Assert.NotNull(reply);
+        string text = reply!.ToJsonString();
+        Assert.True(Encoding.UTF8.GetByteCount(text) <= PublicRateLimits.MaxEssentialBytes, text.Length.ToString());
+        Assert.Equal("rate-limited", reply["result"]!["error"]!["code"]!.GetValue<string>());
+        Assert.Equal("?", reply["result"]!["command"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AnUnknownCommandNameOf4KiB_OverHttp_IsAnsweredWithAtMostAnEssentialMessage()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(Options, time: time);
+        Visitor visitor = await rig.VisitAsync();
+
+        Reply reply = await rig.PostAsync("/api/public/command", visitor, new JsonObject { ["name"] = Bomb });
+
+        Assert.True(Encoding.UTF8.GetByteCount(reply.Text) <= PublicRateLimits.MaxEssentialBytes, reply.Text.Length.ToString());
+        Assert.DoesNotContain("u003C", reply.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, rig.Runtime.Limits.OversizedEssential);
+    }
+
+    [Fact]
+    public void AnOversizedEssentialMessage_IsChargedInFull_AndCounted()
+    {
+        var limits = new PublicRateLimits(new PublicOptions(), new ManualTime());
+        double before = limits.ByteBalance(LoopbackKey);
+
+        bool fits = limits.ChargeEssentialBytes(LoopbackKey, PublicRateLimits.MaxEssentialBytes + 500);
+
+        Assert.False(fits);
+        Assert.Equal(1, limits.OversizedEssential);
+        Assert.True(limits.ByteBalance(LoopbackKey) <= before - (PublicRateLimits.MaxEssentialBytes + 500) + 0.5);
+        Assert.True(limits.ChargeEssentialBytes(LoopbackKey, PublicRateLimits.MaxEssentialBytes));
+        Assert.Equal(1, limits.OversizedEssential);
+    }
+
+    [Fact]
+    public async Task TheRateLimitedReplyToARequestFlood_IsNotChargedToTheByteBudget()
+    {
+        var time = new ManualTime();
+        await using PublicRig rig = await PublicRig.StartAsync(o => { Options(o); o.Guest.MaxBytesPerSecond = 1_000_000; }, time: time);
+        Reply last = default!;
+        for (int i = 0; i < 400 && last?.Status != 429; i++)
+        {
+            last = await rig.GetAsync("/api/public/status");
+        }
+
+        Assert.Equal(429, last.Status);
+        double balance = rig.Runtime.Limits.ByteBalance(LoopbackKey);
+        for (int i = 0; i < 50; i++)
+        {
+            Assert.Equal(429, (await rig.GetAsync("/api/public/status")).Status);
+        }
+
+        Assert.Equal(balance, rig.Runtime.Limits.ByteBalance(LoopbackKey), 3);
     }
 
     [Fact]

@@ -206,7 +206,14 @@ internal sealed class FakeFeed : IPublicFeedConnector
 {
     public bool Tools { get; set; }
 
+    /// <summary>False: the world has no <c>links</c> op. It then answers like the real feed does (see <see cref="LinksSilent"/>).</summary>
     public bool LinksSupported { get; set; } = true;
+
+    /// <summary>
+    /// With <see cref="LinksSupported"/> false: true is a daemon from before the id fix, whose refusal of an unhandled extension op carries no id, so the
+    /// request is never answered and times out; false is the current daemon, whose refusal is an <c>error</c> line with the request's id.
+    /// </summary>
+    public bool LinksSilent { get; set; }
 
     public IEnumerable<ulong> Linked { get; set; } = [];
 
@@ -282,7 +289,10 @@ internal sealed class FakeConnection(FakeFeed feed, IPublicFeedSink sink, long i
         {
             "role" => feed.RoleAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = "role", ["role"] = "web" },
             "links" when feed.LinksSupported => Frames.LinksAnswer(feed.Linked, feed.SummonEntries),
-            "links" => throw new ArcaneCore.Atlas.Core.Commands.CommandException(ArcaneCore.Atlas.Core.Commands.CommandException.Failed, "unknown-op"),
+            "links" when feed.LinksSilent => throw new ArcaneCore.Atlas.Core.Commands.CommandException(
+                ArcaneCore.Atlas.Core.Commands.CommandException.Failed, "query 3 timed out after 8 s: the server did not answer (its world thread may be busy, or it does not support this query).", new TimeoutException()),
+            "links" => throw new ArcaneCore.Atlas.Core.Commands.CommandException(
+                ArcaneCore.Atlas.Core.Commands.CommandException.Failed, "the server refused the query: unknown-op: unknown op; the ops are hello, subscribe, unsubscribe and query"),
             "caps" => feed.CapsAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = feed.CapsActions, ["login"] = true, ["liveServer"] = feed.CapsLiveServer, ["role"] = "web", ["templates"] = new JsonArray() },
             "login" => feed.LoginAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = false, ["kind"] = "login", ["code"] = "login-failed" },
             _ => new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = op },

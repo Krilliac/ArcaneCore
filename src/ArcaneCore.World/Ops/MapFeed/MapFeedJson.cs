@@ -196,6 +196,23 @@ internal static class MapFeedJson
         return Finish(buffer);
     }
 
+    /// <summary>The finished <c>error</c> line that answers request <paramref name="id"/> (an <c>error</c> with an <c>id</c> field), newline included.</summary>
+    public static byte[] ErrorLine(string code, string message, long id)
+    {
+        var buffer = new ArrayBufferWriter<byte>(256);
+        using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+        {
+            writer.WriteStartObject();
+            writer.WriteString(Op, OpError);
+            writer.WriteNumber("id"u8, id);
+            writer.WriteString(Code, code);
+            writer.WriteString(Message, message);
+            writer.WriteEndObject();
+        }
+
+        return Finish(buffer);
+    }
+
     /// <summary>The finished <c>result</c> line, newline included.</summary>
     public static byte[] ResultLine(QueryAnswer answer)
     {

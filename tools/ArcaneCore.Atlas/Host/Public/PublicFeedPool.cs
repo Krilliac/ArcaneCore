@@ -123,7 +123,7 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         public long LinksAskedSeq = -1;
         public int LinksInFlight;
 
-        /// <summary>The world answered <c>links</c> with <c>unknown-op</c> on this connection: do not ask again (each refused line is a strike, and five in a row close the connection).</summary>
+        /// <summary>The world answered <c>links</c> with <c>unknown-op</c>, or not at all (a timeout), on this connection: do not ask again (each refused line is a strike, and five in a row close the connection).</summary>
         public volatile bool LinksUnsupported;
         public long SeenServerErrors;
         public readonly List<long> Strikes = [];
@@ -495,12 +495,19 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
             else
             {
                 _store.SetLinks(map, LinksSnapshot.Unsupported);
+                if (result["code"] is JsonValue code && code.TryGetValue(out string? text) && text == "unknown-op")
+                {
+                    slot.LinksUnsupported = true;
+                }
             }
         }
         catch (Exception e) when (e is CommandException or InvalidOperationException or FormatException)
         {
             _store.SetLinks(map, LinksSnapshot.Unsupported);
-            if (e is CommandException && e.Message.Contains("unknown-op", StringComparison.Ordinal))
+            // A world that serves no links op answers unknown-op (with the request's id since the id fix), or, an older daemon, with an uncorrelated
+            // error and so no answer at all: the query times out. Either way this connection is not asked again (every refused line is a strike, and five in
+            // a row close the connection); a reconnect asks once more.
+            if (e is CommandException && (e.InnerException is TimeoutException || e.Message.Contains("unknown-op", StringComparison.Ordinal)))
             {
                 slot.LinksUnsupported = true;
             }

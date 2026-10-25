@@ -180,6 +180,7 @@ internal sealed class PublicRateLimits
     private readonly KeyedTokenBuckets _socketErrors;
     private readonly double _frameReserve;
     private readonly double _byteRate;
+    private long _oversizedEssential;
 
     /// <summary>The largest message that is charged as essential (and so never refused for bytes).</summary>
     public const int MaxEssentialBytes = 2048;
@@ -248,13 +249,23 @@ internal sealed class PublicRateLimits
     /// <summary>
     /// Charges an essential message (session routes, error bodies, hello, status notes, control messages) to the address's byte budget without ever
     /// refusing it; the budget can go into debt by up to one second's worth, so what follows is throttled instead. Each such message is at most
-    /// <see cref="MaxEssentialBytes"/> and sits behind its own rate limit, which bounds the total.
+    /// <see cref="MaxEssentialBytes"/> and sits behind its own rate limit, which bounds the total. The full length is always charged; false means the
+    /// message was over <see cref="MaxEssentialBytes"/> (counted in <see cref="OversizedEssential"/>) and the caller must not send it as built.
     /// </summary>
-    public void ChargeEssentialBytes(string ipKey, int bytes)
+    public bool ChargeEssentialBytes(string ipKey, int bytes)
     {
-        System.Diagnostics.Debug.Assert(bytes <= MaxEssentialBytes, "an essential message must stay small");
-        _bytes.Spend(ipKey, bytes);
+        _bytes.Spend(ipKey, bytes); // the full length, whatever it is: an oversized message is paid for, not rounded down
+        if (bytes <= MaxEssentialBytes)
+        {
+            return true;
+        }
+
+        Interlocked.Increment(ref _oversizedEssential);
+        return false;
     }
+
+    /// <summary>How many "essential" messages exceeded <see cref="MaxEssentialBytes"/> (each was charged in full and not sent as built); a non-zero value is a bug.</summary>
+    public long OversizedEssential => Interlocked.Read(ref _oversizedEssential);
 
     /// <summary>The address's byte balance now (negative in debt); for tests.</summary>
     internal double ByteBalance(string ipKey) => _bytes.Balance(ipKey);

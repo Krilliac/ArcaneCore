@@ -184,7 +184,7 @@ internal sealed class PublicHub
                 state.LastStatus = statusText;
                 state.LastStatusAt = now;
                 byte[] statusBytes = Encoding.UTF8.GetBytes(statusText);
-                _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, statusBytes.Length);
+                _ = _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, statusBytes.Length); // a status note is a fixed small object
                 state.Frames.Writer.TryWrite(statusBytes);
             }
 
@@ -257,22 +257,33 @@ internal sealed class PublicHub
 
     private string Hello(PublicSession session)
     {
-        var maps = new JsonArray();
-        foreach (PublicMapOption map in _runtime.Options.Guest.Maps)
+        // The map list comes from the operator's config (validated at start), but the hello is an essential message with a hard size: maps that would not fit are left out.
+        string hello = string.Empty;
+        for (int count = _runtime.Options.Guest.Maps.Count; count >= 0; count--)
         {
-            maps.Add(new JsonObject { ["id"] = map.Id, ["name"] = map.Name });
+            var maps = new JsonArray();
+            foreach (PublicMapOption map in _runtime.Options.Guest.Maps.Take(count))
+            {
+                maps.Add(new JsonObject { ["id"] = map.Id, ["name"] = map.Name });
+            }
+
+            hello = new JsonObject
+            {
+                ["op"] = "hello",
+                ["connection"] = session.Ref,
+                ["version"] = AtlasVersion.Current,
+                ["tier"] = session.Tier == PublicTier.Account ? "account" : "guest",
+                ["account"] = session.Account,
+                ["maps"] = maps,
+                ["feedHz"] = _runtime.Options.Guest.FeedHz,
+            }.ToJsonString();
+            if (Encoding.UTF8.GetByteCount(hello) <= PublicRateLimits.MaxEssentialBytes)
+            {
+                break;
+            }
         }
 
-        return new JsonObject
-        {
-            ["op"] = "hello",
-            ["connection"] = session.Ref,
-            ["version"] = AtlasVersion.Current,
-            ["tier"] = session.Tier == PublicTier.Account ? "account" : "guest",
-            ["account"] = session.Account,
-            ["maps"] = maps,
-            ["feedHz"] = _runtime.Options.Guest.FeedHz,
-        }.ToJsonString();
+        return hello;
     }
 
     private async Task<bool> AuthenticateAsync(SocketState state, CancellationToken cancellationToken)
@@ -396,7 +407,11 @@ internal sealed class PublicHub
             // Over the address's byte budget: the answer is replaced by a small refusal instead of being sent.
             JsonObject refusal = PublicCommandRunner.Failure(name ?? "?", PublicCommandRunner.RateLimited, System.Diagnostics.Stopwatch.GetTimestamp());
             answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = refusal }.ToJsonString());
-            _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, answer.Length);
+            if (!_runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, answer.Length))
+            {
+                _runtime.Log.LogError("public socket: a command refusal of {Bytes} bytes exceeds {Max} and was not sent", answer.Length, PublicRateLimits.MaxEssentialBytes);
+                return;
+            }
         }
 
         await SendBytesAsync(state, answer, cancellationToken).ConfigureAwait(false);
@@ -471,7 +486,13 @@ internal sealed class PublicHub
     private Task SendTextAsync(SocketState state, string text, CancellationToken cancellationToken)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(text);
-        _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, bytes.Length);
+        if (!_runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, bytes.Length))
+        {
+            // Never let an oversized "essential" message through: it is charged in full, logged and not sent.
+            _runtime.Log.LogError("public socket: an essential message of {Bytes} bytes exceeds {Max} and was not sent", bytes.Length, PublicRateLimits.MaxEssentialBytes);
+            return Task.CompletedTask;
+        }
+
         return SendBytesAsync(state, bytes, cancellationToken);
     }
 

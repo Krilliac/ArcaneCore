@@ -188,9 +188,17 @@ internal sealed partial class PublicCommandRunner(PublicRuntime runtime)
 
     private static double Elapsed(long started) => Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 3);
 
-    /// <summary>A failed result with the fixed message of its code.</summary>
+    /// <summary>
+    /// A failed result with the fixed message of its code. The command name is echoed only when it is one this listener lists; any other text (it came from
+    /// the client) is replaced by <c>?</c>, so a refusal is small whatever the client sent.
+    /// </summary>
     internal static JsonObject Failure(string name, string code, long started, string? reference = null)
     {
+        if (!PublicCommandPolicy.IsKnown(name))
+        {
+            name = "?";
+        }
+
         var error = new JsonObject { ["code"] = code, ["message"] = Message(code) };
         if (reference is not null)
         {

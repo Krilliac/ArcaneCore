@@ -689,6 +689,42 @@ public sealed class MapFeedLoginTests
     }
 
     [WindowsFact]
+    public async Task AnExtensionOpNothingServes_IsRefusedWithTheRequestsId_SoTheCallerNeedNotWaitForATimeout()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string directory = WebAuditFile.NewDirectory();
+        try
+        {
+            await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup
+            {
+                Terrain = true,
+                Tickets = new FakeFeedTickets(),
+                Actions = o => { o.Enabled = true; o.AuditDirectory = directory; },
+            });
+            FeedClient client = await world.ConnectAsync();
+
+            await client.SendAsync("""{"op":"links","id":9,"map":0,"instance":0}""");
+            JsonElement withId = await client.ReadAsync();
+            Assert.Equal("error", withId.Op());
+            Assert.Equal("unknown-op", withId.GetProperty("code").GetString());
+            Assert.Equal(9, withId.GetProperty("id").GetInt64());
+
+            await client.SendAsync("""{"op":"links","map":0,"instance":0}""");
+            JsonElement withoutId = await client.ReadAsync();
+            Assert.Equal("unknown-op", withoutId.GetProperty("code").GetString());
+            Assert.False(withoutId.TryGetProperty("id", out _));
+        }
+        finally
+        {
+            WebAuditFile.TryDelete(directory);
+        }
+    }
+
+    [WindowsFact]
     public async Task WhenWebActorsAreOff_TheLoginAnswersWebLoginOff()
     {
         if (!OperatingSystem.IsWindows())

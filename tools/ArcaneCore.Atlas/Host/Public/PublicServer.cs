@@ -459,7 +459,8 @@ internal sealed class PublicServer : IAsyncDisposable
             if (!_rt.Limits.AllowHttp(context.IpKey))
             {
                 http.Response.Headers.RetryAfter = "1";
-                await ErrorAsync(http, StatusCodes.Status429TooManyRequests, "rate-limited", context).ConfigureAwait(false);
+                // Not charged to the byte budget: this is the reply to a request flood, and charging it would keep a shared address permanently in debt.
+                await ErrorAsync(http, StatusCodes.Status429TooManyRequests, "rate-limited", null).ConfigureAwait(false);
                 return;
             }
 
@@ -1005,7 +1006,15 @@ internal sealed class PublicServer : IAsyncDisposable
     private async Task WriteEssentialJsonAsync(HttpContext http, int status, JsonNode body, RequestContext context)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
-        _rt.Limits.ChargeEssentialBytes(context.IpKey, Math.Min(bytes.Length, PublicRateLimits.MaxEssentialBytes));
+        if (!_rt.Limits.ChargeEssentialBytes(context.IpKey, bytes.Length))
+        {
+            // An oversized "essential" body is charged in full, logged and replaced by a fixed small error; it never goes out as built.
+            _rt.Log.LogError("public {Path}: an essential body of {Bytes} bytes exceeds {Max} and was replaced", http.Request.Path, bytes.Length, PublicRateLimits.MaxEssentialBytes);
+            status = StatusCodes.Status500InternalServerError;
+            bytes = Encoding.UTF8.GetBytes(new JsonObject { ["ok"] = false, ["error"] = new JsonObject { ["code"] = "internal", ["ref"] = NewRef() } }.ToJsonString());
+            _ = _rt.Limits.ChargeEssentialBytes(context.IpKey, bytes.Length);
+        }
+
         http.Response.StatusCode = status;
         http.Response.ContentType = "application/json; charset=utf-8";
         http.Response.ContentLength = bytes.Length;
