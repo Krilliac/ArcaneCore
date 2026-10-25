@@ -185,8 +185,9 @@ internal sealed class PlayerbotQaSpellMonitor : ISpellCastObserver, IBotCastRefu
     /// below the threshold is taken): a creature whose EventAI sets the threshold (the Blasted Lands quest creatures 7668-7671 stay at 1 health) or a player in
     /// Spirit of Redemption. A player held with no such aura is a death prevention that leaked, and a hit with a heal or aura part (which can fail on its own)
     /// or on a target above its threshold stays reported as SpellNoEffect. A held creature is excused from SpellNoEffect but not hidden: a script that leaks a
-    /// threshold (an unkillable boss) looks the same, so each creature entry is reported once per <see cref="HeldTargetThrottleMs"/> as a low-weight
-    /// <see cref="QaSignalKind.Anomaly"/> (<see cref="HeldTargetGoal"/>, <see cref="HeldTargetReason"/> + entry) naming the entry and the threshold.
+    /// threshold (an unkillable boss) looks the same, so each creature entry is reported once per <see cref="HeldTargetThrottleMs"/> as an
+    /// <see cref="QaSignalKind.Anomaly"/> (<see cref="HeldTargetGoal"/>, <see cref="HeldTargetReason"/> + entry) naming the entry and the threshold. It appears
+    /// in the QA report only and never files an issue (PlayerbotQaPublisher.Eligible skips it).
     /// </summary>
     private bool HeldByDesign(QaBot bot, SpellCast cast, SpellTargetOutcome outcome, SpellFacts facts, int selected)
     {

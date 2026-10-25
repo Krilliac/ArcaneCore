@@ -59,9 +59,11 @@ public sealed partial class SpellSystem
     /// It evaluates only the spell's base and custom values (<see cref="SpellMath.CalculateEffectValue"/>), not the full value-modifier chain (flat and percent
     /// spell mods, auras), so a mod could still lift a non-positive value above 0: it is conservative only for spells that no such mod touches. Read by the
     /// playerbot QA monitor from <see cref="ISpellCastObserver.OnTargetOutcome"/>, which runs inside the synchronous cast (<see cref="Prepare"/> inside the
-    /// try of <see cref="CastCustomSpell"/>), so the scope is still set. Thread: the scope is one plain field of the system, like the one
-    /// <see cref="CustomValueModifier"/> reads; it is consistent only while casts do not overlap. The code-default stage gates serialize the Packets and
-    /// Heartbeat stages and unmarked updaters (MapStageGates), but this was not verified for every cast path, and <c>World:Parallel:Ungated</c> can lift it.
+    /// try of <see cref="CastCustomSpell"/>), so the scope is still set. Thread: the scope is one plain field of the system, shared with the
+    /// pre-existing <see cref="CustomValueModifier"/>; it is consistent only while casts do not overlap. On the live setting
+    /// (<c>World:Parallel:Ungated=CreatureMapSystem,GameObjectMapSystem</c>) casts stay inside the serial gate (CreatureMapSystem.cs:152-158, 1093-1094,
+    /// 1140-1155 take Serial() around casts; only the spline and wander legs run ungated; GameObjectMapSystem.cs:288-293). The exposure would appear only if
+    /// the Packets or Heartbeat stage, or a casting part of those two updaters, were ungated.
     /// </summary>
     public bool CustomValueIsNonPositive(Unit caster, SpellInfo spell, int effectMask)
     {

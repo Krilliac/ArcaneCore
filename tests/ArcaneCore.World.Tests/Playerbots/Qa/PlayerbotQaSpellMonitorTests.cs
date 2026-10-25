@@ -469,8 +469,15 @@ public sealed class PlayerbotQaSpellMonitorTests
     {
         var probe = new NonPositiveProbe(kit.System, asker, spell, mask);
         kit.System.RegisterObserver(probe);
-        kit.System.CastCustomSpell(kit.Bot, spell.Id, SpellCastTargets.ForSelf(), basePoints[0], basePoints[1], basePoints[2]);
-        return probe.Result;
+        try
+        {
+            kit.System.CastCustomSpell(kit.Bot, spell.Id, SpellCastTargets.ForSelf(), basePoints[0], basePoints[1], basePoints[2]);
+            return probe.Result;
+        }
+        finally
+        {
+            kit.System.UnregisterObserver(probe);
+        }
     }
 
     private sealed class NonPositiveProbe(SpellSystem system, Unit asker, SpellInfo spell, int mask) : ISpellCastObserver
