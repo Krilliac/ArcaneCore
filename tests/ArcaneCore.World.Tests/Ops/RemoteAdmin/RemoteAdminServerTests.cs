@@ -175,6 +175,46 @@ public sealed class RemoteAdminServerTests
     }
 
     [Fact]
+    public async Task AccountLogin_RefusesAnAdministrator_WhoseStatusColumnIsActive_ButWhoHasAnActiveBanRow()
+    {
+        // The defect found in the Atlas dev UI design (S.3): RA read only the status column, while the realm and the gateway also read the ban rows.
+        await using WorldTestHost host = PartyTestHost.Start();
+        byte[] salt = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+        Account banned = await host.Accounts.CreateAsync(new Account
+        {
+            Username = "RABANNED", Salt = salt, Security = AccountSecurity.Administrator, Status = AccountStatus.Active,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, "RABANNED", "secret"), 32), SessionKey = new byte[40],
+        });
+        await host.Accounts.CreateAsync(new Account
+        {
+            Username = "RAFREE", Salt = salt, Security = AccountSecurity.Administrator, Status = AccountStatus.Active,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, "RAFREE", "secret"), 32), SessionKey = new byte[40],
+        });
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        host.Bans.AddAccountRow(banned.Id, now, now); // permanent: bandate == unbandate
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            await using (Client refused = await Client.ConnectAsync(server.Port))
+            {
+                await refused.ReadUntilAsync("Username:");
+                await refused.SendAsync("@login RABANNED secret");
+                Assert.Equal("-Wrong username or password.", await refused.ReadLineAsync());
+            }
+
+            await using Client free = await Client.ConnectAsync(server.Port);
+            await free.ReadUntilAsync("Username:");
+            await free.SendAsync("@login RAFREE secret");
+            Assert.Equal("+Logged in as RAFREE (Administrator).", await free.ReadLineAsync());
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public void ProductionRegistration_AddsRemoteAdmin_OnByDefault_OnLoopback()
     {
         var services = new ServiceCollection();

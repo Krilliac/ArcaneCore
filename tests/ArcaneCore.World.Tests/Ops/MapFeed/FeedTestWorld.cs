@@ -88,6 +88,9 @@ internal sealed class FeedWorldSetup
     /// <summary>The web ticket service lane auth implements (<see cref="IFeedActorTickets"/>); a test fake here.</summary>
     internal IFeedActorTickets? Tickets { get; init; }
 
+    /// <summary>Register the real web login (<c>AddMapFeedWebLogin()</c>: the ticket store, the <c>login</c>/<c>logout</c>/<c>characters</c> ops and <c>links</c>) instead of a fake <see cref="Tickets"/>. Needs <see cref="Actions"/>.</summary>
+    public bool WebLogin { get; init; }
+
     /// <summary>The clock the channel's caches and rate limits read (registered as the <see cref="TimeProvider"/>); null leaves the system clock.</summary>
     public TimeProvider? Time { get; init; }
 
@@ -304,6 +307,10 @@ internal sealed class FeedWorld : IAsyncDisposable
                     }
 
                     services.AddMapFeedActions();
+                    if (setup.WebLogin)
+                    {
+                        services.AddMapFeedWebLogin();
+                    }
                 }
 
                 if (setup.WebPipe is { } webPipe)

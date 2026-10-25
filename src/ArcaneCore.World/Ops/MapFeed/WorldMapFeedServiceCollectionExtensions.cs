@@ -19,6 +19,7 @@ public static class WorldMapFeedServiceCollectionExtensions
         services.Configure<WebFeedPipeOptions>(configuration.GetSection(WebFeedPipeOptions.SectionName));
         services.AddSingleton<PacketToolsPermit>();
         services.AddMapFeedActions();
+        services.AddMapFeedWebLogin();
         services.AddWebFeedPipe();
         services.AddHostedService<WorldMapFeed>();
 

@@ -27,6 +27,9 @@ public sealed class CliEnvironment
     /// <summary>Reads an environment variable (for the data and client directory defaults).</summary>
     public Func<string, string?> GetEnvironmentVariable { get; init; } = Environment.GetEnvironmentVariable;
 
+    /// <summary>Every environment variable (name to value), for settings read by prefix (<c>ARCANECORE_ATLAS_PUBLIC__*</c>); null means none.</summary>
+    public System.Collections.IDictionary? EnvironmentVariables { get; init; }
+
     /// <summary>The modules to compose; null discovers every module of the Atlas assembly.</summary>
     public IReadOnlyList<IAtlasModule>? Modules { get; init; }
 
@@ -51,6 +54,7 @@ public sealed class CliEnvironment
             In = new StreamReader(Console.OpenStandardInput(), utf8, detectEncodingFromByteOrderMarks: false),
             Out = new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true, NewLine = "\n" },
             Error = new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true, NewLine = "\n" },
+            EnvironmentVariables = Environment.GetEnvironmentVariables(),
         };
     }
 }

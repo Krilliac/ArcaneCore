@@ -40,7 +40,19 @@ internal static class MapFeedExtensions
     /// <summary>Ask what the action channel offers.</summary>
     public const string CapsOp = "caps";
 
-    private static readonly HashSet<string> Declared = new(StringComparer.Ordinal) { RoleOp, ActionOp, CapsOp };
+    /// <summary>Verify a web login and issue a ticket (docs/areas/atlas-public.md; <see cref="MapFeedLogin"/>).</summary>
+    public const string LoginOp = "login";
+
+    /// <summary>End a ticket (web connection) or every ticket of an account (local connection).</summary>
+    public const string LogoutOp = "logout";
+
+    /// <summary>The online characters of a ticket's own account (<see cref="MapFeedLogin"/>).</summary>
+    public const string CharactersOp = "characters";
+
+    /// <summary>The entity guids of a map that are linked to a real player (<see cref="MapFeedPublicLinks"/>).</summary>
+    public const string LinksOp = "links";
+
+    private static readonly HashSet<string> Declared = new(StringComparer.Ordinal) { RoleOp, ActionOp, CapsOp, LoginOp, LogoutOp, CharactersOp, LinksOp };
 
     /// <summary>Whether <paramref name="op"/> is an op an extension may serve (the parser then hands it on instead of refusing it).</summary>
     public static bool IsDeclared(string op) => Declared.Contains(op);
@@ -48,7 +60,13 @@ internal static class MapFeedExtensions
     /// <summary>The feed is starting: resolve its extension from <paramref name="services"/> and attach the web pipe, if the host has one.</summary>
     public static void FeedStarted(WorldMapFeed feed, IServiceProvider services)
     {
-        feed.Extension = services.GetService<IFeedExtension>();
+        IFeedExtension[] extensions = [.. services.GetServices<IFeedExtension>()];
+        feed.Extension = extensions.Length switch
+        {
+            0 => null,
+            1 => extensions[0],
+            _ => new CompositeFeedExtension(extensions),
+        };
         feed.Extension?.FeedStarted(feed);
         services.GetService<WebFeedPipe>()?.Attach(feed);
     }

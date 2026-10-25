@@ -41,8 +41,15 @@ internal sealed partial class MapFeedConnection
         string op = request.ExtensionOp ?? string.Empty;
         if (_feed.Extension is not { } extension || !extension.Handles(op))
         {
-            return await RefuseAsync(request, new FeedError(
-                MapFeedProtocol.UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query (and console, inject, send, tap and untap with the packet tools)")).ConfigureAwait(false);
+            // The op is declared but nothing here serves it. The refusal carries the request's id when it has one, so a caller that asked (the public
+            // links query on a world without the web login) is told at once instead of waiting for a timeout; a line without an id gets the plain error.
+            const string Message = "unknown op; the ops are hello, subscribe, unsubscribe and query (and console, inject, send, tap and untap with the packet tools)";
+            _logger.LogWarning("map feed: refused a line from {Client}: {Code}: {Message}", Client, MapFeedProtocol.UnknownOp, Message);
+            using JsonDocument document = FeedExtensionJson.Parse(request.ExtensionLine);
+            await QueueAsync(FeedExtensionJson.TryId(document.RootElement, out long id)
+                ? MapFeedJson.ErrorLine(MapFeedProtocol.UnknownOp, Message, id)
+                : MapFeedJson.ErrorLine(MapFeedProtocol.UnknownOp, Message)).ConfigureAwait(false);
+            return Outcome.Refused;
         }
 
         if (op == MapFeedExtensions.RoleOp)

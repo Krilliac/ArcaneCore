@@ -126,6 +126,30 @@ internal sealed class MapFeedActions : IFeedExtension
         _limits = new MapFeedActionRateLimit(_time);
     }
 
+    /// <summary>Whether the channel accepts web actors (decided when the feed started).</summary>
+    internal ActionsGate Gate => _gate;
+
+    /// <summary>
+    /// Forget the cached standing of web tickets so a logout, kick or revoke applies at once instead of after the 30 s cache: the ticket
+    /// <paramref name="ticket"/> when given, else every cached ticket of <paramref name="account"/> (upper case).
+    /// </summary>
+    internal void ForgetTickets(string? ticket, string? account)
+    {
+        if (ticket is not null)
+        {
+            _ticketCache.TryRemove(ticket, out _);
+            return;
+        }
+
+        foreach (KeyValuePair<string, CachedTicket> pair in _ticketCache)
+        {
+            if (string.Equals(pair.Value.Lookup.Account, account, StringComparison.Ordinal))
+            {
+                _ticketCache.TryRemove(pair.Key, out _);
+            }
+        }
+    }
+
     /// <inheritdoc />
     public bool Handles(string op) => op is MapFeedExtensions.ActionOp or MapFeedExtensions.CapsOp or MapFeedExtensions.RoleOp;
 
