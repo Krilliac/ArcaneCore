@@ -321,18 +321,77 @@ public sealed partial class SummonService : ISpellSummonSink
         return (owner.X + (range * MathF.Cos(absoluteAngle)), owner.Y + (range * MathF.Sin(absoluteAngle)));
     }
 
+    /// <summary>
+    /// <see cref="ClosePoint"/> kept on the ground: the ground height within 4 yd of the owner, in line of sight, and not under the map.
+    /// A primary slot rejected for being under the map (not one blocked by a wall) is retried at half the distance and at the neighbouring
+    /// angles; if every slot fails the owner's own point
+    /// is used, unless that point itself classifies under the map (a caster standing just past the edge of a floor), in which case the
+    /// nearest navmesh floor within 3 yd replaces it (no line of sight: the ray from a point past the floor's edge is blocked by that floor).
+    /// </summary>
     internal static (float X, float Y, float Z) SafeClosePoint(Unit owner, CreatureMapSystem creatures, float summonRadius, float distance, float absoluteAngle)
+    {
+        if (TryGroundedSlot(owner, creatures, summonRadius, distance, absoluteAngle, out (float X, float Y, float Z) slot, out bool blocked))
+        {
+            return slot;
+        }
+
+        // TryGroundedSlot only fails for an owner on a map, so Map is set from here on.
+        var collision = owner.Map!.Collision;
+
+        // A wall between the owner and the slot keeps the owner's point; only a slot that is under the map is retried elsewhere.
+        if (!blocked)
+        {
+            if (TryGroundedSlot(owner, creatures, summonRadius, distance * 0.5f, absoluteAngle, out slot, out _))
+            {
+                return slot;
+            }
+
+            ReadOnlySpan<float> offsets = [MathF.PI / 4f, -MathF.PI / 4f, MathF.PI / 2f, -MathF.PI / 2f, MathF.PI];
+            foreach (float offset in offsets)
+            {
+                if (TryGroundedSlot(owner, creatures, summonRadius, distance, absoluteAngle + offset, out slot, out _))
+                {
+                    return slot;
+                }
+            }
+        }
+
+        if (collision.ClassifyUnderMap(owner.X, owner.Y, owner.Z, 8f).Kind == Maps.Collision.UnderMapKind.UnderMap)
+        {
+            for (int ring = 1; ring <= 3; ring++)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    float angle = i * (MathF.PI / 4f);
+                    float x = owner.X + (ring * MathF.Cos(angle));
+                    float y = owner.Y + (ring * MathF.Sin(angle));
+                    if (collision.TryGetMeshFloor(x, y, owner.Z, 4f, 3f, out float floor)
+                        && float.IsFinite(floor)
+                        && collision.ClassifyUnderMap(x, y, floor, 8f).Kind != Maps.Collision.UnderMapKind.UnderMap)
+                    {
+                        // The raw mesh floor, without GroundHeight.StandOffset: the creature's own ground snap settles the offset.
+                        return (x, y, floor);
+                    }
+                }
+            }
+        }
+
+        return (owner.X, owner.Y, owner.Z);
+    }
+
+    private static bool TryGroundedSlot(Unit owner, CreatureMapSystem creatures, float summonRadius, float distance, float absoluteAngle, out (float X, float Y, float Z) point, out bool blocked)
     {
         (float x, float y) = ClosePoint(owner, summonRadius, distance, absoluteAngle);
         float z = creatures.GroundZ(x, y, owner.Z) is { } gz && MathF.Abs(gz - owner.Z) <= 4f ? gz : owner.Z;
-        if (owner.Map is { } map
-            && (!map.Collision.IsInLineOfSight(owner.X, owner.Y, owner.Z + 1.5f, x, y, z + 1.5f)
-                || map.Collision.ClassifyUnderMap(x, y, z, 8f).Kind == Maps.Collision.UnderMapKind.UnderMap))
+        point = (x, y, z);
+        blocked = false;
+        if (owner.Map is not { } map)
         {
-            return (owner.X, owner.Y, owner.Z);
+            return true;
         }
 
-        return (x, y, z);
+        blocked = !map.Collision.IsInLineOfSight(owner.X, owner.Y, owner.Z + 1.5f, x, y, z + 1.5f);
+        return !blocked && map.Collision.ClassifyUnderMap(x, y, z, 8f).Kind != Maps.Collision.UnderMapKind.UnderMap;
     }
 
     private bool TryGetSystems(Unit caster, uint spellId, out PetMapSystem pets, out CreatureMapSystem creatures)

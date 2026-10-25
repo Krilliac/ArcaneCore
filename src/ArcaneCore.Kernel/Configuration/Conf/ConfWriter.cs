@@ -41,7 +41,7 @@ public static class ConfWriter
         sb.Append("# SECTIONS\n#\n");
         foreach (IGrouping<string, ConfKey> group in groups)
         {
-            sb.Append("#   ").Append(group.Key.ToUpperInvariant().PadRight(28)).Append(group.Count()).Append(" keys\n");
+            sb.Append("#   ").Append(group.Key.ToUpperInvariant()).Append('\n');
         }
 
         sb.Append("#\n").Append(Rule).Append("\n\n");
