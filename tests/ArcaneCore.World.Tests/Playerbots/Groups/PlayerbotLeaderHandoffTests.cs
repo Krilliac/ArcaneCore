@@ -194,7 +194,7 @@ public sealed class PlayerbotLeaderHandoffWorldTests
         await master.CollectAsync();
 
         await master.SendChatAsync(ChatType.Party, Language.Common, "follow");
-        Assert.True(await world.RunUntilAsync(5_000, () => world.Coordinator.Groups.Count == 0), await world.TraceAsync());
+        Assert.True(await world.RunUntilPacedAsync(() => world.Coordinator.Groups.Count == 0, 5_000), await world.TraceAsync()); // the order is read from the socket in real time
         ObjectGuid masterGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(Master)!.Guid);
         Assert.True(await world.RunUntilAsync(5_000, () => world.GroupManager.GetGroup(masterGuid)?.LeaderGuid == masterGuid), await world.TraceAsync());
         Assert.True(await world.RunUntilAsync(5_000, () => bots.All(b => world.Bots.IsPartyDriven(b.Id) && !world.Coordinator.Drives(b.Id))), await world.TraceAsync());

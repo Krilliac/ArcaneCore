@@ -2,8 +2,12 @@ using ArcaneCore.Atlas.Core;
 
 namespace ArcaneCore.Atlas.Render;
 
-/// <summary>A point in camera space: <see cref="X"/> to the screen's right, <see cref="Y"/> up the screen, <see cref="D"/> the distance in front of the camera along its forward axis (yards).</summary>
-internal readonly record struct ViewVertex(double X, double Y, double D);
+/// <summary>
+/// A point in camera space: <see cref="X"/> to the screen's right, <see cref="Y"/> up the screen, <see cref="D"/> the distance in front
+/// of the camera along its forward axis (yards). <see cref="U"/> and <see cref="V"/> are the vertex's texture coordinate (0 for
+/// untextured geometry); they are interpolated perspective-correct by the textured fill.
+/// </summary>
+internal readonly record struct ViewVertex(double X, double Y, double D, double U = 0, double V = 0);
 
 /// <summary>
 /// <see cref="CameraMath"/>'s camera applied to world points, with the same arithmetic as

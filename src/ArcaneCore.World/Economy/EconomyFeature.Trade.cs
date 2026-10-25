@@ -21,6 +21,14 @@ public sealed partial class EconomyFeature
     /// <summary>The open trade of a player (tests and GM tools).</summary>
     public TradeSession? TradeOf(Player player) => _trades.GetValueOrDefault(player);
 
+    /// <summary>
+    /// Whether <paramref name="item"/> sits in one of the six traded slots of the player's own side of an open trade
+    /// (vmangos Item::IsInTrade, but for the whole window, not only while it settles). The non-traded slot is shown and never moved,
+    /// so it does not count. World thread; no allocation.
+    /// </summary>
+    public bool IsOffered(Player player, Item item)
+        => _trades.GetValueOrDefault(player) is { } trade && trade.SideOf(player).SlotOf(item.Guid) is >= 0 and < TradeRules.TradedSlotCount;
+
     /// <summary>CMSG_INITIATE_TRADE (vmangos HandleInitiateTradeOpcode).</summary>
     public void InitiateTrade(WorldSession session, Player player, ObjectGuid targetGuid)
     {

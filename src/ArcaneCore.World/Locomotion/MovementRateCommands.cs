@@ -3,6 +3,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.ServerConfig;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Locomotion;
@@ -17,15 +18,20 @@ namespace ArcaneCore.World.Locomotion;
 /// </summary>
 public sealed class MovementRateCommands : ICommandGroup
 {
-    private static readonly (string Field, Func<LocomotionOptions, float> Get, Action<LocomotionOptions, float> Set)[] Fields =
+    /// <summary>
+    /// The <c>.movement set</c> fields: the name typed, the reload key (<c>Locomotion:...</c>) it changes and how that key reads and writes the
+    /// option. <c>.server config</c> answers to <c>movement.$field</c> for every row (<see cref="LegacyOptionSources.MovementAlias"/>), so a new row
+    /// needs a matching <c>WorldConfigKeys</c> entry; a test fails when a row has none.
+    /// </summary>
+    internal static readonly (string Field, string Path, Func<LocomotionOptions, float> Get, Action<LocomotionOptions, float> Set)[] Fields =
     [
-        ("speedrate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
-        ("run", o => o.PlayerRunSpeedRate, (o, v) => o.PlayerRunSpeedRate = v),
-        ("runback", o => o.PlayerRunBackSpeedRate, (o, v) => o.PlayerRunBackSpeedRate = v),
-        ("swim", o => o.PlayerSwimSpeedRate, (o, v) => o.PlayerSwimSpeedRate = v),
-        ("swimback", o => o.PlayerSwimBackSpeedRate, (o, v) => o.PlayerSwimBackSpeedRate = v),
-        ("walk", o => o.PlayerWalkSpeedRate, (o, v) => o.PlayerWalkSpeedRate = v),
-        ("turn", o => o.PlayerTurnRate, (o, v) => o.PlayerTurnRate = v),
+        ("speedrate", "Locomotion:PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
+        ("run", "Locomotion:PlayerRunSpeedRate", o => o.PlayerRunSpeedRate, (o, v) => o.PlayerRunSpeedRate = v),
+        ("runback", "Locomotion:PlayerRunBackSpeedRate", o => o.PlayerRunBackSpeedRate, (o, v) => o.PlayerRunBackSpeedRate = v),
+        ("swim", "Locomotion:PlayerSwimSpeedRate", o => o.PlayerSwimSpeedRate, (o, v) => o.PlayerSwimSpeedRate = v),
+        ("swimback", "Locomotion:PlayerSwimBackSpeedRate", o => o.PlayerSwimBackSpeedRate, (o, v) => o.PlayerSwimBackSpeedRate = v),
+        ("walk", "Locomotion:PlayerWalkSpeedRate", o => o.PlayerWalkSpeedRate, (o, v) => o.PlayerWalkSpeedRate = v),
+        ("turn", "Locomotion:PlayerTurnRate", o => o.PlayerTurnRate, (o, v) => o.PlayerTurnRate = v),
     ];
 
     public const string SetSyntax = "Syntax: .movement set $field $value\nChange a player speed rate for every online player until the next .reload config or restart. "
@@ -68,7 +74,8 @@ public sealed class MovementRateCommands : ICommandGroup
     {
         var args = new CommandArgs(text);
         string? field = args.ExtractLiteral();
-        if (field is null || !args.ExtractFloat(out float value) || !args.IsEmpty)
+        string? value = args.ExtractLiteral();
+        if (field is null || value is null || !args.IsEmpty)
         {
             return false;
         }
@@ -80,28 +87,31 @@ public sealed class MovementRateCommands : ICommandGroup
             return false;
         }
 
-        if (!(value >= LocomotionOptions.MinSpeedRate && value <= LocomotionOptions.MaxSpeedRate))
-        {
-            context.Reply(string.Create(CultureInfo.InvariantCulture,
-                $".movement set: {value} is out of range; the rate must be between {LocomotionOptions.MinSpeedRate} and {LocomotionOptions.MaxSpeedRate}."));
-            return true;
-        }
-
-        if (LocomotionEnvironment.RegisteredOptions(context.World) is not { } options)
+        if (LocomotionEnvironment.RegisteredOptions(context.World) is null)
         {
             context.Reply("Movement rates are not available: the locomotion feature is not running.");
             return true;
         }
 
-        (string name, Func<LocomotionOptions, float> get, Action<LocomotionOptions, float> set) = Fields[index];
-        float old = get(options);
-        set(options, value);
-        int refreshed = SpeedRates.ApplyToAll(context.World, options);
-        context.Session.Logger.LogWarning(
-            "{Player} (account {Account}) set movement rate {Field} from {Old} to {New}; speeds of {Count} online player(s) re-sent",
-            context.InvokerName, context.Session.AccountId, name, old, value, refreshed);
-        context.Reply(string.Create(CultureInfo.InvariantCulture,
-            $"Movement: {name} {old:0.###} -> {value:0.###} (until .reload config or restart); speeds of {refreshed} online player(s) re-sent."));
+        // The same set as .server config set (the keys answer to movement.$field), run in World.Post. It checks the rate against the key's
+        // bounds and re-sends every online player's speeds (SpeedRates.ApplyToAll) when it changes.
+        string name = Fields[index].Field;
+        ServerConfigCommands.PostSet(context, "movement." + name, value, null, outcome =>
+        {
+            if (outcome.Result != OptionSetResult.Ok)
+            {
+                bool wellFormed = outcome.Key is { } key && outcome.Result == OptionSetResult.Invalid && key.TryParse(value, out _, out _);
+                context.Reply(wellFormed ? $".movement set: {value} is out of range: {outcome.Error}." : $".movement set: {outcome.Error}.");
+                return;
+            }
+
+            int refreshed = context.World.OnlinePlayers.Count();
+            context.Session.Logger.LogWarning(
+                "{Player} (account {Account}) set movement rate {Field} from {Old} to {New}; speeds of {Count} online player(s) re-sent",
+                context.InvokerName, context.Session.AccountId, name, outcome.Before, outcome.After, refreshed);
+            context.Reply(string.Create(CultureInfo.InvariantCulture,
+                $"Movement: {name} {outcome.Before} -> {outcome.After} (until .reload config or restart); speeds of {refreshed} online player(s) re-sent."));
+        });
         return true;
     }
 }

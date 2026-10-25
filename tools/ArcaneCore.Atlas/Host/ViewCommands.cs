@@ -32,6 +32,8 @@ internal static class ViewCommands
                 new("theme", ArgType.String, "UI chrome theme.", Choices: [.. Enum.GetValues<Theme>().Select(ViewState.Name)]),
                 new("hud", ArgType.Boolean, "Show the viewport overlays."),
                 new("follow", ArgType.String, "Hex guid of the live entity the camera follows; null stops following."),
+                new("textureRadius", ArgType.Integer, $"Tiles around the focus tile whose textured layers load, 0 to {ViewState.MaxTextureRadius}. Default {ViewState.DefaultTextureRadius}."),
+                new("textureBudgetMb", ArgType.Integer, $"Browser texture memory budget in MiB, {ViewState.MinTextureBudgetMb} to {ViewState.MaxTextureBudgetMb}. Default {ViewState.DefaultTextureBudgetMb}."),
             ],
             ViewSet));
         registry.Register(new CommandDefinition(

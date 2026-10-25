@@ -48,6 +48,19 @@ internal sealed class GuardedAccountStore(GuardedCalls<IAccountStore> calls) : I
 }
 
 /// <summary>See <see cref="GuardedAccountStore"/>.</summary>
+internal sealed class GuardedAccountLoginInfoStore(GuardedCalls<IAccountLoginInfoStore> calls) : IAccountLoginInfoStore
+{
+    public Task RecordLoginAsync(string username, AccountLoginInfo info, CancellationToken cancellationToken = default)
+        => calls.RunAsync(
+            static (store, s, ct) => store.RecordLoginAsync(s.Username, s.Info, ct),
+            (Username: username, Info: info),
+            cancellationToken);
+
+    public Task<AccountLoginInfo?> GetLoginInfoAsync(string username, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.GetLoginInfoAsync(s, ct), username, cancellationToken);
+}
+
+/// <summary>See <see cref="GuardedAccountStore"/>.</summary>
 internal sealed class GuardedRealmStore(GuardedCalls<IRealmStore> calls) : IRealmStore
 {
     public Task<IReadOnlyList<RealmEntry>> GetRealmsAsync(CancellationToken cancellationToken = default)

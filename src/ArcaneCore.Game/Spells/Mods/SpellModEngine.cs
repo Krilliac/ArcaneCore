@@ -4,7 +4,7 @@ using ArcaneCore.Game.Entities;
 namespace ArcaneCore.Game.Spells.Mods;
 
 /// <inheritdoc cref="ISpellModEngine"/>
-public sealed class SpellModEngine : ISpellModEngine
+public sealed partial class SpellModEngine : ISpellModEngine
 {
     private readonly ConditionalWeakTable<Unit, PlayerMods> _mods = new();
     private readonly List<SpellModScope> _windows = [];

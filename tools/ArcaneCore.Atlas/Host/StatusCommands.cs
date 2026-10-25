@@ -40,8 +40,8 @@ internal static class StatusCommands
             TilesStatus));
         registry.Register(new CommandDefinition(
             "cache.clear",
-            "Drops cached tiles so they are rebuilt on the next request, and tells connected UIs to refetch.",
-            [new("layer", ArgType.String, "Only this layer; default all.")],
+            "Drops cached tiles so they are rebuilt on the next request, and tells connected UIs to refetch. Without a layer it also empties the texture and model package caches.",
+            [new("layer", ArgType.String, "Only this layer's tiles; default all tiles and every other cache.")],
             CacheClear));
     }
 
@@ -55,6 +55,7 @@ internal static class StatusCommands
             problems.Add(bookmarkProblem);
         }
 
+        IReadOnlyList<ICacheParticipant> participants = context.CacheParticipants.All;
         var status = new JsonObject
         {
             ["version"] = AtlasVersion.Current,
@@ -64,6 +65,8 @@ internal static class StatusCommands
             ["modules"] = new JsonArray([.. (context.Services.Get<ModuleList>()?.Names ?? []).Select(n => (JsonNode)n)]),
             ["layers"] = new JsonArray([.. context.Layers.Available.Select(l => (JsonNode)l)]),
             ["cacheBytes"] = context.Cache.Bytes,
+            ["caches"] = new JsonArray([.. participants.Select(p => (JsonNode)new JsonObject { ["name"] = p.Name, ["count"] = p.Count, ["bytes"] = p.Bytes })]),
+            ["cacheBytesTotal"] = context.Cache.Bytes + participants.Sum(p => p.Bytes),
             ["ui"] = new JsonObject { ["connections"] = context.Services.Get<UiHub>()?.ConnectionCount ?? 0 },
         };
         if (context.Services.Get<Live.LiveFeed>() is { } live)
@@ -301,6 +304,10 @@ internal static class StatusCommands
         }
 
         int removed = context.Cache.Invalidate(layer);
+        if (layer is null)
+        {
+            context.CacheParticipants.ClearAll();
+        }
 
         // The cache cannot list what it dropped, so the event names the layer (or null for all) and no tile: the UI refetches what it shows.
         context.Events.Publish(EventHub.Topics.TileInvalidated, new JsonObject { ["layer"] = layer, ["tile"] = null });

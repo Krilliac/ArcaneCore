@@ -77,7 +77,7 @@ public sealed record PopulationStatus(
 /// </para>
 /// <para>Thread affinity: <c>Attach</c>, the event handlers and the capture run on the world thread; the pass runs on the thread pool, one at a time.</para>
 /// </summary>
-public sealed class PlayerbotPopulationFeature(IServiceProvider services, ILogger<PlayerbotPopulationFeature> logger) : IDetachableWorldFeature
+public sealed partial class PlayerbotPopulationFeature(IServiceProvider services, ILogger<PlayerbotPopulationFeature> logger) : IDetachableWorldFeature
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private readonly WorldTickWindow _window = new();

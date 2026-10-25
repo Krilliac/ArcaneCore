@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Creatures;
 /// updated. A generator whose update returns false is removed and the one beneath resumes.
 /// Thread affinity: world thread (the creature's map).
 /// </summary>
-public sealed class MotionMaster
+public sealed partial class MotionMaster
 {
     private readonly Creature _owner;
     private readonly List<ICreatureMovementGenerator> _stack = [];

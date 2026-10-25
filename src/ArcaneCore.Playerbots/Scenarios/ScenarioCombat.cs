@@ -229,10 +229,28 @@ public abstract class ClassCombatScenario : IPlayerbotScenario
     protected virtual Task VerifyAsync(ScenarioContext context, ScenarioBot bot, Creature wolf, CombatTrace trace) => Task.CompletedTask;
 }
 
-/// <summary>Orc warrior: Battle Stance between fights, Charge to open (its rage then feeds Rend).</summary>
+/// <summary>
+/// Orc warrior: in Battle Stance (a new warrior enters the world in it, or its rotation casts it), Charge to open (its rage then
+/// feeds Rend). The stance is checked as the shapeshift form, not as a cast, because a warrior that logs in already in Battle Stance
+/// never casts it.
+/// </summary>
 public sealed class CombatWarriorScenario() : ClassCombatScenario("warrior", 2, Class.Warrior,
     [ClassCombatSpells.BattleStance, ClassCombatSpells.Charge, ClassCombatSpells.Rend, ClassCombatSpells.HeroicStrike],
-    ["Battle Stance", "Charge"]);
+    ["Charge"])
+{
+    protected override async Task VerifyAsync(ScenarioContext context, ScenarioBot bot, Creature wolf, CombatTrace trace)
+    {
+        await context.StepAsync("the warrior fought in Battle Stance", async () =>
+        {
+            // Charge and Rend are Battle Stance-only spells, so the form must be Battle Stance after the kill.
+            ShapeshiftForm form = await bot.ReadAsync(p => ShapeshiftService.GetForm(p)).ConfigureAwait(false);
+            ScenarioContext.ExpectEqual(ShapeshiftForm.BattleStance, form, "stance form");
+            bool aura = await bot.ReadAsync(p => context.Services.GetRequiredService<SpellFeature>().System.GetAuras(p)
+                .Any(h => !h.IsRemoved && h.Spell.Name == "Battle Stance")).ConfigureAwait(false);
+            ScenarioContext.Expect(aura, "the Battle Stance aura is not on the bot");
+        }).ConfigureAwait(false);
+    }
+}
 
 /// <summary>Dwarf paladin: Devotion Aura between fights, Seal of Righteousness and Judgement in melee.</summary>
 public sealed class CombatPaladinScenario() : ClassCombatScenario("paladin", 3, Class.Paladin,

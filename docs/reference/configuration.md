@@ -1230,6 +1230,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:GmCommands:AllowDangerousDebug` | `bool` | `false` | - | ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps) behind `DangerousDebugGate`. Off by default; changing it needs a restart. On the live server (`ARCANECORE_LIVE_SERVER=1`) the commands are refused whatever this says. |
 | `World:GmCommands:AuditTailSize` | `int` | `200` | - | How many of the latest audit lines `.arcane gmlog` can show (ArcaneCore only; the lines are the ones `LogCommands` writes, kept in memory, lost on restart). 0 keeps none. |
 | `World:GmCommands:ExactNameFirst` | `bool` | `false` | - | A command word matching a command name exactly wins over a longer name that starts with it (the behaviour before the retail table work). Retail (false) takes the first table entry the word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order. |
 | `World:GmCommands:HideUnavailable` | `bool` | `false` | - | Treat a command above the invoker's level as if it did not exist ("There is no such command", the behaviour before the retail table work). Retail (false) resolves the command first and answers "This command is not available to you." (Chat.cpp:1884-1888). |
@@ -1740,6 +1741,7 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:TrustPerGroupSuccess` | `int` | `30` | live | Trust (permille) gained toward every member of a group that finished its run (-500..500). |
 | `World:Playerbots:Social:Mood:Enabled` | `bool` | `true` | live | Let bots have a mood (on by default). Off: every mood reads 0 and events change nothing. |
 | `World:Playerbots:Social:Mood:HalfLifeMinutes` | `int` | `30` | live | The minutes in which a mood decays to half of itself (1..1440, default 30). |
+| `World:Playerbots:Social:PassBudgetMs` | `double` | `4` | live | The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply carries on (the next one starts when it has finished). The per-bot lanes stop between bots once the budget is spent (a tick may overshoot by one bot); the lanes that work on the whole population run whole. |
 | `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
 | `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
 | `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |

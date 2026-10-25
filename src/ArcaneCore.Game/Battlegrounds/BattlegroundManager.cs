@@ -227,7 +227,7 @@ public sealed record BattlegroundStatusReport(uint QueueSlot, BattlegroundStatus
 /// queue order and the debug "testing" mode of vmangos (docs/areas/battlegrounds.md).
 /// </para>
 /// </summary>
-public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattlegroundPresence
+public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.IBattlegroundPresence
 {
     private readonly Dictionary<BattlegroundType, BattlegroundTemplate> _templates = [];
     private readonly BattlegroundQueue[] _queues;

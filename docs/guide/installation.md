@@ -91,6 +91,8 @@ dotnet run --project tools/ArcaneCore.ContentImporter -- import-dbc path/to/DBFi
 dotnet run --project tools/ArcaneCore.ContentImporter -- verify --provider mariadb --connection-string "Server=127.0.0.1;Database=arcanecore_world;User=arcane;Password=..."
 ```
 
+`import-dbc` also reads `Map.dbc` and `AreaTable.dbc` (and `WMOAreaTable.dbc`) from the same directory and fills `map_template`, `area_template` and `wmo_area_template` when they are empty (the dungeon columns from a dump, such as player limit, reset delay and ghost entrance, are not filled this way; `refresh --dbc-dir` or `import-map-dbc --replace --dump` brings them in); without them the World skips every instance portal. It likewise fills `areatrigger_template`, `taxi_nodes` and `taxi_path` from `AreaTrigger.dbc`, `TaxiNodes.dbc` and `TaxiPath.dbc` when those tables are empty, so the sequence above ends with a clean `verify` unless the dump has other missing references. Tables that already have rows are left as they are; `refresh <dump> --dbc-dir path/to/DBFilesClient` rewrites them. `verify` fails (exit 6) while any of those five tables is empty, and names the command that fills it.
+
 `plan` reads the dumps and reports without writing anything. Every verb except `plan` needs a target: `--database <file>` for SQLite, or `--provider` (`sqlite`, `mariadb`, `mysql`, `postgresql`) with a connection string. The connection string can come from `ARCANECORE_CONTENT_CONNECTION` (keeps the password off
 the command line), but the variable supplies only the connection string and still needs `--provider`. The importer refuses a database or report path that is inside a git work tree and not
 ignored. Details and limits: [content import](../areas/content-import.md).
