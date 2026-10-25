@@ -295,8 +295,10 @@ public sealed partial class TotemSystem
             caster.X + (provisional * MathF.Cos(angle)), caster.Y + (provisional * MathF.Sin(angle)), caster.Z, caster.Orientation);
         // CreatureCreatePos::SelectFinalPoint (Creature.cpp:232) calls caster.GetClosePoint(..., totem radius, distance, angle); the
         // reach is distance + caster radius + totem radius (Object.cpp:2728-2729, 2748). Ground z, line of sight and the under-map
-        // guard are as for pets (Object.cpp:2742-2840): a point behind a wall or under the map falls back to the caster's own
-        // position, and with no floor within 4 yd the slot keeps the caster's z.
+        // guard are as for pets (Object.cpp:2742-2840), with a local extension: a point under the map is retried at half the
+        // distance and at +-45/90/180 degrees, a point behind a wall falls back to the caster's own position, a caster that itself
+        // classifies under the map (standing past a floor edge) is replaced by a navmesh floor up to 3 yd away, and with no ground
+        // within 4 yd the slot keeps the caster's z.
         (float x, float y, float z) = SummonService.SafeClosePoint(caster, creatures, totem.BoundingRadius, Options.PlacementDistance, angle);
         totem.SetPosition(x, y, z, caster.Orientation);
         totem.SetHome(new CreatureHome(x, y, z, caster.Orientation));
