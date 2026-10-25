@@ -22,7 +22,7 @@ internal enum TownIdleAction : byte
 /// quest left still finds creatures to hunt and none is stuck in town for the whole stay.
 /// <para>Thread affinity: one instance per brain, the world thread.</para>
 /// </summary>
-internal sealed class PlayerbotTownIdle
+internal sealed partial class PlayerbotTownIdle
 {
     /// <summary>A bot this close to the town centre (yards; the innkeeper's spawn) is at the inn: inside the NPC interaction distance (5), so it can bind there.</summary>
     internal const float LingerYards = 4f;

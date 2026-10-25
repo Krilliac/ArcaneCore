@@ -56,7 +56,7 @@ internal sealed record BotChatStatus(
 /// exchanges are sent, under character names, with emails and phone numbers replaced.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotChat : IAsyncDisposable
+internal sealed partial class PlayerbotChat : IAsyncDisposable
 {
     internal const int Workers = 2;
     internal const int MaxConversations = 512;

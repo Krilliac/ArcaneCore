@@ -5,6 +5,7 @@ using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.AntiCheat;
+using ArcaneCore.World.Gm.ServerConfig;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Rates;
 using ArcaneCore.World.Social;
@@ -222,6 +223,22 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                         }
                     });
                 transaction.Note($"{cleared} .rates override(s) cleared; the rates are back to their configured values.");
+            }
+
+            // The overrides made through .server config end here too: the keys they changed hold the file's value now, so their baseline
+            // is the file's value again. The PacketHeuristics and pack keys are not reloaded and keep theirs.
+            OptionOverrides optionOverrides = OptionOverrides.For(world);
+            if (optionOverrides.Count > 0)
+            {
+                IReadOnlyList<KeyValuePair<string, OptionOverrides.Entry>> forgotten = [];
+                transaction.Step(
+                    "option overrides",
+                    () => forgotten = optionOverrides.ForgetReloaded(),
+                    () => optionOverrides.Restore(forgotten));
+                if (forgotten.Count > 0)
+                {
+                    transaction.Note($"{forgotten.Count} .server config override(s) ended; those options hold the configured values.");
+                }
             }
 
             if (liveAntiCheat is not null)

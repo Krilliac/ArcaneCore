@@ -783,7 +783,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             bool withinReach = WithinReach(player, npc);
             bool entrySuspended = Suspensions?.IsEntrySuspended(npc.Entry, _session.World.NowMs) == true;
-            foreach (uint id in services.Quests.EndersOf(npc.Entry))
+            foreach (uint id in services.EndersOf(npc))
             {
                 if (!services.IsRewardable(id) || IsGiverWait(id)) continue;
                 EndGiverWait(id, npc.Guid);
@@ -840,7 +840,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (_stage == Stage.None && IsQuestNavigationBudgetExhausted(phaseStartTicks))
                 continue;
 
-            foreach (uint id in services.Quests.StartersOf(npc.Entry))
+            foreach (uint id in services.StartersOf(npc))
             {
                 if (!services.IsRewardable(id) || IsRefused(id) || IsGiverWait(id)) continue;
                 EndGiverWait(id, npc.Guid);
@@ -1598,7 +1598,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         string? packetCode = DrainQuestFailureCode(questId);
         if (state.Quests.FindSlot(0) >= QuestConstants.MaxQuestLogSize)
             return ("QuestLogFull", "quest log is full");
-        if (services.InteractableNpc(player, giverGuid, NpcFlags.QuestGiver, out string? interactErr) is null)
+        if (services.InteractableNpc(player, giverGuid, NpcFlags.QuestGiver, out string? interactErr) is not { } giver)
             return (TurnInRefusalCode(interactErr, packetCode ?? "GiverNotInteractable"), interactErr ?? "quest giver is not interactable");
         if (services.Quests.Get(questId) is { } quest)
         {
@@ -1609,8 +1609,12 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         if (services.CanTakeQuest(player, questId) == false)
             return (packetCode ?? "CannotTakeQuest", packetCode is not null ? $"player cannot take quest ({packetCode})" : "player does not meet quest requirements");
+        // A drained server failure code is the server's own reason and wins over the inferred one below.
         if (packetCode is not null)
             return (packetCode, $"quest accept refused ({packetCode})");
+        // The server looks the quest up in this giver's own relation table (creature or game object) and drops the query silently when it is absent.
+        if (!services.StartersOf(giver).Contains(questId) && !services.EndersOf(giver).Contains(questId))
+            return ("GiverDoesNotOffer", $"giver {giver.Entry} neither starts nor ends quest {questId}");
         return (fallbackCode, fallbackReason);
     }
 

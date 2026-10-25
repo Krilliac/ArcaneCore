@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Events;
+using ArcaneCore.World.Playerbots.Population;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Events.EventsTestWorld;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
@@ -91,7 +92,9 @@ public sealed class PlayerbotFestivalWorldTests
 
         // The linger window (120 s from the first think) ends and the explore window (240 s) begins: from then on no place is held at any think.
         Assert.True(await world.RunUntilAsync(bot, 150_000, () => !world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the bot kept its place into the explore window");
-        Assert.False(await world.RunUntilAsync(bot, 100_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the bot took a place again inside its explore window");
+        // A place taken and released inside one think is never seen holding between thinks: count the claims taken instead.
+        long taken = await world.World.Host.OnWorldAsync(() => world.World.Bots.FindBrain(bot)!.EventBoard!.Claims.TakenCount);
+        Assert.False(await world.RunUntilAsync(bot, 100_000, () => world.World.Bots.FindBrain(bot)!.EventBoard!.Claims.TakenCount != taken), "the bot took a place again inside its explore window");
     }
 
     public static TheoryData<string> SwitchesOff() => new() { "Events:Enabled", "Holidays:Enabled", "CelebrateChance=0" };

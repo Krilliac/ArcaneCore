@@ -338,7 +338,7 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
   `World:Playerbots:Social:Events:Holidays:MaxPerTown` per team. The place is the bot's idle centre: the town idle rule (`PlayerbotTownIdle`) walks to it and holds there as it does at the inn, and a place 5 or more
   yards above or below (Undercity, Thunder Bluff, Ironforge) is never "arrived". A walk the idle rule gives up, or a bot on the wrong floor,
   sets that NPC aside for the bot for `World:Playerbots:Social:Events:Holidays:SpotBackoffMinutes`, frees the place, reports the Info anomaly `event/festival-spot-unreachable` (once per NPC per hour) and sends the bot
-  back to the inn. A bot is held at its place only while it stands at least 5 yards from the NPC (a stalled walk that stops inside the interaction distance is given up like any other). A secondary town's bot takes no place in its explore window. There is no `World:Playerbots:Social:Enabled` key: the gathering is gated by `World:Playerbots:Social:Events:Enabled` and `World:Playerbots:Social:Events:Holidays:Enabled` only. A place lasts 60 seconds past the last held think. Any other goal (a quest, combat, a hunt, rest) frees it at once: the
+  back to the inn. A bot is held at its place only while it stands at least 5 yards from the NPC (a stalled walk that stops inside the interaction distance is given up like any other). A secondary town's bot takes no place in its explore window. The Social section has no master switch of its own; the gathering is gated by `World:Playerbots:Social:Events:Enabled` and `World:Playerbots:Social:Events:Holidays:Enabled` only. A place lasts 60 seconds past the last held think. Any other goal (a quest, combat, a hunt, rest) frees it at once: the
   festival is idle behaviour and never keeps a bot from questing. A bot a player attacks at a spot sets the town's festival aside for its team for
   the same time (a crowd that draws attacks disperses). A festival that ends, or a switch turned off, sends the bots back to the inn at their next think.
 - **Arrival line** (events lane, once per place): with chance 0.6 x (0.5 + chattiness) x the mood multiplier a bot says one /say line
@@ -387,7 +387,19 @@ One pass every second of world time. A pass does a constant number of dictionary
 gathered once per pass and only when something needs it; an event handler's pass gathers none), drains only the guild-invite,
 charter-signature and battleground-win packets of each bot's capture queue, and makes at most one chat admission per guild. The rate
 limiters and the boss and battleground-win maps are bounded and swept; a pass that throws is logged (the first five in full) and the world
-carries on. Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
+carries on.
+
+**The pass is incremental** (`World:Playerbots:Social:PassBudgetMs`, default 4; 0 = no limit). A pass starts when its interval has passed and no
+pass is in flight, takes a snapshot of the running bots (a bot that leaves the world meanwhile is dropped from it) and walks its stages in
+order, at most the budget per world tick (plus one slice): the packet intake, the injected test lanes, then the lanes in their usual order.
+The lanes that act on one bot at a time and independently of the others (`answer-invites`, `emotes`) run on slices of the snapshot and stop
+between slices once the budget is spent; the next tick resumes at the next bot. Every other lane is population-wide (it has its own cursor
+and per-pass quota, or reasons about guilds, charters and the set of running bots) and runs whole as one stage, so the registry check, the
+intake and these lanes keep their once-per-pass meaning. A stage never starts before the one before it has finished, a pass that outlasts
+its interval is simply followed by the next as soon as it ends (no catch-up passes), and a pass in flight for more than 20 intervals is
+reported once to the anomaly ledger (`bot-social` / `pass-starved`).
+
+Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
 state is in memory or read back from it.
 
 ## Tests

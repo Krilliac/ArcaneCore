@@ -865,7 +865,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal void GatherSocialBots(PlayerbotGroupCoordinator? groups, List<BotSocial.PlayerbotSocialBot> destination)
     {
         destination.Clear();
-        ActiveBot[] bots = _ordered;
+        ActiveBot[] bots = RefreshOrdered().Bots;
         destination.EnsureCapacity(bots.Length);
         foreach (ActiveBot active in bots)
         {

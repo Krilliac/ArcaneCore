@@ -14,6 +14,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 /// <summary>A five-Horde-bot RFC run on the manual world clock, from formation through trash and a retry.</summary>
 public sealed class PlayerbotRunClearWorldTests
 {
+    private const uint KalimdorMap = 1;
     private const byte Orc = 2, Undead = 5;
     private const byte Warrior = 1, Priest = 5, Mage = 8;
     private const uint Taunt = GroupTestWorld.Taunt, Resurrection = GroupTestWorld.Resurrection;
@@ -120,6 +121,68 @@ public sealed class PlayerbotRunClearWorldTests
     }
 
     /// <summary>
+    /// After a wipe the released bots are revived at the instance landing at about half health while the surviving trash is still a few yards
+    /// away, and the group then regroups for up to GatherCatchUpMs. Holding inside for that time left the revived bots to be pulled and fought
+    /// at half health with no wipe check running; on the Retry step the leader must walk back out through the exit instead (the members follow),
+    /// so the group re-enters at full strength with the single wipe it already had.
+    /// </summary>
+    [Fact]
+    public async Task AWipedRunWhoseLeaderRevivesInside_RegroupsOutsideTheExit_BeforeTheRetry()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        (Guid Id, string Name)[] bots = await AddParty(world, resurrection: false);
+        PlayerbotGroupCoordinator.BotGroup group = await StartRun(world, bots);
+        PlayerbotRunMachine run = group.Run!;
+        Assert.True(await world.RunUntilAsync(180_000, () => bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map)), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(120_000, () =>
+        {
+            Creature[] trash = Pack(world, bots[0].Id);
+            return trash.Length == 3 && trash.Count(c => !c.IsAlive) >= 1 && trash.Any(c => c.IsAlive);
+        }), await world.TraceAsync());
+        await world.OnWorldAsync(() =>
+        {
+            Creature attacker = Pack(world, bots[0].Id).First(c => c.IsAlive);
+            foreach ((Guid id, string _) in bots.Take(3))
+            {
+                Player victim = world.Player(id);
+                victim.Map!.Combat.DealDamage(attacker, victim, victim.Health, direct: false);
+                Assert.False(victim.IsAlive);
+            }
+
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(5_000, () => run.Step == PlayerbotRunStep.Wiped), await world.TraceAsync());
+        Assert.Equal(1, run.Wipes);
+
+        // The group regroups on the Retry step with the leader revived back inside: the moment the run's own state says so, the surviving trash
+        // hits one of the revived members, as it does when they come back within its reach.
+        Assert.True(await world.RunUntilAsync(180_000, () => group.State == PlayerbotGroupState.Gathering && run.Step == PlayerbotRunStep.Retry
+            && bots.Take(2).All(b => world.Player(b.Id) is { IsAlive: true, MapId: GroupRfcContent.Map })), await world.TraceAsync());
+        await world.OnWorldAsync(() =>
+        {
+            Player member = world.Player(bots[1].Id);
+            foreach (Creature c in Pack(world, bots[0].Id).Where(c => c.IsAlive)) member.Map!.Combat.DealDamage(c, member, 1, direct: false);
+            return true;
+        });
+
+        // Well inside GatherCatchUpMs (60 s): everyone is outside the instance, alive and out of combat, and the run has not re-entered yet.
+        // While the leader is still inside the group is not gathered (even once the members alive have come to it), so it never travels or re-enters from there.
+        bool leftEarly = false, stepOk = true;
+        Assert.True(await world.RunUntilAsync(20_000, () =>
+        {
+            if (world.Player(bots[0].Id).MapId == GroupRfcContent.Map) leftEarly |= group.State != PlayerbotGroupState.Gathering;
+            // The last member out completes the gathering, so the run may already have stepped on to Enter in that same tick; either way it has not cleared.
+            stepOk &= run.Step is PlayerbotRunStep.Retry or PlayerbotRunStep.Enter;
+            return bots.All(b => world.Player(b.Id) is { IsAlive: true, MapId: KalimdorMap } p && !p.Combat.IsInCombat);
+        }), await world.TraceAsync());
+        Assert.False(leftEarly, "the group left Gathering while its leader was still inside the instance");
+        Assert.True(stepOk, "the run moved past Retry/Enter before the group was outside");
+        Assert.True(await world.RunUntilAsync(180_000, () => run.Step == PlayerbotRunStep.Clear
+            && bots.All(b => world.Player(b.Id).MapId == GroupRfcContent.Map && world.Player(b.Id).IsAlive)), await world.TraceAsync());
+        Assert.Equal(1, run.Wipes);
+    }
+
+    /// <summary>
     /// Dungeon trash never leashes (CreatureMapSystem.IsOutOfThreatArea is false in an instanceable map), so a wiped group's leash-based retreat
     /// can run in a line that misses the exit trigger and be chased for good. The survivors here start south of the exit box, where the way
     /// straight away from the pack does not cross it: they must walk out through the exit instead.
@@ -163,7 +226,11 @@ public sealed class PlayerbotRunClearWorldTests
         // The exit is a few yards away and the trash hits for 2-3 every 2 s: both survivors are out, alive and out of combat, long before they
         // could die (a survivor chased east by the leash retreat is still inside, in combat, at this point).
         Assert.True(await world.RunUntilPacedAsync(() => survivors.All(b => world.Player(b.Id) is { IsAlive: true, MapId: 1 } p && !p.Combat.IsInCombat), 30_000), await world.TraceAsync());
-        Assert.True(await world.RunUntilPacedAsync(() => run.Step == PlayerbotRunStep.Retry, 180_000, TimeSpan.FromSeconds(240)), await world.TraceAsync());
+        // Retry is a transient step (it lasts through the regroup's gathering, about 1.3 s of game time here, then Enter and Clear): when the survivors take a few seconds to get out, the run has
+        // already passed through it by the time this wait starts, so wait for the run to leave Wiped (Retry is the only way out of it) and require it
+        // to have done so on the single wipe rather than by giving up.
+        Assert.True(await world.RunUntilPacedAsync(() => run.Step != PlayerbotRunStep.Wiped, 180_000, TimeSpan.FromSeconds(240)), await world.TraceAsync());
+        Assert.True(await world.OnWorldAsync(() => run is { Wipes: 1, Step: not PlayerbotRunStep.GiveUp }), await world.TraceAsync());
     }
 
     /// <summary>

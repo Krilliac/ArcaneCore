@@ -852,6 +852,9 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Events:Holidays:{property.Name}");
         }
 
+        // The social pass's per-tick time budget (a scalar of the Social section itself).
+        expected.Add($"{PlayerbotOptions.SectionName}:Social:{nameof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialOptions.PassBudgetMs)}");
+
         // The bot economy section is live key by key (docs/areas/playbots-economy.md).
         foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

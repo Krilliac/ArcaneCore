@@ -2375,6 +2375,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature creature) continue;
+            // Picking a player's pet, guardian or totem is a PvP decision, not grinding.
+            if (creature.CharmerOrOwnerGuid.IsPlayer) continue;
             if (skip is not null && skip(creature)) continue;
             if (!creature.IsAlive || !map.Combat.Hooks.CanAttack(player, creature)) continue;
             if (creature.Level > player.Level + maxLevelsAbove

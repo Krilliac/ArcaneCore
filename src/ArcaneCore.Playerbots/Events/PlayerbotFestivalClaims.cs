@@ -37,6 +37,9 @@ internal sealed class PlayerbotFestivalClaims
     private readonly List<PlayerbotFestivalClaim> _activeScratch = [];
     private long _serial;
 
+    /// <summary>How many claims have been taken in all (the serial of the latest; inspection, tests).</summary>
+    internal long TakenCount => _serial;
+
     private static bool Alive(in PlayerbotFestivalClaim claim, long nowMs) => nowMs - claim.RenewedAtMs <= ExpiryMs;
 
     /// <summary>
