@@ -169,6 +169,7 @@ internal sealed class PlayerbotWorldPvpObjectives
     private bool _dropFlag;
     private int _dropAttempts;
     private uint _dropNextMs;
+    private bool _offMapDrop;
     private bool _carryFaultReported;
     private bool _sawFlag;
 
@@ -272,7 +273,8 @@ internal sealed class PlayerbotWorldPvpObjectives
     internal WorldPvpStep Update(Player player, uint elapsedMs, bool mayBegin, in SilithystAuras auras)
     {
         ArgumentNullException.ThrowIfNull(player);
-        _sawFlag = auras.Carries;
+        // A flag held off the map is watched only while its cancel is still being tried.
+        _sawFlag = auras.Carries && (player.MapId == SilithusCatalog.MapId || _dropFlag || !_offMapDrop);
         PlayerbotSilithystOptions options = _options.WorldPvp.Silithyst;
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Map is not { } map)
         {
@@ -287,14 +289,17 @@ internal sealed class PlayerbotWorldPvpObjectives
         }
 
         uint now = Now;
+        // Off Kalimdor there is nothing to deliver: a run ends quietly (the brain may skip the think of the map change), a held flag is
+        // cancelled once (bounded tries) and then no longer watched.
+        if (_episode is not null && player.MapId != SilithusCatalog.MapId) End("ended");
         if (_episode is null)
         {
             bool carrying = auras.Carries;
             SpellAuraHolder? tracesBefore = auras.Traces;
             if (!carrying)
             {
-                _carryFaultReported = false;
                 _dropFlag = false;
+                _offMapDrop = false;
             }
 
             if (carrying)
@@ -302,8 +307,21 @@ internal sealed class PlayerbotWorldPvpObjectives
                 // A flag the bot gave up carrying is let go of, not taken up again: it never expires, so taking it up would start the same
                 // failing run at every think.
                 if (_dropFlag) TryDropFlag(player, now);
+                if (player.MapId != SilithusCatalog.MapId)
+                {
+                    if (!_offMapDrop)
+                    {
+                        _offMapDrop = true;
+                        _dropFlag = true;
+                        _dropAttempts = 0;
+                        _dropNextMs = now;
+                        TryDropFlag(player, now);
+                    }
+
+                    return WorldPvpStep.None;
+                }
+
                 if (_noAdopt && !Past(_noAdoptUntilMs, now)) return WorldPvpStep.None;
-                if (player.MapId != SilithusCatalog.MapId) return WorldPvpStep.None;
                 _noAdopt = false;
                 _episode = new Episode { StartedMs = now, LastStepMs = now, Phase = Phase.Carry, Reported = _carryFaultReported };
                 NoteCarryStart(_episode, tracesBefore);
@@ -612,6 +630,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             if (TurnedIn(episode, traces))
             {
                 Deliveries++;
+                _carryFaultReported = false; // only a delivery clears it: a mound dropped by a give-up is a new object, not a new fault
                 if (episode.Key != 0) _ledger.Complete(episode.Key, now, DeliveredRecheckMs);
                 return Quit(episode, "delivered", cooldown: true);
             }
@@ -633,8 +652,12 @@ internal sealed class PlayerbotWorldPvpObjectives
         }
 
         // A mount-up cast under way would drop the dust when it lands (the server drops it on the mount aura); a mount already on is taken off.
-        PlayerbotMount.CancelPendingMountCast(_session, player);
-        if (MountService.IsMounted(player)) PlayerbotMount.Dismount(_session, player);
+        // Only in zone 1377 (OutdoorPvPFeature drops it only there; PlayerbotMount.CanMountHere allows riding elsewhere, so cancelling here would thrash).
+        if (player.ZoneId == SilithusCatalog.SilithusZone)
+        {
+            PlayerbotMount.CancelPendingMountCast(_session, player);
+            if (MountService.IsMounted(player)) PlayerbotMount.Dismount(_session, player);
+        }
 
         if (!episode.Checked)
         {

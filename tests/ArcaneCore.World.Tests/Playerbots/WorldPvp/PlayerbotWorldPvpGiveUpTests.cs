@@ -457,6 +457,103 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         });
     }
 
+    [Fact]
+    public async Task AFlagPickedUpAgainAfterAGiveUp_DoesNotReportTheSameUnreachableTriggerAgain()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustagain", 1);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        await RemoveTriggersAsync(world);
+        using AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.PlayerOf(bot)));
+        (PlayerbotWorldPvpObjectives run, _, Action<uint> advance) = await ControllerAsync(world, bot);
+
+        await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
+
+        // The flag is gone, then a new one is picked up (a mound the give-up dropped, taken up again after the cooldown): the same fault is not reported again.
+        advance(PlayerbotWorldPvpObjectives.GiveUpBackoffMs + 1);
+        await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+    }
+
+    // --- a carrier outside the zone ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ACarrierOutsideZone1377_MayRide_AndIsNotCancelledAtEveryThink()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustride", 1, at: SilithystWorld.Start + new Vector3(250f, 0f, 0f)); // a long way from the trigger (the mount-up needs 80 yards of route)
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        (PlayerbotWorldPvpObjectives run, _, Action<uint> advance) = await ControllerAsync(world, bot);
+
+        await world.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = world.World.Services.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = 97199, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = world.PlayerOf(bot);
+            WorldSession session = world.World.Bots.FindSession(bot)!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+
+            Assert.True(Step(world, bot, run).Busy, "the carrier was not taken up"); // in zone 1377: no mount, the server would drop the dust
+            player.ZoneId = 17; // the carry goes on elsewhere on the map: the server drops nothing there, so the carrier may ride
+            string log = "";
+            int casts = 0;
+            object? lastCast = null;
+            for (int think = 0; think < 14; think++) // the mount-up cast takes 3 s: 15 thinks of 200 ms
+            {
+                advance(200);
+                Assert.True(Step(world, bot, run).Busy, $"think {think}: the carry ended ({run.LastOutcome})");
+                feature.System.Update(200);
+                object? cast = feature.System.GetState(player.Guid)?.CurrentCast;
+                if (cast is not null && !ReferenceEquals(cast, lastCast)) casts++; // a cancel and a recast show as a new cast
+                lastCast = cast ?? lastCast;
+                log += cast is not null ? "B" : ".";
+            }
+
+            Assert.True(casts == 1, "the carrier's mount-up cast was started " + casts + " times (cancelled and recast); log=" + log);
+            Assert.True(log.Count(c => c == 'B') >= 13, "the carrier did not stay in its mount-up cast; log=" + log);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ACarryEndedByAMapChange_EndsQuietly_AndTheFlagIsCancelledOnce()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustmapchg", 1);
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        using AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.PlayerOf(bot)));
+        (PlayerbotWorldPvpObjectives run, _, Action<uint> advance) = await ControllerAsync(world, bot);
+
+        Assert.True((await world.OnWorldAsync(() => Step(world, bot, run, budget: 0))).Busy, "the carrier was not taken up");
+        Assert.True(run.NeedsAuras);
+        // The brain skips the think of a map change; the first think on the other map finds the run still open.
+        await world.OnWorldAsync(() => { world.PlayerOf(bot).MapId = 0; return true; });
+        advance(200);
+        Assert.False((await world.OnWorldAsync(() => Step(world, bot, run))).Busy);
+        Assert.False(run.Active);
+        Assert.Equal("ended", run.LastOutcome);
+        Assert.Equal(0, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
+
+        // Nothing is left to watch: the brain stops its aura walks.
+        advance(200);
+        Assert.False((await world.OnWorldAsync(() => Step(world, bot, run))).Busy);
+        Assert.False(run.NeedsAuras);
+        Assert.Equal(0, capture.Count(Key("silithyst-unreachable-trigger")));
+    }
+
     // --- the motion blacklist ------------------------------------------------------------------------------------------------
 
     [Fact]
