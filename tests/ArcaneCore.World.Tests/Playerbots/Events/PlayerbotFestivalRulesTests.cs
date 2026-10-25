@@ -316,13 +316,37 @@ public sealed class PlayerbotFestivalRulesTests
         => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(10f, 0f, anchorDistance));
 
     [Fact]
-    public void ABotThatArrivedAtASpotIsHeld_EvenWhenTheLingerDistanceBringsItWithinFiveYardsOfTheAnchor()
+    public void TheSpotArrivalDistance_LeavesEveryArrivedBotOutsideTheAnchorsInteractionDisc_ByConstruction()
     {
-        // The nearest spot is RingMinYards from the anchor and a linger counts from LingerYards: the bot may stand 4 yards from the anchor.
-        float anchorDistance = PlayerbotFestivalRules.RingMinYards - 3.5f;
+        Assert.True(PlayerbotFestivalRules.RingMinYards >= PlayerbotFestivalRules.SpotArriveYards + PlayerbotFestivalRules.AnchorClearYards);
+        Assert.True(PlayerbotFestivalRules.SpotArriveYards > 0f);
+        Assert.True(PlayerbotFestivalRules.SpotArriveYards <= PlayerbotTownIdle.LingerYards);
+    }
+
+    [Fact]
+    public void ABotThatArrivedAtASpotOnTheNearestRing_IsAlwaysAtLeastFiveYardsFromTheAnchor_AndHeld()
+    {
+        float ring = PlayerbotFestivalRules.RingMinYards, arrive = PlayerbotFestivalRules.SpotArriveYards;
+        for (int degrees = 0; degrees < 360; degrees += 5)
+        {
+            // The anchor at the origin, the spot on the nearest ring, the bot at the edge of the arrival distance in every direction.
+            double angle = degrees * Math.PI / 180.0;
+            var bot = new System.Numerics.Vector2(ring + (float)(arrive * Math.Cos(angle)), (float)(arrive * Math.Sin(angle)));
+            float anchorDistance = bot.Length();
+            Assert.True(anchorDistance >= PlayerbotFestivalRules.AnchorClearYards - 1e-3f, $"{anchorDistance:F3} yards from the anchor at {degrees} degrees");
+            Assert.Equal(TownIdleAction.Linger, new PlayerbotTownIdle().Decide(TownStay.Capital, arrive, 0, arrive));
+        }
+
+        Assert.True(PlayerbotFestivalRules.IsHeldAtSpot(arrive, 0f, ring - arrive));
+    }
+
+    [Fact]
+    public void ABotJustOutsideTheArrivalDistance_OnTheAnchorSide_KeepsWalking_AndIsNotHeld()
+    {
+        float anchorDistance = PlayerbotFestivalRules.RingMinYards - 3.5f; // 3.5 yards from a spot on the nearest ring, towards the anchor
         Assert.True(anchorDistance < PlayerbotFestivalRules.AnchorClearYards);
-        Assert.Equal(TownIdleAction.Linger, new PlayerbotTownIdle().Decide(TownStay.Capital, 3.5f, 0));
-        Assert.True(PlayerbotFestivalRules.IsHeldAtSpot(3.5f, 0f, anchorDistance));
+        Assert.Equal(TownIdleAction.WalkToTown, new PlayerbotTownIdle().Decide(TownStay.Capital, 3.5f, 0, PlayerbotFestivalRules.SpotArriveYards));
+        Assert.False(PlayerbotFestivalRules.IsHeldAtSpot(3.5f, 0f, anchorDistance));
     }
 
     [Fact]

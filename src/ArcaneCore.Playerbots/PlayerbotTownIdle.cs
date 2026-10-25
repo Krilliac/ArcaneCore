@@ -111,22 +111,22 @@ internal sealed partial class PlayerbotTownIdle
     private bool _deferred;
     private uint _deferUntil;
 
-    /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre.</summary>
-    internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs)
+    /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre (it has arrived within <paramref name="arriveYards"/>).</summary>
+    internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs, float arriveYards = LingerYards)
     {
-        TownIdleAction action = Choose(stay, distance, nowMs);
+        TownIdleAction action = Choose(stay, distance, nowMs, arriveYards);
         _last = action;
         return action;
     }
 
-    private TownIdleAction Choose(TownStay stay, float distance, uint nowMs)
+    private TownIdleAction Choose(TownStay stay, float distance, uint nowMs, float arriveYards)
     {
         if (stay != TownStay.Secondary) _exploring = false; // an explore window belongs to a secondary town's stay only
         if (stay == TownStay.None) return TownIdleAction.Explore;
         if (stay == TownStay.Secondary) Advance(nowMs);
         else _started = false; // the capital: always town; the secondary's window starts afresh on return
         if (stay == TownStay.Secondary && _exploring) return TownIdleAction.Explore;
-        if (distance <= LingerYards)
+        if (distance <= arriveYards)
         {
             _bestDistance = float.MaxValue;
             return TownIdleAction.Linger;

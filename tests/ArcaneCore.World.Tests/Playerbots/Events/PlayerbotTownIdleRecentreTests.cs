@@ -46,6 +46,32 @@ public sealed class PlayerbotTownIdleRecentreTests
     }
 
     [Fact]
+    public void ASecondaryBotInItsExploreWindow_ThenDecidedAsACapitalBot_IsNoLongerExploring_WithoutARehome()
+    {
+        var idle = new PlayerbotTownIdle();
+        idle.Decide(TownStay.Secondary, 0f, 1_000);
+        Assert.Equal(TownIdleAction.Explore, idle.Decide(TownStay.Secondary, 0f, 1_000 + PlayerbotTownIdle.LingerMs));
+        Assert.True(idle.Exploring);
+
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Capital, 0f, 2_000 + PlayerbotTownIdle.LingerMs));
+        Assert.False(idle.Exploring);
+    }
+
+    [Fact]
+    public void ARehomedBot_StartsItsLingerAndExploreWindowAfresh()
+    {
+        var idle = new PlayerbotTownIdle();
+        idle.Decide(TownStay.Secondary, 0f, 1_000);
+        idle.Decide(TownStay.Secondary, 0f, 1_000 + PlayerbotTownIdle.LingerMs);
+        Assert.True(idle.Exploring);
+
+        idle.Rehomed();
+
+        Assert.False(idle.Exploring);
+        Assert.Equal(TownIdleAction.Linger, idle.Decide(TownStay.Secondary, 0f, 5_000 + PlayerbotTownIdle.LingerMs));
+    }
+
+    [Fact]
     public void AWalkGivenUp_ThenRecentred_WalksToTheNewCentreAtOnce_NotAfterTheDeferral()
     {
         var idle = new PlayerbotTownIdle();

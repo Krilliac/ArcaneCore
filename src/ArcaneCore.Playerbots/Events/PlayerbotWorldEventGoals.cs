@@ -148,11 +148,11 @@ internal sealed class PlayerbotWorldEventGoals(Guid botId, PlayerbotWorldEventBo
     }
 
     /// <summary>
-    /// Whether the bot stands at the spot's ground position but on another floor (within the linger distance in 2D, beyond the height
+    /// Whether the bot stands at the spot's ground position but on another floor (within the spot arrival distance in 2D, beyond the height
     /// tolerance): no walk will bring it closer, so the spot is given up at once instead of after the town idle's stall time.
     /// </summary>
     internal static bool IsOnWrongFloor(Player player, PlayerbotHomeArea spot)
-        => spot.DistanceTo(player.X, player.Y) <= PlayerbotTownIdle.LingerYards
+        => spot.DistanceTo(player.X, player.Y) <= PlayerbotFestivalRules.SpotArriveYards
             && !(MathF.Abs(player.Z - spot.Centre.Z) <= PlayerbotFestivalRules.SpotZToleranceYards);
 
     private PlayerbotHomeArea AreaOf(PlayerbotFestivalClaim claim, PlayerbotHomeArea town)

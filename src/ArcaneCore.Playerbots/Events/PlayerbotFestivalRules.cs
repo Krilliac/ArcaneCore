@@ -146,12 +146,17 @@ internal static class PlayerbotFestivalRules
     internal const float AnchorClearYards = 5f;
 
     /// <summary>
+    /// How close to its spot a bot counts as arrived (the town idle's linger distance for a festival spot, instead of
+    /// <see cref="PlayerbotTownIdle.LingerYards"/>). Derived: every point this near a spot is at least <see cref="AnchorClearYards"/> from the
+    /// anchor, since a spot is at least <see cref="RingMinYards"/> from it, so an arrived bot is never inside the interaction disc.
+    /// </summary>
+    internal const float SpotArriveYards = RingMinYards - AnchorClearYards;
+
+    /// <summary>
     /// Whether a bot <paramref name="distance2D"/> yards (ground plane) and <paramref name="dz"/> from its spot is held there: within the
-    /// hold distance, on the spot's floor and, unless it has arrived (within the linger distance of the spot, which lies at least
-    /// <see cref="RingMinYards"/> from the anchor), at least <see cref="AnchorClearYards"/> (ground plane) from the anchor NPC: only a stalled walk
-    /// can stop inside the interaction disc.
+    /// hold distance, on the spot's floor and at least <see cref="AnchorClearYards"/> (ground plane) from the anchor NPC, always: a stalled
+    /// walk that stops inside the interaction disc is given up, and an arrived bot (<see cref="SpotArriveYards"/>) is outside it by construction.
     /// </summary>
     internal static bool IsHeldAtSpot(float distance2D, float dz, float anchorDistance2D)
-        => distance2D <= PlayerbotTownIdle.HoldYards && MathF.Abs(dz) <= SpotZToleranceYards
-            && (distance2D <= PlayerbotTownIdle.LingerYards || anchorDistance2D >= AnchorClearYards);
+        => distance2D <= PlayerbotTownIdle.HoldYards && MathF.Abs(dz) <= SpotZToleranceYards && anchorDistance2D >= AnchorClearYards;
 }

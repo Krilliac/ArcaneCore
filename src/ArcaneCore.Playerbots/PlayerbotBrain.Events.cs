@@ -101,6 +101,6 @@ internal sealed partial class PlayerbotBrain
     private TownIdleAction DecideIdle(Player player, PlayerbotHomeArea town, PlayerbotHomeArea centre, bool spot)
     {
         float distance = spot ? PlayerbotWorldEventGoals.SpotDistance(player, centre) : town.DistanceTo(player.X, player.Y);
-        return _townIdle.Decide(town.Stay, distance, _session.World.NowMs);
+        return _townIdle.Decide(town.Stay, distance, _session.World.NowMs, spot ? PlayerbotFestivalRules.SpotArriveYards : PlayerbotTownIdle.LingerYards);
     }
 }

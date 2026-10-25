@@ -112,6 +112,51 @@ public sealed class PlayerbotFestivalWorldTests
         Assert.True(await world.RunUntilAsync(bot, 120_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the re-homed bot took no place in its capital");
     }
 
+    [Fact]
+    public async Task ARehomedBot_ReleasesTheFestivalPlaceOfItsOldHome()
+    {
+        await using EventsTestWorld world = await EventsTestWorld.StartAsync([Reveler()], Quick);
+        Guid bot = await world.AddHomedBotAsync("Movebot");
+        await world.StartEventAsync(WinterVeil);
+        Assert.True(await world.RunUntilAsync(bot, 120_000, () => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "no place taken");
+
+        await world.RehomeAsync(bot, TownStay.Secondary);
+
+        Assert.False(await world.World.Host.OnWorldAsync(() => world.World.Bots.FindBrain(bot)!.HoldsEventSpot), "the old home's place outlived the Home change");
+    }
+
+    [Fact]
+    public async Task ASpotOnTheFarSideOfTheNpc_IsReachedWithin3Yards_AndTheHeldBotIsAtLeast5YardsFromTheNpc()
+    {
+        // The NPC 10 yards from the inn: a bot whose spot lies beyond the NPC walks past it and arrives from the NPC's side.
+        await using EventsTestWorld world = await EventsTestWorld.StartAsync([Reveler(dx: 10f)], Quick);
+        var anchor = new Vector3(StartXOf(10f), StartYOf(0f), 0f);
+        var bots = new List<Guid>();
+        for (int i = 0; i < 6; i++) bots.Add(await world.AddHomedBotAsync("Farbot" + (char)('a' + i)));
+        await world.StartEventAsync(WinterVeil);
+
+        await world.RunForAsync(bots[0], 150_000);
+
+        int held = 0, farSide = 0;
+        foreach (Guid bot in bots)
+        {
+            (bool holds, Vector3 spot) = await world.World.Host.OnWorldAsync(() =>
+            {
+                PlayerbotFestivalClaim? claim = world.World.Bots.FindBrain(bot)!.EventClaim;
+                return (claim is not null, claim?.Spot ?? default);
+            });
+            if (!holds) continue;
+            Vector3 at = await world.PositionAsync(bot);
+            if (Distance2D(at, spot) > PlayerbotFestivalRules.SpotArriveYards + 0.1f) continue; // still on its way, or a bot whose spot it gave up
+            held++;
+            if (Distance2D(Inn, spot) > Distance2D(Inn, anchor)) farSide++;
+            Assert.True(Distance2D(at, anchor) >= PlayerbotFestivalRules.AnchorClearYards - 0.05f, $"{Distance2D(at, anchor):F2} yards from the NPC");
+        }
+
+        Assert.True(held > 0, "no bot arrived at a spot");
+        Assert.True(farSide > 0, "no bot had a spot beyond the NPC, so the approach from the NPC's side was not exercised");
+    }
+
     public static TheoryData<string> SwitchesOff() => new() { "Events:Enabled", "Holidays:Enabled", "CelebrateChance=0" };
 
     [Theory]
