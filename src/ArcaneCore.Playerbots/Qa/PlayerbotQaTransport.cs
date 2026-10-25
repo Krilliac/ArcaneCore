@@ -63,7 +63,7 @@ internal sealed partial class QaIssueIndex(bool complete)
 /// </summary>
 internal interface IQaIssueTransport : IDisposable
 {
-    /// <summary>Whether <see cref="SearchByMarkerAsync"/> can find an issue outside the label-filtered list (the REST search API; <c>gh</c> has no such call here).</summary>
+    /// <summary>Whether <see cref="SearchByMarkerAsync"/> can find an issue outside the label-filtered list (the REST search API, directly or through <c>gh api search/issues</c>).</summary>
     bool SupportsSearch { get; }
 
     /// <summary>List the labelled issues (open and closed, no pull requests) once and index them.</summary>
