@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Gm;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Gm.Audit;
 
@@ -252,6 +253,45 @@ public sealed partial class GmAuditFeature
     private void PersistTicket(GmTicketRecord ticket) => Writes.Save(TicketKey(ticket.Id), store => store.SaveTicketAsync(ticket));
 
     private static string TicketKey(int ticketId) => "ticket:" + ticketId;
+
+    // ---- GM surveys (CMSG_GMSURVEY_SUBMIT) ----------------------------------------------------------
+
+    private const int MaxSurveysKept = 200;
+
+    private readonly Queue<GmSurveyRecord> _surveys = new();
+    private ILogger? _surveyLog;
+
+    /// <summary>
+    /// Keep a submitted survey (the newest <c>200</c> are held in memory; nothing is written to storage) and log one line
+    /// with the character, the survey and the ratings. The free text stays out of the log.
+    /// </summary>
+    public void RecordSurvey(int characterId, GmSurveySubmission survey)
+    {
+        ArgumentNullException.ThrowIfNull(survey);
+        var record = new GmSurveyRecord(NowUnixSeconds, characterId, survey);
+        lock (_gate)
+        {
+            _surveys.Enqueue(record);
+            while (_surveys.Count > MaxSurveysKept)
+            {
+                _surveys.Dequeue();
+            }
+        }
+
+        _surveyLog ??= loggers.CreateLogger<GmAuditFeature>();
+        _surveyLog.LogInformation(
+            "GM survey {SurveyId} from character {CharacterId}: {Answers} answers [{Ratings}]",
+            survey.SurveyId, characterId, survey.Answers.Count, string.Join(", ", survey.Answers.Select(a => $"{a.QuestionId}={a.Answer}")));
+    }
+
+    /// <summary>The newest <paramref name="count"/> surveys kept, oldest first.</summary>
+    public IReadOnlyList<GmSurveyRecord> Surveys(int count)
+    {
+        lock (_gate)
+        {
+            return [.. _surveys.Skip(Math.Max(0, _surveys.Count - Math.Max(0, count)))];
+        }
+    }
 
     // ---- character deletion (docs/integration/character-delete.md) -------------------------------
 
