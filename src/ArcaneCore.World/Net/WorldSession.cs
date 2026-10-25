@@ -578,6 +578,7 @@ public sealed partial class WorldSession : IPlayerSession
             DiscardQueuedPackets();
             _state = SessionState.CharacterSelect;
             Volatile.Write(ref _leftWorldTick, Environment.TickCount64);
+            _heuristicsGm = false; // no player, so no GM mode: the next character's first world packet learns its own
         }
 
         Send(WorldOpcode.SmsgLogoutComplete, []);

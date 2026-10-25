@@ -139,6 +139,33 @@ public sealed class WebAssetsTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void PublicHtml_PointsOnlyAtEmbeddedFiles_AndRunsNoInlineCode()
+    {
+        string html = ReadWeb("public.html");
+        Dictionary<string, string> embedded = EmbeddedWeb();
+
+        var targets = Regex.Matches(html, @"\b(?:src|href)\s*=\s*""([^""]*)""").Select(m => m.Groups[1].Value).ToList();
+        Assert.Contains("/app/js/public/boot.js", targets);
+        Assert.Contains("/app/app.css", targets);
+        Assert.Contains("/app/public.css", targets);
+        foreach (string target in targets)
+        {
+            if (target.StartsWith("data:", StringComparison.Ordinal) || target.StartsWith('#'))
+            {
+                continue;
+            }
+
+            Assert.StartsWith("/app/", target, StringComparison.Ordinal);
+            Assert.True(embedded.ContainsKey("web/" + target["/app/".Length..]), $"public.html points at {target}, which is not an embedded resource");
+        }
+
+        Assert.DoesNotMatch(new Regex(@"<script(?![^>]*\bsrc\s*=)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), html);
+        Assert.DoesNotMatch(new Regex(@"<style\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), html);
+        Assert.DoesNotMatch(new Regex(@"\son[a-z]+\s*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), html);
+        Assert.DoesNotMatch(new Regex(@"\sstyle\s*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), html);
+    }
+
+    [Fact]
     public void EveryModuleImport_ResolvesToAnEmbeddedFile()
     {
         Dictionary<string, string> embedded = EmbeddedWeb();
@@ -166,6 +193,7 @@ public sealed class WebAssetsTests(ITestOutputHelper output)
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         queue.Enqueue("js/main.js");
+        queue.Enqueue("js/public/boot.js"); // the public page's own entry (public.html)
         queue.Enqueue("js/clientfs/index.js"); // nothing imports it yet: lane D2 (PublicApi.tile) and lane D3 (Local settings entry) will; drop this root once they do
         queue.Enqueue("js/clientfs/worker.js"); // started with new Worker(), not imported
         while (queue.Count > 0)

@@ -55,6 +55,8 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Cross-faction greetings, rude emotes at rivals and stance-aware replies to emotes (<c>World:Playerbots:Social:Rivalry</c>).</summary>
     public PlayerbotSocialRivalryOptions Rivalry { get; set; } = new();
 
+    /// <summary>Bots and the world's events: festival gathering, celebration and talk (<c>World:Playerbots:Social:Events</c>).</summary>
+    public PlayerbotSocialEventsOptions Events { get; set; } = new();
 
     /// <summary>
     /// The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many
@@ -84,6 +86,8 @@ public sealed class PlayerbotSocialOptions
         Initiative.Validate();
         if (Rivalry is null) throw new InvalidOperationException($"{section}:Rivalry is missing.");
         Rivalry.Validate();
+        if (Events is null) throw new InvalidOperationException($"{section}:Events is missing.");
+        Events.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

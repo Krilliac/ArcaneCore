@@ -309,7 +309,7 @@ loses 1 affinity (`OpeningIgnored`, no familiarity) and the cooldown for that pl
 penalty; only a positive reply clears the back-off.
 
 **Surroundings comments** (`CommentsEnabled`): a free bot with a real same-faction listener within earshot rarely says (template, or the model) one of: a rare creature (rank rare or rare elite)
-within 60 yards, a game event that started since the last pass, four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
+within 60 yards, a festival that started since the last pass (see World events, below), four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
 simplified and in memory only: a player of level 40 or more seen on foot and later seen mounted (nothing is persisted, and there is no spellbook or skill check, so a restart forgets who was seen on foot).
 Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one per bot per `CommentBotGapMinutes` (10) and one per zone per `CommentZoneGapSeconds` (60).
 
@@ -366,6 +366,56 @@ in a match are not remembered as rivals in the open world. On, they are recorded
 
 Meters: `arcanecore_playerbot_rivalry_emotes_total{kind}` (`greet`, `rude`, `reply_rude`, `reply_shrug`) and `arcanecore_playerbot_rivalry_optouts_total{change}` (`off`, `on`, `refused`; docs/ops/metrics.md); `.playerbot social $bot` ends with `rivals=N`, the
 number of rivals in the bot's normal layer. Faults go to `playerbot.social`.
+
+## World events: festivals (`World:Playerbots:Social:Events`, live)
+
+While a festival runs, idle bots that stay in a town gather around the festival's NPCs instead of at the inn, celebrate there with text
+emotes, and now and then say a line that names the festival. Code: `src/ArcaneCore.Playerbots/Events/` (`PlayerbotHolidayCatalog`,
+`PlayerbotWorldEventBoard`, `PlayerbotFestivalRules`, `PlayerbotFestivalClaims`, `PlayerbotEventListeners`, `PlayerbotEventLane`,
+`PlayerbotWorldEventGoals`, `PlayerbotEventMeters`) and `PlayerbotBrain.Events.cs`. Everything is on by default and every key is live.
+
+- **Which events are festivals.** A game event with a holiday id (the Hourly Bells, the day and night events and the war-effort events never
+  are) is a *root*. An event linked to a running root (`game_event.linked_to`, at most four links; Wickerman Ember to Hallow's End) counts
+  while its root runs; event 21 (Winter Veil: Gifts) is not linked in the data, counts as nothing in slice 1 and is held for the later event-quest stage. A festival has a flavour (Midsummer, Winter Veil, Lunar
+  Festival, Love is in the Air, Noblegarden, Children's Week, Hallow's End, Harvest Festival, Darkmoon Faire, fishing contest, or a plain
+  "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The fishing contest names itself but does not gather
+  (its NPCs run a contest, not a party). `World:Playerbots:Social:Events:Holidays:ExcludedEvents` is a comma list of event ids (at most 64) that are never festivals.
+- **The board.** `PlayerbotWorldEventBoard` listens to the game events and rebuilds its picture only when a festival event starts or stops:
+  the placed NPCs of the running festival (the positive `game_event_creature` rows of the root and its running members) that talk, give
+  quests or sell, are selectable and are no guard. Per town and team it keeps the anchors a bot may use: present for the team, inside the
+  bot's home, within `World:Playerbots:Social:Events:Holidays:SpotRadiusYards` of the town centre, approachable (a hostile NPC is not), outside
+  zones where PvP is enforced on the bot's team and outside the areas of a running event scenario.
+- **A spot.** A bot that is idle in a town it stays in rolls once per game day per festival (`World:Playerbots:Social:Events:Holidays:CelebrateChance`,
+  scaled by its sociability, staggered by bot so they do not all start at the same minute). If it celebrates, it takes a place on a ring 8 to
+  12 yards from an anchor (a gossip NPC first, then a vendor or quest giver), so it stands near the NPC and never in a player's interaction
+  range. Places are capped: `World:Playerbots:Social:Events:Holidays:MaxPerGossipAnchor`, `World:Playerbots:Social:Events:Holidays:MaxPerServiceAnchor` and
+  `World:Playerbots:Social:Events:Holidays:MaxPerTown` per team. The place is the bot's idle centre: the town idle rule (`PlayerbotTownIdle`) walks to it and holds there as it does at the inn, and a place 5 or more
+  yards above or below (Undercity, Thunder Bluff, Ironforge) is never "arrived". A walk the idle rule gives up, or a bot on the wrong floor,
+  sets that NPC aside for the bot for `World:Playerbots:Social:Events:Holidays:SpotBackoffMinutes`, frees the place, reports the Info anomaly `event/festival-spot-unreachable` (once per NPC per hour) and sends the bot
+  back to the inn. A bot has arrived at its place within 3 yards of it (so never within 5 yards of the NPC) and is held there only while it stands at least 5 yards from the NPC (a stalled walk that stops inside the interaction distance is given up like any other). A secondary town's bot takes no place in its explore window. The Social section has no master switch of its own; the gathering is gated by `World:Playerbots:Social:Events:Enabled` and `World:Playerbots:Social:Events:Holidays:Enabled` only. A place lasts 60 seconds past the last held think. Any other goal (a quest, combat, a hunt, rest) frees it at once: the
+  festival is idle behaviour and never keeps a bot from questing. A bot a player attacks at a spot sets the town's festival aside for its team for
+  the same time (a crowd that draws attacks disperses). A festival that ends, or a switch turned off, sends the bots back to the inn at their next think.
+- **Arrival line** (events lane, once per place): with chance 0.6 x (0.5 + chattiness) x the mood multiplier a bot says one /say line
+  `event.<flavour>.arrive`. The listeners are the real players of **either faction** within `ListenRangeSay` (25 yards): none, one who ignores the bot, or one the chat safety
+  cut off means no line; every listener must be free in the initiative's per-player ledger (`OpeningCooldownMinutes`, the same one the openings use, so festival lines, event remarks and
+  openings together reach a player once per 30 minutes); a listener who said "ai off" makes the line built-in only (no model); at most one line per bot per
+  `World:Playerbots:Social:Events:Holidays:TalkBotGapMinutes` and per zone per `World:Playerbots:Social:Events:Holidays:TalkZoneGapSeconds`.
+  `World:Playerbots:Social:Events:Holidays:TalkEnabled` turns the lines off.
+- **Celebration emotes.** A held bot sends one untargeted text emote from its festival's set every `World:Playerbots:Social:Events:Holidays:EmoteMinSeconds` to
+  `World:Playerbots:Social:Events:Holidays:EmoteMaxSeconds` (shorter for sociable bots). The server shows a text emote to everyone within `ListenRangeTextEmote` (25 yards), so it is sent only when
+  every real player in that range has room in its own budget (`World:Playerbots:Social:Events:Holidays:EmotesPerListenerMinute`, from all bots together) and the anchor has room in its own
+  (`World:Playerbots:Social:Events:Holidays:EmotesPerAnchorMinute`, listeners or not). No emote is aimed at anyone: a friendly emote at a bot would feed the social memory (affinity, familiarity), so festivals add no
+  memory source.
+- **The "an event has started" remark** (the initiative's surroundings comment) is now said only for a festival root, in a zone that has an anchor NPC of it, to the
+  same listener filter and ledger, with the festival's name (`{event}`); the Hourly Bells and member events say nothing.
+- **Switches.** `World:Playerbots:Social:Events:Enabled` is the master switch, `World:Playerbots:Social:Events:Holidays:Enabled` the holiday half. Off, bots give their places up at their next think and say and emote nothing.
+- **Observability.** `.playerbot social <bot>` adds a line with the bot's place (or that a festival runs and it holds none). Metrics:
+  `arcanecore_playerbot_events_total{kind,outcome}`, `arcanecore_playerbot_event_lines_total{kind}` and `arcanecore_playerbot_event_suppressed_total{reason}`
+  ([metrics](../ops/metrics.md)); the suppression reasons are `no_listener`, `listener_cap`, `cut_off`, `ignored`, `emote_listener_budget` and `emote_anchor_budget`, so a cap that never lets anything through is visible.
+  A fault in the festival code is recorded under `playerbot.social.events` and pauses that bot's festival goals for a minute.
+- **Cost.** One dictionary lookup per held bot and pass, no allocation per think; a small listener list is allocated per emote or line attempt (one attempt per 30 to 90 s per held bot) and per arrival; the board is rebuilt only when a festival event changes; the walk to a place is the ordinary town walk.
+- **Not done in this slice.** Targeted festival emotes at friendly real players, and the war-effort and scenario festival chapters.
+  Tests: `tests/ArcaneCore.World.Tests/Playerbots/Events/`.
 
 ## Review round 1 (P2)
 

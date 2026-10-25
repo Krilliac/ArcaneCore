@@ -390,6 +390,20 @@ internal sealed class PlayerbotChatSafety
         return null;
     }
 
+    /// <summary>The same by character GUID: one dictionary lookup instead of the scan by name (the festival listeners are read every pass).</summary>
+    internal BotChatPlayerSafety? Player(ulong guid)
+    {
+        PlayerbotChatSafetyOptions options = Options;
+        DateTimeOffset now = _time.GetUtcNow();
+        lock (_gate)
+        {
+            if (!_players.TryGetValue(guid, out PlayerState? state)) return null;
+            state.Prune(now, TimeSpan.FromMinutes(options.StrikeWindowMinutes));
+            int cutoff = state.CutoffUntil > now ? (int)Math.Ceiling((state.CutoffUntil - now).TotalSeconds) : 0;
+            return new BotChatPlayerSafety(guid, state.Name, state.Strikes.Count, cutoff, state.AiReplies);
+        }
+    }
+
     /// <summary>Clear a player's strikes and cut-off (by character name, or GUID when known). False when they had neither.</summary>
     internal bool Pardon(string name, ulong? guid = null)
     {

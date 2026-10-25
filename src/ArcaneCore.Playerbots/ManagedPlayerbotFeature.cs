@@ -238,6 +238,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         return Interlocked.CompareExchange(ref _social, created, null) ?? created;
     }
 
+    private Events.PlayerbotWorldEventBoard? _eventBoard;
+    private BotSocial.PlayerbotSocialFeature? _socialFeature;
+
+    /// <summary>
+    /// The world's picture of the festivals and the places bots hold around their NPCs (docs/areas/playbots-social.md, World events), on the
+    /// social feature's clock so the bots and the events lane agree on time. Created on first use; hears the game events from the attach on;
+    /// world thread (it is dropped at a detach, and the next attach makes a new one).
+    /// </summary>
+    internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
+        services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt);
+
+    private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
+
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
     private readonly ConcurrentDictionary<Guid, PlayerbotSetAside[]> _loadedSetAsides = new();
@@ -441,6 +454,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Social.RivalryOptOut = services.GetService<BotSocial.PlayerbotSocialFeature>()?.RivalryOptOut;
 
         _world = world;
+        EventBoard.Attach(world);
         _sharedSetAsides.World = world;
         // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this
         // world, so a kill reaches only this world's memory, exactly once, whether or not a bot has thought since it changed maps; the detach takes it off.
@@ -592,6 +606,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _snapshotEpoch++;
         }
 
+        // The festival board stops hearing game events and drops every place (the bots they belonged to are gone with their brains).
+        Interlocked.Exchange(ref _eventBoard, null)?.Dispose();
         _subscriptions = null;
         _world = null;
     }
@@ -1975,7 +1991,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         // Every brain records through the feature's recorder (kill steals, help), a replacement too (ReplaceBrain), and has it before it is
         // registered anywhere below.
-        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy, Social = Social };
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
+        {
+            Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+        };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
         {

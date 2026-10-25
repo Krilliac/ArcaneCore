@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Atlas;
 using ArcaneCore.World.Gm.Npc;
 
 namespace ArcaneCore.World.Gm.Core;
@@ -9,6 +10,12 @@ internal static class GmSelectedUnit
 {
     public static Unit? Of(CommandContext context)
     {
+        // A console-like invoker driven by a tool (the action channel) selects by guid: the unit the tool selected, else none.
+        if (context.IsConsole && GmActionContext.Of(context) is { Primary: not 0 } click)
+        {
+            return GmActionContext.FindUnit(context, click.Primary);
+        }
+
         if (context.Player.Selection.IsEmpty)
         {
             return context.Player;
