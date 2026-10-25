@@ -8,6 +8,7 @@ using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
@@ -31,6 +32,7 @@ public sealed class PlayerbotQuestChainEndToEndTests
     [Fact]
     public async Task Successor15_IsRefusedWithoutAllowlist_AndSettlesWithAllowlist()
     {
+        DateTimeOffset started = DateTimeOffset.UtcNow;
         var fixture = new Quest15Fixture();
         Quest15Services.Current.Value = fixture;
         try
@@ -51,8 +53,6 @@ public sealed class PlayerbotQuestChainEndToEndTests
             {
                 QuestNpcFeature feature = host.WorldServices.GetRequiredService<QuestNpcFeature>();
                 await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(Quest15Fixture.Guid), "quest 15 giver");
-                // The quest journal is tracked by the logged-in event, which may land after the giver becomes visible.
-                await host.WaitForWorldAsync(() => session.Player is { } p && feature.Services.StateOf(p) is not null, "quest 15 npc state");
                 await host.World.InvokeAsync(() =>
                 {
                     Player player = session.Player!;
@@ -63,10 +63,12 @@ public sealed class PlayerbotQuestChainEndToEndTests
                     Assert.False(goals.HasCandidate(player));
                     Assert.False(feature.Services.IsRewardable(15));
                     feature.Options.OrdinaryRewardQuestIds = [783, 7, 15];
+                    // The journal is tracked by QuestNpcFeature's logged-in handler in the same world item as the login,
+                    // so it can only be missing if that handler threw; WorldRuntime.Raise swallows that into the ledger.
+                    PlayerNpcState? state = feature.Services.StateOf(player);
+                    Assert.True(state is not null, "quest NPC state missing; world.event-handler faults: " + EventHandlerFaults(started));
                     // The starter search is gated by a wall-clock phase budget, so a stalled think (GC, preemption)
                     // may defer the accept to the next think. Bound by think count, not time.
-                    PlayerNpcState? state = feature.Services.StateOf(player);
-                    Assert.NotNull(state);
                     for (int think = 0; think < 6 && state.Quests.Get(15) is not { Status: QuestStatus.Incomplete }; think++)
                     {
                         session.ManagedBudget = new ManagedActionBudget(1);
@@ -86,7 +88,7 @@ public sealed class PlayerbotQuestChainEndToEndTests
                     return true;
                 });
                 await feature.WaitForSettlementAsync((int)session.Player!.Guid.Low);
-                await host.WaitForWorldAsync(() => session.Player is { } p && feature.Services.StateOf(p)?.Quests.Get(15)?.Rewarded == true, "quest 15 reward");
+                await host.WaitForWorldAsync(() => feature.Services.StateOf(session.Player!)!.Quests.Get(15)?.Rewarded == true, "quest 15 reward");
                 Assert.Equal(250u, session.Player!.GetUInt32(UpdateFields.PlayerXp));
                 Assert.Equal(40u, session.Player!.Money);
                 Assert.Equal(275, host.WorldServices.GetRequiredService<ReputationFeature>().Service.GetReputation(session.Player!, 72));
@@ -101,6 +103,16 @@ public sealed class PlayerbotQuestChainEndToEndTests
             finally { session.Kick(); await session.ManagedClosed; }
         }
         finally { Quest15Services.Current.Value = null; }
+    }
+
+    // The ledger is process-wide, so this may list faults from tests running in parallel; it is only a failure message.
+    private static string EventHandlerFaults(DateTimeOffset since)
+    {
+        string[] faults = FaultLedger.Shared.Snapshot()
+            .Where(f => f.Site == "world.event-handler" && f.LastSeen >= since)
+            .Select(f => $"{f.ExceptionType}: {f.SampleMessage}\n{f.SampleStack}")
+            .ToArray();
+        return faults.Length == 0 ? "none" : string.Join("\n---\n", faults);
     }
 
     private static void InstallHumanBonus(SpellSystem spells, Player player)
