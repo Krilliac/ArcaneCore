@@ -112,6 +112,11 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan LoginTimeout = TimeSpan.FromSeconds(12);
+
+    /// <summary>How long a <c>links</c> request waits: longer than the world's own query timeout (10 s), so a world that is merely slow answers before Atlas gives up.</summary>
+    private static readonly TimeSpan LinksTimeout = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan LinksBackoffFirst = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan LinksBackoffMax = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan StrikeWindow = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);
 
@@ -123,8 +128,12 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         public long LinksAskedSeq = -1;
         public int LinksInFlight;
 
-        /// <summary>The world answered <c>links</c> with <c>unknown-op</c>, or not at all (a timeout), on this connection: do not ask again (each refused line is a strike, and five in a row close the connection).</summary>
+        /// <summary>The world answered <c>links</c> with a correlated <c>unknown-op</c> on this connection: do not ask again (each refused line is a strike, and five in a row close the connection).</summary>
         public volatile bool LinksUnsupported;
+
+        /// <summary>After a timeout (a slow world, or an older daemon that refuses without an id and so never answers): no ask before this timestamp; the wait doubles per timeout and resets on an answer.</summary>
+        public long LinksRetryAt;
+        public TimeSpan LinksBackoff;
         public long SeenServerErrors;
         public readonly List<long> Strikes = [];
         public long QuarantinedUntil;
@@ -460,7 +469,7 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
 
         _store.Ingest(frame.Frame);
         long seq = frame.Frame.Seq;
-        if (!slot.LinksUnsupported && Interlocked.CompareExchange(ref slot.LinksInFlight, 1, 0) == 0)
+        if (!slot.LinksUnsupported && _time.GetTimestamp() >= Volatile.Read(ref slot.LinksRetryAt) && Interlocked.CompareExchange(ref slot.LinksInFlight, 1, 0) == 0)
         {
             slot.LinksAskedSeq = seq;
             _ = AskLinksAsync(slot, map, seq);
@@ -487,27 +496,34 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
     {
         try
         {
-            JsonObject result = await slot.Connection.RequestAsync(new JsonObject { ["op"] = "links", ["map"] = map, ["instance"] = 0 }, RequestTimeout, CancellationToken.None).ConfigureAwait(false);
+            JsonObject result = await slot.Connection.RequestAsync(new JsonObject { ["op"] = "links", ["map"] = map, ["instance"] = 0 }, LinksTimeout, CancellationToken.None).ConfigureAwait(false);
             if (result["ok"]?.GetValue<bool>() == true)
             {
                 _store.SetLinks(map, new LinksSnapshot(true, seq, Guids(result["linked"]), Entries(result["summonEntries"]), Entries(result["ownedObjectEntries"])));
+                slot.LinksBackoff = TimeSpan.Zero;
             }
             else
             {
                 _store.SetLinks(map, LinksSnapshot.Unsupported);
-                if (result["code"] is JsonValue code && code.TryGetValue(out string? text) && text == "unknown-op")
-                {
-                    slot.LinksUnsupported = true;
-                }
             }
         }
         catch (Exception e) when (e is CommandException or InvalidOperationException or FormatException)
         {
             _store.SetLinks(map, LinksSnapshot.Unsupported);
-            // A world that serves no links op answers unknown-op (with the request's id since the id fix), or, an older daemon, with an uncorrelated
-            // error and so no answer at all: the query times out. Either way this connection is not asked again (every refused line is a strike, and five in
-            // a row close the connection); a reconnect asks once more.
-            if (e is CommandException && (e.InnerException is TimeoutException || e.Message.Contains("unknown-op", StringComparison.Ordinal)))
+            // A world that serves no links op answers unknown-op with the request's id: that is final for this connection (every refused line is a strike,
+            // and five in a row close the connection). A timeout is not final: the world may only be slow, or it is an older daemon that refuses without an id
+            // and so never answers. The ask is repeated after a back-off (1 min, doubling to 10 min) so the slow world recovers and the old one is not struck often.
+            if (e is CommandException && e.InnerException is TimeoutException)
+            {
+                bool first = slot.LinksBackoff == TimeSpan.Zero;
+                slot.LinksBackoff = first ? LinksBackoffFirst : TimeSpan.FromTicks(Math.Min(slot.LinksBackoff.Ticks * 2, LinksBackoffMax.Ticks));
+                Volatile.Write(ref slot.LinksRetryAt, _time.GetTimestamp() + (long)(slot.LinksBackoff.TotalSeconds * _time.TimestampFrequency));
+                if (first)
+                {
+                    _log.LogWarning("Atlas public feed: the world did not answer links for map {Map} within {Seconds} s; creatures stay hidden, asking again in {Backoff}", map, LinksTimeout.TotalSeconds, slot.LinksBackoff);
+                }
+            }
+            else if (e is CommandException && e.Message.Contains("unknown-op", StringComparison.Ordinal))
             {
                 slot.LinksUnsupported = true;
             }

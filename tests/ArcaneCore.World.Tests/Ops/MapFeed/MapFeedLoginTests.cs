@@ -725,6 +725,43 @@ public sealed class MapFeedLoginTests
     }
 
     [WindowsFact]
+    public async Task FiveUnservedExtensionLinesThatCarryIds_StillCountAsStrikes_AndCloseTheConnection()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string directory = WebAuditFile.NewDirectory();
+        try
+        {
+            await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup
+            {
+                Terrain = true,
+                Tickets = new FakeFeedTickets(),
+                Actions = o => { o.Enabled = true; o.AuditDirectory = directory; },
+            });
+            FeedClient client = await world.ConnectAsync();
+
+            for (int id = 1; id <= 5; id++)
+            {
+                await client.SendAsync($$"""{"op":"links","id":{{id}},"map":0,"instance":0}""");
+                JsonElement refusal = await client.ReadAsync();
+                Assert.Equal("unknown-op", refusal.GetProperty("code").GetString());
+                Assert.Equal(id, refusal.GetProperty("id").GetInt64());
+            }
+
+            JsonElement last = await client.ReadAsync();
+            Assert.Equal(MapFeedProtocol.TooManyErrors, last.GetProperty("code").GetString());
+            Assert.Null(await client.TryReadAsync());
+        }
+        finally
+        {
+            WebAuditFile.TryDelete(directory);
+        }
+    }
+
+    [WindowsFact]
     public async Task WhenWebActorsAreOff_TheLoginAnswersWebLoginOff()
     {
         if (!OperatingSystem.IsWindows())

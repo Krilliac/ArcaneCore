@@ -195,6 +195,7 @@ public sealed class PublicByteBudgetTests
         }
 
         Assert.True(await WaitAsync(() => rig.Runtime.Stats.Sockets == 0), "the server should have closed the socket: " + seen); // the close, seen on the server's side
+        Assert.True(rig.Runtime.Stats.FloodCloses == 1, seen + $" floodCloses={rig.Runtime.Stats.FloodCloses}");
         Assert.True(pongs == 10, seen);
         Assert.True(errors is >= 1 and <= 2, seen);
         Assert.True(bytes < 2048, seen);

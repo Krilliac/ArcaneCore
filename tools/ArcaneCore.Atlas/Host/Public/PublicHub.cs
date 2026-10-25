@@ -33,6 +33,8 @@ internal sealed class PublicHub
     /// <summary>The longest message a client may send.</summary>
     public const int MaxMessageBytes = 4096;
 
+    private int _helloTrimmedLogged;
+
     /// <summary>The JSON depth limit of client messages.</summary>
     public const int MaxJsonDepth = 8;
 
@@ -279,6 +281,11 @@ internal sealed class PublicHub
             }.ToJsonString();
             if (Encoding.UTF8.GetByteCount(hello) <= PublicRateLimits.MaxEssentialBytes)
             {
+                if (count < _runtime.Options.Guest.Maps.Count && Interlocked.Exchange(ref _helloTrimmedLogged, 1) == 0)
+                {
+                    _runtime.Log.LogWarning("public socket: the hello lists {Kept} of the {Total} configured maps; the rest do not fit in {Max} bytes (shorten Atlas:Public:Guest:Maps names)", count, _runtime.Options.Guest.Maps.Count, PublicRateLimits.MaxEssentialBytes);
+                }
+
                 break;
             }
         }
@@ -325,6 +332,7 @@ internal sealed class PublicHub
             SocketAdmission admission = _runtime.Limits.AdmitSocketMessage(state.Key);
             if (admission == SocketAdmission.Flood)
             {
+                _runtime.Stats.FloodClosed();
                 await CloseAsync(state, WebSocketCloseStatus.PolicyViolation, "flood").ConfigureAwait(false);
                 return;
             }
@@ -409,8 +417,10 @@ internal sealed class PublicHub
             answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = refusal }.ToJsonString());
             if (!_runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, answer.Length))
             {
-                _runtime.Log.LogError("public socket: a command refusal of {Bytes} bytes exceeds {Max} and was not sent", answer.Length, PublicRateLimits.MaxEssentialBytes);
-                return;
+                // Cannot happen with the fixed refusal messages; if it does, the client waiting on this id still gets a fixed small answer.
+                _runtime.Log.LogError("public socket: a command refusal of {Bytes} bytes exceeds {Max} and was replaced", answer.Length, PublicRateLimits.MaxEssentialBytes);
+                answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = new JsonObject { ["ok"] = false, ["code"] = "internal" } }.ToJsonString());
+                _ = _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, answer.Length);
             }
         }
 

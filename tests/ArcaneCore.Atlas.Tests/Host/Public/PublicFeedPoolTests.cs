@@ -294,6 +294,21 @@ public sealed class PublicFeedPoolTests
         }
 
         Assert.Equal(1, connection.Ops.Count(o => o == "links")); // each unanswered ask is a refused line; five in a row close the connection
+
+        // A timeout is not final: the world may only have been slow. One ask per back-off window (1 min, then 2 min), never a permanent stop.
+        rig.Time.Advance(TimeSpan.FromSeconds(59));
+        connection.PushFrame(FrameOf(9, boar));
+        Assert.Equal(1, connection.Ops.Count(o => o == "links"));
+        rig.Time.Advance(TimeSpan.FromSeconds(2));
+        connection.PushFrame(FrameOf(10, boar));
+        connection.PushFrame(FrameOf(11, boar));
+        Assert.Equal(2, connection.Ops.Count(o => o == "links"));
+        rig.Time.Advance(TimeSpan.FromSeconds(119));
+        connection.PushFrame(FrameOf(12, boar));
+        Assert.Equal(2, connection.Ops.Count(o => o == "links"));
+        rig.Time.Advance(TimeSpan.FromSeconds(2));
+        connection.PushFrame(FrameOf(13, boar));
+        Assert.Equal(3, connection.Ops.Count(o => o == "links"));
     }
 
     [Fact]

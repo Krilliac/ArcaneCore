@@ -15,6 +15,7 @@ internal sealed class PublicStats(TimeProvider time)
     private long _bytesOut;
     private long _framesDropped;
     private long _framesSent;
+    private long _floodCloses;
     private int _sockets;
 
     /// <summary>Open WebSockets.</summary>
@@ -25,6 +26,12 @@ internal sealed class PublicStats(TimeProvider time)
     public long FramesSent => Interlocked.Read(ref _framesSent);
 
     public long FramesDropped => Interlocked.Read(ref _framesDropped);
+
+    /// <summary>Sockets the server closed with 1008 "flood" (a client that kept sending refused messages).</summary>
+    public long FloodCloses => Interlocked.Read(ref _floodCloses);
+
+    /// <summary>Counts a socket closed for flooding.</summary>
+    public void FloodClosed() => Interlocked.Increment(ref _floodCloses);
 
     public int SocketOpened() => Interlocked.Increment(ref _sockets);
 
