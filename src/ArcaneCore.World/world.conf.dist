@@ -12632,8 +12632,9 @@ World.Playerbots.Chat.PerPlayerCooldownSeconds = 8
 #                     listed, and when listed it must be last. See docs/areas/playbots.md for the
 #                     provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers,
 #                     MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort,
-#                     InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
-#                     ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
+#                     JsonResponseFormat, InputUsdPerMillionTokens, OutputUsdPerMillionTokens,
+#                     Moderation, ModerationBaseUrl, ModerationModel,
+#                     ModerationApiKeyEnvironmentVariable).
 #        Type: PlayerbotChatProviderOptions[]
 #        Default: (empty list)
 #        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys

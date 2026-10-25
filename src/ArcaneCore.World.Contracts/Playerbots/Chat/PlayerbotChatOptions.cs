@@ -116,7 +116,7 @@ public sealed class PlayerbotChatOptions
     /// The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing
     /// key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when
     /// listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable,
-    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
+    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort, JsonResponseFormat, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
     /// ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
     /// </summary>
     public PlayerbotChatProviderOptions[] Providers { get; set; } = [];
@@ -297,6 +297,12 @@ public sealed class PlayerbotChatProviderOptions
     /// or the classifier call (for a server that rejects it).
     /// </summary>
     public string ReasoningEffort { get; set; } = string.Empty;
+
+    /// <summary>
+    /// OpenAICompatible only: send <c>response_format: {"type":"json_object"}</c> with the reply prompts, which ask for a JSON object (on by
+    /// default; Ollama, OpenAI and most compatible servers support it). Turn it off for a server that rejects the field.
+    /// </summary>
+    public bool JsonResponseFormat { get; set; } = true;
 
     /// <summary>US dollars per million input tokens for the spend estimate (unset = the built-in price of a known Anthropic model, else unpriced; 0 for a local model).</summary>
     public double? InputUsdPerMillionTokens { get; set; }
@@ -486,7 +492,7 @@ public sealed class PlayerbotChatProviderOptions
         Kind = Kind, BaseUrl = BaseUrl, Model = Model, ApiKeyEnvironmentVariable = ApiKeyEnvironmentVariable,
         Headers = new Dictionary<string, string>(Headers ?? [], StringComparer.OrdinalIgnoreCase),
         MaxRepliesPerHour = MaxRepliesPerHour, MaxTokens = MaxTokens, TokenLimitParameter = TokenLimitParameter,
-        ReasoningEffort = ReasoningEffort,
+        ReasoningEffort = ReasoningEffort, JsonResponseFormat = JsonResponseFormat,
         InputUsdPerMillionTokens = InputUsdPerMillionTokens, OutputUsdPerMillionTokens = OutputUsdPerMillionTokens,
         Moderation = Moderation, ModerationBaseUrl = ModerationBaseUrl, ModerationModel = ModerationModel,
         ModerationApiKeyEnvironmentVariable = ModerationApiKeyEnvironmentVariable,
@@ -496,7 +502,7 @@ public sealed class PlayerbotChatProviderOptions
     internal bool SameAs(PlayerbotChatProviderOptions other)
         => Kind == other.Kind && BaseUrl == other.BaseUrl && Model == other.Model && ApiKeyEnvironmentVariable == other.ApiKeyEnvironmentVariable
             && MaxRepliesPerHour == other.MaxRepliesPerHour && MaxTokens == other.MaxTokens && TokenLimitParameter == other.TokenLimitParameter
-            && ReasoningEffort == other.ReasoningEffort
+            && ReasoningEffort == other.ReasoningEffort && JsonResponseFormat == other.JsonResponseFormat
             && InputUsdPerMillionTokens == other.InputUsdPerMillionTokens && OutputUsdPerMillionTokens == other.OutputUsdPerMillionTokens
             && Moderation == other.Moderation && ModerationBaseUrl == other.ModerationBaseUrl && ModerationModel == other.ModerationModel
             && ModerationApiKeyEnvironmentVariable == other.ModerationApiKeyEnvironmentVariable

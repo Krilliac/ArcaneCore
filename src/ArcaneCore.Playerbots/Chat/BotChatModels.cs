@@ -285,6 +285,12 @@ public sealed record BotChatPrompt(string StaticSystem, string DynamicSystem, IR
     /// drops stale ambient lines). Never sent to a provider.
     /// </summary>
     public BotChatWorkload Workload { get; init; } = BotChatWorkload.Interactive;
+
+    /// <summary>
+    /// Whether the answer is a JSON object (the reply prompts). An OpenAI-compatible provider with <c>JsonResponseFormat</c> on then
+    /// gets <c>response_format: {"type":"json_object"}</c>, so the server constrains the output. Not sent to any other provider kind.
+    /// </summary>
+    public bool ExpectsJson { get; init; }
 }
 
 /// <summary>Who is waiting on a model request, most urgent first.</summary>
