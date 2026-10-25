@@ -239,7 +239,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     }
 
     [Fact]
-    public async Task ABotsPinInACityOrWithoutAnAreaTable_IsNeverSharedWithTheWorld()
+    public async Task ABotsPinInACityOrAnUnknownZone_IsNeverSharedWithTheWorld()
     {
         await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Pocket(), new FloorLineOfSight());
         var pinPos = new Vector3(30, 5, 0);
