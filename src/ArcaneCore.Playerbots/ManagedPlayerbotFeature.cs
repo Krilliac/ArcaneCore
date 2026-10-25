@@ -2795,7 +2795,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
                 willLogStall && report is not null ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease,
-                willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+                willLogStall ? active.Brain.StallSnapshot ?? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+            active.Brain.StallSnapshot = null;
             if (sharedLogged) active.Brain.SharedSetAside = null;
             IReadOnlyList<string> unreachable = active.Brain.TakeUnreachableReports();
             if (unreachable.Count > 0)

@@ -360,7 +360,17 @@ internal static class PlayerbotNavigation
     /// </summary>
     internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
         out PlayerbotRoute? route)
+        => PlanWander(player, destination, options, ref wait, now, out route, out _);
+
+    /// <summary>
+    /// <see cref="PlanWander(Player, Vector3, PlayerbotOptions, ref TileWait, uint, out PlayerbotRoute?)"/> that also says why a refusal was
+    /// made: <paramref name="shortfall"/> is true when the mesh had a route but it stopped more than <see cref="WanderMaxShortfallYards"/>
+    /// short of the ray's end (a wall or slope), false for a refusal by the path query itself (and for any other outcome).
+    /// </summary>
+    internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, out bool shortfall)
     {
+        shortfall = false;
         if (player.Map is { } wanderMap && destination.IsFinite())
         {
             float surface = wanderMap.Collision.GetHeight(destination.X, destination.Y, destination.Z + 20f);
@@ -378,10 +388,47 @@ internal static class PlayerbotNavigation
             && player.Map is { } map && OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player)))
         {
             route = null;
+            shortfall = true;
             return PlanOutcome.Refused;
         }
 
         return outcome;
+    }
+
+    /// <summary>
+    /// The walking region graph's component (steep slopes excluded) of the place at <paramref name="point"/>: the cheap lookup
+    /// <see cref="IsUnreachableOnFoot"/> makes (<c>RegionAt</c> and <c>ComponentOf</c>, no path search). When no region lies at the point's own
+    /// height the ground under it is tried, as <see cref="PlanWander"/> snaps its end. -1 when the graph is not built, the map has none, or the
+    /// place is on no region. World thread.
+    /// </summary>
+    internal static int ComponentAt(Player player, Vector3 point)
+    {
+        if (!point.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return -1;
+        int region = nav.RegionAt(graph, point, WalkingLocate);
+        if (region < 0)
+        {
+            float surface = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
+            if (!InvalidHeight(surface) && MathF.Abs(surface - point.Z) > 1f && MathF.Abs(surface - point.Z) <= 25f)
+                region = nav.RegionAt(graph, point with { Z = surface }, WalkingLocate);
+        }
+
+        return graph.ComponentOf(region);
+    }
+
+    /// <summary>
+    /// <see cref="RegionLeg"/> as a tri-state plan: one leg of the region graph's way from the bot to <paramref name="goal"/> (a place in
+    /// another region), <see cref="PlanOutcome.Pending"/> while a tile or path job is awaited, <see cref="PlanOutcome.Refused"/> when the
+    /// graph does not decide or no leg plans.
+    /// </summary>
+    internal static PlanOutcome PlanRegionLeg(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route)
+    {
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool planned = RegionLeg(player, goal, options, out route, completedQuestReturn: false, friendlyTownEnder: false) is true;
+        return Outcome(planned, mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)

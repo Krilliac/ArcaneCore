@@ -282,9 +282,11 @@ internal sealed partial class PlayerbotStallWatch
     /// <summary>
     /// What counts as progress besides moving. <paramref name="RestMark"/>: the most health and mana seen while the bot rests (0
     /// otherwise), so regeneration is a resting bot's progress.
+    /// <paramref name="Kills"/>: kills the bot had loot rights to, so a bot capped at its level (no experience) or with full bags (no coin or items)
+    /// that kills respawns is progressing; kill loops are the death-loop watch's to catch.
     /// </summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
-        uint Objectives, int Spells, ulong RestMark = 0);
+        uint Objectives, int Spells, ulong RestMark = 0, uint Kills = 0);
 }
 
 /// <summary>

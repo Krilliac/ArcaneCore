@@ -298,7 +298,13 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 `SteepEscapeClimbYards` (1.5) above the bot (`PlayerbotSteepGroundTests`; on the real terrain
 `FromIronwandersSlope_TheBotWalksDownToTheIceClawBear`). The stall watch also gives the goal up again after every further stall bound
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
-and logged once.
+and logged once. Kills the bot had loot rights to count as progress (`Fingerprint.Kills`): a level-capped bot with full bags killing a
+no-coin beast at its spawn is not stalled (bot QA #1465; the death-loop watch still guards kill loops). The stall's diagnostic snapshot is
+taken at the start of `GiveUpStalledGoal` (`StallSnapshot`), before the give-up stops the bot and the same think plans a new leg.
+Explore holds for a pending candidate plan at most `ExplorePendingMaxMs` (10 s) and traces `explore-pending` (then the short wander leg
+runs). The wander leg turns away from rays that end in another walking-graph component than the bot's own (up to 6 headings), traces each
+refusal streak as `wander-refused:<no-path|shortfall|advance|component>` (first and every fifth), and after 8 refusals inside one 10-yard
+cell takes one region-graph leg back toward ground it last wandered from (bot QA #1464).
 
 **Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
 (3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at
