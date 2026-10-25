@@ -16692,6 +16692,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Contention:InvincibleTargetAbandonSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "8",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Seconds a bot may hold a target whose health stays at or below its death-prevention threshold (`InvincibilityHpThreshold`: a creature an EventAI script keeps at 1 health until some condition is met, such as the Blasted Lands servants of quest 2681) before it sets the creature aside as one it cannot kill (1..600).",
+      "allowed": "a whole number from 1 to 600 (seconds)",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Contention:SomeoneElsesMemorySeconds",
       "section": "World:Playerbots",
       "type": "int",

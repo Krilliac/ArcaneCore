@@ -447,6 +447,8 @@ public static class WorldConfigKeys
             (o, v) => o.Contention.SomeoneElsesMemorySeconds = v, PlayerbotContentionOptions.CheckMemory),
         LivePlayerbotsValue("Contention:ContentionSuspendMinutes", o => o.Contention.ContentionSuspendMinutes,
             (o, v) => o.Contention.ContentionSuspendMinutes = v, PlayerbotContentionOptions.CheckSuspend),
+        LivePlayerbotsValue("Contention:InvincibleTargetAbandonSeconds", o => o.Contention.InvincibleTargetAbandonSeconds,
+            (o, v) => o.Contention.InvincibleTargetAbandonSeconds = v, PlayerbotContentionOptions.CheckMemory),
 
         // Not vmangos keys: autonomous flight-path use by bots (docs/areas/playbots.md, Flight paths). PlayerbotTaxi reads the shared
         // PlayerbotOptions.Taxi at each decision.

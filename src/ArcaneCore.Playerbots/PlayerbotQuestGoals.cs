@@ -300,6 +300,48 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     }
 
     /// <summary>
+    /// An incomplete quest in the log with an unmet kill objective on a creature held invincible until a spell hits it
+    /// (<see cref="ArcaneCore.Kernel.WorldData.Creatures.CreatureAiContent.IsInvincibleUntilSpellHit"/>; quest 2681 taken before the rule
+    /// existed): a plain attack can never finish it, so the bot gives it up. Zero when none. The lowest quest id wins.
+    /// </summary>
+    internal static uint UnkillableQuestToShed(Player player, QuestNpcServices services, PlayerNpcState state,
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, Func<uint, bool>? skip = null)
+    {
+        if (content is null) return 0;
+        uint best = 0;
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint id = state.Quests.SlotQuestId(slot);
+            if (id == 0 || (best != 0 && id > best) || skip?.Invoke(id) == true || state.Quests.Get(id) is not { Status: QuestStatus.Incomplete, Rewarded: false } status
+                || services.Quests.Get(id) is not { } quest) continue;
+            for (int i = 0; i < quest.ReqCreatureOrGOId.Count; i++)
+            {
+                int target = quest.ReqCreatureOrGOId[i];
+                if (target <= 0 || quest.ReqSpell[i] != 0 || status.CreatureOrGOCount[i] >= quest.ReqCreatureOrGOCount[i]
+                    || !content.Ai.IsInvincibleUntilSpellHit((uint)target) || IsItemUseCreatureObjective(player, services, quest, i)) continue;
+                best = id;
+                break;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Abandons the quest <see cref="UnkillableQuestToShed"/> names through the client abandon packet (as <see cref="TryMakeRoomInFullLog"/>). True when a packet was sent.</summary>
+    private bool TryShedUnkillableQuest(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
+    {
+        if (player.Combat.IsInCombat || !player.IsAlive) return false;
+        uint id = UnkillableQuestToShed(player, services, state,
+            _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content, IsRefused);
+        if (id == 0) return false;
+        int slot = state.Quests.FindSlot(id);
+        if (slot >= QuestConstants.MaxQuestLogSize
+            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        Refuse(id, now);
+        return true;
+    }
+
+    /// <summary>
     /// A full log sheds one low-value quest (<see cref="LowValueQuestToShed"/>) through the ordinary client abandon packet (vmangos
     /// <c>WorldSession::HandleQuestLogRemoveQuest</c>), so the slot, source item and persistence follow a player's path. A refused
     /// abandon sets the quest aside so the packet is not sent on every think. True when a packet was sent.
@@ -483,6 +525,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         if (_stage is Stage.AcceptConfirmation or Stage.RewardConfirmation)
             return true;
+
+        if (_stage == Stage.None && TryShedUnkillableQuest(player, services, state, now)) return true;
 
         long phaseStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks);
@@ -1368,10 +1412,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
     internal static bool IsKillObjective(WorldSession? session, Player player, QuestNpcServices services,
         ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content, uint entry)
-        => (content ?? session?.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content)?.FindTemplate(entry) is not { } template
+    {
+        content ??= session?.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        if (content?.Ai.IsInvincibleUntilSpellHit(entry) == true) return false;
+        return content?.FindTemplate(entry) is not { } template
             || IsKillable(player, template.Faction,
                 session?.Services.GetService<QuestNpcFeature>()?.FactionTemplates ?? session?.Services.GetService<FactionTemplateCatalog>(),
                 services.Deps.Reputation as ArcaneCore.Game.Reputation.INpcReactionSource);
+    }
 
     /// <summary>
     /// Whether a creature of faction template <paramref name="npcFactionTemplate"/> is not friendly to <paramref name="player"/>
