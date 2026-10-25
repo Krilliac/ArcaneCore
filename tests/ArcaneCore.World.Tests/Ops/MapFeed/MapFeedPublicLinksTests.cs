@@ -28,7 +28,7 @@ public sealed class MapFeedPublicLinksTests
         Bots = bots,
         Content = !bots,
         WebLogin = true,
-        Time = new ManualTimeProvider(),
+        Time = new FeedTestClock(),
         Actions = o =>
         {
             o.Enabled = true;

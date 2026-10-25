@@ -21,7 +21,7 @@ public sealed class MapFeedActionsAuditTests
 
     private static readonly string[] Fields = ["time", "event", "actor", "accountId", "ticketRef", "clientIp", "line", "targets", "result", "code"];
 
-    private static FeedWorldSetup WebWorld(string directory, FakeFeedTickets tickets, ManualTimeProvider time, Action<MapFeedActionsOptions>? options = null)
+    private static FeedWorldSetup WebWorld(string directory, FakeFeedTickets tickets, FeedTestClock time, Action<MapFeedActionsOptions>? options = null)
         => new()
         {
             Terrain = true,
@@ -49,7 +49,7 @@ public sealed class MapFeedActionsAuditTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), time));
             ActionSpies.Install(world.Host);
             FeedClient client = await world.ConnectAsync("web");
@@ -93,7 +93,7 @@ public sealed class MapFeedActionsAuditTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), new ManualTimeProvider()));
+            await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), new FeedTestClock()));
             ActionSpies.Install(world.Host);
             FeedClient client = await world.ConnectAsync("web");
 
@@ -166,7 +166,7 @@ public sealed class MapFeedActionsAuditTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), time));
             MapFeedWebAudit audit = world.Host.WorldServices.GetRequiredService<MapFeedWebAudit>();
 
@@ -204,7 +204,7 @@ public sealed class MapFeedActionsAuditTests
         Directory.CreateDirectory(Path.Combine(directory, WebAuditFile.FileName)); // a directory where the file must go: opening it for append fails
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), new ManualTimeProvider()));
+            await using FeedWorld world = await FeedWorld.StartAsync(WebWorld(directory, Tickets(), new FeedTestClock()));
             ActionSpies spies = ActionSpies.Install(world.Host);
             FeedClient client = await world.ConnectAsync("web");
 

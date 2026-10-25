@@ -21,7 +21,7 @@ public sealed class WebLoginLockoutTests
     [Fact]
     public void FiveFailuresFromOneNetwork_LockThatAccountForThatNetworkOnly()
     {
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         var lockout = new WebLoginLockout(time);
         for (int i = 0; i < WebLoginLockout.NetworkLimit - 1; i++)
         {
@@ -39,7 +39,7 @@ public sealed class WebLoginLockoutTests
     [Fact]
     public void ALockout_EndsWhenTheFailuresAgeOut()
     {
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         var lockout = new WebLoginLockout(time);
         for (int i = 0; i < WebLoginLockout.NetworkLimit; i++)
         {
@@ -55,7 +55,7 @@ public sealed class WebLoginLockoutTests
     [Fact]
     public void ASuccess_ClearsThatNetworksFailures()
     {
-        var lockout = new WebLoginLockout(new ManualTimeProvider());
+        var lockout = new WebLoginLockout(new FeedTestClock());
         for (int i = 0; i < 4; i++)
         {
             lockout.RecordFailure("STAFF", "n");
@@ -70,7 +70,7 @@ public sealed class WebLoginLockoutTests
     [Fact]
     public void ThirtyFailuresFromAllNetworks_AddADelay_NotARefusal()
     {
-        var lockout = new WebLoginLockout(new ManualTimeProvider());
+        var lockout = new WebLoginLockout(new FeedTestClock());
         for (int i = 0; i < WebLoginLockout.GlobalSoftLimit - 1; i++)
         {
             lockout.RecordFailure("STAFF", "net" + i);
@@ -87,7 +87,7 @@ public sealed class WebLoginLockoutTests
     [Fact]
     public void MemoryIsBounded_ByDroppingTheOldestKeys()
     {
-        var time = new ManualTimeProvider();
+        var time = new FeedTestClock();
         var lockout = new WebLoginLockout(time, maxTracked: 64);
         for (int i = 0; i < 1000; i++)
         {

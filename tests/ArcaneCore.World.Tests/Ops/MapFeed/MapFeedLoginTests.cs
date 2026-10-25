@@ -21,7 +21,7 @@ public sealed class MapFeedLoginTests
     private const string StaffIp = "198.51.100.7";
     private const string OtherIp = "203.0.113.9";
 
-    private static FeedWorldSetup Setup(ManualTimeProvider time, string auditDirectory, Action<MapFeedActionsOptions>? tweak = null) => new()
+    private static FeedWorldSetup Setup(FeedTestClock time, string auditDirectory, Action<MapFeedActionsOptions>? tweak = null) => new()
     {
         Terrain = true,
         Time = time,
@@ -94,7 +94,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             ActionSpies spies = ActionSpies.Install(world.Host);
             await AccountAsync(world.Host, "WEBGM", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
@@ -131,7 +131,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             await AccountAsync(world.Host, "WEBGM", AccountSecurity.GameMaster);
             FeedClient local = await world.ConnectAsync("local");
 
@@ -158,7 +158,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
             string secret = Totp.NewSecret();
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
@@ -220,7 +220,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             await AccountAsync(world.Host, "PINGM", AccountSecurity.GameMaster, flags: AccountLockFlags.FixedPin, securityInfo: "4821");
             FeedClient web = await world.ConnectAsync("web");
 
@@ -243,7 +243,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
             string secret = Totp.NewSecret();
             await AccountAsync(world.Host, "TOTPGM", AccountSecurity.GameMaster, flags: AccountLockFlags.Totp, securityInfo: secret);
@@ -277,7 +277,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
             string secret = Totp.NewSecret();
             await AccountAsync(world.Host, "TOTPGM", AccountSecurity.GameMaster, flags: AccountLockFlags.Totp, securityInfo: secret);
@@ -312,7 +312,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld refused = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory, o => o.WebLoginMinSecurity = AccountSecurity.Player));
+            await using FeedWorld refused = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory, o => o.WebLoginMinSecurity = AccountSecurity.Player));
             await AccountAsync(refused.Host, "PLAYER", AccountSecurity.Player);
             FeedClient web = await refused.ConnectAsync("web");
 
@@ -331,7 +331,7 @@ public sealed class MapFeedLoginTests
         try
         {
             // The world's own floor (default Moderator) also holds when Atlas states 0.
-            await using FeedWorld strict = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), second));
+            await using FeedWorld strict = await FeedWorld.StartAsync(Setup(new FeedTestClock(), second));
             await AccountAsync(strict.Host, "PLAYER", AccountSecurity.Player);
             FeedClient web = await strict.ConnectAsync("web");
             (await LoginAsync(web, 1, "PLAYER", Password, floor: 0)).AssertRefused("login-failed");
@@ -353,7 +353,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
@@ -388,7 +388,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
 
@@ -417,7 +417,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster, password: "Tr0ub4dor&3-marker");
             FeedClient web = await world.ConnectAsync("web");
 
@@ -453,7 +453,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
 
@@ -490,7 +490,7 @@ public sealed class MapFeedLoginTests
         await File.WriteAllTextAsync(blocker, "x");
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), blocker));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), blocker));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
 
@@ -516,7 +516,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             ActionSpies.Install(world.Host);
             await AccountAsync(world.Host, "WEBGM", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
@@ -550,7 +550,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory));
             ActionSpies.Install(world.Host);
             await AccountAsync(world.Host, "WEBGM", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
@@ -590,7 +590,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            var time = new ManualTimeProvider();
+            var time = new FeedTestClock();
             await using FeedWorld world = await FeedWorld.StartAsync(Setup(time, directory));
             ActionSpies.Install(world.Host);
             Account staff = await AccountAsync(world.Host, "WEBGM", AccountSecurity.GameMaster);
@@ -627,7 +627,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory, o => o.WebLoginMinSecurity = AccountSecurity.Player));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory, o => o.WebLoginMinSecurity = AccountSecurity.Player));
             await using WorldTestClient mine = await world.AddPlayerAsync("Feedalice");
             await AccountAsync(world.Host, "WEBPLAYER", AccountSecurity.Player);
             // The character was created under an account named after it; give the web account the same id by logging in as that account.
@@ -772,7 +772,7 @@ public sealed class MapFeedLoginTests
         string directory = WebAuditFile.NewDirectory();
         try
         {
-            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new ManualTimeProvider(), directory, o => o.WebLogin = false));
+            await using FeedWorld world = await FeedWorld.StartAsync(Setup(new FeedTestClock(), directory, o => o.WebLogin = false));
             await AccountAsync(world.Host, "STAFF", AccountSecurity.GameMaster);
             FeedClient web = await world.ConnectAsync("web");
 
