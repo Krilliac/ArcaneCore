@@ -150,7 +150,6 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record(WorldBossWatchSite, ex);
             logger.LogFault(WorldBossWatchSite, ex, "Playerbot world-boss scan failed");
         }
     }
@@ -212,7 +211,6 @@ public sealed partial class PlayerbotGroupCoordinator
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record(WorldBossMusterSite, ex);
                 logger.LogFault(WorldBossMusterSite, ex, "Playerbot world-boss muster failed for {Boss}", entry.Name);
                 _wbMusterTriedMs[entry.Entry] = Now; // the next try waits its interval: a fault does not repeat every scan
             }
@@ -600,7 +598,6 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record(WorldBossAdvanceSite, ex);
             logger.LogFault(WorldBossAdvanceSite, ex, "Playerbot world-boss raid {Group} failed", group.Id);
             Finish(group, success: false, "worldboss-fault", setAside: false);
             return true;
@@ -695,9 +692,9 @@ public sealed partial class PlayerbotGroupCoordinator
         switch (decision.Action)
         {
             case PlayerbotWorldBossAction.Kill:
-                if (corpseTapByRaid && !raid.SawAlive && LedgerHoldsBoss(raid))
-                    PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.WorldBossCorpseTapLedgerDead, GroupSubject(group),
-                        string.Create(CultureInfo.InvariantCulture, $"group {group.Id} holds the tap of {raid.Boss.Name} ({raid.Boss.Entry}), a corpse it never saw alive, and the respawn ledger already had the boss dead"),
+                if (corpseTapByRaid && !raid.SawAlive)
+                    PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.WorldBossCorpseTapUnseen, GroupSubject(group),
+                        string.Create(CultureInfo.InvariantCulture, $"group {group.Id} holds the tap of {raid.Boss.Name} ({raid.Boss.Entry}), a corpse it never saw alive: the boss died before the raid's first look at it"),
                         world.Identity, AnomalySeverity.Info);
                 raid.KilledAtMs = Math.Max(1u, now);
                 raid.PullHeld = false;

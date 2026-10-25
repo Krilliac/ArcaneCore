@@ -498,11 +498,10 @@ public sealed class PlayerbotWorldBossGuardTests
     // --- the corpse a raid never saw alive, and the fault sites --------------------------------------------------------------------
 
     [Fact]
-    public async Task ACorpseTheRaidHoldsTheTapOf_ThatItNeverSawAlive_WhileTheLedgerHasTheBossDead_RecordsTheAnomalyOnce()
+    public async Task ACorpseTheRaidHoldsTheTapOf_ThatItNeverSawAlive_RecordsTheAnomalyOnce()
     {
-        (GroupTestWorld world, CountingLedger ledger) = await StartSpawnedAsync(Boss());
-        await using GroupTestWorld _ = world;
-        ledger.Due[BossEntry] = BaseUnix + 100_000; // the ledger already holds the boss dead; the creature still stands, so the watch sees it Up and the muster opens
+        (GroupTestWorld world, CountingLedger _) = await StartSpawnedAsync(Boss());
+        await using GroupTestWorld __ = world;
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wc");
         await world.RunAsync(500);
         Creature boss = await FindSpawnedAsync(world, bots[0].Id);
@@ -526,8 +525,7 @@ public sealed class PlayerbotWorldBossGuardTests
         }), await world.TraceAsync());
 
         Assert.False(sawAlive, "the raid saw the boss alive: it is not the case this anomaly is about");
-        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.WorldBossCorpseTapLedgerDead)));
-        Assert.True(ledger.Lookups > 0);
+        Assert.Equal(1, cap.Count(Key(PlayerbotGroupAnomalies.WorldBossCorpseTapUnseen)));
     }
 
     /// <summary>A ledger whose point lookup fails, as a broken store would.</summary>

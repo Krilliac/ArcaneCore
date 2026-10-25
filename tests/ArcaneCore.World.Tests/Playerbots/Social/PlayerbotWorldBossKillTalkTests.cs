@@ -158,7 +158,7 @@ public sealed class PlayerbotWorldBossKillTalkTests
         });
 
         Assert.Null(zone);
-        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "playerbot.social.bosskill");
+        Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "playerbot.social.bosskill" && f.ExceptionType.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
     }
 
     [Fact]

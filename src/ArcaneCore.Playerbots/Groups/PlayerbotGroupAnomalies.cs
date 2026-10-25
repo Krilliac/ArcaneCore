@@ -61,8 +61,8 @@ internal static class PlayerbotGroupAnomalies
     /// <summary>A world-boss raid at full size wiped as often as it may (its wipe cap): the boss is out of its reach.</summary>
     internal const string WorldBossWipedAtFullSize = "worldboss-wiped-full-size";
 
-    /// <summary>A world-boss raid holds the tap of a corpse it never saw alive, while the respawn ledger already said the boss was dead.</summary>
-    internal const string WorldBossCorpseTapLedgerDead = "worldboss-corpse-tap-ledger-dead";
+    /// <summary>A world-boss raid holds the tap of a corpse it never saw alive (a member killed the boss before the raid's first look at it).</summary>
+    internal const string WorldBossCorpseTapUnseen = "worldboss-corpse-tap-unseen";
 
     /// <summary>The ledger key of <paramref name="code"/> (tests).</summary>
     internal static string Key(string code) => PlayerbotAnomalies.Key(Area, code);

@@ -473,7 +473,7 @@ lasts at most `MaxRaidMinutes`; its step limits reuse `World:Playerbots:Groups:D
 **Observability.** Counter `arcanecore.playerbot.worldboss_raids{outcome}` (`formed`, `killed`, `wiped`, `boss-taken`, `boss-gone`,
 `not-enough`, `forming-failed`, `abandoned`, `timeout`, `stalled`, `no-path`, `muster-failed`, `other`) and gauge
 `arcanecore.playerbot.worldboss_active`. Anomalies (area `group`): `worldboss-pull-near-players`, `worldboss-wiped-full-size`,
-`worldboss-corpse-tap-ledger-dead`. A raid that ends in a timeout, a wipe-out, a stall or without a path goes to bot QA as a `RunFailed`
+`worldboss-corpse-tap-unseen` (a raid-tapped corpse the raid never saw alive). A raid that ends in a timeout, a wipe-out, a stall or without a path goes to bot QA as a `RunFailed`
 signal. Fault sites: `playerbot.groups.worldboss.watch`, `.muster`, `.advance`; `playerbot.social.bosskill` for the kill talk's zone name.
 The group report prints one `worldboss:` line per catalogued boss (state, phase, attempts, cooldown, last opening verdict).
 
