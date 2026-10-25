@@ -21,6 +21,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Party;
+using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -51,6 +52,9 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private const long SecondsPerDay = 86_400;
 
+    /// <summary>The fault sites of the world-boss code (the fault ledger and the log): the watch, the muster and a raid's advance.</summary>
+    internal const string WorldBossWatchSite = "playerbot.groups.worldboss.watch", WorldBossMusterSite = "playerbot.groups.worldboss.muster", WorldBossAdvanceSite = "playerbot.groups.worldboss.advance";
+
     private PlayerbotWorldBossOptions Wb => _options.Groups.WorldBosses;
 
     /// <summary>The campaigns' clock, in Unix seconds (tests set it to a manual clock).</summary>
@@ -67,6 +71,7 @@ public sealed partial class PlayerbotGroupCoordinator
     private readonly Dictionary<uint, WorldBossSeen> _wbSeen = [];
     private readonly Dictionary<uint, uint> _wbMusterTriedMs = [];
     private readonly Dictionary<uint, PlayerbotWorldBossOpening> _wbOpening = [];
+    private readonly Dictionary<uint, ObjectGuid> _wbBossGuid = [];
     private uint _wbWatchMs;
     private bool _wbWatched;
 
@@ -93,6 +98,7 @@ public sealed partial class PlayerbotGroupCoordinator
         _wbSeen.Clear();
         _wbMusterTriedMs.Clear();
         _wbOpening.Clear();
+        _wbBossGuid.Clear();
         _wbWatchMs = 0;
         _wbWatched = false;
         PlayerbotWorldBossMeters.SetActive(0);
@@ -123,6 +129,7 @@ public sealed partial class PlayerbotGroupCoordinator
             _wbSeen.Remove(stale);
             _wbMusterTriedMs.Remove(stale);
             _wbOpening.Remove(stale);
+            _wbBossGuid.Remove(stale);
         }
 
         foreach (PlayerbotWorldBossEntry entry in catalogue.Entries) CampaignOf(entry.Entry);
@@ -140,8 +147,8 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot.groups", ex);
-            logger.LogFault("playerbot.group-worldboss", ex, "Playerbot world-boss scan failed");
+            FaultLedger.Shared.Record(WorldBossWatchSite, ex);
+            logger.LogFault(WorldBossWatchSite, ex, "Playerbot world-boss scan failed");
         }
     }
 
@@ -149,7 +156,7 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         EnsureWorldBossCatalogue();
         PlayerbotWorldBossCatalogue catalogue = _wbCatalogue;
-        if (catalogue.Entries.Count == 0 || _world is null || !_options.Groups.Enabled) return;
+        if (catalogue.Entries.Count == 0 || _world is null || !_options.Groups.Enabled || !_options.Groups.RaidsEnabled) return;
         PlayerbotWorldBossOptions o = Wb;
         long unix = UnixNow();
         uint now = Now;
@@ -195,7 +202,16 @@ public sealed partial class PlayerbotGroupCoordinator
                 logger.LogInformation("Playerbot world boss {Boss} ({Entry}) is up: a muster opens", entry.Name, entry.Entry);
             }
 
-            MusterWorldBoss(seen.Live, campaign, o, unix);
+            try
+            {
+                MusterWorldBoss(seen.Live, campaign, o, unix);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record(WorldBossMusterSite, ex);
+                logger.LogFault(WorldBossMusterSite, ex, "Playerbot world-boss muster failed for {Boss}", entry.Name);
+                _wbMusterTriedMs[entry.Entry] = Now; // the next try waits its interval: a fault does not repeat every scan
+            }
         }
     }
 
@@ -293,6 +309,7 @@ public sealed partial class PlayerbotGroupCoordinator
         Map? map = _world?.FindMap(live.Locator.MapId);
         group.WorldBoss = new PlayerbotWorldBossRaid(live, WorldBossZone(map, bossAt, live.Locator.MapId))
         {
+            BossGuid = _wbBossGuid.GetValueOrDefault(live.Entry),
             PullHeld = true,
             FormedUnix = unix,
             RallyYards = MathF.Sqrt(((rally.X - bossAt.X) * (rally.X - bossAt.X)) + ((rally.Y - bossAt.Y) * (rally.Y - bossAt.Y))),
@@ -320,7 +337,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
         {
-            FaultLedger.Shared.Record("playerbot.groups", error);
+            FaultLedger.Shared.Record(WorldBossMusterSite, error);
         }
 
         return WorldMaps.Of(world).Registry.Find(mapId)?.Name is { Length: > 0 } name ? name : "the open world";
@@ -369,12 +386,23 @@ public sealed partial class PlayerbotGroupCoordinator
         }
         else
         {
-            foreach (Creature candidate in system.Creatures)
-                if (candidate.Entry == entry.Entry && candidate.IsAlive)
-                {
-                    creature = candidate;
-                    break;
-                }
+            // The cached guid first (one lookup); a scan of the map's creatures only while nothing is cached, and this watch runs once per WatchSeconds.
+            if (_wbBossGuid.TryGetValue(entry.Entry, out ObjectGuid cachedGuid))
+            {
+                if (system.FindCreature(cachedGuid) is { IsAlive: true } known && known.Entry == entry.Entry) creature = known;
+                else _wbBossGuid.Remove(entry.Entry);
+            }
+
+            if (creature is null && (locator.Kind != PlayerbotWorldBossLocatorKind.Portal || system.IsGridLoaded(position.X, position.Y)))
+            {
+                foreach (Creature candidate in system.Creatures)
+                    if (candidate.Entry == entry.Entry && candidate.IsAlive)
+                    {
+                        creature = candidate;
+                        _wbBossGuid[entry.Entry] = candidate.Guid;
+                        break;
+                    }
+            }
         }
 
         if (creature is { IsAlive: true } living)
@@ -387,7 +415,7 @@ public sealed partial class PlayerbotGroupCoordinator
                 Living = true,
                 Position = at,
                 InCombat = living.Combat.IsInCombat,
-                TappedOrFightingOthers = !living.LootTapper.IsEmpty || living.Combat.Victim is Player,
+                TappedOrFightingOthers = !living.LootTapper.IsEmpty && !IsAnyRaidTap(map, living.LootTapper) || living.Combat.Victim is Player victim && !IsAnyRaidTap(map, victim.Guid),
                 RealPlayersNear = near,
                 GridLoaded = true,
             }, unix);
@@ -484,6 +512,14 @@ public sealed partial class PlayerbotGroupCoordinator
     private static bool TapIsRaid(Map map, BotGroup group, ObjectGuid tap)
         => !tap.IsEmpty && (IsMember(group, tap) || map.FindObject(tap) is Unit pet && DuelRules.ControllingPlayer(pet) is { } owner && IsMember(group, owner.Guid));
 
+    /// <summary>The guid is a member (or a member's pet) of any world-boss raid: our own tap is not somebody else's claim.</summary>
+    private bool IsAnyRaidTap(Map map, ObjectGuid guid)
+    {
+        foreach (BotGroup group in _groups)
+            if (group.WorldBoss is not null && TapIsRaid(map, group, guid)) return true;
+        return false;
+    }
+
     private static bool FightsRaid(BotGroup group, Creature boss)
     {
         if (boss.Combat.Victim is { } victim && BelongsToRaid(group, victim)) return true;
@@ -495,10 +531,25 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>The boss creature (alive, or its corpse) the raid is after: by spawn guid for a database spawn, else the nearest of the entry to <paramref name="home"/>.</summary>
-    private static Creature? FindRaidBoss(CreatureMapSystem system, PlayerbotWorldBossRaid raid, Vector3 home)
+    private Creature? FindRaidBoss(CreatureMapSystem system, PlayerbotWorldBossRaid raid, Vector3 home, uint now)
     {
+        // The cached guid is one lookup; it is dropped when it finds nothing or a creature of another entry.
+        if (!raid.BossGuid.IsEmpty)
+        {
+            if (system.FindCreature(raid.BossGuid) is { } cached && cached.Entry == raid.Boss.Entry) return cached;
+            raid.BossGuid = ObjectGuid.Empty;
+        }
+
         PlayerbotWorldBossLocator locator = raid.Boss.Locator;
-        if (locator.Kind == PlayerbotWorldBossLocatorKind.Spawn && system.FindBySpawnGuid(locator.SpawnGuid) is { } bySpawn && bySpawn.Entry == raid.Boss.Entry) return bySpawn;
+        if (locator.Kind == PlayerbotWorldBossLocatorKind.Spawn && system.FindBySpawnGuid(locator.SpawnGuid) is { } bySpawn && bySpawn.Entry == raid.Boss.Entry)
+        {
+            raid.BossGuid = bySpawn.Guid;
+            return bySpawn;
+        }
+
+        // Nothing cached: scan the map's creatures at most once per watch interval (a miss is looked at again then).
+        if (raid.BossScanMs != 0 && unchecked(now - raid.BossScanMs) < (uint)Math.Max(1, Wb.WatchSeconds) * 1000u) return null;
+        raid.BossScanMs = Math.Max(1u, now);
         Creature? best = null;
         float bestYards = float.MaxValue;
         foreach (Creature creature in system.Creatures)
@@ -512,6 +563,7 @@ public sealed partial class PlayerbotGroupCoordinator
             bestYards = yards;
         }
 
+        if (best is not null) raid.BossGuid = best.Guid;
         return best;
     }
 
@@ -520,6 +572,21 @@ public sealed partial class PlayerbotGroupCoordinator
     /// the decision is carried out. While travelling only the boss's death or disappearance acts (the others wait for the rally). True when the group ended.
     /// </summary>
     private bool AdvanceWorldBoss(BotGroup group, Player leader, uint now)
+    {
+        try
+        {
+            return AdvanceWorldBossCore(group, leader, now);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(WorldBossAdvanceSite, ex);
+            logger.LogFault(WorldBossAdvanceSite, ex, "Playerbot world-boss raid {Group} failed", group.Id);
+            Finish(group, success: false, "worldboss-fault", setAside: false);
+            return true;
+        }
+    }
+
+    private bool AdvanceWorldBossCore(BotGroup group, Player leader, uint now)
     {
         if (_world is not { } world || group.WorldBoss is not { } raid) return false;
         PlayerbotWorldBossOptions o = Wb;
@@ -536,7 +603,7 @@ public sealed partial class PlayerbotGroupCoordinator
         Map? map = world.FindMap(raid.Boss.Locator.MapId);
         if (map?.FindUpdater<CreatureMapSystem>() is not { } system) return false;
         Vector3 home = group.Goal.Objective;
-        Creature? boss = FindRaidBoss(system, raid, home);
+        Creature? boss = FindRaidBoss(system, raid, home, now);
         // Not in the creature system and its grid not loaded: nothing is known of the boss (the raid has not come near enough yet).
         if (boss is null && !system.IsGridLoaded(home.X, home.Y)) return false;
 
@@ -563,6 +630,7 @@ public sealed partial class PlayerbotGroupCoordinator
             bool tapIsRaid = TapIsRaid(map, group, boss.LootTapper);
             if (alive)
             {
+                raid.SawAlive = true;
                 fightingUs = FightsRaid(group, boss);
                 tappedByRaid = tapIsRaid;
                 othersClaim = !fightingUs && PlayerbotBrain.IsSomeoneElses(leader, boss, GroupManagerOrNull());
@@ -603,6 +671,10 @@ public sealed partial class PlayerbotGroupCoordinator
         switch (decision.Action)
         {
             case PlayerbotWorldBossAction.Kill:
+                if (corpseTapByRaid && !raid.SawAlive && LedgerHoldsBoss(raid))
+                    PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.WorldBossCorpseTapLedgerDead, GroupSubject(group),
+                        string.Create(CultureInfo.InvariantCulture, $"group {group.Id} holds the tap of {raid.Boss.Name} ({raid.Boss.Entry}), a corpse it never saw alive, and the respawn ledger already had the boss dead"),
+                        world.Identity, AnomalySeverity.Info);
                 raid.KilledAtMs = Math.Max(1u, now);
                 raid.PullHeld = false;
                 raid.Waiting = false;
@@ -626,6 +698,10 @@ public sealed partial class PlayerbotGroupCoordinator
                 raid.Hold = decision.Hold;
                 break;
             case PlayerbotWorldBossAction.Release:
+                if (playersNear > 0)
+                    PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.WorldBossPullNearPlayers, GroupSubject(group),
+                        string.Create(CultureInfo.InvariantCulture, $"group {group.Id} pulls {raid.Boss.Name} ({raid.Boss.Entry}) in {raid.Zone} with {playersNear} real player(s) within {o.PlayersNearYards:F0} yards"),
+                        world.Identity);
                 raid.Released = true;
                 raid.PullHeld = false;
                 raid.Waiting = false;
@@ -659,6 +735,44 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotWorldBossMeters.Count(PlayerbotWorldBossOutcomes.Of(group.Reason, raid.ReachedTravelling));
         CampaignOf(raid.Boss.Entry).Ended(Wb, UnixNow(), raid.ReachedTravelling, killed);
         PlayerbotWorldBossMeters.SetActive(_groups.Count(g => g.WorldBoss is not null));
+        ReportWorldBossFailed(group, raid);
+    }
+
+    private static string GroupSubject(BotGroup group) => string.Create(CultureInfo.InvariantCulture, $"group {group.Id} (leader {group.LeaderGuid.Value:X})");
+
+    /// <summary>The raid wiped as often as it may: at full size that is an anomaly (the boss is out of its reach), at a smaller size the raid was short to begin with.</summary>
+    private void NoteWorldBossWipedOut(BotGroup group, PlayerbotWorldBossRaid raid)
+    {
+        int joined = group.Members.Count(m => m.Joined);
+        if (joined < group.Goal.Size) return;
+        PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.WorldBossWipedAtFullSize, GroupSubject(group),
+            string.Create(CultureInfo.InvariantCulture, $"group {group.Id} wiped {raid.Wipes} times on {raid.Boss.Name} ({raid.Boss.Entry}) in {raid.Zone} at its full size of {joined}"), _world?.Identity);
+    }
+
+    /// <summary>
+    /// A raid that ended for a content or code reason (<see cref="PointsAtContentOrCode"/>: a timeout, a wipe-out, a stall, no path) goes to bot QA like a failed run,
+    /// straight to the sink (docs/areas/playbots-qa.md): the map, the boss and the reason; no group, bot or character is named. Once per raid; nothing is built while QA
+    /// is off; a failure of the report is swallowed so it cannot reach the world tick.
+    /// </summary>
+    private void ReportWorldBossFailed(BotGroup group, PlayerbotWorldBossRaid raid)
+    {
+        try
+        {
+            if (group.Reason is not { } reason || group.Succeeded || reason == "objective-missing" || !PointsAtContentOrCode(reason)) return;
+            if (services.GetService<IPlayerbotQaSink>() is not { Enabled: true } sink) return;
+            string stage = raid.ReachedTravelling ? "raid" : "forming";
+            sink.Report(new QaSignal
+            {
+                Kind = QaSignalKind.RunFailed, AtUtc = DateTime.UtcNow, Map = raid.Boss.Locator.MapId, Segment = 0, Stage = stage, Target = raid.Boss.Entry, Reason = reason,
+                Detail = raid.Zone,
+                Message = string.Create(CultureInfo.InvariantCulture, $"world-boss raid ended: {reason} on {raid.Boss.Name} ({raid.Boss.Entry}) in {raid.Zone} (map {raid.Boss.Locator.MapId}), {raid.Wipes} wipes"),
+            });
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(WorldBossAdvanceSite, ex);
+            logger.LogDebug(ex, "Playerbot group {Group}: the world-boss failure could not be reported to bot QA", group.Id);
+        }
     }
 
     // --- status ---------------------------------------------------------------------------------------------------------------

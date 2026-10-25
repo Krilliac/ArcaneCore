@@ -351,7 +351,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
         catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
         {
-            FaultLedger.Shared.Record("playerbot.social-zone-name", error);
+            FaultLedger.Shared.Record("playerbot.social.bosskill", error);
             return null; // a minimal host without terrain or area data: the map's name is named instead
         }
     }

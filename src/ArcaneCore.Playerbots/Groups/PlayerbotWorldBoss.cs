@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Globalization;
 using System.Numerics;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.WorldState;
@@ -656,6 +657,9 @@ internal sealed class PlayerbotWorldBossRaid(PlayerbotWorldBossEntry boss, strin
     /// <summary>The gate has opened.</summary>
     internal bool Released { get; set; }
 
+    /// <summary>The raid saw the boss alive at some scan.</summary>
+    internal bool SawAlive { get; set; }
+
     /// <summary>The raid held the boss's tap at some tick.</summary>
     internal bool TapSeen { get; set; }
 
@@ -681,6 +685,12 @@ internal sealed class PlayerbotWorldBossRaid(PlayerbotWorldBossEntry boss, strin
 
     /// <summary>How far from the boss the raid gathers (flat yards from the rally point to the boss).</summary>
     internal float RallyYards { get; set; }
+
+    /// <summary>The boss creature last found (empty: none cached): every later look is one lookup by guid, dropped when it finds nothing or another entry.</summary>
+    internal ObjectGuid BossGuid { get; set; }
+
+    /// <summary>World ms of the last scan of the creature system for the boss (0: none yet); a scan runs at most once per watch interval while nothing is cached.</summary>
+    internal uint BossScanMs { get; set; }
 
     /// <summary>World ms of the last engage decision (the boss is looked at a few times a second, not every tick; 0: never).</summary>
     internal uint CheckedMs { get; set; }

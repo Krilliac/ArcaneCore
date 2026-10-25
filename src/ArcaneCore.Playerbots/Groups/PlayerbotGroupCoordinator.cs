@@ -1321,7 +1321,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     {
                         group.Failures = ++raid.Wipes;
                         Note($"group {group.Id} wiped ({raid.Wipes}/{Wb.MaxWipes})");
-                        if (raid.Wipes >= Wb.MaxWipes) Finish(group, success: false, "wiped");
+                        if (raid.Wipes >= Wb.MaxWipes)
+                        {
+                            NoteWorldBossWipedOut(group, raid);
+                            Finish(group, success: false, "wiped");
+                        }
                         else
                         {
                             ResetWorldBossPull(raid);

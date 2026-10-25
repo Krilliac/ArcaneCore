@@ -392,6 +392,7 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
         if (isLeader && group.Siege is null) TrackLag(player, group);
         else ClearLag();
+        if (!isLeader && SitOutMark(player, group, interval)) return;
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
@@ -592,6 +593,8 @@ internal sealed class PlayerbotGroupAI
     /// <summary>Where the leader walks while engaging: the nearest visible objective creature, else the objective's spawn.</summary>
     private Vector3 ObjectivePoint(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
+        // A world-boss raid walks to its cached boss (one FindObject), else to where the boss was last known: never a scan.
+        if (group.WorldBoss is { } bossRaid) return !bossRaid.BossGuid.IsEmpty && player.Map?.FindObject(bossRaid.BossGuid) is Creature cached ? new Vector3(cached.X, cached.Y, cached.Z) : group.ObjectivePosition;
         if (FindObjectiveCreature(player, group) is { } creature) return new Vector3(creature.X, creature.Y, creature.Z);
 
         // A run's boss out of sight (it patrols away from its spawn): walk to where it is.
@@ -689,6 +692,7 @@ internal sealed class PlayerbotGroupAI
         {
             if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.ObjectiveEntry) continue;
             if (!map.Combat.Hooks.CanAttack(player, creature) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
+            if (group.WorldBoss is not null && PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) continue; // a tap that lands between two scans still stops the pull
             float distance = Distance(player, creature);
             // The objective on the leader's own level first (a unit on the floor below is near in 3D and unreachable from here), then the nearest.
             bool otherLevel = PlayerbotTargetFilter.OnOtherLevel(new Vector3(creature.X, creature.Y, creature.Z), here);
@@ -999,7 +1003,7 @@ internal sealed class PlayerbotGroupAI
         }
 
         // A world-boss raid pulls only once its coordinator has released the pull, and not after the kill.
-        if (isLeader && group.WorldBoss is { PullHeld: true } or { KilledAtMs: not 0 }) return null;
+        if (isLeader && group.WorldBoss is { } held) { if (held.KilledAtMs != 0) return null; if (held.PullHeld) return current is Creature { } fought && fought.Entry == group.ObjectiveEntry ? null : current; } // held: only a fight already on us (an add) is kept, the boss is never picked
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
             && Ready(player))
         {
@@ -1518,6 +1522,38 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
     private TileWait _tileWait;
+
+    /// <summary>The Mark of Frost a player gets when Azuregos or Kazzak kills it (AzuregosKazzakAI.SpellMarkOfFrostPlayer): a marked member sits the rest of the fight out.</summary>
+    internal const uint MarkOfFrost = 23182;
+
+    /// <summary>
+    /// A raid member carrying the Mark of Frost does not fight again: it stops, and holds at the rally (the leader's approach point) until the mark is gone.
+    /// True when it did (the member's think is over). A world-boss raid only; the leader is not held (its raid would stall).
+    /// </summary>
+    private bool SitOutMark(Player player, PlayerbotGroupCoordinator.BotGroup group, uint interval)
+    {
+        if (group.WorldBoss is null || _session.Services.GetService<SpellFeature>()?.System.HasAura(player, MarkOfFrost) != true) return false;
+        if (_target is not null)
+        {
+            if (_attacking) StopAttacking(player);
+            _target = null;
+            _attacking = false;
+            _route = null;
+            LastTargetGuid = ObjectGuid.Empty;
+            LastTargetEntry = 0;
+        }
+
+        Goal = PlayerbotGoalKind.Group;
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), group.Approach) > PlayerbotGroupCoordinator.WorldBossPresentSlackYards)
+            Step = WalkTo(player, group.Approach, interval, toward: true) ? "worldboss:walk-rally-marked" : "worldboss:no-path-rally-marked";
+        else
+        {
+            Step = "worldboss:hold-marked";
+            Hold(player);
+        }
+
+        return true;
+    }
 
     private void Hold(Player player)
     {
