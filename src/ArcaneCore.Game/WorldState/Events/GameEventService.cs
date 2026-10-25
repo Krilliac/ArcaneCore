@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.WorldState.Events;
 /// does no I/O: the running set goes to an <see cref="IGameEventStatusSink"/>. World thread.
 /// </para>
 /// </summary>
-public sealed class GameEventService : IGameEventState
+public sealed partial class GameEventService : IGameEventState
 {
     private readonly SortedDictionary<ushort, GameEventDefinition> _definitions;
     private readonly Dictionary<ushort, GameEventSource> _sources;

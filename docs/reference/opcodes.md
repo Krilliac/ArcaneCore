@@ -255,7 +255,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_MOVE_HOVER_ACK` | `0x00F6` | handled | — | — |
 | `MSG_MOVE_HOVER` | `0x00F7` | unhandled | 2 | allowlisted |
 | `CMSG_TRIGGER_CINEMATIC_CHEAT` | `0x00F8` | dropped (dev) | — | — |
-| `CMSG_OPENING_CINEMATIC` | `0x00F9` | unhandled | — | — |
+| `CMSG_OPENING_CINEMATIC` | `0x00F9` | handled | — | — |
 | `SMSG_TRIGGER_CINEMATIC` | `0x00FA` | — | 3 | decoded |
 | `CMSG_NEXT_CINEMATIC_CAMERA` | `0x00FB` | handled | — | — |
 | `CMSG_COMPLETE_CINEMATIC` | `0x00FC` | handled | — | — |
@@ -814,7 +814,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GM_UPDATE_TICKET_STATUS` | `0x0327` | unhandled | — | — |
 | `SMSG_GM_TICKET_STATUS_UPDATE` | `0x0328` | — | 0 | — |
 | `MSG_SET_DUNGEON_DIFFICULTY` | `0x0329` | unhandled | 0 | — |
-| `CMSG_GMSURVEY_SUBMIT` | `0x032A` | unhandled | — | — |
+| `CMSG_GMSURVEY_SUBMIT` | `0x032A` | handled | — | — |
 | `SMSG_UPDATE_INSTANCE_OWNERSHIP` | `0x032B` | — | 123 | decoded |
 | `CMSG_IGNORE_KNOCKBACK_CHEAT` | `0x032C` | dropped (dev) | — | — |
 | `SMSG_CHAT_PLAYER_AMBIGUOUS` | `0x032D` | — | 0 | — |

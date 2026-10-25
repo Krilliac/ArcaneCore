@@ -28,7 +28,7 @@ namespace ArcaneCore.World.Warden;
 /// action per <see cref="WardenOptions.StaffNoticeCooldownSeconds"/>; the held-back count follows as one line.
 /// </para>
 /// </summary>
-public sealed class WardenFeature(IServiceProvider services, ILogger<WardenFeature> logger) : IWorldFeature
+public sealed partial class WardenFeature(IServiceProvider services, ILogger<WardenFeature> logger) : IWorldFeature
 {
     public const string BanAuthor = "Warden";
 

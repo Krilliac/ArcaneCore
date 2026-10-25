@@ -71,7 +71,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
     internal static bool CommandsHelp(CommandContext context, string text)
     {
-        bool isGm = context.IsConsole || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
+        bool isGm = context.IsTrueConsole() || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
         context.Reply(PlayerbotChatCommands.HelpFor(isGm));
         context.Reply(isGm
             ? "Dot commands: .bot <commands|gear|summon|party|raid|status|list|debug|cadence> (or .playerbot ...)."
@@ -243,8 +243,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
             return true;
         }
 
-        if (!context.IsConsole && context.Security < AccountSecurity.GameMaster)
+        if (!context.IsTrueConsole() && context.Security < AccountSecurity.GameMaster)
         {
+            if (context.IsConsole)
+            {
+                context.Reply(GmStrings.SecurityTooLow); // a remote invoker has no character to share a group with
+                return true;
+            }
+
             GroupManager? groups = context.Session.Services.GetService<SocialFeature>()?.Context.Groups;
             if (groups?.AreInSameGroup(context.Player.Guid, botPlayer.Guid) != true)
             {
@@ -593,8 +599,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
     internal static bool SummonSingleOrFleet(CommandContext context, string text)
     {
-        if (!context.IsConsole && context.Security < AccountSecurity.GameMaster)
+        if (!context.IsTrueConsole() && context.Security < AccountSecurity.GameMaster)
         {
+            if (context.IsConsole)
+            {
+                context.Reply(GmStrings.SecurityTooLow); // a remote invoker has no character to share a group with
+                return true;
+            }
+
             var args = new CommandArgs(text);
             string? targetArg = args.ExtractArg();
             if (string.IsNullOrEmpty(targetArg) || !args.IsEmpty)

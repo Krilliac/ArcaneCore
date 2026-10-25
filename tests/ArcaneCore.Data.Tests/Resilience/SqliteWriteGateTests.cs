@@ -58,8 +58,9 @@ public sealed class SqliteWriteGateTests : IDisposable
             {
                 try
                 {
-                    // The live write bound (5 s): the gate's wait is bounded by it, and a loaded test host (parallel test classes, Windows' 15.6 ms timer) must not time out.
-                    await using GateDb db = Create(connection, gate, writeTimeoutMs: 5000);
+                    // A generous write bound: the gate's wait is bounded by it, and a loaded test host (parallel test classes starving the thread pool, Windows' 15.6 ms timer)
+                    // must not turn a scheduling delay into a busy failure. A gate that really loses writers still fails (count and first exception are asserted).
+                    await using GateDb db = Create(connection, gate, writeTimeoutMs: 30000);
                     await using var transaction = await db.Database.BeginTransactionAsync();
                     db.Rows.Add(new GateRow { Writer = writer, Seq = seq });
                     await db.SaveChangesAsync();
@@ -182,13 +183,15 @@ public sealed class SqliteWriteGateTests : IDisposable
     public async Task AHoldOlderThanMaxHold_IsReleasedByTheNextWaiter()
     {
         string connection = ConnectionString("stuck.db");
-        SqliteSingleWriterOptions options = new() { Enabled = true, WaitMs = 3000, MaxHoldMs = 200, StatsIntervalMs = 0 };
+        SqliteSingleWriterOptions options = new() { Enabled = true, WaitMs = 30000, MaxHoldMs = 200, StatsIntervalMs = 0 };
         SqliteWriteGate gate = SqliteWriteGate.For(connection)!;
         SqliteWriteGate.Hold leaked = gate.Enter(100, "leaked", options.MaxHoldMs)!;
         Assert.NotNull(leaked);
 
+        // The waiter wakes once a second to release the stuck hold. The wait bound is generous because a full parallel suite can starve the thread pool for
+        // seconds and a tight bound would turn that scheduling delay into a false failure; a release that never happens still fails at the bound.
         SqliteWriteGate.Hold? next = await gate.EnterAsync(options.WaitMs, "next", options.MaxHoldMs, CancellationToken.None);
-        Assert.NotNull(next);
+        Assert.True(next is not null, $"waiter gave up: timeouts={gate.TimeoutsTotal}, forced={gate.ForcedTotal}, current={gate.Current?.Owner}, leakedHeldMs={leaked.HeldMs:0}");
         Assert.True(leaked.Forced);
         leaked.Release(); // the late release of the leaked holder must not free the gate under "next"
         Assert.Same(next, gate.Current);

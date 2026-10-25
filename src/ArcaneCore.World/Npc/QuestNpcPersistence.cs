@@ -29,6 +29,42 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     /// <summary>Raised once when a durable ownership fence rejects a quest or taxi write.</summary>
     public event Action<Exception>? FatalFailure;
 
+    /// <summary>Quest and taxi writes queued or in progress, over all characters.</summary>
+    public int Pending
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _characters.Values.Sum(c => c.Pending);
+            }
+        }
+    }
+
+    /// <summary>Ids of characters whose last quest or taxi write failed and is not yet durable (quarantined characters excluded), ascending.</summary>
+    public IReadOnlyList<int> RetainedCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key)).Select(c => c.Key).Order()];
+            }
+        }
+    }
+
+    /// <summary>The failure that halted the queue for good (a rejected character ownership), or null while it is running.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
+
     public void Start()
     {
         lock (_gate)

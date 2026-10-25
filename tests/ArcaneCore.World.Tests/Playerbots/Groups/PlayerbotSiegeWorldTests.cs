@@ -1543,6 +1543,62 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task AMeleeWaitingLeaderChasingAnAttackerOutOfReach_WalksAChaseRoute_SoTheLoopWatchDoesNotCountItsEnds()
+    {
+        (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
+        await using GroupTestWorld _ = world;
+        world.Options.Party.TeleportToLeader = false;
+        Guid leaderBot = raid.Group!.LeaderBotId;
+        var held = raid.Group.Members.First(m => !m.Real && m.BotId != leaderBot);
+        int stepAtPush = -1;
+        Creature? attacker = null;
+        uint sentAt = 0, engagedAt = 0;
+        bool engaged = false, killed = false, chasing = false;
+        var plain = new List<string>();
+        bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 300_000, () =>
+        {
+            TopUpGuards(world, raid);
+            TopUpMembers(world, raid);
+            Player leader = Leader(world, raid);
+            if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) stepAtPush = siege.Step;
+            if (stepAtPush < 0) return false;
+            Player far = world.World.Host.World.FindOnlinePlayer(held.Guid)!;
+            far.Relocate(Origin.X + 38f, Origin.Y, far.Z, 0, Now(world));
+            if (attacker is null && SendRangedAttacker(siege, raid, leader, stepAtPush, Now(world)) is { } sent)
+            {
+                attacker = sent;
+                sentAt = Now(world);
+            }
+
+            if (attacker is null) return false;
+            if (attacker.IsAlive && !ReferenceEquals(attacker.Combat.Victim, leader)) attacker.Combat.Threat.AddThreat(leader, 100_000f);
+            // Every route the leader walks that ends at the attacker is a chase: the watch must not count it (the waypoint walk, the chase, the walk back read as A, B, A).
+            if (attacker.IsAlive && PlayerbotMotion.RouteOf(leader) is { } route && route.Points.Count > 0
+                && FlatYards(leader, new Vector3(attacker.X, attacker.Y, attacker.Z)) > 3f
+                && Vector3.Distance(route.Points[^1], new Vector3(attacker.X, attacker.Y, attacker.Z)) <= 4f)
+            {
+                chasing = true;
+                if (!route.Chase) plain.Add($"t={Now(world) - sentAt} end=({route.Points[^1].X:F1},{route.Points[^1].Y:F1})");
+            }
+
+            if (!engaged && attacker.IsAlive && FlatYards(leader, new Vector3(attacker.X, attacker.Y, attacker.Z)) <= 6f)
+            {
+                engaged = true;
+                engagedAt = Now(world);
+            }
+
+            if (engaged && attacker.IsAlive && unchecked(Now(world) - engagedAt) > 4_000) leader.Map!.Combat.Kill(null, attacker);
+            killed |= !attacker.IsAlive;
+            return killed || unchecked(Now(world) - sentAt) > 80_000;
+        });
+
+        string story = $"done={done} sent={attacker is not null} engaged={engaged} killed={killed} chasing={chasing}";
+        if (attacker is null) Assert.Fail("the probe never fired: " + story);
+        if (!chasing) Assert.Fail("the leader never walked a route to the attacker, the probe proves nothing: " + story);
+        if (plain.Count > 0) Assert.Fail("the fight chase was planned as a plain route, so the loop watch counts its ends: " + story + " " + string.Join("; ", plain.Take(5)));
+    }
+
+    [Fact]
     public async Task AnAttackerThatKitesBeyondTheLeash_IsNotFollowedFurther_TheLeaderReturnsToTheWaypoint_NoDenial()
     {
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();

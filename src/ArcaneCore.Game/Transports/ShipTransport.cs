@@ -21,7 +21,7 @@ namespace ArcaneCore.Game.Transports;
 /// <see cref="CurrentMap"/> names the map it sails on. World thread only.
 /// </para>
 /// </summary>
-public sealed class ShipTransport : WorldObject
+public sealed partial class ShipTransport : WorldObject
 {
     /// <summary>vmangos <c>ShipTransport::Update</c> <c>positionUpdateDelay</c>: the position is recomputed at most every 50 ms.</summary>
     public const uint PositionUpdateDelayMs = 50;
