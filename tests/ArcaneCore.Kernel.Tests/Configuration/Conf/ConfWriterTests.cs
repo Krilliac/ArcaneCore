@@ -31,6 +31,19 @@ public sealed class ConfWriterTests : IDisposable
         => new ConfigurationBuilder().AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value))).Build();
 
     [Fact]
+    public void WriteDefaults_SectionIndexListsNamesOnly_WithoutPerSectionKeyCounts()
+    {
+        string text = ConfWriter.WriteDefaults(_catalog, ConfigDaemon.World);
+        int start = text.IndexOf("# SECTIONS\n#\n", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the index header is missing");
+        int end = text.IndexOf("\n#\n", start + "# SECTIONS\n#\n".Length, StringComparison.Ordinal);
+        string index = text[start..end];
+        Assert.Contains("\n#   FIXTURE", index, StringComparison.Ordinal);
+        Assert.DoesNotContain(" keys", index, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"\d", index);
+    }
+
+    [Fact]
     public void WriteDefaults_HasSectionBannersAndACommentBlockPerKey()
     {
         string text = ConfWriter.WriteDefaults(_catalog, ConfigDaemon.World);

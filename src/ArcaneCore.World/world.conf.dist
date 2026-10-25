@@ -26,57 +26,57 @@
 
 # SECTIONS
 #
-#   ANTICHEAT                   44 keys
-#   AUCTIONHOUSEBOT             39 keys
-#   AURAS                       4 keys
-#   AUTOBROADCAST               3 keys
-#   BANS                        7 keys
-#   BATTLEGROUND                8 keys
-#   CHARACTERCREATION           13 keys
-#   CLIENTDATA                  2 keys
-#   CLUSTER                     15 keys
-#   COMBAT                      11 keys
-#   CONDITIONS                  2 keys
-#   CRAFTING                    1 keys
-#   CREATURES                   67 keys
-#   DATABASE                    26 keys
-#   DIAGNOSTICS                 13 keys
-#   ECONOMY                     29 keys
-#   ENCHANTING                  3 keys
-#   FORMS                       1 keys
-#   GAMEOBJECTS                 5 keys
-#   HOTRELOAD                   5 keys
-#   ITEMRANDOMPROPERTIES        2 keys
-#   ITEMSETS                    1 keys
-#   ITEMS                       7 keys
-#   LOCOMOTION                  17 keys
-#   LOGGING                     16 keys
-#   LOOT                        15 keys
-#   MODULES                     6 keys
-#   NAMES                       2 keys
-#   NET                         16 keys
-#   NPCSERVICES                 8 keys
-#   OPS                         60 keys
-#   PAGETEXT                    1 keys
-#   PERFORMANCELOG              8 keys
-#   PETS                        7 keys
-#   PROGRESSION                 7 keys
-#   QUESTS                      14 keys
-#   RANGED                      4 keys
-#   REPUTATION                  7 keys
-#   RESILIENCE                  14 keys
-#   REST                        5 keys
-#   SERVERMAIL                  1 keys
-#   SKILLS                      19 keys
-#   SPECIALLOOT                 4 keys
-#   SPELLRULES                  8 keys
-#   SPELLS                      10 keys
-#   STARTUP                     1 keys
-#   STATS                       1 keys
-#   TALENTS                     12 keys
-#   TOTEMS                      3 keys
-#   WARDEN                      15 keys
-#   WORLD                       732 keys
+#   ANTICHEAT
+#   AUCTIONHOUSEBOT
+#   AURAS
+#   AUTOBROADCAST
+#   BANS
+#   BATTLEGROUND
+#   CHARACTERCREATION
+#   CLIENTDATA
+#   CLUSTER
+#   COMBAT
+#   CONDITIONS
+#   CRAFTING
+#   CREATURES
+#   DATABASE
+#   DIAGNOSTICS
+#   ECONOMY
+#   ENCHANTING
+#   FORMS
+#   GAMEOBJECTS
+#   HOTRELOAD
+#   ITEMRANDOMPROPERTIES
+#   ITEMSETS
+#   ITEMS
+#   LOCOMOTION
+#   LOGGING
+#   LOOT
+#   MODULES
+#   NAMES
+#   NET
+#   NPCSERVICES
+#   OPS
+#   PAGETEXT
+#   PERFORMANCELOG
+#   PETS
+#   PROGRESSION
+#   QUESTS
+#   RANGED
+#   REPUTATION
+#   RESILIENCE
+#   REST
+#   SERVERMAIL
+#   SKILLS
+#   SPECIALLOOT
+#   SPELLRULES
+#   SPELLS
+#   STARTUP
+#   STATS
+#   TALENTS
+#   TOTEMS
+#   WARDEN
+#   WORLD
 #
 ###############################################################################
 
