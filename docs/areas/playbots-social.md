@@ -322,7 +322,7 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
 
 - **Which events are festivals.** A game event with a holiday id (the Hourly Bells, the day and night events and the war-effort events never
   are) is a *root*. An event linked to a running root (`game_event.linked_to`, at most four links; Wickerman Ember to Hallow's End) counts
-  while its root runs; the Darkmoon Faire's companion event 21 counts as holiday 141. A festival has a flavour (Midsummer, Winter Veil, Lunar
+  while its root runs; event 21 (Winter Veil: Gifts) is not linked in the data, counts as nothing in slice 1 and is held for the later event-quest stage. A festival has a flavour (Midsummer, Winter Veil, Lunar
   Festival, Love is in the Air, Noblegarden, Children's Week, Hallow's End, Harvest Festival, Darkmoon Faire, fishing contest, or a plain
   "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The fishing contest names itself but does not gather
   (its NPCs run a contest, not a party). `World:Playerbots:Social:Events:Holidays:ExcludedEvents` is a comma list of event ids (at most 64) that are never festivals.
@@ -359,7 +359,7 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
   `arcanecore_playerbot_events_total{kind,outcome}`, `arcanecore_playerbot_event_lines_total{kind}` and `arcanecore_playerbot_event_suppressed_total{reason}`
   ([metrics](../ops/metrics.md)); the suppression reasons are `no_listener`, `listener_cap`, `cut_off`, `ignored`, `emote_listener_budget` and `emote_anchor_budget`, so a cap that never lets anything through is visible.
   A fault in the festival code is recorded under `playerbot.social.events` and pauses that bot's festival goals for a minute.
-- **Cost.** One dictionary lookup per held bot and pass, no per-bot allocation in the steady state; the board is rebuilt only when a festival event changes; the walk to a place is the ordinary town walk.
+- **Cost.** One dictionary lookup per held bot and pass, no allocation per think; a small listener list is allocated per emote or line attempt (one attempt per 30 to 90 s per held bot) and per arrival; the board is rebuilt only when a festival event changes; the walk to a place is the ordinary town walk.
 - **Not done in this slice.** Targeted festival emotes at friendly real players, and the war-effort and scenario festival chapters.
   Tests: `tests/ArcaneCore.World.Tests/Playerbots/Events/`.
 

@@ -194,17 +194,25 @@ public sealed class PlayerbotHolidayCatalogTests
     // --- the companion ---------------------------------------------------------------------------------------------------
 
     [Fact]
-    public void WinterVeilGifts_IsACompanionOfWinterVeil_AndAddsNoSpawns()
+    public void WinterVeilGifts_IsNotAMember_AndAddsNoSpawns_InSliceOne()
     {
-        Assert.Equal(141u, PlayerbotHolidayCatalog.CompanionHoliday(21));
-        Assert.Null(PlayerbotHolidayCatalog.CompanionHoliday(2));
-        Assert.Null(PlayerbotHolidayCatalog.CompanionHoliday(12));
-        Assert.Null(PlayerbotHolidayCatalog.CompanionHoliday(1024));
-
-        // A companion is not a festival member: it brings no anchors, so even with Winter Veil running it is not in the member map.
+        // Event 21 is not linked in the data and is held for H6: it brings no anchors, so even with Winter Veil running it is not in the member map.
         IReadOnlyDictionary<ushort, ushort> members = PlayerbotHolidayCatalog.ActiveMembers(Z2815(), new HashSet<ushort> { 2, 21 }, None);
         Assert.False(members.ContainsKey(21));
         Assert.Equal((ushort)2, members[2]);
+    }
+
+    [Fact]
+    public void TheCatalog_HasNoCompanionHolidayUntilH6()
+        => Assert.Null(typeof(PlayerbotHolidayCatalog).GetMethod("CompanionHoliday", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic));
+
+    [Fact]
+    public void TheAreaDoc_DoesNotMisstateEvent21_OrTheAllocationCost()
+    {
+        string doc = File.ReadAllText(Path.Combine(ArcaneCore.TestSupport.RepositorySource.RequireRoot(), "docs", "areas", "playbots-social.md"));
+        Assert.DoesNotContain("companion event 21 counts as holiday 141", doc);
+        Assert.DoesNotContain("no per-bot allocation in the steady state", doc);
+        Assert.Contains("Winter Veil: Gifts", doc);
     }
 
     // --- the flavour -----------------------------------------------------------------------------------------------------

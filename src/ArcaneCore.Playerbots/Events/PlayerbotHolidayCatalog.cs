@@ -13,7 +13,7 @@ internal sealed record PlayerbotFestivalFlavour(string Key, string Name, IReadOn
 /// Which game events are festivals (docs/areas/playbots-social.md, World events). The game-event data is the authority on what runs and where;
 /// this catalog only reads it: a festival <b>root</b> is an event with a client holiday id (Call to Arms aside, and any event the operator
 /// excluded), a <b>member</b> is an event whose <c>LinkedTo</c> chain reaches a root (Hallow's End and its two sub-events 24 and 25 in classic-db
-/// z2815), and one curated <b>companion</b> is an event the data does not link (21, Winter Veil: Gifts, to 141). Only the flavour (key, name,
+/// z2815). Event 21 (Winter Veil: Gifts) is not linked in the data and is not a member in slice 1; it is held for the event-quest stage (H6). Only the flavour (key, name,
 /// emotes) is curated. Pure and stateless; any thread.
 /// </summary>
 internal static class PlayerbotHolidayCatalog
@@ -71,9 +71,6 @@ internal static class PlayerbotHolidayCatalog
             if (RootOf(id, find, excluded) is { } root && running.Contains(root)) members[id] = root;
         return members;
     }
-
-    /// <summary>The holiday id of the festival a data-unlinked event belongs to (21, Winter Veil: Gifts, to 141), or null. Brings no spawns.</summary>
-    internal static uint? CompanionHoliday(ushort eventId) => eventId == 21 ? 141u : null;
 
     /// <summary>
     /// The flavour of a holiday id; an unknown id gets the key <c>festival</c>, <paramref name="description"/> as its name and the default
