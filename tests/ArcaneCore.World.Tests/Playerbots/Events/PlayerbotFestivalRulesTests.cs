@@ -45,17 +45,17 @@ public sealed class PlayerbotFestivalRulesTests
 
     private static readonly (string Why, PlayerbotAnchorFacts Facts)[] RejectedFacts =
     [
-        ("not selectable (a spotlight or credit marker)", new PlayerbotAnchorFacts { NotSelectable = true }),
-        ("invisible (a trigger)", new PlayerbotAnchorFacts { Behaviour = CreatureBehaviourFlags.Invisible }),
-        ("a guard", new PlayerbotAnchorFacts { Behaviour = CreatureBehaviourFlags.Guard }),
-        ("invisible among other flags", new PlayerbotAnchorFacts { Behaviour = CreatureBehaviourFlags.NoAggro | CreatureBehaviourFlags.Invisible }),
-        ("absent (its event is off)", new PlayerbotAnchorFacts { Present = false }),
-        ("outside the home", new PlayerbotAnchorFacts { InsideHome = false }),
-        ("beyond the radius", new PlayerbotAnchorFacts { DistanceFromTownYards = Radius + 0.5f }),
-        ("hostile to the team", new PlayerbotAnchorFacts { Hostile = true }),
-        ("not approachable by the team", new PlayerbotAnchorFacts { Approachable = false }),
-        ("PvP enforced on the team", new PlayerbotAnchorFacts { PvpEnforced = true }),
-        ("inside a GM scenario area", new PlayerbotAnchorFacts { InsideScenarioArea = true }),
+        ("not selectable (a spotlight or credit marker)", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, NotSelectable = true }),
+        ("invisible (a trigger)", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Behaviour = CreatureBehaviourFlags.Invisible }),
+        ("a guard", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Behaviour = CreatureBehaviourFlags.Guard }),
+        ("invisible among other flags", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Behaviour = CreatureBehaviourFlags.NoAggro | CreatureBehaviourFlags.Invisible }),
+        ("absent (its event is off)", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Present = false }),
+        ("outside the home", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, InsideHome = false }),
+        ("beyond the radius", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = Radius + 0.5f }),
+        ("hostile to the team", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Hostile = true }),
+        ("not approachable by the team", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, Approachable = false }),
+        ("PvP enforced on the team", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, PvpEnforced = true }),
+        ("inside a GM scenario area", new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, InsideScenarioArea = true }),
     ];
 
     public static TheoryData<int> Rejected()
@@ -79,13 +79,13 @@ public sealed class PlayerbotFestivalRulesTests
     [Fact]
     public void TheRadius_IsInclusive_AndCountsFromTheTownCentre()
     {
-        Assert.NotNull(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = Radius }));
-        Assert.NotNull(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = 0f }));
-        Assert.Null(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = Radius + 0.01f }));
-        Assert.NotNull(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = 20f }, radius: 20f));
-        Assert.Null(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = 20.5f }, radius: 20f));
-        Assert.NotNull(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = 1000f }, radius: 1000f));
-        Assert.Null(Kind(new PlayerbotAnchorFacts { DistanceFromTownYards = float.NaN }));
+        Assert.NotNull(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = Radius }));
+        Assert.NotNull(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = 0f }));
+        Assert.Null(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = Radius + 0.01f }));
+        Assert.NotNull(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = 20f }, radius: 20f));
+        Assert.Null(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = 20.5f }, radius: 20f));
+        Assert.NotNull(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = 1000f }, radius: 1000f));
+        Assert.Null(Kind(new PlayerbotAnchorFacts { NpcFlags = NpcFlags.Gossip, DistanceFromTownYards = float.NaN }));
     }
 
     // --- the ring --------------------------------------------------------------------------------------------------------

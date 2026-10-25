@@ -78,7 +78,7 @@ public sealed class PlayerbotEventCommentWorldTests
     {
         // The control above speaks within the attempts; here the same festival has no anchor (its only NPC belongs to another event).
         await using SocialWorld world = await StartAsync(new FakeBotChatClient(), [Gossip(Hallows)], options => options.Chat.Safety.RequireOptIn = true);
-        (_, WorldTestClient listener) = await SetUpAsync(world, "Noanchor");
+        (_, WorldTestClient listener) = await SetUpAsync(world, "Noanc");
         await using WorldTestClient disposeListener = listener;
 
         await ScanAsync(world, WinterVeil, 0, Attempts, until: 1);
@@ -118,7 +118,7 @@ public sealed class PlayerbotEventCommentWorldTests
     public async Task HallowsEndAsARoot_IsRemarkedOnByItsName()
     {
         await using SocialWorld world = await StartAsync(new FakeBotChatClient(), [Gossip(Hallows)], options => options.Chat.Safety.RequireOptIn = true);
-        (_, WorldTestClient listener) = await SetUpAsync(world, "Hallows");
+        (_, WorldTestClient listener) = await SetUpAsync(world, "Hallow");
         await using WorldTestClient disposeListener = listener;
 
         await ScanAsync(world, Hallows, 0, Attempts, until: 1);
@@ -190,7 +190,7 @@ public sealed class PlayerbotEventCommentWorldTests
     public async Task APlayerWhoWasRemarkedTo_IsNotAddressedAgainWithin30Minutes_ButIsAfterIt()
     {
         await using SocialWorld world = await StartAsync(new FakeBotChatClient(), [Gossip(WinterVeil)], options => options.Chat.Safety.RequireOptIn = true);
-        (_, WorldTestClient listener) = await SetUpAsync(world, "Ledgerc");
+        (_, WorldTestClient listener) = await SetUpAsync(world, "Ledgc");
         await using WorldTestClient disposeListener = listener;
 
         long first = await ScanAsync(world, WinterVeil, 0, Attempts, until: 1);

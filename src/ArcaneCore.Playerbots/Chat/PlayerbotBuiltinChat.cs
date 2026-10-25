@@ -408,7 +408,7 @@ internal static partial class PlayerbotBuiltinChat
     private static readonly HashSet<string> TopicOnly = new(StringComparer.Ordinal)
     {
         "guild", "who", "newlevel", "boss", "battleground", "instance", "item", "place", "dungeon", "price", "count", "roles", "task",
-        "where", "node", "newzone", "minlevel", "loot", "wanted", "topic",
+        "where", "node", "newzone", "minlevel", "loot", "wanted", "topic", "event",
     };
 
     private static string? Value(string name, BotChatAsk ask, BotChatPersona p, BotChatFacts? f)

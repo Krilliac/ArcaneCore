@@ -148,7 +148,8 @@ public sealed class PlayerbotFestivalTalkWorldTests
     public async Task AListenerWhoSaidAiOff_GetsABuiltinLine_AndTheModelGetsNoCall_WhileAnotherListenerGetsTheModel()
     {
         var model = new FakeBotChatClient();
-        await using SocialWorld world = await StartAsync(model);
+        // The same bot arrives twice 199 seconds apart: its own gap is shortened so it is not what holds the second line back.
+        await using SocialWorld world = await StartAsync(model, options => options.Social.Events.Holidays.TalkBotGapMinutes = 1);
         await StartEventAsync(world, WinterVeil);
         (ulong botGuid, string bot) = await BotAsync(world, "Aioffbot");
         Eager(world);
@@ -276,18 +277,17 @@ public sealed class PlayerbotFestivalTalkWorldTests
         })
         {
             at += 100 * Minute;
+            int before = Lane(world).Lines; // Lines counts for the whole test: each switch is judged by what it adds
             await world.Host.OnWorldAsync(() => flip(false));
             Assert.True(await ClaimAsync(world, bot, WinterVeil, at));
             await RunLaneAsync(world, at);
-            Assert.Equal(0, Lane(world).Lines);
+            Assert.Equal(before, Lane(world).Lines);
 
             at += 100 * Minute;
             await world.Host.OnWorldAsync(() => flip(true));
             Assert.True(await ClaimAsync(world, bot, WinterVeil, at));
             await RunLaneAsync(world, at);
-            Assert.True(Lane(world).Lines >= 1);
-            int before = Lane(world).Lines;
-            Assert.Equal(before, Lane(world).Lines);
+            Assert.Equal(before + 1, Lane(world).Lines);
         }
     }
 

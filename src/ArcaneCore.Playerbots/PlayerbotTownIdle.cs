@@ -81,6 +81,20 @@ internal sealed class PlayerbotTownIdle
         _last = TownIdleAction.Explore;
         _bestDistance = float.MaxValue;
     }
+
+    /// <summary>
+    /// The town centre this idle is measured from has changed (a festival spot became the centre, or the bot gave it up and the inn is again):
+    /// the walk state belongs to one centre, so it is cleared. The best distance and a give-up of the old centre mean nothing against the
+    /// new one, and a walk given up toward the old centre must not hold the bot back from the new one. The linger and explore window of a
+    /// secondary town is a clock, not walk state, and is kept.
+    /// </summary>
+    internal void Recentre()
+    {
+        _last = TownIdleAction.Explore;
+        _bestDistance = float.MaxValue;
+        _deferred = false;
+    }
+
     private bool _started;
     private float _bestDistance = float.MaxValue;
     private uint _bestAt;
