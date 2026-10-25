@@ -87,6 +87,9 @@ internal sealed class PlayerbotPathJobs
     /// <summary>One yard of <see cref="PlayerbotNavigation.SearchNodes"/>: a cached answer computed with at least this much less than asked is still the answer.</summary>
     internal const int NodeTolerance = 48;
 
+    /// <summary>How far a finished job's destination may lie from the destination now asked and still answer it: 5% of the distance, 2..25 yards.</summary>
+    internal static float DestinationTolerance(Vector3 from, Vector3 to) => Math.Clamp(Vector3.Distance(from, to) * 0.05f, 2f, 25f);
+
     /// <summary>A wait longer than this (wall ms) is reported once (<c>nav/job-wait-long</c>).</summary>
     internal const long WaitLongMs = 5_000;
 
@@ -304,7 +307,7 @@ internal sealed class PlayerbotPathJobs
                 carry = new Carry(entry.Failures);
                 if (entry.Job.IsDone)
                 {
-                    PathResult? applied = TryApply(shared, map, player, entry, wallMs, state, ref carry, out how, out settled);
+                    PathResult? applied = TryApply(shared, map, player, entry, to, wallMs, state, ref carry, out how, out settled);
                     if (applied is not null)
                     {
                         state.PendingSinceWallMs = 0;
@@ -387,7 +390,7 @@ internal sealed class PlayerbotPathJobs
     }
 
     /// <summary>The applied answer of a finished job; null when it was dropped (<paramref name="settled"/> says what the caller does next).</summary>
-    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, long wallMs,
+    private PathResult? TryApply(ISharedTiledPathSearch shared, Map map, Player player, Entry entry, Vector3 to, long wallMs,
         BotState state, ref Carry carry, out JobAnswer how, out JobAnswer settled)
     {
         how = JobAnswer.Applied;
@@ -408,7 +411,7 @@ internal sealed class PlayerbotPathJobs
                 return null;
         }
 
-        if (job.Result is not { } result || !StillValid(shared, map, player, entry))
+        if (job.Result is not { } result || !StillValid(shared, map, player, entry) || !ReachesAsked(entry, result, to))
         {
             _totals = _totals with { Stale = _totals.Stale + 1 };
             state.Remove(entry);
@@ -441,6 +444,15 @@ internal sealed class PlayerbotPathJobs
 
         carry = default;
         return result with { Points = new List<Vector3>(result.Points) };
+    }
+
+    /// <summary>An answer found for a destination near the asked one stands only if its route ends within the tolerance of the asked one.</summary>
+    private static bool ReachesAsked(Entry entry, PathResult result, Vector3 to)
+    {
+        if (entry.To == to) return true;
+        if (result.Points.Count == 0) return false;
+        float tolerance = DestinationTolerance(entry.Start, to);
+        return Vector3.DistanceSquared(result.Points[^1], to) <= tolerance * tolerance;
     }
 
     private static bool StillValid(ISharedTiledPathSearch shared, Map map, Player player, Entry entry)
@@ -719,12 +731,24 @@ internal sealed class PlayerbotPathJobs
 
         internal Entry? Find(PathOptions key, Vector3 to, Vector3 from, int nodes)
         {
+            // An exact destination wins; otherwise the nearest one within the tolerance (a destination that keeps moving, such as a
+            // leader, still finds the job asked a think ago). TryApply re-validates a near match against the destination asked now.
+            float tolerance = DestinationTolerance(from, to);
+            Entry? best = null;
+            float bestSq = tolerance * tolerance;
             foreach (Entry e in Entries)
             {
-                if (e.To == to && Vector3.DistanceSquared(e.Start, from) <= 1f && e.MaxNodes >= nodes - NodeTolerance && e.Key.Equals(key)) return e;
+                if (Vector3.DistanceSquared(e.Start, from) > 1f || e.MaxNodes < nodes - NodeTolerance || !e.Key.Equals(key)) continue;
+                if (e.To == to) return e;
+                float d = Vector3.DistanceSquared(e.To, to);
+                if (d <= bestSq)
+                {
+                    best = e;
+                    bestSq = d;
+                }
             }
 
-            return null;
+            return best;
         }
 
         internal void Add(Entry entry) => Entries.Add(entry);

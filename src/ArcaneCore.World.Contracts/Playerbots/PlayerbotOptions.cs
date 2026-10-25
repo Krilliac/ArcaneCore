@@ -150,12 +150,12 @@ public sealed class PlayerbotOptions
     public int PathJobWaitMaxMs { get; set; } = 30_000;
 
     /// <summary>
-    /// The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, else 10..60000):
+    /// The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, the default until the 200-bot benchmark has run; else 10..60000):
     /// a search past it stops as one that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2 168 ms in a single
     /// 32 768-node search. Live: <c>.reload config</c>.
     /// </summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("0 (no bound), or a whole number from 10 to 60000")]
-    public int SyncPathQueryMaxMs { get; set; } = 100;
+    public int SyncPathQueryMaxMs { get; set; } = 0;
 
     /// <summary>The most points of one bot route (1..4096).</summary>
     public int MaxPathPoints { get; set; } = 128;

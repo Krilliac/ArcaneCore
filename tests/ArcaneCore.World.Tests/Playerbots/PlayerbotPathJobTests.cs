@@ -512,7 +512,51 @@ public sealed class PlayerbotPathJobTests
     }
 
     [Fact]
-    public async Task ADestinationThatMovesEveryThink_StillEndsItsWait_WithOneBoundedSynchronousSearch()
+    public async Task ADestinationThatMovesEveryThink_GetsARouteWithinAFewThinks_NotAfterThePathJobWait()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            int thinks = 0;
+            bool answered = false;
+            for (int step = 0; step < 40 && !answered; step++)
+            {
+                thinks++;
+                answered = !IsPending(h.Ask(h.Far(250 + (2 * step))));
+                h.Runner.CompleteAll();
+                h.Wall += 2_000;
+                h.Clock += 500;
+            }
+
+            Assert.True(answered, "the wait must end");
+            Assert.True(thinks <= 3, $"a moving destination needed {thinks} thinks");
+            Assert.Equal(0, h.Jobs.Totals.Escalations);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Single(h.Runner.Submitted);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AFinishedAnswerForADestinationFarFromTheAskedOne_IsNeverApplied()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+            Assert.True(IsPending(h.Ask(h.Far(300)))); // 50 yards away: beyond the tolerance, a new job
+            Assert.Equal(0, h.Jobs.Totals.Applied);
+            Assert.Equal(2, h.Runner.Submitted.Count);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ADestinationThatMovesEveryThink_ByJumpsBeyondTheTolerance_StillEndsItsWait_WithOneBoundedSynchronousSearch()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         await world.OnWorldAsync(() =>
@@ -521,8 +565,7 @@ public sealed class PlayerbotPathJobTests
             bool answered = false;
             for (int step = 0; step < 40 && !answered; step++)
             {
-                PathResult result = h.Ask(h.Far(250 + step));
-                answered = !IsPending(result);
+                answered = !IsPending(h.Ask(h.Far(250 + (40 * step)))); // each ask is far from the last: always a new job, never a match
                 h.Runner.CompleteAll();
                 h.Wall += 2_000;
                 h.Clock += 500;
@@ -532,6 +575,27 @@ public sealed class PlayerbotPathJobTests
             Assert.Equal(1, h.Jobs.Totals.Escalations);
             Assert.Equal(1, h.Nav.OwnerCalls);
             Assert.True(h.Wall - 1_000_000 <= (h.Options.PathJobWaitMaxMs + 4_000));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ADefaultConfigFarPlan_IsNotCutByTheDeadline_SoItsOutcomeDoesNotDependOnHostLoad()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var defaults = new PlayerbotOptions { Enabled = true, MaxPathPoints = 128, MaxRouteYards = 2000 };
+            Assert.Equal(0, defaults.SyncPathQueryMaxMs);
+            Assert.False(defaults.PathJobs);
+
+            var nav = new ManualSharedPathSearch();
+            using var h = new Harness(world, defaults, nav);
+            var wait = new TileWait();
+            Assert.Equal(PlanOutcome.Route, h.Plan(h.Far(250), ref wait, 1_000, out PlayerbotRoute? route));
+            Assert.NotNull(route);
+            Assert.Equal(0, nav.OwnerOptions[0].MaxSearchMs);
+            Assert.Equal(0, h.Probe.Search.DeadlineHits);
             return true;
         });
     }
