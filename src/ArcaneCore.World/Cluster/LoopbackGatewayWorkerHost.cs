@@ -31,6 +31,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
     {
         private static readonly TimeSpan SendDrainTimeout = TimeSpan.FromSeconds(2);
 
+        public required LoopbackGatewayWorkerHost Owner { get; init; }
         public required int Id { get; init; }
         public required TcpClient Tcp { get; init; }
         public required NetworkStream Stream { get; init; }
@@ -41,6 +42,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
         public async ValueTask DisposeAsync()
         {
+            Owner.DisposeStartedForTest?.Invoke();
             SendChannel.Writer.TryComplete();
 
             // Drain queued frames (notably the HelloAck rejection) before closing: closing first would discard
@@ -62,7 +64,9 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
             try
             {
-                // Graceful FIN after the last queued byte; the peer reads everything before seeing EOF.
+                // Graceful FIN after the last queued byte, so the peer reads everything before seeing EOF.
+                // This avoids a reset only when no unread incoming data is pending; closing a socket that still
+                // holds unread received bytes makes the OS send an RST regardless.
                 Tcp.Client.Shutdown(SocketShutdown.Send);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -135,6 +139,12 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         _localTransport.SessionDetachedForConnection += OnWorkerSessionDetached;
     }
 
+    /// <summary>Test seam (instance state): awaited by the send loop before each frame is written.</summary>
+    internal Func<Task>? BeforeSendFrameForTest { get; set; }
+
+    /// <summary>Test seam (instance state): invoked when a connection's disposal starts.</summary>
+    internal Action? DisposeStartedForTest { get; set; }
+
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
 
     public void Start()
@@ -181,6 +191,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 
             var conn = new ClientConnection
             {
+                Owner = this,
                 Id = id,
                 Tcp = client,
                 Stream = client.GetStream(),
@@ -193,12 +204,17 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         }
     }
 
-    private static async Task SendLoopAsync(ClientConnection conn, CancellationToken ct)
+    private async Task SendLoopAsync(ClientConnection conn, CancellationToken ct)
     {
         try
         {
             await foreach (byte[] frame in conn.SendChannel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                if (BeforeSendFrameForTest is { } gate)
+                {
+                    await gate().ConfigureAwait(false);
+                }
+
                 await WriteFrameAsync(conn.Stream, frame, ct).ConfigureAwait(false);
             }
         }
