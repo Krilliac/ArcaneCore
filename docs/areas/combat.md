@@ -129,6 +129,12 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - PLAYER_FLAGS_PVP_DESIRED; turning it on flags UNIT_FLAG_PVP at once.
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
+- `CombatHooks.CanAttack` resolves each side to its controlling player (`DuelRules.ControllingPlayer`, vmangos
+  `WorldObject::IsValidAttackTarget`) but tests the PvP flag only on the victim side: outside a duel, nothing a player
+  controls can attack another player's unit (the player, or a pet, guardian or totem) unless that unit's controlling
+  player is PvP flagged. The attacker's own flag is not tested, so an unflagged player can attack a flagged owner's pet.
+- Known gap: FFA PvP (both players flagged FFA, e.g. the Gurubashi arena) is not handled for player versus player
+  and now refuses pets and totems the same way; tracked here until an FFA rule is ported.
 
 ### Aura states and reactive abilities (warrior-mechanics S07)
 `AuraStateService` and `ReactiveService` (`Combat/Reactive/`, installed by `ReactiveFeature`), after vmangos
