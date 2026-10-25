@@ -3,6 +3,7 @@ using System.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Bots;
