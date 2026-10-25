@@ -74,7 +74,21 @@ internal sealed partial class PlayerbotBattlegroundAI
     private readonly PlayerbotBattlegroundBuffs _buffs = new();
     private readonly float _followAngle;
     private readonly float _followDistance;
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
+
+    /// <summary>The route this driver walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
+
     private Vector3 _routeGoal;
     private readonly PlayerbotPvpFight _pvp;
     private readonly Func<Vector3, uint, bool, bool> _chase;
@@ -817,8 +831,9 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
         {
             PlanOutcome planned = toward
-                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? plannedRoute)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out plannedRoute, chase: chase);
+            _route = plannedRoute;
             if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;
@@ -836,8 +851,9 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             _route = null;
             PlanOutcome replanned = toward
-                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route)
-                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route, chase: chase);
+                ? PlayerbotNavigation.PlanToward(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? replannedRoute)
+                : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out replannedRoute, chase: chase);
+            _route = replannedRoute;
             if (replanned != PlanOutcome.Route || _route is null)
             {
                 _route = null;

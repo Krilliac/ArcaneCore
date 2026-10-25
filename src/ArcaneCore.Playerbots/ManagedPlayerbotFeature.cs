@@ -2533,6 +2533,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                         if (!active.BattlegroundDriven)
                         {
+                            ReleaseBrainRoute(driven);
                             PlayerbotTaxi.Cancel(driven);
                             PlayerbotTravel.CancelLegs(active.Session, driven);
                         }
@@ -2546,8 +2547,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         {
                             driver = "battleground";
                             PlayerbotThinkProbe.Phase("battleground");
+                            uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             battlegrounds.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, renewals, sinceLast);
                         }
                     }
                     // A member of a bot-led group follows its group AI; when the group lets it go the brain resumes, with its
@@ -2562,6 +2564,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                         if (!active.GroupDriven)
                         {
+                            ReleaseBrainRoute(driven);
                             PlayerbotTaxi.Cancel(driven);
                             PlayerbotTravel.CancelLegs(active.Session, driven);
                         }
@@ -2575,8 +2578,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         {
                             driver = "group";
                             PlayerbotThinkProbe.Phase("group");
+                            uint renewals = PlayerbotMotion.RenewalsOf(driven);
                             coordinator.UpdateMember(active.Record.BotId, driven, sinceLast);
-                            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+                            PlayerbotMotion.SettleAfterDriver(active.Session, driven, renewals, sinceLast);
                         }
                     }
                     else
@@ -2604,6 +2608,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
+            if (measured is not null) PlayerbotMotion.NoteThink(measured, driver, world.NowMs);
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
         if (driver != "brain") active.Brain.CancelNavigationPlanning();
@@ -2613,13 +2618,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// The party AI takes the bot or gives it back, or a controller attaches or detaches: the route of the one before is not the next
     /// one's, and the motion would walk it for its lease, seconds long (<see cref="PlayerbotMotion"/>). Stops the bot if it moves along
-    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator are not stopped at takeover (stopping there
-    /// broke group formation); their drivers stop the bot themselves when they have nothing to walk: the group leader's Hold states
-    /// (PlayerbotGroupAI.Hold), a member whose leader is missing, Release, and the battleground coordinator's idle phases.
+    /// one. Party AI and controllers only: a bot-led group and the battleground coordinator do not stop the bot at takeover (stopping
+    /// there broke group formation); <see cref="ReleaseBrainRoute"/> marks the brain's route released instead, and the driver's first
+    /// settle (<see cref="PlayerbotMotion.SettleAfterDriver"/>) stops the bot unless that think followed a route of its own. The drivers
+    /// also stop the bot themselves when they have nothing to walk: the group leader's Hold states (PlayerbotGroupAI.Hold), a member
+    /// whose leader is missing, Release, and the battleground coordinator's idle phases.
     /// </summary>
     private static void ReleaseMotion(WorldSession session, Player player)
     {
         if (PlayerbotMotion.IsActive(player)) PlayerbotMovementControl.Stop(session, player);
+    }
+
+    /// <summary>
+    /// The battleground coordinator or a bot-led group takes the bot from its brain: the brain's route is marked released
+    /// (<see cref="PlayerbotRoute.Released"/>) without stopping the bot (see <see cref="ReleaseMotion"/>). The driver's settle
+    /// (<see cref="PlayerbotMotion.SettleAfterDriver"/>) stops a walk the driver does not take over (its own Follow clears the mark).
+    /// </summary>
+    private static void ReleaseBrainRoute(Player player)
+    {
+        if (PlayerbotMotion.RouteOf(player) is { } route) route.Released = true;
     }
 
     /// <summary>
@@ -2688,8 +2705,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (party)
         {
             PlayerbotThinkProbe.Phase("party");
+            uint partyRenewals = PlayerbotMotion.RenewalsOf(driven);
             active.Party.Update(driven, sinceLast);
-            PlayerbotMotion.SettleAfterThink(active.Session, driven, gaveUp: false, renewalsBefore: 0, sinceLast);
+            PlayerbotMotion.SettleAfterDriver(active.Session, driven, partyRenewals, sinceLast);
             return "party AI";
         }
         else

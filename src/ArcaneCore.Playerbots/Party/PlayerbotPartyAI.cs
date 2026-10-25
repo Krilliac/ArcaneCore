@@ -117,7 +117,20 @@ internal sealed class PlayerbotPartyAI
 
     /// <summary>The targets this bot found no path to, skipped for <see cref="UnreachableTargetMs"/> in <see cref="SelectTarget"/>; the leader's explicit choices are exempt. One thread (the bot's think).</summary>
     private readonly PlayerbotUnreachableTargets _unreachable = new();
-    private PlayerbotRoute? _route;
+    private PlayerbotRoute? _routeSlot;
+
+    /// <summary>The route this driver walks. Letting go of one (null or another route) marks it released
+    /// (<see cref="PlayerbotRoute.Released"/>): <see cref="PlayerbotMotion.SettleAfterDriver"/> stops a walk nobody holds.</summary>
+    private PlayerbotRoute? _route
+    {
+        get => _routeSlot;
+        set
+        {
+            if (ReferenceEquals(_routeSlot, value)) return;
+            if (_routeSlot is { } old) old.Released = true;
+            _routeSlot = value;
+        }
+    }
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
     private TileWait _tileWait;
@@ -1935,7 +1948,8 @@ internal sealed class PlayerbotPartyAI
     {
         if (_route is null || _route.Complete || Vector3.Distance(_routeGoal, goal) > 2f)
         {
-            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out _route);
+            PlanOutcome planned = PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? plannedRoute);
+            _route = plannedRoute;
             if (planned != PlanOutcome.Route)
             {
                 _route = null;

@@ -170,7 +170,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
                 return false;
             }
         }
-        else if (session.IsManaged || session.Security >= AccountSecurity.Moderator || session.HeuristicsGmMode)
+        else if (session.IsHeuristicsStaff)
         {
             traffic = PacketTraffic.Staff;
             if (settings.ExemptStaff)
@@ -254,6 +254,16 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         {
             Report(session, settings, state, traffic, PacketCheck.UnknownOpcode, opcode, AnomalySeverity.Info, length,
                 static length => string.Create(CultureInfo.InvariantCulture, $"no handler, {length} bytes"));
+        }
+    }
+
+    /// <summary>A stripped developer opcode the session dropped unread (never a staff session: those are audited instead).</summary>
+    internal void DevOpcode(WorldSession session, WorldOpcode opcode, int length)
+    {
+        if (Admit(session, out PacketHeuristicsSettings settings, out PacketHeuristicsSession state, out PacketTraffic traffic) && settings.CheckOn(PacketCheck.DevOpcode))
+        {
+            Report(session, settings, state, traffic, PacketCheck.DevOpcode, opcode, AnomalySeverity.Warning, length,
+                static length => string.Create(CultureInfo.InvariantCulture, $"stripped developer opcode, {length} bytes, dropped"));
         }
     }
 

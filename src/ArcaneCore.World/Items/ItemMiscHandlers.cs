@@ -39,7 +39,16 @@ public sealed class ItemMiscHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        bool casting = CombatEnvironment.For(session.World).MeleeSpells?.IsNonMeleeSpellCasted(player) == true;
+        // Wrapping changes the offered item's entry, and uses up one of the paper's stack: either would change what a trade
+        // partner who already accepted receives. Stricter than vmangos (no check there); refused unscored.
+        PlayerInventory inventory = player.Inventory;
+        if ((inventory.GetItem(payload[0], payload[1]) is { } paper && ItemHandlers.RefuseIfOffered(session, player, paper, score: false))
+            || (inventory.GetItem(payload[2], payload[3]) is { } target && ItemHandlers.RefuseIfOffered(session, player, target, score: false)))
+        {
+            return;
+        }
+
+        bool casting =CombatEnvironment.For(session.World).MeleeSpells?.IsNonMeleeSpellCasted(player) == true;
         player.Inventory.WrapItem(payload[0], payload[1], payload[2], payload[3], casting);
     }
 

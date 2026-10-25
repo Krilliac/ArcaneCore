@@ -222,8 +222,16 @@ public sealed class TerrainInfo
     /// </summary>
     public LiquidStatus GetLiquidStatus(float x, float y, float z, LiquidTypeFlags requiredType, out LiquidData data)
     {
+        return LiquidStatusOn(GetTile(x, y), x, y, z, requiredType, out data);
+    }
+
+    /// <summary>
+    /// <see cref="GetLiquidStatus"/> over a tile already in hand (the live path passes the cached tile, a background read passes
+    /// <see cref="TerrainManager.ReadTileDetached"/>'s): one implementation for both. Pure over the tile; any thread.
+    /// </summary>
+    public static LiquidStatus LiquidStatusOn(TerrainTile tile, float x, float y, float z, LiquidTypeFlags requiredType, out LiquidData data)
+    {
         data = default;
-        TerrainTile tile = GetTile(x, y);
         float ground = tile.GetHeight(x, y);
         LiquidStatus status = tile.GetLiquidStatus(x, y, z, requiredType, out LiquidData mapData);
         if (status != LiquidStatus.NoWater && mapData.Level > ground)

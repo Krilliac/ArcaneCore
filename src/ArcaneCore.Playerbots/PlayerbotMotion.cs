@@ -85,10 +85,18 @@ internal static class PlayerbotMotion
         internal uint RenewedMs;
         /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
         internal uint Renewals;
+        /// <summary>The motion-clock time of the route's last <see cref="Follow"/> (adopted or renewed); <see cref="SettleAfterDriver"/> renews an unreleased route only for <see cref="SettleBoundMs"/> after it.</summary>
+        internal uint FollowedMs;
         /// <summary>The bot's think gap in ms, smoothed (<see cref="NoteThinkGap"/>); 0 until the first measured gap.</summary>
         internal uint GapMs;
         /// <summary>The scheduler's measured main-lane full-pass time in ms (<see cref="NoteSchedulerPass"/>); 0 until the feature has one.</summary>
         internal uint PassMs;
+        /// <summary>The server time of the bot's last think (<see cref="NoteThink"/>); meaningful only when <see cref="Thought"/>.</summary>
+        internal uint LastThinkMs;
+        /// <summary>Which driver made the last think (a static string: no allocation per think).</summary>
+        internal string LastThinkDriver = "";
+        /// <summary>Whether the bot has thought since its motion state was made: <see cref="LastThinkMs"/> and <see cref="LastThinkDriver"/> mean nothing until then.</summary>
+        internal bool Thought;
         internal readonly PlayerbotLoopDetector Loops = new();
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
@@ -119,6 +127,41 @@ internal static class PlayerbotMotion
 
     internal static bool TryGetState(Player player, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MotionState? state)
         => States.TryGetValue(player, out state);
+
+    /// <summary>The route the bot is moving along now, or null when its motion is idle.</summary>
+    internal static PlayerbotRoute? RouteOf(Player player) => States.TryGetValue(player, out MotionState? state) ? state.Route : null;
+
+    /// <summary>After a driver's think (battleground, bot-led group, party AI). The driver and its helpers hand their routes to Follow
+    /// every decided think; a think that did not (a gate-only tick, an instant cast or buff on the way) kept the route unless its owner
+    /// let go of it (PlayerbotRoute.Released, set by the owner's route slot): a released route is stopped now, a kept one is renewed.
+    /// A kept route is renewed only while less than SettleBoundMs (the larger of its lease and three of the bot's smoothed think gaps) has passed since
+    /// its last Follow (MotionState.FollowedMs): two keep-thinks in a row (two instant buffs) under a heavy rotation still renew, while a
+    /// route nobody re-asserts, e.g. one of an owner without a releasing slot, lives a bounded time. renewalsBefore is
+    /// RenewalsOf before the think. True when it stopped the bot.</summary>
+    internal static bool SettleAfterDriver(WorldSession session, Player player, uint renewalsBefore, uint sinceLast)
+    {
+        if (sinceLast == 0 || !States.TryGetValue(player, out MotionState? state) || !state.Active || state.Route is not { } route) return false;
+        if (state.Renewals != renewalsBefore) return false;
+        if (route.Released) return SettleAfterThink(session, player, gaveUp: true, renewalsBefore, sinceLast);
+        if (Age(session.World.NowMs, state.FollowedMs) >= SettleBoundMs(state)) return false;
+        return SettleAfterThink(session, player, gaveUp: false, renewalsBefore, sinceLast);
+    }
+
+    /// <summary>How long after its last Follow an unreleased route may still be renewed by <see cref="SettleAfterDriver"/>:
+    /// <c>max(lease, 2 gaps + 1 gap)</c> of the bot's smoothed think gap (the scheduler's pass while none is measured, as <see cref="Lease"/>
+    /// takes it). The lease alone is not enough: <see cref="LeaseCapMs"/> can hold it under two gaps, and then a single keep-think would
+    /// be the last. Two gaps are the two keep-thinks in a row (two instant buffs) that must both renew, and the margin of one more gap is
+    /// the jitter of a rotation whose real gap runs over its smoothed average. Uncapped the lease is already 3 gaps, so the bound equals it
+    /// and is not stretched. Worst-case lifetime of a route nobody follows: a settle just inside the bound renews it, and it then walks
+    /// one lease from that renewal, so bound + lease after its last Follow. At a 30 s gap that is 105 s (cap at its 15 s floor: bound 90 s,
+    /// lease 15 s) to 180 s (uncapped: bound 90 s, lease 90 s). At saturation (the gap and lease at <see cref="HardMaxGapLeaseMs"/>, 120 s)
+    /// it is 480 s (bound 360 s, lease 120 s).</summary>
+    internal static long SettleBoundMs(MotionState state)
+    {
+        long gap = state.GapMs != 0 ? state.GapMs : state.PassMs;
+        long margin = gap;
+        return Math.Max(state.LeaseMs, (2L * gap) + margin);
+    }
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;
@@ -257,6 +300,8 @@ internal static class PlayerbotMotion
             state.RenewedMs = now;
             state.LeaseMs = Lease(options, state);
             state.Renewals++;
+            route.Released = false;
+            state.FollowedMs = now;
             Pump(session, player, now);
             return state.Active || route.Complete;
         }
@@ -384,6 +429,8 @@ internal static class PlayerbotMotion
             state.LastRejectedDestination = default;
         }
         state.Route = route;
+        route.Released = false;
+        state.FollowedMs = now;
         state.Map = map;
         state.Anchor = current;
         state.AnchorMs = now;
@@ -640,6 +687,7 @@ internal static class PlayerbotMotion
         if (!States.TryGetValue(player, out MotionState? state) || !state.Active) return;
         state.AnchorMs = unchecked(state.AnchorMs - milliseconds);
         state.RenewedMs = unchecked(state.RenewedMs - milliseconds);
+        state.FollowedMs = unchecked(state.FollowedMs - milliseconds);
     }
 
     /// <summary>After an acknowledged speed change the motion continues at the new speed.</summary>
@@ -1218,6 +1266,15 @@ internal static class PlayerbotMotion
 
         Stop(session, player);
         return true;
+    }
+
+    /// <summary>Records that the bot thought now under <paramref name="driver"/> (a static string), for the lease-expiry anomaly's detail.</summary>
+    internal static void NoteThink(Player player, string driver, uint now)
+    {
+        MotionState state = Of(player);
+        state.LastThinkMs = now;
+        state.LastThinkDriver = driver;
+        state.Thought = true;
     }
 
     /// <summary>The scheduler's measured main-lane full-pass time (ms; 0 = none yet) as this bot's motion should see it.</summary>

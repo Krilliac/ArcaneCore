@@ -49,6 +49,11 @@ public sealed class WiringCommands : ICommandExtension
     {
         ArgumentNullException.ThrowIfNull(report);
         var lines = new List<string> { report.Summary };
+        if (report.DevDropped is not null)
+        {
+            lines.Add(report.DevDropped);
+        }
+
         foreach (WiringFinding finding in report.Findings.Take(MaxListed))
         {
             lines.Add(finding.ToString());
