@@ -390,6 +390,56 @@ A feature that decides where a bot lives (the bot-home lane's home area) registe
 thread, and **a bot one of them owns is never relocated**. The population still parks and restarts such a bot and still places a
 bot it creates. This lane registers none; with none registered nothing is vetoed.
 
+### Zone capacity (`SpawnsPerBot`)
+
+A small zone must not take more bots than its creatures can feed. Deadwind Pass (zone 41, level 50-60, one graveyard) has 62 creature
+spawns, 15 of them in an underground crypt on a 600 s respawn; 127 level 60 bots were placed in it, every creature was always dead
+and the bots stalled. The atlas now caps each zone: **a zone takes no new or relocated bot while its assigned bots (the running
+bots standing in it) are at least the level-fitting surface creature spawns divided by `SpawnsPerBot`** (default 3; 0 turns the cap
+off). It applies in `PopulationZoneAtlas.Pick` and `PickSafe`, so creation and relocation both skip a full zone; when every
+fitting zone is full no bot is placed rather than overfilling one. Bots already standing in an over-cap zone are not evicted.
+
+* The count is per zone and team (`PopulationSpawnCapacity`): the database spawns hostile to the team under the survey's rule
+  (`PopulationCreatureSurvey.CountSurface`: no civilians, no-aggro, invisible or not-selectable creatures, no positive game event
+  spawns), whose zone is the one the terrain tile puts them in, and that stand **outdoors on the surface**, the test of
+  `PlayerbotNavigation.IsOutdoorsOnSurface` (outside every indoor WMO group and not more than 8 yards under the terrain). Crypts,
+  caves and building interiors do not count. The comparison uses the team's count against all bots assigned to the zone.
+* A spawn *fits* a bot level range when its template `MinLevel` is within 5 levels below the lowest and 3 above the highest level of
+  the range (`PopulationSpawnCapacity.LevelsBelow` / `LevelsAbove`; the 3 is the placement safety gap). Level 20 rats do not
+  feed a level 60 bot.
+* The survey runs on a background task (`PlayerbotPopulationFeature.EnsureCapacity`): the zone and ground height of each spawn come
+  from the terrain tile file (`TerrainManager.ReadTileDetached`, spawns ordered by tile), and a spawn more than 8 yards under the
+  ground is dropped there, off the world thread. Only the indoor test (a spawn inside an indoor WMO group, `MapCollision.IsOutdoors`)
+  needs the world thread: it hops once per batch of at most 128 spawns lying in **one tile** (`PopulationCreatureSurvey.SurfaceBatch`),
+  loading at most that tile's **vmap** (`ICollisionTileDemand` of the line-of-sight service; never the navigation mesh tile, which
+  would evict the mesh cache the bots' routes use). A tile nobody held is released again after its batch
+  (`VMapManager.ReleaseOnDemandTile`, never a tile a grid holds), and every 16th hop and at the end the cached models no loaded tile
+  uses are dropped (`VMapManager.TrimUnusedModels`; the model cache otherwise only grows), so the survey does not leave its models behind. The trim drops every unused model server-wide, so it may drop more than the survey brought in, and a grid tile that reloads later parses such a model again, on the world thread. Measured on the real vmaps (`PopulationSurveyRealTerrainTests`, 8 spawns on Stormwind, Ironforge, Deathknell and Goldshire
+  tiles): 227 models cached before and after, 244 brought in and dropped. The first parse of a tile's models still runs on the world
+  thread, once per hop. The survey's duration, hop count and the model cache before/after are logged with its result. It never holds
+  creation back: until the result is posted (and attached to the atlas, `PopulationZoneAtlas.Capacity`) the previous capacity, or none,
+  applies, and without terrain data, creature content or faction templates there is no survey and no cap. A survey that located no
+  spawn at all is discarded rather than capping every zone at 0 (and never replaces a capacity already in force). Sources: `AllowedMaps`,
+  the area table and the creature definitions version. `SpawnsPerBot` is **not** part of the atlas key:
+  the atlas reads the divisor live, so a change neither restarts the terrain lookup nor holds creation, and the survey does not
+  depend on it. The old capacity is kept while a new survey runs unless the area table changed.
+* Diagnostics: the survey log lists the bots each weighted band can hold (the sum of the caps of the zones that fit it) and every zone
+  capped under 20; `.playerbot population status` prints `Zone capacity N` per band and `(SHORT of want)` when the band's want
+  exceeds it.
+* Size the population against it: the caps of the zones that fit a band must add up to the bots wanted there, or the band is
+  left short ("no safe zone").
+
+### Dead-end escape veto
+
+When a bot escapes a dead-end pin or a navigation-mesh island (`PlayerbotBrain.EscapeIsland` teleports it home or to its bind
+point), the brain remembers the zone it left (`TakeEscapedZones`). The next capture of the population records it in
+`PopulationZoneVetoes` (in memory, per bot and zone, not persisted: a restart forgets it): the zone is vetoed for **60 minutes,
+doubling with every repeat escape from the same zone by the same bot (2 h, 4 h, 8 h), at most 8 hours**; the strikes are forgotten 24 h
+after a veto ended. The brain keeps the zones of all escapes between two captures (also the bind teleports of a bot stalled exploring
+where nothing fits its level and of a revived bot among creatures too strong for it). `RelocateAsync` passes the
+bot's vetoes to `PickSafe`, which skips a vetoed zone for that bot only. Without it, the bind point (a low zone) counted the bot as
+out-levelled and the next pass relocated it straight back into the dead end.
+
 ## The command
 
 `.playerbot population [status|enable|disable|target #count]`, Administrator, an ArcaneCore operator command (not a vmangos one),
@@ -473,6 +523,7 @@ and swapped as one value on reload.
 | `ZoneLevelSlackMaxFloor` | `12` | The highest floor with the whole slack; above it one level less per two floor levels (1..60; 60 = flat). |
 | `CreatureLevelMargin` | `3` | No placement where most hostile creatures near the graveyard are more than this above the bot (0..10). |
 | `CreatureSurveyRadius` | `100` | Yards around each graveyard the creature survey counts (0..300; 0 = no survey). |
+| `SpawnsPerBot` | `3` | Zone capacity: a zone takes bots while assigned bots < level-fitting surface creature spawns / this (0..100; 0 = no cap). |
 | `OutlevelMargin` | `2` | Levels above a zone's highest before relocation (0..10). |
 | `Relocation` / `MaxRelocationsPerInterval` | `Teleport` / `2` | What to do with an out-levelled bot; moves per pass (0..50). |
 | `ExcludedZones` | `[]` | Zone ids bots are never placed in (at most 256). |
@@ -613,7 +664,7 @@ counted: it means the snapshot is being rebuilt, not that the placements are bad
 
 `tests/ArcaneCore.World.Tests/Playerbots/Population/`: the pure helpers (`PopulationBudgetControllerTests`,
 `PopulationBandPlannerTests`, `PopulationZoneAtlasTests`, `PopulationLevelRuleTests` (the slack taper, the creature survey, band
-coverage and no relocation ping-pong, on the live w24 floors of the Hinterlands, Feralas and Deadwind Pass), `PopulationTickWindowTests`, `PopulationNamesTests`,
+coverage and no relocation ping-pong, on the live w24 floors of the Hinterlands, Feralas and Deadwind Pass), `PopulationZoneCapacityTests` (the zone cap, indoor spawns not counting, the band capacity, the escape veto and its TTL) and `PopulationZoneWiringTests` (the feature: a recorded escape keeps a bot out of the zone; the capacity survey superseded, cancelled and discarded), `PopulationTickWindowTests`, `PopulationNamesTests`,
 `PlayerbotPopulationOptionsTests`), `PopulationParkingTests` (who may be parked and in which order: dead, sick, stalled first;
 the anti-churn minimum; the restart rotation), `PlayerbotPopulationFeatureTests` (a real world and managed bots with a fake tick
 source: add, hold, park, restart and the window reset; the creation caps; owned-only parking; operator bots in a band not

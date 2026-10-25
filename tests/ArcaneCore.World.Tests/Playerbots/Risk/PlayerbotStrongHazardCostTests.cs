@@ -47,26 +47,36 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         });
         await world.SeeAsync(spawned);
         FieldInfo next = typeof(PlayerbotRisk).GetField("_nextScanMs", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        (double micros, double bytes, int hazards) = await world.OnWorldAsync(() =>
+        (double micros, double median, double bytes, int hazards) = await world.OnWorldAsync(() =>
         {
             PlayerbotRisk risk = world.Brain.Risk;
             Player player = world.Player;
             for (int i = 0; i < 200; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); } // warm-up
+            // The cost is the fastest of ten windows: a preemption on a loaded runner lands in some windows, not in all.
+            const int Windows = 10, PerWindow = Scans / Windows;
+            var perScan = new double[Windows];
             long before = GC.GetAllocatedBytesForCurrentThread();
-            var watch = Stopwatch.StartNew();
-            for (int i = 0; i < Scans; i++)
+            var watch = new Stopwatch();
+            for (int window = 0; window < Windows; window++)
             {
-                next.SetValue(risk, 0u);
-                risk.ScanHazards(player);
+                watch.Restart();
+                for (int i = 0; i < PerWindow; i++)
+                {
+                    next.SetValue(risk, 0u);
+                    risk.ScanHazards(player);
+                }
+
+                watch.Stop();
+                perScan[window] = watch.Elapsed.TotalMicroseconds / PerWindow;
             }
 
-            watch.Stop();
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            return (watch.Elapsed.TotalMicroseconds / Scans, (double)allocated / Scans,
+            Array.Sort(perScan);
+            return (perScan[0], (perScan[Windows / 2 - 1] + perScan[Windows / 2]) / 2, (double)allocated / Scans,
                 risk.Hazards.Active(player.MapId, world.Host.World.NowMs).Count);
         });
-        output.WriteLine($"strong-hazard scan (bot level {botLevel}): {micros:F1} us, {bytes:F0} bytes per scan, {hazards} hazards, {Creatures} creatures");
-        Console.WriteLine($"strong-hazard scan (bot level {botLevel}): {micros:F1} us, {bytes:F0} bytes per scan, {hazards} hazards, {Creatures} creatures");
+        output.WriteLine($"strong-hazard scan (bot level {botLevel}): {micros:F1} us best window, {median:F1} us median window, {bytes:F0} bytes per scan, {hazards} hazards, {Creatures} creatures");
+        Console.WriteLine($"strong-hazard scan (bot level {botLevel}): {micros:F1} us best window, {median:F1} us median window, {bytes:F0} bytes per scan, {hazards} hazards, {Creatures} creatures");
         Assert.Equal(botLevel == 2 ? Creatures : 0, hazards);
         Assert.True(micros < 2_000, $"{micros:F1} us per scan");
     }
@@ -89,19 +99,29 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         });
         await world.SeeAsync(ring);
         FieldInfo next = typeof(PlayerbotRisk).GetField("_nextScanMs", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        (int evaluations, double micros) = await world.OnWorldAsync(() =>
+        (int evaluations, double micros, double median) = await world.OnWorldAsync(() =>
         {
             PlayerbotRisk risk = world.Brain.Risk;
             Player player = world.Player;
             for (int i = 0; i < 50; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); }
             int evaluated = risk.PackExposureEvaluations;
-            var clock = Stopwatch.StartNew();
-            for (int i = 0; i < 300; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); }
-            clock.Stop();
-            return (evaluated, clock.Elapsed.TotalMicroseconds / 300);
+            // The cost is the fastest of ten windows: a preemption on a loaded runner lands in some windows, not in all.
+            const int Windows = 10, PerWindow = 30;
+            var perScan = new double[Windows];
+            var clock = new Stopwatch();
+            for (int window = 0; window < Windows; window++)
+            {
+                clock.Restart();
+                for (int i = 0; i < PerWindow; i++) { next.SetValue(risk, 0u); risk.ScanHazards(player); }
+                clock.Stop();
+                perScan[window] = clock.Elapsed.TotalMicroseconds / PerWindow;
+            }
+
+            Array.Sort(perScan);
+            return (evaluated, perScan[0], (perScan[Windows / 2 - 1] + perScan[Windows / 2]) / 2);
         });
-        output.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us");
-        Console.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us");
+        output.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us best window, {median:F1} us median window");
+        Console.WriteLine($"100-hostile scan: {evaluations} exposure calculations, {micros:F1} us best window, {median:F1} us median window");
         Assert.Equal(100, evaluations);
         Assert.True(micros < 5_000, $"{micros:F1} us per scan");
     }

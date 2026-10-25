@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -37,6 +38,104 @@ internal static class PopulationCreatureSurvey
     public static uint PlayerTemplateOf(Team team) => team == Team.Alliance ? 1u : 2u;
 
     /// <summary>
+    /// Whether the spawn is a creature a bot of the <paramref name="player"/> faction template would fight (the survey's counting rule:
+    /// not gated by a positive game event, a known template, not civilian, no-aggro, invisible or not selectable, hostile to the player
+    /// template); <paramref name="level"/> is the template <c>MinLevel</c>.
+    /// </summary>
+    private static bool TryHostileLevel(CreatureSpawn spawn, FactionTemplateRecord player, Func<uint, CreatureTemplate?> templateOf,
+        FactionTemplateCatalog factions, IReadOnlySet<uint> gated, out int level)
+    {
+        level = 0;
+        if (gated.Contains(spawn.Guid) || templateOf(spawn.Entry) is not { } template) return false;
+        if ((template.Behaviour & Ignored) != 0 || (template.UnitFlags & (uint)UnitFlags.NotSelectable) != 0) return false;
+        if (factions.Find(template.Faction) is not { } faction || !faction.IsHostileTo(player)) return false;
+        level = template.MinLevel;
+        return true;
+    }
+
+    /// <summary>
+    /// Zone capacity: the level of every creature spawn a bot of each team would fight on the surface, by zone and team. A spawn counts
+    /// for a team under the same rule as <see cref="LevelNear"/>, when <paramref name="zoneOf"/> gives it a zone (0: unknown, or under
+    /// the terrain: the caller decides that off the world thread from the terrain tile) and <paramref name="outdoors"/> says it is not
+    /// indoors (an indoor WMO group, which needs the map's collision and so the world thread). The spawns that pass the cheap rule are
+    /// ordered by map tile and handed to <paramref name="outdoors"/> in batches that lie within one tile and hold at most
+    /// <see cref="SurfaceBatch"/> spawns, so the caller can hop to the world thread once per batch, loading at most one tile per hop.
+    /// <para>Thread affinity: any thread; <paramref name="outdoors"/> decides where its own work runs. Throws <see cref="OperationCanceledException"/> when cancelled.</para>
+    /// </summary>
+    public static PopulationSpawnCapacity CountSurface(IEnumerable<CreatureSpawn> spawns, Func<CreatureSpawn, uint> zoneOf,
+        Func<IReadOnlyList<CreatureSpawn>, IReadOnlyList<bool>> outdoors, Func<uint, CreatureTemplate?> templateOf,
+        FactionTemplateCatalog factions, IReadOnlySet<uint> gated, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(spawns);
+        ArgumentNullException.ThrowIfNull(zoneOf);
+        ArgumentNullException.ThrowIfNull(outdoors);
+        ArgumentNullException.ThrowIfNull(templateOf);
+        ArgumentNullException.ThrowIfNull(factions);
+        ArgumentNullException.ThrowIfNull(gated);
+        FactionTemplateRecord? alliance = factions.Find(PlayerTemplateOf(Team.Alliance));
+        FactionTemplateRecord? horde = factions.Find(PlayerTemplateOf(Team.Horde));
+        var candidates = new List<(CreatureSpawn Spawn, uint Zone, int Alliance, int Horde, int TileX, int TileY)>();
+        int seen = 0;
+        foreach (CreatureSpawn spawn in spawns)
+        {
+            if ((++seen & 0xFFF) == 0) cancellationToken.ThrowIfCancellationRequested();
+            int forAlliance = 0, forHorde = 0;
+            bool ally = alliance is not null && TryHostileLevel(spawn, alliance, templateOf, factions, gated, out forAlliance);
+            bool orc = horde is not null && TryHostileLevel(spawn, horde, templateOf, factions, gated, out forHorde);
+            if (!ally && !orc) continue;
+            uint zone = zoneOf(spawn);
+            if (zone == 0) continue;
+            (int X, int Y) tile = TerrainTile.TileOf(spawn.X, spawn.Y) ?? (-1, -1);
+            candidates.Add((spawn, zone, ally ? forAlliance : -1, orc ? forHorde : -1, tile.X, tile.Y));
+        }
+
+        candidates.Sort(static (a, b) =>
+        {
+            int c = a.Spawn.MapId.CompareTo(b.Spawn.MapId);
+            if (c == 0) c = a.TileX.CompareTo(b.TileX);
+            if (c == 0) c = a.TileY.CompareTo(b.TileY);
+            return c == 0 ? a.Spawn.Guid.CompareTo(b.Spawn.Guid) : c;
+        });
+        var levels = new Dictionary<(uint ZoneId, Team Team), List<int>>();
+        for (int start = 0; start < candidates.Count;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var first = candidates[start];
+            int count = 1;
+            while (count < SurfaceBatch && start + count < candidates.Count
+                && candidates[start + count] is var next && next.Spawn.MapId == first.Spawn.MapId && next.TileX == first.TileX && next.TileY == first.TileY)
+                count++;
+            var batch = new CreatureSpawn[count];
+            for (int i = 0; i < count; i++) batch[i] = candidates[start + i].Spawn;
+            IReadOnlyList<bool> surface = outdoors(batch);
+            if (surface.Count != count) throw new InvalidOperationException("the surface test answered for a different number of spawns");
+            for (int i = 0; i < count; i++)
+            {
+                if (!surface[i]) continue;
+                var c = candidates[start + i];
+                if (c.Alliance >= 0) Add(levels, (c.Zone, Team.Alliance), c.Alliance);
+                if (c.Horde >= 0) Add(levels, (c.Zone, Team.Horde), c.Horde);
+            }
+
+            start += count;
+        }
+
+        return new PopulationSpawnCapacity(levels.ToDictionary(p => p.Key, p => { int[] sorted = [.. p.Value]; Array.Sort(sorted); return sorted; }));
+
+        static void Add(Dictionary<(uint, Team), List<int>> into, (uint, Team) key, int level)
+        {
+            if (!into.TryGetValue(key, out List<int>? list)) into[key] = list = [];
+            list.Add(level);
+        }
+    }
+
+    /// <summary>How far under the ground a spawn must stand to be underground (the rule of <c>PlayerbotNavigation.IsOutdoorsOnSurface</c>).</summary>
+    public const float UndergroundYards = 8f;
+
+    /// <summary>The most spawns one <c>outdoors</c> call of <see cref="CountSurface"/> is asked about.</summary>
+    public const int SurfaceBatch = 128;
+
+    /// <summary>
     /// The lower median <c>MinLevel</c> of the hostile creatures within <paramref name="radius"/> yards (2D) of <paramref name="location"/>
     /// and <see cref="MaxHeightDifference"/> yards of its height,
     /// or 0 when fewer than <see cref="MinHostile"/> are there, the radius is not positive or the team's player template is unknown.
@@ -56,10 +155,7 @@ internal static class PopulationCreatureSurvey
         {
             float dx = spawn.X - location.X, dy = spawn.Y - location.Y;
             if (spawn.MapId != location.MapId || dx * dx + dy * dy > r2 || MathF.Abs(spawn.Z - location.Z) > MaxHeightDifference) continue;
-            if (gated.Contains(spawn.Guid) || templateOf(spawn.Entry) is not { } template) continue;
-            if ((template.Behaviour & Ignored) != 0 || (template.UnitFlags & (uint)UnitFlags.NotSelectable) != 0) continue;
-            if (factions.Find(template.Faction) is not { } faction || !faction.IsHostileTo(player)) continue;
-            levels.Add(template.MinLevel);
+            if (TryHostileLevel(spawn, player, templateOf, factions, gated, out int level)) levels.Add(level);
         }
 
         if (levels.Count < MinHostile) return 0;

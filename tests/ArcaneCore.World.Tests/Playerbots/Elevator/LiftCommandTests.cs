@@ -68,14 +68,21 @@ public sealed class LiftCommandTests
         await using WorldTestClient watcher = await world.ObserverAsync("LIFTWATCH", "Liftwatch", TopCar + new Vector3(10f, 0f, 2f));
         await watcher.CollectAsync();
         string[] frozen = await RunAsync(gm, $".debug lift freeze {id}");
-        Assert.Contains(frozen, l => l.Contains("frozen at 15", StringComparison.Ordinal));
+        // The world clock is manual and ObserverAsync advances it by a varying amount while the watcher logs in, so the lift has moved on
+        // from stop 2's start (15000 ms) by an unpredictable amount before the freeze: assert "15000 or later in the cycle", not 15xxx.
+        // Phase, stop, freeze and resume themselves run on the world thread between clock advances, so those readings stay exact.
+        System.Text.RegularExpressions.Match frozenAt = frozen.Select(l => System.Text.RegularExpressions.Regex.Match(l, @"frozen at (\d+) ms on the server\."))
+            .FirstOrDefault(m => m.Success) ?? System.Text.RegularExpressions.Match.Empty;
+        Assert.True(frozenAt.Success, "no 'frozen at <n> ms on the server.' line in: " + string.Join(" | ", frozen));
+        uint frozenMs = uint.Parse(frozenAt.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(frozenMs, 15000u, 29999u);
         Assert.Contains(frozen, l => l.StartsWith("Warning: Liftwatch keep the normal animation", StringComparison.Ordinal) && !l.Contains("Liftgm", StringComparison.Ordinal));
         Assert.True(await world.OnWorldAsync(() => system.GetElevatorControl(car).Frozen));
 
         string[] speed = await RunAsync(gm, $".debug lift speed 2.5 {id}");
         Assert.Contains(speed, l => l.Contains("speed x2.5 (frozen, applies on resume)", StringComparison.Ordinal));
         Assert.Contains(speed, l => l.StartsWith("Warning: Liftwatch", StringComparison.Ordinal));
-        Assert.Contains(await RunAsync(gm, $".debug lift resume {id}"), l => l.Contains("running again from 15", StringComparison.Ordinal));
+        Assert.Contains(await RunAsync(gm, $".debug lift resume {id}"), l => l.Contains($"running again from {frozenMs} ms;", StringComparison.Ordinal));
         Assert.Equal(2.5, await world.OnWorldAsync(() => system.GetElevatorControl(car).Scale));
 
         Assert.Contains(await RunAsync(gm, $".debug lift reset {id}"), l => l.Contains("back on its default schedule", StringComparison.Ordinal));
@@ -140,8 +147,9 @@ public sealed class LiftCommandTests
         Assert.Matches(@"^x2\.5 at \d+ ms$", reset.OldValue);
 
         await RunAsync(gm, $".debug lift freeze {id}");
+        Assert.Equal(7, Writes().Length);
         await RunAsync(gm, $".debug lift reset {id}");
-        DebugWriteEntry resetFrozen = Writes()[^1];
+        DebugWriteEntry resetFrozen = Next("reset", 8);
         Assert.Matches(@"^x1 frozen at \d+ ms$", resetFrozen.OldValue);
 
         // A refused or failed change records nothing.
