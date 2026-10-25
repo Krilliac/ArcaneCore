@@ -49,7 +49,7 @@ Every action gets its own executor and console session at the actor's level; two
 
 ## Wire
 
-`{"op":"caps","id":N}` answers `actions`, `actionsWhyOff`, `login`, `liveServer`, `role`, `templates`.
+`{"op":"caps","id":N}` answers `actions`, `settleSeconds` (the configured `SettleSeconds`; an action waits up to that long twice), `actionsWhyOff`, `login`, `liveServer`, `role`, `templates`.
 `{"op":"action","id":N,"actor":{...},"command":"atlas place creature ..."}` or `"template":"place.creature","args":{...},"targets":["<guid>"],
 "point":{"map":0,"x":..,"y":..,"z":..,"o":..},"confirm":"<code>"` answers one `result` (`ok`, `kind:"action"`, `lines`, `settled`, per-target
 `targets`, `code`/`message` on refusal). Output that arrives after the settle window is sent as `actionLine`.

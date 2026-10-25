@@ -1,0 +1,435 @@
+{
+  "items": [
+    {
+      "id": "tele.me",
+      "label": "Teleport me here",
+      "scope": "point",
+      "group": "move",
+      "kinds": [],
+      "args": [],
+      "needsPoint": true,
+      "subject": "me",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "tele",
+      "shortcut": "Alt\u002BT"
+    },
+    {
+      "id": "tele.selected",
+      "label": "Teleport selected here",
+      "scope": "point",
+      "group": "move",
+      "kinds": [
+        "player",
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": true,
+      "subject": "selection",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "tele"
+    },
+    {
+      "id": "moveto.selected",
+      "label": "Move selected here",
+      "scope": "point",
+      "group": "move",
+      "kinds": [
+        "creature",
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": true,
+      "subject": "selection",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "moveto"
+    },
+    {
+      "id": "place.creature",
+      "label": "Spawn creature...",
+      "scope": "point",
+      "group": "spawn",
+      "kinds": [],
+      "args": [
+        {
+          "name": "entry",
+          "type": "uint",
+          "label": "Creature entry",
+          "min": 1,
+          "max": 4294967295
+        }
+      ],
+      "needsPoint": true,
+      "subject": "none",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "place.creature"
+    },
+    {
+      "id": "place.gobject",
+      "label": "Spawn game object...",
+      "scope": "point",
+      "group": "spawn",
+      "kinds": [],
+      "args": [
+        {
+          "name": "entry",
+          "type": "uint",
+          "label": "Game object entry",
+          "min": 1,
+          "max": 4294967295
+        }
+      ],
+      "needsPoint": true,
+      "subject": "none",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "template": "place.gobject"
+    },
+    {
+      "id": "spawns",
+      "label": "Show spawn points here...",
+      "scope": "point",
+      "group": "debug",
+      "kinds": [],
+      "args": [
+        {
+          "name": "radius",
+          "type": "uint",
+          "label": "Radius (yards)",
+          "min": 1,
+          "max": 5000,
+          "default": 100
+        }
+      ],
+      "needsPoint": true,
+      "subject": "none",
+      "write": false,
+      "gated": false,
+      "undo": false,
+      "template": "spawns"
+    },
+    {
+      "id": "kill",
+      "label": "Kill",
+      "scope": "entity",
+      "group": "life",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "kill",
+      "shortcut": "Alt\u002BK"
+    },
+    {
+      "id": "heal",
+      "label": "Heal (full health)",
+      "scope": "entity",
+      "group": "life",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "alter health",
+      "shortcut": "Alt\u002BH"
+    },
+    {
+      "id": "respawn",
+      "label": "Respawn",
+      "scope": "entity",
+      "group": "life",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "creature respawn"
+    },
+    {
+      "id": "revive",
+      "label": "Revive",
+      "scope": "entity",
+      "group": "life",
+      "kinds": [
+        "player",
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "revive"
+    },
+    {
+      "id": "despawn",
+      "label": "Despawn (temporary only)",
+      "scope": "entity",
+      "group": "life",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "creature delete",
+      "shortcut": "Delete"
+    },
+    {
+      "id": "setlevel",
+      "label": "Set level...",
+      "scope": "entity",
+      "group": "edit",
+      "kinds": [
+        "creature"
+      ],
+      "args": [
+        {
+          "name": "level",
+          "type": "uint",
+          "label": "Level",
+          "min": 1,
+          "max": 255
+        }
+      ],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "alter level"
+    },
+    {
+      "id": "setfaction",
+      "label": "Set faction...",
+      "scope": "entity",
+      "group": "edit",
+      "kinds": [
+        "creature"
+      ],
+      "args": [
+        {
+          "name": "faction",
+          "type": "uint",
+          "label": "Faction id",
+          "min": 0,
+          "max": 65535
+        }
+      ],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "npc set faction"
+    },
+    {
+      "id": "setspeed",
+      "label": "Set speed...",
+      "scope": "entity",
+      "group": "edit",
+      "kinds": [
+        "creature",
+        "player",
+        "bot"
+      ],
+      "args": [
+        {
+          "name": "rate",
+          "type": "number",
+          "label": "Speed rate",
+          "min": 0.1,
+          "max": 10,
+          "default": 1
+        }
+      ],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "modify aspeed"
+    },
+    {
+      "id": "moveto.pick",
+      "label": "Move to point...",
+      "scope": "entity",
+      "group": "move",
+      "kinds": [
+        "creature",
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": true,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "template": "moveto",
+      "pick": "point"
+    },
+    {
+      "id": "bot.goto",
+      "label": "Bot: go to point...",
+      "scope": "entity",
+      "group": "bot",
+      "kinds": [
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": true,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "botctl move",
+      "pick": "point"
+    },
+    {
+      "id": "bot.attack",
+      "label": "Selected bots: attack this",
+      "scope": "entity",
+      "group": "bot",
+      "kinds": [
+        "creature",
+        "player",
+        "bot",
+        "gameobject"
+      ],
+      "args": [
+        {
+          "name": "unit",
+          "type": "guid",
+          "label": "Unit to attack"
+        }
+      ],
+      "needsPoint": false,
+      "subject": "selection-bots",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "botctl attack"
+    },
+    {
+      "id": "bot.follow",
+      "label": "Bot: follow me",
+      "scope": "entity",
+      "group": "bot",
+      "kinds": [
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": false,
+      "path": "botctl follow"
+    },
+    {
+      "id": "bot.take",
+      "label": "Bot: take control",
+      "scope": "entity",
+      "group": "bot",
+      "kinds": [
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "path": "botctl take"
+    },
+    {
+      "id": "bot.release",
+      "label": "Bot: release",
+      "scope": "entity",
+      "group": "bot",
+      "kinds": [
+        "bot"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": false,
+      "undo": true,
+      "path": "botctl release"
+    },
+    {
+      "id": "ai.pause",
+      "label": "AI: pause",
+      "scope": "entity",
+      "group": "ai",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": true,
+      "undo": true,
+      "path": "creature ai pause"
+    },
+    {
+      "id": "ai.resume",
+      "label": "AI: resume",
+      "scope": "entity",
+      "group": "ai",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": true,
+      "gated": true,
+      "undo": true,
+      "path": "creature ai resume"
+    },
+    {
+      "id": "debug",
+      "label": "Show AI state, threat and route",
+      "scope": "entity",
+      "group": "debug",
+      "kinds": [
+        "creature"
+      ],
+      "args": [],
+      "needsPoint": false,
+      "subject": "entity",
+      "write": false,
+      "gated": false,
+      "undo": false,
+      "template": "debug"
+    }
+  ]
+}

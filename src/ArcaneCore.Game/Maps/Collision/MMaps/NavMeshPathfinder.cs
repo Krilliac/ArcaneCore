@@ -26,7 +26,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// </para>
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
-public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch,
+public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch, ISharedTiledPathSearch,
     ISharedMeshPointQuery, ICollisionTileDemand
 {
     /// <summary>
@@ -121,6 +121,100 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <inheritdoc />
     public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options)
+        => FindPathSharedCore(mapId, start, end, options);
+
+    /// <inheritdoc />
+    public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options, List<(int X, int Y)> missedTiles)
+    {
+        ArgumentNullException.ThrowIfNull(missedTiles);
+        List<(int X, int Y)>? outer = NavMesh.MissedTileSink;
+        NavMesh.MissedTileSink = missedTiles;
+        try
+        {
+            return FindPathSharedCore(mapId, start, end, options);
+        }
+        finally
+        {
+            NavMesh.MissedTileSink = outer;
+        }
+    }
+
+    /// <inheritdoc />
+    public bool PrepareShared(uint mapId, Vector3 start, Vector3 end)
+    {
+        if (!IsFinite(start) || !IsFinite(end) || GetNavMesh(mapId) is null)
+        {
+            return true;
+        }
+
+        _queryStamp++;
+        _queryLoads = 0;
+        _pendingThisQuery.Clear();
+        _trackPendingThisQuery = true;
+        try
+        {
+            EnsureTile(mapId, start, nonBlocking: true);
+            EnsureTile(mapId, end, nonBlocking: true);
+            return !QueryTileStillOpen();
+        }
+        finally
+        {
+            _trackPendingThisQuery = false;
+        }
+    }
+
+    /// <inheritdoc />
+    public SharedMissVerdict ResolveSharedMisses(uint mapId, IReadOnlyList<(int X, int Y)> missedTiles)
+    {
+        ArgumentNullException.ThrowIfNull(missedTiles);
+        if (missedTiles.Count == 0 || GetNavMesh(mapId) is not { } mesh)
+        {
+            return SharedMissVerdict.None;
+        }
+
+        _queryStamp++;
+        _queryLoads = 0;
+        _pendingThisQuery.Clear();
+        _trackPendingThisQuery = true;
+        bool changed = false;
+        try
+        {
+            int asked = 0;
+            foreach ((int x, int y) in missedTiles)
+            {
+                if (asked >= MaxTilesPerQuery)
+                {
+                    break;
+                }
+
+                asked++;
+                if (mesh.GetTile(x, y) is not null)
+                {
+                    changed = true;
+                    continue;
+                }
+
+                Vector3 center = NavMeshFormat.ToWorld(mesh.TileCenter(x, y));
+                if (Terrain.TerrainTile.TileOf(center.X, center.Y) is { } terrain && _noTile.Contains((mapId, terrain.X, terrain.Y)))
+                {
+                    continue;
+                }
+
+                if (EnsureTile(mapId, center, nonBlocking: true) && mesh.GetTile(x, y) is not null)
+                {
+                    changed = true;
+                }
+            }
+
+            return changed ? SharedMissVerdict.Changed : QueryTileStillOpen() ? SharedMissVerdict.Pending : SharedMissVerdict.None;
+        }
+        finally
+        {
+            _trackPendingThisQuery = false;
+        }
+    }
+
+    private PathResult FindPathSharedCore(uint mapId, Vector3 start, Vector3 end, PathOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.LoadTiles || options.NonBlockingTiles)

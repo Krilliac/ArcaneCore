@@ -25,6 +25,9 @@ public interface ICreatureRespawnPersistence
     /// <summary>The stored respawn time (unix seconds) of every spawn of one map instance that is still waiting to respawn (<paramref name="instanceId"/> 0 = the shared map).</summary>
     IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId);
 
+    /// <summary>The stored respawn time of one spawn, without copying the map's table (a point lookup for a hot path); false when the spawn has none.</summary>
+    bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds);
+
     /// <summary>Remember that spawn <paramref name="spawnGuid"/> respawns at <paramref name="respawnUnixSeconds"/>.</summary>
     void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds);
 

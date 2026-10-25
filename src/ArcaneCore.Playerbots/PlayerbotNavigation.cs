@@ -200,6 +200,7 @@ internal struct TileWait
     private uint _since;
     private long _sinceRealTicks;
     private uint _lastHold;
+    private long _lastHoldRealTicks;
     private bool _started;
     private bool _realRead;
     private bool _spent;
@@ -215,13 +216,29 @@ internal struct TileWait
             _started = true;
             _since = now;
             _sinceRealTicks = RealNow();
+            _lastHold = now;
+            _lastHoldRealTicks = _sinceRealTicks;
             _realRead = false;
             _spent = false;
+        }
+
+        if (PlayerbotPathJobs.LastPendingWasJob)
+        {
+            // Waiting for a path job (the pool is busy, the search runs) is not a tile read gone wrong: the time spent in it neither spends this
+            // wait nor counts toward it (overloaded must not become unreachable), and the tile time already waited is kept: the wait's start
+            // moves forward by the time since the last hold. The job wait has its own bound (PathJobWaitMaxMs).
+            long realNow = RealNow();
+            _since = unchecked(_since + (now - _lastHold));
+            _sinceRealTicks += realNow - _lastHoldRealTicks;
+            _lastHold = now;
+            _lastHoldRealTicks = realNow;
+            return true;
         }
 
         _realRead |= PathSearchCounters.LastPendingWasRealRead;
 
         _lastHold = now;
+        _lastHoldRealTicks = RealNow();
         if (_spent) return false;
         if (unchecked(now - _since) <= MaxMs) return true;
         if (_realRead && (RealNow() - _sinceRealTicks) * 1000 / System.Diagnostics.Stopwatch.Frequency <= MaxMs) return true;
@@ -283,10 +300,10 @@ internal static class PlayerbotNavigation
     /// (<see cref="PathOptions.NonBlockingTiles"/>). Take it before planning and ask <see cref="PendingSince"/> after a refusal: a refusal
     /// for want of a tile is no verdict on the destination, and the caller asks again on a later think instead of setting the goal aside.
     /// </summary>
-    internal static long PendingMark => PathSearchCounters.TilesPending;
+    internal static long PendingMark => PathSearchCounters.TilesPending + PlayerbotPathJobs.PendingAnswers;
 
     /// <summary>Whether a search since <paramref name="mark"/> (<see cref="PendingMark"/>) waited for a navigation tile.</summary>
-    internal static bool PendingSince(long mark) => PathSearchCounters.TilesPending != mark;
+    internal static bool PendingSince(long mark) => PendingMark != mark;
 
     /// <summary>
     /// Plans like <see cref="TryPlan"/>, but tells a refusal for want of a navigation tile still being read in the background
@@ -297,6 +314,7 @@ internal static class PlayerbotNavigation
         out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false, bool chase = false,
         bool trial = false, bool nearestEnd = false)
     {
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
         return Outcome(TryPlan(player, destination, options, out route, trial: trial, completedQuestReturn: completedQuestReturn,
             friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd), mark, ref wait, now, ref route);
@@ -306,6 +324,7 @@ internal static class PlayerbotNavigation
     internal static PlanOutcome PlanFar(Player player, Vector3 destination, PlayerbotOptions options, int searchNodes, ref TileWait wait,
         uint now, out PlayerbotRoute? route)
     {
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
         return Outcome(TryPlanFar(player, destination, options, searchNodes, out route), mark, ref wait, now, ref route);
     }
@@ -314,6 +333,7 @@ internal static class PlayerbotNavigation
     internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
         out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
     {
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
         return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
     }
@@ -780,6 +800,8 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
+        // A chase answers this think (combat responsiveness) and a trial weighs candidates: neither can wait for a path job.
+        using PlayerbotPathJobs.NoDeferScope noDefer = chase || trial ? PlayerbotPathJobs.NoDefer() : default;
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase,
                 nearestEnd: chase || nearestEnd) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;

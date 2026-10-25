@@ -224,7 +224,9 @@ public sealed class PlayerbotRiskWorldTests
     public async Task ANearlyWonFight_IsNotAbandoned_AFreshOneAtTheSameHealthIs()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        CreatureTemplate template = RiskTestWorld.Template(991031, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 0.6f);
+        // Blows of half a point to one: the verdict reads a two-second window, and with 1 to 2 a crit in it (seed 93 of 100) put the
+        // bot's time to die under half the time to kill, so it rightly left the nearly-won fight.
+        CreatureTemplate template = RiskTestWorld.Template(991031, health: 400, minDamage: 0.5f, maxDamage: 1, runSpeed: 0.6f);
         Creature nearlyDead = await world.OnWorldAsync(() => world.Spawn(template, 2, 0));
         await world.SeeAsync(nearlyDead);
         await world.OnWorldAsync(() =>

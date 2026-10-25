@@ -55,6 +55,15 @@ internal static class PlayerbotGroupAnomalies
     /// <summary>An unhandled exception escaped while ticking an active siege.</summary>
     internal const string SiegeFault = "siege-fault";
 
+    /// <summary>A world-boss raid pulled while some, but not enough to hold the pull, real players stood at the boss.</summary>
+    internal const string WorldBossPullNearPlayers = "worldboss-pull-near-players";
+
+    /// <summary>A world-boss raid at full size wiped as often as it may (its wipe cap): the boss is out of its reach.</summary>
+    internal const string WorldBossWipedAtFullSize = "worldboss-wiped-full-size";
+
+    /// <summary>A world-boss raid holds the tap of a corpse it never saw alive (a member killed the boss before the raid's first look at it).</summary>
+    internal const string WorldBossCorpseTapUnseen = "worldboss-corpse-tap-unseen";
+
     /// <summary>The ledger key of <paramref name="code"/> (tests).</summary>
     internal static string Key(string code) => PlayerbotAnomalies.Key(Area, code);
 

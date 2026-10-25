@@ -54,6 +54,8 @@ public sealed class PlayerbotSocialOptions
 
     /// <summary>Cross-faction greetings, rude emotes at rivals and stance-aware replies to emotes (<c>World:Playerbots:Social:Rivalry</c>).</summary>
     public PlayerbotSocialRivalryOptions Rivalry { get; set; } = new();
+    /// <summary>Answering trade windows, deals, group gifts and the outflow limits (<c>World:Playerbots:Social:Trading</c>).</summary>
+    public PlayerbotSocialTradingOptions Trading { get; set; } = new();
 
     /// <summary>Bots and the world's events: festival gathering, celebration and talk (<c>World:Playerbots:Social:Events</c>).</summary>
     public PlayerbotSocialEventsOptions Events { get; set; } = new();
@@ -86,6 +88,8 @@ public sealed class PlayerbotSocialOptions
         Initiative.Validate();
         if (Rivalry is null) throw new InvalidOperationException($"{section}:Rivalry is missing.");
         Rivalry.Validate();
+        if (Trading is null) throw new InvalidOperationException($"{section}:Trading is missing.");
+        Trading.Validate();
         if (Events is null) throw new InvalidOperationException($"{section}:Events is missing.");
         Events.Validate();
         Lists.Validate();

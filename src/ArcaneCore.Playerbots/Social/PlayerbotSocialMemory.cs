@@ -27,6 +27,18 @@ internal enum PlayerbotSocialEvent
 
     /// <summary>A bot's unprompted opening got no answer: affinity -1 and no familiarity (<c>PlayerbotInitiativeLane</c>).</summary>
     OpeningIgnored,
+
+    /// <summary>A trade deal completed at the agreed terms (P4).</summary>
+    FairDeal,
+
+    /// <summary>The partner changed a deal's value after matching it (P4).</summary>
+    TradeScam,
+
+    /// <summary>A gift worth at least the trading gift minimum was received (P4).</summary>
+    GiftReceived,
+
+    /// <summary>A deal was agreed and then never completed (P4).</summary>
+    DealFlaked,
 }
 
 /// <summary>
@@ -141,6 +153,10 @@ internal sealed partial class PlayerbotSocialMemory
                 PlayerbotSocialEvent.KillSteal => _options.AffinityPerKillSteal,
                 PlayerbotSocialEvent.AbandonedRun => _options.AffinityPerAbandonedRun,
                 PlayerbotSocialEvent.OpeningIgnored => -1,
+                PlayerbotSocialEvent.FairDeal => _options.AffinityPerFairDeal,
+                PlayerbotSocialEvent.TradeScam => _options.AffinityPerTradeScam,
+                PlayerbotSocialEvent.GiftReceived => _options.AffinityPerGiftReceived,
+                PlayerbotSocialEvent.DealFlaked => _options.AffinityPerDealFlaked,
                 _ => 0,
             };
             double before = entry.Affinity;
@@ -155,6 +171,8 @@ internal sealed partial class PlayerbotSocialMemory
             {
                 PlayerbotSocialEvent.GroupSucceeded => _options.TrustPerGroupSuccess,
                 PlayerbotSocialEvent.DiedFirstInWipe => _options.TrustPerFirstDeathInWipe,
+                PlayerbotSocialEvent.FairDeal => _options.TrustPerFairDeal,
+                PlayerbotSocialEvent.TradeScam => _options.TrustPerTradeScam,
                 _ => 0,
             };
             if (trust != 0) entry.TrustPermille = (short)Math.Clamp(entry.TrustPermille + trust, 0, 1000);
@@ -163,7 +181,7 @@ internal sealed partial class PlayerbotSocialMemory
                 entry.Flags |= PlayerbotRelationFlags.Grouped;
             // Something the other side did toward the bot (the bot's own HelpedThem or a rude word is not an overture).
             if (e is PlayerbotSocialEvent.ChatExchange or PlayerbotSocialEvent.TradeCompleted or PlayerbotSocialEvent.HelpedBy or PlayerbotSocialEvent.FriendlyEmote
-                or PlayerbotSocialEvent.Apologized or PlayerbotSocialEvent.Grouped or PlayerbotSocialEvent.GroupSucceeded or PlayerbotSocialEvent.GroupWiped)
+                or PlayerbotSocialEvent.FairDeal or PlayerbotSocialEvent.GiftReceived or PlayerbotSocialEvent.Apologized or PlayerbotSocialEvent.Grouped or PlayerbotSocialEvent.GroupSucceeded or PlayerbotSocialEvent.GroupWiped)
                 entry.Flags |= PlayerbotRelationFlags.Interacted;
             if (otherFaction) entry.Flags |= PlayerbotRelationFlags.OtherFaction;
             ApplyRival(entry);
@@ -199,6 +217,12 @@ internal sealed partial class PlayerbotSocialMemory
 
     /// <summary>The affinity every decision reads: the war layer while War Mode is on, the normal layer otherwise.</summary>
     public int EffectiveAffinity(PlayerbotRelation relation) => _war.Enabled ? relation.WarAffinity : relation.Affinity;
+
+    /// <summary>
+    /// The affinity every giving decision reads (gift chance, friend discount, gift thresholds): the lower of the normal layer and <see cref="EffectiveAffinity(PlayerbotRelation)"/>,
+    /// so War Mode, whose war layer can climb past the daily cap under <c>RemoveCaps</c>, can only make a bot less generous.
+    /// </summary>
+    public int GivingAffinity(PlayerbotRelation relation) => Math.Min(relation.Affinity, EffectiveAffinity(relation));
 
     /// <summary>Whether every decision treats the other as a rival: the war layer's flag while War Mode is on, the normal flag otherwise.</summary>
     public bool IsRival(PlayerbotRelation relation)

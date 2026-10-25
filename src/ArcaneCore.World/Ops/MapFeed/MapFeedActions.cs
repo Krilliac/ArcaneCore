@@ -176,9 +176,12 @@ internal sealed class MapFeedActions : IFeedExtension
         ActionsGate gate = _gate;
         FeedRole role = connection.Role;
         string? operatorName = role == FeedRole.Local ? connection.Identity.Operator : null;
+        int settleSeconds = _options.SettleSeconds;
         await connection.QueueAsync(FeedExtensionJson.Result(id, ok: true, "caps", writer =>
         {
             writer.WriteBoolean("actions"u8, gate.On);
+            // How long an action may take to answer: a client sizes its wait from it (the world waits this long up to twice per action).
+            writer.WriteNumber("settleSeconds"u8, settleSeconds);
             if (!gate.On && gate.WhyOff is { } why)
             {
                 writer.WriteString("actionsWhyOff"u8, why);

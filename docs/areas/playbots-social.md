@@ -87,13 +87,15 @@ Events queue **topics** per guild (at most four, the oldest dropped; one older t
 | `guild.welcome` | a real player joined (not through a charter) | any bot but the newcomer |
 | `guild.ding` | a bot member reached level 10, 20, ... | that bot |
 | `guild.grats` | a real player reached such a level | another bot |
-| `guild.boss` | a dungeon or raid boss (instance-bind flag or world-boss rank) was killed by a player: the guilds of the killer and its group | any bot |
+| `guild.boss` | a dungeon or raid boss (instance-bind flag or world-boss rank), or a continent boss of the world-boss catalogue, was killed by a player: the guilds of the killer and its group | any bot |
 | `guild.bgwin` | a bot won a battleground (`SMSG_BATTLEFIELD_WIN`), once per guild in ten minutes | any bot |
 | `guild.chatter` | small talk, a chance per pass aiming at half of `MessagesPerHour` an hour | any bot |
 
 A boss kill is remembered per guild, **map instance** and victim for ten minutes of world time (at most 4096 entries). A boss keeps the
 same creature guid in every instance of its dungeon, so each instance's kill is remarked on once, and a respawning open-world boss again
 after the window.
+
+**World bosses on the continents (kill talk).** A kill on a continent is remarked on only when the creature is in the group coordinator's world-boss catalogue (`World:Playerbots:Groups:WorldBosses`, see `docs/areas/playbots-groups.md`, World-boss raids): rank 3 alone is not enough, because the faction leaders and Archbishop Benedictus are rank 3 on the continents. The coordinator publishes a frozen snapshot of the catalogue's entries that the map threads read (`PlayerbotGroupCoordinator.IsWorldBossEntry`); with no catalogue wired, or before it is built, a continent kill stays silent. The place named is the zone the boss stood in, from the area table (the map's name where the area is not known), where a dungeon boss names the dungeon; the guild line and the conversations' boss news (`BotChatEventKind.BossKill`) both use it (`PlayerbotBossKills.PlaceOf`). The scope is dungeon parity: any player's kill of a catalogued boss makes the guild bots of the killer and its group talk, whether or not a bot raid was involved (the alternative, only a group with a bot member, is an open decision). The zone lookup's fault site is `playerbot.social.bosskill`.
 
 **Rate limits and the safety path.** A topic is said only when guild chat is on, `MessagesPerHour` is above zero, the bot chat service
 is on (`World:Playerbots:Chat:Enabled`), a real player who can read guild chat is online (nothing is ever said to bots alone), the
@@ -434,6 +436,12 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
 - **`{objective}` in announcements.** The template placeholder `{objective}` may now be filled from the bot's own facts (it was topic-only for a moment, which broke `doing.objective`). It is always the bot's own quest progress, or the shared quest title the initiative lane puts in the topic; no template can show another player's objective, because no fact of another player's is ever put into a bot's persona.
 - **Verified.** `TryAnnounce` does not refuse whispers to non-opted players (the opt-in only gates model use), so the Interacted gate in the lane is the guard. `SpellSystem.HolderAdded` is raised on the world thread. The thank emote id 97 is the repo's `PlayerbotSocialEmotes.TextEmotes.Thank`.
 
+
+## Trading (`World:Playerbots:Social:Trading`, P4a foundation)
+
+Status: the 26 Trading keys are registered and documented, but until the trade desk and the deal steps land (later P4 steps) nothing reads them except `ScamMemoryDays` and `NinjaMemoryDays`, which the trade ledger applies when it reads a row. Setting the others changes no bot behaviour yet.
+
+The trade ledger (`playerbot_trade_record`, characters schema) keeps, per bot and partner, the fair deals and scams counted, the last scam and ninja times and the last UTC day a gift counted: counts and times only, no items, prices or chat. It is fed by the social recorder (a scam, ninja loot or gift note) whether or not `World:Playerbots:Social:Trading:Enabled` or `World:Playerbots:Social:Memory:Enabled` is on; the switches gate what bots do with it, not what is counted. It holds at most 4096 partners per bot and is written at the bot's checkpoint only when it changed. Deleting a bot removes its own rows and the rows other bots hold about it (written again without them right away, like the relation table). Rows about a real player have no time expiry: they stay until the bot's 4096-partner bound evicts them (a partner with no scam or ninja loot inside its window and the fewest fair deals goes first). A bot that was deleted is not fed again.
 
 ## Cost and persistence
 

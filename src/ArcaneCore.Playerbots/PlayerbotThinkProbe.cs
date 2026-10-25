@@ -101,6 +101,33 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>Navigation queries made through <see cref="Find"/> in this think.</summary>
     internal int Queries { get; private set; }
 
+    /// <summary>
+    /// The longest wall time in milliseconds a navigation search of this think may take on the world thread (0 = no bound;
+    /// <see cref="PlayerbotOptions.SyncPathQueryMaxMs"/>). A query that asks for no bound of its own gets it. Set before <see cref="Begin"/>.
+    /// </summary>
+    internal double SyncQueryMaxMs { get; set; }
+
+    /// <summary>Path jobs queued by this think (<see cref="PlayerbotPathJobs"/>).</summary>
+    internal int JobsSubmitted { get; private set; }
+
+    /// <summary>Queries of this think answered pending while their job was under way (or a tile read of it was).</summary>
+    internal int JobsWaiting { get; private set; }
+
+    /// <summary>Finished job answers applied by this think.</summary>
+    internal int JobsApplied { get; private set; }
+
+    /// <summary>Queries of this think held back by the path-job budget.</summary>
+    internal int JobsBudgetRefused { get; private set; }
+
+    /// <summary>Waits that ended in one synchronous search in this think.</summary>
+    internal int Escalations { get; private set; }
+
+    /// <summary>The worker time (Stopwatch ticks) of the job answers applied by this think: off the world thread, kept apart from <see cref="QueryTicks"/>.</summary>
+    internal long JobWorkerTicks { get; private set; }
+
+    /// <summary>The applied job that created the most nodes: nodes, worker ticks, queue ticks, phase, ends.</summary>
+    internal (long Nodes, long WorkerTicks, long QueueTicks, string Phase, Vector3 From, Vector3 To) LargestJob { get; private set; }
+
     /// <summary>Total A* nodes created on this thread since <see cref="Begin"/>.</summary>
     internal long TotalNodes => PathSearchCounters.NodesCreated - _searchBefore.Nodes;
 
@@ -146,6 +173,9 @@ internal sealed class PlayerbotThinkProbe
         _fallbackDepth = 0;
         _fallbackNodes = 0;
         Largest = default;
+        JobsSubmitted = JobsWaiting = JobsApplied = JobsBudgetRefused = Escalations = 0;
+        JobWorkerTicks = 0;
+        LargestJob = default;
         Search = default;
         SlowestTile = default;
         Player = null;
@@ -271,6 +301,24 @@ internal sealed class PlayerbotThinkProbe
             return PathResult.None(from);
         }
 
+        // A far query of a planning wrapper runs on the path-job pool; the bot answers pending until a later think finds it done.
+        if (PlayerbotPathJobs.Bound is { } jobs && jobs.Eligible(collision, options, out ISharedTiledPathSearch shared))
+        {
+            PathResult answer = jobs.Resolve(shared, collision.Map, from, to, options, out JobAnswer how, out NavJob? job);
+            if (how != JobAnswer.Escalated)
+            {
+                probe.RecordJob(how, job, fallback, from, to, options.MaxSearchNodes);
+                t_lastCachedCapped = how == JobAnswer.Applied && job!.Search.Capped > 0;
+                return answer;
+            }
+
+            probe.Escalations++;
+        }
+
+        // The search runs here, on the world thread: held to a wall-time deadline so that one pathological search cannot stall the tick.
+        bool deadline = probe.SyncQueryMaxMs > 0 && options.MaxSearchMs <= 0;
+        if (deadline) options = options with { MaxSearchMs = probe.SyncQueryMaxMs };
+        long deadlinesBefore = PathSearchCounters.DeadlineHits;
         long started = probe._time.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
         long ticks = probe._time.GetTimestamp() - started;
@@ -280,7 +328,40 @@ internal sealed class PlayerbotThinkProbe
         if (fallback) probe._fallbackNodes += nodes;
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
+        if ((path.Type & PathType.TilesPending) != 0) PlayerbotPathJobs.NoteTilePending();
+        if (PathSearchCounters.DeadlineHits != deadlinesBefore)
+        {
+            t_lastCachedCapped = true;
+            // No retry would do anything different (a job was not possible, or its wait was spent): the capped corridor stands as the answer.
+            PlayerbotPathJobs.Bound?.ReportSyncDeadline(probe._phase, from, to, nodes);
+        }
+
         return path;
+    }
+
+    private void RecordJob(JobAnswer how, NavJob? job, bool fallback, Vector3 from, Vector3 to, int maxNodes)
+    {
+        Queries++;
+        switch (how)
+        {
+            case JobAnswer.Applied when job is not null:
+                JobsApplied++;
+                JobWorkerTicks += job.ComputeTicks;
+                if (fallback) _fallbackNodes += job.Search.Nodes;
+                if (job.Search.Capped > 0) Search = Search with { Capped = Search.Capped + 1 };
+                if (job.Search.Nodes > LargestJob.Nodes)
+                    LargestJob = (job.Search.Nodes, job.ComputeTicks, job.QueueTicks, _phase, from, to);
+                break;
+            case JobAnswer.Submitted:
+                JobsSubmitted++;
+                break;
+            case JobAnswer.BudgetRefused:
+                JobsBudgetRefused++;
+                break;
+            default:
+                JobsWaiting++;
+                break;
+        }
     }
 
     internal static bool ConsumeLastQueryCapped()
@@ -366,6 +447,20 @@ internal sealed class PlayerbotThinkProbe
                 $"; largest {nodes}/{max} nodes {Ms(ticks):F1} ms in {phase} from ({from.X:F1}, {from.Y:F1}, {from.Z:F1}) to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}), {Vector3.Distance(from, to):F0} yd");
         }
 
+        if (JobsSubmitted + JobsWaiting + JobsApplied + JobsBudgetRefused + Escalations > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"; off-thread: {JobsSubmitted} jobs submitted, {JobsWaiting} waiting, {JobsApplied} applied ({Ms(JobWorkerTicks):F1} ms on workers), {JobsBudgetRefused} held by the budget, {Escalations} escalated");
+            if (LargestJob.Nodes > 0)
+            {
+                (long jobNodes, long workerTicks, long queueTicks, string jobPhase, Vector3 jobFrom, Vector3 jobTo) = LargestJob;
+                text.Append(CultureInfo.InvariantCulture,
+                    $"; largest job {jobNodes} nodes {Ms(workerTicks):F1} ms worker, {Ms(queueTicks):F1} ms queued, in {jobPhase} from ({jobFrom.X:F1}, {jobFrom.Y:F1}, {jobFrom.Z:F1}) to ({jobTo.X:F1}, {jobTo.Y:F1}, {jobTo.Z:F1})");
+            }
+        }
+
+        if (Search.DeadlineHits > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; {Search.DeadlineHits} searches cut at the {SyncQueryMaxMs:F0} ms deadline");
         if (Clamped > 0 || Refused > 0)
             text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} fallback queries cut short, {Refused} refused");
         if (Search.TilesPending > 0)

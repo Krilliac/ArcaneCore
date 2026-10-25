@@ -52,7 +52,8 @@ public sealed class NightmareDragonsFeature(IServiceScopeFactory scopes, ILogger
     private WorldRuntime? _world;
     private uint _sinceUpdateMs;
 
-    internal NightmareDragonsState State { get; set; } = NightmareDragonsState.Initial;
+    /// <summary>The event's current state (read by the bot world-boss raids to see which dragon stands at which portal); only the feature writes it.</summary>
+    public NightmareDragonsState State { get; internal set; } = NightmareDragonsState.Initial;
 
     internal Func<long> NowUnix { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 

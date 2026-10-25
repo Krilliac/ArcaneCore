@@ -117,9 +117,10 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <param name="rfc">RFC map, trigger, encounter, creature and graveyard content for an end-to-end run.</param>
     /// <param name="openWorldTrophyDrop">The open-world ogre drops <see cref="BossTrophy"/> too: the item then has a dropper outside the instance.</param>
     /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
+    /// <param name="extraTemplates">More creature templates with no database spawn (an event boss a test places with <c>SpawnTemporary</c>).</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
         Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false,
-        bool openWorldTrophyDrop = false)
+        bool openWorldTrophyDrop = false, CreatureTemplate[]? extraTemplates = null)
     {
         var options = new PlayerbotOptions
         {
@@ -127,7 +128,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])]);
+        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? []);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
@@ -283,7 +284,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     }
 
     /// <summary>The giver, the creatures and the quests (a later registration replaces the scenario content's stores).</summary>
-    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra) : ICreatureDataStore, IQuestContentStore, ILootDataStore
+    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra, CreatureTemplate[] templatesOnly) : ICreatureDataStore, IQuestContentStore, ILootDataStore
     {
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [
@@ -308,7 +309,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 Hostile(BossEntry, "Deadmines Boss", level: 12, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
                 .. quests.Contains(SoloQuest) ? [Hostile(RatEntry, "Group Rat", level: 1, health: 20, minDamage: 1, maxDamage: 1, rank: 0)] : Array.Empty<CreatureTemplate>(),
                 Hostile(EntranceOgreEntry, "Entrance Ogre", level: 10, health: 150, minDamage: 3, maxDamage: 4, rank: 1),
-                .. extra.Select(e => e.Template).DistinctBy(t => t.Entry),
+                .. extra.Select(e => e.Template).Concat(templatesOnly).DistinctBy(t => t.Entry),
             ],
             [
                 new CreatureSpawn { Guid = GiverSpawn, Entry = GiverEntry, MapId = 0, X = Home.X + 3f, Y = Home.Y, Z = Home.Z, Orientation = MathF.PI },
