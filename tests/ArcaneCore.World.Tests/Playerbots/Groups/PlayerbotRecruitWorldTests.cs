@@ -196,6 +196,7 @@ public sealed class PlayerbotRecruitWorldTests
             options.Groups.Cooperation.RecruitRadiusYards = 1500;
             options.Groups.Cooperation.RefusalMemoryMinutes = 1;
             options.Groups.FormationTimeoutSeconds = 3_600;
+            options.Chat.Voice.Enabled = false; // a bot's LFG answer (OfferLfg, offer:true) skips the refusal memory and adds a bonus; its post time is unseeded
         });
         var (tank, mage) = await WaitingPairAsync(world);
 
@@ -293,30 +294,40 @@ public sealed class PlayerbotRecruitWorldTests
     {
         // Default chance: whether the healer comes is exactly the pure rule's answer for (healer, first group), whichever way it falls.
         // The refusal window is keyed on the candidate's guid, so it is the same on every run. The coordinator asks once, a few seconds after the
-        // healer appears (RecruitWaitSeconds 5), not at the instant the expectation is computed: the answer is checked against the rule at the
-        // start and at the end of that span (the same window unless a boundary falls inside it, in which case either answer is the rule's).
+        // healer appears (RecruitWaitSeconds 5): the expected answer is computed at the time of the decision itself, the refusal's own time
+        // (RefusedAtMs) or the moment the group stands, so a window boundary between "now" and the ask cannot change it. Which branch is taken
+        // depends on the guid; the decline branch is covered whatever the guid by ACandidateThatRefusedAGroup_... (it forces a refusal).
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
         {
             Still(options);
             options.Groups.Cooperation.RecruitWaitSeconds = 5;
+            options.Chat.Voice.Enabled = false; // a stray LFG answer skips the refusal rule (PlanWithRecruits offer:true)
         });
         var (tank, _) = await WaitingPairAsync(world);
         var healer = await world.AddBotAsync("Detheal", Human, Priest, 10, [LesserHeal, Smite], South);
-        bool[] expectedAnswers = await world.OnWorldAsync(() =>
+        int groupId = await world.OnWorldAsync(() => world.Coordinator.WaitingGroupIdOf(tank.Id)); // the waiting group's own id, whatever other groups there are
+        Assert.NotEqual(0, groupId);
+        uint decidedAt = 0;
+        bool formed = false;
+        Assert.True(await world.RunUntilAsync(90_000, () =>
+        {
+            uint refusedAt = world.Coordinator.RefusedAtMs(healer.Id, groupId);
+            if (refusedAt != 0) { decidedAt = refusedAt; return true; }
+            if (world.Coordinator.Groups.Count == 0) return false;
+            formed = true;
+            decidedAt = (uint)world.World.Host.World.NowMs;
+            return true;
+        }), "the healer was neither recruited nor refused" + Environment.NewLine + await world.TraceAsync());
+
+        bool expected = await world.OnWorldAsync(() =>
         {
             Player player = world.Player(healer.Id);
-            int groupId = world.Coordinator.WaitingGroupIdOf(tank.Id); // the waiting group's own id, whatever other groups there are
-            Assert.NotEqual(0, groupId);
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, 0, 0, false, FillsRole: true, false, false);
             uint period = (uint)world.Options.Groups.Cooperation.RefusalMemoryMinutes * 60_000u;
-            bool AnswerAt(uint ms) => PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value,
-                PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(ms, period, player.Guid.Value, groupId)), facts);
-            uint now = (uint)world.World.Host.World.NowMs;
-            return new[] { AnswerAt(now), AnswerAt(now + 15_000) };
+            return PlayerbotRecruitment.Accepts(world.Options.Groups.Cooperation, player.Guid.Value,
+                PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(decidedAt, period, player.Guid.Value, groupId)), facts);
         });
-
-        bool formed = await world.RunUntilAsync(90_000, () => world.Coordinator.Groups.Count > 0);
-        Assert.Contains(formed, expectedAnswers);
+        Assert.Equal(expected, formed);
         if (formed) Assert.NotNull(world.Coordinator.Groups.Single().Find(healer.Id));
     }
 
