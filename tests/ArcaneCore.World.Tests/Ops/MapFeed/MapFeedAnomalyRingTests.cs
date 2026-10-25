@@ -149,6 +149,11 @@ public sealed class MapFeedAnomalyRingTests
         Assert.Equal(50L, ring.Query(50, 10).Lost);
         Assert.Equal(0L, ring.Query(100, 10).Lost);
         Assert.Equal(0L, ring.Query(4000, 10).Lost);
+
+        // A since above anything the ring issued means the caller's numbers come from an older ring (a restart): the page says so.
+        Assert.False(ring.Query(total, 10).Reset);
+        Assert.True(ring.Query(total + 1, 10).Reset);
+        Assert.Empty(ring.Query(total + 1, 10).Slots);
         Assert.Equal(101L, ring.Query(50, 1).Slots[0].Seq);
 
         // The slots are contiguous: a ring that overwrote in the wrong order would show a gap or a repeat.

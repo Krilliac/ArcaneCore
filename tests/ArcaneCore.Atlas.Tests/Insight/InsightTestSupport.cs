@@ -81,17 +81,23 @@ internal sealed class InsightRig : IAsyncDisposable
         return rig;
     }
 
-    public async Task ConnectAsync(int rev)
+    public Task ConnectAsync(int rev)
     {
-        Task accept = Server.AcceptAsync();
-        Task<CommandResult> connecting = RunAsync("live.connect", new JsonObject { ["pid"] = 4242 });
-        await accept;
         JsonObject hello = Wire.Hello(pid: 4242);
         if (rev > 1)
         {
             hello["rev"] = rev;
         }
 
+        return ConnectWithHelloAsync(hello);
+    }
+
+    /// <summary>Connects (pid 4242) and answers the handshake with exactly <paramref name="hello"/>.</summary>
+    public async Task ConnectWithHelloAsync(JsonObject hello)
+    {
+        Task accept = Server.AcceptAsync();
+        Task<CommandResult> connecting = RunAsync("live.connect", new JsonObject { ["pid"] = 4242 });
+        await accept;
         await Server.AnswerHelloAsync(hello);
         CommandResult result = await connecting.WaitAsync(FakeFeedServer.Patience);
         Assert.True(result.Ok, result.ErrorMessage);
@@ -158,6 +164,15 @@ internal sealed class InsightRig : IAsyncDisposable
     {
         int before = EventCount(EventHub.Topics.LiveFrame);
         await Server.WriteAsync(Wire.Frame(map, 0, seq, entities));
+        await Wait.UntilAsync(() => EventCount(EventHub.Topics.LiveFrame) > before, $"frame {seq} published");
+        await Wait.UntilAsync(() => Hub.Tail.NewestSeq == seq, $"frame {seq} reached the insight recorder");
+    }
+
+    /// <summary>Sends a whole frame line as the world wrote it and waits until the client has published it.</summary>
+    public async Task SendFrameLineAsync(long seq, JsonObject frame)
+    {
+        int before = EventCount(EventHub.Topics.LiveFrame);
+        await Server.WriteAsync(frame);
         await Wait.UntilAsync(() => EventCount(EventHub.Topics.LiveFrame) > before, $"frame {seq} published");
         await Wait.UntilAsync(() => Hub.Tail.NewestSeq == seq, $"frame {seq} reached the insight recorder");
     }

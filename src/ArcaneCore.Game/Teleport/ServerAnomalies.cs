@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Teleport;
 
 /// <summary>
 /// Front door to <see cref="AnomalyLedger"/> for the server-side outcome checks that concern a player whether a client or a bot
-/// drives it (teleport, death, session): the subject is the stable <c>player Name (guid HEX)</c>, the detail is the caller's text
+/// drives it (teleport, death, session): the subject is the stable <c>player Name (guid N)</c> with N the decimal low part of the guid, as the other Game writers (MapCombat, the Locomotion observers, TransportAnomalies) write it, the detail is the caller's text
 /// followed by <c>| map M at x,y,z</c>. Failure path only: callers format their detail after the check failed.
 /// </summary>
 public static class ServerAnomalies

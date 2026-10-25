@@ -62,6 +62,7 @@ internal sealed class AnomalyData
 {
     public long Latest;
     public long Lost;
+    public bool Reset;
     public AnomalyRow[] Rows = [];
 }
 
@@ -258,6 +259,11 @@ internal static partial class MapFeedAnomalies
                 if (!cache.TryGetValue(guid, out var hit))
                 {
                     hit = Locate(feed.World, new ObjectGuid(guid));
+                    if (!hit.Found && TryTransportGuid(slot.Subject, out ulong transport))
+                    {
+                        hit = Locate(feed.World, new ObjectGuid(transport)); // an elevator or tram carries HighGuid.Transport, not GameObject
+                    }
+
                     cache[guid] = hit;
                 }
 
@@ -267,7 +273,7 @@ internal static partial class MapFeedAnomalies
             rows[i] = new AnomalyRow(slot, has, mapId, instanceId, position);
         }
 
-        return new InsightAnswer { Id = request.Id, Kind = request.Kind, Anomalies = new AnomalyData { Latest = page.Latest, Lost = page.Lost, Rows = rows } };
+        return new InsightAnswer { Id = request.Id, Kind = request.Kind, Anomalies = new AnomalyData { Latest = page.Latest, Lost = page.Lost, Reset = page.Reset, Rows = rows } };
     }
 
     private static (bool Found, uint MapId, uint InstanceId, Vector3 Position) Locate(WorldRuntime world, ObjectGuid guid)
@@ -312,6 +318,23 @@ internal static partial class MapFeedAnomalies
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// For a <c>gameobject E spawn S</c> subject, the guid the same spawn has when its template is an elevator or tram
+    /// (<see cref="GameObject.HighGuidOf"/>: <see cref="HighGuid.Transport"/>); the subject does not say which, so the caller tries both.
+    /// </summary>
+    internal static bool TryTransportGuid(string subject, out ulong guid)
+    {
+        guid = 0;
+        if (subject.Length is 0 or > 300 || SpawnSubject().Match(subject) is not { Success: true } spawn || spawn.Groups[1].Value != "gameobject"
+            || !uint.TryParse(spawn.Groups[2].ValueSpan, out uint entry) || !uint.TryParse(spawn.Groups[3].ValueSpan, out uint counter))
+        {
+            return false;
+        }
+
+        guid = ObjectGuid.WithEntry(HighGuid.Transport, entry, counter).Value;
+        return true;
     }
 
     [GeneratedRegex(@"^(creature|gameobject) (?:entry )?(\d+) spawn (\d+)", RegexOptions.CultureInvariant)]

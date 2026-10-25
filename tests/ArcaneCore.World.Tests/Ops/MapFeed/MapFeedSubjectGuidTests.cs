@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
@@ -27,6 +28,23 @@ public sealed class MapFeedSubjectGuidTests
 
         Assert.True(MapFeedAnomalies.TryGuid("gameobject 2843 spawn 77001 (stuck)", out ulong chest));
         Assert.Equal(ObjectGuid.WithEntry(HighGuid.GameObject, 2843, 77001).Value, chest);
+    }
+
+    [Fact]
+    public void AGameObjectSubject_CanAlsoBeATransport_WhoseGuidCarriesTheTransportHighPart()
+    {
+        // GameObject.HighGuidOf: an elevator or tram (template type 11) is HighGuid.Transport. The subject does not say, so the ring tries both.
+        Assert.True(MapFeedAnomalies.TryTransportGuid("gameobject entry 176080 spawn 88001", out ulong transport));
+        Assert.Equal(ObjectGuid.WithEntry(HighGuid.Transport, 176080, 88001).Value, transport);
+        Assert.Equal(GameObject.HighGuidOf((uint)GameObjectType.Transport), new ObjectGuid(transport).High);
+
+        Assert.True(MapFeedAnomalies.TryGuid("gameobject entry 176080 spawn 88001", out ulong plain));
+        Assert.Equal(GameObject.HighGuidOf((uint)GameObjectType.Chest), new ObjectGuid(plain).High);
+        Assert.NotEqual(plain, transport);
+
+        Assert.False(MapFeedAnomalies.TryTransportGuid("creature 3100 spawn 812", out ulong none));
+        Assert.Equal(0ul, none);
+        Assert.False(MapFeedAnomalies.TryTransportGuid("bot Thrall (guid 4D2)", out _));
     }
 
     [Fact]

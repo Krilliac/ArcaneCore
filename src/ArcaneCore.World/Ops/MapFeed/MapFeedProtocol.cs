@@ -143,6 +143,12 @@ internal static class MapFeedProtocol
     /// <summary>The protocol version this daemon speaks (the <c>protocol</c> of <c>hello</c>).</summary>
     public const int Version = 1;
 
+    /// <summary>
+    /// The feed revision (the <c>rev</c> of <c>hello</c>): 1 is the original shape, 2 adds <c>cb</c> (in combat, written only when true)
+    /// and <c>d</c> (display id, written when non-zero) to unit entities. Additive, so a consumer that predates it ignores both.
+    /// </summary>
+    public const int Revision = 2;
+
     /// <summary>The longest client line in bytes; a longer one closes the connection.</summary>
     public const int MaxLineBytes = 4096;
 
@@ -265,9 +271,6 @@ internal static class MapFeedProtocol
 
     /// <summary>An <c>inspect</c> names no object this world holds on that map (nothing is loaded to look for it).</summary>
     public const string NotFound = "not-found";
-
-    /// <summary>An <c>inspect</c> names an object that is not a unit (a game object has no level, health or auras).</summary>
-    public const string NotAUnit = "not-a-unit";
 
     /// <summary>The connection already has a tap.</summary>
     public const string TapBusy = "tap-busy";

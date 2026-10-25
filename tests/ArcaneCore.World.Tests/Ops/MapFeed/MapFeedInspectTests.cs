@@ -296,6 +296,33 @@ public sealed class MapFeedInspectTests
     }
 
     [WindowsFact]
+    public async Task Anomalies_OfAnElevator_AreOnlyPositioned_BecauseItsGuidIsATransportGuid()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup { Content = true, Elevator = true, Options = o => o.AnomaliesUnowned = false });
+        await world.AddPlayerAsync("Liftone");
+        FeedClient client = await world.ConnectAsync();
+        string tag = "insight" + Guid.NewGuid().ToString("N")[..8];
+        Assert.Equal(HighGuid.Transport, new ObjectGuid(FeedWorld.ElevatorGuid).High);
+        await world.Host.WaitForWorldAsync(
+            () => world.Host.World.FindMap(0, 0)?.FindObject(new ObjectGuid(FeedWorld.ElevatorGuid)) is not null, "the elevator spawns");
+
+        // The subject the elevator reporters write (GameObjectMapSystem.Elevators.cs): "gameobject entry E spawn S".
+        AnomalyLedger.Shared.Report(tag, "lift", $"gameobject entry {FeedWorld.ElevatorEntry} spawn {FeedWorld.ElevatorSpawn}", "elevator input", AnomalySeverity.Error, world.Host.World.Identity);
+
+        JsonElement r = await AskAsync(client, AnomaliesLine(5, since: 0, max: 4096));
+
+        AssertOk(r, 5, "anomalies");
+        JsonElement lift = Assert.Single(r.GetProperty("items").EnumerateArray(), i => i.GetProperty("subsystem").GetString() == tag);
+        Assert.Equal("current", lift.GetProperty("pos").GetString());
+        Assert.True(Vector3.Distance(lift.GetProperty("p").ToVector(), new Vector3(-8930f, -140f, 90f)) < 5f);
+    }
+
+    [WindowsFact]
     public async Task Anomalies_AreNotKeptWithoutAnOwner_WhenTheOptionIsOff_AndAre_WhenOn()
     {
         if (!OperatingSystem.IsWindows())

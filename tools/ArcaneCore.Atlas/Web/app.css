@@ -1918,7 +1918,7 @@ input[type="range"] {
     margin-top: 6px;
     overflow: auto;
     max-height: 240px;
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .scrub {

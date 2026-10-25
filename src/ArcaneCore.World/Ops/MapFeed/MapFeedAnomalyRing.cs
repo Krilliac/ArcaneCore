@@ -18,7 +18,7 @@ internal readonly record struct AnomalySlot(
 /// <param name="Slots">The notices above the requested sequence number, oldest first.</param>
 /// <param name="Latest">The newest sequence number the ring has issued (0: nothing yet).</param>
 /// <param name="Lost">Notices after the requested sequence number that the ring no longer holds (overwritten).</param>
-internal sealed record AnomalyPage(AnomalySlot[] Slots, long Latest, long Lost);
+internal sealed record AnomalyPage(AnomalySlot[] Slots, long Latest, long Lost, bool Reset = false);
 
 /// <summary>
 /// A bounded ring of the anomalies this world reported (docs/areas/atlas-insight.md, "Anomalies"). The ledger is process-global and
@@ -104,10 +104,11 @@ internal sealed class MapFeedAnomalyRing : IDisposable
             long oldest = Math.Max(1L, latest - Capacity + 1);
             long start = Math.Max(Math.Max(since, 0L) + 1, oldest);
             long lost = latest > since ? Math.Max(0L, oldest - (Math.Max(since, 0L) + 1)) : 0L;
+            bool reset = since > latest; // the caller holds a sequence number this ring never issued: the daemon restarted, or the ring was recreated
             int count = max < 1 || start > latest ? 0 : (int)Math.Min((long)max, latest - start + 1);
             if (count == 0)
             {
-                return new AnomalyPage([], latest, lost);
+                return new AnomalyPage([], latest, lost, reset);
             }
 
             var slots = new AnomalySlot[count];

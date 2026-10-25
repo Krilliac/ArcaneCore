@@ -289,11 +289,49 @@ public sealed class InsightQueryCommandTests
         Assert.Equal(256, seqs.Length);
         Assert.Equal(ring, seqs[^1]);
         Assert.Equal(ring - 255, seqs[0]);
+        Assert.Equal(ring - 256, recent.Data["skipped"]!.GetValue<long>()); // the jump to the newest page passed over the older notices
+        Assert.False(recent.Data["reset"]!.GetValue<bool>());
 
         CommandResult rare = await rig.RunAsync("live.anomalies", new JsonObject { ["subsystem"] = "rare" });
         Assert.True(rare.Ok, rare.ErrorMessage);
         Assert.Equal([100L, 200L, 300L, 400L, 500L, 600L], rare.Data!["items"]!.AsArray().Select(r => r!["seq"]!.GetValue<long>()));
         Assert.Equal(6, rare.Data["total"]!.GetValue<int>());
+        Assert.Equal(0L, rare.Data["skipped"]!.GetValue<long>());
+    }
+
+    [WindowsFact]
+    public async Task Anomalies_WithASinceAboveWhatTheRingIssued_AreReadFromTheStart_AndSayReset()
+    {
+        await using InsightRig rig = await InsightRig.StartAsync();
+        JsonObject[] all = [.. Enumerable.Range(1, 3).Select(i => Item(i, "warning", "common", "code", "s" + i, i))];
+        var asked = new List<long>();
+        rig.Respond(req =>
+        {
+            long since = req["since"]!.GetValue<long>();
+            lock (asked)
+            {
+                asked.Add(since);
+            }
+
+            if (since > 3)
+            {
+                JsonObject empty = AnomalyReply(req, 3);
+                empty["reset"] = true;
+                return empty;
+            }
+
+            return AnomalyReply(req, 3, [.. all.Where(a => a["seq"]!.GetValue<long>() > since)]);
+        });
+
+        CommandResult result = await rig.RunAsync("live.anomalies", new JsonObject { ["since"] = 9000 });
+
+        Assert.True(result.Ok, result.ErrorMessage);
+        Assert.True(result.Data!["reset"]!.GetValue<bool>());
+        Assert.Equal([1L, 2L, 3L], result.Data["items"]!.AsArray().Select(i => i!["seq"]!.GetValue<long>()));
+        lock (asked)
+        {
+            Assert.Equal([9000L, 0L], asked);
+        }
     }
 
     // ---- live.heatmap ----
@@ -373,6 +411,32 @@ public sealed class InsightQueryCommandTests
         Assert.False(result.Ok);
         Assert.Equal(CommandException.Unavailable, result.ErrorCode);
         Assert.Contains("combat needs feed rev 2", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    // The two lines are what the world's own writer produces (tests/ArcaneCore.World.Tests/Ops/MapFeed/MapFeedJsonTests.cs pins the same
+    // literals against MapFeedJson.HelloLine and MapFeedJson.WriteFrame), so this proves the consumer against the producer, not a fake.
+    private const string WorldHelloLine =
+        """{"op":"hello","protocol":1,"rev":2,"sha":"abc123","pid":4242,"maps":[{"map":0,"instance":0,"players":0,"creatures":3}]}""";
+
+    private const string WorldFrameLine =
+        """{"op":"frame","seq":1,"clockMs":1000,"map":0,"instance":0,"grids":[[32,48]],"counters":{"players":0,"bots":0,"creatures":2,"gameobjects":1,"emitted":3,"truncated":0,"nonFinite":0,"pathsOmitted":0,"dropped":0,"online":0,"diffMs":0,"deferredPaths":0,"directFallbackPaths":0,"noPathPaths":0,"homePathTeleports":0},"entities":[{"g":"F13000012B000001","k":"creature","e":299,"n":"Wolf","x":10,"y":10,"z":5,"o":0,"hp":75,"cb":true,"d":1234,"mt":"chase"},{"g":"F13000012B000002","k":"creature","e":299,"n":"Wolf","x":250,"y":10,"z":5,"o":0,"hp":100,"d":55,"mt":"idle"},{"g":"F110000000000001","k":"gameobject","e":2843,"n":"Chest","x":1,"y":2,"z":3,"o":0}]}""";
+
+    [WindowsFact]
+    public async Task Heatmap_OfCombat_OverTheLinesTheWorldsOwnWriterEmits_CountsTheCreatureInCombat()
+    {
+        await using InsightRig rig = await InsightRig.StartAsync(connect: false);
+        await rig.ConnectWithHelloAsync(JsonNode.Parse(WorldHelloLine)!.AsObject());
+        await rig.SendFrameLineAsync(1, JsonNode.Parse(WorldFrameLine)!.AsObject());
+
+        CommandResult result = await rig.RunAsync("live.heatmap", new JsonObject { ["metric"] = "combat", ["cellSize"] = 100, ["map"] = 0 });
+
+        Assert.Equal(2, rig.Feed.FeedRevision);
+        Assert.True(result.Ok, result.ErrorMessage);
+        JsonObject data = result.Data!.AsObject();
+        Assert.Equal(1, data["total"]!.GetValue<int>());
+        RecordedEntity wolf = Assert.Single(rig.Hub.Tail.Latest()!.Entities, e => (e.Flags & InsightRecorder.FlagCombat) != 0);
+        Assert.Equal(1234u, wolf.D);
+        Assert.Equal(55u, Assert.Single(rig.Hub.Tail.Latest()!.Entities, e => e.D == 55).D);
     }
 
     [WindowsFact]

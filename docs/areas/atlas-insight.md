@@ -7,8 +7,10 @@ tool side is in `tools/ArcaneCore.Atlas/Insight` (commands, recorder, heatmap, w
 
 ## Feed revision
 
-The hello reply may carry `rev` (an integer 1..1000). Absent or malformed means rev 1. Rev 2 adds the per-entity combat flag and the
-two insight query kinds. Atlas reads `rev` in `FeedSession` (`FeedSession.FeedRevision`, exposed as `LiveFeed.FeedRevision`); the shared
+The hello reply carries `rev` (an integer 1..1000; the world writes `MapFeedProtocol.Revision`, 2). Absent or malformed means rev 1.
+Rev 2 adds two optional entity fields, written by `MapFeedJson` from `MapFeedCapture`: `cb:true` for a unit with the in-combat unit
+flag (omitted when false) and `d`, the unit's display id (omitted when 0), and the two insight query kinds. Both fields are additive,
+so a rev 1 consumer ignores them. Atlas reads `rev` in `FeedSession` (`FeedSession.FeedRevision`, exposed as `LiveFeed.FeedRevision`); the shared
 `HelloInfo` record is unchanged. `live.heatmap metric:combat` needs rev 2 and fails `unavailable` against an older world. An older
 world answers the new query kinds with "unknown query kind"; Atlas remembers that per connection and reports `unavailable` with an
 update hint.
@@ -21,7 +23,7 @@ Both are ordinary `query` requests (`kind`, `id`), answered on the world thread 
 ### `inspect`
 
 Request: `{"op":"query","id":N,"kind":"inspect","map":M,"instance":I,"guid":"HEX"}`. The map must be running (refused
-`map_not_loaded`, never created) and the object must be on it (`not_found`); no grid is loaded for the lookup. The result carries
+`map-not-loaded`, never created) and the object must be on it (`not-found`); no grid is loaded for the lookup. The result carries
 the guid, entity kind, name, position `p`, and for units: level, hp, power, faction, unit flags, stand state, target, victim,
 in-combat, the top 10 of the threat list, auras (spell id, stacks, remaining ms, caster), the motion generator stack, the AI name and,
 when the playerbot pack's route seam is attached, the bot's route and goal. Spell names are not on the wire; Atlas adds them from
@@ -31,6 +33,8 @@ when the playerbot pack's route seam is attached, the bot's route and goal. Spel
 
 Request: `{"kind":"anomalies","since":S,"max":K}`. The answer lists the notices with a sequence number above `S`, oldest first, at
 most `K`, plus `latest` (the newest sequence issued) and `lost` (notices that fell out of the ring between `S` and the oldest kept).
+When `S` is above `latest` (the daemon restarted, so the sequence numbers started over) the answer is empty and carries `"reset":true`
+(omitted otherwise); `live.anomalies` then asks again from 0 and reports `reset:true`.
 Each item has `seq`, `t`, `key`, `subsystem`, `code`, `severity`, `subject`, `detail`, `count` and, when the subject names a live
 object, `pos:"current"`, `map`, `instance` and `p`. Positions are the subject's position at query time, not at report time.
 
@@ -38,7 +42,8 @@ The subject forms that resolve to a guid:
 
 | Subject | Guid |
 |---|---|
-| `creature [entry ]E spawn S` / `gameobject [entry ]E spawn S` | `ObjectGuid.WithEntry(High, E, S)`; the creature reporters write the `entry ` form (`CreatureAnomalies.Subject`) |
+| `creature [entry ]E spawn S` | `ObjectGuid.WithEntry(HighGuid.Unit, E, S)`; the creature reporters write the `entry ` form (`CreatureAnomalies.Subject`) |
+| `gameobject [entry ]E spawn S` | `HighGuid.GameObject`, and when no such object is on a map, `HighGuid.Transport` (an elevator or tram, template type 11, carries the transport high part: `GameObject.HighGuidOf`); the elevator reporters in `GameObjectMapSystem.Elevators.cs` write this form |
 | `bot NAME (guid H)` | `ObjectGuid.Player(H)`, H in hex (`PlayerbotAnomalies.SubjectOf`, `PlayerbotGroupAnomalies.ReportNamed`) |
 | `player NAME (guid D)` | `ObjectGuid.Player(D)`, D in decimal (`ServerAnomalies.SubjectOf`, `MapCombat.SubjectOf`, the falling, under-map, flag, instance and loot observers); `SpellSystem.FormatUnitSubject` writes the player counter, which equals the decimal low part |
 
@@ -50,7 +55,7 @@ the prefix, so a new reporter must write `bot` with a hex guid or `player` with 
 
 `MapFeedAnomalyRing` holds the last 4,096 notices this world reported. It subscribes to the process-wide `AnomalyLedger` while
 the feed listens, copies only immutable values into a preallocated slot under a short lock (it never touches a world object), and is
-disposed and cleared when the feed stops (an `anomalies` query then answers `bad_args`).
+disposed and cleared when the feed stops (an `anomalies` query then answers `bad-args`).
 
 A notice is kept when its owner is this world's identity token. A notice with no owner is kept only when
 `WorldMapFeedOptions.AnomaliesUnowned` is true (the default, since the daemon runs one world per process); tests that run several
@@ -70,9 +75,10 @@ worlds in one process set it false.
 | `insight.watch` | Re-runs watchable commands on live frames. |
 
 `live.anomalies` returns the newest `limit` notices (default 256, up to 4,096), not the oldest. The ring answers oldest-first, so when
-the first page is full and newer notices exist Atlas asks again for the newest page. The `map`, `subsystem` and `severity` filters
+the first page is full and newer notices exist Atlas asks again for the newest page, and `skipped` says how many sequence numbers above `since` that jump passed over (0 when it did
+not jump; some of them may also have left the ring, see `lost`). The `map`, `subsystem` and `severity` filters
 run in Atlas, so a filtered call fetches the widest page (4,096) and keeps the newest `limit` matches; `total` and `truncated`
-describe what that page held, not the whole history.
+describe what that page held, not the whole history. The result also carries the ring's `lost` and `reset` (see above).
 
 ## Recorder
 
@@ -82,7 +88,7 @@ Stopping keeps the recording for replay. A 16 MB tail of recent frames is always
 when nothing was recorded). The tail is filled on the feed reader thread for every frame (one parse of the frame, bounded by its
 size and a 30 second age); it is not lazy because `deaths` needs the frames from before the first call.
 
-What replays: positions (interpolated between recorded frames), hp, kind, the combat flag, the motion generator type (`mt`, interned; the rev-2 `mf` movement flags field is not recorded) and the display id `d`. What does not
+What replays: positions (interpolated between recorded frames), hp, kind, the combat flag, the motion generator type (`mt`, interned; the world does not send movement flags) and the display id `d`. What does not
 replay: spline paths, routes, targets and animation state. While a replay is on, the UI ignores live frames and shows a "replay"
 badge. Playback speed is above 0 and at most 60.
 

@@ -207,6 +207,11 @@ internal static class MapFeedInsightJson
     {
         writer.WriteNumber("latest", d.Latest);
         writer.WriteNumber("lost", d.Lost);
+        if (d.Reset)
+        {
+            writer.WriteBoolean("reset", true);
+        }
+
         writer.WriteStartArray("items");
         foreach (AnomalyRow row in d.Rows)
         {

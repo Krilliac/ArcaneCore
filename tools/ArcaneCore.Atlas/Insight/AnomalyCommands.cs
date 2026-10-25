@@ -68,12 +68,25 @@ internal static class AnomalyCommands
         JsonObject reply = await hub.Feed.RequestAsync(
             new JsonObject { ["kind"] = "anomalies", ["since"] = since, ["max"] = fetch },
             cancellationToken).ConfigureAwait(false);
+        bool reset = reply["reset"] is JsonValue resetNode && resetNode.TryGetValue(out bool wasReset) && wasReset;
+        if (reset)
+        {
+            // since is above anything the ring has issued (the daemon restarted): the sequence numbers started over, so read from the start.
+            since = 0;
+            reply = await hub.Feed.RequestAsync(
+                new JsonObject { ["kind"] = "anomalies", ["since"] = 0, ["max"] = fetch },
+                cancellationToken).ConfigureAwait(false);
+        }
+
         JsonArray page = reply["items"] as JsonArray ?? [];
         long latestSeq = Long(reply["latest"]);
+        long skipped = 0;
         if (page.Count >= fetch && page[^1] is JsonObject last && Long(last["seq"]) < latestSeq)
         {
+            long newerSince = Math.Max(since, latestSeq - fetch);
+            skipped = newerSince - since;
             reply = await hub.Feed.RequestAsync(
-                new JsonObject { ["kind"] = "anomalies", ["since"] = Math.Max(since, latestSeq - fetch), ["max"] = fetch },
+                new JsonObject { ["kind"] = "anomalies", ["since"] = newerSince, ["max"] = fetch },
                 cancellationToken).ConfigureAwait(false);
             page = reply["items"] as JsonArray ?? [];
         }
@@ -137,6 +150,8 @@ internal static class AnomalyCommands
         {
             ["latest"] = reply["latest"]?.DeepClone(),
             ["lost"] = reply["lost"]?.DeepClone(),
+            ["skipped"] = skipped,
+            ["reset"] = reset,
             ["total"] = total,
             ["returned"] = rows.Count,
             ["truncated"] = rows.Count < total,
