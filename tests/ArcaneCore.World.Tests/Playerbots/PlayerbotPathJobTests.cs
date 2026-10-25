@@ -586,6 +586,156 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    // ---- 7b. long-wait reports and escalation reasons ---------------------------------------------------------------------------------
+
+    /// <summary>After an applied answer the refresh job is the bot's own new job: asking again while it runs is not a wait since the clock's zero.</summary>
+    [Fact]
+    public async Task AskingAgainWhileTheRefreshJobRuns_AfterAnAppliedAnswer_ReportsNoLongWait()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+            Assert.False(IsPending(h.Ask(h.Far(260)))); // applied; a refresh job for the destination now is queued
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(2, h.Runner.Submitted.Count);
+
+            h.Wall += 1_000;
+            h.Clock += 500;
+            Assert.True(IsPending(h.Ask(h.Far(260)))); // finds the running refresh job
+            Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "job-wait-long")));
+            return true;
+        });
+    }
+
+    /// <summary>A no-path answer for a goal re-picked a few yards away is still the unreachable verdict for that goal.</summary>
+    [Fact]
+    public async Task ANoPathAnswerForASlightlyMovedDestination_IsTheUnreachableVerdict_NotStaleNorAnEscalation()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { Type = PathType.NoPath };
+            using var h = new Harness(world, Options(), nav);
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+
+            PathResult answer = h.Ask(h.Far(255)); // 5 yards on: within the 15% tolerance
+            Assert.False(IsPending(answer));
+            Assert.NotEqual(PathType.Blank, answer.Type & PathType.NoPath);
+            PlayerbotPathJobTotals totals = h.Jobs.Totals;
+            Assert.Equal(1, totals.Applied);
+            Assert.Equal(0, totals.Stale);
+            Assert.Equal(0, totals.Escalations);
+            Assert.Equal(0, nav.OwnerCalls);
+            return true;
+        });
+    }
+
+    /// <summary>A partial answer for the same re-picked goal is a partial verdict too, marked Short because it ends short of the asked goal.</summary>
+    [Fact]
+    public async Task AnIncompleteAnswerForASlightlyMovedDestination_IsAPartialVerdict_NotStale()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { Type = PathType.Incomplete };
+            using var h = new Harness(world, Options(), nav);
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+
+            PathResult answer = h.Ask(h.Far(255));
+            Assert.False(IsPending(answer));
+            Assert.NotEqual(PathType.Blank, answer.Type & PathType.Incomplete);
+            Assert.Equal(0, h.Jobs.Totals.Stale);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            return true;
+        });
+    }
+
+    /// <summary>A no-path answer for a destination well beyond the tolerance is never applied to the one asked now.</summary>
+    [Fact]
+    public async Task ANoPathAnswerForAGenuinelyDifferentDestination_IsNeverApplied_AsStaleOrOtherwise()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            var nav = new ManualSharedPathSearch { Type = PathType.NoPath };
+            using var h = new Harness(world, Options(), nav);
+            Assert.True(IsPending(h.Ask(h.Far(250))));
+            h.Runner.CompleteAll();
+
+            Assert.True(IsPending(h.Ask(h.Far(300)))); // 50 yards on: beyond the tolerance, a new job
+            Assert.Equal(0, h.Jobs.Totals.Applied);
+            Assert.Equal(2, h.Runner.Submitted.Count);
+            return true;
+        });
+    }
+
+    private static string EscalationDetail(AnomalyCapture cap)
+    {
+        AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == PlayerbotAnomalies.Key("nav", "job-escalated"));
+        return notice.Detail;
+    }
+
+    /// <summary>Re-installs another pathfinder object, so the finished answer is stale when asked for.</summary>
+    private static void MakeFinishedAnswerStale(Harness h, RiskTestWorld world)
+    {
+        h.Runner.CompleteAll();
+        WorldCollision.Of(world.Host.World).Install(pathfinder: new ManualSharedPathSearch());
+    }
+
+    [Fact]
+    public async Task ThreeStaleAnswers_EscalateWithTheStaleReason_NotACancelReason()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            for (int i = 0; i < 2; i++)
+            {
+                MakeFinishedAnswerStale(h, world);
+                Assert.True(IsPending(h.Ask(h.Far())));
+            }
+
+            MakeFinishedAnswerStale(h, world);
+            Assert.False(IsPending(h.Ask(h.Far())));
+            Assert.Equal(3, h.Jobs.Totals.Stale);
+            Assert.Equal(0, h.Jobs.Totals.Canceled);
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            string detail = EscalationDetail(cap);
+            Assert.Contains("3 stale, 0 canceled", detail);
+            Assert.DoesNotContain("repeatedly canceled", detail);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task MixedStaleAndCanceledFailures_EscalateNamingBothCounts()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            using AnomalyCapture cap = BotAnomalyCapture.For(h.Player);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            Assert.True(h.Runner.CancelNext());
+            Assert.True(IsPending(h.Ask(h.Far())));
+            MakeFinishedAnswerStale(h, world);
+            Assert.True(IsPending(h.Ask(h.Far())));
+            MakeFinishedAnswerStale(h, world);
+            Assert.False(IsPending(h.Ask(h.Far())));
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            Assert.Contains("2 stale, 1 canceled", EscalationDetail(cap));
+            return true;
+        });
+    }
+
     // ---- 8. tiles the detached search missed ----------------------------------------------------------------------------------------
 
     [Theory]

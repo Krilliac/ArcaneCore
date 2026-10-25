@@ -322,7 +322,7 @@ internal sealed class PlayerbotPathJobs
             if (entry is not null)
             {
                 entry.LastAskMs = nowMs;
-                carry = new Carry(entry.Failures);
+                carry = new Carry(entry.Failures, entry.StaleFailures);
                 if (entry.Job.IsDone)
                 {
                     PathResult? applied = TryApply(shared, map, player, entry, to, from, wallMs, state, ref carry, out how, out settled);
@@ -339,7 +339,11 @@ internal sealed class PlayerbotPathJobs
                     if (settled == JobAnswer.Escalated)
                     {
                         state.PendingSinceWallMs = 0;
-                        return Escalate(state, null, carry.Failures >= EscalateAfterFailures ? "repeatedly canceled" : "faulted", player, from, to, out how);
+                        string why = entry.Job.Status == NavJobStatus.Faulted
+                            ? "faulted"
+                            : string.Create(CultureInfo.InvariantCulture,
+                                $"failed repeatedly ({carry.StaleFailures} stale, {carry.Failures - carry.StaleFailures} canceled)");
+                        return Escalate(state, null, why, player, from, to, out how);
                     }
                 }
             }
@@ -368,7 +372,8 @@ internal sealed class PlayerbotPathJobs
         }
     }
 
-    private readonly record struct Carry(int Failures);
+    /// <summary>The consecutive failures of one query: all of them, and how many of those were stale answers (the rest were cancellations).</summary>
+    private readonly record struct Carry(int Failures, int StaleFailures);
 
     private PathResult Pending(BotState state, long wallMs, Vector3 from, JobAnswer how, out JobAnswer answer)
     {
@@ -404,10 +409,14 @@ internal sealed class PlayerbotPathJobs
 
     private void ReportLongWait(Entry entry, BotState state, long wallMs, Player player)
     {
-        if (entry.LongWaitReported || wallMs - state.PendingSinceWallMs <= WaitLongMs || !player.IsInWorld) return;
+        // No run of pending answers is open right after an applied answer or an old-episode reset (PendingSinceWallMs is 0 until Pending
+        // sets it): the job's own submit time is the start then, never the clock's zero.
+        long since = state.PendingSinceWallMs != 0 ? state.PendingSinceWallMs : entry.SubmittedWallMs;
+        long waited = wallMs - since;
+        if (entry.LongWaitReported || waited <= WaitLongMs || !player.IsInWorld) return;
         entry.LongWaitReported = true;
         PlayerbotAnomalies.Report(player, "nav", "job-wait-long",
-            string.Create(CultureInfo.InvariantCulture, $"a path job has been pending for {wallMs - state.PendingSinceWallMs} ms ({entry.Job.Status}, {entry.MaxNodes} nodes)"),
+            string.Create(CultureInfo.InvariantCulture, $"a path job has been pending for {waited} ms ({entry.Job.Status}, {entry.MaxNodes} nodes)"),
             AnomalySeverity.Info);
     }
 
@@ -439,7 +448,7 @@ internal sealed class PlayerbotPathJobs
         {
             _totals = _totals with { Stale = _totals.Stale + 1 };
             state.Remove(entry);
-            carry = carry with { Failures = carry.Failures + 1 };
+            carry = carry with { Failures = carry.Failures + 1, StaleFailures = carry.StaleFailures + 1 };
             if (carry.Failures >= EscalateAfterFailures) settled = JobAnswer.Escalated;
             return null;
         }
@@ -495,12 +504,22 @@ internal sealed class PlayerbotPathJobs
         };
     }
 
-    /// <summary>An answer found for a destination near the asked one stands only if its route ends within the tolerance of the asked one.</summary>
+    /// <summary>
+    /// An answer found for a destination near the asked one stands only if its route ends within the tolerance of the asked one. A
+    /// partial (Incomplete) or no-path answer is a verdict on the goal, not a route to it, so it stands when the destination it was
+    /// searched for lies within that tolerance of the asked one (a goal re-picked a few yards away is still the same unreachable goal).
+    /// </summary>
     private static bool ReachesAsked(Entry entry, PathResult result, Vector3 to, Vector3 from)
     {
         if (entry.To == to) return true;
-        if (result.Points.Count == 0) return false;
         float tolerance = DestinationTolerance(from, to);
+        if ((result.Type & (PathType.Incomplete | PathType.NoPath)) != 0
+            && Vector3.DistanceSquared(entry.To, to) <= tolerance * tolerance)
+        {
+            return true;
+        }
+
+        if (result.Points.Count == 0) return false;
         return Vector3.DistanceSquared(result.Points[^1], to) <= tolerance * tolerance;
     }
 
@@ -513,6 +532,12 @@ internal sealed class PlayerbotPathJobs
     private bool JoinsFrom(Entry entry, PathResult result, Vector3 from, out List<Vector3> points)
     {
         IReadOnlyList<Vector3> source = result.Points;
+        if ((result.Type & PathType.NoPath) != 0 && source.Count <= 1)
+        {
+            points = [from]; // a no-path verdict has no legs to splice onto; the bot is within the walk bound of where it was asked (DropStale)
+            return true;
+        }
+
         if (Vector3.DistanceSquared(entry.Start, from) <= 1f)
         {
             points = new List<Vector3>(source);
@@ -585,7 +610,7 @@ internal sealed class PlayerbotPathJobs
             return Pending(state, wallMs, from, JobAnswer.BudgetRefused, out how);
         }
 
-        if (!TrySubmitCore(shared, map, player, state, from, to, options, key, carry.Failures, nowMs, wallMs))
+        if (!TrySubmitCore(shared, map, player, state, from, to, options, key, carry, nowMs, wallMs))
         {
             JoinLine(botId);
             _totals = _totals with { BudgetRefused = _totals.BudgetRefused + 1 };
@@ -612,12 +637,12 @@ internal sealed class PlayerbotPathJobs
             if (!e.Job.IsDone) mine++;
 
         if (mine >= _options.PathJobsMaxPerBot || !Admitted(botId, options.MaxSearchNodes)) return;
-        if (TrySubmitCore(shared, map, player, state, from, to, options, key, 0, nowMs, wallMs)) LeaveLine(botId);
+        if (TrySubmitCore(shared, map, player, state, from, to, options, key, default, nowMs, wallMs)) LeaveLine(botId);
     }
 
     /// <summary>Queue the job and record its entry; false when the runner refuses it (nothing recorded).</summary>
     private bool TrySubmitCore(ISharedTiledPathSearch shared, Map map, Player player, BotState state, Vector3 from, Vector3 to,
-        PathOptions options, PathOptions key, int failures, uint nowMs, long wallMs)
+        PathOptions options, PathOptions key, Carry failures, uint nowMs, long wallMs)
     {
         PathOptions jobOptions = options with
         {
@@ -633,7 +658,8 @@ internal sealed class PlayerbotPathJobs
         _totals = _totals with { Submitted = _totals.Submitted + 1 };
         state.Add(new Entry(job, key, to, from, PlayerbotMotion.CurrentPosition(player), options.MaxSearchNodes, player, map, shared, DatasetOf(shared), wallMs)
         {
-            Failures = failures,
+            Failures = failures.Failures,
+            StaleFailures = failures.StaleFailures,
             LastAskMs = nowMs,
         });
         TrimEntries(state);
@@ -934,6 +960,9 @@ internal sealed class PlayerbotPathJobs
         /// <summary>Asked from where the bot stood (a fallback query starts beside it or at a detour point and is not main).</summary>
         internal bool IsMain => Vector3.DistanceSquared(Start, BotPosition) <= 1f;
         internal int Failures;
+
+        /// <summary>How many of <see cref="Failures"/> were stale answers (the rest were cancellations).</summary>
+        internal int StaleFailures;
         internal uint LastAskMs;
         internal bool LongWaitReported;
         internal bool AppliedOnce;
