@@ -32,12 +32,15 @@ public sealed class PlayerbotSilithystOptions
     /// The chance (0..1; default 0.5) that an eligible bot takes part in a given two-minute window: each bot rolls once per window from its
     /// guid, so a crowd of bots in Silithus is not all on the geysers at once.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 1, '.' is the decimal point")]
     public float ParticipationChance { get; set; } = 0.5f;
 
     /// <summary>The chance (0..1; default 0.9) of the same roll while <c>World:Playerbots:Social:WarMode:Enabled</c> is on.</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 1, '.' is the decimal point")]
     public float WarModeParticipationChance { get; set; } = 0.9f;
 
     /// <summary>The most bots that go for one geyser or mound at the same time (1..8; default 1).</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 1 to 8")]
     public int MaxBotsPerGeyser { get; set; } = 1;
 
     /// <summary>Throws when a key is out of range (the reload refuses such a value with the same ranges).</summary>

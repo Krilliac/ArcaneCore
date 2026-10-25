@@ -509,7 +509,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
         return new EscapeSituation(player.Class, player.MaxHealth == 0 ? 0 : player.Health * 100f / player.MaxHealth,
             player.Combat.IsInCombat, within8, within10, victim is not null && Distance(player, victim) <= PlayerbotClassRotation.MeleeRange + 1f,
-            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat);
+            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat, Events.PlayerbotWorldPvpObjectives.Carries(player));
     }
 
     /// <summary>An escape that is known, castable at its target now and (unless <paramref name="ignoreUsed"/>) not used yet this retreat.</summary>

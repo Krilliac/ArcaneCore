@@ -427,20 +427,26 @@ is the bot half, one controller per brain.
 - **Who.** A bot in Silithus proper (map 1, zone 1377), level 55 or more, alive, out of combat, that rolls in. The roll is made once per two-minute window from the bot's guid
   against `ParticipationChance` (default 0.5), or `WarModeParticipationChance` (default 0.9) while `World:Playerbots:Social:WarMode:Enabled` is on, so a crowd of bots is not all on the geysers at once.
   `Enabled` (default true) off: no new run starts; a bot already carrying finishes its trip.
-- **The run.** *Seek*: the nearest spawned Silithyst Geyser (181598) or Mound (181597) that is ready, not set aside and claimed by fewer than `MaxBotsPerGeyser` (default 1) other bots
+- **The run.** *Seek*: the nearest spawned Silithyst Geyser (181598) or Mound (181597) that is ready, not set aside and claimed by fewer than `MaxBotsPerGeyser` (1..8, default 1) other bots
   (`PlayerbotClaims`, the same claim table as mobs and chests). *Use*: walk to within 4 yards, stop, CMSG_GAMEOBJ_USE (the goober casts 29518, whose script gives the flag aura 29519).
   *Await*: 3 s for the flag. *Carry*: walk on foot to the centre of the own faction's turn-in trigger (4162 Alliance, 4168 Horde); the ordinary area trigger packet fires on entering it and the server counts the
-  delivery and applies Traces of Silithyst (29534). *Deliver* is done when the flag is gone within the trigger's radius plus 8 yards and 29534 is on. The geyser is looked at again after a minute.
+  delivery and applies Traces of Silithyst (29534). *Deliver* is done when the flag is gone within the trigger's radius plus 8 yards and 29534 was newly put on by this turn-in (an older 29534 still running does not count). A bot that picked the flag up inside the
+  trigger volume, or stands at its centre with the flag still on, walks out (radius + 3 yards) and back in, up to twice more, because the trigger fires on entering. The carry limit (5 minutes) counts only the time the carry rung runs, not rest or fights.
+  The geyser is looked at again after a minute. After a delivery or any give-up the bot starts no new run for two minutes (one roll window).
 - **Priority.** A run in progress, or a bot found holding the flag, is driven high in the think ladder: after rest and equipment, before class upkeep, home, town errands, the goal policy and quests (a fight still comes first).
   A new run is only started low, next to the opportunity goal. The goal kind reported is `WorldPvp` (appended to `PlayerbotGoalKind`; it is not a goal-policy rung).
 - **A carrier never mounts or stealths.** The server drops the dust when the carrier mounts or stealths away from its trigger. `PlayerbotMount.CanMountHere` refuses while 29519 is on, and the class upkeep gets
-  `RotationState.NoStealth` (rogue Stealth and Vanish, druid Prowl). Using the geyser still dismounts the bot (ordinary game object use).
+  `RotationState.NoStealth` (rogue Stealth and Vanish, druid Prowl); a rogue's retreat does not choose Vanish either (`EscapeSituation.CarriesSilithyst`). A mount-up cast under way when the flag lands is cancelled.
+  Using the geyser still dismounts the bot (ordinary game object use).
 - **Giving up.** A geyser someone else used, or a lost flag away from the trigger, ends the run quietly (the geyser is set aside 30 s to a minute). A death, no route, or a stalled walk sets it aside with the
-  ledger's backoff (60 s doubling to 5 min, `PlayerbotOpportunityLedger`).
+  ledger's backoff (60 s doubling to 5 min, `PlayerbotOpportunityLedger`). The brain's stall watch giving the goal up ends the run the same way. A carry given up while the flag is still on (no trigger row, no route, a refused turn-in,
+  the carry limit, a stall) cancels the flag with CMSG_CANCEL_AURA (five tries, one second apart) and does not take the flag up again for ten minutes: the aura never expires, so otherwise every think would open a new carry and
+  report the same fault again. The fault is reported once for as long as the same flag is held.
 - **Anomalies** (area `world-pvp`, once per run, none on success or an early loss of the flag): `silithyst-use-no-aura` (the use gave no 29519 within 3 s),
-  `silithyst-carry-timeout` (a carry of more than 5 minutes) and `silithyst-unreachable-trigger` (no route to the trigger, or no trigger row loaded).
+  `silithyst-carry-timeout` (a carry of more than 5 minutes of carry time) and `silithyst-unreachable-trigger` (no route to the trigger, no trigger row loaded, or the flag still on after three entries into the volume).
 - **Observability (server).** Each pickup and each turn-in writes a debug line `outdoor-pvp.silithyst` with the player, team and count; `SilithusZone.PickupsTotal` and `TurnInsTotal` count them since start.
-- **Cost.** A bot with no run, away from Silithus or with the option off does a zone test per think and allocates nothing; an eligible bot scans the map's game objects (an entry test each) every 5 s.
+- **Cost.** A bot with no run, away from Silithus or with the option off does a zone test per think and allocates nothing; an eligible bot not cooling down seeks every 5 s with one dictionary lookup per cached geyser/mound spawn (16 in the real data, no enumerator, no allocation). The spawn guids of a map come from one scan of
+  its game objects, shared by the bots of the map and renewed every 10 minutes (30 s while every cached geyser is in an unloaded grid), so a grid that loads in between is seen at the next renewal. A carrier walks its aura list once per think.
 - **Not done in phase 1.** Eastern Plaguelands towers, dropped flags and dust bags, escorting a carrier, killing enemy carriers on purpose and group runs.
   Tests: `tests/ArcaneCore.World.Tests/Playerbots/WorldPvp/`, and the server end to end in `tests/ArcaneCore.World.Tests/OutdoorPvP/SilithystEndToEndTests.cs`.
 

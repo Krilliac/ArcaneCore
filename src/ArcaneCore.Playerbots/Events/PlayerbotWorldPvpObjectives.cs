@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -8,6 +9,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.OutdoorPvP;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
@@ -35,11 +37,16 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
 /// <item><b>Seek</b>: the nearest spawned geyser the ledger has not set aside, that is ready and that fewer than
 /// <see cref="PlayerbotSilithystOptions.MaxBotsPerGeyser"/> other bots claim (<see cref="PlayerbotClaims"/>); the bot joins its claim.</item>
 /// <item><b>Use</b>: walk to within <see cref="InteractYards"/>, stop, CMSG_GAMEOBJ_USE. <b>Await</b>: <see cref="AwaitAuraMs"/> for the flag.</item>
-/// <item><b>Carry</b>: walk to the trigger centre. A carrier never mounts (<c>PlayerbotMount.CanMountHere</c>) or stealths
-/// (<c>RotationState.NoStealth</c>): the server drops the dust when it does. <b>Deliver</b> is done when the flag is gone near the trigger
-/// and Traces of Silithyst is on.</item>
-/// <item><b>Give-up</b>: a taken geyser, a lost flag away from the trigger, a death, no route or a timeout ends the episode; the geyser is
-/// set aside in the ledger (60 s, doubling to 5 min for faults).</item>
+/// <item><b>Carry</b>: walk to the trigger centre; a bot that picked the flag up inside the volume (or stands at the centre with it) walks
+/// out and in again, because the trigger fires on entering. A carrier never mounts (<c>PlayerbotMount.CanMountHere</c>; a mount-up cast under
+/// way is cancelled), stealths (<c>RotationState.NoStealth</c>) or Vanishes as a retreat (<c>EscapeSituation.CarriesSilithyst</c>): the server
+/// drops the dust when it does. The carry timer counts only the time this rung runs (not rest or fights). <b>Deliver</b> is done when the flag
+/// is gone near the trigger and Traces of Silithyst was newly put on by this turn-in (an older one still running does not count).</item>
+/// <item><b>Give-up</b>: a taken geyser, a lost flag away from the trigger, a death, no route, a refused turn-in or a timeout ends the episode;
+/// the geyser is set aside in the ledger (60 s, doubling to 5 min for faults). A carry given up while the flag is still held cancels the
+/// flag (CMSG_CANCEL_AURA, <see cref="MaxDropAttempts"/> tries) and does not take it up again for <see cref="GiveUpBackoffMs"/>: the aura never
+/// expires, so without that the next think would open the same failing carry again. The fault is reported once per held flag. After a
+/// delivery or any give-up no new run starts for <see cref="RunCooldownMs"/>.</item>
 /// </list>
 /// The brain calls <see cref="Update"/> twice per think: high on the ladder with <c>mayBegin: false</c> (an episode already running, or a
 /// bot found carrying the flag) and low with <c>mayBegin: true</c> (the seek).
@@ -48,8 +55,11 @@ internal readonly record struct WorldPvpStep(bool Busy, PlayerbotGoalKind Goal =
 /// <c>silithyst-carry-timeout</c> (the carry ran past <see cref="CarryMaxMs"/>), <c>silithyst-unreachable-trigger</c> (no route or no trigger),
 /// once per episode; nothing on success or on an early loss of the flag.
 /// </para>
-/// Thread affinity: world thread only, owned by one brain. Cost: a scan every <see cref="ScanEveryMs"/> over the map's game objects (an entry
-/// test each) only while the bot is eligible in Silithus; nothing per think otherwise but an options read and a zone test.
+/// Thread affinity: world thread only, owned by one brain. Cost: while the bot is eligible in Silithus and not cooling down, a seek every
+/// <see cref="ScanEveryMs"/> that does one dictionary lookup per cached geyser/mound spawn (16 in the real data; no enumerator, no allocation).
+/// The spawn guids of a map are found by one scan of its game objects, shared by its bots in a per-map weak table and renewed every
+/// <see cref="GeyserCacheRefreshMs"/> (a grid that loads in between is seen at the next renewal; 30 s when every cached geyser is in an
+/// unloaded grid). Nothing per think otherwise but an options read and a zone test; a carrier adds an aura-list walk per think.
 /// </summary>
 internal sealed class PlayerbotWorldPvpObjectives
 {
@@ -104,6 +114,30 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// <summary>Arrived at the trigger centre; the area trigger has long fired.</summary>
     internal const float ArrivedYards = 1.5f;
 
+    /// <summary>A bot that picked the flag up inside the trigger volume walks out to this far beyond its radius, then back in: the trigger fires on entering.</summary>
+    internal const float ExitMarginYards = 3f;
+
+    /// <summary>Times the bot walks into the volume with the flag still on afterwards before it reports the turn-in as refused.</summary>
+    internal const int MaxEntries = 2;
+
+    /// <summary>After a delivery or a give-up the bot starts no new run for this long (one participation window).</summary>
+    internal const uint RunCooldownMs = ParticipationWindowMs;
+
+    /// <summary>After a give-up with the flag in hand the bot does not take up the same flag again for this long (the flag never expires).</summary>
+    internal const uint GiveUpBackoffMs = 600_000;
+
+    /// <summary>Times the bot tries to cancel a flag it gave up carrying, one per <see cref="DropRetryMs"/>.</summary>
+    internal const int MaxDropAttempts = 5;
+
+    /// <summary>The gap between two attempts to cancel the flag.</summary>
+    internal const uint DropRetryMs = 1_000;
+
+    /// <summary>The geyser spawns of a map are looked up again (a full scan of its game objects) after this.</summary>
+    internal const uint GeyserCacheRefreshMs = 600_000;
+
+    /// <summary>A map whose cached geysers all lie in unloaded grids is looked up again after this.</summary>
+    internal const uint GeyserCacheRetryMs = 30_000;
+
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotClaims _claims;
@@ -114,6 +148,24 @@ internal sealed class PlayerbotWorldPvpObjectives
     private TileWait _tileWait;
     private PlayerbotRoute? _route;
     private Vector3 _routeGoal;
+    private bool _cooling;
+    private uint _coolUntilMs;
+    private bool _noAdopt;
+    private uint _noAdoptUntilMs;
+    private bool _dropFlag;
+    private int _dropAttempts;
+    private uint _dropNextMs;
+    private bool _carryFaultReported;
+
+    /// <summary>The geyser and mound objects of each map (their guids), found by one scan and looked up by guid afterwards.</summary>
+    private static readonly ConditionalWeakTable<Map, GeyserCache> GeyserCaches = [];
+
+    private sealed class GeyserCache
+    {
+        public ObjectGuid[] Guids = [];
+        public uint BuiltMs;
+        public bool Built;
+    }
 
     internal PlayerbotWorldPvpObjectives(WorldSession session, PlayerbotOptions options, PlayerbotClaims? claims)
     {
@@ -158,13 +210,21 @@ internal sealed class PlayerbotWorldPvpObjectives
     internal static bool Carries(Player player)
         => player.Session is WorldSession session && session.Services.GetService<SpellFeature>() is { } spells && spells.System.HasAura(player, SilithystFlag);
 
-    private bool Carries(Player player, out bool traces)
+    /// <summary>Whether the bot holds the flag; <paramref name="traces"/> is its Traces of Silithyst holder, if any (no allocation).</summary>
+    private bool Carries(Player player, out SpellAuraHolder? traces)
     {
-        traces = false;
+        traces = null;
         if (_session.Services.GetService<SpellFeature>()?.System is not { } spells) return false;
-        traces = spells.HasAura(player, SilithusCatalog.SpellTracesOfSilithyst);
+        List<SpellAuraHolder> holders = spells.GetAuras(player);
+        for (int i = 0; i < holders.Count; i++)
+        {
+            if (holders[i].Spell.Id == SilithusCatalog.SpellTracesOfSilithyst && !holders[i].IsRemoved) traces = holders[i];
+        }
+
         return spells.HasAura(player, SilithystFlag);
     }
+
+    private static bool Past(uint untilMs, uint now) => unchecked((int)(now - untilMs)) >= 0;
 
     /// <summary>Whether the bot is where the objective is offered: Silithus proper, at the level, alive.</summary>
     internal static bool Eligible(Player player)
@@ -195,13 +255,27 @@ internal sealed class PlayerbotWorldPvpObjectives
         uint now = Now;
         if (_episode is null)
         {
-            if (Carries(player, out _))
+            bool carrying = Carries(player, out SpellAuraHolder? tracesBefore);
+            if (!carrying)
             {
+                _carryFaultReported = false;
+                _dropFlag = false;
+            }
+
+            if (carrying)
+            {
+                // A flag the bot gave up carrying is let go of, not taken up again: it never expires, so taking it up would start the same
+                // failing run at every think.
+                if (_dropFlag) TryDropFlag(player, now);
+                if (_noAdopt && !Past(_noAdoptUntilMs, now)) return WorldPvpStep.None;
                 if (player.MapId != SilithusCatalog.MapId) return WorldPvpStep.None;
-                _episode = new Episode { StartedMs = now, LastStepMs = now, Phase = Phase.Carry, CarryStartedMs = now };
+                _noAdopt = false;
+                _episode = new Episode { StartedMs = now, LastStepMs = now, Phase = Phase.Carry, Reported = _carryFaultReported };
+                NoteCarryStart(_episode, tracesBefore);
             }
             else if (mayBegin && options.Enabled)
             {
+                if (_cooling && !Past(_coolUntilMs, now)) return WorldPvpStep.None;
                 if (_scanned && unchecked((int)(now - _nextScanMs)) < 0) return WorldPvpStep.None;
                 _scanned = true;
                 _nextScanMs = unchecked(now + ScanEveryMs);
@@ -216,6 +290,28 @@ internal sealed class PlayerbotWorldPvpObjectives
         }
 
         return Step(player, map, elapsedMs, now, options);
+    }
+
+    /// <summary>
+    /// The brain's stall watch gave the goal up (the walk made no progress): the run ends. A geyser run sets its geyser aside (a strike); a
+    /// carry drops the flag and holds off new runs (<see cref="GiveUpCarry"/>), or the next think would take the same flag up again.
+    /// </summary>
+    internal void Stalled(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_episode is not { } episode) return;
+        uint now = Now;
+        if (episode.Phase == Phase.Carry)
+        {
+            GiveUpCarry(player, now);
+        }
+        else if (episode.Key != 0)
+        {
+            _ledger.Defer(episode.Key, now);
+        }
+
+        StartCooldown(now);
+        End("stalled");
     }
 
     /// <summary>The bot died (the brain tells at the first think of the death): a run before the carry costs the geyser a strike.</summary>
@@ -239,12 +335,15 @@ internal sealed class PlayerbotWorldPvpObjectives
 
     private void Begin(Player player, Map map, uint now, PlayerbotSilithystOptions options)
     {
-        if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) return;
+        ObjectGuid[] guids = GeysersOf(map, now);
         GameObject? best = null;
         float nearest = float.MaxValue;
-        foreach (GameObject go in objects.GameObjects)
+        int live = 0;
+        for (int i = 0; i < guids.Length; i++)
         {
-            if (go.Entry is not (GeyserEntry or MoundEntry) || !go.IsSpawned) continue;
+            if (map.FindObject(guids[i]) is not GameObject go || go.Entry is not (GeyserEntry or MoundEntry)) continue;
+            live++;
+            if (!go.IsSpawned) continue;
             if (_ledger.IsDeferred(go.Guid.Value, now) || !IsReady(go)) continue;
             if (_claims.OthersOf(go.Guid.Value, mine: false, now) >= options.MaxBotsPerGeyser) continue;
             float dx = go.X - player.X, dy = go.Y - player.Y, dz = go.Z - player.Z;
@@ -256,6 +355,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             }
         }
 
+        if (live == 0 && guids.Length > 0 && GeyserCaches.TryGetValue(map, out GeyserCache? stale)) stale.BuiltMs = unchecked(now - GeyserCacheRefreshMs + GeyserCacheRetryMs); // every grid unloaded: look again soon
         if (best is not { } chosen) return;
         ulong key = chosen.Guid.Value;
         uint epoch = _claims.Join(key, player.Guid.Value, now);
@@ -271,6 +371,33 @@ internal sealed class PlayerbotWorldPvpObjectives
             Guid = chosen.Guid, Entry = chosen.Entry, At = new Vector3(chosen.X, chosen.Y, chosen.Z), StartedMs = now, LastStepMs = now,
             ClaimEpoch = epoch, Phase = Phase.Use,
         };
+    }
+
+    /// <summary>
+    /// The guids of the geyser and mound objects of <paramref name="map"/>: one scan of the map's game objects when first needed and again every
+    /// <see cref="GeyserCacheRefreshMs"/> (a grid that loads later is seen at the next one), shared by the bots of the map. A scan afterwards is
+    /// one dictionary lookup per guid (<see cref="Map.FindObject"/>), none of which allocates.
+    /// </summary>
+    private static ObjectGuid[] GeysersOf(Map map, uint now)
+    {
+        GeyserCache cache = GeyserCaches.GetValue(map, static _ => new GeyserCache());
+        if (cache.Built && unchecked((int)(now - cache.BuiltMs - GeyserCacheRefreshMs)) < 0) return cache.Guids;
+        cache.Built = true;
+        cache.BuiltMs = now;
+        if (map.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        {
+            cache.Guids = [];
+            return cache.Guids;
+        }
+
+        var found = new List<ObjectGuid>();
+        foreach (GameObject go in objects.GameObjects)
+        {
+            if (go.Entry is GeyserEntry or MoundEntry) found.Add(go.Guid);
+        }
+
+        cache.Guids = [.. found];
+        return cache.Guids;
     }
 
     private bool TooMany(ulong key, ulong self, uint now, PlayerbotSilithystOptions options)
@@ -298,10 +425,17 @@ internal sealed class PlayerbotWorldPvpObjectives
         public uint ClaimEpoch;
         public Phase Phase;
         public uint AwaitUntilMs;
-        public uint CarryStartedMs;
+        public uint CarryRunMs;
         public uint TracesGraceUntilMs;
         public int WalkFailures;
         public bool Reported;
+        public bool Checked;
+        public bool ExitFirst;
+        public bool HasExit;
+        public Vector3 ExitPoint;
+        public int Entries;
+        public SpellAuraHolder? TracesBefore;
+        public int TracesBeforeDuration;
 
         public ulong Key => Guid.Value;
     }
@@ -315,7 +449,7 @@ internal sealed class PlayerbotWorldPvpObjectives
         episode.LastStepMs = now;
         if (player.Combat.IsInCombat) return WorldPvpStep.None; // the brain's combat path has the think; the walk goes on after it
 
-        bool carries = Carries(player, out bool traces);
+        bool carries = Carries(player, out SpellAuraHolder? traces);
         if (carries && episode.Phase != Phase.Carry)
         {
             // The flag is in hand (the use landed, or another source gave it): the geyser's claim is not needed any more.
@@ -323,7 +457,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             if (episode.Key != 0) _claims.Leave(episode.Key, episode.ClaimEpoch);
             episode.ClaimEpoch = 0;
             episode.Phase = Phase.Carry;
-            episode.CarryStartedMs = now;
+            NoteCarryStart(episode, traces);
             _route = null;
         }
 
@@ -339,7 +473,7 @@ internal sealed class PlayerbotWorldPvpObjectives
         if (unchecked(now - episode.StartedMs) > UseMaxMs && episode.Phase == Phase.Use)
         {
             _ledger.Defer(episode.Key, now);
-            return Quit(episode, "use-timeout");
+            return Quit(episode, "use-timeout", cooldown: true);
         }
 
         if (episode.Phase == Phase.Await)
@@ -353,7 +487,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             ReportAnomaly(player, episode, "silithyst-use-no-aura",
                 $"used the {(episode.Entry == GeyserEntry ? "geyser" : "mound")} {episode.Entry} ({episode.Guid.Value:X}) and got no Silithyst (aura {SilithystFlag}) within {AwaitAuraMs} ms");
             _ledger.Defer(episode.Key, now);
-            return Quit(episode, "no-aura");
+            return Quit(episode, "no-aura", cooldown: true);
         }
 
         GameObject? go = map.FindObject(episode.Guid) as GameObject;
@@ -378,10 +512,10 @@ internal sealed class PlayerbotWorldPvpObjectives
             {
                 case WalkResult.Failed:
                     _ledger.Defer(episode.Key, now);
-                    return Quit(episode, "no-route");
+                    return Quit(episode, "no-route", cooldown: true);
                 case WalkResult.Stuck when ++episode.WalkFailures >= MaxWalkFailures:
                     _ledger.Defer(episode.Key, now);
-                    return Quit(episode, "no-route");
+                    return Quit(episode, "no-route", cooldown: true);
             }
 
             return Busy(episode);
@@ -395,19 +529,32 @@ internal sealed class PlayerbotWorldPvpObjectives
         return Busy(episode);
     }
 
-    private WorldPvpStep StepCarry(Player player, Episode episode, bool carries, bool traces, uint elapsedMs, uint now)
+    private static void NoteCarryStart(Episode episode, SpellAuraHolder? traces)
+    {
+        episode.CarryRunMs = 0;
+        episode.TracesBefore = traces;
+        episode.TracesBeforeDuration = traces?.Duration ?? 0;
+    }
+
+    /// <summary>Traces of Silithyst was put on (or renewed) since the carry began: this turn-in gave it, not an earlier one still running.</summary>
+    private static bool TurnedIn(Episode episode, SpellAuraHolder? traces)
+        => traces is not null
+            && (episode.TracesBefore is null || !ReferenceEquals(traces, episode.TracesBefore) || traces.Duration > episode.TracesBeforeDuration);
+
+    private WorldPvpStep StepCarry(Player player, Episode episode, bool carries, SpellAuraHolder? traces, uint elapsedMs, uint now)
     {
         AreaTriggerTemplate? trigger = WorldMaps.Of(_session.World).FindAreaTrigger(
             player.Team == Team.Alliance ? SilithusCatalog.AreaTriggerAlliance : SilithusCatalog.AreaTriggerHorde);
         if (trigger is null || trigger.MapId != player.MapId)
         {
             ReportAnomaly(player, episode, "silithyst-unreachable-trigger", "the turn-in area trigger is not in the loaded world data");
-            return Quit(episode, "no-trigger", defer: true);
+            return GiveUp(player, episode, "no-trigger", now, carries);
         }
 
         var centre = new Vector3(trigger.X, trigger.Y, trigger.Z);
         float dx = trigger.X - player.X, dy = trigger.Y - player.Y, dz = trigger.Z - player.Z;
         float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        float volume = trigger.Radius > 0f ? trigger.Radius : ArrivedYards;
 
         if (!carries)
         {
@@ -415,49 +562,129 @@ internal sealed class PlayerbotWorldPvpObjectives
             {
                 // The flag went early (dropped, removed): not a fault and not a turn-in.
                 if (episode.Key != 0) _ledger.SetAside(episode.Key, now, DeliveredRecheckMs);
-                return Quit(episode, "lost");
+                return Quit(episode, "lost", cooldown: true);
             }
 
-            if (traces)
+            if (TurnedIn(episode, traces))
             {
                 Deliveries++;
                 if (episode.Key != 0) _ledger.Complete(episode.Key, now, DeliveredRecheckMs);
-                return Quit(episode, "delivered");
+                return Quit(episode, "delivered", cooldown: true);
             }
 
             if (episode.TracesGraceUntilMs == 0) episode.TracesGraceUntilMs = unchecked(now + TracesGraceMs);
             if (unchecked((int)(episode.TracesGraceUntilMs - now)) > 0) return Busy(episode);
             if (episode.Key != 0) _ledger.SetAside(episode.Key, now, DeliveredRecheckMs);
-            return Quit(episode, "lost");
+            return Quit(episode, "lost", cooldown: true);
         }
 
         episode.TracesGraceUntilMs = 0;
-        if (unchecked(now - episode.CarryStartedMs) > CarryMaxMs)
+        // Only the time the carry rung runs counts: rest, fights and higher goals hold the bot without it being slow.
+        episode.CarryRunMs = episode.CarryRunMs > uint.MaxValue - elapsedMs ? uint.MaxValue : episode.CarryRunMs + elapsedMs;
+        if (episode.CarryRunMs > CarryMaxMs)
         {
             ReportAnomaly(player, episode, "silithyst-carry-timeout",
                 $"carried the Silithyst for {CarryMaxMs} ms without turning it in ({distance:F0} yards from trigger {trigger.Id})");
-            return Quit(episode, "carry-timeout", defer: true);
+            return GiveUp(player, episode, "carry-timeout", now, carries);
         }
 
+        // A mount-up cast under way would drop the dust when it lands (the server drops it on the mount aura); a mount already on is taken off.
+        PlayerbotMount.CancelPendingMountCast(_session, player);
         if (MountService.IsMounted(player)) PlayerbotMount.Dismount(_session, player);
-        if (distance <= ArrivedYards)
+
+        if (!episode.Checked)
         {
-            // At the centre with the flag still on: the trigger fires on entering, so a bot that was inside already waits for the timeout.
+            // The trigger fires on entering its volume: a flag picked up inside it needs a walk out and back in.
+            episode.Checked = true;
+            episode.ExitFirst = distance <= volume;
+        }
+
+        if (episode.ExitFirst && distance > volume + 1f) episode.ExitFirst = false;
+        if (!episode.ExitFirst && distance <= ArrivedYards)
+        {
+            // At the centre with the flag still on: the entry did not turn it in. Out and in again, a few times, then it is reported.
             PlayerbotMovementControl.Stop(_session, player);
+            if (++episode.Entries > MaxEntries)
+            {
+                ReportAnomaly(player, episode, "silithyst-unreachable-trigger",
+                    $"walked into the turn-in trigger {trigger.Id} {MaxEntries + 1} times and still holds the Silithyst");
+                return GiveUp(player, episode, "no-turn-in", now, carries);
+            }
+
+            episode.ExitFirst = true;
+            episode.HasExit = false;
+            _route = null;
             return Busy(episode);
         }
 
-        switch (WalkTo(player, centre, elapsedMs, now))
+        Vector3 goal = centre;
+        if (episode.ExitFirst)
+        {
+            if (!episode.HasExit)
+            {
+                Vector3 away = new(player.X - trigger.X, player.Y - trigger.Y, 0f);
+                away = away.LengthSquared() < 0.0001f ? Vector3.UnitX : Vector3.Normalize(away);
+                episode.ExitPoint = centre + (away * (volume + ExitMarginYards));
+                episode.HasExit = true;
+            }
+
+            goal = episode.ExitPoint;
+        }
+
+        switch (WalkTo(player, goal, elapsedMs, now))
         {
             case WalkResult.Failed:
                 ReportAnomaly(player, episode, "silithyst-unreachable-trigger", $"no route to the turn-in trigger {trigger.Id} ({distance:F0} yards away)");
-                return Quit(episode, "no-route", defer: true);
+                return GiveUp(player, episode, "no-route", now, carries);
             case WalkResult.Stuck when ++episode.WalkFailures >= MaxWalkFailures:
                 ReportAnomaly(player, episode, "silithyst-unreachable-trigger", $"the walk to the turn-in trigger {trigger.Id} stopped {MaxWalkFailures} times ({distance:F0} yards away)");
-                return Quit(episode, "no-route", defer: true);
+                return GiveUp(player, episode, "no-route", now, carries);
         }
 
         return Busy(episode);
+    }
+
+    /// <summary>Gives the carry up: the geyser is set aside, the flag (if still held) is let go of, no new run starts for a while.</summary>
+    private WorldPvpStep GiveUp(Player player, Episode episode, string outcome, uint now, bool carries)
+    {
+        if (carries) GiveUpCarry(player, now);
+        return Quit(episode, outcome, defer: true, cooldown: true);
+    }
+
+    /// <summary>
+    /// The bot holds a flag it can no longer carry. The aura never expires, so the next think would take it up and start the same run again:
+    /// cancel it (CMSG_CANCEL_AURA, retried by <see cref="Update"/> for <see cref="MaxDropAttempts"/> tries) and do not take the flag up again
+    /// for <see cref="GiveUpBackoffMs"/> whether or not it went.
+    /// </summary>
+    private void GiveUpCarry(Player player, uint now)
+    {
+        if (!Carries(player, out _)) return;
+        _noAdopt = true;
+        _noAdoptUntilMs = unchecked(now + GiveUpBackoffMs);
+        _dropFlag = true;
+        _dropAttempts = 0;
+        _dropNextMs = now;
+        TryDropFlag(player, now);
+    }
+
+    private void TryDropFlag(Player player, uint now)
+    {
+        if (_dropAttempts >= MaxDropAttempts)
+        {
+            _dropFlag = false;
+            return;
+        }
+
+        if (!Past(_dropNextMs, now) || _session.ManagedBudget is { Remaining: <= 0 }) return;
+        if (!_session.TryManagedAction(WorldOpcode.CmsgCancelAura, BitConverter.GetBytes(SilithystFlag))) return;
+        _dropAttempts++;
+        _dropNextMs = unchecked(now + DropRetryMs);
+    }
+
+    private void StartCooldown(uint now)
+    {
+        _cooling = true;
+        _coolUntilMs = unchecked(now + RunCooldownMs);
     }
 
     // --- walking ----------------------------------------------------------------------------------------------------
@@ -498,12 +725,14 @@ internal sealed class PlayerbotWorldPvpObjectives
     {
         if (episode.Reported || _session.IsInChaosProbe) return;
         episode.Reported = true;
+        if (episode.Phase == Phase.Carry) _carryFaultReported = true; // the same flag taken up again later does not report the same fault again
         PlayerbotAnomalies.Report(player, "world-pvp", code, detail);
     }
 
-    private WorldPvpStep Quit(Episode episode, string outcome, bool defer = false)
+    private WorldPvpStep Quit(Episode episode, string outcome, bool defer = false, bool cooldown = false)
     {
         if (defer && episode.Key != 0) _ledger.Defer(episode.Key, Now);
+        if (cooldown) StartCooldown(Now);
         End(outcome);
         return WorldPvpStep.None;
     }

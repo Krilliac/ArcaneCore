@@ -18189,7 +18189,7 @@ World.Playerbots.WorldPvp.Silithyst.Enabled = true
 #                     1).
 #        Type: int
 #        Default: 1
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number from 1 to 8
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
@@ -18202,7 +18202,7 @@ World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser = 1
 #                     bots in Silithus is not all on the geysers at once.
 #        Type: float
 #        Default: 0.5
-#        Allowed: a number, '.' is the decimal point
+#        Allowed: a number from 0 to 1, '.' is the decimal point
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
@@ -18214,7 +18214,7 @@ World.Playerbots.WorldPvp.Silithyst.ParticipationChance = 0.5
 #                     World:Playerbots:Social:WarMode:Enabled is on.
 #        Type: float
 #        Default: 0.9
-#        Allowed: a number, '.' is the decimal point
+#        Allowed: a number from 0 to 1, '.' is the decimal point
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #

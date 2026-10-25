@@ -199,7 +199,7 @@ public sealed class PlayerbotWorldPvpObjectivesTests
         Assert.True((await world.OnWorldAsync(() => Step(world, bot, run))).Busy, "the carrier was not taken up");
         Assert.True(run.IsCarrying);
         clock += PlayerbotWorldPvpObjectives.CarryMaxMs + 1;
-        await world.OnWorldAsync(() => Step(world, bot, run));
+        await world.OnWorldAsync(() => Step(world, bot, run, elapsedMs: PlayerbotWorldPvpObjectives.CarryMaxMs + 1));
 
         Assert.True(capture.Any(Key("silithyst-carry-timeout")), capture.Describe());
         Assert.False(run.Active);
@@ -227,10 +227,10 @@ public sealed class PlayerbotWorldPvpObjectivesTests
         Assert.False(run.Active);
     }
 
-    private static WorldPvpStep Step(SilithystWorld world, Guid bot, PlayerbotWorldPvpObjectives run)
+    private static WorldPvpStep Step(SilithystWorld world, Guid bot, PlayerbotWorldPvpObjectives run, uint elapsedMs = 200)
     {
         WorldSession session = world.World.Bots.FindSession(bot)!;
         session.ManagedBudget = new ManagedActionBudget(5);
-        return run.Update(session.Player!, 200, mayBegin: false);
+        return run.Update(session.Player!, elapsedMs, mayBegin: false);
     }
 }

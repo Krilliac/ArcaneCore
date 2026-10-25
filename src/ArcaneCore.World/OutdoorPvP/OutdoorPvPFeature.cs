@@ -348,7 +348,9 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
     /// </summary>
     private void OnHolderAdded(SpellAuraHolder holder)
     {
-        if (holder.Target is Player taker && holder.Spell.Id == SilithusCatalog.SpellSilithystFlag && Silithus is { } silithus)
+        // A re-applied flag replaces the old holder (removed in the same tick, OnHolderRemoved): the carrier already counted as a pickup.
+        if (holder.Target is Player taker && holder.Spell.Id == SilithusCatalog.SpellSilithystFlag && Silithus is { } silithus
+            && !(_flagRemovedAt.TryGetValue(taker.Guid, out uint removedAt) && removedAt == World.NowMs))
         {
             silithus.NotePickup();
             logger.LogDebug("outdoor-pvp.silithyst: pickup by {Player} ({Team}): {Total} pickup(s) in total", taker.Name, taker.Team, silithus.PickupsTotal);

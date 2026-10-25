@@ -13,9 +13,9 @@ internal enum EscapeTarget : byte
 /// <summary>One escape: the spell, its target, and whether the bot turns away from its enemies first (Blink goes forward).</summary>
 internal readonly record struct EscapeAction(string Spell, EscapeTarget Target, bool FaceAway = false);
 
-/// <summary>What the escape choice reads about the retreat (a plain snapshot).</summary>
+/// <summary>What the escape choice reads about the retreat (a plain snapshot). <c>CarriesSilithyst</c>: no stealth escape (Vanish), the server drops the dust.</summary>
 internal readonly record struct EscapeSituation(Class Class, float HealthPct, bool InCombat, int AttackersWithin8, int AttackersWithin10,
-    bool VictimInMelee, bool HasVictim, bool InCatForm);
+    bool VictimInMelee, bool HasVictim, bool InCatForm, bool CarriesSilithyst = false);
 
 /// <summary>
 /// The 1.12 class escapes a retreating bot uses, in order, each at most once per retreat (pure). They follow the uses vmangos
@@ -69,7 +69,7 @@ internal static class PlayerbotEscapes
                 yield return new(Blink, EscapeTarget.Self, FaceAway: true);
                 break;
             case Class.Rogue:
-                yield return new(Vanish, EscapeTarget.Self);
+                if (!s.CarriesSilithyst) yield return new(Vanish, EscapeTarget.Self);
                 if (s.HasVictim && s.VictimInMelee) yield return new(Gouge, EscapeTarget.Victim);
                 yield return new(Sprint, EscapeTarget.Self);
                 break;

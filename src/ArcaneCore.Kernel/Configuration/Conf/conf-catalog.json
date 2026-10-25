@@ -22777,7 +22777,7 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "The most bots that go for one geyser or mound at the same time (1..8; default 1).",
-      "allowed": "a whole number, -2147483648 to 2147483647",
+      "allowed": "a whole number from 1 to 8",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -22793,7 +22793,7 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "The chance (0..1; default 0.5) that an eligible bot takes part in a given two-minute window: each bot rolls once per window from its guid, so a crowd of bots in Silithus is not all on the geysers at once.",
-      "allowed": "a number, '.' is the decimal point",
+      "allowed": "a number from 0 to 1, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -22809,7 +22809,7 @@
       "daemons": "World",
       "reload": "live",
       "meaning": "The chance (0..1; default 0.9) of the same roll while `World:Playerbots:Social:WarMode:Enabled` is on.",
-      "allowed": "a number, '.' is the decimal point",
+      "allowed": "a number from 0 to 1, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

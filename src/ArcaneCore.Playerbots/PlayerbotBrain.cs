@@ -1834,6 +1834,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (_home is null && IsUnderLevelledForArea(player))
                     TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true); // among creatures too strong for it
                 break;
+            case PlayerbotGoalKind.WorldPvp:
+                // The run owns the goal like the opportunity chest does: giving the goal up without ending the episode lets the same think
+                // take it again. Stalled ends it, sets the geyser aside and, for a carrier, drops the flag and holds off a new run.
+                _worldPvp?.Stalled(player);
+                break;
             case PlayerbotGoalKind.Rest:
             case PlayerbotGoalKind.Recover:
             case PlayerbotGoalKind.Follow:
