@@ -2,6 +2,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
@@ -199,7 +200,9 @@ public sealed class ServerConfigCommandTests
         {
             CommandTable table = ChatCommands.CreateTable();
             CommandContext ctx = CommandContext.ForConsole(session, table, replies.Add);
-            Assert.True(table.Resolve("server config set", AccountSecurity.Administrator)!.Handler!(ctx, $"World:AutosaveIntervalMs {original + 7}"));
+            ChatCommand set = table.Resolve("server config set", AccountSecurity.Administrator)!;
+            ctx.Bind(set, "server config set"); // what CommandTable.Execute does; DebugWrite.Record needs the running command
+            Assert.True(set.Handler!(ctx, $"World:AutosaveIntervalMs {original + 7}"));
             int seen = host.World.Options.AutosaveIntervalMs;
             return (ctx, seen, ctx.WhenSettled.IsCompleted);
         });
@@ -210,13 +213,18 @@ public sealed class ServerConfigCommandTests
         Assert.False(settledEarly); // the console command stayed open for the posted reply
         Assert.Equal(original + 7, host.World.Options.AutosaveIntervalMs);
         Assert.StartsWith($"Option World:AutosaveIntervalMs: {original} -> {original + 7}", Assert.Single(replies), StringComparison.Ordinal);
+        DebugWriteLog writes = host.WorldServices.GetRequiredService<GmAuditFeature>().DebugWrites;
+        DebugWriteEntry recorded = Assert.Single(writes.Tail(10), e => e.Command == "server config set");
+        Assert.Equal(("World:AutosaveIntervalMs", $"{original}", $"{original + 7}"), (recorded.Field, recorded.OldValue, recorded.NewValue));
 
         replies.Clear();
         (CommandContext reset, int stillSet) = await host.OnWorldAsync(() =>
         {
             CommandTable table = ChatCommands.CreateTable();
             CommandContext ctx = CommandContext.ForConsole(session, table, replies.Add);
-            Assert.True(table.Resolve("server config reset", AccountSecurity.Administrator)!.Handler!(ctx, "World:AutosaveIntervalMs"));
+            ChatCommand resetCommand = table.Resolve("server config reset", AccountSecurity.Administrator)!;
+            ctx.Bind(resetCommand, "server config reset");
+            Assert.True(resetCommand.Handler!(ctx, "World:AutosaveIntervalMs"));
             return (ctx, host.World.Options.AutosaveIntervalMs);
         });
         reset.Complete();
@@ -225,6 +233,8 @@ public sealed class ServerConfigCommandTests
         Assert.Equal(original + 7, stillSet);
         Assert.Equal(original, host.World.Options.AutosaveIntervalMs);
         Assert.Equal($"World:AutosaveIntervalMs is back to its baseline value {original}.", Assert.Single(replies));
+        DebugWriteEntry undone = Assert.Single(writes.Tail(10), e => e.Command == "server config reset");
+        Assert.Equal(($"{original + 7}", $"{original}"), (undone.OldValue, undone.NewValue));
     }
 
     [Fact]
