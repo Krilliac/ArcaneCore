@@ -13474,6 +13474,21 @@ World.Playerbots.Contention.ContentionSuspendMinutes = 5
 World.Playerbots.Contention.HelpChance = 0.35
 
 #
+#    World.Playerbots.Contention.InvincibleTargetAbandonSeconds
+#        Description: Seconds a bot may hold a target whose health stays at or below its
+#                     death-prevention threshold (InvincibilityHpThreshold: a creature an EventAI
+#                     script keeps at 1 health until some condition is met, such as the Blasted
+#                     Lands servants of quest 2681) before it sets the creature aside as one it
+#                     cannot kill (1..600).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number from 1 to 600 (seconds)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
+
+#
 #    World.Playerbots.Contention.SomeoneElsesMemorySeconds
 #        Description: Seconds a bot leaves a mob alone after it found it to be someone else's
 #                     (1..600), and the least between two decisions about the same mob.
