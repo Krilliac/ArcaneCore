@@ -278,7 +278,7 @@ public sealed class PublicFeedPoolTests
     }
 
     [Fact]
-    public async Task AWorldThatNeverAnswersLinks_IsAskedOncePerConnection_NotOncePerFrame()
+    public async Task AWorldThatNeverAnswersLinks_IsAskedOncePerBackoffWindow_NotOncePerFrame()
     {
         var rig = new Rig();
         rig.Feed.LinksSupported = false;
@@ -293,7 +293,7 @@ public sealed class PublicFeedPoolTests
             connection.PushFrame(FrameOf(seq, boar));
         }
 
-        Assert.Equal(1, connection.Ops.Count(o => o == "links")); // each unanswered ask is a refused line; five in a row close the connection
+        Assert.Equal(1, connection.Ops.Count(o => o == "links")); // each unanswered ask is a refused line on an id-less daemon
 
         // A timeout is not final: the world may only have been slow. One ask per back-off window (1 min, then 2 min), never a permanent stop.
         rig.Time.Advance(TimeSpan.FromSeconds(59));
@@ -309,6 +309,67 @@ public sealed class PublicFeedPoolTests
         rig.Time.Advance(TimeSpan.FromSeconds(2));
         connection.PushFrame(FrameOf(13, boar));
         Assert.Equal(3, connection.Ops.Count(o => o == "links"));
+
+        // The back-off doubles up to a cap of 10 minutes: 1, 2, 4, 8, then 10 (not 16).
+        foreach (int minutes in new[] { 4, 8, 10, 10 })
+        {
+            rig.Time.Advance(TimeSpan.FromMinutes(minutes) - TimeSpan.FromSeconds(1));
+            int before = connection.Ops.Count(o => o == "links");
+            connection.PushFrame(FrameOf(100 + minutes, boar));
+            Assert.Equal(before, connection.Ops.Count(o => o == "links")); // still inside the window
+            rig.Time.Advance(TimeSpan.FromSeconds(2));
+            connection.PushFrame(FrameOf(200 + minutes, boar));
+            Assert.Equal(before + 1, connection.Ops.Count(o => o == "links"));
+        }
+    }
+
+    [Fact]
+    public async Task TheLinksBackoff_StartsAgainAtOneMinuteAfterASuccessfulAnswer()
+    {
+        var rig = new Rig();
+        rig.Feed.LinksSupported = false;
+        rig.Feed.LinksSilent = true;
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+        int Asked() => connection.Ops.Count(o => o == "links");
+
+        connection.PushFrame(FrameOf(1, boar)); // timeout: 1 minute
+        rig.Time.Advance(TimeSpan.FromSeconds(61));
+        connection.PushFrame(FrameOf(2, boar)); // timeout: 2 minutes
+        Assert.Equal(2, Asked());
+        rig.Feed.LinksSupported = true;
+        rig.Time.Advance(TimeSpan.FromSeconds(121));
+        connection.PushFrame(FrameOf(3, boar)); // answered: the back-off is forgotten
+        Assert.Equal(3, Asked());
+        connection.PushFrame(FrameOf(4, boar));
+        Assert.Equal(4, Asked()); // an answer is followed by another ask on the next frame
+
+        rig.Feed.LinksSupported = false;
+        connection.PushFrame(FrameOf(5, boar)); // timeout again: back to 1 minute, not 4
+        rig.Time.Advance(TimeSpan.FromSeconds(61));
+        int before = Asked();
+        connection.PushFrame(FrameOf(6, boar));
+        Assert.Equal(before + 1, Asked());
+    }
+
+    [Fact]
+    public async Task ALinksAnswerThatSaysNotOk_IsAskedAgainAfterAShortBackoff_NotOnTheNextFrame()
+    {
+        var rig = new Rig();
+        rig.Feed.LinksBusy = true;
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+
+        connection.PushFrame(FrameOf(1, boar));
+        connection.PushFrame(FrameOf(2, boar));
+        Assert.Equal(1, connection.Ops.Count(o => o == "links"));
+        rig.Time.Advance(TimeSpan.FromSeconds(6));
+        connection.PushFrame(FrameOf(3, boar));
+        Assert.Equal(2, connection.Ops.Count(o => o == "links"));
     }
 
     [Fact]

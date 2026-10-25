@@ -117,6 +117,9 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
     private static readonly TimeSpan LinksTimeout = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan LinksBackoffFirst = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan LinksBackoffMax = TimeSpan.FromMinutes(10);
+
+    /// <summary>The wait after a <c>links</c> answer that says <c>ok:false</c> (the world's own query gave up): short, so the view recovers soon, but not on the very next frame.</summary>
+    private static readonly TimeSpan LinksRefusedBackoff = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan StrikeWindow = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);
 
@@ -471,6 +474,13 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         long seq = frame.Frame.Seq;
         if (!slot.LinksUnsupported && _time.GetTimestamp() >= Volatile.Read(ref slot.LinksRetryAt) && Interlocked.CompareExchange(ref slot.LinksInFlight, 1, 0) == 0)
         {
+            // An ask that ended between the check above and the exchange has set the retry time: look again now that this thread owns the slot.
+            if (_time.GetTimestamp() < Volatile.Read(ref slot.LinksRetryAt))
+            {
+                Interlocked.Exchange(ref slot.LinksInFlight, 0);
+                return;
+            }
+
             slot.LinksAskedSeq = seq;
             _ = AskLinksAsync(slot, map, seq);
         }
@@ -505,6 +515,7 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
             else
             {
                 _store.SetLinks(map, LinksSnapshot.Unsupported);
+                Volatile.Write(ref slot.LinksRetryAt, _time.GetTimestamp() + (long)(LinksRefusedBackoff.TotalSeconds * _time.TimestampFrequency));
             }
         }
         catch (Exception e) when (e is CommandException or InvalidOperationException or FormatException)

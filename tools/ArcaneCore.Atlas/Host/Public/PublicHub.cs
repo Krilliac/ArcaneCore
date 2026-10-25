@@ -33,8 +33,6 @@ internal sealed class PublicHub
     /// <summary>The longest message a client may send.</summary>
     public const int MaxMessageBytes = 4096;
 
-    private int _helloTrimmedLogged;
-
     /// <summary>The JSON depth limit of client messages.</summary>
     public const int MaxJsonDepth = 8;
 
@@ -70,6 +68,7 @@ internal sealed class PublicHub
     private readonly ConcurrentDictionary<string, int> _perIp = new(StringComparer.Ordinal);
     private int _count;
     private long _nextSocket;
+    private int _helloTrimmedLogged;
 
     public PublicHub(PublicRuntime runtime)
     {

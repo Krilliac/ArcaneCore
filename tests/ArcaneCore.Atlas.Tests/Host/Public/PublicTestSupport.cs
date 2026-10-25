@@ -215,6 +215,9 @@ internal sealed class FakeFeed : IPublicFeedConnector
     /// </summary>
     public bool LinksSilent { get; set; }
 
+    /// <summary>With <see cref="LinksSupported"/> true: the world answers <c>links</c> with <c>ok:false</c> (its own query gave up) instead of a list.</summary>
+    public bool LinksBusy { get; set; }
+
     public IEnumerable<ulong> Linked { get; set; } = [];
 
     public IEnumerable<uint> SummonEntries { get; set; } = [];
@@ -288,6 +291,7 @@ internal sealed class FakeConnection(FakeFeed feed, IPublicFeedSink sink, long i
         JsonObject answer = op switch
         {
             "role" => feed.RoleAnswer ?? new JsonObject { ["op"] = "result", ["ok"] = true, ["kind"] = "role", ["role"] = "web" },
+            "links" when feed.LinksSupported && feed.LinksBusy => new JsonObject { ["op"] = "result", ["ok"] = false, ["kind"] = "links", ["code"] = "timeout" },
             "links" when feed.LinksSupported => Frames.LinksAnswer(feed.Linked, feed.SummonEntries),
             "links" when feed.LinksSilent => throw new ArcaneCore.Atlas.Core.Commands.CommandException(
                 ArcaneCore.Atlas.Core.Commands.CommandException.Failed, "query 3 timed out after 8 s: the server did not answer (its world thread may be busy, or it does not support this query).", new TimeoutException()),
