@@ -1,5 +1,6 @@
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Playerbots.Party;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.WorldBossTestKit;
 
@@ -97,16 +98,20 @@ public sealed class PlayerbotWorldBossFormingWorldTests
         var tank = await world.AddBotAsync("Wqtank", Human, Warrior, 10, [GroupTestWorld.Taunt]);
         var healer = await world.AddBotAsync("Wqheal", Human, Priest, 10, [LesserHeal, GroupTestWorld.Resurrection]);
         var mage = await world.AddBotAsync("Wqmage", Human, Mage, 10, [Fireball]);
-        Assert.True(await world.RunUntilAsync(60_000, () => new[] { tank, healer, mage }.All(b => world.HasQuest(b.Id, GroupTestWorld.EliteQuest))), await world.TraceAsync());
+        // Nobody answers an invitation. The hook is set on every tick before the group forms: a three-bot group is whole in the tick it forms in, so setting it after is too late.
+        void MuteAll()
+        {
+            foreach (var bot in new[] { tank, healer, mage }) if (world.Bots.FindPartyAI(bot.Id) is { } ai)
+            {
+                ai.AcceptsBotGroup = (_, _) => false;
+                ai.InviteStanding = (_, _) => new PlayerbotGroupInvites.Standing(Rival: true, WellKnown: false, SharesGoal: false); // the Affinity policy takes an inviter of the same goal otherwise; a rival is refused
+            }
+        }
+
+        Assert.True(await world.RunUntilAsync(60_000, () => { MuteAll(); return new[] { tank, healer, mage }.All(b => world.HasQuest(b.Id, GroupTestWorld.EliteQuest)); }), await world.TraceAsync());
 
         PlayerbotGroupCoordinator.BotGroup? group = null;
-        Assert.True(await world.RunUntilAsync(60_000, () => (group = world.Coordinator.Groups.FirstOrDefault(g => g.WorldBoss is null)) is not null), await world.TraceAsync());
-        await world.OnWorldAsync(() =>
-        {
-            Guid last = group!.Members.Last(m => m.BotId != group.LeaderBotId).BotId;
-            world.Bots.FindPartyAI(last)!.AcceptsBotGroup = (_, _) => false;
-            return true;
-        });
+        Assert.True(await world.RunUntilAsync(60_000, () => { MuteAll(); return (group = world.Coordinator.Groups.FirstOrDefault(g => g.WorldBoss is null)) is not null; }), await world.TraceAsync());
 
         Assert.True(await world.RunUntilAsync(120_000, () => !world.Coordinator.Groups.Contains(group!)), await world.TraceAsync());
         Assert.True(Noted(world, "invites-unanswered"), await world.TraceAsync());
