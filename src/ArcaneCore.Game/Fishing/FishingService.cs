@@ -26,7 +26,7 @@ namespace ArcaneCore.Game.Fishing;
 /// </para>
 /// World thread only; one service per map, attached with <see cref="Map.AddUpdater"/>.
 /// </summary>
-public sealed class FishingService : IMapUpdater, ILootReleaseHandler
+public sealed partial class FishingService : IMapUpdater, ILootReleaseHandler
 {
     /// <summary>FISHING_BOBBER_READY_TIME (GameObjectDefines.h:197): seconds a bobber stays ready for the catch.</summary>
     public const long BobberReadyTimeMs = 5000;

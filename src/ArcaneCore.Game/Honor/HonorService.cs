@@ -12,7 +12,7 @@ namespace ArcaneCore.Game.Honor;
 /// (HonorMgr.cpp:671-698, 792-1097). No reference code is copied. Also serves the other areas through
 /// <see cref="IPlayerHonor"/> and <see cref="IHonorAwards"/>.
 /// </summary>
-public sealed class HonorService : IPlayerHonor, IHonorAwards
+public sealed partial class HonorService : IPlayerHonor, IHonorAwards
 {
     private static readonly InstanceAttachments<ArcaneCore.Game.Spells.SpellSystem, HonorService> s_spellLinks = new();
     private readonly ConditionalWeakTable<Player, HonorState> _players = new();

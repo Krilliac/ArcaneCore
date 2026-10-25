@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Characters;
 /// (ObjectMgr::LoadPlayerCacheData at startup, GetPlayerDataByGUID for name queries).
 /// Loaded once at startup and kept current by character creation and deletion. Thread-safe.
 /// </summary>
-public sealed class CharacterDirectory
+public sealed partial class CharacterDirectory
 {
     private readonly ConcurrentDictionary<int, CharacterIdentity> _byId = new();
 

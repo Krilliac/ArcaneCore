@@ -22,6 +22,7 @@ import { eye as cameraEye, projectionMatrix, viewMatrix } from './camera.js';
 import { LINE_STRIDE, LINE_WORDS, MARKER_STRIDE } from './geom.js';
 import * as S from './shaders.js';
 import { writesDepth } from './layerstate.js';
+import { createMaterialRegistry } from './materials/index.js';
 
 export class RendererUnavailable extends Error {
     constructor(message) {
@@ -32,6 +33,10 @@ export class RendererUnavailable extends Error {
 
 const TRI_STRIDE = 16;
 const POINT_STRIDE = 16;
+// Textured triangles: x, y, z relative to the chunk origin, u, v, colour0 as RGBA8.
+const TEX_STRIDE = 24;
+// Byte offsets of the streams in the expanded batch vertex (position, uv0, colour0), what a material's layout() names.
+const TEX_STREAM_OFFSETS = { position: 0, uv0: 12, color0: 20 };
 const LIGHT_WORLD = normalize3([0.35, 0.25, 0.9]);
 const LINE_BIAS = [1e-4, 0.01];
 const MARKER_BIAS = [1e-3, 0.6];
@@ -94,7 +99,23 @@ export class Renderer {
             throw new RendererUnavailable('WebGL2 is not available in this browser.');
         }
         this.gl = gl;
-        this.stats = { drawCalls: 0, triangles: 0, lines: 0, chunks: 0, gpuBytes: 0 };
+        // The texture counters are pinned names (design section 4): always numbers, 0 before any texture work.
+        this.stats = {
+            drawCalls: 0,
+            triangles: 0,
+            lines: 0,
+            chunks: 0,
+            gpuBytes: 0,
+            textures: 0,
+            textureBytes: 0,
+            texturesPending: 0,
+            texturesMissing: 0,
+            texturesEvicted: 0,
+            textureOverBudget: 0,
+            arrayReallocs: 0,
+        };
+        this.materials = createMaterialRegistry();
+        this.textures = null;
         this.shading = { mode: 0, contours: false, fog: true, sunAzimuth: 38, sunAltitude: 55 };
         this.pickSupported = true;
         this._slots = new Map();
@@ -142,6 +163,14 @@ export class Renderer {
         return this.getShading();
     }
 
+    /**
+     * Gives the renderer the store its material batches take textures from (a TextureStore, or null to draw textured chunks as flat
+     * layer-coloured fills). The store belongs to the caller; a lost context needs a new one.
+     */
+    setTextureStore(store) {
+        this.textures = store ?? null;
+    }
+
     getShading() {
         return { ...this.shading, sunDir: this._sunDir() };
     }
@@ -177,7 +206,10 @@ export class Renderer {
             pick: this._program(S.PICK),
             line: this._program(S.LINE),
             marker: this._program(S.MARKER),
+            material: null,
         };
+        // The programs of the generic material come from its implementation, compiled through the same shader library.
+        this.programs.material = this.materials.get('generic').programs(gl, { sources: S, compile: (source) => this._program(source) }).main;
         this.emptyLut = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.emptyLut);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(256 * 4));
@@ -298,6 +330,10 @@ export class Renderer {
             triVao: null,
             lineVao: null,
             pointVao: null,
+            texVbo: null,
+            texVao: null,
+            batches: [],
+            materials: [],
             lut: null,
         };
 
@@ -327,6 +363,41 @@ export class Renderer {
                 gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, TRI_STRIDE, 12);
             });
             chunk.bytes += buffer.byteLength;
+        }
+
+        if (triangleCount > 0 && decoded.batches?.length > 0 && decoded.uv0) {
+            // The batches draw from their own expanded copy (position, uv0, colour0); the plain triangle buffer above stays for the
+            // depth pre-pass, picking and readTriangle, so a textured layer picks exactly like an untextured one.
+            const buffer = new ArrayBuffer(triangleCount * 3 * TEX_STRIDE);
+            const f = new Float32Array(buffer);
+            const u = new Uint32Array(buffer);
+            const tri = decoded.triangles;
+            const uv = decoded.uv0;
+            const color = decoded.color0;
+            for (let t = 0; t < triangleCount * 3; t++) {
+                const vertex = tri[t];
+                const w = t * (TEX_STRIDE / 4);
+                f[w] = p[vertex * 3];
+                f[w + 1] = p[vertex * 3 + 1];
+                f[w + 2] = p[vertex * 3 + 2];
+                f[w + 3] = uv[vertex * 2];
+                f[w + 4] = uv[vertex * 2 + 1];
+                u[w + 5] = color ? color[vertex] : 0xFFFFFFFF;
+            }
+            chunk.texVbo = this._buffer(buffer);
+            chunk.texVao = this._vao(() => {
+                gl.bindBuffer(gl.ARRAY_BUFFER, chunk.texVbo);
+                for (const a of this.materials.get('generic').layout()) {
+                    gl.enableVertexAttribArray(a.location);
+                    gl.vertexAttribPointer(a.location, a.size, gl[a.type], a.normalized, TEX_STRIDE, TEX_STREAM_OFFSETS[a.stream]);
+                    if (a.divisor !== 0) {
+                        gl.vertexAttribDivisor(a.location, a.divisor);
+                    }
+                }
+            });
+            chunk.bytes += buffer.byteLength;
+            chunk.materials = decoded.materials;
+            chunk.batches = decoded.batches.map((batch) => ({ ...batch, center: batchCenter(decoded, batch) }));
         }
 
         if (lineCount > 0) {
@@ -393,12 +464,12 @@ export class Renderer {
             return;
         }
         const gl = this.gl;
-        for (const key of ['triVbo', 'lineVbo', 'pointVbo']) {
+        for (const key of ['triVbo', 'lineVbo', 'pointVbo', 'texVbo']) {
             if (chunk[key]) {
                 gl.deleteBuffer(chunk[key]);
             }
         }
-        for (const key of ['triVao', 'lineVao', 'pointVao']) {
+        for (const key of ['triVao', 'lineVao', 'pointVao', 'texVao']) {
             if (chunk[key]) {
                 gl.deleteVertexArray(chunk[key]);
             }
@@ -498,6 +569,7 @@ export class Renderer {
         this.stats.drawCalls = 0;
         this.stats.triangles = 0;
         this.stats.lines = 0;
+        this.textures?.beginFrame();
         gl.viewport(0, 0, frame.width, frame.height);
         gl.disable(gl.SCISSOR_TEST);
         gl.depthMask(true);
@@ -518,6 +590,28 @@ export class Renderer {
             gl.disable(gl.SCISSOR_TEST);
         }
         gl.bindVertexArray(null);
+        this._endTextureFrame();
+    }
+
+    _endTextureFrame() {
+        const store = this.textures;
+        if (!store) {
+            return;
+        }
+        store.endFrame();
+        const t = store.stats();
+        this.stats.textures = t.resident;
+        this.stats.textureBytes = t.bytes;
+        this.stats.texturesPending = t.pending;
+        this.stats.texturesMissing = t.missing;
+        this.stats.texturesEvicted = t.evictions;
+        this.stats.textureOverBudget = t.overBudget ? 1 : 0;
+        this.stats.arrayReallocs = t.arrayReallocs;
+    }
+
+    /** True when the chunk's batches are drawn through the material pass (it has batches and a texture store exists). */
+    _isTextured(chunk) {
+        return chunk.texVao !== null && this.textures !== null;
     }
 
     _context(frame) {
@@ -544,6 +638,7 @@ export class Renderer {
         const layers = frame.layers.filter((l) => l.chunks.length > 0 && l.regions.includes(region));
         this._passDepth(layers, ctx);
         this._passFill(layers, ctx);
+        this._passMaterials(layers, ctx);
         this._passLines(layers, ctx);
         this._passPoints(layers, ctx);
         this._passSets(frame.sets ?? [], ctx);
@@ -580,7 +675,8 @@ export class Renderer {
                 bound = true;
             }
             for (const chunk of layer.chunks) {
-                if (chunk.triangleCount > 0) {
+                // Textured chunks write their own depth in the material pass.
+                if (chunk.triangleCount > 0 && !this._isTextured(chunk)) {
                     gl.uniform3fv(p.u.uRel, this._rel(ctx, chunk.origin));
                     gl.bindVertexArray(chunk.triVao);
                     gl.drawArrays(gl.TRIANGLES, 0, chunk.triangleCount * 3);
@@ -620,7 +716,7 @@ export class Renderer {
             const isLiquid = layer.sub === 'liquid' || Boolean(layer.id?.includes('liquid')) || Boolean(layer.layerId?.includes('liquid'));
             gl.uniform1i(p.u.uIsLiquid, isLiquid ? 1 : 0);
             for (const chunk of layer.chunks) {
-                if (chunk.triangleCount > 0) {
+                if (chunk.triangleCount > 0 && !this._isTextured(chunk)) {
                     gl.bindTexture(gl.TEXTURE_2D, chunk.lut);
                     gl.uniform3fv(p.u.uOrigin, chunk.origin);
                     gl.uniform3fv(p.u.uRel, this._rel(ctx, chunk.origin));
@@ -646,6 +742,71 @@ export class Renderer {
             gl.depthMask(true);
             gl.disable(gl.BLEND);
         }
+    }
+
+    /**
+     * Draws the batches of textured chunks (ATG1 version 2): opaque first, then alpha key, then everything that blends, back to front
+     * by the batch centre. A layer below full opacity draws all its batches in the blended group. Each batch asks the texture store
+     * for its material's primary texture; the answer (ready, missing or still loading) decides what the shader samples.
+     */
+    _passMaterials(layers, ctx) {
+        const store = this.textures;
+        if (!store) {
+            return;
+        }
+        const groups = { opaque: [], alphaKey: [], blended: [] };
+        for (const layer of layers) {
+            if ((layer.mode !== 'fill' && layer.mode !== 'both') || layer.opacity <= 0) {
+                continue;
+            }
+            const faint = layer.opacity < 0.99;
+            for (const chunk of layer.chunks) {
+                if (!this._isTextured(chunk)) {
+                    continue;
+                }
+                for (const batch of chunk.batches) {
+                    const material = chunk.materials[batch.material];
+                    const pass = this.materials.resolve(material.kind).pass(material);
+                    const group = faint || pass === 'blend' ? groups.blended : pass === 'alphakey' ? groups.alphaKey : groups.opaque;
+                    group.push({ layer, chunk, batch, material, faint });
+                }
+            }
+        }
+        if (groups.opaque.length + groups.alphaKey.length + groups.blended.length === 0) {
+            return;
+        }
+        const eye = ctx.eye;
+        const distance = (d) => (d.batch.center[0] - eye[0]) ** 2 + (d.batch.center[1] - eye[1]) ** 2 + (d.batch.center[2] - eye[2]) ** 2;
+        groups.blended.sort((a, b) => distance(b) - distance(a));
+
+        const gl = this.gl;
+        const p = this.programs.material;
+        this._bindFrame(p, ctx);
+        gl.uniform3fv(p.u.uLight, ctx.light);
+        gl.uniform3fv(p.u.uSunDir, ctx.sunDir);
+        gl.uniform1i(p.u.uTexture, 0);
+        gl.uniform1i(p.u.uMode, ctx.ortho ? 0 : 1);
+        gl.depthFunc(gl.LEQUAL);
+        gl.activeTexture(gl.TEXTURE0);
+        for (const draw of [...groups.opaque, ...groups.alphaKey, ...groups.blended]) {
+            this._drawBatch(p, ctx, store, draw);
+        }
+        gl.depthMask(true);
+        gl.enable(gl.DEPTH_TEST);
+        gl.disable(gl.BLEND);
+    }
+
+    _drawBatch(p, ctx, store, { layer, chunk, batch, material, faint }) {
+        const gl = this.gl;
+        const impl = this.materials.resolve(material.kind);
+        const frame = { flat: styleRgbF(layer.color), alpha: layer.opacity, fog: this.shading.fog, faint };
+        if (!impl.bind(gl, p, material, frame, store)) {
+            return;
+        }
+        gl.uniform3fv(p.u.uRel, this._rel(ctx, chunk.origin));
+        gl.bindVertexArray(chunk.texVao);
+        gl.drawArrays(gl.TRIANGLES, batch.firstTriangle * 3, batch.triangleCount * 3);
+        this._count(batch.triangleCount, 0);
     }
 
     _lineUniforms(p, ctx, { width, dash, bias, colorMode, rgb, alpha }) {
@@ -1004,6 +1165,26 @@ export class Renderer {
         }
         this._disposePick();
     }
+}
+
+/** World-space centre of the bounding box of one batch's triangles (the sort key of blended batches). */
+function batchCenter(decoded, batch) {
+    const p = decoded.positions;
+    const tri = decoded.triangles;
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = batch.firstTriangle * 3; i < (batch.firstTriangle + batch.triangleCount) * 3; i++) {
+        for (let a = 0; a < 3; a++) {
+            const v = p[tri[i] * 3 + a];
+            if (v < min[a]) {
+                min[a] = v;
+            }
+            if (v > max[a]) {
+                max[a] = v;
+            }
+        }
+    }
+    return [0, 1, 2].map((a) => decoded.origin[a] + (min[a] + max[a]) / 2);
 }
 
 function positionsBounds(p, origin) {
