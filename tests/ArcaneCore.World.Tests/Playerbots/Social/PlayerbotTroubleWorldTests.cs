@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
@@ -151,6 +152,9 @@ public sealed class PlayerbotTroubleWorldTests
             Player enemy = HelpTestKit.Online(world, "Troubleorc");
             // The only attacker is now a hostile player's pet: a fight that would flag the bot.
             scene.Mob.SetUInt64(UpdateFields.UnitFieldSummonedby, enemy.Guid.Value);
+            // A pet that fights a player has flagged its owner; an unflagged owner's pet is not attackable at all.
+            enemy.Flags |= PlayerFlags.PvpDesired; // persistent: the world's pvp timer keeps the flag
+            enemy.UnitFlags |= UnitFlags.Pvp;
             Assert.True(PlayerbotHelpRules.WouldFlag(scene.Mob));
             Assert.False(PlayerbotHelpRules.MayFlag(self, warMode: false));
             Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: false, groupSize: 1));
@@ -162,6 +166,9 @@ public sealed class PlayerbotTroubleWorldTests
             self.UnitFlags &= ~UnitFlags.Pvp;
             Assert.True(PlayerbotHelpRules.MayFlag(self, warMode: true));
         });
+
+        // The pet is attackable by the bot, so the War Mode gate alone decides the scan below.
+        await world.Host.OnWorldAsync(() => Assert.True(HelpTestKit.Online(world, "Troublebot").Map!.Combat.Hooks.CanAttack(HelpTestKit.Online(world, "Troublebot"), scene.Mob)));
 
         // Through the lane: War Mode off, no help; the roll cannot matter.
         long now = HelpTestKit.NowWhere(t => PlayerbotHelpRules.Helps(scene.BotGuid.Value, scene.VictimGuid.Value, (uint)t, HelpfulnessOf(scene), 0));
