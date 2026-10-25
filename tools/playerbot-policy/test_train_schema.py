@@ -52,7 +52,7 @@ class GoalListTests(unittest.TestCase):
         self.assertEqual(["Quest", "Town", "Opportunity", "Train", "Mount", "QuestTravel", "Grind", "Explore"], train.GOALS)
 
     def test_the_trainer_reads_the_server_record_version(self):
-        self.assertEqual(2, train.RECORD_VERSION)
+        self.assertEqual(3, train.RECORD_VERSION)
 
     def test_the_weights_file_names_every_goal_in_order(self):
         # The server refuses a model whose goal names differ (RequireNames): the model train.py writes lists GOALS as they are.
@@ -78,14 +78,22 @@ class RemapTests(unittest.TestCase):
         rows = load_lines([goal_record(1, "Grind", (1 << 5) | (1 << 6)), goal_record(2, "Opportunity", (1 << 2) | (1 << 7))])
         self.assertEqual(2, len(rows))
         v1 = next(row for row in rows if row["goal"] == "Grind")
-        self.assertEqual(2, v1["v"])
+        self.assertEqual(3, v1["v"])
         self.assertEqual((1 << 6) | (1 << 7), v1["open"])  # Grind 5 -> 6, Explore 6 -> 7
         v2 = next(row for row in rows if row["goal"] == "Opportunity")
-        self.assertEqual((1 << 2) | (1 << 7), v2["open"])  # a version 2 record is read as written
+        self.assertEqual((1 << 2) | (1 << 7), v2["open"])  # a version 2 record keeps its bits
+        self.assertEqual(3, v2["v"])  # and is labelled with the current version, like version 1
+
+    def test_upgrade_record_labels_version_2_as_current_and_leaves_the_input_alone(self):
+        original = goal_record(2, "Grind", 1 << 6)
+        upgraded = train.upgrade_record(original)
+        self.assertEqual(train.RECORD_VERSION, upgraded["v"])
+        self.assertEqual(1 << 6, upgraded["open"])
+        self.assertEqual(2, original["v"])
 
     def test_load_refuses_a_version_it_does_not_know(self):
-        rows = load_lines([goal_record(3, "Grind", 1), goal_record(2, "Grind", 1)])
-        self.assertEqual(1, len(rows))
+        rows = load_lines([goal_record(4, "Grind", 1), goal_record(2, "Grind", 1), goal_record(3, "Grind", 1)])
+        self.assertEqual(2, len(rows))
 
     def test_a_version_2_opportunity_record_is_a_training_row(self):
         class Args:
@@ -96,7 +104,8 @@ class RemapTests(unittest.TestCase):
         self.assertEqual(train.GOALS.index("Opportunity"), int(goal[0]))
 
     def test_combat_and_opportunity_records_are_left_out_of_the_goal_rows(self):
-        rows = load_lines([{"v": 2, "k": "opportunity", "t": T0}, {"v": 2, "k": "fight", "t": T0}, goal_record(2, "Grind", 1)])
+        burst_fight = {"v": 3, "k": "fight", "t": T0, "retreat": {"retreat": 1, "f": [0.5] * 8, "reason": "losing-burst-2"}}
+        rows = load_lines([{"v": 2, "k": "opportunity", "t": T0}, {"v": 2, "k": "fight", "t": T0}, burst_fight, goal_record(2, "Grind", 1)])
         self.assertEqual(1, len(rows))
 
 

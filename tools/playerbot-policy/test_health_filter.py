@@ -108,16 +108,16 @@ class FilterTests(unittest.TestCase):
         self.assertEqual("unverified", gate.classify(T0 + 250_000, 300))
         self.assertEqual("keep", gate.classify(T0 + 650_000, 300))
 
-    def test_health_records_of_version_1_and_2_are_accepted(self):
+    def test_health_records_of_version_1_2_and_3_are_accepted(self):
         h = health_filter.Health()
-        for version in (1, 2):
+        for version in (1, 2, 3):
             h.add_record({"v": version, "k": "health", "t": T0 + version * 10_000, "ms": 10_000, "over": 3, "budget": 76}, "f")
         self.assertEqual(0, h.bad)
-        self.assertEqual(2, len(h.intervals))
+        self.assertEqual(3, len(h.intervals))
 
     def test_malformed_health_records_are_counted_and_ignored(self):
         h = health_filter.Health()
-        for record in ({"v": 1, "k": "health", "t": "x", "ms": 1, "over": 0}, {"v": 3, "k": "health", "t": 1, "ms": 1, "over": 0},
+        for record in ({"v": 1, "k": "health", "t": "x", "ms": 1, "over": 0}, {"v": 4, "k": "health", "t": 1, "ms": 1, "over": 0},
                        {"v": 1, "k": "health", "t": 1, "ms": 1, "over": -1}):
             h.add_record(record, "f")
         self.assertEqual(3, h.bad)
