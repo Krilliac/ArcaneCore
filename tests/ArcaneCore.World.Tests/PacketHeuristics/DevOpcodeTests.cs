@@ -416,6 +416,59 @@ public sealed class DevOpcodeTests
     }
 
     [Fact]
+    public async Task WithTheHeuristicsOff_APlayerAccountInGmMode_IsAuditedNotWarned()
+    {
+        var dev = new DevOpcodeTracker();
+        var log = new LevelLogger();
+        await using var host = WorldTestHost.Start(configureServices: c => c.AddSingleton(dev), sessionLogger: log);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVGMOFF", "Devgmoff");
+        await using (client)
+        {
+            Assert.False(host.WorldServices.GetRequiredService<PacketHeuristicsFeature>().Active);
+            GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+            Player player = await host.PlayerAsync("Devgmoff");
+            Assert.False(session.IsHeuristicsStaff);
+
+            await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
+            await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet: the session learns the GM mode on dispatch
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+            Assert.True(session.HeuristicsGmMode);
+            Assert.True(session.IsHeuristicsStaff);
+
+            await client.SendAsync(WorldOpcode.CmsgGodmode, Junk);
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            string name = WorldOpcodeNames.GetName(WorldOpcode.CmsgGodmode);
+            Assert.Single(audit.Tail(1000), e => e.Command == "dev-opcode " + name && e.AccountId == session.AccountId);
+            Assert.DoesNotContain(log.Warnings, m => m.Contains("stripped developer opcode", StringComparison.Ordinal));
+            Assert.Equal(1, dev.Total);
+            Assert.Equal(SessionState.InWorld, session.State);
+        }
+    }
+
+    [Fact]
+    public async Task AGmModeCharacterThatLeavesTheWorld_NoLongerCountsAsStaff()
+    {
+        await using var host = WorldTestHost.Start(configure: o => o.InstantLogoutSecurity = AccountSecurity.Player);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "DEVGMLO", "Devgmlogout");
+        await using (client)
+        {
+            Player player = await host.PlayerAsync("Devgmlogout");
+            await host.OnWorldAsync(() => player.Flags |= PlayerFlags.Gm);
+            await client.SendAsync(WorldOpcode.CmsgSetSelection, new byte[8]); // a world packet: the session learns the GM mode on dispatch
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+            Assert.True(session.HeuristicsGmMode);
+
+            await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+            await client.ReadUntilAsync(WorldOpcode.SmsgLogoutComplete);
+            await host.WaitForWorldAsync(() => session.State == SessionState.CharacterSelect, "the session is back at the character screen");
+
+            Assert.False(session.HeuristicsGmMode);
+            Assert.False(session.IsHeuristicsStaff);
+        }
+    }
+
+    [Fact]
     public async Task AFloodOfOneDevOpcode_IsCountedInFull_ButReportedAndLoggedOncePerInterval()
     {
         long now = 1_000_000;

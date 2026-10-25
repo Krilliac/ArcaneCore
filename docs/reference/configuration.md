@@ -78,6 +78,8 @@ How to read the tables:
 - [`World:Collision`](#worldcollision)
 - [`World:Console`](#worldconsole)
 - [`World:Control:MapFeed`](#worldcontrolmapfeed)
+- [`World:Control:MapFeed:Actions`](#worldcontrolmapfeedactions)
+- [`World:Control:MapFeed:Web`](#worldcontrolmapfeedweb)
 - [`World:Control:PacketTools`](#worldcontrolpackettools)
 - [`World:Control:Pipe`](#worldcontrolpipe)
 - [`World:Death`](#worlddeath)
@@ -1167,6 +1169,38 @@ How to read the tables:
 | `World:Control:MapFeed:MaxEntitiesPerFrame` | `int` | `4096` | - | The most entities one frame carries. Players and bots come first, then creatures (moving ones before idle ones) and game objects; the rest are counted as truncated in the frame. 16 to 65536. |
 | `World:Control:MapFeed:MaxHz` | `int` | `5` | - | The most frames per second any subscription gets; a tool asking for more is given this rate. 1 to 60. |
 
+## `World:Control:MapFeed:Actions`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Actions:AllowOnLiveServer` | `bool` | `false` | - | A second, deliberate opt-in: let `Enabled` take effect on the live server (`ARCANECORE_LIVE_SERVER=1`, set by the live launcher, which runs the server as Development). The daemon then logs a warning at start. Default off. |
+| `World:Control:MapFeed:Actions:AuditDirectory` | `string` | `null` | - | The directory of the durable audit file; null: `logs` beside the working directory (where the server log goes). |
+| `World:Control:MapFeed:Actions:AuditLocalDurable` | `bool` | `true` | - | Also append local actions to the durable audit file (`atlas-web-audit.jsonl`). Web actions are always recorded. Default on. |
+| `World:Control:MapFeed:Actions:BulkConfirmAbove` | `int` | `1` | - | A template applied to more targets than this needs a confirm code. 0 to 50. Default 1. |
+| `World:Control:MapFeed:Actions:Deny` | `List<string>` | `[]` | - | Command paths no actor may run, local included (same matching as `PublicDeny`). Default none. |
+| `World:Control:MapFeed:Actions:Enabled` | `bool` | `false` | - | Accept action requests on the map feed (World:Control:MapFeed:Enabled must be on too). Default off. |
+| `World:Control:MapFeed:Actions:LocalAccountId` | `int?` | `null` | - | The account id the local actor counts as for "my own character" checks (`.atlas tele` of a player at GameMaster level). Set here, in the world's configuration, never by a tool. Default none: the local actor has no account. |
+| `World:Control:MapFeed:Actions:LocalBurst` | `int` | `20` | - | Local actor: burst. Default 20. |
+| `World:Control:MapFeed:Actions:LocalPerSecond` | `int` | `10` | - | Local actor: actions per second. Default 10. |
+| `World:Control:MapFeed:Actions:LocalSecurity` | `AccountSecurity` | `Administrator` | - | The security the local actor (whoever controls the daemon's Windows account on this machine; the world sees "the daemon account") runs commands at. Player to Administrator: there is no Console level, so the local actor is never the true console. Default Administrator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:PublicAllowModeration` | `bool` | `false` | - | Let web actors run `.ban` and `.unban`: removes them from `PublicDeny`. Default off. |
+| `World:Control:MapFeed:Actions:PublicDeny` | `List<string>` | `["account", "server shutdown", "server restart", "server idleshutdown", "server idlerestart", "reload", "hotcode", "hotmodule", "botctl raw", "ban", "unban"]` | - | Command paths no web actor may run, matched on the path the command table resolved (so an abbreviation cannot dodge a rule): a path is denied when it starts with an entry's words ("ban" denies "ban account", "botctl raw" denies "botctl raw send"). The default list is the account, lifecycle, reload, hot-code, raw bot and moderation commands. |
+| `World:Control:MapFeed:Actions:PublicMaxSecurity` | `AccountSecurity` | `GameMaster` | - | The highest security a web actor runs at, whatever its account has. Default GameMaster. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:SettleSeconds` | `int` | `30` | - | Seconds an action waits for its command to settle (a command that holds itself open) before the answer goes out. 1 to 600. Default 30. |
+| `World:Control:MapFeed:Actions:WebAuditDays` | `int` | `90` | - | Days the durable audit file's rotated copies are kept. 1 to 3650. Default 90. |
+| `World:Control:MapFeed:Actions:WebBurst` | `int` | `5` | - | Each web actor: burst. Default 5. |
+| `World:Control:MapFeed:Actions:WebLogin` | `bool` | `false` | - | Accept web actors (tickets issued by the public Atlas listener's login). Needs the true-console predicate (`CommandContextConsole`, design 1.7) in this build: without it the channel logs a warning and refuses web actors. Default off. |
+| `World:Control:MapFeed:Actions:WebLoginMinSecurity` | `AccountSecurity` | `Moderator` | - | The lowest account security a web login is accepted for. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:Control:MapFeed:Actions:WebPerSecond` | `int` | `2` | - | Each web actor: actions per second. Default 2. |
+
+## `World:Control:MapFeed:Web`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Control:MapFeed:Web:ClientAccount` | `string` | `null` | - | The one Windows account allowed to open the web pipe: a SID (`S-1-5-21-...`) or an account name (`MACHINE\atlas-public`). Required when `Enabled` is set; without it the pipe is not created. A group or built-in principal is refused (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, `BUILTIN\`, `NT AUTHORITY\` and `NT SERVICE\` names, `S-1-5-32-*`, any account with a RID below 1000), and so is the daemon's own account: `Problems` checks the text at start-up, the pipe checks the resolved SID. |
+| `World:Control:MapFeed:Web:Enabled` | `bool` | `false` | - | Serve the web pipe (World:Control:MapFeed:Enabled must be on too). Default off. |
+| `World:Control:MapFeed:Web:MaxConnections` | `int` | `2` | - | The most web connections at once, independent of the local pipe's count. 1 to 8. Default 2. |
+
 ## `World:Control:PacketTools`
 
 | Key | Type | Default | Reload | Meaning |
@@ -1671,6 +1705,22 @@ How to read the tables:
 | `World:Playerbots:Scenarios:StepTimeoutSeconds` | `int` | `20` | - | Default bound of one WaitUntil step in seconds (1..300). |
 | `World:Playerbots:SlowThinkLogMs` | `double` | `50` | live | A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches (`PlayerbotSlowThinkLog`; 0 = off, 0..60000). Live: `.reload config` applies a change at once. |
 | `World:Playerbots:Social:Emotes:Enabled` | `bool` | `true` | live | Let an idle bot wave at (CMSG_TEXT_EMOTE) or greet with /say a real player of its faction standing within 8 yards, at most once per bot and player in 30 minutes, once per player in 10 minutes, once per bot in 5 minutes and twelve times a minute in all (on by default). A player who ignores the bot is never greeted. |
+| `World:Playerbots:Social:Events:Enabled` | `bool` | `true` | live | Let bots take part in the world's events (on by default). Off: festival places are given up (the bots go back to the inn at their next idle think) and no event line or emote is made. |
+| `World:Playerbots:Social:Events:Holidays:CelebrateChance` | `int` | `60` | live | The percent chance (0..100, default 60) that a bot celebrates a festival on a given day; rolled per bot per festival per day (the day changes for each bot at a time of its own). Sociable bots celebrate more often: `p = 1 - (1 - c)^(0.5 + sociability)`, which is exactly `c` at sociability 0.5. 0 sends nobody, 100 every bot. |
+| `World:Playerbots:Social:Events:Holidays:EmoteMaxSeconds` | `int` | `90` | live | The longest gap between two celebration emotes of one bot, in seconds (5..3600, not below `EmoteMinSeconds`, default 90). |
+| `World:Playerbots:Social:Events:Holidays:EmoteMinSeconds` | `int` | `30` | live | The shortest gap between two celebration emotes of one bot, in seconds (5..3600, default 30). |
+| `World:Playerbots:Social:Events:Holidays:EmotesPerAnchorMinute` | `int` | `3` | live | The festival text emotes around one anchor per minute, players in range or not (0..30, default 3). |
+| `World:Playerbots:Social:Events:Holidays:EmotesPerListenerMinute` | `int` | `2` | live | The festival text emotes one real player receives per minute from all bots together (0..10, default 2; 0 sends none while a player is in range). |
+| `World:Playerbots:Social:Events:Holidays:Enabled` | `bool` | `true` | live | Gather and celebrate at running festivals (on by default; `Social:Events:Enabled` is the master switch). |
+| `World:Playerbots:Social:Events:Holidays:ExcludedEvents` | `string` | `""` | live | Game event ids that are never treated as a festival or part of one, separated by commas and/or spaces (`"12, 24 25"`; each 1..65535, at most 64; empty: none). A string so that a reload compares it by value. |
+| `World:Playerbots:Social:Events:Holidays:MaxPerGossipAnchor` | `int` | `6` | live | The most bots around one festival NPC that only talks (1..20, default 6). |
+| `World:Playerbots:Social:Events:Holidays:MaxPerServiceAnchor` | `int` | `3` | live | The most bots around one festival quest giver or vendor (0..10, default 3; 0 keeps bots away from them). |
+| `World:Playerbots:Social:Events:Holidays:MaxPerTown` | `int` | `24` | live | The most bots celebrating in one town per team (1..200, default 24). |
+| `World:Playerbots:Social:Events:Holidays:SpotBackoffMinutes` | `int` | `30` | live | The minutes a festival NPC whose spot a bot could not reach is set aside for that bot, and a town whose crowd was attacked by a player is set aside for that team (1..1440, default 30). |
+| `World:Playerbots:Social:Events:Holidays:SpotRadiusYards` | `int` | `250` | live | How far from the town centre a festival NPC may stand to count, in yards (20..1000, default 250); it must also be inside the bot's home. |
+| `World:Playerbots:Social:Events:Holidays:TalkBotGapMinutes` | `int` | `20` | live | The minutes between two festival lines of the same bot (1..1440, default 20). |
+| `World:Playerbots:Social:Events:Holidays:TalkEnabled` | `bool` | `true` | live | Let bots say the arrival line and the named event remark (on by default; chat must be on as well). |
+| `World:Playerbots:Social:Events:Holidays:TalkZoneGapSeconds` | `int` | `120` | live | The seconds between two festival lines in the same zone, whichever bot (1..86400, default 120). |
 | `World:Playerbots:Social:Gratitude:Enabled` | `bool` | `true` | live | Let bots thank whoever helped them (on by default). Off: no emote, no line, no favour. |
 | `World:Playerbots:Social:Gratitude:MaxTipCopper` | `int` | `10000` | live | The most copper a tip may be for a level 60 bot (a lower level tips proportionally less; never more than 1% of the bot's gold). 0 turns tips off (default 10000, one gold). |
 | `World:Playerbots:Social:Gratitude:TipChance` | `float` | `0.05` | live | The chance (0..1), before the bot's Generosity trait scales it, that a thanks to a well-liked human helper is a gold tip by trade (default 0.05). |

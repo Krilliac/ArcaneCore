@@ -741,7 +741,7 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
     {
         PlayerbotChatSafetyOptions safety = options.Safety;
         bool screening = safety.Enabled;
-        bool modelAllowed = options.HasModelProvider && !safety.RequireOptIn;
+        bool modelAllowed = options.HasModelProvider && !safety.RequireOptIn && !ask.BuiltinOnly;
         if (screening)
         {
             SafetyVerdict verdict = _safety.ScreenInput(ask.Text);

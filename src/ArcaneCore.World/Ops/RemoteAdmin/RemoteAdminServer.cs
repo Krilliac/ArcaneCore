@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Accounts;
 using ArcaneCore.World.Ops.ServerConsole;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -361,13 +362,11 @@ public sealed class RemoteAdminServer : IHostedService
         if (name.Length is 0 or > 32 || password.Length is 0 or > 128) return null;
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore? accounts = scope.ServiceProvider.GetService<IAccountStore>();
-        Account? account = accounts is null ? null : await accounts.FindByUsernameAsync(name, token).ConfigureAwait(false);
-        // The verifier is computed even for an unknown name, so a wrong name and a wrong password take the same time.
-        byte[] salt = account?.Salt ?? new byte[WowSrp6.SaltLength];
-        byte[] computed = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, account?.Username ?? name, password), 32);
-        if (account is null || account.Verifier.Length != computed.Length
-            || !CryptographicOperations.FixedTimeEquals(computed, account.Verifier)) return null;
-        if (account.Status != AccountStatus.Active || account.Security < _options.MinSecurity) return null;
+        if (accounts is null) return null;
+        // The shared check (equal-time verifier, status column and ban rows, as the realm and the gateway judge them): a banned account is refused.
+        AccountCheckResult check = await AccountPasswordCheck.CheckAsync(accounts, scope.ServiceProvider.GetService<IBanStore>(), name, password,
+            scope.ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System, token).ConfigureAwait(false);
+        if (check.Account is not { } account || account.Security < _options.MinSecurity) return null;
         return new Login(account.Username, account.Security, automation);
     }
 

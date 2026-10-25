@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Playerbots.Events;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
@@ -217,6 +218,19 @@ internal sealed class PlayerbotInitiativeLane
 
     /// <summary>The player's cooldown for openings ends at (world milliseconds), 0 when none runs (tests).</summary>
     internal long NextOpeningFor(ObjectGuid player) => _playerNext.GetValueOrDefault(player.Value);
+
+    /// <summary>Whether bots may address the real player at <paramref name="nowMs"/>: no cooldown runs for them (the one ledger of openings, event remarks and festival arrival lines).</summary>
+    internal bool MayAddress(ObjectGuid player, long nowMs) => !_playerNext.TryGetValue(player.Value, out long until) || until <= nowMs;
+
+    /// <summary>
+    /// A bot addressed the real player at <paramref name="nowMs"/> (a festival line or an event remark): the player is left alone for the
+    /// opening cooldown, doubled for each opening they ignored, as after an opening. Never shortens a longer cooldown that runs.
+    /// </summary>
+    internal void NoteAddressed(ObjectGuid player, long nowMs, int openingCooldownMinutes)
+    {
+        long until = nowMs + PlayerbotInitiativeRules.CooldownMs(openingCooldownMinutes, _ignored.GetValueOrDefault(player.Value));
+        _playerNext[player.Value] = Math.Max(_playerNext.GetValueOrDefault(player.Value), until);
+    }
 
     private long _passNowMs;
 
@@ -579,9 +593,10 @@ internal sealed class PlayerbotInitiativeLane
     {
         if (pass.Services.GetService<GameEventFeature>() is not { } feature) return;
         IReadOnlyCollection<ushort> active = feature.ActiveEvents; // a copy per read: read once a pass
-        if (_eventsKnown)
+        // Only a festival that starts is remarked on (its root event): the hourly bells, a member event and the war-effort events never are.
+        if (_eventsKnown && pass.Events is { } board && pass.Options.Events.Enabled)
             foreach (ushort id in active)
-                if (!_events.Contains(id)) _newEvents.Add(id);
+                if (!_events.Contains(id) && board.IsFestivalRoot(id)) _newEvents.Add(id);
         _events.Clear();
         foreach (ushort id in active) _events.Add(id);
         _eventsKnown = true;
@@ -602,10 +617,12 @@ internal sealed class PlayerbotInitiativeLane
         if (_commentBot.TryGetValue(bot.Id, out long botUntil) && botUntil > pass.NowMs) return false;
         if (_commentZone.TryGetValue(self.ZoneId, out long zoneUntil) && zoneUntil > pass.NowMs) return false;
         if (!PlayerbotInitiativeRules.Rolls(self.Guid.Value, (ulong)self.ZoneId, pass.NowMs, PlayerbotInitiativeRules.CommentSalt, PlayerbotInitiativeRules.CommentChance(traits.Chattiness, mood))) return false;
-        if (RealListener(pass, self) is not { } listener) return false; // a remark is for someone to hear
+        Player? listener = RealListener(pass, self);
+        if (listener is null && _newEvents.Count == 0) return false; // a remark is for someone to hear
 
         string? key = null;
         string instruction = string.Empty;
+        PlayerbotFestival? festival = null;
         string? mounted = null;
         int enemies = 0;
         bool rare = false;
@@ -639,28 +656,81 @@ internal sealed class PlayerbotInitiativeLane
             key = "comment.rare";
             instruction = "A rare creature is near you. Remark on it in one short line.";
         }
-        else if (_newEvents.Count > 0)
+        else if (_newEvents.Count > 0 && FestivalHere(pass, self) is { } here)
         {
+            festival = here;
             key = "comment.event";
-            instruction = "A world event has just started. Remark on it in one short line.";
+            instruction = $"The {here.Flavour.Name} has just started. Remark on it in one short line.";
         }
-        else if (enemies >= RaidPlayers)
+        else if (listener is not null && enemies >= RaidPlayers)
         {
             key = "comment.raid";
             instruction = "Many players of the enemy faction are around you. Remark on it in one short line.";
         }
-        else if (mounted is not null)
+        else if (listener is not null && mounted is not null)
         {
             key = "comment.mount";
             instruction = $"{mounted} has just got a first mount. Congratulate them in one short line.";
         }
 
         if (key is null || pass.Chat is not { IsActive: true } chat) return false;
+        if (festival is not null) return CommentOnFestival(pass, options, bot, chat, festival, instruction);
+        if (listener is null) return false;
         var speech = new BotSpeech(BotSpeechChannel.Say, string.Empty, key.Replace('.', '-'), BotSpeechPriority.Low) { TargetGuid = listener.Guid };
         var ask = new BotChatAsk(bot.Id, self.Guid, bot.Party.PersonaFor(self), listener.Guid, mounted ?? listener.Name, ChatType.Say, string.Empty, FromMaster: false, InviteAllowed: false,
             SenderAccountId: 0, Topic: new BotChatTopic(key, instruction, new Dictionary<string, string>(), string.Empty), Speech: speech);
         if (chat.TryAnnounce(ask) != BotChatAdmission.Queued) return false;
         Comments++;
+        _commentBot[bot.Id] = pass.NowMs + options.CommentBotGapMinutes * 60_000L;
+        _commentZone[self.ZoneId] = pass.NowMs + options.CommentZoneGapSeconds * 1000L;
+        return true;
+    }
+
+    // The first festival that just started and has an anchor NPC in the zone the bot stands in.
+    private PlayerbotFestival? FestivalHere(PlayerbotSocialPass pass, Player self)
+    {
+        if (pass.Events is not { } board) return null;
+        uint zone = board.ZoneAt(self.MapId, new System.Numerics.Vector3(self.X, self.Y, self.Z));
+        foreach (ushort root in _newEvents)
+            if (board.HasAnchorInZone(root, self.MapId, zone) && board.FestivalOf(root) is { } festival)
+                return festival;
+        return null;
+    }
+
+    // The remark on a festival that started: heard by real players of either faction in /say range, so it goes through the listener filter,
+    // the one ledger of who was addressed lately, and is built-in when a listener said "ai off".
+    private bool CommentOnFestival(PlayerbotSocialPass pass, PlayerbotSocialInitiativeOptions options, PlayerbotSocialBot bot, PlayerbotChat chat, PlayerbotFestival festival, string instruction)
+    {
+        Player self = bot.Player;
+        PlayerbotListenerResult heard = PlayerbotEventLane.ListenersOf(pass, self, pass.World.Options.ListenRangeSay);
+        if (heard.Verdict != PlayerbotListenVerdict.Heard)
+        {
+            PlayerbotEventMeters.Suppress(heard.Verdict switch
+            {
+                PlayerbotListenVerdict.Ignored => PlayerbotEventMeters.Ignored,
+                PlayerbotListenVerdict.CutOff => PlayerbotEventMeters.CutOff,
+                _ => PlayerbotEventMeters.NoListener,
+            });
+            return false;
+        }
+
+        foreach (ulong listener in heard.Listeners)
+            if (!MayAddress(new ObjectGuid(listener), pass.NowMs))
+            {
+                PlayerbotEventMeters.Suppress(PlayerbotEventMeters.ListenerCap);
+                return false;
+            }
+
+        ObjectGuid first = new(heard.Listeners[0]);
+        string name = pass.World.FindOnlinePlayer(first)?.Name ?? string.Empty;
+        var speech = new BotSpeech(BotSpeechChannel.Say, string.Empty, "comment-event", BotSpeechPriority.Low) { TargetGuid = first };
+        var ask = new BotChatAsk(bot.Id, self.Guid, bot.Party.PersonaFor(self), first, name, ChatType.Say, string.Empty, FromMaster: false, InviteAllowed: false,
+            SenderAccountId: 0, Topic: new BotChatTopic("comment.event", instruction, new Dictionary<string, string> { ["event"] = festival.Flavour.Name }, string.Empty), Speech: speech)
+        { BuiltinOnly = heard.BuiltinOnly };
+        if (chat.TryAnnounce(ask) != BotChatAdmission.Queued) return false;
+        Comments++;
+        PlayerbotEventMeters.Line(PlayerbotEventMeters.Comment);
+        foreach (ulong listener in heard.Listeners) NoteAddressed(new ObjectGuid(listener), pass.NowMs, options.OpeningCooldownMinutes);
         _commentBot[bot.Id] = pass.NowMs + options.CommentBotGapMinutes * 60_000L;
         _commentZone[self.ZoneId] = pass.NowMs + options.CommentZoneGapSeconds * 1000L;
         return true;

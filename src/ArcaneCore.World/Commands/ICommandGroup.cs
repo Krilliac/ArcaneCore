@@ -30,12 +30,22 @@ public interface ICommandGroup
 public static class ChatCommands
 {
     public static CommandTable CreateTable(GmOptions? options = null, IServiceProvider? services = null)
-        => Build(
+    {
+        RegisterConsoleOnlyPaths();
+        return Build(
             BuiltinCommands.Create().Roots,
             AssemblyDiscovery.CreateAll<ICommandGroup>(),
             AssemblyDiscovery.CreateAll<ICommandExtension>(),
             options ?? new GmOptions(),
             services);
+    }
+
+    /// <summary>
+    /// The Console-only command paths (design 1.7, <see cref="ConsoleOnlyCommands"/>): refused for every remote context (the action channel,
+    /// remote admin) before the handler runs. No Console-only leaf is built yet; the token rotation of ops#45 is the first planned. The rule for
+    /// a lane that adds one: register its resolved path here, or test <c>context.IsTrueConsole()</c> at the handler's entry.
+    /// </summary>
+    private static void RegisterConsoleOnlyPaths() => ConsoleOnlyCommands.Register("server remote token rotate");
 
     /// <summary>The table for a host: <c>World:GmCommands</c> from its configuration, and its services so a group behind a switch (HotReload:Commands) can leave its roots out.</summary>
     public static CommandTable CreateTable(IServiceProvider services)
