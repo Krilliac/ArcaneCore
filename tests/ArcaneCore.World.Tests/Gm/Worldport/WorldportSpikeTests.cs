@@ -160,7 +160,7 @@ public sealed class WorldportSpikeTests
         // In the world again: commands work, and the status lists the run.
         await rig.Admin.SendChatAsync(ChatType.Say, Language.Common, ".worldport status");
         // One system message per line of the reply.
-        string status = (await rig.Admin.ReadChatAsync()).Text + "\n" + string.Join('\n', (await rig.Admin.CollectAsync(Quiet))
+        string status = (await rig.Admin.ReadChatAsync()).Text + "\n" + string.Join('\n', (await rig.Admin.CollectRepliesAsync(Quiet))
             .Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text));
         Assert.Contains("#" + run.Id + " far " + name + " map 0", status, StringComparison.Ordinal);
         Assert.Contains("worldport-ack", status, StringComparison.Ordinal);

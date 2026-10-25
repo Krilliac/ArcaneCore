@@ -41,7 +41,7 @@ public sealed class LookupContentCommandTests
     {
         await gm.SendChatAsync(ChatType.Say, Language.Common, command);
         List<string> lines = [(await gm.ReadChatAsync()).Text];
-        lines.AddRange((await gm.CollectAsync(Quiet)).Where(m => m.Opcode == WorldOpcode.SmsgMessagechat).Select(m => ChatMessage.Parse(m.Payload).Text));
+        lines.AddRange((await gm.CollectRepliesAsync(Quiet)).Where(m => m.Opcode == WorldOpcode.SmsgMessagechat).Select(m => ChatMessage.Parse(m.Payload).Text));
         return lines;
     }
 
