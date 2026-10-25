@@ -4,12 +4,14 @@
 
 /** A failed request: `status` is the HTTP status, `code` the server's stable error code, `ref` the log reference to quote. */
 export class PublicApiError extends Error {
-    constructor(message, { status = 0, code = null, ref = null } = {}) {
+    constructor(message, { status = 0, code = null, ref = null, retryAfter = null } = {}) {
         super(message);
         this.name = 'PublicApiError';
         this.status = status;
         this.code = code;
         this.ref = ref;
+        /** Seconds the server asked to wait (Retry-After), or null. */
+        this.retryAfter = retryAfter;
     }
 }
 
@@ -76,7 +78,13 @@ export class PublicApi {
         }
         if (!response.ok) {
             const error = isObject(json) && isObject(json.error) ? json.error : {};
-            throw new PublicApiError(`The request failed (${response.status}).`, { status: response.status, code: error.code ?? null, ref: error.ref ?? null });
+            const header = Number(response.headers?.get?.('Retry-After'));
+            throw new PublicApiError(`The request failed (${response.status}).`, {
+                status: response.status,
+                code: error.code ?? null,
+                ref: error.ref ?? null,
+                retryAfter: Number.isFinite(header) && header > 0 ? header : null,
+            });
         }
         if (!isObject(json)) {
             throw new PublicApiError('The server sent an answer that is not JSON.', { status: response.status, code: 'bad-answer' });

@@ -100,6 +100,7 @@ public sealed class PublicEndToEndTests
         }
 
         // The byte budget: a frame the address cannot pay for is counted dropped and never arrives, even later.
+        connection.PushFrame(Frame(99)); // the world's links answer must be fresh (within two frames) or every creature would be withheld
         long dropped = rig.Runtime.Stats.FramesDropped;
         time.Advance(TimeSpan.FromSeconds(5));
         connection.PushFrame(ManyBoars(100, 80));

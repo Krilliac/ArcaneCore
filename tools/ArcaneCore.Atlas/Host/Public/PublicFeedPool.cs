@@ -122,6 +122,9 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         public long LastChange = long.MinValue;
         public long LinksAskedSeq = -1;
         public int LinksInFlight;
+
+        /// <summary>The world answered <c>links</c> with <c>unknown-op</c> on this connection: do not ask again (each refused line is a strike, and five in a row close the connection).</summary>
+        public volatile bool LinksUnsupported;
         public long SeenServerErrors;
         public readonly List<long> Strikes = [];
         public long QuarantinedUntil;
@@ -457,7 +460,7 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
 
         _store.Ingest(frame.Frame);
         long seq = frame.Frame.Seq;
-        if (Interlocked.CompareExchange(ref slot.LinksInFlight, 1, 0) == 0)
+        if (!slot.LinksUnsupported && Interlocked.CompareExchange(ref slot.LinksInFlight, 1, 0) == 0)
         {
             slot.LinksAskedSeq = seq;
             _ = AskLinksAsync(slot, map, seq);
@@ -497,6 +500,11 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
         catch (Exception e) when (e is CommandException or InvalidOperationException or FormatException)
         {
             _store.SetLinks(map, LinksSnapshot.Unsupported);
+            if (e is CommandException && e.Message.Contains("unknown-op", StringComparison.Ordinal))
+            {
+                slot.LinksUnsupported = true;
+            }
+
             _log.LogDebug("Atlas public feed: links for map {Map} failed: {Message}", map, e.Message);
         }
         finally

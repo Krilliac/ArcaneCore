@@ -637,7 +637,7 @@ internal sealed class PublicServer : IAsyncDisposable
 
         JsonObject status = GuestCommands.Status(_rt);
         status["ok"] = true;
-        await WriteJsonAsync(http, StatusCodes.Status200OK, status, context).ConfigureAwait(false);
+        await WriteEssentialJsonAsync(http, StatusCodes.Status200OK, status, context).ConfigureAwait(false);
     }
 
     private async Task MeAsync(HttpContext http, RequestContext context)
@@ -649,7 +649,7 @@ internal sealed class PublicServer : IAsyncDisposable
             return;
         }
 
-        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(session), context).ConfigureAwait(false);
+        await WriteEssentialJsonAsync(http, StatusCodes.Status200OK, SessionJson(session), context).ConfigureAwait(false);
     }
 
     private JsonObject SessionJson(PublicSession session)
@@ -798,7 +798,7 @@ internal sealed class PublicServer : IAsyncDisposable
 
                 SetCookie(http, issued.Cookie);
                 _rt.Log.LogInformation("login ok account={Account} ip={Ip} ref={Ref}", issued.Session.Account, context.Client, issued.Session.Ref);
-                await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(issued.Session), context).ConfigureAwait(false);
+                await WriteEssentialJsonAsync(http, StatusCodes.Status200OK, SessionJson(issued.Session), context).ConfigureAwait(false);
                 break;
             case WorldLoginKind.Off:
                 await ErrorAsync(http, StatusCodes.Status403Forbidden, "login-disabled", context).ConfigureAwait(false);
@@ -865,7 +865,7 @@ internal sealed class PublicServer : IAsyncDisposable
         }
 
         SetCookie(http, result.Issued.Cookie);
-        await WriteJsonAsync(http, StatusCodes.Status200OK, SessionJson(result.Issued.Session), context).ConfigureAwait(false);
+        await WriteEssentialJsonAsync(http, StatusCodes.Status200OK, SessionJson(result.Issued.Session), context).ConfigureAwait(false);
     }
 
     private async Task CommandAsync(HttpContext http, RequestContext context)
@@ -896,6 +896,14 @@ internal sealed class PublicServer : IAsyncDisposable
             || (request["args"] is not null && request["args"] is not JsonObject))
         {
             await ErrorAsync(http, StatusCodes.Status400BadRequest, "bad-request", context).ConfigureAwait(false);
+            return;
+        }
+
+        // An address whose byte budget is in debt runs no command: the answer could not be sent, so the world is not asked for it.
+        if (_rt.Limits.InDebt(context.IpKey, out TimeSpan wait))
+        {
+            http.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(wait.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            await ErrorAsync(http, StatusCodes.Status429TooManyRequests, "rate-limited", context).ConfigureAwait(false);
             return;
         }
 
@@ -991,12 +999,32 @@ internal sealed class PublicServer : IAsyncDisposable
     }
 
     /// <summary>
+    /// Writes an essential JSON body (the session routes <c>status</c>, <c>me</c>, <c>login</c> and <c>logout</c>): it is charged to the address's byte
+    /// budget as an essential message and never refused for bytes, because these routes have side effects or start the page.
+    /// </summary>
+    private async Task WriteEssentialJsonAsync(HttpContext http, int status, JsonNode body, RequestContext context)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
+        _rt.Limits.ChargeEssentialBytes(context.IpKey, Math.Min(bytes.Length, PublicRateLimits.MaxEssentialBytes));
+        http.Response.StatusCode = status;
+        http.Response.ContentType = "application/json; charset=utf-8";
+        http.Response.ContentLength = bytes.Length;
+        await http.Response.Body.WriteAsync(bytes, http.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Writes a JSON body. With <paramref name="charge"/> the body is charged to the address's byte budget (<c>Guest:MaxBytesPerSecond</c>, shared with
     /// the sockets) and a body the budget cannot pay for is replaced by a 429 <c>rate-limited</c> refusal. Error bodies are small and not charged.
     /// </summary>
     private async Task WriteJsonAsync(HttpContext http, int status, JsonNode body, RequestContext? charge = null)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
+        // A budgeted (refusable) answer must never follow a side effect: refusing after a cookie was issued would strand the visitor.
+        if (charge is not null && http.Response.Headers.ContainsKey("Set-Cookie"))
+        {
+            throw new InvalidOperationException("a byte-refusable answer was written after a session cookie was issued");
+        }
+
         if (charge is not null && !_rt.Limits.AllowBytes(charge.IpKey, bytes.Length))
         {
             http.Response.Headers.RetryAfter = "1";
@@ -1031,6 +1059,12 @@ internal sealed class PublicServer : IAsyncDisposable
         }
 
         var body = new JsonObject { ["ok"] = false, ["error"] = new JsonObject { ["code"] = code, ["ref"] = reference } };
+        if (context is not null)
+        {
+            await WriteEssentialJsonAsync(http, status, body, context).ConfigureAwait(false); // an error body is essential: charged, never refused
+            return;
+        }
+
         await WriteJsonAsync(http, status, body).ConfigureAwait(false);
     }
 }

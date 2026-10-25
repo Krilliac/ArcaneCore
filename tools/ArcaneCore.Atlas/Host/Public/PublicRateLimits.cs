@@ -32,7 +32,13 @@ internal sealed class KeyedTokenBuckets(double ratePerSecond, double burst, Time
     }
 
     /// <summary>Spends <paramref name="cost"/> tokens of <paramref name="key"/>'s bucket; false (and the wait until it would succeed) when it is empty.</summary>
-    public bool TryTake(string key, out TimeSpan retryAfter, double cost = 1)
+    public bool TryTake(string key, out TimeSpan retryAfter, double cost = 1) => TryTake(key, cost, 0, out retryAfter);
+
+    /// <summary>
+    /// Spends <paramref name="cost"/> tokens only if the balance stays at or above <paramref name="floor"/> afterwards (a reserve other callers keep);
+    /// otherwise spends nothing and says how long until it would succeed.
+    /// </summary>
+    public bool TryTake(string key, double cost, double floor, out TimeSpan retryAfter)
     {
         long now = time.GetTimestamp();
         lock (_gate)
@@ -54,15 +60,31 @@ internal sealed class KeyedTokenBuckets(double ratePerSecond, double burst, Time
                 bucket.Stamp = now;
             }
 
-            if (bucket.Tokens >= cost)
+            if (bucket.Tokens - cost >= floor)
             {
                 bucket.Tokens -= cost;
                 retryAfter = TimeSpan.Zero;
                 return true;
             }
 
-            retryAfter = TimeSpan.FromSeconds((cost - bucket.Tokens) / _rate);
+            retryAfter = TimeSpan.FromSeconds((cost + floor - bucket.Tokens) / _rate);
             return false;
+        }
+    }
+
+    /// <summary>The tokens <paramref name="key"/> holds now (negative while in debt after <see cref="Spend"/>); a key never seen holds a full burst. Does not change the bucket.</summary>
+    public double Balance(string key)
+    {
+        long now = time.GetTimestamp();
+        lock (_gate)
+        {
+            if (!_buckets.TryGetValue(key, out Bucket? bucket))
+            {
+                return _burst;
+            }
+
+            double elapsed = (now - bucket.Stamp) / (double)time.TimestampFrequency;
+            return Math.Min(_burst, bucket.Tokens + (elapsed * _rate));
         }
     }
 
@@ -126,6 +148,19 @@ internal sealed class KeyedTokenBuckets(double ratePerSecond, double burst, Time
     }
 }
 
+/// <summary>What the socket's message limits say about one inbound message.</summary>
+internal enum SocketAdmission
+{
+    /// <summary>Within 10 per second.</summary>
+    Allowed,
+
+    /// <summary>Over the rate: answer with a (coalesced) error and do not process it.</summary>
+    Refused,
+
+    /// <summary>So far over the rate that the socket is closed.</summary>
+    Flood,
+}
+
 /// <summary>
 /// The abuse limits of the public listener (design 0.8, 0.4 step 6), one object so every limit uses the same clock. All per-address keys are
 /// <see cref="PublicAddresses.Key"/> (IPv6 by /64).
@@ -141,10 +176,21 @@ internal sealed class PublicRateLimits
     private readonly KeyedTokenBuckets _worldIp;
     private readonly KeyedTokenBuckets _worldGlobal;
     private readonly KeyedTokenBuckets _infoSession;
+    private readonly KeyedTokenBuckets _socketFlood;
+    private readonly KeyedTokenBuckets _socketErrors;
+    private readonly double _frameReserve;
+    private readonly double _byteRate;
+
+    /// <summary>The largest message that is charged as essential (and so never refused for bytes).</summary>
+    public const int MaxEssentialBytes = 2048;
 
     public PublicRateLimits(PublicOptions options, TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _byteRate = options.Guest.MaxBytesPerSecond;
+        _frameReserve = Math.Max(1024, options.Guest.MaxBytesPerSecond * 0.25);
+        _socketFlood = new KeyedTokenBuckets(10, 100, time);
+        _socketErrors = new KeyedTokenBuckets(2, 2, time);
         _http = new KeyedTokenBuckets(20, 40, time);
         _loginIp = new KeyedTokenBuckets(options.Login.PerIpPerMinute / 60.0, options.Login.PerIpPerMinute, time);
         _loginAccount = new KeyedTokenBuckets(options.Login.PerAccountPer15Min / 900.0, options.Login.PerAccountPer15Min, time);
@@ -168,20 +214,64 @@ internal sealed class PublicRateLimits
         return ip && name;
     }
 
-    /// <summary>One message in on a socket (10 per second).</summary>
-    public bool AllowSocketMessage(string socketKey) => _socketIn.TryTake(socketKey);
+    /// <summary>
+    /// One message in on a socket: <see cref="SocketAdmission.Allowed"/> within 10 per second; past that <see cref="SocketAdmission.Refused"/> for up to
+    /// 100 more messages (burst, then 10 per second); past that <see cref="SocketAdmission.Flood"/>, which closes the socket.
+    /// </summary>
+    public SocketAdmission AdmitSocketMessage(string socketKey)
+    {
+        if (_socketIn.TryTake(socketKey))
+        {
+            return SocketAdmission.Allowed;
+        }
 
-    /// <summary>Forgets a closed socket's message bucket.</summary>
-    public void ForgetSocket(string socketKey) => _socketIn.Remove(socketKey);
+        return _socketFlood.TryTake(socketKey) ? SocketAdmission.Refused : SocketAdmission.Flood;
+    }
+
+    /// <summary>Whether this socket may be sent another error reply (2 per second); replies past that are suppressed.</summary>
+    public bool AllowErrorReply(string socketKey) => _socketErrors.TryTake(socketKey);
+
+    /// <summary>Forgets a closed socket's buckets.</summary>
+    public void ForgetSocket(string socketKey)
+    {
+        _socketIn.Remove(socketKey);
+        _socketFlood.Remove(socketKey);
+        _socketErrors.Remove(socketKey);
+    }
 
     /// <summary>Spends <paramref name="bytes"/> of the address's byte budget (<c>Guest:MaxBytesPerSecond</c>, one second of burst); false means drop the frame.</summary>
     public bool AllowBytes(string ipKey, int bytes) => _bytes.TryTake(ipKey, out _, bytes);
 
+    /// <summary>A live frame: like <see cref="AllowBytes"/> but it never takes the budget below a reserve (a quarter of it, at least 1 KiB), so interactive answers still fit between frames.</summary>
+    public bool AllowFrameBytes(string ipKey, int bytes) => _bytes.TryTake(ipKey, bytes, _frameReserve, out _);
+
     /// <summary>
-    /// Charges <paramref name="bytes"/> to the address's byte budget without refusing (status notes, hello and small control messages that must be
-    /// sent); the budget can go into debt by up to one second's worth, so what follows is throttled instead.
+    /// Charges an essential message (session routes, error bodies, hello, status notes, control messages) to the address's byte budget without ever
+    /// refusing it; the budget can go into debt by up to one second's worth, so what follows is throttled instead. Each such message is at most
+    /// <see cref="MaxEssentialBytes"/> and sits behind its own rate limit, which bounds the total.
     /// </summary>
-    public void ChargeBytes(string ipKey, int bytes) => _bytes.Spend(ipKey, bytes);
+    public void ChargeEssentialBytes(string ipKey, int bytes)
+    {
+        System.Diagnostics.Debug.Assert(bytes <= MaxEssentialBytes, "an essential message must stay small");
+        _bytes.Spend(ipKey, bytes);
+    }
+
+    /// <summary>The address's byte balance now (negative in debt); for tests.</summary>
+    internal double ByteBalance(string ipKey) => _bytes.Balance(ipKey);
+
+    /// <summary>True while the address's byte budget is in debt (an essential message was charged beyond what it held); a command must not run then.</summary>
+    public bool InDebt(string ipKey, out TimeSpan retryAfter)
+    {
+        double balance = _bytes.Balance(ipKey);
+        if (balance < 0)
+        {
+            retryAfter = TimeSpan.FromSeconds(-balance / _byteRate);
+            return true;
+        }
+
+        retryAfter = TimeSpan.Zero;
+        return false;
+    }
 
     /// <summary>
     /// A call that touches the world (<c>live.find</c>, <c>pick.public</c>): per session and per address 5 per second and globally

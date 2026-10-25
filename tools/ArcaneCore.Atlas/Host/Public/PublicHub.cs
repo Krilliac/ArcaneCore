@@ -17,6 +17,13 @@ namespace ArcaneCore.Atlas.Host.Public;
 /// keep up has at most two frames waiting (the oldest is dropped). Messages in are at most 4 KiB, 10 per second and JSON depth 8. The hub never touches
 /// the world: it reads the <see cref="PublicFrameStore"/> and asks the <see cref="IPublicWorld"/> for map demand.
 /// <para>
+/// Byte budget (one bucket per address, shared with HTTP). Three classes of outbound message: <b>essential</b> (hello, status notes, pong, error replies,
+/// command refusals) is charged with <c>ChargeEssentialBytes</c>, may take the bucket into debt and is never refused for bytes; each is small and behind its
+/// own rate limit (one hello per socket, 10 messages in per second, 2 error replies per second per socket). <b>Interactive</b> (command results) is refused
+/// when it does not fit, and a command does not run at all while the address is in debt. <b>Droppable</b> (live frames) never takes the bucket below a
+/// reserve, so interactive answers still fit between frames. A socket that keeps sending refused messages (100 over the rate) is closed with 1008 "flood".
+/// </para>
+/// <para>
 /// Threading: one receive loop and one send loop per socket; <see cref="Tick"/> runs on the hub's timer and only renders and enqueues, never
 /// awaiting a socket. Sends on one socket are serialized by its lock.
 /// </para>
@@ -52,6 +59,7 @@ internal sealed class PublicHub
         public long LastStatusAt = long.MinValue;
         public string LastStatus = string.Empty;
         public volatile bool Throttled;
+        public long SuppressedErrors;
     }
 
     private readonly PublicRuntime _runtime;
@@ -176,7 +184,7 @@ internal sealed class PublicHub
                 state.LastStatus = statusText;
                 state.LastStatusAt = now;
                 byte[] statusBytes = Encoding.UTF8.GetBytes(statusText);
-                _runtime.Limits.ChargeBytes(state.Session.IpKey, statusBytes.Length);
+                _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, statusBytes.Length);
                 state.Frames.Writer.TryWrite(statusBytes);
             }
 
@@ -194,7 +202,7 @@ internal sealed class PublicHub
             GuestFrameProjector.WriteFrame(buffer, projection, state.Session.OpaqueKey);
             state.LastSent = now;
             state.LastSeq = projection.Seq;
-            if (!_runtime.Limits.AllowBytes(state.Session.IpKey, buffer.WrittenCount))
+            if (!_runtime.Limits.AllowFrameBytes(state.Session.IpKey, buffer.WrittenCount))
             {
                 _runtime.Stats.Dropped();
                 state.Throttled = true; // the next status note tells the guest a frame was dropped for size
@@ -303,15 +311,22 @@ internal sealed class PublicHub
                 return;
             }
 
-            if (!_runtime.Limits.AllowSocketMessage(state.Key))
+            SocketAdmission admission = _runtime.Limits.AdmitSocketMessage(state.Key);
+            if (admission == SocketAdmission.Flood)
             {
-                await SendTextAsync(state, new JsonObject { ["op"] = "error", ["code"] = PublicCommandRunner.RateLimited, ["message"] = PublicCommandRunner.Message(PublicCommandRunner.RateLimited) }.ToJsonString(), cancellationToken).ConfigureAwait(false);
+                await CloseAsync(state, WebSocketCloseStatus.PolicyViolation, "flood").ConfigureAwait(false);
+                return;
+            }
+
+            if (admission == SocketAdmission.Refused)
+            {
+                await SendErrorAsync(state, new JsonObject { ["op"] = "error", ["code"] = PublicCommandRunner.RateLimited, ["message"] = PublicCommandRunner.Message(PublicCommandRunner.RateLimited) }.ToJsonString(), cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
             if (!TryParse(message, out JsonObject? root))
             {
-                await SendTextAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-message", ["message"] = "That message was not understood." }.ToJsonString(), cancellationToken).ConfigureAwait(false);
+                await SendErrorAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-message", ["message"] = "That message was not understood." }.ToJsonString(), cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -327,7 +342,7 @@ internal sealed class PublicHub
                     await CommandAsync(state, root, cancellationToken).ConfigureAwait(false);
                     break;
                 default:
-                    await SendTextAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-message", ["message"] = "That message was not understood." }.ToJsonString(), cancellationToken).ConfigureAwait(false);
+                    await SendErrorAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-message", ["message"] = "That message was not understood." }.ToJsonString(), cancellationToken).ConfigureAwait(false);
                     break;
             }
         }
@@ -341,7 +356,7 @@ internal sealed class PublicHub
             return;
         }
 
-        await SendTextAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-args", ["message"] = PublicCommandRunner.Message("bad-args") }.ToJsonString(), cancellationToken).ConfigureAwait(false);
+        await SendErrorAsync(state, new JsonObject { ["op"] = "error", ["code"] = "bad-args", ["message"] = PublicCommandRunner.Message("bad-args") }.ToJsonString(), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SetMapAsync(SocketState state, uint? map, CancellationToken cancellationToken)
@@ -369,16 +384,19 @@ internal sealed class PublicHub
         long id = message["id"] is JsonValue idValue && idValue.TryGetValue(out long parsedId) ? parsedId : 0;
         string? name = message["name"] is JsonValue n && n.TryGetValue(out string? text) ? text : null;
         JsonObject args = message["args"] as JsonObject ?? [];
+        // An address in debt (essential messages were charged beyond its budget) runs no command: the world is not asked for an answer that cannot be sent.
         JsonObject result = name is null
             ? PublicCommandRunner.Failure("?", "bad-args", System.Diagnostics.Stopwatch.GetTimestamp())
-            : await _runner.RunAsync(state.Session, name, args, cancellationToken).ConfigureAwait(false);
+            : _runtime.Limits.InDebt(state.Session.IpKey, out _)
+                ? PublicCommandRunner.Failure(name, PublicCommandRunner.RateLimited, System.Diagnostics.Stopwatch.GetTimestamp())
+                : await _runner.RunAsync(state.Session, name, args, cancellationToken).ConfigureAwait(false);
         byte[] answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result }.ToJsonString());
         if (!_runtime.Limits.AllowBytes(state.Session.IpKey, answer.Length))
         {
             // Over the address's byte budget: the answer is replaced by a small refusal instead of being sent.
             JsonObject refusal = PublicCommandRunner.Failure(name ?? "?", PublicCommandRunner.RateLimited, System.Diagnostics.Stopwatch.GetTimestamp());
             answer = Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = refusal }.ToJsonString());
-            _runtime.Limits.ChargeBytes(state.Session.IpKey, answer.Length);
+            _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, answer.Length);
         }
 
         await SendBytesAsync(state, answer, cancellationToken).ConfigureAwait(false);
@@ -449,12 +467,24 @@ internal sealed class PublicHub
         }
     }
 
-    /// <summary>Sends a small control message (hello, pong, error); it counts against the address's byte budget but is not refused.</summary>
+    /// <summary>Sends a small essential message (hello, pong); it counts against the address's byte budget but is not refused.</summary>
     private Task SendTextAsync(SocketState state, string text, CancellationToken cancellationToken)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(text);
-        _runtime.Limits.ChargeBytes(state.Session.IpKey, bytes.Length);
+        _runtime.Limits.ChargeEssentialBytes(state.Session.IpKey, bytes.Length);
         return SendBytesAsync(state, bytes, cancellationToken);
+    }
+
+    /// <summary>Sends an error reply, at most 2 per second per socket; the rest are counted and suppressed, so a flood of bad messages cannot make the server send a flood back.</summary>
+    private Task SendErrorAsync(SocketState state, string text, CancellationToken cancellationToken)
+    {
+        if (!_runtime.Limits.AllowErrorReply(state.Key))
+        {
+            Interlocked.Increment(ref state.SuppressedErrors);
+            return Task.CompletedTask;
+        }
+
+        return SendTextAsync(state, text, cancellationToken);
     }
 
     private async Task SendBytesAsync(SocketState state, byte[] bytes, CancellationToken cancellationToken)

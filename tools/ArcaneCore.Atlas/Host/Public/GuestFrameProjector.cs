@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
-using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Live;
 
 namespace ArcaneCore.Atlas.Host.Public;
@@ -45,7 +44,8 @@ internal sealed record GuestProjection(long Seq, long ClockMs, uint Map, uint In
 /// every entity linked to a player is removed (owner chains and groups from <c>links</c>; <c>tg</c> and motion targets from the frame itself, transitively
 /// to depth 3) and stays removed for <c>PlayerDelaySeconds</c> after its last link; <c>chase</c> and <c>follow</c> collapse to <c>moving</c> unless the
 /// target is an emitted non-player entity. With the world's <c>links</c> missing or older than two frames the projector fails closed: every bot, every following
-/// creature, every creature or object whose entry the world once reported as owned, and (with no such list yet) every game object is dropped. With
+/// creature, every creature or object whose entry the world once reported as owned, and (with no such list yet) every game object is dropped; while no
+/// template set has ever been reported, every creature is dropped (a partial rule would leave a hole that moves with a hidden player). With
 /// <c>ShowPlayers=true</c> players are emitted (named only with <c>ShowPlayerNames</c>). In every case <c>tg</c>, <c>home</c>, splines and routes are never
 /// copied. Thread-safety: <see cref="Project"/> is called by one feed reader at a time; the returned projection is immutable.
 /// </para>
@@ -57,9 +57,6 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
 
     /// <summary>A links answer older than this many frames is stale.</summary>
     public const int MaxLinksAgeFrames = 2;
-
-    /// <summary>Without a known pet/totem template set, creatures within this many yards of a hidden player are dropped (the fail-closed rule).</summary>
-    public const double NearPlayerYards = 50;
 
     /// <summary>The label of a real player shown without a name.</summary>
     public const string PlayerLabel = "Player";
@@ -159,14 +156,14 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
 
         bool reduced = !showPlayers && !linksUsable;
 
-        // With no template set ever reported by the world, a pet or totem cannot be told from any other creature by entry, so every creature
-        // near a hidden player goes: an idle pet or totem beside a hidden player would otherwise mark where that player stands.
-        Dictionary<(int X, int Y), List<WorldPoint>>? playerPoints = reduced && _knownSummonEntries.Count == 0 ? PlayerPoints(frame) : null;
+        // With no template set ever reported by the world, a pet or totem cannot be told from any other creature by entry. Any rule that keeps
+        // some creatures near a hidden player leaves a hole in the creature field that moves with the player, so every creature is dropped.
+        bool noTemplates = reduced && _knownSummonEntries.Count == 0;
         var emit = new List<LiveEntity>(frame.Entities.Count);
         var emitted = new HashSet<ulong>();
         foreach (LiveEntity entity in frame.Entities)
         {
-            if (hidden.Contains(entity.Id) || (reduced && FailClosedDrops(entity)) || (playerPoints is not null && entity.Kind == LiveKind.Creature && NearAPlayer(entity, playerPoints)))
+            if (hidden.Contains(entity.Id) || (reduced && FailClosedDrops(entity)) || (noTemplates && entity.Kind == LiveKind.Creature))
             {
                 continue;
             }
@@ -283,54 +280,6 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
     };
 
     private static double Round(double value) => Math.Round(value, 2);
-
-    private static Dictionary<(int X, int Y), List<WorldPoint>> PlayerPoints(LiveFrame frame)
-    {
-        var points = new Dictionary<(int X, int Y), List<WorldPoint>>();
-        foreach (LiveEntity entity in frame.Entities)
-        {
-            if (entity.Kind == LiveKind.Player)
-            {
-                var cell = ((int)Math.Floor(entity.Position.X / NearPlayerYards), (int)Math.Floor(entity.Position.Y / NearPlayerYards));
-                if (!points.TryGetValue(cell, out List<WorldPoint>? list))
-                {
-                    points[cell] = list = [];
-                }
-
-                list.Add(entity.Position);
-            }
-        }
-
-        return points;
-    }
-
-    private static bool NearAPlayer(LiveEntity entity, Dictionary<(int X, int Y), List<WorldPoint>> points)
-    {
-        int cx = (int)Math.Floor(entity.Position.X / NearPlayerYards);
-        int cy = (int)Math.Floor(entity.Position.Y / NearPlayerYards);
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                if (!points.TryGetValue((cx + dx, cy + dy), out List<WorldPoint>? list))
-                {
-                    continue;
-                }
-
-                foreach (WorldPoint p in list)
-                {
-                    double ddx = p.X - entity.Position.X;
-                    double ddy = p.Y - entity.Position.Y;
-                    if ((ddx * ddx) + (ddy * ddy) <= NearPlayerYards * NearPlayerYards)
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
 
     private bool FailClosedDrops(LiveEntity entity) => entity.Kind switch
     {

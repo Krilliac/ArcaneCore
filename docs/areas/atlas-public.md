@@ -98,16 +98,17 @@ Anything not on the list of allowed commands answers one generic error, `not-ava
 
 `pick.public` returns only what the page shows: name, type, level, faction, health percent, motion. The "Player" label for characters is a deliberate deviation from the design's "Race Class": the live entity the feed delivers (`LiveEntity`) has no race or class field, so there is nothing to build that label from, and the page labels every character "Player".
 
-When the world's `links` answer has never been available (an older daemon), the projector also has no list of pet and totem templates. It then drops every creature within 50 yards of a hidden player, because an idle pet or totem beside a hidden player would show where the player stands. The page says some entities are hidden while this holds.
+When the world's `links` answer has never been available (an older daemon), the projector also has no list of pet and totem templates. It then drops every creature (and every bot and game object) and the status reads "reduced". A partial rule such as "creatures near a hidden player" would leave a hole in the creature field that moves with the player, which is worse than showing no creatures. Once a `links` answer has been seen, the template set it carried is remembered, so a later outage drops only creatures of those templates, followers, bots and player-ownable objects. A pet species that first appears during an outage is not in that set; a world-side template list in `caps` would close that gap and is not built yet.
 
 ## Byte budget
 
-`Guest:MaxBytesPerSecond` is one bucket per client address, spent by:
+`Guest:MaxBytesPerSecond` is one bucket per client address, shared by every socket and HTTP answer of that address. Messages come in three classes:
 
-- live frames: a frame the bucket cannot pay for is dropped (never queued) and the guest sees "Updates are slowed to stay within the data limit";
-- HTTP answers of `/api/public/` (status, me, login, logout, command results): an answer the bucket cannot pay for is replaced by `429 rate-limited` with `Retry-After`;
-- WebSocket command results: replaced by a small `rate-limited` result;
-- hello, status notes and other small control messages: charged but always sent (the bucket may go one second into debt).
+- **Essential**: the session routes (`status`, `me`, `login`, `logout`), every HTTP error body, and on a socket the hello, status notes, pongs, error replies and command refusals. They are charged but never refused for bytes, because login and logout have already changed the session by the time the answer is written, and `status` and `me` start the page. The bucket may go up to one second into debt. Each such message is at most 2 KiB and sits behind its own rate limit (20 HTTP requests per second, 10 socket messages per second, at most 2 socket error replies per second, one hello per socket), which bounds the total.
+- **Interactive**: command results over HTTP and over the socket. A result that does not fit is replaced by a small refusal (`429 rate-limited` with `Retry-After` over HTTP, a `rate-limited` result on the socket). While the address is in debt a command is not run at all.
+- **Droppable**: live frames. A frame never takes the bucket below a reserve (a quarter of it, at least 1 KiB), so a command answer still fits between frames; a frame that does not fit is dropped, never queued, and the guest sees "Updates are slowed to stay within the data limit".
+
+A socket that keeps sending messages faster than 10 per second is answered with at most 2 error replies per second; once 100 refused messages have piled up it is closed with 1008 "flood". The page waits out one 429 on `status`/`me` (at most 3 s) and retries once.
 
 The page itself (`public.html`, scripts and styles) is not charged; the HTTP request rate limit covers it.
 

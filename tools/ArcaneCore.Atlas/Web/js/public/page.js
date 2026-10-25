@@ -41,7 +41,8 @@ export class PublicPage {
      * @param {HTMLElement} root The element the page fills.
      * @param {{api: object, socket: object, schedule: Function, observeSize?: Function}} deps `schedule(fn)` runs fn on the next frame.
      */
-    constructor(root, { api, socket, schedule, observeSize }) {
+    constructor(root, { api, socket, schedule, observeSize, wait }) {
+        this.wait = wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
         this.root = root;
         this.api = api;
         this.socket = socket;
@@ -124,8 +125,8 @@ export class PublicPage {
     async start() {
         this.#build();
         try {
-            const status = await this.api.status();
-            await this.api.me();
+            const status = await this.#retryOnce(() => this.api.status());
+            await this.#retryOnce(() => this.api.me());
             this.loginAvailable = status?.login?.available ?? null;
         } catch (error) {
             this.#problem(error instanceof PublicApiError && error.code === 'unreachable' ? 'This page could not reach the server.' : 'The server did not accept this visit. Reload the page to try again.');
@@ -190,10 +191,23 @@ export class PublicPage {
         });
     }
 
+    /** Runs a request; on a 429 waits the server's Retry-After (at most 3 s) and tries once more. */
+    async #retryOnce(request) {
+        try {
+            return await request();
+        } catch (error) {
+            if (!(error instanceof PublicApiError) || error.status !== 429) {
+                throw error;
+            }
+            await this.wait(Math.min(error.retryAfter ?? 1, 3) * 1000);
+            return request();
+        }
+    }
+
     async #renewVisit() {
         try {
-            await this.api.status();
-            await this.api.me();
+            await this.#retryOnce(() => this.api.status());
+            await this.#retryOnce(() => this.api.me());
             this.renderAccount();
             this.socket.connect();
         } catch {

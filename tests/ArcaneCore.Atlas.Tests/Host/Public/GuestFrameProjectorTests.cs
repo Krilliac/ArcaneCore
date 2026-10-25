@@ -275,25 +275,46 @@ public sealed class GuestFrameProjectorTests
     }
 
     [Fact]
-    public void WhenLinksWasNeverSupported_EveryCreatureNearAHiddenPlayerIsDropped_BecauseNoTemplateSetIsKnown()
+    public void WhenNoTemplateSetIsKnown_EveryCreatureIsDropped_AndTheStatusIsReduced()
     {
         var projector = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime());
         LiveFrame frame = Frames.Frame(
             10,
             Player(Zed, "Zed", 100.25, 100.5),
-            Frames.Entity(500, LiveKind.Creature, "IdlePet", 103.125, 101.5, motion: "idle", entry: 17), // an idle pet beside the hidden player
-            Frames.Entity(501, LiveKind.Creature, "Totem", 112.75, 95.5, entry: 18), // a totem planted a few yards off
-            Frames.Entity(502, LiveKind.Creature, "Boar", 4000.5, 4001.5, entry: 5)); // nowhere near
+            Frames.Entity(500, LiveKind.Creature, "IdlePet", 103.125, 101.5, motion: "idle", entry: 17),
+            Frames.Entity(501, LiveKind.Creature, "Totem", 112.75, 95.5, entry: 18),
+            Frames.Entity(502, LiveKind.Creature, "Boar", 4000.5, 4001.5, entry: 5)); // far from the player, and dropped as well
 
         GuestProjection projection = projector.Project(frame, LinksSnapshot.Unsupported); // never any earlier answer: no summon set
         string text = Bytes(projection);
 
         Assert.True(projection.Reduced);
-        Assert.Equal([502UL], Guids(projection));
-        foreach (string x in new[] { "103.12", "112.75", "100.25", "100.5" })
+        Assert.Empty(projection.Entities);
+        foreach (string x in new[] { "103.12", "112.75", "4000.5", "100.25" })
         {
             AssertPositionAbsent(text, x);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AHiddenPlayerMovingThroughAmbientCreatures_LeavesNoMovingHole(bool templatesKnown)
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime());
+        if (templatesKnown)
+        {
+            // A first answer teaches the projector the summon templates; afterwards the world's links are unavailable.
+            projector.Project(Frames.Frame(1, Frames.Entity(1, LiveKind.Creature, "Boar", 1, 1, entry: 5)), Links(1, [], summons: [17], objects: [77]));
+        }
+
+        LiveEntity[] ambient = [.. Enumerable.Range(0, 25).Select(i => Frames.Entity(600UL + (ulong)i, LiveKind.Creature, "Boar" + i, (i % 5 * 60) + 30, (i / 5 * 60) + 30, entry: 5))];
+        LiveEntity[] Frame(double x, double y) => [Player(Zed, "Zed", x, y), .. ambient];
+
+        IReadOnlyList<ulong> first = Guids(projector.Project(Frames.Frame(10, Frame(100, 100)), LinksSnapshot.Unsupported));
+        IReadOnlyList<ulong> second = Guids(projector.Project(Frames.Frame(11, Frame(400, 400)), LinksSnapshot.Unsupported));
+
+        Assert.Equal(first, second); // wherever the hidden player stands, the creature field is the same: nothing is carved out around them
     }
 
     [Fact]
@@ -306,8 +327,8 @@ public sealed class GuestFrameProjectorTests
         GuestProjection stale = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime()).Project(frame, Links(7, [])); // 3 frames old
         GuestProjection fresh = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime()).Project(frame, Links(8, [])); // 2 frames old: usable
 
-        Assert.Equal([501UL], Guids(unknown));
-        Assert.Equal([501UL], Guids(stale));
+        Assert.Empty(Guids(unknown)); // no template set is known: every creature goes, and the chest (owner list unknown) with it
+        Assert.Empty(Guids(stale));
         Assert.True(stale.Reduced);
         Assert.Equal(2, fresh.Entities.Count);
         Assert.False(fresh.Reduced);

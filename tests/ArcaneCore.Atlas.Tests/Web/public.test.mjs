@@ -472,7 +472,13 @@ function pageRig({ loginAvailable = true } = {}) {
         csrf: 'c1',
         logins: [],
         loginError: null,
-        async status() { return { login: { available: loginAvailable } }; },
+        statusErrors: [],
+        async status() {
+            if (this.statusErrors.length > 0) {
+                throw this.statusErrors.shift();
+            }
+            return { login: { available: loginAvailable } };
+        },
         async me() {},
         async layers() { return FALLBACK_LAYERS; },
         async bookmarks() { return [{ name: 'Goldshire', map: 0, at: [-9462, 16, 53], distance: 300 }]; },
@@ -491,8 +497,9 @@ function pageRig({ loginAvailable = true } = {}) {
     };
     const socket = new FakeApiSocket();
     const root = document.createElement('div');
-    const page = new PublicPage(root, { api, socket, schedule: (fn) => fn() });
-    return { api, socket, root, page };
+    const waits = [];
+    const page = new PublicPage(root, { api, socket, schedule: (fn) => fn(), wait: async (ms) => { waits.push(ms); } });
+    return { api, socket, root, page, waits };
 }
 
 async function started(options) {
@@ -675,6 +682,26 @@ test('sign-in: the form opens, a wrong password shows the one message, a right o
     assert.equal(api.tier, 'guest');
     assert.equal(page.charactersPanel.hidden, true);
     assert.ok(root.byText('Sign in'));
+});
+
+test('a 429 while the page starts is waited out once, at most 3 seconds, and the visit then starts; a second 429 is a problem', async () => {
+    const first = pageRig();
+    first.api.statusErrors.push(new PublicApiError('x', { status: 429, code: 'rate-limited', retryAfter: 9 }));
+    await first.page.start();
+    assert.deepEqual(first.waits, [3000]);
+    assert.equal(first.page.message.hidden, true);
+    assert.ok(first.root.byText('Sign in'));
+
+    const twice = pageRig();
+    twice.api.statusErrors.push(new PublicApiError('x', { status: 429, retryAfter: 1 }), new PublicApiError('x', { status: 429, retryAfter: 1 }));
+    await twice.page.start();
+    assert.deepEqual(twice.waits, [1000]);
+    assert.equal(twice.page.message.hidden, false);
+
+    const other = pageRig();
+    other.api.statusErrors.push(new PublicApiError('x', { status: 500 }));
+    await other.page.start();
+    assert.deepEqual(other.waits, []); // only a 429 is retried
 });
 
 test('a server that offers no sign-in shows no sign-in button', async () => {

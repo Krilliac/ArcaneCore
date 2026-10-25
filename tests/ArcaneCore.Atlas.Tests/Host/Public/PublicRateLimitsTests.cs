@@ -120,13 +120,80 @@ public sealed class PublicRateLimitsTests
     }
 
     [Fact]
+    public void ABucketWithAFloor_KeepsTheReserve_ReportsTheWait_AndDebtRecovers()
+    {
+        var time = new ManualTime();
+        var buckets = new KeyedTokenBuckets(100, 1000, time);
+
+        Assert.True(buckets.TryTake("k", 700, 200, out TimeSpan none)); // 1000 -> 300, still above the floor of 200
+        Assert.Equal(TimeSpan.Zero, none);
+        Assert.False(buckets.TryTake("k", 150, 200, out TimeSpan wait)); // would leave 150 < 200
+        Assert.Equal(TimeSpan.FromSeconds(0.5), wait); // (150 + 200 - 300) / 100
+        Assert.Equal(300, buckets.Balance("k"), 3);
+        Assert.True(buckets.TryTake("k", 300, 0, out _));
+
+        buckets.Spend("k", 600); // debt: the balance goes below zero
+        Assert.Equal(-600, buckets.Balance("k"), 3);
+        Assert.False(buckets.TryTake("k", 1, 0, out TimeSpan debtWait));
+        Assert.Equal(TimeSpan.FromSeconds(6.01), debtWait);
+        time.Advance(TimeSpan.FromSeconds(7));
+        Assert.Equal(100, buckets.Balance("k"), 3); // recovered
+        buckets.Spend("k", 100000);
+        Assert.Equal(-1000, buckets.Balance("k"), 3); // debt is capped at one burst
+        Assert.Equal(1000, buckets.Balance("never-seen"), 3);
+    }
+
+    [Fact]
+    public void ASocketThatKeepsSendingPastTheRate_IsRefusedHundredTimes_ThenFlagged_AndErrorRepliesAreTwoPerSecond()
+    {
+        var time = new ManualTime();
+        var limits = new PublicRateLimits(new PublicOptions(), time);
+
+        for (int i = 1; i <= 10; i++)
+        {
+            Assert.Equal(SocketAdmission.Allowed, limits.AdmitSocketMessage("ws"));
+        }
+
+        for (int i = 11; i <= 110; i++)
+        {
+            Assert.Equal(SocketAdmission.Refused, limits.AdmitSocketMessage("ws"));
+        }
+
+        Assert.Equal(SocketAdmission.Flood, limits.AdmitSocketMessage("ws"));
+        Assert.True(limits.AllowErrorReply("ws"));
+        Assert.True(limits.AllowErrorReply("ws"));
+        Assert.False(limits.AllowErrorReply("ws"));
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(limits.AllowErrorReply("ws"));
+        limits.ForgetSocket("ws");
+        Assert.Equal(SocketAdmission.Allowed, limits.AdmitSocketMessage("ws"));
+    }
+
+    [Fact]
+    public void FramesKeepAReserve_ThatEssentialMessagesMayEatInto_AndDebtBlocksCommands()
+    {
+        var time = new ManualTime();
+        var limits = new PublicRateLimits(new PublicOptions { Guest = new PublicGuestOptions { MaxBytesPerSecond = 4096 } }, time);
+
+        Assert.False(limits.InDebt("ip", out _));
+        Assert.True(limits.AllowFrameBytes("ip", 3000)); // 4096 -> 1096, reserve is 1024
+        Assert.False(limits.AllowFrameBytes("ip", 100)); // would leave 996
+        Assert.True(limits.AllowBytes("ip", 1000)); // an interactive answer may use the reserve
+        limits.ChargeEssentialBytes("ip", 2048); // essential traffic is never refused: the balance goes negative
+        Assert.True(limits.InDebt("ip", out TimeSpan retry));
+        Assert.True(retry > TimeSpan.Zero);
+        time.Advance(retry + TimeSpan.FromMilliseconds(5));
+        Assert.False(limits.InDebt("ip", out _));
+    }
+
+    [Fact]
     public void SocketMessages_AreTenPerSecondPerSocket_AndInfoIsTwoPerSecondPerSession()
     {
         var time = new ManualTime();
         var limits = new PublicRateLimits(new PublicOptions(), time);
 
-        Assert.Equal(10, Enumerable.Range(0, 50).Count(_ => limits.AllowSocketMessage("ws1")));
-        Assert.True(limits.AllowSocketMessage("ws2"));
+        Assert.Equal(10, Enumerable.Range(0, 50).Count(_ => limits.AdmitSocketMessage("ws1") == SocketAdmission.Allowed));
+        Assert.Equal(SocketAdmission.Allowed, limits.AdmitSocketMessage("ws2"));
         Assert.Equal(2, Enumerable.Range(0, 50).Count(_ => limits.AllowInfo("sessionA")));
     }
 }

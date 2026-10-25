@@ -176,7 +176,7 @@ public sealed class PublicHubTests
         using ClientWebSocket two = await OpenAsync(rig, await rig.VisitAsync());
         AllowLinks(rig, 1);
 
-        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 22)); // about 2.6 KiB: one fits in the 4 KiB budget, two do not
+        rig.Runtime.Frames.Ingest(FrameOfBoars(1, 14)); // about 1.7 KiB: one fits in the 4 KiB budget beside the reserve, two do not
         Assert.True(await WaitAsync(() => rig.Runtime.Stats.FramesDropped == 1), "one of the two sockets should have had its frame dropped");
 
         bool oneGotIt = await GotFrameAsync(one);

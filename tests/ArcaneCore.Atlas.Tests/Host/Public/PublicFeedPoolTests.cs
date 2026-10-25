@@ -274,7 +274,25 @@ public sealed class PublicFeedPoolTests
 
         PublicMapStatus status = rig.Store.Status(0);
         Assert.True(status.Reduced);
-        Assert.Equal([501UL], status.Projection!.Entities.Select(e => e.Guid).ToArray());
+        Assert.Empty(status.Projection!.Entities); // no template set is known, so no creature is shown
+    }
+
+    [Fact]
+    public async Task AWorldThatAnswersUnknownOpToLinks_IsAskedOncePerConnection_NotOncePerFrame()
+    {
+        var rig = new Rig();
+        rig.Feed.LinksSupported = false;
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+
+        for (int seq = 1; seq <= 8; seq++)
+        {
+            connection.PushFrame(FrameOf(seq, boar));
+        }
+
+        Assert.Equal(1, connection.Ops.Count(o => o == "links")); // eight refused lines would have closed the connection after five
     }
 
     [Fact]
