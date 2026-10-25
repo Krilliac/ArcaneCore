@@ -478,8 +478,11 @@ public sealed class TickWatchdogFeatureTests
         }
 
         // Released: the world thread goes back to waiting between ticks.
-        await WorldTestHost.WaitForAsync(() => host.World.CurrentPosition.Phase == TickPhase.Idle, "the world thread idle between ticks");
-        Assert.Equal("(nothing)", host.World.CurrentPosition.DescribeWork());
+        // The host ticks every few ms, so the next tick (and a real feature such as ChatRestrictionFeature) can start right after the
+        // Idle reading: assert on that one reading, not on a second read of the live position, which races the next tick.
+        TickPosition idle = default;
+        await WorldTestHost.WaitForAsync(() => (idle = host.World.CurrentPosition).Phase == TickPhase.Idle, "the world thread idle between ticks");
+        Assert.Equal("(nothing)", idle.DescribeWork());
     }
 
     [Fact]
