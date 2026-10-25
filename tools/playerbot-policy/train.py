@@ -58,7 +58,9 @@ FEATURES = ["level", "money", "free_bag_slots", "quest_log", "quests_complete", 
 GOALS = ["Quest", "Town", "Opportunity", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
 # Record version 2 added the Opportunity goal: the `open` bitmask is `1 << goal` in GOALS order, so every bit from Train up moved one
 # place. Version 1 records (written by a server without the goal) are read by remapping their bits through the old 7-goal order.
-RECORD_VERSION = 2
+# Record version 3 added the `losing-burst-N` retreat reason and the `round_damage` retreat feature (fight records only); a goal record's
+# layout is the same as in version 2, so version 2 records are read as written.
+RECORD_VERSION = 3
 GOALS_V1 = ["Quest", "Town", "Train", "Mount", "QuestTravel", "Grind", "Explore"]
 
 
@@ -74,7 +76,7 @@ def remap_open_v1(bits: int) -> int:
 def upgrade_record(record: dict) -> dict | None:
     """The record in the current layout, or None for a version this trainer does not read. Version 1 keeps its data."""
     version = record.get("v")
-    if version == RECORD_VERSION:
+    if version == RECORD_VERSION or version == 2:
         return record
     if version == 1:
         upgraded = dict(record)

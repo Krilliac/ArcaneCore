@@ -718,7 +718,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 
 | Key | Meaning |
 |---|---|
-| `v` | Record version (2). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
+| `v` | Record version (3). Version 3 added the `losing-burst-N` retreat `reason` and the `round_damage` retreat feature to fight records (goal and health records keep their layout). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
 | `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |

@@ -52,7 +52,7 @@ class GoalListTests(unittest.TestCase):
         self.assertEqual(["Quest", "Town", "Opportunity", "Train", "Mount", "QuestTravel", "Grind", "Explore"], train.GOALS)
 
     def test_the_trainer_reads_the_server_record_version(self):
-        self.assertEqual(2, train.RECORD_VERSION)
+        self.assertEqual(3, train.RECORD_VERSION)
 
     def test_the_weights_file_names_every_goal_in_order(self):
         # The server refuses a model whose goal names differ (RequireNames): the model train.py writes lists GOALS as they are.
@@ -78,14 +78,14 @@ class RemapTests(unittest.TestCase):
         rows = load_lines([goal_record(1, "Grind", (1 << 5) | (1 << 6)), goal_record(2, "Opportunity", (1 << 2) | (1 << 7))])
         self.assertEqual(2, len(rows))
         v1 = next(row for row in rows if row["goal"] == "Grind")
-        self.assertEqual(2, v1["v"])
+        self.assertEqual(3, v1["v"])
         self.assertEqual((1 << 6) | (1 << 7), v1["open"])  # Grind 5 -> 6, Explore 6 -> 7
         v2 = next(row for row in rows if row["goal"] == "Opportunity")
         self.assertEqual((1 << 2) | (1 << 7), v2["open"])  # a version 2 record is read as written
 
     def test_load_refuses_a_version_it_does_not_know(self):
-        rows = load_lines([goal_record(3, "Grind", 1), goal_record(2, "Grind", 1)])
-        self.assertEqual(1, len(rows))
+        rows = load_lines([goal_record(4, "Grind", 1), goal_record(2, "Grind", 1), goal_record(3, "Grind", 1)])
+        self.assertEqual(2, len(rows))
 
     def test_a_version_2_opportunity_record_is_a_training_row(self):
         class Args:
