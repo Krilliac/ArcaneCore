@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Game;
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -245,6 +246,8 @@ internal static class MapFeedCapture
     private static void SetHealth(ref FeedEntity entity, Unit unit)
     {
         entity.HealthPercent = unit.HealthPercent;
+        entity.InCombat = (unit.UnitFlags & UnitFlags.InCombat) != 0; // the flag itself: Unit.Combat would allocate its UnitCombat
+        entity.DisplayId = unit.DisplayId;
         entity.Parts |= FeedEntityParts.Health;
     }
 

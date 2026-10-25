@@ -225,5 +225,92 @@ public sealed class MapFeedProtocolTests
         Assert.Equal(5, MapFeedProtocol.MaxStrikes);
         Assert.Equal(512, MapFeedProtocol.MaxPathPoints);
         Assert.Equal(1024, MapFeedProtocol.MaxResultPoints);
+        Assert.Equal(4096, MapFeedProtocol.MaxAnomalyResults);
+        Assert.Equal(10, MapFeedProtocol.MaxInspectThreat);
+    }
+
+    // ---- live insight kinds (docs/areas/atlas-insight.md) ----
+
+    [Fact]
+    public void Inspect_ReadsTheMapInstanceAndGuid_AsHex_WithoutPoints()
+    {
+        FeedRequest inspect = Accepted("""{"op":"query","id":11,"kind":"inspect","map":530,"instance":4,"guid":"F1300001A2B3C4D5"}""");
+
+        Assert.Equal(FeedOp.Query, inspect.Op);
+        Assert.Equal(QueryKind.Inspect, inspect.Kind);
+        Assert.Equal(11L, inspect.Id);
+        Assert.Equal(530u, inspect.MapId);
+        Assert.Equal(4u, inspect.InstanceId);
+        Assert.Equal(0xF1300001A2B3C4D5UL, inspect.InspectGuid);
+
+        // The instance is optional, and 0x and lower case are accepted like everywhere else a guid is written.
+        FeedRequest bare = Accepted("""{"op":"query","id":12,"kind":"inspect","map":0,"guid":"0x2a"}""");
+        Assert.Equal(0u, bare.InstanceId);
+        Assert.Equal(0x2AUL, bare.InspectGuid);
+    }
+
+    [Theory]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":""}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":"0"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":"0000000000000000"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":"xyz"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":"10000000000000000"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"guid":12}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","guid":"2A"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":-1,"guid":"2A"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"inspect","map":0,"instance":"x","guid":"2A"}""")]
+    public void Inspect_WithoutAUsableGuidOrMap_IsBadArgs_AndStillCarriesTheId(string line)
+    {
+        Assert.False(Parse(line, out FeedRequest request, out FeedError error));
+
+        Assert.Equal(MapFeedProtocol.BadArgs, error.Code);
+        Assert.True(request.HasId, "a refused query is answered as a result with the client's id");
+        Assert.Equal(9L, request.Id);
+    }
+
+    [Fact]
+    public void Anomalies_NeedsNoMapNorPoint_AndDefaultsToTheWholeRing()
+    {
+        FeedRequest anomalies = Accepted("""{"op":"query","id":21,"kind":"anomalies"}""");
+
+        Assert.Equal(QueryKind.Anomalies, anomalies.Kind);
+        Assert.Equal(21L, anomalies.Id);
+        Assert.Equal(0L, anomalies.Since);
+        Assert.Equal(MapFeedProtocol.DefaultAnomalyResults, anomalies.MaxResults);
+
+        FeedRequest bounded = Accepted("""{"op":"query","id":22,"kind":"anomalies","since":123456789012,"max":4096,"extra":true}""");
+        Assert.Equal(123456789012L, bounded.Since);
+        Assert.Equal(4096, bounded.MaxResults);
+        Assert.Equal(1, Accepted("""{"op":"query","id":23,"kind":"anomalies","max":1}""").MaxResults);
+    }
+
+    [Theory]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","since":-1}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","since":1.5}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","since":"3"}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","max":0}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","max":4097}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","max":-5}""")]
+    [InlineData("""{"op":"query","id":9,"kind":"anomalies","max":"all"}""")]
+    public void Anomalies_WithOutOfRangeArguments_IsBadArgs(string line)
+    {
+        Assert.False(Parse(line, out FeedRequest request, out FeedError error));
+
+        Assert.Equal(MapFeedProtocol.BadArgs, error.Code);
+        Assert.True(request.HasId);
+    }
+
+    [Fact]
+    public void TheOldKinds_StillNeedTheirPoints_AndTheUnknownKindMessageNamesTheNewOnes()
+    {
+        // The new kinds take no point; that must not have loosened the old ones.
+        Assert.Equal(MapFeedProtocol.BadArgs, Refused("""{"op":"query","id":9,"kind":"height","map":0}""").Code);
+        Assert.Equal(MapFeedProtocol.BadArgs, Refused("""{"op":"query","id":9,"kind":"los","map":0,"a":[0,0,0]}""").Code);
+
+        FeedError unknown = Refused("""{"op":"query","id":9,"kind":"teleport","map":0,"a":[0,0,0]}""");
+        Assert.Equal(MapFeedProtocol.BadArgs, unknown.Code);
+        Assert.Contains("inspect", unknown.Message, StringComparison.Ordinal);
+        Assert.Contains("anomalies", unknown.Message, StringComparison.Ordinal);
     }
 }

@@ -116,6 +116,7 @@ internal static class MapFeedQueries
             QueryKind.Height => AnswerHeight(map, request),
             QueryKind.Path => AnswerPath(map, request),
             QueryKind.UnderMap => AnswerUnderMap(map, request),
+            QueryKind.Inspect or QueryKind.Anomalies => QueryAnswer.Refused(request, MapFeedProtocol.BadArgs, "inspect and anomalies are answered by the insight path, not here"),
             _ => QueryAnswer.Refused(request, MapFeedProtocol.BadArgs, "unknown query kind"),
         };
     }

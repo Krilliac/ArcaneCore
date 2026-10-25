@@ -7,6 +7,7 @@ import { normalizeLayerList } from './catalog.js';
 import { cameraPatch, defaultView, normalizeView } from './view.js';
 import { resolveLayers } from './layerstate.js';
 import { LiveModel } from './live.js';
+import { REPLAY_FRAME_TOPIC, REPLAY_STATE_TOPIC, acceptsLiveFrame, acceptsReplayFrame, createReplayState, noteReplayFrame, reduceReplayState } from './insight/replay.js';
 import { normalizeBookmarks, normalizeCommands, normalizeMaps, normalizeStatus } from './normalize.js';
 import { OverlayStore, colorKeyTable } from './overlays.js';
 import { tileOf } from './tiles.js';
@@ -29,6 +30,7 @@ export class App {
         this.bookmarks = [];
         this.connection = { state: 'connecting', id: null, version: null, message: '' };
         this.live = new LiveModel();
+        this.replay = createReplayState();
         this.overlays = new OverlayStore();
         this.scene = null;
         this.selection = { hit: null, entityGuid: null, point: null, tile: null };
@@ -113,7 +115,20 @@ export class App {
                 this.#onCommandEvent(data);
                 break;
             case 'live.frame':
-                this.live.applyFrame(data, performance.now());
+                if (acceptsLiveFrame(this.replay)) {
+                    this.live.applyFrame(data, performance.now());
+                }
+                break;
+            case REPLAY_STATE_TOPIC:
+                this.replay = reduceReplayState(this.replay, data);
+                this.events.emit('replay', this.replay);
+                break;
+            case REPLAY_FRAME_TOPIC:
+                if (acceptsReplayFrame(this.replay)) {
+                    this.replay = noteReplayFrame(this.replay, data);
+                    this.live.applyFrame(data, performance.now());
+                    this.events.emit('replay', this.replay);
+                }
                 break;
             case 'live.status':
                 this.live.applyStatus(data);
