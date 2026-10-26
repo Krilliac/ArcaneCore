@@ -594,7 +594,7 @@ public sealed class ClusterCommands : ICommandGroup
             t =>
             {
                 Exception ex = t.Exception!.GetBaseException();
-                if (ex is OperationCanceledException)
+                if (ex is OperationCanceledException or OutOfMemoryException)
                 {
                     return;
                 }
@@ -607,7 +607,9 @@ public sealed class ClusterCommands : ICommandGroup
                 }
                 catch (Exception replyEx) when (replyEx is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("cluster.diag-post", replyEx); // the world cannot take the GM reply either (stopped): the fault above stands
+                    // Post only enqueues; it can throw only when the world's clock is disposed. The first fault above stands.
+                    FaultLedger.Shared.Record("cluster.diag-post", replyEx);
+                    logger?.LogFault("cluster-diag-post", replyEx, "cluster diag could not queue its failure reply");
                 }
             },
             CancellationToken.None,

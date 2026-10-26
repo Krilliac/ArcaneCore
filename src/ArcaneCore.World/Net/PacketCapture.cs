@@ -198,7 +198,14 @@ public sealed class PacketCapture : IDisposable
         FaultLedger.Shared.Record("net.packet-capture-full", ex);
         try
         {
-            _logger?.LogFault("net-packet-capture-full", ex, "packet capture {Path} stopped: the writer is {Capacity} records behind", Path, QueueCapacity);
+            if (_logger is not null)
+            {
+                _logger.LogFault("net-packet-capture-full", ex, "packet capture {Path} stopped: the writer is {Capacity} records behind", Path, QueueCapacity);
+            }
+            else
+            {
+                Console.Error.WriteLine($"packet capture {Path} stopped: the writer is {QueueCapacity} records behind");
+            }
         }
         catch (Exception logEx) when (logEx is not OutOfMemoryException)
         {

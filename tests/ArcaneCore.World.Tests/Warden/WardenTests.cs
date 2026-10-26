@@ -1245,6 +1245,9 @@ public sealed class WardenTests
         /// <summary>When set, the released write throws this instead of committing.</summary>
         public Exception? FailOnRelease { get; init; }
 
+        /// <summary>When set, the write blocks its calling thread until released (a provider that completes its async calls synchronously, as SQLite does).</summary>
+        public bool BlockSynchronously { get; init; }
+
         /// <summary>Completes when the Warden's ban write has reached the store (and is waiting).</summary>
         public Task WriteEntered => _entered.Task;
 
@@ -1253,7 +1256,15 @@ public sealed class WardenTests
         public async Task BanAccountAsync(BanRequest request, CancellationToken cancellationToken = default)
         {
             _entered.TrySetResult();
-            await _release.Task.ConfigureAwait(false);
+            if (BlockSynchronously)
+            {
+                _release.Task.Wait();
+            }
+            else
+            {
+                await _release.Task.ConfigureAwait(false);
+            }
+
             if (FailOnRelease is not null)
             {
                 throw FailOnRelease;
@@ -1327,6 +1338,56 @@ public sealed class WardenTests
             AccountBanRecord ban = Assert.IsType<AccountBanRecord>(await store.GetActiveAccountBanAsync(session.AccountId));
             Assert.Equal(WardenFeature.BanAuthor, ban.BannedBy);
             Assert.True(ban.IsPermanent);
+        }
+    }
+
+    [Fact]
+    public async Task StartBan_ReturnsAtOnce_EvenWhenTheStoreBlocksItsCallingThread()
+    {
+        // A provider that completes its async calls synchronously (SQLite) blocks the thread that runs the write. The write must not run on the caller.
+        var store = new GatedBanStore { BlockSynchronously = true };
+        await using WorldTestHost host = WardenHostWith(_ => { }, services => services.AddSingleton<IBanStore>(store));
+        WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+        try
+        {
+            await Task.Run(() => feature.StartBan(4242, "probe")).WaitAsync(TimeSpan.FromSeconds(10)); // inline, this would not return until released
+            await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            store.Release();
+        }
+
+        await feature.StopAsync();
+        Assert.NotNull(await store.GetActiveAccountBanAsync(4242));
+    }
+
+    [Fact]
+    public async Task StopAsync_RecordsABanWriteThatIsStillPendingAtItsBound()
+    {
+        var store = new GatedBanStore();
+        (WorldTestHost host, WorldTestClient client, WorldSession session) = await FailedBanScanAsync(store, "wardenstop");
+        await using (host)
+        await using (client)
+        {
+            WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
+            feature.PendingBanStopWait = TimeSpan.FromMilliseconds(200);
+            long before = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "warden.ban-stop").Sum(s => s.Count);
+            try
+            {
+                await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
+                await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session was kicked");
+                await feature.StopAsync().WaitAsync(TimeSpan.FromSeconds(10)); // returns at its bound although the write never finishes
+            }
+            finally
+            {
+                store.Release();
+            }
+
+            long after = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "warden.ban-stop").Sum(s => s.Count);
+            Assert.True(after > before, "the pending ban write at the stop bound was not recorded"); // the Record + LogFault pair counts it more than once by design
+            Assert.Contains(ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot(),
+                s => s.Site == "warden.ban-stop" && s.SampleMessage.Contains($"account(s) {session.AccountId}", StringComparison.Ordinal));
         }
     }
 
