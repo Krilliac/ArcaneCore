@@ -627,6 +627,29 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
     }
 
+    /// <summary>
+    /// #1475: a bot the walk keeps on the mesh surface of an upper WMO storey (<see cref="PlayerbotMotion"/> places a navigated step on
+    /// the surface <see cref="MapCollision.TryWalkMeshSurface"/> answers) while the model query answers the storey 9 yd below is on its
+    /// floor: the mesh polygon under it (the zero-length walk <see cref="PlayerbotMotionAnomalies.StaysOnMesh"/> also uses) is within <see cref="PlayerbotMotionAnomalies.MeshStoreyYards"/>.
+    /// The control: the same bot with the mesh only on the lower storey is still walking on air.
+    /// </summary>
+    [Theory]
+    [InlineData(9f, false)]
+    [InlineData(0f, true)]
+    public async Task ABotOnAnUpperStoreysMesh_TheModelQueryMisses_IsNotAirwalk(float meshAboveModelFloor, bool reported)
+    {
+        var mesh = new ScriptedMesh { Surface = Floor + meshAboveModelFloor };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var at = new Vector3(player.X, player.Y, Floor + 9f);
+            PlayerbotMotionAnomalies.CheckGround(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), at, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.Equal(reported, scenario.Capture.Any(Key(Code.Airwalk)));
+    }
+
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotRoute LineRoute(Player player, float yards, bool navigated)
