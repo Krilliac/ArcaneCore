@@ -83,7 +83,7 @@ const TABS = [
 function start(token, joinName) {
     const app = createApp(token, window.location);
     if (joinName) {
-        app.setSessionName(joinName);
+        app.setSessionName(joinName, { remember: false });
     }
     const stage = h('main', { class: 'stage', tabindex: 0, aria: { label: 'Map viewport. Drag to orbit, right-drag to pan, wheel to zoom.' } });
     const toasts = new Toasts(document.body);

@@ -19,7 +19,7 @@ public sealed class HostSessionTests
 {
     private static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 
-    private static Task<HostRig> StartAsync(ManualTime? clock = null, TimeSpan? interval = null, int? maxAgents = null, TimeSpan? timeout = null)
+    private static Task<HostRig> StartAsync(TimeProvider? clock = null, TimeSpan? interval = null, int? maxAgents = null, TimeSpan? timeout = null)
         => HostRig.StartAsync(new AtlasServerOptions
         {
             PresenceMinInterval = interval ?? TimeSpan.Zero,
@@ -404,6 +404,62 @@ public sealed class HostSessionTests
         JsonNode join = await rig.DataAsync("help", Args("""{"command":"session.join"}"""));
         Assert.Equal(new[] { "name" }, join.At("schema.required")!.AsArray().Select(r => r!.GetValue<string>()));
         Assert.Equal("array", join.Str("schema.properties.at.type"));
+    }
+
+    [Fact]
+    public async Task TheSweepTimer_IsCreatedOnTheOptionsClock_AndDropsExpiredSessionsWhenItFires()
+    {
+        var clock = new TimerSpyTime();
+        await using HostRig rig = await StartAsync(clock, timeout: TimeSpan.FromSeconds(30));
+        await using UiClient ui = await UiClient.ConnectAsync(rig);
+        string id = await JoinAsync(rig);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), Assert.Single(clock.Timers).Period);
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        clock.Timers[0].Fire();
+
+        await ReceiveLeftOfAsync(ui, id);
+    }
+
+    /// <summary>A manual clock whose timers never run by themselves: a test fires them.</summary>
+    private sealed class TimerSpyTime : TimeProvider
+    {
+        private long _ticks;
+
+        public List<SpyTimer> Timers { get; } = [];
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+
+        public void Advance(TimeSpan span) => Interlocked.Add(ref _ticks, span.Ticks);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new SpyTimer(callback, state, period);
+            lock (Timers)
+            {
+                Timers.Add(timer);
+            }
+
+            return timer;
+        }
+    }
+
+    private sealed class SpyTimer(TimerCallback callback, object? state, TimeSpan period) : ITimer
+    {
+        public TimeSpan Period { get; } = period;
+
+        public void Fire() => callback(state);
+
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 

@@ -717,4 +717,77 @@ public sealed class HostPresenceTests
         Assert.DoesNotContain(new BookmarkStore(rig.State.BookmarksFile, NullLoggerFactory.Instance).All(), b => !b.BuiltIn);
         Assert.Equal(0, rig.Context.View.Version);
     }
+
+    [Fact]
+    public async Task AUiThatDoesNotOwnTheFollow_CannotStopIt_ButTheOwnerCan()
+    {
+        await using HostRig rig = await StartAsync();
+        await using UiClient a = await UiClient.ConnectAsync(rig);
+        await using UiClient b = await UiClient.ConnectAsync(rig);
+
+        // A follows AB, then B takes the follow over with CD.
+        await a.SendAsync(Raw("""{"op":"command","id":1,"name":"view.set","args":{"follow":"AB"}}"""));
+        await b.ReceiveEventAsync("view", d => d.Str("followOrigin") == $"ui:{a.ConnectionId}");
+        await b.SendAsync(Raw("""{"op":"command","id":1,"name":"view.set","args":{"follow":"CD"}}"""));
+        await a.ReceiveEventAsync("view", d => d.Str("followOrigin") == $"ui:{b.ConnectionId}");
+
+        // A drags: its UI would send follow null together with a camera. The follow is B's, so it stays.
+        await a.SendAsync(Raw("""{"op":"command","id":2,"name":"view.set","args":{"follow":null,"camera":{"yaw":77}}}"""));
+        JsonNode result = await a.ReceiveUntilAsync(m => m.Str("op") == "result" && m.Num("id") == 2, "the result of A's view.set");
+
+        Assert.True(result.Flag("result.ok"));
+        Assert.Equal("CD", rig.Context.View.Current.FollowGuid);
+        Assert.Equal($"ui:{b.ConnectionId}", rig.Context.View.FollowOrigin);
+        Assert.Equal(77, rig.Context.View.Current.Camera.Yaw);
+
+        // B stops its own follow.
+        await b.SendAsync(Raw("""{"op":"command","id":3,"name":"view.set","args":{"follow":null}}"""));
+        JsonNode stopped = await a.ReceiveEventAsync("view", d => d.At("view.follow") is null);
+        Assert.Equal($"ui:{b.ConnectionId}", stopped.Str("data.origin"));
+        Assert.Null(rig.Context.View.Current.FollowGuid);
+    }
+
+    [Fact]
+    public async Task InvalidPresenceFlood_IsAnsweredOnlyWhileTheErrorBudgetLasts_AndRefillsWithTime()
+    {
+        var time = new ManualTime();
+        await using HostRig rig = await StartAsync(TimeSpan.FromMilliseconds(50), time);
+        await using UiClient a = await UiClient.ConnectAsync(rig);
+        await using UiClient b = await UiClient.ConnectAsync(rig);
+        int flood = AtlasServer.PresenceErrorBurst + 24;
+
+        for (int i = 0; i < flood; i++)
+        {
+            await a.SendTextAsync("""{"op":"presence"}""");
+        }
+
+        // A valid message after the flood proves the host has read every invalid one (one connection is read in order).
+        await a.SendAsync(Presence(x: 1));
+        await ReceivePresenceOfAsync(b, a.ConnectionId);
+        await a.SendAsync(Raw("""{"op":"command","id":9,"name":"status","args":{}}"""));
+        int errors = 0;
+        while (true)
+        {
+            JsonNode m = await a.ReceiveAsync();
+            if (m.Str("op") == "error")
+            {
+                errors++;
+            }
+            else if (m.Str("op") == "result" && m.Num("id") == 9)
+            {
+                break;
+            }
+        }
+
+        Assert.True(errors <= AtlasServer.PresenceErrorBurst, $"{errors} answers for {flood} invalid messages");
+
+        // Time refills the budget one answer per presence interval: after two intervals, further invalid messages are answered again.
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        while (errors < AtlasServer.PresenceErrorBurst + 1)
+        {
+            await a.SendTextAsync("""{"op":"presence"}""");
+            await a.ReceiveUntilAsync(m => m.Str("op") == "error", "an answer after the budget refilled");
+            errors++;
+        }
+    }
 }

@@ -63,6 +63,12 @@ public sealed class UiConnection
     /// <summary><see cref="TimeProvider.GetTimestamp"/> of the last accepted presence message, null before the first; only the receive loop touches it.</summary>
     internal long? LastPresenceStamp { get; set; }
 
+    /// <summary><see cref="TimeProvider.GetTimestamp"/> of the last invalid presence message seen (the bucket's last update), null before the first; only the receive loop touches it.</summary>
+    internal long? LastPresenceErrorStamp { get; set; }
+
+    /// <summary>Answers left in the invalid-presence bucket (refilled by elapsed time); only the receive loop touches it.</summary>
+    internal double PresenceErrorTokens { get; set; } = AtlasServer.PresenceErrorBurst;
+
     internal ChannelReader<string> PendingEvents => _events.Reader;
 
     internal void EnqueueEvent(string json) => _events.Writer.TryWrite(json);

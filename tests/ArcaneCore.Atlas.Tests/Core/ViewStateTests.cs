@@ -116,6 +116,88 @@ public sealed class ViewStateTests
     }
 
     [Fact]
+    public void Store_PublishesEveryVersionInOrder_WhenManyThreadsPatchAtOnce()
+    {
+        const int Threads = 8;
+        const int PerThread = 150;
+        var store = new ViewStore(ViewState.Default);
+        var applied = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        var changed = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        store.Applied += (_, _, version, _, _) =>
+        {
+            applied.Enqueue(version);
+            Thread.Yield();
+        };
+        store.Changed += (_, version, _) => changed.Enqueue(version);
+
+        Parallel.For(0, Threads, new ParallelOptions { MaxDegreeOfParallelism = Threads }, t =>
+        {
+            for (int i = 0; i < PerThread; i++)
+            {
+                store.Patch(new JsonObject { ["camera"] = new JsonObject { ["yaw"] = (t * PerThread) + i } }, $"ui:{t}");
+            }
+        });
+
+        long[] expected = [.. Enumerable.Range(1, Threads * PerThread).Select(v => (long)v)];
+        Assert.Equal(expected, applied.ToArray());
+        Assert.Equal(expected, changed.ToArray());
+    }
+
+    [Fact]
+    public void Store_AUiCannotClearAFollowAnotherUiOwns_ButTheOwnerAndNonUiOriginsCan()
+    {
+        var store = new ViewStore(ViewState.Default);
+        JsonObject Clear(double? yaw = null)
+        {
+            var patch = new JsonObject { ["follow"] = null };
+            if (yaw is { } y)
+            {
+                patch["camera"] = new JsonObject { ["yaw"] = y };
+            }
+
+            return patch;
+        }
+
+        store.Patch(new JsonObject { ["follow"] = "AA" }, "ui:a");
+        store.Patch(new JsonObject { ["follow"] = "BB" }, "ui:b");
+
+        store.Patch(Clear(yaw: 12), "ui:a");
+
+        Assert.Equal("BB", store.Current.FollowGuid);
+        Assert.Equal("ui:b", store.FollowOrigin);
+        Assert.Equal(12, store.Current.Camera.Yaw);
+
+        store.Patch(Clear(), "ui:b");
+        Assert.Null(store.Current.FollowGuid);
+
+        store.Patch(new JsonObject { ["follow"] = "CC" }, "ui:b");
+        store.Patch(Clear(), "cli");
+        Assert.Null(store.Current.FollowGuid);
+
+        store.Patch(new JsonObject { ["follow"] = "DD" }, "cli");
+        store.Patch(Clear(), "ui:a");
+        Assert.Null(store.Current.FollowGuid);
+    }
+
+    [Fact]
+    public void Store_Snapshot_ReportsTheViewVersionAndFollowOwnerOfOneMoment()
+    {
+        var store = new ViewStore(ViewState.Default);
+        (ViewState view, long version, string? owner) = store.Snapshot();
+        Assert.Equal((0L, (string?)null), (version, owner));
+        Assert.Same(store.Current, view);
+
+        store.Patch(new JsonObject { ["follow"] = "AA" }, "ui:a");
+        (view, version, owner) = store.Snapshot();
+        Assert.Equal("AA", view.FollowGuid);
+        Assert.Equal(1, version);
+        Assert.Equal("ui:a", owner);
+
+        store.Patch(new JsonObject { ["follow"] = null }, "ui:a");
+        Assert.Null(store.Snapshot().FollowOrigin);
+    }
+
+    [Fact]
     public void Catalog_IdsAreUnique_ColoursValid_AndEveryIdConstantIsListed()
     {
         Assert.Equal(LayerCatalog.All.Count, LayerCatalog.All.Select(l => l.Id).Distinct(StringComparer.Ordinal).Count());

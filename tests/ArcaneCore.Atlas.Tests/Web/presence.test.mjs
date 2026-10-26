@@ -158,9 +158,11 @@ test('peerLabelCandidates: only peers on the map, text is the name', () => {
 
 // ---- App wiring ----
 
-// Node may ship a Web Storage global; the app reads the stored session name from it, so give every test an empty one.
+// Node may ship a Web Storage global; the app reads the stored session name from sessionStorage (the web assets use no localStorage),
+// so give every test an empty one that records what is written.
+const storedNames = [];
 try {
-    Object.defineProperty(globalThis, 'localStorage', { value: { getItem: () => null, setItem: () => {} }, configurable: true });
+    Object.defineProperty(globalThis, 'sessionStorage', { value: { getItem: () => null, setItem: (key, value) => storedNames.push([key, value]) }, configurable: true });
 } catch {
     // A runtime without the property needs no stub.
 }
@@ -586,4 +588,54 @@ test('app: a first hello whose follow is owned by the CLI, or by nobody, takes t
         assert.equal(app.view.follow, '0xAA', String(followOrigin));
         app._publishPresence.cancel();
     }
+});
+
+test('app: a UI that does not own the follow keeps none and never sends follow null; the owner does', async () => {
+    const other = 'ui:other0000000';
+    const { app, socket } = makeApp();
+    // This UI follows 0xAA ...
+    app.view = { ...app.view, follow: '0xAA' };
+    assert.equal(app.ownsFollow(), true);
+    // ... then another UI takes the host's follow over.
+    socket.emit('event', 'view', { version: 1, origin: other, cameraChanged: true, followOrigin: other, view: hostView(app, { follow: '0xBB' }) });
+    assert.equal(app.view.follow, null, 'the stale local follow is cleared');
+    assert.equal(app.ownsFollow(), false);
+    // A drag or key flight here must not cancel their follow.
+    app.releaseFollow();
+    await settle();
+    assert.deepEqual(socket.commands.filter((c) => c.name === 'view.set'), [], 'nothing was sent');
+    // Their live frames still do not move this camera, and a refresh adopts no follow.
+    socket.emit('event', 'view', liveFrame(app, 2, other));
+    assert.equal(app.view.follow, null);
+    // Once they stop following, this UI can follow and release its own again.
+    socket.emit('event', 'view', { version: 3, origin: other, cameraChanged: true, followOrigin: null, view: hostView(app, { follow: null }) });
+    app.view = { ...app.view, follow: '0xCC' };
+    assert.equal(app.ownsFollow(), true);
+    app.releaseFollow();
+    assert.equal(app.view.follow, null);
+    app._flushPatch.flush();
+    await settle();
+    assert.deepEqual(socket.commands.filter((c) => c.name === 'view.set').map((c) => c.args), [{ follow: null }]);
+});
+
+test('app: a peer follow arriving mid-gesture clears the local follow at once', () => {
+    const other = 'ui:other0000000';
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, follow: '0xAA' };
+    app.beginInteraction();
+    socket.emit('event', 'view', { version: 1, origin: other, cameraChanged: true, followOrigin: other, view: hostView(app, { follow: '0xBB' }) });
+    assert.equal(app.view.follow, null);
+    app.releaseFollow();
+    assert.equal(app._pending, null, 'no follow null is queued for the host');
+});
+
+test('app.setSessionName: the name is kept in sessionStorage, except for a join link name', () => {
+    const { app } = makeApp();
+    storedNames.length = 0;
+    app.setSessionName('Ann');
+    assert.deepEqual(storedNames, [['atlas.name', 'Ann']]);
+    app.setSessionName('Bob', { remember: false });
+    assert.equal(app.sessionName, 'Bob');
+    assert.deepEqual(storedNames, [['atlas.name', 'Ann']], 'the join name was not stored');
+    app._publishPresence.cancel();
 });

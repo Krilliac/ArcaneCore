@@ -6,7 +6,8 @@
 // camera). An event from anything else (cli, mcp, script, http) carries `cameraChanged`; only when it is true (or missing,
 // an older host) does it move the camera and follow. The live feed moves the camera of a followed entity every frame (origin
 // `live`); `followOrigin` says who asked for the follow, and only that UI (or any non-UI asker) takes those frames. `refreshView` keeps the local camera unless asked to take the host's,
-// which happens after this UI ran a camera command. Each UI also publishes where it is (`presence`, at most about 5 Hz,
+// which happens after this UI ran a camera command. The follow is shared with ownership: the host holds one, and `followOrigin` names the
+// UI (or the CLI, MCP, a script) that owns it. A UI that does not own it keeps no local follow and never sends `follow: null`. Each UI also publishes where it is (`presence`, at most about 5 Hz,
 // only when it moved) and keeps the other sessions in `app.presence`, which the viewport draws as labelled markers.
 
 import { Api, ApiError, Socket, unwrap } from './api.js';
@@ -21,7 +22,7 @@ import { PresenceStore, cleanName, presenceMessage } from './presence.js';
 import { tileOf } from './tiles.js';
 import { Emitter, composePatch, deepEqual, throttle, mergePatch } from './util.js';
 
-/** localStorage slot of the user-chosen session name. */
+/** sessionStorage slot of the user-chosen session name (it lasts for this tab; the web assets keep no persistent storage). */
 const NAME_SLOT = 'atlas.name';
 
 /** Minimum spacing of presence messages; the host drops closer ones (50 ms), so this stays well clear of that. */
@@ -38,7 +39,7 @@ function movesCamera(name, args) {
 
 function readStoredName() {
     try {
-        return typeof localStorage === 'undefined' ? '' : (localStorage.getItem(NAME_SLOT) ?? '');
+        return typeof sessionStorage === 'undefined' ? '' : (sessionStorage.getItem(NAME_SLOT) ?? '');
     } catch {
         return '';
     }
@@ -46,8 +47,8 @@ function readStoredName() {
 
 function writeStoredName(name) {
     try {
-        if (typeof localStorage !== 'undefined') {
-            localStorage.setItem(NAME_SLOT, name);
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(NAME_SLOT, name);
         }
     } catch {
         // Storage can be blocked; the name then only lasts for this page.
@@ -254,6 +255,10 @@ export class App {
         // to whoever started the follow (`followOrigin`), not to the live feed. Noted before the own-origin return below.
         const followedByPeer = typeof data.followOrigin === 'string' && data.followOrigin.startsWith('ui:') && data.followOrigin !== this.socket.origin;
         this._peerFollow = followedByPeer;
+        if (followedByPeer && this.view.follow) {
+            // Another UI took the follow over: a follow kept here would be stale, freeze this camera and cancel theirs when it ended.
+            this.#replaceView({ ...this.view, follow: null }, 'remote');
+        }
         if (data.origin && data.origin === this.socket.origin) {
             return;
         }
@@ -270,12 +275,24 @@ export class App {
         this.#replaceView(this.#mergeRemote(normalizeView(data.view, this.view), takeCamera), 'remote');
     }
 
-    /** `next` with this UI's camera and follow kept, unless `takeCamera`; even then the follow of another UI is never adopted. */
+    /** `next` with this UI's camera and follow kept, unless `takeCamera`; the follow of another UI is never adopted, and no follow is kept while another UI owns it. */
     #mergeRemote(next, takeCamera) {
         if (!takeCamera) {
-            return { ...next, camera: this.view.camera, follow: this.view.follow };
+            return { ...next, camera: this.view.camera, follow: this._peerFollow ? null : this.view.follow };
         }
-        return this._peerFollow ? { ...next, follow: this.view.follow } : next;
+        return this._peerFollow ? { ...next, follow: null } : next;
+    }
+
+    /** True when this UI has a follow that it owns (none is kept while another UI owns the host's follow). */
+    ownsFollow() {
+        return Boolean(this.view.follow) && !this._peerFollow;
+    }
+
+    /** Stops this UI's own follow (a drag or a key flight took the camera); sends nothing when another UI owns the host's follow. */
+    releaseFollow() {
+        if (this.ownsFollow()) {
+            this.patchView({ follow: null });
+        }
     }
 
     #clearPresence() {
@@ -303,10 +320,15 @@ export class App {
         return false;
     }
 
-    /** Sets the display name other sessions see ('' falls back to the host's default), remembers it and publishes it with the next presence message. */
-    setSessionName(name) {
+    /**
+     * Sets the display name other sessions see ('' falls back to the host's default) and publishes it with the next presence message.
+     * The name is remembered for this tab unless `remember` is false (a join link's name applies to that join only).
+     */
+    setSessionName(name, { remember = true } = {}) {
         this.sessionName = cleanName(name);
-        writeStoredName(this.sessionName);
+        if (remember) {
+            writeStoredName(this.sessionName);
+        }
         this._publishPresence();
         this.events.emit('sessionName', this.sessionName);
     }
@@ -413,7 +435,9 @@ export class App {
 
     /** Applies a merge patch locally at once and queues it for the host (about 10 Hz; `immediate` flushes now). */
     patchView(patch, { immediate = false } = {}) {
-        this.#replaceView(normalizeView(mergePatch(this.view, patch), this.view), 'local');
+        const next = normalizeView(mergePatch(this.view, patch), this.view);
+        // A merge patch deletes a null member instead of setting it, so the normalizer would keep the old follow: stop it here.
+        this.#replaceView(patch !== null && typeof patch === 'object' && patch.follow === null ? { ...next, follow: null } : next, 'local');
         this._pending = this._pending ? composePatch(this._pending, patch) : patch;
         this._flushPatch(this);
         if (immediate) {

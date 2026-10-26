@@ -23,6 +23,12 @@ public sealed partial class AtlasServer
 
     private const int MaxMessageBytes = 1024 * 1024;
 
+    /// <summary>
+    /// Invalid presence messages are answered from a token bucket of this many answers per connection, refilled by one per
+    /// <see cref="AtlasServerOptions.PresenceMinInterval"/>; beyond it they are dropped without an answer. A zero interval disables the limit.
+    /// </summary>
+    internal const int PresenceErrorBurst = 16;
+
     private async Task WebSocketAsync(HttpContext http)
     {
         if (!http.WebSockets.IsWebSocketRequest)
@@ -70,9 +76,8 @@ public sealed partial class AtlasServer
             connection = _hub.Add(socket, Guid.NewGuid().ToString("N")[..12]);
 
             // The connection is registered before the view is read, so no change can fall between the hello and the first event;
-            // the version is read first so a view newer than the reported version only produces a repeat the UI ignores.
-            long viewVersion = _context.View.Version;
-            ViewState view = _context.View.Current;
+            // the view, its version and the follow owner come from one snapshot, so they describe the same moment.
+            (ViewState view, long viewVersion, string? followOrigin) = _context.View.Snapshot();
             var hello = new JsonObject
             {
                 ["op"] = "hello",
@@ -80,7 +85,7 @@ public sealed partial class AtlasServer
                 ["version"] = AtlasVersion.Current,
                 ["view"] = view.ToJson(),
                 ["viewVersion"] = viewVersion,
-                ["followOrigin"] = view.FollowGuid is null ? null : _context.View.FollowOrigin,
+                ["followOrigin"] = followOrigin,
                 ["name"] = connection.Name,
                 ["sessions"] = new JsonArray([.. _hub.PresenceSnapshot(connection.Id).Select(p => (JsonNode)p.ToJson())]),
             };
@@ -258,14 +263,19 @@ public sealed partial class AtlasServer
     /// </summary>
     private void HandlePresence(UiConnection connection, JsonObject message, CancellationToken ct)
     {
+        TimeProvider time = _options.Time;
+        long now = time.GetTimestamp();
         if (!TryReadPresence(connection, message, out UiPresence? presence))
         {
-            _ = SendErrorAsync(connection, "bad-request", "A presence message needs an integer 'map' (0 to 4294967295), 'at' as three finite numbers within +-100000, a finite 'yaw', a 'mode' of orbit, fly or top, and a text 'name' when it has one.", ct);
+            // Answering costs a send per frame, so a client that streams bad presence is answered only while its error budget lasts.
+            if (TakePresenceErrorToken(connection, time, now))
+            {
+                _ = SendErrorAsync(connection, "bad-request", "A presence message needs an integer 'map' (0 to 4294967295), 'at' as three finite numbers within +-100000, a finite 'yaw', a 'mode' of orbit, fly or top, and a text 'name' when it has one.", ct);
+            }
+
             return;
         }
 
-        TimeProvider time = _options.Time;
-        long now = time.GetTimestamp();
         if (_options.PresenceMinInterval > TimeSpan.Zero
             && connection.LastPresenceStamp is { } last
             && time.GetElapsedTime(last, now) < _options.PresenceMinInterval)
@@ -277,6 +287,27 @@ public sealed partial class AtlasServer
         connection.Name = presence.Name;
         connection.Presence = presence;
         _hub.BroadcastPresence(presence);
+    }
+
+    /// <summary>True when an invalid presence message may be answered now. Runs on the connection's receive loop, the only writer of the bucket.</summary>
+    private bool TakePresenceErrorToken(UiConnection connection, TimeProvider time, long now)
+    {
+        TimeSpan interval = _options.PresenceMinInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return true;
+        }
+
+        double tokens = connection.PresenceErrorTokens;
+        if (connection.LastPresenceErrorStamp is { } last)
+        {
+            tokens = Math.Min(PresenceErrorBurst, tokens + (time.GetElapsedTime(last, now) / interval));
+        }
+
+        connection.LastPresenceErrorStamp = now;
+        bool allowed = tokens >= 1;
+        connection.PresenceErrorTokens = allowed ? tokens - 1 : tokens;
+        return allowed;
     }
 
     /// <summary>

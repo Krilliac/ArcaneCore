@@ -91,7 +91,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly WebApplication _app;
     private IDisposable? _events;
-    private Timer? _sweeper;
+    private ITimer? _sweeper;
     private DiscoveryRecord? _discovery;
     private int _port;
     private int _disposed;
@@ -172,7 +172,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
                 ?? throw new InvalidOperationException("The web server reports no listening address.");
             server._port = new Uri(addresses.Addresses.First()).Port;
             server._events = context.Events.Subscribe(server._hub.Broadcast);
-            server._sweeper = new Timer(_ => server._hub.SweepExpired(), null, SweepInterval, SweepInterval);
+            server._sweeper = options.Time.CreateTimer(_ => server.Sweep(), null, SweepInterval, SweepInterval);
             if (options.WriteDiscovery)
             {
                 server._discovery = new DiscoveryRecord(Environment.ProcessId, server._port, server.Token, DateTimeOffset.UtcNow, AtlasVersion.Current, context.Paths.TerrainData, context.Paths.ClientRoot);
@@ -187,6 +187,19 @@ public sealed partial class AtlasServer : IAsyncDisposable
 
         server._log.LogInformation("Atlas listening on {Address} (pid {Pid})", server.BaseAddress, Environment.ProcessId);
         return server;
+    }
+
+    /// <summary>Timer callback: drops expired agent sessions. A fault is logged and the next tick tries again; it never escapes to the timer thread.</summary>
+    private void Sweep()
+    {
+        try
+        {
+            _hub.SweepExpired();
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            _log.LogWarning(e, "Sweeping expired agent sessions failed; it is retried on the next tick.");
+        }
     }
 
     public async ValueTask DisposeAsync()

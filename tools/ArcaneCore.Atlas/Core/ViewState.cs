@@ -383,6 +383,11 @@ public sealed record ViewState(
 public sealed class ViewStore(ViewState initial)
 {
     private readonly Lock _gate = new();
+
+    // Held around the state change and its notifications, so versions are published in order: without it, two threads can
+    // change the view (v5, v6) and then publish v6 first, and a subscriber that drops versions at or below the latest it saw loses v5.
+    // Always taken before _gate, never the other way round.
+    private readonly Lock _publishGate = new();
     private ViewState _current = initial ?? throw new ArgumentNullException(nameof(initial));
     private long _version;
     private string? _followOrigin;
@@ -410,6 +415,15 @@ public sealed class ViewStore(ViewState initial)
         }
     }
 
+    /// <summary>The view, its version and the follow owner read under one lock, so they describe the same moment (a null owner when nothing is followed).</summary>
+    public (ViewState View, long Version, string? FollowOrigin) Snapshot()
+    {
+        lock (_gate)
+        {
+            return (_current, _version, _current.FollowGuid is null ? null : _followOrigin);
+        }
+    }
+
     public ViewState Current
     {
         get
@@ -433,25 +447,48 @@ public sealed class ViewStore(ViewState initial)
     }
 
     /// <summary>Applies a merge patch atomically; <paramref name="origin"/> names the writer (for example <c>ui</c> or <c>mcp</c>).</summary>
+    /// <remarks>
+    /// A UI cannot stop a follow that another UI owns: a patch from a <c>ui:</c> origin that only clears <c>follow</c> while a different
+    /// UI owns it has that member ignored (the rest of the patch still applies). Anything else, including a UI taking the follow over, goes through.
+    /// </remarks>
     public ViewState Patch(JsonObject patch, string origin)
     {
-        ViewState previous;
-        ViewState next;
-        long version;
-        string? followOrigin;
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(patch);
+        lock (_publishGate)
         {
-            previous = _current;
-            next = _current.Apply(patch);
-            _current = next;
-            version = ++_version;
-            followOrigin = NoteFollowLocked(previous, next, origin, patch.ContainsKey("follow"));
-        }
+            ViewState previous;
+            ViewState next;
+            long version;
+            string? followOrigin;
+            lock (_gate)
+            {
+                JsonObject effective = patch;
+                bool followKey = patch.ContainsKey("follow");
+                if (followKey && patch["follow"] is null && _current.FollowGuid is not null && IsPeerUi(_followOrigin, origin))
+                {
+                    effective = (JsonObject)patch.DeepClone();
+                    effective.Remove("follow");
+                    followKey = false;
+                }
 
-        Applied?.Invoke(previous, next, version, origin, followOrigin);
-        Changed?.Invoke(next, version, origin);
-        return next;
+                previous = _current;
+                next = _current.Apply(effective);
+                _current = next;
+                version = ++_version;
+                followOrigin = NoteFollowLocked(previous, next, origin, followKey);
+            }
+
+            Applied?.Invoke(previous, next, version, origin, followOrigin);
+            Changed?.Invoke(next, version, origin);
+            return next;
+        }
     }
+
+    private static bool IsPeerUi(string? owner, string origin)
+        => owner is not null
+            && owner.StartsWith("ui:", StringComparison.Ordinal)
+            && origin.StartsWith("ui:", StringComparison.Ordinal)
+            && !string.Equals(owner, origin, StringComparison.Ordinal);
 
     /// <summary>
     /// Stops the follow when <paramref name="owner"/> is the origin that owns it (a UI that disconnected); the check and the change are one
@@ -459,46 +496,52 @@ public sealed class ViewStore(ViewState initial)
     /// </summary>
     public bool ReleaseFollow(string owner)
     {
-        ViewState previous;
-        ViewState next;
-        long version;
-        lock (_gate)
+        lock (_publishGate)
         {
-            if (_current.FollowGuid is null || !string.Equals(_followOrigin, owner, StringComparison.Ordinal))
+            ViewState previous;
+            ViewState next;
+            long version;
+            lock (_gate)
             {
-                return false;
+                if (_current.FollowGuid is null || !string.Equals(_followOrigin, owner, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                previous = _current;
+                next = _current.Apply(new JsonObject { ["follow"] = null });
+                _current = next;
+                version = ++_version;
+                NoteFollowLocked(previous, next, owner, followKey: true);
             }
 
-            previous = _current;
-            next = _current.Apply(new JsonObject { ["follow"] = null });
-            _current = next;
-            version = ++_version;
-            NoteFollowLocked(previous, next, owner, followKey: true);
+            Applied?.Invoke(previous, next, version, owner, null);
+            Changed?.Invoke(next, version, owner);
+            return true;
         }
-
-        Applied?.Invoke(previous, next, version, owner, null);
-        Changed?.Invoke(next, version, owner);
-        return true;
     }
 
     /// <summary>Replaces the whole view.</summary>
     public ViewState Set(ViewState state, string origin)
     {
         ArgumentNullException.ThrowIfNull(state);
-        ViewState previous;
-        long version;
-        string? followOrigin;
-        lock (_gate)
+        lock (_publishGate)
         {
-            previous = _current;
-            _current = state;
-            version = ++_version;
-            followOrigin = NoteFollowLocked(previous, state, origin, followKey: previous.FollowGuid != state.FollowGuid);
-        }
+            ViewState previous;
+            long version;
+            string? followOrigin;
+            lock (_gate)
+            {
+                previous = _current;
+                _current = state;
+                version = ++_version;
+                followOrigin = NoteFollowLocked(previous, state, origin, followKey: previous.FollowGuid != state.FollowGuid);
+            }
 
-        Applied?.Invoke(previous, state, version, origin, followOrigin);
-        Changed?.Invoke(state, version, origin);
-        return state;
+            Applied?.Invoke(previous, state, version, origin, followOrigin);
+            Changed?.Invoke(state, version, origin);
+            return state;
+        }
     }
 
     /// <summary>
