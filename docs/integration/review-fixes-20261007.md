@@ -2,7 +2,7 @@
 
 Base: `claude/integrate-20261007` at `dd158e71`. Twelve lanes worked through review findings 1-126 in parallel worktrees. Each lane
 branch was merged here with `git merge --no-ff`, one at a time, in the order below. Every lane had a result; none was skipped. The
-vmangos reference used by the lanes and their reviewers is `D:/refs/vmangos`.
+vmangos reference used by the lanes and their reviewers is `<refs-root>/vmangos`.
 
 Status meanings: **fixed** means behaviour changed, with a test that failed before the change (RED) and passes now (GREEN), unless the
 row says otherwise. **already_fixed** means the base already had the fix (the commit named is in the base). **not_a_bug** means the

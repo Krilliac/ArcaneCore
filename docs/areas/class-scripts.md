@@ -1,6 +1,6 @@
 # Class scripts
 
-Status: wave 2, lane `class-scripts` (branch `claude/w2-class-scripts`, built on the proc-engine tip `988c27a1`). Reference: D:\refs\vmangos
+Status: wave 2, lane `class-scripts` (branch `claude/w2-class-scripts`, built on the proc-engine tip `988c27a1`). Reference: <refs-root>\vmangos
 (primary; scripts/spells/*.cpp, Spells/SpellEffects.cpp, Spells/SpellAuras.cpp, UnitAuraProcHandler.cpp, Objects/DynamicObject.cpp), mangos-classic
 where the build 5875 data needs it (Holy Light), the build 5875 `spell_template` rows of the world database for ids, families, flags and effects.
 Every formula cites its vmangos file and line in the code.
@@ -66,7 +66,7 @@ passive spells are skipped; the rank chain is the spell family and name (no `Ski
 ## Talent scripts (lane `tb-t3-talent-class-scripts-pets`)
 
 Talents that vmangos implements as per-spell class scripts. Each is a new file on an existing seam; each test was RED-proved by switching its script off
-(`D:/ArcaneCore-lanes/_logs/tb-t3-talent-class-scripts-pets/red-*.log`).
+(`<lanes-root>/_logs/tb-t3-talent-class-scripts-pets/red-*.log`).
 
 | Talent | What it does | Code | vmangos |
 |---|---|---|---|
@@ -214,9 +214,9 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
   `CounterattackScriptTests` (4); `Pets/TalentPetAuraTests` (8: Soul Link on the imp and the warlock and its unlearn, Soul Link ending with a pet change,
   Master Demonologist's variant by entry at summon and its unlearn, the permanent-pet rule, Spirit Bond on a called hunter pet, the respec removing the
   hunter's pet, a learned talent re-casting the pet aura). The scenario `ClassScriptScenarioTests.Swiftmend_*` runs Swiftmend between two bots.
-- RED evidence for the talent scripts: `D:/ArcaneCore-lanes/_logs/tb-t3-talent-class-scripts-pets/red-*.log` (one per script or hook, each failing on
+- RED evidence for the talent scripts: `<lanes-root>/_logs/tb-t3-talent-class-scripts-pets/red-*.log` (one per script or hook, each failing on
   assertions with the piece switched off).
 - `tests/ArcaneCore.World.Tests/Spells/ClassScriptWiringTests` (the production world spell system carries the scripts) and the playerbot scenarios
   `Playerbots/Scenarios/ClassScriptScenarioTests` (two bots duel: Seal of Righteousness and Judgement; Consecration's ground object reaches the
   opponent's client and ticks on it), with `ScenarioClassDecoders` (SMSG_SPELLNONMELEEDAMAGELOG, SMSG_PERIODICAURALOG).
-- RED evidence: `D:/ArcaneCore-lanes/_logs/w2-class-scripts/red-*.log` (each run with the lane's implementation switched off).
+- RED evidence: `<lanes-root>/_logs/w2-class-scripts/red-*.log` (each run with the lane's implementation switched off).

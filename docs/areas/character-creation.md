@@ -2,8 +2,8 @@
 
 Lane `character-creation-rules` (branch `claude/vw4-character-creation-rules`, base `claude/vw-integration`
 41babaf). Everything below is reimplemented from the behaviour of the references; no reference code or data
-is copied into this repository. `D:\refs\vmangos` is the primary reference, `D:\refs\mangos-classic` the
-cross-check, `D:\refs\wow_messages` (gtker) the wire values, `D:\refs\classic-db` the base data.
+is copied into this repository. `<refs-root>\vmangos` is the primary reference, `<refs-root>\mangos-classic` the
+cross-check, `<refs-root>\wow_messages` (gtker) the wire values, `<refs-root>\classic-db` the base data.
 
 Code: `src/ArcaneCore.World/Characters/Creation/`, `src/ArcaneCore.World/Characters/CharacterNames.cs`,
 `src/ArcaneCore.World/Handlers/CharacterHandlers.cs`, `src/ArcaneCore.Data/Content/Chr/`,
@@ -136,7 +136,7 @@ Each of these needs data or a primitive this lane does not have; none is stubbed
 ## Verification
 
 * No real 1.12.1 client was run against these rules. The appearance check was proven against the client's own CharSections.dbc and
-  CharacterFacialHairStyles.dbc (D:\refs\client-dbc-5875-effective) in `OptionalClientDataRealTests`.
+  CharacterFacialHairStyles.dbc (<refs-root>\client-dbc-5875-effective) in `OptionalClientDataRealTests`.
 * MariaDB and PostgreSQL are not available locally. `CharacterNameUniqueTests` and
   `PlayerCreateActionImporterTests` are theories over `TestDatabases.AvailableProviders` written against the
   real provider semantics (error codes above; the `playercreateinfo_action` table is a plain `CreateTableChange`,

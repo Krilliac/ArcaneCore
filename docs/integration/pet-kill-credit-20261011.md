@@ -1,7 +1,7 @@
 # Pet kill credit continuation — 2026-10-11
 
 Worktree: `claude/w22-pet-xp`, starting at WIP `32ea04ff`; reviewed predecessor `f514b7dc`.
-Reference checkout: `D:/refs/vmangos`, revision `0e3ff01` (read only).
+Reference checkout: `<refs-root>/vmangos`, revision `0e3ff01` (read only).
 Nothing committed or pushed. No live databases, profile files, or server ports were used.
 
 ## Reference rules and root causes
@@ -25,7 +25,7 @@ Nothing committed or pushed. No live databases, profile files, or server ports w
 
 ## RED evidence
 
-Logs are in `D:/ArcaneCore-lanes/_codex/w6/runs/pet-xp/`.
+Logs are in `<lanes-root>/_codex/w6/runs/pet-xp/`.
 
 * `world-red.log`: 18 tests, 17 passed, 1 failed. `AGroupMembersActivePet_RequiresAPlayerToTakeOverTheTap(false)` observed **25 XP** for the group leader when zero was required. This used the rebuilt World.Tests DLL and unmodified WIP production binaries.
 * `game-red.log`: 30 tests, 28 passed, 2 failed. `Provisional_pet_tap_does_not_reward_group_honor` and `Evade_without_a_full_heal_releases_the_honor_tap` each observed an unwanted **488 honor** record. The charmed-victim environmental cases passed. The tested Game DLL was the pre-fix WIP binary.
@@ -34,11 +34,11 @@ Logs are in `D:/ArcaneCore-lanes/_codex/w6/runs/pet-xp/`.
 
 ## Verification
 
-All commands ran from `D:/ArcaneCore-lanes/w22-pet-xp` in PowerShell, with:
+All commands ran from `<lanes-root>/w22-pet-xp` in PowerShell, with:
 
 ```powershell
-$env:ARCANECORE_TEST_TERRAIN_DIR='D:/ArcaneCore-data/terrain-5875'
-$env:ARCANECORE_TEST_DBC_DIR='D:/ArcaneCore-data/client-dbc-5875'
+$env:ARCANECORE_TEST_TERRAIN_DIR='<data-root>/terrain-5875'
+$env:ARCANECORE_TEST_DBC_DIR='<data-root>/client-dbc-5875'
 dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter FullyQualifiedName~HonorKillRewardsTests
 dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter FullyQualifiedName~OwnedKillerRewardTests

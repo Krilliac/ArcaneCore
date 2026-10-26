@@ -1,7 +1,7 @@
 # Operations and performance (ops-perf lane)
 
 Delivered scope, limits and provenance. Reference sources are read-only GPL projects used to
-verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
+verify behaviour; nothing is copied. `<refs-root>\vmangos` is the primary reference.
 
 ## Load benchmark (2026-10-08)
 

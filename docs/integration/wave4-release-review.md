@@ -1,7 +1,7 @@
 # Wave 4 release review (claude/vw5-integration, head 7bcbc95 vs origin/main 7313b9e)
 
 Read-only review. Nothing was built, run or edited except this file. Every finding is from reading the merged tree and, where noted, the vmangos
-sources under D:\refs\vmangos. Provider (MariaDB / PostgreSQL) behaviour is judged from the code and EF/driver semantics, not exercised.
+sources under <refs-root>\vmangos. Provider (MariaDB / PostgreSQL) behaviour is judged from the code and EF/driver semantics, not exercised.
 "Static reasoning" below is never claimed to equal a compiler or test result.
 
 ## Verdict: APPROVE WITH FIXES

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
@@ -65,6 +66,22 @@ internal static class RepoHygieneScanner
         ("MMAP (extracted navmesh tile)", LittleEndian(NavMeshFormat.MmapMagic)),
     ];
 
+    /// <summary>Markdown never names a person or a machine: the repository is public. Each rule is a pattern that must not occur in
+    /// a document; the first-name pattern is assembled from fragments so this file does not itself contain the name.</summary>
+    private static readonly (string Rule, Regex Pattern)[] DocTextRules =
+    [
+        ("per-user Windows profile path (use a placeholder or an ARCANECORE_* variable)", new Regex(@"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]+Users[\\/]|/[a-z]/Users/", RegexOptions.CultureInvariant)),
+        ("host checkout path under a lanes/data/live directory (use <lanes-root>, <data-root>, <live-home>)", new Regex(@"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]+ArcaneCore-", RegexOptions.CultureInvariant)),
+        ("personal first name (say \"the maintainer\")", new Regex(@"\bNat(?:e|han)\b", RegexOptions.CultureInvariant)),
+    ];
+
+    /// <summary>Documents the text rules apply to: every <c>.md</c> except the upstream copyright notice and the generated
+    /// <c>docs/reference/</c> and <c>docs/ops/exception-audit.md</c> (their text comes from source comments).</summary>
+    private static bool IsScannedDocument(string path) =>
+        !path.Equals("THIRD_PARTY_NOTICES.md", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("docs/reference/", StringComparison.OrdinalIgnoreCase)
+        && !path.Equals("docs/ops/exception-audit.md", StringComparison.OrdinalIgnoreCase);
+
     private static readonly string[] SqlDumpBanners = ["-- MySQL dump", "-- MariaDB dump", "-- Host:", "LOCK TABLES `"];
 
     /// <summary>Applies every rule to each repo-relative path (files read from <paramref name="root"/>).</summary>
@@ -106,6 +123,18 @@ internal static class RepoHygieneScanner
             if (probe.AsSpan().StartsWith(bytes))
             {
                 yield return $"{name} magic header";
+            }
+        }
+
+        if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase) && IsScannedDocument(path))
+        {
+            string doc = File.ReadAllText(full);
+            foreach ((string rule, Regex pattern) in DocTextRules)
+            {
+                if (pattern.IsMatch(doc))
+                {
+                    yield return rule;
+                }
             }
         }
 

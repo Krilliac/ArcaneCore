@@ -333,7 +333,7 @@ running does not start another), so a long `Retry-After` wait or a slow GitHub n
 
 Everything that leaves the process (issue titles and bodies, comments, the dry-run files, the exports, chat) goes through
 `PlayerbotQaRedactor`: GitHub tokens (`ghp_`, `github_pat_`, ...), `Bearer` headers, `sk-` keys, `key=value` secrets, the literal
-token in use, IPv4 and IPv6 addresses, e-mail addresses, guids, `C:\Users\<name>`-style folders, and the names of all current bots and
+token in use, IPv4 and IPv6 addresses, e-mail addresses, guids, per-user profile folders, and the names of all current bots and
 accounts (refreshed every pass; names under 3 characters are ignored). Titles are limited to a plain character set and 120
 characters; bodies are cut at a line boundary under 60000 characters and always keep the marker. GitHub error replies are redacted and
 cut to 300 characters before they reach an exception or a log.

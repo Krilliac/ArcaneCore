@@ -1,7 +1,7 @@
 # Social wave 3: guild charters, tabard/emblem, guild parity, chat gate
 
 Branch `claude/vw4-social-guild-petitions`, based on `claude/vw-integration` at `41babaf`. Reference
-precedence as in [areas/social.md](../areas/social.md): vmangos first (`D:\refs\vmangos`), then
+precedence as in [areas/social.md](../areas/social.md): vmangos first (`<refs-root>\vmangos`), then
 cmangos-classic, gtker wow_messages, classic-db. Every rule in code cites the vmangos file and line it follows;
 nothing was copied from the references.
 

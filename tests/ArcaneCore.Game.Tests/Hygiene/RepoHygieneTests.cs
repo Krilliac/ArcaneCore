@@ -145,6 +145,33 @@ public sealed class RepoHygieneTests : IDisposable
         Assert.Contains(ScanOne(path), v => v.Path == path);
     }
 
+    private const string UserDir = "C:\\" + "Users\\someone\\x.log";
+    private const string FirstName = "Nat" + "han";
+
+    [Theory]
+    [InlineData("notes/a.md", "see " + UserDir)]
+    [InlineData("notes/a.md", "see C:/Users/someone/x.log")]
+    [InlineData("notes/a.md", "see /c/Users/someone/x.log")]
+    [InlineData("README.md", "profile D:\\ArcaneCore-lanes\\fx")]
+    [InlineData("notes/a.md", "owner " + FirstName + " decides")]
+    [InlineData("notes/a.md", "owner Nat" + "e's call")]
+    public void MarkdownNamingAPersonOrMachine_IsRefused(string path, string text)
+    {
+        Plant(path, Encoding.UTF8.GetBytes(text));
+        Assert.Contains(ScanOne(path), v => v.Path == path);
+    }
+
+    [Theory]
+    [InlineData("notes/a.md", "<live-profile> via ARCANECORE_LIVE_PROFILE, owner is the maintainer, Nathanael and Natesville are other words")]
+    [InlineData("THIRD_PARTY_NOTICES.md", "Copyright " + FirstName + " " + UserDir)]
+    [InlineData("docs/reference/configuration.md", "D:\\refs\\vmangos " + FirstName)]
+    [InlineData("src/Note.cs", "// " + FirstName + " " + UserDir)]
+    public void MarkdownText_ExemptionsAndNeutralWording_AreAllowed(string path, string text)
+    {
+        Plant(path, Encoding.UTF8.GetBytes(text));
+        Assert.Empty(ScanOne(path));
+    }
+
     [Fact]
     public void OrdinarySourceAndSmallSql_AreAllowed()
     {

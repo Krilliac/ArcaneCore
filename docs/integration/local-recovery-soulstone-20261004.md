@@ -1,7 +1,7 @@
 # Local source recovery and Soulstone requests, 2026-10-04
 
 Development resumes on `codex/server-continue-20261004` in
-`D:\ArcaneCore-continue-20261004`, based on current GitHub `main` at
+`<continue-checkout>`, based on current GitHub `main` at
 `7313b9eb089197b253dc51bd8bb5ceb803adcc6b`. The older local acceptance
 checkout remains pinned to `f8ae6e8` and was preserved.
 
@@ -79,7 +79,7 @@ git diff --check
 ```
 
 Local logs and recovery records live under
-`C:\Users\Nathan\Documents\Codex\2026-10-04\c\work`.
+`<work-dir>`.
 The handoff and portable source patch are in the sibling `outputs` directory.
 All source changes remain local and uncommitted; no push, merge, deployment,
 database upgrade, or real-client session occurred.
