@@ -703,6 +703,20 @@ internal static class PlayerbotNavigation
             && IsOutdoorsOnSurface(map, here);
     }
 
+    /// <summary>
+    /// Whether the map's walking region graph (steep slopes excluded) puts the bot and <paramref name="goal"/> in different components,
+    /// with none of <see cref="IsUnreachableOnFoot"/>'s outdoors, fragment or size exemptions: the caller wants "is there possibly a walk",
+    /// not "is it safe to give up". False when the graph is not built yet or either place is on no region.
+    /// </summary>
+    internal static bool InOtherWalkingComponent(Player player, Vector3 goal)
+    {
+        if (!goal.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        int from = nav.RegionAt(graph, PlayerbotMotion.CurrentPosition(player), WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        return from >= 0 && to >= 0 && graph.ComponentOf(from) != graph.ComponentOf(to);
+    }
+
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
     internal const float MinTowardChunkYards = 24f;
 

@@ -444,11 +444,17 @@ internal static partial class PlayerbotTram
         return leg;
     }
 
-    private static bool CanReachEntranceApproach(Player player, Vector3 approach)
+    /// <summary>
+    /// Whether a walk to <paramref name="approach"/> is worth committing the trip to. Within 150 yd a trial plan decides; beyond it the
+    /// plan is too costly to run, so the region graph decides: a start in another walking component than the approach has no walk there
+    /// (live: 128 no-way-to-entrance failures from Coldridge Valley and from indoors in Ironforge, #1499). Unknown (graph not built, no
+    /// region) stays true.
+    /// </summary>
+    internal static bool CanReachEntranceApproach(Player player, Vector3 approach)
     {
         Vector3 at = new(player.X, player.Y, player.Z);
         if (Vector2.Distance(Flat(at), Flat(approach)) > 150f)
-            return true;
+            return !PlayerbotNavigation.InOtherWalkingComponent(player, approach);
         var options = new PlayerbotOptions();
         if (!PlayerbotNavigation.TryPlanToward(player, approach, options, out PlayerbotRoute? route) || route is null)
             return false;
