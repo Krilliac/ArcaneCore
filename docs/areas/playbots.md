@@ -507,11 +507,14 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
   reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
-  (2000): the approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, and the walk
-  ends after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). This is a coarse guard, not the fix: of the
-  "no way to the Great Lift" failures that day those that began more than 2000 yards out (most of them in the 2026-10-25 live log) are covered and those inside it (among them the issue's own
-  -3557,-2240) are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, and the "in the shaft pit" failures at the lift itself are not. The journey or the walk leg
-  brings the bot within reach and the trip begins on a later think (all lifts share the rule). A failed ride is not tried again for 10 minutes.
+  (2000), nor farther than `ElevatorNetwork.NearLiftYards` (150): a trip is the local ride, and begun from hundreds of yards out its
+  approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, so the walk ended
+  after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482: six failures 889 to 1473 yards
+  out, inside `MaxRouteYards`). Beyond 150 yards `TryBegin` hands the caller a plain route to the landing beside the lift's stop (when
+  `PlanToward` finds one) and the trip begins on a later think, once the bot is near (all lifts share the rule). This moves the approach
+  out of the trip; it does not make the canyon floor of Thousand Needles any easier to cross, so a bot there whose plan is refused is
+  now reported by its caller as an unreachable goal instead of as `bot-elevator/trip-failed`. The "in the shaft pit" failures at the lift
+  itself and the Undercity ones are not touched. A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a

@@ -227,9 +227,10 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>)
-    /// began the trip with a goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s no-progress bound, failing the trip. It begins
-    /// none until it is within reach; then it does.
+    /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>),
+    /// or farther than <see cref="ElevatorNetwork.NearLiftYards"/> (the live failures began 889 to 1473 yards out), began the trip with a
+    /// goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s
+    /// no-progress bound, failing the trip. It begins none until it is within <see cref="ElevatorNetwork.NearLiftYards"/>; then it does.
     /// </summary>
     [Fact]
     public async Task ABotBeyondOneRoutesReachOfTheLift_BeginsNoTrip_UntilItIsWithinReach()
@@ -243,7 +244,15 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
             $"a trip began {far:F0} yards from the lift");
         Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
 
-        await world.PlaceAsync(new Vector3(lift.Centre.X + (options.MaxRouteYards - 500f), lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        // Inside one route's reach but beyond the lift's near range (the 889 to 1473 yard failures of #1482): no trip either.
+        float mid = ElevatorNetwork.NearLiftYards + 850f;
+        Assert.True(mid < options.MaxRouteYards, "the check proves nothing: the mid distance is not inside MaxRouteYards");
+        await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
+            $"a trip began {mid:F0} yards from the lift, beyond NearLiftYards");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+
+        await world.PlaceAsync(new Vector3(lift.Centre.X + (ElevatorNetwork.NearLiftYards - 50f), lift.Centre.Y, ElevatorTestWorld.TopFloor));
         Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
             "no trip began within reach of the lift");
     }

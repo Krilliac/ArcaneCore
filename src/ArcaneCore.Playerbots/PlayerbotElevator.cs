@@ -647,14 +647,26 @@ internal static partial class PlayerbotElevator
         if (NetworkOf(session) is not { } network) return false;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
-        // A bot farther from the lift than one route reaches is not sent at it: the approach (ToStop, Walk) plans each leg with
-        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift, and the walk ends after MaxRefusedPlans
-        // refusals in a row or the 60 s no-progress bound. This is a coarse guard, not the fix: of the "no way to the Great Lift"
-        // failures of bot QA #1482 (2026-10-25), those that began more than 2000 yards out are covered, most of that day's; those that
-        // began inside it are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, nor the "in the shaft pit" trip failures at the lift itself. The journey or
-        // the walk leg brings the bot within reach first, and the trip begins on a later think. Every lift shares this (a mesa top is
-        // always within reach of its lifts).
+        // A bot farther from the lift than one route reaches is not sent at it: O(1) rejection before any path query.
+        // Within that reach but beyond ElevatorNetwork.NearLiftYards it is not sent at it either: a trip is the local ride (ToStop,
+        // Waiting, Aboard, Drop), not the journey to the lift. Begun from hundreds of yards out, ToStop plans each leg with
+        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift (the canyon floor of Thousand Needles under
+        // the Great Lift), and the walk ends after MaxRefusedPlans refusals in a row or the 60 s no-progress bound: the "no way to the
+        // Great Lift" failures of bot QA #1482 that began 889 to 1473 yards out. The bot walks to the lift's landing as an ordinary route
+        // (returned in walk, which the callers walk instead of planning again) and the trip begins on a later think, once it is near.
         if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > options.MaxRouteYards) return false;
+        if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > ElevatorNetwork.NearLiftYards)
+        {
+            Vector3 stop = choice.Lift.Cars[0].At(choice.From);
+            Vector3 approach = LandingBeside(map, stop, bot) ?? stop;
+            StrongBox<TileWait> approachTiles = TileWaits.GetValue(player, static _ => new StrongBox<TileWait>());
+            if (PlayerbotNavigation.PlanToward(player, approach, options, ref approachTiles.Value, now, out PlayerbotRoute? approachRoute) == PlanOutcome.Route)
+            {
+                walk = approachRoute;
+            }
+
+            return false;
+        }
         // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
         // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
         PlanOutcome directPlan = PlanOutcome.Refused;
