@@ -80,7 +80,7 @@ public sealed partial class SummonService : ISpellSummonSink
                 && (!DetachedPersistenceConfigured || DetachedPersistenceSupported))
             {
                 QueueDetachedPetSave(player);
-                Unsummon(pet);
+                Unsummon(pet, "owner logging out");
             }
         });
     }
@@ -124,13 +124,15 @@ public sealed partial class SummonService : ISpellSummonSink
     /// Remove a summon from the world: the owner's pet link for a pet (vmangos Pet::Unsummon),
     /// then the creature itself.
     /// </summary>
-    public void Unsummon(Creature creature)
+    public void Unsummon(Creature creature, string reason = "unspecified")
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (creature.Summon is not { } links)
         {
             return;
         }
+
+        LogUnsummon(creature, links, reason);
 
         Unit? owner = creature.GetOwner();
         Map? map = creature.Map;
@@ -147,6 +149,24 @@ public sealed partial class SummonService : ISpellSummonSink
 
         map?.Pets?.Forget(creature);
         creature.System?.Despawn(creature);
+    }
+
+    /// <summary>
+    /// Every pet that goes away says why: a pet vanishing without a trace (the loyalty runaway, a leash, a dismiss) cannot otherwise be told
+    /// apart from a bug. A pet is logged at Information, a guardian, mini pet or wild summon at Debug (they come and go all the time).
+    /// </summary>
+    private void LogUnsummon(Creature creature, SummonLinks links, string reason)
+    {
+        uint owner = creature.OwnerGuid.Low;
+        uint number = links.Charm?.PetNumber ?? 0;
+        if (links.Kind == SummonKind.Pet)
+        {
+            _logger.LogInformation("pet unsummoned: entry {Entry} number {PetNumber} owner {OwnerGuid} reason {Reason}", creature.Entry, number, owner, reason);
+        }
+        else
+        {
+            _logger.LogDebug("summon unsummoned: kind {Kind} entry {Entry} owner {OwnerGuid} reason {Reason}", links.Kind, creature.Entry, owner, reason);
+        }
     }
 
     /// <summary>

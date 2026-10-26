@@ -327,7 +327,7 @@ public sealed class PetMapSystem : IMapUpdater
         // the new map (PetTeleportFollow, vmangos UnsummonPetTemporaryIfAny); guardians and mini pets stay gone.
         foreach (Creature creature in SummonsOf(player).ToArray())
         {
-            _service?.Unsummon(creature);
+            _service?.Unsummon(creature, "owner left the map");
         }
     }
 
@@ -356,7 +356,7 @@ public sealed class PetMapSystem : IMapUpdater
                 // TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN: unsummoned once out of combat; a dead one is left to its corpse.
                 if (wild.IsAlive && !wild.Combat.IsInCombat)
                 {
-                    _service?.Unsummon(wild);
+                    _service?.Unsummon(wild, "summon duration ended");
                 }
 
                 return;
@@ -391,7 +391,7 @@ public sealed class PetMapSystem : IMapUpdater
 
             if (_service is { } service)
             {
-                service.UnsummonReturningReagents(pet);
+                service.UnsummonReturningReagents(pet, "owner gone, pet left behind or pet link lost");
             }
 
             return;
@@ -399,7 +399,7 @@ public sealed class PetMapSystem : IMapUpdater
 
         if (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid)
         {
-            _service?.Unsummon(pet); // replaced by another pet: not the owner's current one, so not saved
+            _service?.Unsummon(pet, "replaced by another pet"); // replaced by another pet: not the owner's current one, so not saved
             return;
         }
 
@@ -410,11 +410,11 @@ public sealed class PetMapSystem : IMapUpdater
             if (links.Kind == SummonKind.Pet)
             {
                 _service?.QueueCurrentPetSave(deadOwner);
-                _service?.UnsummonReturningReagents(pet); // RemovePet(PET_SAVE_REAGENTS)
+                _service?.UnsummonReturningReagents(pet, "owner died"); // RemovePet(PET_SAVE_REAGENTS)
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, "owner dead (mini pet or guardian)");
             }
 
             return;
@@ -430,7 +430,7 @@ public sealed class PetMapSystem : IMapUpdater
                 {
                     _service?.QueueCurrentPetSave(player);
                 }
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, "corpse decayed");
             }
 
             return;
@@ -443,7 +443,7 @@ public sealed class PetMapSystem : IMapUpdater
             {
                 _service?.QueueCurrentPetSave(player);
             }
-            _service?.Unsummon(pet);
+            _service?.Unsummon(pet, "owner dead and pet out of combat");
             return;
         }
 
@@ -462,7 +462,7 @@ public sealed class PetMapSystem : IMapUpdater
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, "summon duration ended");
             }
         }
     }

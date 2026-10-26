@@ -118,7 +118,7 @@ public sealed partial class SummonService
     /// the pet is unsummoned. Used when the owner dies (Player::SetDeathState, Player.cpp:1527) and when the pet loses its owner or is
     /// left behind (Pet::Update, Pet.cpp:668-674).
     /// </summary>
-    internal void UnsummonReturningReagents(Creature pet)
+    internal void UnsummonReturningReagents(Creature pet, string reason = "unspecified")
     {
         if (pet.Summon is { Kind: SummonKind.Pet } links && pet.GetOwner() is Player owner && links.SpellId != 0
             && _spells?.Store.Get(links.SpellId) is { } spell)
@@ -129,7 +129,7 @@ public sealed partial class SummonService
             }
         }
 
-        Unsummon(pet);
+        Unsummon(pet, reason);
     }
 
     private sealed record SpiritHealerPet(uint Entry, uint SpellId, uint PetNumber, bool Hunter);

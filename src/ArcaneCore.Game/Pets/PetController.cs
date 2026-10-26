@@ -638,7 +638,7 @@ public sealed partial class PetController
             _summons.ForgetPetForSpiritHealer(player); // PET_SAVE_AS_DELETED: "do not rez the pet in BG"
         }
 
-        _summons.Unsummon(pet);
+        _summons.Unsummon(pet, "abandoned or dismissed by the owner");
     }
 
     // --- responses (vmangos Unit::SendPet*) ------------------------------------------------------------------

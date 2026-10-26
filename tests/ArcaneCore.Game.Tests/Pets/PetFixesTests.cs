@@ -5,6 +5,8 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.Pets.PetTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -194,5 +196,106 @@ public sealed class PetFixesTests
         Assert.Equal(PowerType.Focus, pet.PowerType);
         Assert.Equal((byte)Class.Warrior, pet.GetByte(UpdateFields.UnitFieldBytes0, 1));
         Assert.Equal((byte)2, pet.GetByte(UpdateFields.UnitFieldBytes0, 2));
+    }
+
+    // --- E: runaway and loyalty -------------------------------------------------------------------------
+
+    private const uint BeastEntry = 5241;
+    private const uint DismissSpell = 991003;
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<string> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Lines.Add(formatter(state, exception));
+    }
+
+    private static PetTestKit BeastKit(CapturingLogger logger) => new(
+        [
+            Spell(DismissSpell, Effect(SpellEffectName.DismissPet, 0)),
+            Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0)),
+        ],
+        extraTemplates:
+        [
+            CreatureTestKit.Template(BeastEntry, b =>
+            {
+                b.MinLevel = 20;
+                b.MaxLevel = 20;
+                b.MinLevelHealth = 100;
+                b.MaxLevelHealth = 100;
+                b.Faction = 14;
+            }) with { CreatureType = SummonService.CreatureTypeBeast, TypeFlags = SummonService.TypeFlagTameable, Family = 1 },
+        ],
+        logger: logger);
+
+    private static (Player Hunter, FakeSession Session, Creature Pet) TameBeast(PetTestKit kit)
+    {
+        (Player hunter, FakeSession session) = kit.AddPlayer(1);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        hunter.Level = 30;
+        Creature beast = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(BeastEntry)!, 3, 0, 0, 0);
+        return (hunter, session, Assert.IsType<Creature>(kit.Service.TameCreature(hunter, beast, 1515)));
+    }
+
+    [Fact]
+    public void HunterPet_SurvivesItsTargetEvading_AndCallPetStillWorksAfterADismiss()
+    {
+        var logger = new CapturingLogger();
+        using PetTestKit kit = BeastKit(logger);
+        (Player hunter, FakeSession session, Creature pet) = TameBeast(kit);
+        Creature enemy = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(NpcCasterEntry)!, 8, 5, 83.5f, 0);
+        kit.Controller.HandleCommand(pet, CommandState.Attack, enemy);
+        Assert.Same(enemy, pet.Combat.Victim);
+
+        kit.Creatures.EnterEvadeMode(enemy);
+        kit.Run(3_000);
+
+        Assert.Same(pet, kit.Creatures.FindCreature(pet.Guid));
+        Assert.Equal(pet.Guid, hunter.PetGuid);
+        Assert.DoesNotContain(logger.Lines, l => l.Contains("ran away", StringComparison.Ordinal));
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetBroken);
+
+        uint number = pet.Summon!.Charm!.PetNumber;
+        kit.Cast(hunter, DismissSpell);
+        Assert.True(hunter.PetGuid.IsEmpty);
+        session.Clear();
+        kit.Cast(hunter, CallPetSpell);
+
+        Creature called = Assert.Single(kit.Creatures.Creatures, c => c.IsPet);
+        Assert.Equal(number, called.Summon!.Charm!.PetNumber);
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetTameFailure);
+    }
+
+    [Fact]
+    public void UnfedRebelliousPet_RunsAway_WithABrokenPacketALogLineAndNoPetToCall()
+    {
+        var logger = new CapturingLogger();
+        using PetTestKit kit = BeastKit(logger);
+        (Player hunter, FakeSession session, Creature pet) = TameBeast(kit);
+        uint number = pet.Summon!.Charm!.PetNumber;
+        PetLoyalty.Restore(pet, PetLoyalty.Rebellious, 10, 0);
+        pet.SetUInt32(UpdateFields.UnitFieldPower5, 0);
+        session.Clear();
+
+        kit.Run(12_000);
+
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetBroken);
+        string line = Assert.Single(logger.Lines, l => l.Contains("ran away", StringComparison.Ordinal));
+        Assert.Contains($"pet number {number}", line, StringComparison.Ordinal);
+        Assert.Contains($"entry {BeastEntry}", line, StringComparison.Ordinal);
+        Assert.Contains(logger.Lines, l => l.Contains("pet unsummoned", StringComparison.Ordinal) && l.Contains("loyalty runaway", StringComparison.Ordinal));
+        Assert.True(hunter.PetGuid.IsEmpty);
+
+        session.Clear();
+        kit.Cast(hunter, CallPetSpell);
+
+        Assert.Equal((byte)PetTameFailureReason.NoPetAvailable,
+            Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetTameFailure).Payload[0]);
+        Assert.DoesNotContain(kit.Creatures.Creatures, c => c.IsPet);
     }
 }

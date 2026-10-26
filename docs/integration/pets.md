@@ -346,3 +346,8 @@ sibling `pet_levelstats_copy` table is ignored, levels outside 1..60 and creatur
 importer (Imp 416 learns Firebolt 3110, and so on); it deletes and re-inserts only those seven entries. `pet_levelstats` is not shipped
 as SQL (about 1,560 rows of GPL classic-db data): run the importer for it. With either table empty `PetsFeature` logs a warning at
 start-up. Hunter Growl is not in `petcreateinfo_spell`: a freshly tamed pet learns it through Beast Training.
+
+Loyalty and runaway: the happiness states split at vmangos `HAPPINESS_LEVEL_SIZE` 333000 and 666000 (`Pet.h:130`, `Pet.cpp:870-877`). A Rebellious pet
+whose loyalty runs out is deleted (`SMSG_PET_BROKEN`, `Unsummon(PET_SAVE_AS_DELETED)`) and the server now logs "hunter pet ran away" (character, pet
+number, entry, loyalty level, happiness) at Information. Every pet unsummon logs its reason (`SummonService.Unsummon(creature, reason)`);
+guardians, mini pets and wild summons log at Debug.

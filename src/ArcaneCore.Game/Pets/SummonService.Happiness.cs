@@ -16,6 +16,9 @@ public sealed partial class SummonService
     public const int LoyaltyPeriodMs = 12_000;
     public const uint HappinessMax = 1_050_000;
 
+    /// <summary>vmangos HAPPINESS_LEVEL_SIZE (Pet.h:130): the happiness bar is split at 333000 and 666000, not at a third of the maximum.</summary>
+    public const uint HappinessLevelSize = 333_000;
+
     public enum HappinessState : byte
     {
         Unhappy = 1,
@@ -25,7 +28,7 @@ public sealed partial class SummonService
 
     /// <summary>vmangos Pet::GetHappinessState.</summary>
     public static HappinessState StateOf(uint happiness)
-        => happiness < HappinessMax / 3 ? HappinessState.Unhappy : happiness < HappinessMax / 3 * 2 ? HappinessState.Content : HappinessState.Happy;
+        => happiness < HappinessLevelSize ? HappinessState.Unhappy : happiness >= HappinessLevelSize * 2 ? HappinessState.Happy : HappinessState.Content;
 
     /// <summary>vmangos Pet::LooseHappiness: the happiness a tick takes at <paramref name="loyaltyLevel"/> (×1.5 in combat).</summary>
     public static int HappinessLoss(int loyaltyLevel, bool inCombat)
@@ -98,10 +101,13 @@ public sealed partial class SummonService
             return true;
         }
 
+        // vmangos Pet::ModifyLoyalty: the pet "runs away" (SMSG_PET_BROKEN, Unsummon(PET_SAVE_AS_DELETED)). It is deleted for good, so say so.
+        _logger.LogInformation("hunter pet ran away: character {CharacterId} pet number {PetNumber} entry {Entry} loyalty level {LoyaltyLevel} happiness {Happiness}",
+            owner.Guid.Low, pet.Summon?.Charm?.PetNumber ?? 0, pet.Entry, PetLoyalty.Level(pet), pet.GetUInt32(UpdateFields.UnitFieldPower5));
         owner.Session.Send(WorldOpcode.SmsgPetBroken, ReadOnlySpan<byte>.Empty);
         QueueDeletePet(owner);
         ForgetPetForSpiritHealer(owner);
-        Unsummon(pet);
+        Unsummon(pet, "loyalty runaway");
         return false;
     }
 }
