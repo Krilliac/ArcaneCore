@@ -289,8 +289,10 @@ public sealed class PlayerbotExploreStallFixTests
             bool respawned = false;
             Assert.True(await world.ThinkUntilAsync(10_000, () => respawned, each: () =>
             {
-                // The moment the kill is counted the creature comes back (before its corpse is gone), as a spawn's respawn does: same object, same guid.
-                if (!respawned && world.Brain.LootedKills >= expected && !mob.IsAlive)
+                // Once the kill is counted and the bot is done with the corpse (loot released, target dropped) the creature comes back, as a
+                // spawn's respawn does after the corpse is gone: same object, same guid. (Respawning it while the bot still waits on the
+                // loot window would leave the bot in that wait and drop the target at its end, which no real respawn can do.)
+                if (!respawned && world.Brain.LootedKills >= expected && !mob.IsAlive && world.Brain.TargetEntry == 0)
                 {
                     Assert.Equal(expected, world.Brain.LootedKills);
                     // What a spawn's respawn does to the object (CreatureMapSystem.Respawn): the same creature, the same guid, alive again.
