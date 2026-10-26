@@ -235,6 +235,42 @@ public sealed class PetFixesTests
         Assert.Equal(number, back.GetUInt32(UpdateFields.UnitFieldPetnumber));
     }
 
+    private static PetLevelStats StatsRow(uint entry, uint health)
+        => new(entry, 1, health, 0, 0, 0, 0, 1, 1, 1, 1, 1);
+
+    [Theory]
+    [InlineData(true, 700u)]   // vmangos Pet.cpp:1288: creatureId = HUNTER_PET ? 1 : entry
+    [InlineData(false, 0u)]
+    public async Task HunterPetStats_ComeFromCreatureId1_AndFallBackToTheOwnEntry(bool withSharedRow, uint sharedHealth)
+    {
+        PetLevelStats[] rows = withSharedRow ? [StatsRow(1, sharedHealth), StatsRow(PetEntry, 300)] : [StatsRow(PetEntry, 300)];
+        using PetTestKit kit = new([Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))], new PetContent(rows, []));
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 804, PetEntry, 1, 0, 50, 0, 0, 1, [], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+
+        kit.Cast(owner, CallPetSpell);
+
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        Assert.Equal(withSharedRow ? 700u : 300u, pet.MaxHealth);
+    }
+
+    [Fact]
+    public void AWarlockPet_IgnoresTheHunterRowsOfCreatureId1()
+    {
+        var content = new PetContent([StatsRow(1, 700), StatsRow(ImpEntry, 300)], [new PetCreateSpells(ImpEntry, [FireboltRank1])]);
+        using var kit = new PetTestKit(ImpSpells(), content);
+        kit.Service.InstallDemons(kit.Spells.System);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.Level = 10;
+
+        kit.Cast(owner, SummonImpSpell);
+
+        Assert.Equal(300u, Assert.Single(kit.Creatures.Creatures, c => c.IsPet).MaxHealth);
+    }
+
     // --- E: runaway and loyalty -------------------------------------------------------------------------
 
     private const uint BeastEntry = 5241;
