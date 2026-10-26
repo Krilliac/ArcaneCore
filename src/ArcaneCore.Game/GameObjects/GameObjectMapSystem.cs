@@ -887,6 +887,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
+        if (result is GameObjectUseResult.Unsupported or GameObjectUseResult.NotUsable or GameObjectUseResult.Locked)
+        {
+            ReportUseDefect(player, guid, go, result);
+        }
+
         long nowMs = _clockMs;
         if (_refusedUseAttempts.Count >= MaxTrackedRefusedUseAttempts)
         {
@@ -916,6 +921,48 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _refusedUseAttempts[key] = state;
+    }
+
+    /// <summary>Anomaly code of a use refused for a reason the content or the server is at fault for, not the player.</summary>
+    public const string UseFailedCode = "use-failed";
+
+    /// <summary>
+    /// Report a refusal that is a defect rather than a player mistake: an object type the server cannot use at all (Unsupported), a
+    /// chest/door/button/goober refused although it is not flagged non-interactive or in use (NotUsable), or a lock id with no
+    /// Lock.dbc row (Locked). TooFar, Dead, NeedsQuest, MissingKey, SkillTooLow, InUse, LevelTooLow, Immune, NotFound and OnCooldown are the
+    /// player's doing and never reach here. Strings are built only when a report is due; ids and guid low only, no names.
+    /// </summary>
+    private void ReportUseDefect(Player player, ObjectGuid guid, GameObject? go, GameObjectUseResult result)
+    {
+        if (go is null)
+        {
+            return;
+        }
+
+        string why;
+        switch (result)
+        {
+            case GameObjectUseResult.Unsupported:
+                why = "no handler for the object's type or its loot is unavailable";
+                break;
+            case GameObjectUseResult.NotUsable
+                when go.Type is GameObjectType.Chest or GameObjectType.Door or GameObjectType.Button or GameObjectType.Goober
+                    && ((uint)go.Flags & 0x11u) == 0 && go.LootState != GameObjectLootState.NotReady:
+                why = "an interactable object is not flagged unusable yet refuses the use";
+                break;
+            case GameObjectUseResult.Locked when GameObjectLocks.LockIdOf(go.Template) is var lockId and not 0 && _content.FindLock(lockId) is null:
+                why = $"lock {lockId} has no lock_template row";
+                break;
+            default:
+                return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "gameobject",
+            UseFailedCode,
+            $"gameobject entry {go.Entry} type {go.Template.Type}",
+            $"use refused ({result}): {why}; spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} guid {guid.Low} map {Map.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}; player guid {player.Guid.Low}",
+            AnomalySeverity.Warning);
     }
 
     /// <summary>

@@ -6,6 +6,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -174,6 +175,11 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         if (check.Result != SpellCastResult.CastOk)
         {
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(context.Spell.Id, check.Result));
+            if (go is not null)
+            {
+                ReportOpenNoEffect(context, player, go, $"the effect-time lock check refused with {check.Result} and only a cast result was sent");
+            }
+
             return;
         }
 
@@ -202,6 +208,13 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0,
                 (uint)Math.Max(0, SimpleValue(effect)), rollsSkill ? RollFor : null)
                 ?? GameObjectUseResult.Unsupported;
+            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && player.Map is { InstanceId: 0 } openMap
+                && Objects?.FindSystem(openMap)?.Loot?.OpenLootOf(player)?.Source != go.Guid)
+            {
+                // A dungeon chest (instance map) says Ok when its generation is accepted and opens the window later, so it is exempt.
+                ReportOpenNoEffect(context, player, go, "the open returned Ok for a chest but the player has no loot window on it");
+            }
+
             if (opened != GameObjectUseResult.Ok)
             {
                 Logger.LogInformation(
@@ -230,6 +243,23 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         {
             playerSkills.UpdateGather(check.SkillId, pure, (uint)check.RequiredSkill);
         }
+    }
+
+    /// <summary>Anomaly code of an open-lock effect on a game object that left the player without any visible result.</summary>
+    internal const string OpenNoEffectCode = "open-no-effect";
+
+    /// <summary>
+    /// Report (Error, subsystem <c>gameobject</c>) an open-lock cast on a game object that ended with neither a loot window nor a client-visible
+    /// refusal. Called from failure branches only, so the strings are built only then. Ids and guid low only, no names.
+    /// </summary>
+    private static void ReportOpenNoEffect(SpellEffectContext context, Player player, GameObject go, string why)
+    {
+        AnomalyLedger.Shared.Report(
+            "gameobject",
+            OpenNoEffectCode,
+            $"gameobject entry {go.Entry} spell {context.Spell.Id}",
+            $"{why}; type {go.Type}, spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}, guid {go.Guid.Low}, lock {GameObjectLocks.LockIdOf(go.Template)}, map {go.MapId}, caster guid {player.Guid.Low}",
+            AnomalySeverity.Error);
     }
 
     /// <summary>

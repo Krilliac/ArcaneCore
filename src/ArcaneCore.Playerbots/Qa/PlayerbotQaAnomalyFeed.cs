@@ -16,6 +16,18 @@ internal sealed class PlayerbotQaAnomalyFeed(
     AnomalySeverity minSeverity = AnomalySeverity.Warning)
 {
     internal const string BotSubsystemPrefix = "bot-";
+
+    /// <summary>
+    /// Ledger keys of world (non-bot) anomalies a bot can trigger by using the world: a chest that opens empty, a game object use refused as a
+    /// defect, an open-lock cast that did nothing, and a game object effect dropped before it ran. They are admitted like <c>bot-*</c> keys.
+    /// </summary>
+    internal static readonly HashSet<string> WorldKeys = new(StringComparer.Ordinal)
+    {
+        "loot/gameobject-loot-empty",
+        "gameobject/use-failed",
+        "gameobject/open-no-effect",
+        "spell/gameobject-effect-skipped",
+    };
     internal const int DefaultMinCount = 5;
     internal const int DefaultMinDistinctSubjects = 3;
 
@@ -51,7 +63,7 @@ internal sealed class PlayerbotQaAnomalyFeed(
 
     internal bool Qualifies(AnomalySnapshot anomaly)
         => !string.Equals(anomaly.Key, AnomalyLedger.OverflowKey, StringComparison.Ordinal)
-            && anomaly.Subsystem.StartsWith(BotSubsystemPrefix, StringComparison.Ordinal)
+            && (anomaly.Subsystem.StartsWith(BotSubsystemPrefix, StringComparison.Ordinal) || WorldKeys.Contains(anomaly.Key))
             && anomaly.Severity >= minSeverity
             && (anomaly.Severity >= AnomalySeverity.Error || anomaly.Count >= minCount || anomaly.DistinctSubjects >= minDistinctSubjects);
 

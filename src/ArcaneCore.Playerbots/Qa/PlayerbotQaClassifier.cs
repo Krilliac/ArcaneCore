@@ -90,7 +90,8 @@ internal static class PlayerbotQaClassifier
 
             case QaSignalKind.Anomaly:
                 return new QaClassification(QaCause.BehaviourBug,
-                    "recurring bot outcome anomaly " + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
+                    (s.Goal.Length != 0 && !s.Goal.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal) ? "recurring world anomaly " : "recurring bot outcome anomaly ")
+                    + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                     + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
 
             default:
