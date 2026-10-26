@@ -617,13 +617,19 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         (_, AnomalyCapture capture, uint t0) = await DroppedMoundSetupAsync(world, bot);
         using AnomalyCapture owned = capture;
 
-        Assert.True(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs + 60_000,
+        // The dropped mound stands 3 minutes, so it is gone long before the back-off ends: the bot is idle for all of it (nothing to take up).
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs,
+            () => world.BrainOf(bot).WorldPvp.Active || capture.Count(Key("silithyst-unreachable-trigger")) > 1), "the bot started a carry inside the back-off; " + capture.Describe());
+
+        // A new flag after the back-off is carried again and reports the fault once more.
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        Assert.True(await world.RunUntilAsync(60_000,
             () => capture.Count(Key("silithyst-unreachable-trigger")) >= 2), "no second report after the back-off; " + capture.Describe());
         uint t1 = await world.OnWorldAsync(() => world.World.Host.World.NowMs);
         Assert.True(unchecked(t1 - t0) >= PlayerbotWorldPvpObjectives.GiveUpBackoffMs, $"the second report came {t1 - t0} ms after the give-up, inside the back-off");
         Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
         Assert.Equal("no-trigger", await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.LastOutcome));
-        Assert.Equal(1, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
+        Assert.Equal(0, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
         Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
             () => world.BrainOf(bot).WorldPvp.Active || capture.Count(Key("silithyst-unreachable-trigger")) > 2), "a third carry inside the new back-off");
         Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
