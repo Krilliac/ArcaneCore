@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Skills;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
@@ -26,6 +27,7 @@ public sealed class DisenchantLootTests
     private const uint WhiteSword = 90104;
     private const uint GreenPotion = 90105;
     private const uint LegendaryBlade = 90106;
+    private const uint SellableSword = 90107;
     private const uint LargeShard = 14344;
     private const uint NexusCrystal = 20725;
     private const uint SecondCrystal = 20726;
@@ -35,6 +37,7 @@ public sealed class DisenchantLootTests
     [
         .. ItemTestData.Templates,
         new ItemTemplate { Entry = GreenSword, Class = 2, SubClass = 7, Name = "Green Sword", DisplayId = 10, Quality = 2, InventoryType = 21, DisenchantId = 48 },
+        new ItemTemplate { Entry = SellableSword, Class = 2, SubClass = 7, Name = "Sellable Sword", DisplayId = 19, Quality = 2, InventoryType = 21, DisenchantId = 48, SellPrice = 100 },
         new ItemTemplate { Entry = NoDisenchantRing, Class = 4, SubClass = 0, Name = "Quest Ring", DisplayId = 11, Quality = 2, InventoryType = 11, DisenchantId = 49, Flags = DisenchantLoot.ItemFlagNoDisenchant },
         new ItemTemplate { Entry = WhiteSword, Class = 2, SubClass = 7, Name = "White Sword", DisplayId = 16, Quality = 1, InventoryType = 21, DisenchantId = 48 },
         new ItemTemplate { Entry = GreenPotion, Class = 0, SubClass = 0, Name = "Green Potion", DisplayId = 17, Quality = 2, DisenchantId = 48 },
@@ -231,6 +234,21 @@ public sealed class DisenchantLootTests
         Assert.Equal(0u, rig.Player.Inventory.GetItemCount(LargeShard));
         Assert.Equal(0u, rig.Player.Inventory.GetItemCount(NexusCrystal));
         Assert.Null(rig.Player.Inventory.GetItemByGuid(sword.Guid));
+    }
+
+    [Fact]
+    public void ReleasingTheWindow_AfterTheItemWasSoldToAVendor_PaysOutNothing()
+    {
+        using var rig = new Rig();
+        Item item = rig.Give(SellableSword);
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(item));
+
+        Assert.Equal(VendorSellError.None, rig.Player.Inventory.SellItem(item.Guid, 0, 1, RepairCostTable.Empty, uint.MaxValue, out _));
+        rig.Loot.Release(rig.Player, item.Guid);
+
+        Assert.Equal(0u, rig.Player.Inventory.GetItemCount(LargeShard));   // the sold item must not leave reagents behind
+        Assert.Equal(0, rig.Disenchant.ActiveItems);
+        Assert.Null(rig.Loot.FindLoot(item.Guid));
     }
 
     [Fact]
