@@ -960,6 +960,42 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
     }
 
     /// <summary>
+    /// Bind a player to a running match without a queue invitation (vmangos <c>Player::SetBattleGroundId(id, type)</c>, which the GM commands
+    /// <c>.goname</c> and <c>.namego</c> call, TeleportCommands.cpp:1165, 1254). The world-port acknowledgement then adds the player to the
+    /// match with <paramref name="team"/> (<see cref="EnterBattleground"/>); <see cref="ClearBinding"/> undoes it when the player leaves.
+    /// </summary>
+    public void BindPlayer(ObjectGuid player, Battleground battleground, Team team)
+    {
+        if (!Invariant.Check(!player.IsEmpty, "BindPlayer called for an empty player guid")
+            || !Invariant.CheckNotNull(battleground, nameof(battleground)))
+        {
+            return;
+        }
+
+        BattlegroundPlayerState state = StateOf(player);
+        state.InstanceId = battleground.InstanceId;
+        state.Type = battleground.Type;
+        state.Team = team;
+    }
+
+    /// <summary>
+    /// Undo <see cref="BindPlayer"/> for a player that never entered the match (the teleport was refused): the binding fields go and the
+    /// queue slots stay, unlike <see cref="ClearBinding"/>, which also frees the slot of the match's type.
+    /// </summary>
+    public void UnbindPlayer(ObjectGuid player)
+    {
+        if (!Invariant.Check(!player.IsEmpty, "UnbindPlayer called for an empty player guid"))
+        {
+            return;
+        }
+
+        BattlegroundPlayerState state = StateOf(player);
+        state.InstanceId = 0;
+        state.Type = BattlegroundType.None;
+        state.Team = null;
+    }
+
+    /// <summary>
     /// A player left its match (vmangos <c>BattleGround::RemovePlayerAtLeave</c>, BattleGround.cpp:945-960 and 989-991): drop the queue slot of the
     /// match's type and the binding. Called from the match host's <see cref="IBattlegroundHost.ClearPlayerBinding"/>.
     /// </summary>

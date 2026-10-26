@@ -131,8 +131,13 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   is runtime state only because this branch has no persisted power-cap schema. Responses use mangos LANG ids 122/123
   (ENERGY) and 125/126 (rage), with invariant numeric formatting. A selected creature or offline/missing player returns
   `No character selected.` and security checks run before mutation.
-* `.goname` does not create the GM's instance bind and has no battleground rule; the teleport service's instance rules
-  apply and a refused teleport answers the invalid-coordinates text (vmangos is silent).
+* `.goname` follows vmangos for the target's map (TeleportCommands.cpp:1242-1303). To a player in a battleground it binds the GM to
+  that match through the battleground manager (the teleport gate admits only bound players), refuses a GM already bound to a
+  different match with LANG_CANNOT_GO_TO_BG_FROM_BG, and records the GM's position as its entry point. To a player in a dungeon
+  instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an unbound GM to that instance. `.namego`
+  from inside a battleground binds the summoned player to the caller's match. The bind is cleared by the ordinary leave paths
+  (a far teleport off the map, the match removing the player, logout). Not ported: the smart-instance-binding mode. A refused
+  teleport answers the invalid-coordinates text (vmangos is silent).
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

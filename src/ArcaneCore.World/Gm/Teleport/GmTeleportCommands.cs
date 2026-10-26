@@ -1,9 +1,12 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Instances;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,9 +16,10 @@ namespace ArcaneCore.World.Gm.Teleport;
 /// <c>.recall</c>, <c>.goname</c> and <c>.namego</c> (vmangos TeleportCommands.cpp:1106-1346;
 /// levels Chat.cpp:1236-1237,1259). Online players only: vmangos also moves offline characters
 /// by writing their saved position, which ArcaneCore answers with "Player not found!" (see
-/// docs/integration/gm-commands.md). Entering a dungeon through <c>.goname</c> does not create
-/// the GM's instance bind and battleground bookkeeping vmangos does (no BG exists here); the
-/// teleport service's own instance rules apply.
+/// docs/integration/gm-commands.md). <c>.goname</c> to a player in a battleground binds the GM to that
+/// match, and to a player in a dungeon instance binds the GM to that instance (TeleportCommands.cpp:1242-1303);
+/// <c>.namego</c> from a battleground binds the summoned player to the caller's match (:1163-1168).
+/// The bind is what lets the teleport service's own battleground and instance rules admit the move.
 /// </summary>
 public sealed class GmTeleportCommands : ICommandGroup
 {
@@ -77,12 +81,22 @@ public sealed class GmTeleportCommands : ICommandGroup
             return true;
         }
 
+        // vmangos HandleNamegoCommand: summoned from a battleground, the player is bound to the caller's match
+        // (a player already in another match is taken out of it, as any far teleport does).
+        BattlegroundFeature? battlegrounds = context.Session.Services.GetService<BattlegroundFeature>();
+        GmBattlegroundGo bound = battlegrounds?.BindToMatchOf(target, caller, leaveOtherMatch: true) ?? GmBattlegroundGo.NotBattleground;
+
         context.Reply(GmStrings.Summoning(link));
         target.SendSystemMessage(GmStrings.SummonedBy(GmStrings.PlayerLink(caller.Name)));
 
         GmTeleports.BeginCommandTeleport(context, target);
         if (!feature.Teleports.TeleportTo(target, caller.MapId, caller.X, caller.Y, caller.Z, caller.Orientation))
         {
+            if (bound == GmBattlegroundGo.Bound)
+            {
+                battlegrounds!.RevertGmBinding(target);
+            }
+
             TeleportCommands.ReplyInvalid(context, caller.X, caller.Y, caller.MapId);
         }
 
@@ -103,6 +117,24 @@ public sealed class GmTeleportCommands : ICommandGroup
             return true;
         }
 
+        // vmangos HandleGonameCommand (:1242-1303): the target's map decides first. A battleground: refuse from another
+        // battleground, else bind the GM to the target's match. A dungeon: refuse from another group, else bind the GM to
+        // the target's instance. Without the bind the teleport service refuses the battleground map, or opens a new instance.
+        BattlegroundFeature? battlegrounds = context.Session.Services.GetService<BattlegroundFeature>();
+        GmBattlegroundGo bound = battlegrounds?.BindToMatchOf(caller, target, leaveOtherMatch: false) ?? GmBattlegroundGo.NotBattleground;
+        if (bound == GmBattlegroundGo.InOtherMatch)
+        {
+            context.Reply(GmStrings.CannotGoToBgFromBg);
+            return true;
+        }
+
+        if (bound == GmBattlegroundGo.NotBattleground
+            && context.Session.Services.GetService<InstanceFeature>()?.Instances.PrepareGmGoToInstanceOf(caller, target) == GmInstanceGo.GroupMismatch)
+        {
+            context.Reply(GmStrings.CannotGoToInstParty);
+            return true;
+        }
+
         context.Reply(GmStrings.AppearingAt(GmStrings.PlayerLink(target.Name)));
         target.SendSystemMessage(GmStrings.AppearingTo(GmStrings.PlayerLink(caller.Name)));
 
@@ -116,6 +148,11 @@ public sealed class GmTeleportCommands : ICommandGroup
         GmTeleports.BeginCommandTeleport(context, caller);
         if (!TeleportCommands.Feature(context).Teleports.TeleportTo(caller, target.MapId, target.X, target.Y, target.Z + 5.0f, angle))
         {
+            if (bound == GmBattlegroundGo.Bound)
+            {
+                battlegrounds!.RevertGmBinding(caller);
+            }
+
             TeleportCommands.ReplyInvalid(context, target.X, target.Y, target.MapId);
         }
 
