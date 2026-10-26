@@ -422,6 +422,10 @@ public sealed class WorldHost(
             await ReleaseOwnershipAsync(cancellationToken, failures).ConfigureAwait(false);
         }
 
+        // Sessions may still hold open packet traces: stop them and wait (bounded) so their records reach the disk before the process ends.
+        // Captures are diagnostics, so this comes after the player saves (a stalled capture disk must not delay them) and the ownership release.
+        await Task.Run(() => Net.PacketCapture.DrainAll(TimeSpan.FromSeconds(10), logger)).ConfigureAwait(false);
+
         // The file lock is not released here: the SQLite checkpointer's final WAL checkpoint runs after this host stops, so the guard is
         // disposed with the host container (Program) or the process, after every hosted service has stopped.
         if (failures.Count == 0) logger.LogInformation("World saved and stopped");

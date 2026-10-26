@@ -32,7 +32,7 @@ internal sealed record WebAuditRecord(
 /// is sent. Web actions are always recorded, local ones while <see cref="MapFeedActionsOptions.AuditLocalDurable"/> is on. An action that cannot be
 /// recorded is refused (<see cref="Preflight"/>) instead of run. The file is opened per record in append mode (a record is one write, so
 /// parallel hosts and a reader on the file see whole lines), and a file over <see cref="RotateBytes"/> is renamed with its time and kept
-/// <see cref="MapFeedActionsOptions.WebAuditDays"/> days. Thread-safe: one process-wide gate serializes the writes.
+/// <see cref="MapFeedActionsOptions.WebAuditDays"/> days. Thread-safe: one process-wide gate serializes the writes, which run on the thread pool.
 /// </summary>
 internal sealed class MapFeedWebAudit(IOptions<MapFeedActionsOptions> options, ILoggerFactory loggers, TimeProvider? time = null)
 {
@@ -42,7 +42,7 @@ internal sealed class MapFeedWebAudit(IOptions<MapFeedActionsOptions> options, I
     /// <summary>A file this long is rotated before the next record.</summary>
     public const long RotateBytes = 16L * 1024 * 1024;
 
-    private static readonly Lock FileGate = new();
+    private static readonly SemaphoreSlim FileGate = new(1, 1);
 
     private readonly MapFeedActionsOptions _options = options.Value;
     private readonly ILogger _logger = loggers.CreateLogger(MapFeedActions.LogCategory);
@@ -60,12 +60,10 @@ internal sealed class MapFeedWebAudit(IOptions<MapFeedActionsOptions> options, I
     {
         try
         {
-            lock (FileGate)
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                using var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
-                return true;
-            }
+            // No gate: the stream is opened with FileShare.Delete, so a rotation or a write in progress is not disturbed (and a caller never waits on a write).
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            using var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
@@ -75,7 +73,7 @@ internal sealed class MapFeedWebAudit(IOptions<MapFeedActionsOptions> options, I
     }
 
     /// <summary>Append <paramref name="record"/> and flush it to disk. False (and an error in the log) when it could not be written.</summary>
-    public ValueTask<bool> AppendAsync(WebAuditRecord record)
+    public async ValueTask<bool> AppendAsync(WebAuditRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
         var buffer = new ArrayBufferWriter<byte>(512);
@@ -107,22 +105,36 @@ internal sealed class MapFeedWebAudit(IOptions<MapFeedActionsOptions> options, I
         buffer.Advance(1);
         try
         {
-            lock (FileGate)
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                RotateIfNeeded();
-                using var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1, FileOptions.WriteThrough);
-                stream.Write(buffer.WrittenSpan);
-                stream.Flush(flushToDisk: true);
-            }
-
-            return ValueTask.FromResult(true);
+            // The callers run on the world thread or a request task; the directory, rotation and disk work all happen on the pool.
+            ReadOnlyMemory<byte> bytes = buffer.WrittenMemory;
+            await Task.Run(() => WriteRecordAsync(bytes)).ConfigureAwait(false);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
             FaultLedger.Shared.Record("ops.map-feed-audit", ex);
             _logger.LogError(ex, "atlas audit: a {Event} record could not be written to {Path}", record.Event, FilePath);
-            return ValueTask.FromResult(false);
+            return false;
+        }
+    }
+
+    /// <summary>Pool thread: one record, serialized with the other writers by <see cref="FileGate"/>, written through and flushed to disk.</summary>
+    private async Task WriteRecordAsync(ReadOnlyMemory<byte> bytes)
+    {
+        await FileGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            RotateIfNeeded();
+            await using var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1,
+                FileOptions.WriteThrough | FileOptions.Asynchronous);
+            await stream.WriteAsync(bytes).ConfigureAwait(false);
+            await stream.FlushAsync().ConfigureAwait(false);
+            stream.Flush(flushToDisk: true);
+        }
+        finally
+        {
+            FileGate.Release();
         }
     }
 

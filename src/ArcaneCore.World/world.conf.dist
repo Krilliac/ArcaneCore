@@ -3576,7 +3576,9 @@ Diagnostics.PacketCapture.Enabled = false
 #
 #    Diagnostics.PacketCapture.MaxBytes
 #        Description: Maximum bytes in one trace, including its header; a full trace stops
-#                     automatically.
+#                     automatically. A trace also stops when the disk writer falls 8192 records
+#                     behind. Records are written by a background writer and the file is finished
+#                     asynchronously after a stop; the server drains open traces at shutdown.
 #        Type: long
 #        Default: 67108864
 #        Allowed: a whole number, -9223372036854775808 to 9223372036854775807

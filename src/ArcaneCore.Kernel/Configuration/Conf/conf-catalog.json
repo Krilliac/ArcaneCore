@@ -4423,7 +4423,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Maximum bytes in one trace, including its header; a full trace stops automatically.",
+      "meaning": "Maximum bytes in one trace, including its header; a full trace stops automatically. A trace also stops when the disk writer falls 8192 records behind. Records are written by a background writer and the file is finished asynchronously after a stop; the server drains open traces at shutdown.",
       "allowed": "a whole number, -9223372036854775808 to 9223372036854775807",
       "docs": "docs/reference/configuration.md#diagnosticspacketcapture",
       "isCollection": false

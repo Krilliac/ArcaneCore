@@ -474,7 +474,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `Diagnostics:PacketCapture:Directory` | `string` | `"packet-captures"` | - | Directory for new traces; generated filenames do not include player input. |
 | `Diagnostics:PacketCapture:Enabled` | `bool` | `false` | - | Permit an Administrator to start a session capture. Default false. |
-| `Diagnostics:PacketCapture:MaxBytes` | `long` | `67108864` | - | Maximum bytes in one trace, including its header; a full trace stops automatically. |
+| `Diagnostics:PacketCapture:MaxBytes` | `long` | `67108864` | - | Maximum bytes in one trace, including its header; a full trace stops automatically. A trace also stops when the disk writer falls 8192 records behind. Records are written by a background writer and the file is finished asynchronously after a stop; the server drains open traces at shutdown. |
 
 ## `Economy`
 
