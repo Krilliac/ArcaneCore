@@ -481,6 +481,32 @@ public sealed class ItemInventoryTests
     }
 
     [Fact]
+    public void AutoEquip_FromTheBank_NeedsABanker_OnBothOpcodes()
+    {
+        (Player player, FakeSession session) = CreatePlayer();
+        PlayerInventory inv = player.Inventory;
+        Item worn = inv.GetItem(InventorySlots.Bag0, InventorySlots.Body)!;
+        Item banked = Give(inv, RecruitsShirt);
+        inv.CanUseBank = () => true;
+        inv.SwapItem(banked.BagSlot, banked.Slot, InventorySlots.Bag0, InventorySlots.BankItemStart);
+        Assert.Same(banked, inv.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
+        inv.CanUseBank = () => false;
+        session.Clear();
+
+        // CMSG_AUTOEQUIP_ITEM_SLOT by guid, then CMSG_AUTOEQUIP_ITEM by position: both stay put away from a banker.
+        inv.AutoEquipItemSlot(banked.Guid, InventorySlots.Body);
+        Assert.False(inv.AutoEquipItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
+        Assert.Same(banked, inv.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
+        Assert.Same(worn, inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
+        Assert.Equal([InventoryResult.TooFarAwayFromBank, InventoryResult.TooFarAwayFromBank], EquipErrors(session));
+
+        // With a banker in range the swap still works.
+        inv.CanUseBank = () => true;
+        inv.AutoEquipItemSlot(banked.Guid, InventorySlots.Body);
+        Assert.Same(banked, inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
+    }
+
+    [Fact]
     public void AutoStoreBag_IntoAFullBankBag_DoesNotSpillIntoTheMainBank()
     {
         // vmangos HandleAutoStoreBagItemOpcode stores with CanStoreItem even when the destination
