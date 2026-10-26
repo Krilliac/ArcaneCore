@@ -60,12 +60,19 @@ if [ "$ext" = "" ]; then
   chmod +x "$stage/world/ArcaneCore.World" "$stage/realm/ArcaneCore.Realm" "$stage/tools/arcane-content-importer" "$stage/dbupgrade/arcane-db" "$stage/account/arcane-account"
 fi
 
-# Start check: the daemons answer --help before anything binds or touches a database (Program.cs, DaemonCommandLine). It needs the
+# Start check: the daemons answer --help (exit 64) before anything binds or touches a database (Program.cs, DaemonCommandLine). It needs the
 # runner to be able to execute this rid, so it is skipped when the caller says the binaries are cross-built.
 if [ "${SKIP_RUN_CHECK:-0}" != "1" ]; then
   for daemon in world/ArcaneCore.World realm/ArcaneCore.Realm; do
     echo "== $daemon --help"
-    help_text="$(cd "$stage/$(dirname "$daemon")" && "./$(basename "$daemon")$ext" --help)"
+    # --help is answered with exit 64 (EX_USAGE, ConfStartup.TryAnswerEarly); any other code means the host did not start cleanly.
+    status=0
+    help_text="$(cd "$stage/$(dirname "$daemon")" && "./$(basename "$daemon")$ext" --help 2>&1)" || status=$?
+    if [ "$status" -ne 64 ] || [ -z "$help_text" ]; then
+      echo "$daemon --help exited $status (expected 64 with usage text)" >&2
+      echo "$help_text" >&2
+      exit 1
+    fi
     echo "$help_text" | head -n 5
   done
   for tool in tools/arcane-content-importer dbupgrade/arcane-db account/arcane-account; do
