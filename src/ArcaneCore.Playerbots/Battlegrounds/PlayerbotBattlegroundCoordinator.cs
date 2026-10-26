@@ -194,6 +194,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         /// <summary>The zone the bot started the walk in: a refusal of the master is for this zone too, not only for the one the walk stalled in.</summary>
         public uint StartZone { get; set; }
+
+        /// <summary>The master walks waypoints (<see cref="Battlemaster.Walks"/>): a bot standing at its goal does not take an empty spot for a missing master.</summary>
+        public bool MasterWalks { get; set; }
+
+        /// <summary>The last facts pass found the walk stalled (no progress for the stall time): the bot is set aside alone, the master is not refused for its zone.</summary>
+        public bool WalkStalled { get; set; }
         public bool HelloSent { get; set; }
         public bool JoinSent { get; set; }
         public uint QueuedSinceMs { get; set; }
@@ -301,7 +307,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 // The goal follows the live creature once it moved more than a few yards, so the walk is not replanned at every step.
                 if (player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } live)
                     FollowMaster(t, new Vector3(player.X, player.Y, player.Z), new Vector3(live.X, live.Y, live.Z));
-                ai.Travel(player, t.MasterAt, elapsedMs);
+                ai.Travel(player, t.MasterAt, elapsedMs, refuseEmptySpot: !t.MasterWalks);
                 break;
             case PlayerbotBattlegroundPhase.InMatch when Feature()?.BattlegroundOf(player.Guid) is { } match && match.PlayerTeam(player.Guid) is { } team:
                 ai.Play(player, match, team, t.Role, elapsedMs, match is WarsongGulch wsg ? WarsongOrder(wsg, team, player) : null);
@@ -405,6 +411,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         // A walk that does not close on the master for minutes is refused like one the navigation refused (the existing refusal path).
         bool stalled = t.Phase == PlayerbotBattlegroundPhase.Travel && player.IsInWorld
             && WatchTravel(t, new Vector3(player.X, player.Y, player.Z), PlayerbotBattlegroundAI.IsAttacked(player), Now);
+        // A stall says something about this bot (a rock, a mover bug), not about the master: it is set aside alone (see SetAside below).
+        t.WalkStalled = stalled && t.AI?.TravelRefused != true;
 
         return new PlayerbotBattlegroundFacts
         {
@@ -532,7 +540,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
             case PlayerbotBattlegroundAction.SetAside:
                 SetAside(t.BotId, t.Type);
-                if (facts.TravelRefused) RefuseMaster(t, player);
+                if (facts.TravelRefused && !t.WalkStalled) RefuseMaster(t, player);
                 Note(facts.TravelRefused ? $"{t.Name} could not walk to the {t.Type} battlemaster: set aside" : $"{t.Name} got no queue slot for {t.Type}: set aside");
                 if (!bot.Session.IsInChaosProbe)
                 {
@@ -710,7 +718,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             var tracked = new Tracked(bot.BotId, player.Name)
             {
                 Phase = PlayerbotBattlegroundPhase.Travel, PhaseSinceMs = now, Type = choice.Type, Bracket = choice.Bracket, Team = player.Team,
-                Battlemaster = master.Guid, MasterAt = master.At, StartZone = player.ZoneId, AI = new PlayerbotBattlegroundAI(bot.Session, _options),
+                Battlemaster = master.Guid, MasterAt = master.At, MasterWalks = master.Walks, StartZone = player.ZoneId, AI = new PlayerbotBattlegroundAI(bot.Session, _options),
                 TravelYards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At) * PlayerbotBattlegroundQueueMachine.TravelDetourFactor,
             };
             _tracked[bot.BotId] = tracked;
@@ -1148,7 +1156,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (master.Type != type) continue;
             if (gate is not null && !gate.AllowsCreature(master.SpawnGuid)) continue;
             if (IsMasterRefused(master.Guid, player.ZoneId)) continue;
-            float distance = Vector3.Distance(here, master.At);
+            // A walker is judged where it stands now when the map has it (its spawn point is only where its route starts).
+            Vector3 at = master.Walks && map.FindObject(master.Guid) is Creature { IsAlive: true } liveMaster ? new Vector3(liveMaster.X, liveMaster.Y, liveMaster.Z) : master.At;
+            float distance = Vector3.Distance(here, at);
             // Within sight of the spawn point the map says whether the master is there: an emissary whose event the gate still allows but
             // that is not in the world (or is dead) had bots walk up, hold 5 s and report 'no living battlemaster' (live: 15105 Undercity, 15102 Ironforge).
             if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
@@ -1157,11 +1167,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             // Strictly nearer, or as near with the lower spawn guid.
             if (distance > limit || (distance == limit && held is not null && master.SpawnGuid >= held.SpawnGuid)) continue;
             if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
-                || PlayerbotNavigation.IsInOtherWalkingRegion(player, master.At))
+                || PlayerbotNavigation.IsInOtherWalkingRegion(player, at))
                 continue;
             if (master.Walks)
             {
-                walking = master;
+                walking = master with { At = at };
                 walkingAt = distance;
             }
             else

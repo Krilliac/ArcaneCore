@@ -140,6 +140,38 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
         });
     }
 
+    /// <summary>
+    /// A master that walks waypoints is judged where it stands, not at its spawn point: one whose spawn is out of reach but which stands within
+    /// reach is picked (at its live position), and one that walked back out of reach is not.
+    /// </summary>
+    [Fact]
+    public async Task FindMaster_JudgesAWalkingMasterWhereItStands_NotAtItsSpawnPoint()
+    {
+        Vector3 spawn = Content.MasterAt(Content.AllianceWsgMaster) + new Vector3(300f, 0f, 0f);
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartWithSpawnsAsync([ExtraMaster(993930, spawn, (byte)CreatureMovementType.Waypoint)]);
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-live-position", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bgmlive", 1, characterClass: 1);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            coordinator.Options.MaxTravelYards = 100;
+            // 150 yards from the walker's spawn point and over 400 from the still master: only the walker can be in reach.
+            await context.PlaceAsync(ally, 0, spawn.X + 150f, spawn.Y, spawn.Z);
+            await ExpectInWorldAsync(context, ally, 993930);
+            await context.ReadAsync(() =>
+            {
+                ScenarioContext.Expect(coordinator.FindMasterForTests(ally.RequirePlayer(), BattlegroundType.WarsongGulch) is null, "control: the walker's spawn point is out of reach");
+                var master = (Creature)ally.RequirePlayer().Map!.FindObject(ObjectGuid.WithEntry(HighGuid.Unit, Content.AllianceWsgMaster, 993930))!;
+                master.Relocate(spawn.X + 120f, spawn.Y, spawn.Z);
+                (uint SpawnGuid, Vector3 At)? found = coordinator.FindMasterForTests(ally.RequirePlayer(), BattlegroundType.WarsongGulch);
+                ScenarioContext.Expect(found is { SpawnGuid: 993930 }, "the walker that stands within reach is picked");
+                ScenarioContext.Expect(found is { } f && Vector3.Distance(f.At, new Vector3(master.X, master.Y, master.Z)) < 1f, "the pick holds the walker's live position");
+                master.Relocate(spawn.X, spawn.Y, spawn.Z);
+                ScenarioContext.Expect(coordinator.FindMasterForTests(ally.RequirePlayer(), BattlegroundType.WarsongGulch) is null, "a walker back out of reach is not picked");
+                return true;
+            });
+        });
+    }
+
     private static CreatureSpawn ExtraMaster(uint guid, Vector3 at, byte movementType = 0)
         => new() { Guid = guid, Entry = Content.AllianceWsgMaster, MapId = 0, X = at.X, Y = at.Y, Z = at.Z, Orientation = MathF.PI, MovementType = movementType };
 
@@ -216,18 +248,19 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
     }
 
     /// <summary>
-    /// The progress watch driven through the facts: a walk that has made no progress for its stall time is set aside, the master is refused
-    /// for the zone the walk started in and, separately, for the zone it stalled in, and the stall is reported as an unreachable objective.
-    /// The start zone is made to differ from the bot's zone before the stall fires, so the start-zone refusal cannot come from the
-    /// current-zone one.
+    /// The progress watch driven through the facts: a walk that has made no progress for its stall time is set aside, and the stall is reported
+    /// as an unreachable objective. A stall is about the bot (a rock, a mover bug), not the master: the master is NOT refused for the zone, so
+    /// another bot of the same zone still picks it (a route the navigation refuses, a different failure, refuses the zone: see the refused-route test).
+    /// The start zone is made to differ from the bot's zone before the stall fires, so neither zone can be refused through the other's key.
     /// </summary>
     [Fact]
-    public async Task AStalledWalk_IsSetAside_AndTheMasterIsRefusedFromTheStartZoneAndTheZoneItStalledIn()
+    public async Task AStalledWalk_IsSetAsideForThatBotAlone_AndAnotherBotOfTheZoneStillPicksTheMaster()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
         await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-stalled", async context =>
         {
             ScenarioBot ally = await context.LoginAsync("Bgmstalled", 1, characterClass: 1);
+            ScenarioBot other = await context.LoginAsync("Bgmstalledb", 1, characterClass: 1);
             Vector3 start = await ally.ReadAsync(p => new Vector3(p.X, p.Y, p.Z));
             await context.PlaceAsync(ally, 0, start.X + 40f, start.Y, start.Z);
             await context.AutonomousAsync(ally);
@@ -240,8 +273,8 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
                 // The walk started in a zone other than the one the bot stalls in.
                 t.StartZone = player.ZoneId + 1;
                 ScenarioContext.Expect(t.StartZone != player.ZoneId, "control: the start zone differs from the bot's zone");
-                ScenarioContext.Expect(!coordinator.IsMasterRefused(t.Battlemaster, t.StartZone) && !coordinator.IsMasterRefused(t.Battlemaster, player.ZoneId),
-                    "control: not refused before");
+                ScenarioContext.Expect(other.RequirePlayer().ZoneId == player.ZoneId, "control: the other bot is in the stalling bot's zone");
+                ScenarioContext.Expect(coordinator.FindMasterForTests(other.RequirePlayer(), BattlegroundType.WarsongGulch) is not null, "control: the other bot picks the master before");
                 // The watch's mark: a best distance no step can beat by ten yards, reached longer ago than the stall time.
                 t.BestYardsToMaster = 0.1f;
                 t.BestYardsAtMs = unchecked(t.PhaseSinceMs - PlayerbotBattlegroundQueueMachine.TravelStallFor(t.TravelYards) - 10_000);
@@ -252,9 +285,10 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
             await context.ReadAsync(() =>
             {
                 uint zone = ally.RequirePlayer().ZoneId;
-                ScenarioContext.Expect(zone != startZone, "control: the zone the walk stalled in is not the start zone");
-                ScenarioContext.Expect(coordinator.IsMasterRefused(master, startZone), "the master is refused from the start zone");
-                ScenarioContext.Expect(coordinator.IsMasterRefused(master, zone), "the master is refused from the zone the walk stalled in");
+                ScenarioContext.Expect(!coordinator.IsMasterRefused(master, startZone), "the master is not refused from the start zone by one bot's stall");
+                ScenarioContext.Expect(!coordinator.IsMasterRefused(master, zone), "the master is not refused from the zone by one bot's stall");
+                ScenarioContext.Expect(coordinator.FindMasterForTests(other.RequirePlayer(), BattlegroundType.WarsongGulch) is { SpawnGuid: var guid } && guid == Content.AllianceWsgMaster,
+                    "another bot of the zone still picks the master");
                 return true;
             });
         });
