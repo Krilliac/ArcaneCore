@@ -79,6 +79,9 @@ public sealed class CreatureSmartAI : AggressorAI
         Script.ProcessEventsFor(SmartEvent.ReceiveEmote, player, textEmote);
     }
 
+    /// <summary>AzerothCore SmartAI::sQuestReward (SmartAI.cpp:1221-1224): SMART_EVENT_REWARD_QUEST with the player as invoker and the quest as var0.</summary>
+    public override void OnQuestRewarded(Player player, uint questId) => Script.ProcessEventsFor(SmartEvent.RewardQuest, player, questId);
+
     public override void OnSpellHit(Unit caster, SpellInfo spell) => Script.ProcessEventsFor(SmartEvent.SpellHit, caster, spell: spell);
 
     /// <summary>AzerothCore SmartAI::UpdateAI: the timers every update, then the aggressor's victim choice and melee.</summary>

@@ -363,6 +363,12 @@ public sealed class SmartScript
                     RecalcTimer(e, r.EventParam2, r.EventParam3);
                     ProcessAction(e, invoker);
                     break;
+                case SmartEvent.RewardQuest:
+                    // SmartScript.cpp:4728-4735: param1 the quest (var0, 0 any); cooldown param2..param3.
+                    if (r.EventParam1 != 0 && r.EventParam1 != var0) return;
+                    RecalcTimer(e, r.EventParam2, r.EventParam3);
+                    ProcessAction(e, invoker);
+                    break;
                 case SmartEvent.ReceiveEmote:
                     // SMART_EVENT_RECEIVE_EMOTE: param1 the text emote (var0); cooldown param2..param3.
                     if (r.EventParam1 != var0) return;
@@ -615,6 +621,26 @@ public sealed class SmartScript
                         ? (r.TargetX, r.TargetY, r.TargetZ)
                         : targets.FirstOrDefault() is { } t ? (t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ) : null;
                     if (point is { } p) me.Motion.MovePoint(r.ActionParam1, p.x, p.y, p.z, run: me.Combat.IsInCombat);
+                    break;
+                }
+                case SmartAction.SetInstData:
+                    // SmartScript.cpp:1236-1269: the base object's (else the invoker's) instance script; type 0 only (refused otherwise at load).
+                    ((WorldObject?)_owner.Base ?? invoker)?.Map?.FindUpdater<Instances.Scripts.InstanceData>()?.SetData(r.ActionParam1, r.ActionParam2);
+                    break;
+                case SmartAction.SummonGo:
+                {
+                    // SmartScript.cpp:1651-1681: per target at its position plus the offsets, or at the base object with targetsummon; then at a
+                    // POSITION target. The despawn time is seconds (Object.cpp:2494 SetRespawnTime).
+                    if (_owner.Base is not { } summoner || _owner.Objects is not { } objects) break;
+                    foreach (WorldObject t in targets)
+                    {
+                        if (r.ActionParam3 == 0)
+                            objects.Summon(r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation + r.TargetO, r.ActionParam2);
+                        else objects.Summon(r.ActionParam1, summoner.X, summoner.Y, summoner.Z, summoner.Orientation, r.ActionParam2);
+                    }
+
+                    if (r.TargetType == (byte)SmartTarget.Position)
+                        objects.Summon(r.ActionParam1, r.TargetX, r.TargetY, r.TargetZ, r.TargetO, r.ActionParam2);
                     break;
                 }
                 case SmartAction.CallTimedActionList:

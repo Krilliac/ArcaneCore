@@ -89,9 +89,33 @@ Deviations:
   reset, then RESPAWN only, as before this slice.
 - **RANDOM_EMOTE and players.** As PLAY_EMOTE, player targets are skipped.
 
-## Still open (slice 3e and later)
+## Slice 3e (branch `claude/smartai-pr-a`, 2026-10-26)
 
-By the same count, the largest single blockers left are event 38 DATA_SET (205 rows that need nothing else), 40 WAYPOINT_REACHED (160), 62
-GOSSIP_SELECT (132), 106 and 105 (AzerothCore-only ids, 98 and 84), action 50 SUMMON_GO (97), event 20 REWARD_QUEST (80), 52 TEXT_OVER (76) and action 34
-SET_INST_DATA (75). Also open: MOVEMENTINFORM (34, needs the AC motion-type numbering mapped), the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending the area-trigger handler when a
-script ran.
+References: AzerothCore azerothcore-wotlk at `4ad75f467ad0cdb1991869e9a8b5ff8555ad0232`, files under `src/server/game/AI/SmartScripts/`.
+
+Creature events now run: `0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 20, 21, 22, 25, 59, 60, 61`. Actions 34 and 50 run for creature, timed
+action list and game object sources.
+
+| Id | Name | Behaviour here |
+|---|---|---|
+| event 20 | REWARD_QUEST | `me` rewarded quest param1 (0 any) to a player (`OnQuestRewarded`, AC `SmartAI::sQuestReward`, SmartAI.cpp:1221-1224); the player is the invoker; cooldown param2..param3 (SmartScript.cpp:4728-4735). A cooldown with min above max is refused (SmartScriptMgr.cpp:1247-1252). |
+| action 34 | SET_INST_DATA | `InstanceData.SetData(param1, param2)` on the base object's map, else the invoker's; no instance script does nothing (SmartScript.cpp:1236-1269). Type (param3) 1, SetBossState, is refused at load: `InstanceData` has no boss-state call. Types above 1 are refused as AC does (SmartScriptMgr.cpp:1916-1931). |
+| action 50 | SUMMON_GO | Object param1 per target at the target's position plus the target offsets, or at the base object when param3 (targetsummon) is set; and at a POSITION target's point. Param2 is the despawn time in seconds (SmartScript.cpp:1651-1681; `Object.cpp:2494`, `SetRespawnTime`), through `GameObjectMapSystem.Summon`. |
+
+Event 20 is not hooked for game objects: ArcaneCore has no game object AI quest-reward hook (a game object's reward reaches the instance script only).
+
+**Event 40 is not delivered.** It is ESCORT_REACHED (SmartScriptMgr.h:139), not WAYPOINT_REACHED (108, :197). AzerothCore raises it only while a
+SmartAI escort started by SMART_ACTION_WP_START (53) is running, with the path id that action loaded (SmartAI.cpp:262-298, 662-720); waypoint motion
+raises 108 instead (:711-712). ArcaneCore runs neither action 53 nor an escort for a SmartAI creature, so there is no point or path id to match.
+Rows with event 40 stay refused, now with the reason "ESCORT_REACHED needs a SMART_ACTION_WP_START escort".
+
+Limits: SUMMON_GO's summonType (param4) is ignored, as in the AzerothCore action. A summoned object with an unknown entry is not placed
+(`GameObjectMapSystem.Summon` returns null); the catalog does not check object entries. AzerothCore logs a SET_INST_DATA without an instance script;
+this script has no logger, so it does nothing silently.
+
+## Still open (slice 3f and later)
+
+By the same count, the largest single blockers left are event 38 DATA_SET (205 rows that need nothing else), 40 ESCORT_REACHED (160, needs action
+53 and an escort), 62 GOSSIP_SELECT (132), 106 and 105 (AzerothCore-only ids, 98 and 84) and 52 TEXT_OVER (76). Also open: MOVEMENTINFORM (34, needs
+the AC motion-type numbering mapped), the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending
+the area-trigger handler when a script ran.

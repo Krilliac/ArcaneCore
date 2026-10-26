@@ -1,6 +1,9 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -12,8 +15,8 @@ namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
 /// <summary>
 /// SmartAI slice 3d: events MANA_PCT (3), RANGE (9), RESPAWN (11), FRIENDLY_HEALTH (14); actions SET_REACT_STATE (8), RANDOM_EMOTE (10),
-/// SET_UNIT_FLAG (18), REMOVE_UNIT_FLAG (19), FLEE_FOR_ASSIST (25), ATTACK_START (49). Rows use raw AzerothCore ids (SmartScriptMgr.h), so
-/// they state the numbering the ported data uses.
+/// SET_UNIT_FLAG (18), REMOVE_UNIT_FLAG (19), FLEE_FOR_ASSIST (25), ATTACK_START (49); slice 3e: event REWARD_QUEST (20), actions SET_INST_DATA (34)
+/// and SUMMON_GO (50). Rows use raw AzerothCore ids (SmartScriptMgr.h), so they state the numbering the ported data uses.
 /// </summary>
 public sealed class SmartAiSlice3dTests
 {
@@ -221,5 +224,91 @@ public sealed class SmartAiSlice3dTests
         Assert.Contains("mana 50..30", reasons[5], StringComparison.Ordinal);
         Assert.Contains("own creature", reasons[6], StringComparison.Ordinal);
         Assert.Contains("own creature", reasons[7], StringComparison.Ordinal);
+    }
+
+    // ---- slice 3e ----
+
+    private sealed class RecordingInstance(Map map) : InstanceData(map)
+    {
+        public Dictionary<uint, uint> Data { get; } = [];
+
+        public override void SetData(uint type, uint data) => Data[type] = data;
+    }
+
+    [Fact]
+    public void RewardQuest_RunsForTheNamedQuestOnly_AndQuestZeroMatchesAny()
+    {
+        using var rig = SmartRig.Start([Make(Wolf, 0, 0, 20, 22, 1, e1: 100, a1: 3), Make(Wolf, 0, 1, 20, 23, 1, a1: 1)]);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 99);
+        Assert.Equal(1u, rig.Script.Phase);
+
+        rig.WolfAi.OnQuestRewarded(rig.Player, 100);
+        Assert.Equal(4u, rig.Script.Phase);
+    }
+
+    [Fact]
+    public void RewardQuest_Cooldown_SuppressesTheNextReward()
+    {
+        using var rig = SmartRig.Start([Make(Wolf, 0, 0, 20, 23, 1, e2: 60_000, e3: 60_000, a1: 1)]);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 7);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 7);
+        Assert.Equal(1u, rig.Script.Phase);
+    }
+
+    [Fact]
+    public void SetInstData_WritesTheMapsInstanceScript_AndWithoutOneDoesNothing()
+    {
+        using var rig = SmartRig.Start([Make(Wolf, 0, 0, 20, 34, 1, a1: 5, a2: 9)]);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 1);
+        Assert.Empty(rig.Script.Unsupported);
+
+        var instance = new RecordingInstance(rig.Map);
+        rig.Map.AddUpdater(instance);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 1);
+        Assert.Equal(9u, instance.Data[5]);
+    }
+
+    [Fact]
+    public void SummonGo_AtEachTargetPlusOffset_AtTheBaseWithTargetSummon_AndAtAPositionTarget()
+    {
+        using var rig = SmartRig.Start(
+        [
+            Make(Wolf, 0, 0, 20, 50, 1, a1: SmartRig.ObjectEntry) with { TargetX = 2f, TargetO = 1f },
+            Make(Wolf, 0, 1, 20, 50, 7, a1: SmartRig.ObjectEntry2, a3: 1),
+            Make(Wolf, 0, 2, 20, 50, 8, a1: SmartRig.ObjectEntryDespawning, a2: 30) with { TargetX = 10f, TargetY = 20f },
+        ], objectSpawns: []);
+        rig.WolfAi.OnQuestRewarded(rig.Player, 1);
+
+        GameObject self = Assert.Single(rig.Objects!.GameObjects, g => g.Entry == SmartRig.ObjectEntry);
+        Assert.Equal((7f, 0f), (self.X, self.Y));
+        Assert.Equal(rig.Wolf.Orientation + 1f, self.Orientation);
+        GameObject atBase = Assert.Single(rig.Objects.GameObjects, g => g.Entry == SmartRig.ObjectEntry2);
+        Assert.Equal((5f, 0f), (atBase.X, atBase.Y));
+        GameObject atPosition = Assert.Single(rig.Objects.GameObjects, g => g.Entry == SmartRig.ObjectEntryDespawning);
+        Assert.Equal((10f, 20f), (atPosition.X, atPosition.Y));
+    }
+
+    [Fact]
+    public void Catalog_Slice3e_RefusesSetInstDataBossStateEscortReachedAndABadRewardCooldown_AcceptsObjectSummonGo()
+    {
+        var catalog = new SmartScriptCatalog(
+        [
+            Make(Wolf, 0, 0, 20, 34, 1, a1: 5, a2: 1),
+            Make(Wolf, 0, 1, 20, 50, 1, a1: SmartRig.ObjectEntry),
+            Make(Wolf, 0, 2, 20, 34, 1, a1: 5, a2: 1, a3: 1),
+            Make(Wolf, 0, 3, 20, 34, 1, a3: 2),
+            Make(Wolf, 0, 4, 40, 22, 1, a1: 1),
+            Make(Wolf, 0, 5, 20, 22, 1, e2: 5, e3: 1, a1: 1),
+            Make(50000, 1, 0, 64, 50, 1, a1: SmartRig.ObjectEntry2),
+            Make(50000, 1, 1, 64, 34, 1, a1: 5, a2: 1),
+        ]);
+
+        Assert.Equal(2, catalog.For(WolfEntry, 0).Count);
+        string[] reasons = [.. catalog.Rejected.OrderBy(r => r.SourceType).ThenBy(r => r.Id).Select(r => r.Reason)];
+        Assert.Equal(4, reasons.Length);
+        Assert.Contains("SET_INST_DATA type 1", reasons[0], StringComparison.Ordinal);
+        Assert.Contains("SET_INST_DATA type 2", reasons[1], StringComparison.Ordinal);
+        Assert.Contains("needs a SMART_ACTION_WP_START escort", reasons[2], StringComparison.Ordinal);
+        Assert.Contains("cooldown 5..1", reasons[3], StringComparison.Ordinal);
     }
 }

@@ -12,7 +12,7 @@ public static class SmartScriptSupport
 {
     // ---- events the engine runs ----
 
-    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 21, 22, 25, 59, 60, 61 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 20, 21, 22, 25, 59, 60, 61 }.ToFrozenSet();
 
     // GO: UPDATE_OOC, AI_INIT, TIMED_EVENT_TRIGGERED, UPDATE, LINK, JUST_CREATED, GOSSIP_HELLO (the ArcaneCore GO hooks: Update and OnUse).
     private static readonly FrozenSet<byte> GameObjectEvents = new byte[] { 1, 37, 59, 60, 61, 63, 64 }.ToFrozenSet();
@@ -31,10 +31,10 @@ public static class SmartScriptSupport
 
     // ---- actions ----
 
-    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 2, 3, 4, 5, 8, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 30, 31, 37, 39, 41, 49, 67, 69, 73, 74, 80, 87, 88 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 2, 3, 4, 5, 8, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 30, 31, 34, 37, 39, 41, 49, 50, 67, 69, 73, 74, 80, 87, 88 }.ToFrozenSet();
 
     // SUMMON_CREATURE (12) and MOVE_TO_POS (69) need a creature owner; a GO has no summoner or motion master here.
-    private static readonly FrozenSet<byte> GameObjectActions = new byte[] { 1, 11, 22, 23, 30, 31, 67, 73, 74, 80, 87, 88 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> GameObjectActions = new byte[] { 1, 11, 22, 23, 30, 31, 34, 50, 67, 73, 74, 80, 87, 88 }.ToFrozenSet();
 
     private static readonly FrozenSet<byte> AreaTriggerActions = new byte[] { 1, 80, 87, 88 }.ToFrozenSet();
 
@@ -104,7 +104,9 @@ public static class SmartScriptSupport
 
             if (!Events(source).Contains(row.EventType))
             {
-                return $"event {row.EventType} has no ArcaneCore hook for source type {row.SourceType}";
+                // SmartAI.cpp:706-720: ESCORT_REACHED is raised only while a WP_START (53) escort runs, which ArcaneCore does not run.
+                string why = row.EventType == 40 ? ": ESCORT_REACHED needs a SMART_ACTION_WP_START escort" : string.Empty;
+                return $"event {row.EventType} has no ArcaneCore hook for source type {row.SourceType}{why}";
             }
         }
 
@@ -204,6 +206,10 @@ public static class SmartScriptSupport
                 }
 
                 return row.EventParam3 > row.EventParam4 ? $"FRIENDLY_HEALTH repeat {row.EventParam3}..{row.EventParam4} has min above max" : null;
+            case 20:
+                // SMART_EVENT_REWARD_QUEST: IsMinMaxValid on the cooldown (SmartScriptMgr.cpp:1247-1252).
+                return row.EventParam2 > row.EventParam3
+                    ? $"REWARD_QUEST cooldown {row.EventParam2}..{row.EventParam3} has min above max (SmartScriptMgr.cpp:1247-1252)" : null;
             default:
                 return null;
         }
@@ -221,6 +227,9 @@ public static class SmartScriptSupport
 
         // SMART_ACTION_SET/REMOVE_UNIT_FLAG type 1 is UNIT_FIELD_FLAGS_2, a field 1.12 does not have.
         18 or 19 when row.ActionParam2 != 0 => $"action {row.ActionType} type {row.ActionParam2} names UNIT_FIELD_FLAGS_2, which 1.12 does not have",
+
+        // SMART_ACTION_SET_INST_DATA type 1 is SetBossState, which InstanceData does not have; above 1 AC refuses (SmartScriptMgr.cpp:1916-1931).
+        34 when row.ActionParam3 != 0 => $"SET_INST_DATA type {row.ActionParam3} is not 0 (SetData); InstanceData has no SetBossState",
         _ => null,
     };
 
