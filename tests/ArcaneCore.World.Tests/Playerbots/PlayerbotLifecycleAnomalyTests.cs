@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Net;

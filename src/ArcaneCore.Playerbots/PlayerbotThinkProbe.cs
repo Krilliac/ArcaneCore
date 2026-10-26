@@ -48,6 +48,9 @@ internal sealed class PlayerbotThinkProbe
     /// </summary>
     internal static PlayerbotThinkProbe SpentForTest(double elapsedMs, double gcPauseMs = 0, string slowestPhase = "start")
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(elapsedMs);
+        ArgumentOutOfRangeException.ThrowIfNegative(gcPauseMs);
+        ArgumentNullException.ThrowIfNull(slowestPhase);
         var probe = new PlayerbotThinkProbe();
         probe._elapsed = (long)Math.Round(elapsedMs * Stopwatch.Frequency / 1000);
         probe.GcPauseMs = gcPauseMs;
