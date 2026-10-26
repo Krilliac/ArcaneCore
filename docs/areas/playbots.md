@@ -303,7 +303,7 @@ kill): a level-capped bot with full bags killing a no-coin beast at its spawn is
 clock reset for `KillProgressBounds` (3) stall bounds since another field changed or the bot moved; after that a kill loop stalls like any
 other (the death-loop watch counts only the bot's own deaths and does not guard it). The stall's diagnostic snapshot is
 taken at the start of `GiveUpStalledGoal` (`StallSnapshot`), before the give-up stops the bot and the same think plans a new leg.
-Explore holds for a pending candidate plan at most `ExplorePendingMaxMs` (10 s) and traces `explore-pending` (then the short wander leg
+Explore holds for a pending candidate plan until the first think after `ExplorePendingMaxMs` (10 s) has passed, and traces `explore-pending` (then the short wander leg
 runs). The wander leg turns away from rays that end in another walking-graph component than the bot's own (up to 6 headings), traces each
 refusal streak as `wander-refused:<no-path|shortfall|advance|component>` (first and every fifth), and after 8 refusals inside one 10-yard
 cell takes one region-graph leg (only with the optional think budget) toward the ground it last wandered from on this map and instance, else
