@@ -150,6 +150,7 @@ internal sealed class PlayerbotPhantomCombatWatch
     internal const uint PhantomMs = 45_000;
 
     private uint _sinceMs;
+    private uint _combatSets;
     private bool _reported;
 
     internal void Look(Player player, uint nowMs)
@@ -158,12 +159,16 @@ internal sealed class PlayerbotPhantomCombatWatch
         {
             _sinceMs = 0;
             _reported = false;
+            _combatSets = 0;
             return;
         }
 
-        if (_sinceMs == 0)
+        uint currentSets = player.Combat.CombatSetsSinceClear;
+        if (_sinceMs == 0 || currentSets != _combatSets)
         {
             _sinceMs = Math.Max(1u, nowMs);
+            _combatSets = currentSets;
+            _reported = false;
             return;
         }
 
@@ -172,7 +177,7 @@ internal sealed class PlayerbotPhantomCombatWatch
         _reported = true;
         PlayerbotAnomalies.Report(player, "combat", "phantom-combat",
             string.Create(CultureInfo.InvariantCulture,
-                $"in combat for {elapsed} ms with no attacker, no threat-list holder and no victim; {Holders(player)}"));
+                $"in combat for {elapsed} ms with no attacker, no threat-list holder and no victim; set {player.Combat.DescribeLastCombatSet()}; {Holders(player)}"));
     }
 
     private static bool HasLiveOpponent(Player player)
