@@ -133,7 +133,7 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   `No character selected.` and security checks run before mutation.
 * `.goname` does not create the GM's instance bind and has no battleground rule; the teleport service's instance rules
   apply and a refused teleport answers the invalid-coordinates text (vmangos is silent).
-* Movement cheats (`.cheat fly`, `.cheat fixedz`): cleared only once a far teleport completes on arrival (the worldport-ack path); kept if refused or failed, matching the client's continuous flight.
+* Movement cheats (`.cheat fly`, `.cheat fixedz`): cleared only once a far teleport completes on arrival (the worldport-ack path); kept by a far teleport that never sends SMSG_NEW_WORLD (refused, bailed out, stalled while scheduled), matching the client's continuous flight. An ArcaneCore behaviour: vmangos never clears these cheats on a teleport.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

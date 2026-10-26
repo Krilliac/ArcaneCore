@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Locomotion;
 /// player and to the player itself (Unit.cpp:511-527). Status: emulator-sourced; not checked against a 1.12.1 client. vmangos does
 /// not clear the cheat on a teleport (nothing outside CharacterCommands.cpp and MovementAnticheat.cpp reads it); this core clears Fly and
 /// Fixed Z on a successful far teleport arrival (TeleportService.CompleteTeleportFar), where the client enters the world afresh, so the cheat cannot keep whitelisting
-/// the fly hack's flags for a player who walks again. A refused or failed far teleport, or a near one, keeps the client's flight and the cheat. As the cheat only
+/// the fly hack's flags for a player who walks again. A near teleport, or a far one that never sends SMSG_NEW_WORLD (refused, bailed out, stalled while scheduled), keeps the client's flight and the cheat. As the cheat only
 /// whitelists flags, a stale one grants no immunity. A jump ends fly mode (the command's own warning; <see cref="EndFlyOnJump"/>).
 /// Feather fall has no vmangos command; the order is the existing feather fall change (SMSG_MOVE_FEATHER_FALL 242 / SMSG_MOVE_NORMAL_FALL
 /// 243, vmangos MovementPacketSender::SendMovementFlagChangeToController, MovementPacketSender.cpp:346, via <see cref="MovementControl"/>).
