@@ -4002,7 +4002,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// (<see cref="PlayerbotNavigation.GroundNear(Map, System.Numerics.Vector3, System.Numerics.Vector3)"/>) when there is one.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals, Map? map)
-        => InwardLeg(home, from, refusals, map is null ? null : end => PlayerbotNavigation.GroundNear(map, from, end));
+    {
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground = null;
+        if (map is not null) ground = end => PlayerbotNavigation.GroundNear(map, from, end);
+        return InwardLeg(home, from, refusals, ground);
+    }
 
     /// <summary>
     /// <see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> with the grounding given: <paramref name="ground"/>

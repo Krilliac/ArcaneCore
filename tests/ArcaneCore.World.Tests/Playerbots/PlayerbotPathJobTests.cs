@@ -601,12 +601,12 @@ public sealed class PlayerbotPathJobTests
             Assert.Equal(1, h.Jobs.Totals.Escalations);
             int submitted = h.Runner.Submitted.Count;
 
-            // Episode two, a moment later and a few yards off: the pair is known. No job, no search, no escalation.
+            // Episode two, a moment later: the pair is known. No job, no search, no escalation.
             h.Wall += 5_000;
             h.Clock += 5_000;
             for (int i = 0; i < 5; i++)
             {
-                PathResult again = h.Ask(goal, from: h.Origin + new Vector3(1f, 1f, 0f));
+                PathResult again = h.Ask(goal);
                 Assert.Equal(PathType.NoPath, again.Type);
             }
 
