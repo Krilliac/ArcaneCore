@@ -686,6 +686,58 @@ public sealed class TickMonitorTests
         Assert.Equal(1, monitor.ActionsFired);
     }
 
+    // A tick that began at second 0 and has been running for 15 s, memory-starved the whole time, checked at 15.000 s and then 1 ms later.
+    private (TickMonitor Monitor, FakeTickHangActuator Actuator, HostLoadSampler Sampler) MemoryStarvedHangAt15Seconds()
+    {
+        var actuator = new FakeTickHangActuator();
+        var probe = new FakeHostLoadProbe { Current = IdleUnderMemoryPressure(0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+        sampler.Check(_clock.NowMicros);
+
+        var options = new TickMonitorOptions { HangMs = 2000, ActionHangMs = 5000, Action = TickHangAction.FailFast };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator) { HostLoad = sampler };
+        monitor.StartTicking(50);
+        Tick(monitor, 2, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        for (int second = 1; second <= 15; second++)
+        {
+            _clock.AdvanceMs(1_000);
+            probe.Current = IdleUnderMemoryPressure(second);
+            sampler.Check(_clock.NowMicros);
+        }
+
+        return (monitor, actuator, sampler);
+    }
+
+    [Fact]
+    public void ActionHang_MemoryStarved_ExactlyThreeTimesActionHangMs_StillDefers_AMillisecondLaterFires()
+    {
+        (TickMonitor monitor, FakeTickHangActuator actuator, HostLoadSampler sampler) = MemoryStarvedHangAt15Seconds();
+        Assert.Equal(HostLoadVerdict.MemoryStarved, sampler.Report(15_000_000)!.Value.Verdict);
+
+        monitor.Check(_clock.NowMicros); // exactly 15.000 s = 3 x ActionHangMs
+        Assert.Empty(actuator.Calls);
+
+        _clock.AdvanceMs(1);
+        monitor.Check(_clock.NowMicros); // 15.001 s
+        Assert.Single(actuator.Calls);
+    }
+
+    [Fact]
+    public void ActionHang_MemoryStarvedDeferral_IsSaidOncePerHungTick_WithAWarning()
+    {
+        (TickMonitor monitor, FakeTickHangActuator actuator, _) = MemoryStarvedHangAt15Seconds();
+
+        monitor.Check(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Empty(actuator.Calls);
+        LogLine line = Assert.Single(_log.Of(WatchdogEvents.TickActionDeferred));
+        Assert.Equal(LogLevel.Warning, line.Level);
+        Assert.Contains("deferred", line.Message);
+    }
+
     [Fact]
     public async Task AFaultingGcPauseProbe_IsSaidInTheCapture_NotShownAsAZeroPause()
     {

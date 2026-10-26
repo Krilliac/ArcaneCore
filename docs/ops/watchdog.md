@@ -110,12 +110,18 @@ recorder are appended to each line so both views are on one line.
   `IHostApplicationLifetime.StopApplication()`; `FailFast` writes a synchronous crash report to `Console.Error` and calls
   `Environment.Exit(70)` (`ExitCodes.UnhandledException`) so a supervisor immediately restarts a process whose world thread is permanently
   deadlocked without waiting on a stuck graceful-shutdown drain. `Action` set with `ActionHangMs` 0 is a configuration warning (the action
-  never fires).
+  never fires). A `MemoryStarved` verdict (an idle process on a memory-loaded host) does not stop the action but defers it: it fires only
+  once the hang has lasted more than 3 x `ActionHangMs` (exactly 3 x still defers), because an idle process is also what a deadlock looks like. The
+  deferral is announced once per hung tick with a `Warning` line (event `TickActionDeferred`, 7105) that names the time the action will fire.
 - **Hang stack capture**: once per hung tick, when the hang is first reported, the stack tool in `StackCaptureTool` (dotnet-stack; the World
   appsettings point it at `%USERPROFILE%/.dotnet/tools/dotnet-stack.exe`) runs as `<tool> report -p <pid>` on the thread pool and its
   output, every managed thread's stack with the world thread inside `WorldRuntime.RunTick`, goes to
   `StackCaptureDirectory/hang-stacks-<utc>-<pid>.txt` (a Warning line names the file). At most one capture runs at a time and one per
   `StackCaptureIntervalSeconds`; nothing runs while no tick is hung, and a missing tool is said once (Information) and skipped.
+  The file starts with `#` header lines. `# EMPTY CAPTURE` means the tool printed no thread stacks (the output has no `Thread (` marker, or was
+  blank), and the log line is then a Warning saying the capture is empty instead of naming stacks. `# GC-DOMINATED` means the GC pause covers
+  30% or more of the running tick, so the stack shows where the threads were parked, not the cause. `# GC pause unknown` means reading the
+  host-load sampler failed (see the fault ledger), so the stack may be GC-dominated.
 - Counters: `watchdog.tick.frames`, `watchdog.tick.overruns`, `watchdog.tick.hangs`, `watchdog.tick.actions`, gauges `watchdog.tick.frame_p99_us`, `watchdog.tick.frame_max_us`.
 - Latency gauges (microseconds, last minute, refreshed every check): `watchdog.tick.frame_{p50,p75,p90,p95,p999,mean,stddev}_us`, the same set with `p99` and `max` for the tick body as `watchdog.tick.body_*_us`, and `watchdog.tick.phase_<name>_p50_us` / `_p99_us` for the phases `commands`, `world_tick`, `features`, `maps` and `autosave`. The overrun and summary log lines append `; frame latency last 1 min: p50 .. p75 .. p90 .. p95 .. p99 .. p99.9 .. max .. (n=.., min .., mean .. +/-..)` (the summary adds the 15 minute window), then the tick body and per-phase p50/p99. The percentile primitive is `LatencyHistogram` (log buckets, at most 1/32 above the exact nearest-rank value, rolling 1 and 15 minute windows, lock-free).
 

@@ -129,6 +129,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private long _hangReportedForStart = NoTick;
     private long _actionFiredForStart = NoTick;
     private long _stackCapturedForStart = NoTick;
+    private long _deferralLoggedForStart = NoTick;
     private long _nextSummaryMicros = NoTick;
     private volatile bool _started;
     private volatile bool _stopped;
@@ -369,6 +370,13 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         {
             HostLoadVerdict verdict = HostVerdict(nowMicros - last);
             bool memoryDeferred = verdict == HostLoadVerdict.MemoryStarved && nowMicros - last <= _actionHangMicros * MemoryStarvedGraceFactor;
+            if (memoryDeferred && _deferralLoggedForStart != last)
+            {
+                _deferralLoggedForStart = last; // once per hung tick, not once per check
+                _logger.LogWarning(WatchdogEvents.TickActionDeferred, "world tick has been hung for {RunningMs} ms (action threshold {ActionHangMs} ms): action {Action} deferred while this process is memory-starved; it fires anyway at {GraceMs} ms",
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_actionHangMicros), _options.Action, Micros.ToMillis(_actionHangMicros * MemoryStarvedGraceFactor));
+            }
+
             if (!memoryDeferred && verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled))
             {
                 _actionFiredForStart = last;

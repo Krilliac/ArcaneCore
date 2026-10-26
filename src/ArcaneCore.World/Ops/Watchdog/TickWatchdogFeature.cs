@@ -181,6 +181,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             long occurrences = 1;
             if (alert.InProgress)
             {
+                // Deliberately without the "|memory-starved" suffix: one hung tick is one in-progress report, whichever verdict it carried when the report went out.
                 string seen = facts.Phase + "|" + facts.Item;
                 if (string.Equals(_lastInProgress, seen, StringComparison.Ordinal)) return;
                 _lastInProgress = seen;

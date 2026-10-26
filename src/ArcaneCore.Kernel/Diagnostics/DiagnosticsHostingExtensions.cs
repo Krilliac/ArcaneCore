@@ -68,20 +68,7 @@ internal sealed class DiagnosticsHostedService(
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
         FaultLedger.Shared.Configure(value);
-        string processName = CrashJournalPaths.ProcessName();
-        string crashJournal = CrashJournalPaths.PathFor(AppContext.BaseDirectory, processName);
-        FaultLedger.Shared.ConfigureCrashJournal(crashJournal, processName);
-        (int legacyReplayed, int legacyDropped) = FaultLedger.Shared.MigrateLegacyCrashJournal(CrashJournalPaths.LegacyPath(AppContext.BaseDirectory), processName);
-        if (legacyDropped > 0)
-        {
-            crashLogger.LogWarning("Diagnostics: discarded {Count} unattributed record(s) from the legacy shared crash journal; it named no writing process", legacyDropped);
-        }
-
-        int replayedCrashes = FaultLedger.Shared.ReplayCrashJournal(crashJournal) + legacyReplayed;
-        if (replayedCrashes > 0)
-        {
-            crashLogger.LogWarning("Diagnostics: replayed {Count} prior terminating crash fault(s) from {Path} into FaultLedger", replayedCrashes, crashJournal);
-        }
+        CrashJournalPaths.ConfigureAndReplay(FaultLedger.Shared, AppContext.BaseDirectory, CrashJournalPaths.ProcessName(), crashLogger);
 
         AnomalyLedger.Shared.Configure(loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Anomaly"), value.FaultLogLimit);
         CrashHandler handler = CrashHandler.Install(value, new LoggerCrashSink(crashLogger), [.. providers]);

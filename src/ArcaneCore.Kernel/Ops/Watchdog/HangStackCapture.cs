@@ -133,7 +133,7 @@ public sealed class HangStackCapture
     /// <summary>
     /// Watchdog thread, when a tick has been running past the hang threshold: start a capture unless one is running, the last started less
     /// than the interval ago, or no tool is available. True when a capture was started. Never throws.
-    /// <paramref name="runningMicros"/> is how long the tick had been running and <paramref name="gcPauseMicros"/> the GC pause inside that time (0 when unknown);
+    /// <paramref name="runningMicros"/> is how long the tick had been running and <paramref name="gcPauseMicros"/> the GC pause inside that time (<see cref="GcPauseUnknown"/> when unknown);
     /// when the pause covers <see cref="GcDominatedShare"/> or more of it the capture header says the stack shows where the thread was parked, not the cause.
     /// </summary>
     public bool TryCapture(long nowMicros, string reason, long runningMicros = 0, long gcPauseMicros = 0)

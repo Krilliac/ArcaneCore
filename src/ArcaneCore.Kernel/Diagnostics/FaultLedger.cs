@@ -476,6 +476,7 @@ public sealed class FaultLedger
         }
 
         int dropped = 0;
+        int replayed = 0;
         var mine = new List<PersistedCrashFault>();
         try
         {
@@ -535,7 +536,16 @@ public sealed class FaultLedger
 
             foreach (PersistedCrashFault crash in mine)
             {
-                RecordPersistedCrash(crash);
+                // The journal is already consumed above: one bad record must not drop the ones after it.
+                try
+                {
+                    RecordPersistedCrash(crash);
+                    replayed++;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    Record("diagnostics.crash-journal-replay", ex);
+                }
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -543,7 +553,7 @@ public sealed class FaultLedger
             // Never fail startup because the crash journal could not be read or removed.
         }
 
-        return (mine.Count, dropped);
+        return (replayed, dropped);
     }
 
     private void RecordPersistedCrash(PersistedCrashFault crash)
