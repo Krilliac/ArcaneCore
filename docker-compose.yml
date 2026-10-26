@@ -16,7 +16,7 @@ x-arcane-db: &arcane-db
 services:
   arcane-database:
     container_name: arcane-database
-    image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    image: mariadb:11.4@sha256:250e1609e93c0e6aecf64bfbab2d84d5e89d2481540fe77447ff6c855c3b1873
     networks: [arcane-network]
     ports:
       - ${DOCKER_DB_EXTERNAL_BIND:-127.0.0.1}:${DOCKER_DB_EXTERNAL_PORT:-3306}:3306
