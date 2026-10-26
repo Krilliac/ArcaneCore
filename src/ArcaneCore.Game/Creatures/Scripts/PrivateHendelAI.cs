@@ -41,12 +41,13 @@ public sealed class PrivateHendelAI(Creature creature) : CreatureAI(creature), I
 
         _accepter = player;
         Surrendered = false;
-        Me.FactionTemplate = FactionHostile;
+        // mangos-classic dustwallow_marsh.cpp:605 SetFactionTemporary(FACTION_HOSTILE, RESTORE_COMBAT_STOP | RESTORE_RESPAWN): the template faction returns on evade.
+        Me.SetFactionTemporary(FactionHostile, TemporaryFactionFlags.RestoreCombatStop | TemporaryFactionFlags.RestoreRespawn);
         Me.InvincibilityHpThreshold = Math.Max(1u, (uint)((ulong)Me.MaxHealth * 20 / 100));
         system.AttackStart(Me, player);
         foreach (Creature sentry in system.CreaturesOfEntryInRange(Me, NpcSentry, 40f).Where(c => c.IsAlive))
         {
-            sentry.FactionTemplate = FactionHostile;
+            sentry.SetFactionTemporary(FactionHostile, TemporaryFactionFlags.RestoreCombatStop | TemporaryFactionFlags.RestoreRespawn); // same call at :617
             system.AttackStart(sentry, player);
         }
     }

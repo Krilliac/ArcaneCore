@@ -680,6 +680,31 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Hendel_GetsHisTemplateFactionBack_WhenHeSurrendersAndEvades()
+    {
+        // mangos-classic dustwallow_marsh.cpp:605 uses SetFactionTemporary(RESTORE_COMBAT_STOP | RESTORE_RESPAWN); a direct field write was never given back.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        const uint friendly = 35;
+        CreatureContent content = new([Template(entry, b => b.Faction = friendly), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, hendel.FactionTemplate);
+            hendel.Health = hendel.MaxHealth / 10;
+            world.RunTick(100);
+            Assert.True(ai.Surrendered);
+
+            Assert.Equal(friendly, hendel.FactionTemplate); // RED on main: stays 168
+        }
+    }
+
+    [Fact]
     public void Stinky_WalksToTheBogbeanAndBack_AndCreditsTheTeamQuestAt40()
     {
         // npc_stinky_ignatzAI (dustwallow_marsh.cpp at 3e8597afe7).
