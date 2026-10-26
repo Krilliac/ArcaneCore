@@ -612,7 +612,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         CheckAssistCredit(player);
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         TimeSpan gcPauseBefore = GC.GetTotalPauseDuration();
-        _thinkStartedAt = startedAt;
+        _thinkStartedAt = PlayerbotThinkProbe.Timestamp(); // on the running think's clock, as HasOptionalThinkBudget reads it
         try
         {
             UpdateCore(player, elapsedMs);
@@ -638,7 +638,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal bool HasOptionalThinkBudget(double maxElapsedMs = 15.0)
         => (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
             && !(PlayerbotThinkProbe.Active is { } running && running.RunningMs >= maxElapsedMs)
-            && (_thinkStartedAt == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(_thinkStartedAt).TotalMilliseconds < maxElapsedMs);
+            && (_thinkStartedAt == 0 || PlayerbotThinkProbe.MsSince(_thinkStartedAt) < maxElapsedMs);
 
     private void UpdateCore(Player player, uint elapsedMs)
     {
