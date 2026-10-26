@@ -329,6 +329,8 @@ public sealed class PlayerbotGatherLootWaitTests
             return rig.Bot.Session.TryManagedAction(WorldOpcode.MsgMoveStartTurnLeft, writer.AsMemory().ToArray());
         }));
 
+        // The handler provably ran: the turn flag is on the player now.
+        Assert.NotEqual(MovementFlags.None, await rig.Host.OnWorldAsync(() => rig.Player.Movement.Flags & MovementFlags.TurnLeft));
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
     }
 
@@ -410,6 +412,39 @@ public sealed class PlayerbotGatherLootWaitTests
 
         Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
         Assert.True(await rig.Host.OnWorldAsync(rig.Casting), "the cast was refused against the caster's own stale window");
+    }
+
+    private static byte[] CastPacket(uint spellId)
+    {
+        var writer = new PacketWriter(8);
+        writer.WriteUInt32(spellId);
+        writer.WriteUInt16(0); // no targets
+        return writer.ToArray();
+    }
+
+    private static ArcaneCore.Game.Loot.LootBag? OpenLootOf(Rig rig)
+        => rig.Bot.Session.Services.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().FindSystem(rig.Player.Map!)?.Loot?.OpenLootOf(rig.Player);
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(HerbSpell)]
+    public async Task ACastRequestTheServerRefuses_LeavesTheCastersOpenWindowOpen(uint spellId)
+    {
+        // vmangos HandleCastSpellOpcode (SpellHandler.cpp:283-306): an unknown spell (0 is in no store) and a spell the player does not know
+        // (HerbSpell exists but the bot only learned SlowHerbSpell) return before the loot release.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgCastSpell, CastPacket(spellId));
+        });
+
+        Assert.NotNull(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Equal(UnitFlags.Looting, await rig.Host.OnWorldAsync(() => rig.Player.UnitFlags & UnitFlags.Looting));
     }
 
     [Fact]

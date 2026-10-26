@@ -152,18 +152,19 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotKnown;
         }
 
-        // Casting spells interrupts looting, once the spell is known (vmangos HandleCastSpellOpcode, SpellHandler.cpp:301-306): a window left open would also make
-        // the cast of a gather on the same node fail with CHEST_IN_USE against the caster's own stale window.
-        if ((player.UnitFlags & UnitFlags.Looting) != 0)
-        {
-            ReleaseLoot?.Invoke(player);
-        }
-
         if ((targets.Mask & SpellCastTargetFlags.Unit) != 0 && targets.Unit == player.Guid
             && IsExplicitUnitTarget(spell.Effects[0].TargetA) && !spell.IsPositive)
         {
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spellId, SpellCastResult.BadTargets));
             return SpellCastResult.BadTargets;
+        }
+
+        // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (vmangos HandleCastSpellOpcode,
+        // SpellHandler.cpp:283-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
+        // the caster's own stale window.
+        if ((player.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            ReleaseLoot?.Invoke(player);
         }
 
         spell = AutoSelectRankForTarget(player, spell, targets);

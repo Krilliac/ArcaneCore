@@ -87,7 +87,7 @@ buy affordable weapon/armor/bag/recipe upgrades and crafting tools/reagents from
 quest objective creature is in immediate sight, harvest nearby herb and mining nodes (`TryGatherNode`), skin looted beast and dragonkin corpses
 (`TrySkinCorpse`; the loot window of a gather, skin or disenchant cast is taken on the brain update after it arrives, between thinks as a
 corpse's is, not on the crafting rung's next think, which higher rungs, other loot readers and the bounded packet ring stood between:
-`PlayerbotCrafting.UpdateGatherLoot`, GitHub #774), craft wearable upgrades, bags, ammo, bandages, potions, food and intermediate
+`PlayerbotCrafting.UpdateGatherLoot`, GitHub #774; a gather skips a node another looter has open, sends CMSG_LOOT_RELEASE when the loot reply never arrives so the node is not left "in use", and backs a node whose cast was refused with CHEST_IN_USE off for 60 s without a `craft-failed` report, GitHub #1468), craft wearable upgrades, bags, ammo, bandages, potions, food and intermediate
 reagents (moving to a nearby forge or anvil when `RequiresSpellFocus` demands one), and hunt creatures that drop missing crafting materials (`PreferredMaterialDropperEntry`).
 
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
