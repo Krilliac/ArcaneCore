@@ -203,6 +203,7 @@ public sealed partial class QuestNpcServices
     {
         PlayerMenu menu = s.Menu;
         menu.ClearMenus();
+        menu.SourceGuid = npc.Guid;
         if (scripted.ShowQuests)
         {
             PrepareQuestMenu(s, npc);
@@ -253,6 +254,11 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        if (s.Menu.SourceGuid != npc.Guid)
+        {
+            return; // the menu was built for another source (vmangos does not check, NPCHandler.cpp:370-414)
+        }
+
         PauseInteractionMovement(player, npc);
         OnGossipSelect(s, npc, listId);
         Flush(s);
@@ -271,6 +277,7 @@ public sealed partial class QuestNpcServices
         PlayerMenu menu = s.Menu;
         menu.ClearMenus();
         menu.MenuId = menuId;
+        menu.SourceGuid = npc.Guid;
 
         bool defaultMenu = menuId == npc.GossipMenuId;
         bool canSeeQuests = defaultMenu && (npc.NpcFlags & NpcFlags.QuestGiver) != 0;
