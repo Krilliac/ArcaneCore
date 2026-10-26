@@ -81,10 +81,12 @@ internal static class ViewCommands
             BookmarkGo));
         registry.Register(new CommandDefinition(
             "bookmark.add",
-            "Saves the current camera as a bookmark, replacing a saved one of the same name.",
+            "Saves a camera as a bookmark, replacing a saved one of the same name. Without map and camera it saves the shared view's camera (that of whichever client moved last); a UI that flies its own camera passes its map and camera, which are saved without changing the shared view.",
             [
                 new("name", ArgType.String, "1 to 64 letters, digits, spaces or . _ - ' characters.", Required: true),
                 new("note", ArgType.String, "Free text shown in the bookmark list."),
+                new("map", ArgType.Integer, "Map id to save instead of the shared view's."),
+                new("camera", ArgType.Object, "Camera fields to save instead of the shared view's, as in view.set: target [x,y,z], distance, yaw, pitch, fov, mode (orbit|fly|top)."),
             ],
             BookmarkAdd));
         registry.Register(new CommandDefinition(
@@ -381,6 +383,23 @@ internal static class ViewCommands
     {
         string name = ArgReader.RequiredText(invocation, "name").Trim();
         ViewState view = invocation.Service<AtlasContext>().View.Current;
+        var given = new JsonObject();
+        if (invocation.Has("map"))
+        {
+            given["map"] = ArgReader.Map(invocation, view);
+        }
+
+        if (invocation.OptionalObject("camera") is { } camera)
+        {
+            given["camera"] = camera.DeepClone();
+        }
+
+        // Applied to a copy: the shared view is neither read for these fields nor changed.
+        if (given.Count > 0)
+        {
+            view = view.Apply(given);
+        }
+
         CameraState c = view.Camera;
         var bookmark = new Bookmark(name, view.MapId, c.Target, c.Distance, c.Yaw, c.Pitch, c.Mode, ArgReader.Text(invocation, "note"), null);
         invocation.Service<BookmarkStore>().Save(bookmark);

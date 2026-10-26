@@ -12,8 +12,9 @@ namespace ArcaneCore.Atlas.Host;
 
 /// <summary>
 /// The UI WebSocket (doc section 13). Messages are JSON text frames:
-/// client to server <c>auth</c>, <c>command</c>, <c>captureFailed</c>; server to client <c>hello</c>, <c>event</c>,
-/// <c>result</c>, <c>capture</c>, <c>error</c>.
+/// client to server <c>auth</c>, <c>command</c>, <c>presence</c>, <c>captureFailed</c>; server to client <c>hello</c>
+/// (with the connection's default <c>name</c> and the other sessions' presence), <c>event</c> (including <c>ui.presence</c>
+/// and <c>ui.presence.left</c>), <c>result</c>, <c>capture</c>, <c>error</c>.
 /// </summary>
 public sealed partial class AtlasServer
 {
@@ -79,6 +80,9 @@ public sealed partial class AtlasServer
                 ["version"] = AtlasVersion.Current,
                 ["view"] = view.ToJson(),
                 ["viewVersion"] = viewVersion,
+                ["followOrigin"] = view.FollowGuid is null ? null : _context.View.FollowOrigin,
+                ["name"] = connection.Name,
+                ["sessions"] = new JsonArray([.. _hub.PresenceSnapshot(connection.Id).Select(p => (JsonNode)p.ToJson())]),
             };
             await connection.SendAsync(hello.ToJsonString(), ct).ConfigureAwait(false);
             pump = PumpEventsAsync(connection, ct);
@@ -122,6 +126,9 @@ public sealed partial class AtlasServer
             if (connection is not null)
             {
                 _hub.Remove(connection);
+
+                // The follower left: the host stops moving the shared camera for it.
+                _context.View.ReleaseFollow($"ui:{connection.Id}");
             }
 
             await Task.WhenAll(commands.Append(pump)).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
@@ -224,6 +231,9 @@ public sealed partial class AtlasServer
                 }
 
                 break;
+            case "presence":
+                HandlePresence(connection, message, ct);
+                break;
             case "captureFailed":
                 if (message["id"] is JsonValue captureId && captureId.TryGetValue(out string? failedId))
                 {
@@ -238,6 +248,47 @@ public sealed partial class AtlasServer
                 _ = SendErrorAsync(connection, "bad-request", $"Unknown op '{op}'.", ct);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Validates a <c>presence</c> message and, when valid and not rate limited, stores it on the connection and tells the other
+    /// UIs. An invalid message answers <c>bad-request</c> and changes nothing; a valid message arriving within
+    /// <see cref="AtlasServerOptions.PresenceMinInterval"/> of the last accepted one is dropped silently, whatever it changes.
+    /// Runs on the connection's receive loop.
+    /// </summary>
+    private void HandlePresence(UiConnection connection, JsonObject message, CancellationToken ct)
+    {
+        if (!TryReadPresence(connection, message, out UiPresence? presence))
+        {
+            _ = SendErrorAsync(connection, "bad-request", "A presence message needs an integer 'map' (0 to 4294967295), 'at' as three finite numbers within +-100000, a finite 'yaw', a 'mode' of orbit, fly or top, and a text 'name' when it has one.", ct);
+            return;
+        }
+
+        TimeProvider time = _options.Time;
+        long now = time.GetTimestamp();
+        if (_options.PresenceMinInterval > TimeSpan.Zero
+            && connection.LastPresenceStamp is { } last
+            && time.GetElapsedTime(last, now) < _options.PresenceMinInterval)
+        {
+            return;
+        }
+
+        connection.LastPresenceStamp = now;
+        connection.Name = presence.Name;
+        connection.Presence = presence;
+        _hub.BroadcastPresence(presence);
+    }
+
+    /// <summary>
+    /// Reads and validates a presence message (the rules are <see cref="UiPresence.TryRead"/> and <see cref="UiPresence.TryResolveName"/>,
+    /// shared with the session commands). A <c>name</c> that is present and empty after cleaning resets the name to the connection's
+    /// default; an absent <c>name</c> keeps the current one.
+    /// </summary>
+    private static bool TryReadPresence(UiConnection connection, JsonObject message, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out UiPresence? presence)
+    {
+        presence = null;
+        return UiPresence.TryResolveName(message, connection.Name, connection.DefaultName, out string name)
+            && UiPresence.TryRead(message, null, connection.Id, name, UiPresence.KindUi, out presence, out _);
     }
 
     private async Task RunCommandAsync(UiConnection connection, JsonNode? id, string name, JsonObject? args, CancellationToken ct)

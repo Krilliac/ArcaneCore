@@ -77,7 +77,7 @@ Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`,
 | `live.trails` | `Live` | `Live` | **Trails**: recent entity positions, fading with age (untiled). |
 | `live.grids` | `Live` | `Live` | **Loaded grids**: grids the world daemon has loaded on this map (untiled). |
 
-### 3. Command catalog (63 commands)
+### 3. Command catalog (98 commands)
 
 Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":...,"data":{...}}` or `{"command":"...","ok":false,"elapsedMs":...,"error":{"code":"...","message":"..."}}`.
 
@@ -85,7 +85,8 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 - `status`, `help` (`command?`), `layers.list`, `maps.list`, `tiles.status` (`map`, `x?`, `y?`, `layer?`, `radius?`), `cache.clear` (`layer?`).
 - `view.get`, `view.set` (`map?`, `camera?`, `layers?`, `compare?`, `split?`, `loadRadius?`, `theme?`, `hud?`, `follow?`, `textureRadius?`, `textureBudgetMb?`), `layer.set` (`id`, `visible?`, `color?`, `opacity?`, `mode?`, `colorByAttribute?`).
 - `camera.goto` (`map?`, `at?`, `x?`, `y?`, `z?`, `yaw?`, `pitch?`, `distance?`, `mode?`), `camera.frame` (`tile?`, `bounds?`, `guid?`, `map?`).
-- `bookmarks.list`, `bookmark.go` (`name`), `bookmark.add` (`name`, `note?`), `bookmark.remove` (`name`).
+- `bookmarks.list`, `bookmark.go` (`name`), `bookmark.add` (`name`, `note?`, `map?`, `camera?`), `bookmark.remove` (`name`).
+- `session.join` (`name`, `map?`, `at?`, `yaw?`, `mode?`), `session.move` (`id`, `map?`, `at?`, `yaw?`, `mode?`), `session.leave` (`id`), `sessions.list`: agent sessions for scripts and agents (section 7); they need a running `serve` instance.
 - `query.pick` (`map?`, `ray` or `at`, `layers?`, `maxDistance?`): exact ray/triangle and point/line picking across visible layers (`ChunkPicker`).
 - `capture` (`width?`, `height?`, `out?`, `source?`, `view?`): renders a PNG via the connected browser UI (`source=ui`, `UiHub.RequestCaptureAsync`) or the headless CPU renderer (`source=headless`, `IHeadlessRenderer`), with `source=auto` selecting the UI when one is connected.
 
@@ -179,6 +180,46 @@ wire (`ATX1`) and the binary route `GET /api/bin/{name}` that serves both are de
 - The browser opens with `#t=<token>` in the URL fragment (never in query strings or server logs), moves the token into `sessionStorage`, strips the fragment via `history.replaceState`, and authenticates `/api/ws` via a first-frame `{"op":"auth","token":"..."}` message (unauthenticated sockets close with code `4401`).
 - Browser UI assets under `tools/ArcaneCore.Atlas/Web/` use a self-contained WebGL2 renderer (`js/renderer.js`, `js/scene.js`, `js/viewport.js`) with `Content-Security-Policy` locked to `'self'` and zero external CDN requests.
 - File output commands (`render.png`, `export.obj`, `export.json`) validate target paths through `OutputPaths` so outputs cannot overwrite files inside any git checkout.
+
+### 7. Several users at once
+
+Every UI WebSocket connection to `serve` is a session with its own camera, so two people (or two windows) can fly independently.
+
+- **What is shared:** the map, layer styles, compare mode and bookmarks stay one shared view on the host. **What is per UI:** the camera and the followed entity (follow drives the camera). A `view` event that comes from another UI updates the shared parts and leaves both alone.
+- **The `cameraChanged` rule:** every `view` event carries `cameraChanged`, true when that change altered the camera or the followed entity. A camera change from the CLI, MCP, a script or HTTP (`camera.goto`, `camera.frame`, `view.set` with a camera) therefore moves every UI. Any other non-UI change (`layer.set`, a theme) does not, so a layer toggle from the CLI never drags a UI away from where it is flying. A UI that connects to an older host, whose events lack the flag, treats every non-UI event as a camera change. A UI that reconnects keeps its camera and follow.
+- **The follow owner:** `live.follow` and `view.set` with a `follow` record who asked (`ui:<id>`, `cli`, `mcp`, `script`, `http`); the `view` event carries it as `followOrigin` (null when nothing is followed) and it stays until the follow is stopped. Any patch that names `follow` takes the ownership, even when it re-follows the guid already followed, so a second UI or the CLI can take a follow over. The hello carries `followOrigin` too: a UI that connects while another UI owns the follow adopts neither that follow nor the camera it drives. When the owning UI disconnects, the host clears the shared follow (a `view` event with origin `ui:<id>` and a null `followOrigin`) so the shared camera stops moving for a departed follower; a follow owned by the CLI, MCP, a script or HTTP is not affected by UIs leaving. The live feed patches the camera every frame with origin `live`; a UI ignores those frames while *another UI* owns the follow, so one user following a player does not drag everyone else's camera, and takes them when it owns the follow itself or when the CLI, MCP, a script or HTTP does. `view.set` with a `follow` counts as a camera change for the UI that ran it.
+- **`view.get`** reports the camera of whichever client moved it last. A UI re-reads the view after its own commands but takes that camera only after it ran a camera command itself.
+- **Bookmarks:** `bookmark.add` accepts an optional `map` and `camera`. The UI passes its own, so a bookmark saves where that user is and the shared view does not change. From the CLI or MCP, which pass neither, it saves the shared view's camera, that of the last mover.
+- **Presence:** a UI sends `{"op":"presence","name":"...","map":0,"at":[x,y,z],"yaw":45,"mode":"orbit"}` over `/api/ws`, at most about five times a second and only when its camera or map changed (`mode` is `orbit`, `fly` or `top`; `at` is the eye in fly mode, else the camera target, and each coordinate must be within +-100000, which the UI clamps to). `name` is optional: an absent name keeps the current one, an empty one (after trimming, and after removing control and format characters such as bidi overrides) resets it to the default, and names are capped at 32 characters. A malformed message answers `error` with code `bad-request` and changes nothing. Messages closer together than the host's presence interval (50 ms, a code option of the server) are dropped on that connection, whatever they change.
+- **Events:** the host pushes `ui.presence` (`{id, name, map, at, yaw, mode}`) to the other connections and `ui.presence.left` (`{id}`) when a session that had published presence disconnects. Presence does not go through the recording or insight event stream. The `hello` message carries the connection's default `name` (`session` plus the first four characters of its id) and `sessions`, the presence of every other session.
+- **Limit:** each connection's event queue drops its oldest entry when a browser reads slowly, and `ui.presence.left` is not superseded by a later event, so a dropped one can leave a ghost marker until that browser reconnects.
+- **In the UI:** the status bar has a "Session name" box (kept in the browser's local storage), and every other session on the same map shows as an amber labelled marker that moves as it flies. Markers are cleared while the UI is disconnected.
+- **Inspecting:** the `status` command lists every published presence in `ui.sessions` next to `ui.connections`. Every presence carries `kind`: `ui` for a browser, `agent` for a scripted session (see below).
+
+#### Joining from a script
+
+Two agents (or any script) on the same machine can join without a human at a browser. Every path below goes through the existing bearer-token `/api/command` or the user-only discovery file; nothing is added to the loopback surface.
+
+- **Browser join with a name.** `arcane-atlas url --name "Grok Bot"` prints one JSON line, `{"pid":1234,"url":"http://127.0.0.1:PORT/#t=TOKEN&name=Grok%20Bot"}`. Open that address in a browser: the UI reads `name` from the fragment next to `t` (then clears the fragment, as for the token) and joins under that display name. `url [--pid N] [--name NAME]` finds the instance exactly as `ctl` does and makes no network call; it exits 1 when no instance is running and 2 on a bad command line. **The printed URL contains the instance's token, so it is a secret**: it reveals nothing the user-only discovery file does not already hold, but anyone who has it can drive the instance.
+- **Agent sessions without a browser.** `session.join` creates a session that every UI shows as an amber labelled marker, exactly like a UI's presence (`ui.presence`, `ui.presence.left`, the hello `sessions` list, `status.ui.sessions`) with `kind` `agent`. It has no camera and never changes the shared view.
+
+```
+arcane-atlas url --name "Grok Bot"
+arcane-atlas ctl session.join name="Grok Bot" map=0 at=[-9000,400,90] yaw=0 mode=orbit
+arcane-atlas ctl session.move id=<id> at=[-8990,400,90] yaw=90 mode=fly
+arcane-atlas ctl sessions.list
+arcane-atlas ctl session.leave id=<id>
+```
+
+`key=value` words are parsed as JSON when they can be, so `at=[-9000,400,90]` is an array and `at=-9000,400,90` (text with commas) works too; `--json '{"name":"Grok Bot","at":[-9000,400,90]}'` is the object form. Quote a value that contains spaces for the shell, as in `name="Grok Bot"`. MCP exposes the same four commands as the tools `session_join`, `session_move`, `session_leave` and `sessions_list` (`at` is an array of three numbers, as for `camera.goto`); `arcane-atlas script --attach` runs them from a file.
+
+- `session.join` returns `{id, name}` (the id is 12 hex characters). `name` must be given but may be empty; it is cleaned like a UI name and empty (or nothing but control characters) means `session xxxx`. `map`, `at`, `yaw` and `mode` default to `0`, `[0,0,0]`, `0` and `orbit`.
+- `session.move` changes only the fields it is given and returns the stored presence. Values are validated like the socket `presence` op (see above). A move less than the presence interval (50 ms, `PresenceMinInterval`, a code option) after the previous one fails with code `unavailable` and says how long to wait; it is never dropped silently. The first move after a join is not limited.
+- `sessions.list` returns `{sessions:[{id,name,map,at,yaw,mode,kind}]}`: every session that has published a position, browsers (`kind` `ui`) and agents (`kind` `agent`) together, oldest first. A browser appears once it has sent its first presence, which is right after it connects.
+- An agent session expires after 10 minutes without a `session.join` or `session.move` (the `AgentSessionTimeout` code option) and at most 16 can exist at once (`MaxAgentSessions`); a join past the cap fails with a message saying so. Expired sessions are removed lazily on every session command and snapshot read and by a 30 second timer, and each removal is announced as `ui.presence.left`. Move at least every few minutes to stay.
+- These commands need a running `serve` instance: `run`, headless `script` and headless MCP answer `unavailable` and say to attach to `serve`. Command results are also pushed to the UIs in the `command` event (except `session.move`, which an agent may call many times a second and which publishes none); ids are not secrets, and nothing these commands return contains the token.
+
+This is still the loopback posture of section 6: the token is per instance, and anyone on this machine who is given the URL and token joins the same host.
 
 ## Environment variables
 

@@ -29,17 +29,37 @@ export class StatusBar {
         this.gpu = h('span', { class: 'status-item num' });
         this.dot = h('span', { class: 'dot dot-off', aria: { hidden: 'true' } });
         this.connection = h('span', { class: 'status-item' }, this.dot, h('span', { class: 'connection-text' }));
+        this.name = h('input', {
+            class: 'input session-name',
+            type: 'text',
+            spellcheck: false,
+            autocomplete: 'off',
+            title: 'The name other sessions see next to your marker',
+            attrs: { maxlength: 32, 'aria-label': 'Session name' },
+            on: { change: () => this.app.setSessionName(this.name.value) },
+        });
         this.last = h('span', { class: 'status-item status-last num', title: 'The last command that ran on the host, from the UI, ctl, a script or MCP' });
         this.element = h('footer', { class: 'statusbar', role: 'contentinfo' },
             h('div', { class: 'status-group', role: 'status', aria: { label: 'Rendering status' } }, this.tiles, this.triangles, this.fps, this.gpu),
-            h('div', { class: 'status-group' }, this.connection),
+            h('div', { class: 'status-group' }, this.connection, this.name),
             h('div', { class: 'status-group status-grow', role: 'status', aria: { label: 'Last automation command', live: 'off' } }, this.last));
         app.events.on('stats', () => this.updateStats());
         app.events.on('connection', () => this.updateConnection());
         app.events.on('lastCommand', () => this.updateLast());
+        app.events.on('connection', () => this.updateName());
+        app.events.on('sessionName', () => this.updateName());
         this.updateStats();
         this.updateConnection();
         this.updateLast();
+        this.updateName();
+    }
+
+    /** Shows the user's name (empty until one is set) with the host's default as the placeholder; never overwrites typing in progress. */
+    updateName() {
+        this.name.placeholder = this.app.defaultName || 'session name';
+        if (document.activeElement !== this.name) {
+            this.name.value = this.app.sessionName;
+        }
     }
 
     updateStats() {

@@ -58,6 +58,7 @@ public sealed class HostCommandTests
         [
             "status", "help", "maps.list", "view.get", "view.set", "camera.goto", "camera.frame", "layer.set", "layers.list",
             "bookmarks.list", "bookmark.go", "bookmark.add", "bookmark.remove", "tiles.status", "query.pick", "capture", "cache.clear",
+            "session.join", "session.move", "session.leave", "sessions.list",
         ];
         foreach (string name in expected)
         {

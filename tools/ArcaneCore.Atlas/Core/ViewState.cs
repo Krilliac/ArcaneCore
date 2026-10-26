@@ -385,8 +385,30 @@ public sealed class ViewStore(ViewState initial)
     private readonly Lock _gate = new();
     private ViewState _current = initial ?? throw new ArgumentNullException(nameof(initial));
     private long _version;
+    private string? _followOrigin;
 
     public event Action<ViewState, long, string>? Changed;
+
+    /// <summary>
+    /// Raised just before <see cref="Changed"/> with the view as it was before this change, for subscribers that need to
+    /// know what the change altered (arguments: previous, next, version, origin, and the origin that owns the follow).
+    /// </summary>
+    public event Action<ViewState, ViewState, long, string, string?>? Applied;
+
+    /// <summary>
+    /// The origin of the patch or set that last changed <see cref="ViewState.FollowGuid"/> (a clear counts), or null before any
+    /// follow change. Later patches that keep the same follow, such as the live feed moving the camera each frame, do not take it over.
+    /// </summary>
+    public string? FollowOrigin
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _followOrigin;
+            }
+        }
+    }
 
     public ViewState Current
     {
@@ -413,31 +435,83 @@ public sealed class ViewStore(ViewState initial)
     /// <summary>Applies a merge patch atomically; <paramref name="origin"/> names the writer (for example <c>ui</c> or <c>mcp</c>).</summary>
     public ViewState Patch(JsonObject patch, string origin)
     {
+        ViewState previous;
+        ViewState next;
+        long version;
+        string? followOrigin;
+        lock (_gate)
+        {
+            previous = _current;
+            next = _current.Apply(patch);
+            _current = next;
+            version = ++_version;
+            followOrigin = NoteFollowLocked(previous, next, origin, patch.ContainsKey("follow"));
+        }
+
+        Applied?.Invoke(previous, next, version, origin, followOrigin);
+        Changed?.Invoke(next, version, origin);
+        return next;
+    }
+
+    /// <summary>
+    /// Stops the follow when <paramref name="owner"/> is the origin that owns it (a UI that disconnected); the check and the change are one
+    /// atomic step, so a follow another origin took over in the meantime is left alone. False when nothing was released.
+    /// </summary>
+    public bool ReleaseFollow(string owner)
+    {
+        ViewState previous;
         ViewState next;
         long version;
         lock (_gate)
         {
-            next = _current.Apply(patch);
+            if (_current.FollowGuid is null || !string.Equals(_followOrigin, owner, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            previous = _current;
+            next = _current.Apply(new JsonObject { ["follow"] = null });
             _current = next;
             version = ++_version;
+            NoteFollowLocked(previous, next, owner, followKey: true);
         }
 
-        Changed?.Invoke(next, version, origin);
-        return next;
+        Applied?.Invoke(previous, next, version, owner, null);
+        Changed?.Invoke(next, version, owner);
+        return true;
     }
 
     /// <summary>Replaces the whole view.</summary>
     public ViewState Set(ViewState state, string origin)
     {
         ArgumentNullException.ThrowIfNull(state);
+        ViewState previous;
         long version;
+        string? followOrigin;
         lock (_gate)
         {
+            previous = _current;
             _current = state;
             version = ++_version;
+            followOrigin = NoteFollowLocked(previous, state, origin, followKey: previous.FollowGuid != state.FollowGuid);
         }
 
+        Applied?.Invoke(previous, state, version, origin, followOrigin);
         Changed?.Invoke(state, version, origin);
         return state;
+    }
+
+    /// <summary>
+    /// Records who owns the follow: the origin of any patch that names <c>follow</c> (even with the guid already followed, so a second
+    /// origin can take the follow over), or of a whole-view replacement that changes it. Returns the owner to publish, null when nothing is followed.
+    /// </summary>
+    private string? NoteFollowLocked(ViewState previous, ViewState next, string origin, bool followKey)
+    {
+        if (followKey)
+        {
+            _followOrigin = origin;
+        }
+
+        return next.FollowGuid is null ? null : _followOrigin;
     }
 }

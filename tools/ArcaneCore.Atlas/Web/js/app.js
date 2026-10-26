@@ -1,6 +1,13 @@
 // Application state and the wiring between the host (REST + WebSocket) and the panels. The server owns the view:
 // local edits are applied immediately for responsiveness, sent as `view.set` merge patches throttled to about 10 Hz,
 // and every `view` event that did not originate from this connection (`ui:<connection>`) replaces the local copy.
+// Several UIs may be open at once and each flies its own camera. A `view` event from another UI (`ui:<other>`) updates the
+// shared parts (map, layers, compare mode, ...) but neither this UI's camera nor its follow target (follow drives the
+// camera). An event from anything else (cli, mcp, script, http) carries `cameraChanged`; only when it is true (or missing,
+// an older host) does it move the camera and follow. The live feed moves the camera of a followed entity every frame (origin
+// `live`); `followOrigin` says who asked for the follow, and only that UI (or any non-UI asker) takes those frames. `refreshView` keeps the local camera unless asked to take the host's,
+// which happens after this UI ran a camera command. Each UI also publishes where it is (`presence`, at most about 5 Hz,
+// only when it moved) and keeps the other sessions in `app.presence`, which the viewport draws as labelled markers.
 
 import { Api, ApiError, Socket, unwrap } from './api.js';
 import { normalizeLayerList } from './catalog.js';
@@ -10,8 +17,42 @@ import { LiveModel } from './live.js';
 import { REPLAY_FRAME_TOPIC, REPLAY_STATE_TOPIC, acceptsLiveFrame, acceptsReplayFrame, createReplayState, noteReplayFrame, reduceReplayState } from './insight/replay.js';
 import { normalizeBookmarks, normalizeCommands, normalizeMaps, normalizeStatus } from './normalize.js';
 import { OverlayStore, colorKeyTable } from './overlays.js';
+import { PresenceStore, cleanName, presenceMessage } from './presence.js';
 import { tileOf } from './tiles.js';
 import { Emitter, composePatch, deepEqual, throttle, mergePatch } from './util.js';
+
+/** localStorage slot of the user-chosen session name. */
+const NAME_SLOT = 'atlas.name';
+
+/** Minimum spacing of presence messages; the host drops closer ones (50 ms), so this stays well clear of that. */
+const PRESENCE_MS = 200;
+
+/** Host commands that move the camera (every one goes through `ViewCommands`), so the view refresh after them takes the host's camera. */
+const CAMERA_COMMANDS = /^(camera\.(goto|frame)|bookmark\.go|live\.follow)$/;
+
+/** True when running this command from this UI moves the host's camera or follow: a camera command, or `view.set` with a camera or a follow. */
+function movesCamera(name, args) {
+    return CAMERA_COMMANDS.test(name)
+        || (name === 'view.set' && args !== null && typeof args === 'object' && ('camera' in args || 'follow' in args));
+}
+
+function readStoredName() {
+    try {
+        return typeof localStorage === 'undefined' ? '' : (localStorage.getItem(NAME_SLOT) ?? '');
+    } catch {
+        return '';
+    }
+}
+
+function writeStoredName(name) {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(NAME_SLOT, name);
+        }
+    } catch {
+        // Storage can be blocked; the name then only lasts for this page.
+    }
+}
 
 /** Commands whose result cannot have changed the shared view, so no view refresh follows them. */
 const VIEW_NEUTRAL = /^(view\.get|status|help|maps\.list|layers\.list|bookmarks\.list|tiles\.status|query\.|ref\.query\.|live\.(status|entities|query)|cache\.|export\.)/;
@@ -46,6 +87,20 @@ export class App {
         this.webgl = { ok: true, message: '' };
         this._pending = null;
         this._staleRemote = false;
+        this._staleCamera = false;
+        this._peerFollow = false;
+        this._helloing = false;
+        this._lastConnection = null;
+        this.presence = new PresenceStore();
+        this.defaultName = '';
+        this.sessionName = cleanName(readStoredName());
+        this._lastPresence = '';
+        this._publishPresence = throttle(() => this.#publishPresence(), PRESENCE_MS);
+        this.events.on('view', (view, changed) => {
+            if (!this._helloing && (changed.has('camera') || changed.has('map'))) {
+                this._publishPresence();
+            }
+        });
         this._flushPatch = throttle(() => this.#flush(), 100);
         this._resolved = null;
         this.stopped = false;
@@ -61,6 +116,9 @@ export class App {
                 return;
             }
             this.connection = { ...this.connection, state, id: s.connection };
+            if (state !== 'open') {
+                this.#clearPresence();
+            }
             if (state !== 'open') {
                 this.connection.message = state === 'unauthorized' ? 'The host refused the token.' : state === 'closed' ? 'Reconnecting to the host.' : 'Connecting.';
             }
@@ -93,16 +151,44 @@ export class App {
     stop() {
         this.stopped = true;
         this._pending = null;
+        this._publishPresence.cancel();
         this.socket.stop();
     }
 
     async #onHello(m) {
         this.connection = { state: 'open', id: m.connection ?? null, version: m.version ?? null, message: '' };
+        this.defaultName = typeof m.name === 'string' ? m.name : '';
+        this.presence.reset(m.connection ?? null, m.sessions ?? []);
+        this.events.emit('presence');
         this.viewVersion = Number.isFinite(m.viewVersion) ? m.viewVersion : this.viewVersion;
-        if (m.view) {
-            this.#replaceView(normalizeView(m.view, this.view), 'hello');
+        // The first hello takes the whole view. After a reconnect this UI keeps flying where it was: the host's camera and
+        // follow are those of whoever moved last.
+        const reconnect = this._lastConnection !== null;
+        this._lastConnection = m.connection ?? '';
+        // A follow owned by another UI is neither adopted nor allowed to drag this camera, on the first hello as on a reconnect.
+        this._peerFollow = typeof m.followOrigin === 'string' && m.followOrigin.startsWith('ui:') && m.followOrigin !== `ui:${m.connection}`;
+        this._helloing = true;
+        try {
+            if (m.view) {
+                this.#replaceView(this.#mergeRemote(normalizeView(m.view, this.view), !reconnect), 'hello');
+            }
+        } finally {
+            this._helloing = false;
+        }
+        // The old connection's departure released this UI's follow on the host: follow again, or drop the stale local follow.
+        const hostFollow = m.view && typeof m.view.follow === 'string' ? m.view.follow : null;
+        if (reconnect && this.view.follow && this.view.follow !== hostFollow) {
+            const guid = this.view.follow;
+            this.runCommand('live.follow', { guid }, { quiet: true }).then((result) => {
+                if (!result?.ok && this.view.follow === guid) {
+                    this.#replaceView({ ...this.view, follow: null }, 'refresh');
+                }
+            }).catch(() => {});
         }
         this.events.emit('connection', this.connection);
+        this._lastPresence = '';
+        this._publishPresence.cancel();
+        this._publishPresence();
         await Promise.allSettled([this.refreshCommands(), this.refreshStatus(), this.refreshLayers(), this.refreshMaps(), this.refreshBookmarks()]);
     }
 
@@ -113,6 +199,16 @@ export class App {
                 break;
             case 'command':
                 this.#onCommandEvent(data);
+                break;
+            case 'ui.presence':
+                if (this.presence.apply(data)) {
+                    this.events.emit('presence');
+                }
+                break;
+            case 'ui.presence.left':
+                if (data && typeof data.id === 'string' && this.presence.remove(data.id)) {
+                    this.events.emit('presence');
+                }
                 break;
             case 'live.frame':
                 if (acceptsLiveFrame(this.replay)) {
@@ -154,14 +250,65 @@ export class App {
             }
             this.viewVersion = version;
         }
+        // Who owns the follow: the live feed moves the camera of the followed entity every frame with origin `live`, which belongs
+        // to whoever started the follow (`followOrigin`), not to the live feed. Noted before the own-origin return below.
+        const followedByPeer = typeof data.followOrigin === 'string' && data.followOrigin.startsWith('ui:') && data.followOrigin !== this.socket.origin;
+        this._peerFollow = followedByPeer;
         if (data.origin && data.origin === this.socket.origin) {
             return;
         }
+        // Another UI never moves this camera, and neither do the live feed's frames while another UI follows. Anything else does,
+        // unless the host says the change left the camera alone (an event without the flag comes from an older host, which cannot
+        // tell, so it counts as a camera change).
+        const fromPeerUi = typeof data.origin === 'string' && data.origin.startsWith('ui:') && data.origin !== this.socket.origin;
+        const takeCamera = !fromPeerUi && !(data.origin === 'live' && followedByPeer) && data.cameraChanged !== false;
         if (this.interacting || this._pending) {
             this._staleRemote = true;
+            this._staleCamera = this._staleCamera || takeCamera;
             return;
         }
-        this.#replaceView(normalizeView(data.view, this.view), 'remote');
+        this.#replaceView(this.#mergeRemote(normalizeView(data.view, this.view), takeCamera), 'remote');
+    }
+
+    /** `next` with this UI's camera and follow kept, unless `takeCamera`; even then the follow of another UI is never adopted. */
+    #mergeRemote(next, takeCamera) {
+        if (!takeCamera) {
+            return { ...next, camera: this.view.camera, follow: this.view.follow };
+        }
+        return this._peerFollow ? { ...next, follow: this.view.follow } : next;
+    }
+
+    #clearPresence() {
+        this._lastPresence = '';
+        if (this.presence.peers().length > 0) {
+            this.presence.reset(null, []);
+            this.events.emit('presence');
+        }
+    }
+
+    /** Sends this session's presence when it changed since the last send; false when nothing was sent. */
+    #publishPresence() {
+        if (this.stopped || this.socket.state !== 'open') {
+            return false;
+        }
+        const message = presenceMessage(this.view, this.sessionName);
+        const key = JSON.stringify(message);
+        if (key === this._lastPresence) {
+            return false;
+        }
+        if (this.socket.send(message)) {
+            this._lastPresence = key;
+            return true;
+        }
+        return false;
+    }
+
+    /** Sets the display name other sessions see ('' falls back to the host's default), remembers it and publishes it with the next presence message. */
+    setSessionName(name) {
+        this.sessionName = cleanName(name);
+        writeStoredName(this.sessionName);
+        this._publishPresence();
+        this.events.emit('sessionName', this.sessionName);
     }
 
     #onCommandEvent(data) {
@@ -288,9 +435,16 @@ export class App {
         this.interacting = false;
         this._flushPatch.flush();
         if (this._staleRemote) {
-            this._staleRemote = false;
-            await this.refreshView();
+            await this.#catchUp();
         }
+    }
+
+    /** Fetches the host's view after remote changes arrived mid-gesture; the camera is taken only if a non-UI origin moved it. */
+    async #catchUp() {
+        const takeCamera = this._staleCamera;
+        this._staleRemote = false;
+        this._staleCamera = false;
+        await this.refreshView({ takeCamera });
     }
 
     async #flush() {
@@ -302,21 +456,24 @@ export class App {
         const result = await this.runCommand('view.set', patch, { quiet: true, noRefresh: true });
         if (!result.ok) {
             this.toast(`The host refused a view change: ${result.error?.message ?? 'view.set failed'}`, 'warn');
-            await this.refreshView();
+            await this.refreshView({ takeCamera: true });
         } else if (this._staleRemote && !this.interacting && !this._pending) {
-            this._staleRemote = false;
-            await this.refreshView();
+            await this.#catchUp();
         }
     }
 
-    async refreshView() {
+    /**
+     * Re-reads the host's view. The host's camera and follow are those of whichever client moved last, so this UI keeps its
+     * own unless `takeCamera` (after it ran a camera command, or when the host refused its patch).
+     */
+    async refreshView({ takeCamera = false } = {}) {
         const result = await this.runCommand('view.get', {}, { quiet: true, noRefresh: true });
         if (result.ok) {
             const body = result.data?.view ?? result.data;
             if (Number.isFinite(result.data?.version)) {
                 this.viewVersion = Math.max(this.viewVersion, result.data.version);
             }
-            this.#replaceView(normalizeView(body, this.view), 'refresh');
+            this.#replaceView(this.#mergeRemote(normalizeView(body, this.view), takeCamera), 'refresh');
         }
     }
 
@@ -346,6 +503,10 @@ export class App {
      * resolves with the CommandResult JSON; failures become a toast unless `quiet`. Overlays in the result are kept.
      */
     async runCommand(name, args = {}, { quiet = false, noRefresh = false } = {}) {
+        if (name === 'bookmark.add' && args !== null && typeof args === 'object' && !('map' in args) && !('camera' in args)) {
+            // The host's camera is that of whoever moved last; a bookmark saves where this user is.
+            args = { ...args, map: this.view.map, camera: cameraPatch(this.view.camera).camera };
+        }
         let result;
         try {
             if (this.socket.state === 'open') {
@@ -372,7 +533,7 @@ export class App {
         }
         this.events.emit('command-result', { name, args, result });
         if (!noRefresh && !VIEW_NEUTRAL.test(name)) {
-            this.refreshView().catch(() => {});
+            this.refreshView({ takeCamera: movesCamera(name, args) }).catch(() => {});
         }
         return result;
     }

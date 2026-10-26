@@ -289,7 +289,7 @@ public sealed class CliVerbTests
             Assert.Equal(string.Empty, result.Error);
         }
 
-        foreach (string verb in new[] { "serve", "ctl", "run", "script", "mcp", "layers", "help", "ARCANECORE_ATLAS_STATE_DIR" })
+        foreach (string verb in new[] { "serve", "ctl", "url", "run", "script", "mcp", "layers", "help", "ARCANECORE_ATLAS_STATE_DIR" })
         {
             Assert.Contains(verb, AtlasCli.Usage, StringComparison.Ordinal);
         }
