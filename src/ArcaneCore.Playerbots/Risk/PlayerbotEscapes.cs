@@ -63,7 +63,7 @@ internal static class PlayerbotEscapes
     ];
 
     /// <summary>
-    /// The victim snares only the kite uses (<see cref="PlayerbotKiteModel"/>). Kept out of <see cref="All"/> so the risk model's
+    /// The victim snares only the kite uses (<see cref="Combat.PlayerbotKiteModel"/>). Kept out of <see cref="All"/> so the risk model's
     /// ready-escape count (<c>PlayerbotRisk.ReadyEscapes</c>) and the retreat's candidates are unchanged by the kite.
     /// </summary>
     internal static IReadOnlyList<string> KiteSlows { get; } = [Frostbolt, ConeOfCold, CurseOfExhaustion];
