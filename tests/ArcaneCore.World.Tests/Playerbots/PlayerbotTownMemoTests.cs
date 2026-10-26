@@ -188,7 +188,8 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         /// 13 queries on the 5 ms budget). Null keeps the production limit (5 ms).
         /// </param>
         /// <param name="frozenThinkClock">
-        /// Whether the think probe runs on a manual clock (<see cref="PlayerbotThinkProbeTests.ManualClock"/>) instead of the system clock.
+        /// Whether the think probe runs on a manual clock (<see cref="PlayerbotThinkProbeTests.ManualClock"/>) instead of the system clock
+        /// (the default: every test of this world, so none depends on how fast this machine thinks).
         /// It moves only when something calls its Advance(), and the only caller is <see cref="HazardPathfinder"/>, by
         /// <paramref name="queryMs"/> inside each query. With <paramref name="queryMs"/> 0 nothing calls it, so the clock never moves and no
         /// budget read off the think's own time can stop a plan: neither the query time (<see cref="PlayerbotTownGoals.RepairQueryTicksLimit"/>)
@@ -199,7 +200,7 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         /// How long each path query takes on the frozen think clock. The pathfinder advances the clock inside the query, so the time is
         /// charged both to the think's query time and to its running time, exactly, whatever this machine's speed.
         /// </param>
-        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long? queryTicksLimit = long.MaxValue, bool frozenThinkClock = false, double queryMs = 0)
+        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long? queryTicksLimit = long.MaxValue, bool frozenThinkClock = true, double queryMs = 0)
         {
             var items = new ItemTestContent();
             items.Templates.Templates.Add(new ItemTemplate
