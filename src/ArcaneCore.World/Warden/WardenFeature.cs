@@ -276,7 +276,8 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 break;
             case WardenAction.Ban:
                 Announce(session, action, reason, "Warden banned an account", AnnounceSeverity.Error);
-                _ = BanAsync(session.AccountId, reason);
+                int accountId = session.AccountId;
+                _ = Task.Run(() => BanAsync(accountId, reason)); // not inline: SQLite runs the async ban write synchronously, and this runs on the world tick
                 session.Kick();
                 break;
         }
