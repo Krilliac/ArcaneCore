@@ -2,7 +2,7 @@
 // Stream: byte 0 = literal mode (0 binary, 1 ASCII), byte 1 = dictionary size as bits (4 to 6), then an LSB-first bit stream.
 // Each token starts with one flag bit: 0 = literal (8 bits), 1 = back-reference (length code, extra length bits, distance code,
 // low distance bits). A back-reference of length 519 ends the stream. ASCII literal mode is refused (MPQ writers use binary).
-// ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:34-69 (tables), :277-389 (tokens), :486-505 (header)
+// ref: StormLib src/pklib/explode.c:34-69 (tables), :277-389 (tokens), :486-505 (header)
 
 import { badFile, ClientFsError } from './limits.js';
 

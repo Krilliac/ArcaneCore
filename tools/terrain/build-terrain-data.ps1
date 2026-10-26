@@ -22,11 +22,11 @@ builds every other map plus transports (tiles already built are skipped, so it r
 '0 --tile 32,48' builds one tile (mmap tile order: Y first, i.e. the Northshire tile).
 
 .EXAMPLE
-pwsh -File tools\terrain\build-terrain-data.ps1 -ToolsDir D:\terrain-tools -OutDir D:\ArcaneCore-data
+pwsh -File tools\terrain\build-terrain-data.ps1 -ToolsDir <tools-dir> -OutDir <data-dir>
 #>
 [CmdletBinding()]
 param(
-    [string]$VmangosSource = 'D:\refs\vmangos',
+    [string]$VmangosSource = $(if ($env:ARCANECORE_VMANGOS_REF) { $env:ARCANECORE_VMANGOS_REF } elseif ($env:ARCANECORE_REFS_ROOT) { Join-Path $env:ARCANECORE_REFS_ROOT 'vmangos' } else { '' }),
     [string]$ClientDir = 'D:\World of Warcraft Classic 1.12.1',
     [Parameter(Mandatory = $true)][string]$ToolsDir,
     [Parameter(Mandatory = $true)][string]$OutDir,
@@ -54,6 +54,7 @@ function Assert-FreeMemory {
 }
 
 if ($Steps -contains 'Tools') {
+    if (-not $VmangosSource) { throw 'give -VmangosSource, or set ARCANECORE_VMANGOS_REF or ARCANECORE_REFS_ROOT' }
     if (-not (Test-Path (Join-Path $VmangosSource 'contrib\mmap'))) { throw "$VmangosSource is not a vmangos source tree" }
     New-Item -ItemType Directory -Force $src, $build | Out-Null
     robocopy $VmangosSource $src /MIR /XD .git sql bin .serena /XF CMakeUserPresets.json /NFL /NDL /NJH /NJS /NP | Out-Null

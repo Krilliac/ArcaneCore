@@ -1,7 +1,7 @@
 namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
-/// Which auras the Shapeshift Form Effect (spell 9033) removes. Source: D:\refs\vmangos\src\game\Spells\
+/// Which auras the Shapeshift Form Effect (spell 9033) removes. Source: vmangos@0e3ff01 src/game/Spells/
 /// SpellEffects.cpp:4442-4480 and Unit.cpp:543-556 (RemoveSpellsCausingAuraWithMechanic), with the keep mask
 /// MECHANIC_NOT_REMOVED_BY_SHAPESHIFT from SpellDefines.h:710-714 and the Mechanics ids of SpellDefines.h:660-691.
 /// Operates on the aura's spell data only (mechanic mask, icon, dispel); the caller walks the holders.

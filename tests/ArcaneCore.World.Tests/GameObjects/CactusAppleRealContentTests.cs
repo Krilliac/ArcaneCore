@@ -45,7 +45,7 @@ internal sealed class CactusRealContentFactAttribute : FactAttribute
 /// Quest 4402 "Galgar's Cactus Apple Surprise" against the imported world (a copy of <c>ARCANECORE_TEST_WORLD_DB</c>; the fixture is never
 /// written), configured as the live realm is (skills Retail from the client DBCs): an orc rogue made by the real character creation, the real
 /// Cactus Apple spawn nearest the Valley of Trials start, the real lock 43, loot 11500 and spell 6478 rows. The client side is what the 5875
-/// binary does (D:/WoW-RE-Research/protocol/gameobject-interaction.md): the apple is clickable only once GAMEOBJECT_DYN_FLAGS bit 0x1 reached it
+/// binary does (WoW-RE-Research protocol/gameobject-interaction.md): the apple is clickable only once GAMEOBJECT_DYN_FLAGS bit 0x1 reached it
 /// (FLAGS 0x4 INTERACT_COND), and the click then sends CMSG_CAST_SPELL of 6478 with target mask 0x0800 and the object's GUID, never
 /// CMSG_GAMEOBJ_USE.
 /// </summary>

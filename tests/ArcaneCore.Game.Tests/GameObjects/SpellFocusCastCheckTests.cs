@@ -11,7 +11,7 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 namespace ArcaneCore.Game.Tests.GameObjects;
 
 /// <summary>
-/// GO7a: the spell focus requirement of Spell::CheckItems (D:\refs\vmangos\src\game\Spells\Spell.cpp:7230-7243,
+/// GO7a: the spell focus requirement of Spell::CheckItems (vmangos@0e3ff01 src/game/Spells/Spell.cpp:7230-7243,
 /// GridNotifiers.h:586-606 GameObjectFocusCheck, Object.cpp:1738-1752 IsWithinDist).
 /// </summary>
 public sealed class SpellFocusCastCheckTests

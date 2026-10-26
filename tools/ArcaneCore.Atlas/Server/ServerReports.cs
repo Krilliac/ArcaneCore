@@ -462,7 +462,7 @@ public sealed record ServerStatus(
     /// <summary>The file versions the server's readers accept: what a data directory must hold for the engine to read it.</summary>
     public static JsonObject Readers()
     {
-        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:38-39 "MAPS" + "z1.4" (vmangos D:\refs\vmangos\src\game\Maps\GridMap.cpp:35-36)
+        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:38-39 "MAPS" + "z1.4" (vmangos vmangos@0e3ff01 src/game/Maps/GridMap.cpp:35-36)
         // ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs:13 "VMAP_7.0"
         // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:17-26 MMAP magic, Detour version 7, mmap version 6, DNAV
         return new JsonObject
