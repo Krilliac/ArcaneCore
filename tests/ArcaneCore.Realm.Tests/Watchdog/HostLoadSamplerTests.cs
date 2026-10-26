@@ -127,7 +127,7 @@ public sealed class HostLoadSamplerTests
             clock.AdvanceMs(1000);
         }
 
-        probe.Current = Reading(0, 9, 144);
+        probe.Current = Reading(4, 9, 144); // the process ran a core: not an idle (process-blocked) window
         HostLoadReport quiet = sampler.Report(4 * Second)!.Value;
         Assert.Equal(0, quiet.StallMicros);
         Assert.Equal(HostLoadVerdict.Quiet, quiet.Verdict);

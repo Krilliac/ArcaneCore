@@ -149,7 +149,7 @@ public sealed class HangStackCaptureTests : IDisposable
     }
 
     [Fact]
-    public async Task AnEmptyCapture_IsReportedAsEmpty_NotAsWritten()
+    public async Task AnEmptyCapture_IsWrittenWithABanner_AndLoggedAsEmpty()
     {
         var log = new RecordingLogger<TickMonitor>();
         var capture = new HangStackCapture(Options(), log, new EmptyRunner(), fileExists: _ => true, processId: 4242);
@@ -163,6 +163,39 @@ public sealed class HangStackCaptureTests : IDisposable
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, line.Level);
         Assert.Contains("empty", line.Message);
         Assert.DoesNotContain("were written", line.Message);
+    }
+
+    private sealed class WhitespaceFailedRunner : IHangStackRunner
+    {
+        public Task<(int ExitCode, string Output)> RunAsync(string tool, IReadOnlyList<string> arguments, TimeSpan timeout)
+            => Task.FromResult((1, "  \r\n"));
+    }
+
+    [Fact]
+    public async Task WhitespaceOnlyOutput_WithANonZeroExit_IsAlsoEmpty()
+    {
+        var log = new RecordingLogger<TickMonitor>();
+        var capture = new HangStackCapture(Options(), log, new WhitespaceFailedRunner(), fileExists: _ => true, processId: 4242);
+
+        Assert.True(capture.TryCapture(0, "hang"));
+        await capture.Last;
+
+        string text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_directory)));
+        Assert.Contains("EMPTY CAPTURE", text);
+        Assert.Contains("empty", Assert.Single(log.Lines).Message);
+    }
+
+    [Fact]
+    public async Task AnUnknownGcPause_IsSaidInTheHeader_NotShownAsZero()
+    {
+        var capture = new HangStackCapture(Options(), new RecordingLogger<TickMonitor>(), new FakeRunner(), fileExists: _ => true, processId: 4242);
+
+        Assert.True(capture.TryCapture(0, "hang", runningMicros: 63_000_000, gcPauseMicros: HangStackCapture.GcPauseUnknown));
+        await capture.Last;
+
+        string text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_directory)));
+        Assert.Contains("GC pause unknown", text);
+        Assert.DoesNotContain("GC-DOMINATED", text);
     }
 
     [Fact]

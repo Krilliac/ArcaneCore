@@ -98,6 +98,9 @@ public sealed class HangStackCapture
     /// <summary>The GC pause share of the hung frame at or above which the capture header says the stack is not the cause.</summary>
     public const double GcDominatedShare = 0.5;
 
+    /// <summary>Passed as the GC pause when reading it faulted: the capture header then says the pause is unknown.</summary>
+    public const long GcPauseUnknown = -1;
+
     /// <summary>The marker of one thread's block in dotnet-stack report output; none in the output means the tool captured no stacks.</summary>
     public const string ThreadMarker = "Thread (";
 
@@ -188,11 +191,16 @@ public sealed class HangStackCapture
             text.Append("# ").Append(at.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC, process ").Append(_processId)
                 .Append(", ").Append(tool).Append(" exit ").Append(exitCode).AppendLine();
             text.Append("# ").AppendLine(reason.ReplaceLineEndings(" "));
-            bool empty = exitCode == 0 && !output.Contains(ThreadMarker, StringComparison.Ordinal);
+            bool empty = string.IsNullOrWhiteSpace(output) || (exitCode == 0 && !output.Contains(ThreadMarker, StringComparison.Ordinal)); // the marker assumes dotnet-stack report prints "Thread (" per thread
             bool gcDominated = runningMicros > 0 && gcPauseMicros >= runningMicros * GcDominatedShare;
             if (empty)
             {
-                text.AppendLine("# EMPTY CAPTURE: the tool exited 0 but printed no thread stacks, so this hang has no stack.");
+                text.AppendLine("# EMPTY CAPTURE: the tool printed no thread stacks, so this hang has no stack.");
+            }
+
+            if (gcPauseMicros == GcPauseUnknown)
+            {
+                text.AppendLine("# GC pause unknown: reading the host-load sampler failed (see the fault ledger), so this stack may be GC-dominated.");
             }
 
             if (gcDominated)
@@ -209,7 +217,7 @@ public sealed class HangStackCapture
             await File.WriteAllTextAsync(path, text.ToString()).ConfigureAwait(false);
             if (empty)
             {
-                _logger.LogWarning("world tick hang: the stack tool exited 0 but captured no thread stacks, the capture is empty: {Path}", path);
+                _logger.LogWarning("world tick hang: the stack tool captured no thread stacks (exit {ExitCode}), the capture is empty: {Path}", exitCode, path);
             }
             else if (exitCode == 0)
             {

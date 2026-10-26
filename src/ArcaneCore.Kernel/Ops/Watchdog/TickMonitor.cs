@@ -88,6 +88,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 {
     private const long NoTick = long.MinValue;
 
+    /// <summary>How many times ActionHangMs a memory-starved hang may last before the fatal action fires regardless.</summary>
+    internal const long MemoryStarvedGraceFactor = 3;
+
     private readonly TickMonitorOptions _options;
     private readonly WatchdogClock _clock;
     private readonly ITickHangActuator _actuator;
@@ -361,10 +364,12 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         }
 
         // 1b. Fatal hang action: when a single tick remains wedged past ActionHangMs and the host-load sampler does not blame GC pauses, machine CPU starvation or a stopped process.
+        // A memory-starved verdict only defers the action: an idle process on a memory-loaded host is also what a deadlock looks like, so past MemoryStarvedGraceFactor x ActionHangMs it fires anyway.
         if (!_stopped && last != NoTick && nowMicros - last > _actionHangMicros && _actionFiredForStart != last)
         {
             HostLoadVerdict verdict = HostVerdict(nowMicros - last);
-            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled or HostLoadVerdict.MemoryStarved))
+            bool memoryDeferred = verdict == HostLoadVerdict.MemoryStarved && nowMicros - last <= _actionHangMicros * MemoryStarvedGraceFactor;
+            if (!memoryDeferred && verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled))
             {
                 _actionFiredForStart = last;
                 _actionCounter.Increment();
@@ -547,7 +552,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         }
     }
 
-    /// <summary>The GC pause inside the window of a slow tick (watchdog thread), or 0 without a sampler or a baseline.</summary>
+    /// <summary>The GC pause inside the window of a slow tick (watchdog thread): 0 without a sampler or a baseline, -1 when the probe faulted (recorded).</summary>
     private long GcPauseMicros(long windowMicros)
     {
         try
@@ -556,7 +561,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            return 0;
+            _logger.LogFault("TickMonitor.GcPauseMicros", ex, "world tick hang: the GC pause of the hung window could not be read");
+            return HangStackCapture.GcPauseUnknown;
         }
     }
 
