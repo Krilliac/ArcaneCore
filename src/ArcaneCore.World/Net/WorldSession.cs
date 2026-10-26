@@ -899,6 +899,7 @@ public sealed partial class WorldSession : IPlayerSession
     private void ReportUnhandled(WorldOpcode opcode, int length)
     {
         long count = _unhandled.Record(opcode);
+        NoteUnhandledOpcode(opcode);
         if (count == 1)
         {
             string label = UnhandledOpcodeTracker.LabelOf(opcode);

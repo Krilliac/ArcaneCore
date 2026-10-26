@@ -174,6 +174,49 @@ public sealed partial class WorldSession
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} refusals sent to at least {accounts} accounts within {ClientRejectionRateTracker.WindowMs / 60_000} minutes (latest entry {rejection.Entry}, bot {IsPlayerbot})"));
     }
 
+    /// <summary>Opcode values (by index) that are never reported as unhandled: obsolete opcodes (a name that says so) and values with no reference name.</summary>
+    private static readonly bool[] UnhandledNotReported = BuildUnhandledTables(gameplay: false);
+
+    /// <summary>Opcode values (by index) that are real gameplay requests: an unhandled one is a Warning, any other reported opcode an Info.</summary>
+    private static readonly bool[] UnhandledGameplay = BuildUnhandledTables(gameplay: true);
+
+    private static bool[] BuildUnhandledTables(bool gameplay)
+    {
+        WorldOpcode[] known = Enum.GetValues<WorldOpcode>();
+        var table = new bool[known.Max(o => (int)o) + 1];
+        WorldOpcode[] gameplayOpcodes = [WorldOpcode.CmsgOpeningCinematic, WorldOpcode.CmsgGmsurveySubmit, WorldOpcode.CmsgStoreLootInSlot, WorldOpcode.CmsgSkillBuyStep];
+        foreach (WorldOpcode opcode in known)
+        {
+            table[(int)opcode] = gameplay
+                ? Array.IndexOf(gameplayOpcodes, opcode) >= 0
+                : WorldOpcodeNames.GetName(opcode).Contains("OBSOLETE", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return table;
+    }
+
+    /// <summary>
+    /// Outcome check <c>session/opcode-unhandled</c>: a client packet reached the session with no registered handler and was dropped. Warning for a real gameplay
+    /// request (the client feature silently does nothing), Info for any other named opcode; obsolete opcodes and unnamed values are not reported. A stripped developer
+    /// opcode has a (stripped) handler and never gets here. The subject is the opcode name, so the ledger's subject count says how many opcodes are missing.
+    /// Cost: two table loads, then the ledger call (no allocation of its own: the subject is the tracker's label).
+    /// </summary>
+    private static void NoteUnhandledOpcode(WorldOpcode opcode)
+    {
+        int index = (ushort)opcode;
+        if (index >= UnhandledNotReported.Length || UnhandledNotReported[index] || UnhandledOpcodeTracker.LabelOf(opcode) == UnhandledOpcodeTracker.UnknownLabel)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "opcode-unhandled",
+            UnhandledOpcodeTracker.LabelOf(opcode),
+            "a client packet had no registered handler and was dropped",
+            UnhandledGameplay[index] ? ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Warning : ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
+    }
+
     /// <summary>
     /// H1 outcome check <c>session/send-after-close</c> (Info): a packet was sent to a session that has been closed for more than
     /// <see cref="SendAfterCloseGraceMs"/>, so a player or object kept talking to a logged-out connection (the player was not removed
