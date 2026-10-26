@@ -160,7 +160,7 @@ public sealed partial class SpellSystem
         }
 
         // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (vmangos HandleCastSpellOpcode,
-        // SpellHandler.cpp:283-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
+        // SpellHandler.cpp:266-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
         // the caster's own stale window.
         if ((player.UnitFlags & UnitFlags.Looting) != 0)
         {
