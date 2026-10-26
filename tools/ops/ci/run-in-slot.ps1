@@ -3,8 +3,9 @@
 # - Waits for one of $Slots slot files (atomic CreateNew) AND >= $MinAvailableMB available memory.
 # - Slot files live in <LanesRoot>\slot-locks, shared by every lane on the machine; LanesRoot defaults to ARCANECORE_LANES_ROOT.
 # - Runs the command in a child pwsh at BelowNormal (its children inherit it), output to <LanesRoot>\slot-logs\<lane>-<n>.log.
-# - Each `dotnet build|test|msbuild|publish|pack` in -Command gets -maxcpucount:$MaxCpuCount (0 = leave MSBuild's default;
-#   a command that sets -m/-maxcpucount itself is left alone). At the default width every build fans out to one worker node
+# - Each `dotnet build|test|msbuild|publish|pack|restore` call in -Command gets -maxcpucount:$MaxCpuCount (0 = leave MSBuild's default;
+#   decided per call, split at ; && || | and newlines: a call that sets -m/-maxcpucount itself before any `--` is left alone).
+#   `dotnet run` without --no-build is not capped. The effective width decision is the first line of the lane log. At the default width every build fans out to one worker node
 #   per core, so three slots ran 54 nodes (6.4 GB) and paged the live World. Directory.Build.rsp cannot do this: the CLI's
 #   own bare -maxcpucount overrides it.
 # - The child gets DOTNET_ROOT (default %USERPROFILE%\.dotnet) and, when ARCANECORE_DATA_ROOT (or ARCANECORE_TERRAIN_DIR /
@@ -84,7 +85,13 @@ try {
     if ($dbcDir) { $setup += "`$env:ARCANECORE_TEST_DBC_DIR=$(ConvertTo-PsSingleQuoted $dbcDir)`n" }
     if ($clientDir) { $setup += "`$env:ARCANECORE_TEST_CLIENT_DIR=$(ConvertTo-PsSingleQuoted $clientDir)`n" }
     if ($clientFilesDir) { $setup += "`$env:ARCANECORE_TEST_CLIENT_FILES_DIR=$(ConvertTo-PsSingleQuoted $clientFilesDir)`n" }
-    $Command = Add-MaxCpuCount -Command $Command -MaxCpuCount $MaxCpuCount
+    $widthCommand = Add-MaxCpuCount -Command $Command -MaxCpuCount $MaxCpuCount
+    $widthNote = if ($widthCommand -ne $Command) { "[$Lane] width capped at $MaxCpuCount; effective command: $widthCommand" }
+                 elseif ($MaxCpuCount -le 0) { "[$Lane] width left alone: -MaxCpuCount 0" }
+                 else { "[$Lane] width left alone: no uncapped dotnet build/test/msbuild/publish/pack/restore call (or -m/-maxcpucount found)" }
+    $widthNote
+    $Command = $widthCommand
+    $setup += "Write-Output $(ConvertTo-PsSingleQuoted $widthNote)`n"
     $script = "$setup$Command`nexit `$LASTEXITCODE"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"

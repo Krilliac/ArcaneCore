@@ -90,8 +90,17 @@ try {
     Check 'width: existing -MaxCpuCount left alone' ((Add-MaxCpuCount -Command 'dotnet build x.sln -MaxCpuCount 0' -MaxCpuCount 6) -eq 'dotnet build x.sln -MaxCpuCount 0')
     Check 'width: 0 disables the rewrite' ((Add-MaxCpuCount -Command 'dotnet build x.sln' -MaxCpuCount 0) -eq 'dotnet build x.sln')
     Check 'width: lands before the -- passthrough' ((Add-MaxCpuCount -Command 'dotnet test x.csproj -- RunConfiguration.Foo=1' -MaxCpuCount 6) -eq 'dotnet test -maxcpucount:6 x.csproj -- RunConfiguration.Foo=1')
-    Check 'width: dotnet.exe and a chained second build' ((Add-MaxCpuCount -Command 'dotnet.exe restore; dotnet.exe build a; dotnet test b' -MaxCpuCount 4) -eq 'dotnet.exe restore; dotnet.exe build -maxcpucount:4 a; dotnet test -maxcpucount:4 b')
+    Check 'width: dotnet.exe and a chained second build' ((Add-MaxCpuCount -Command 'dotnet.exe restore; dotnet.exe build a; dotnet test b' -MaxCpuCount 4) -eq 'dotnet.exe restore -maxcpucount:4; dotnet.exe build -maxcpucount:4 a; dotnet test -maxcpucount:4 b')
     Check 'width: build-server is not a build' ((Add-MaxCpuCount -Command 'dotnet build-server shutdown' -MaxCpuCount 6) -eq 'dotnet build-server shutdown')
+    Check 'width: stray non-dotnet -m before a build does not suppress the cap' ((Add-MaxCpuCount -Command 'git commit -m x; dotnet build a' -MaxCpuCount 6) -eq 'git commit -m x; dotnet build -maxcpucount:6 a')
+    Check 'width: python -m && build still capped' ((Add-MaxCpuCount -Command 'python -m foo && dotnet build a' -MaxCpuCount 6) -eq 'python -m foo && dotnet build -maxcpucount:6 a')
+    Check 'width: -m after -- belongs to the runner' ((Add-MaxCpuCount -Command 'dotnet test a -- -m 1' -MaxCpuCount 6) -eq 'dotnet test -maxcpucount:6 a -- -m 1')
+    Check 'width: -m on one call does not uncap the next' ((Add-MaxCpuCount -Command 'dotnet build a -m:2; dotnet test b' -MaxCpuCount 6) -eq 'dotnet build a -m:2; dotnet test -maxcpucount:6 b')
+    Check 'width: newline separates calls' ((Add-MaxCpuCount -Command ("dotnet build a -m:2`ndotnet build b") -MaxCpuCount 6) -eq ("dotnet build a -m:2`ndotnet build -maxcpucount:6 b"))
+    Check 'width: restore is capped' ((Add-MaxCpuCount -Command 'dotnet restore x.slnx --locked-mode' -MaxCpuCount 6) -eq 'dotnet restore -maxcpucount:6 x.slnx --locked-mode')
+    Check 'width: quoted dotnet.exe path' ((Add-MaxCpuCount -Command '& "C:\sdk\dotnet.exe" build a' -MaxCpuCount 6) -eq '& "C:\sdk\dotnet.exe" build -maxcpucount:6 a')
+    Check 'width: verb is case-insensitive' ((Add-MaxCpuCount -Command 'DOTNET Build a' -MaxCpuCount 6) -eq 'DOTNET Build -maxcpucount:6 a')
+    Check 'width: dotnet run is not capped' ((Add-MaxCpuCount -Command 'dotnet run --project a' -MaxCpuCount 6) -eq 'dotnet run --project a')
 }
 finally {
     Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
