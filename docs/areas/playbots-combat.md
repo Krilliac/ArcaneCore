@@ -156,8 +156,8 @@ class rotation, so a retreat always wins and kiting is the fight-on branch.
   bot is above `HealthPct`, the positioning of the brain, party AI and group AI uses the kite's range (`PlayerbotKite.HoldRange`)
   instead of the rotation's. A warrior or rogue, whose rotation prefers melee, therefore stands and shoots at casting range after a step
   instead of walking back in; a creature that reaches melee reach is still fought in melee. The hold is made against one victim: it
-  is cleared when the victim changes (unless the bot switched to another of its pursuers), and the brain, party AI and group AI all
-  call the kite with player targets too: for a player victim `Update` answers false, ends a step under way and clears the hold, so
+  is cleared when the victim changes (unless the bot switched to another of its pursuers). Party AI (`Party/PlayerbotPartyAI.cs`) and group AI
+  (`Groups/PlayerbotGroupAI.cs`) also call the kite with player targets; the brain fights only creatures through the kite. For a player victim `Update` answers false, ends a step under way and clears the hold, so
   positioning and the rotation agree and a hurt warrior fights a hostile player in melee even while a creature is on it.
 * **Design limit.** A rogue that Gouges the creature does not shoot at it (the damage would break the Gouge), so after a Gouge it
   stands at range until the Gouge ends.
@@ -195,10 +195,10 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
 - `Playerbots/Risk/PlayerbotKiteRangedWorldTests.cs` on `RiskTestWorld` with real bow, thrown-weapon and arrow items: a warrior at 45%
   health with a bow, arrows and Hamstring stays outside melee reach for most of eight seconds and shoots from there instead of walking
   back after every step; `PlayerbotKite.HasUsableRangedWeapon` is false for a bow with no ammunition and at zero durability, and true for
-  a thrown weapon with none; a full-health warrior 20 yards from an engaged creature walks in and fights it in melee (wiring `PlayerbotKite.HoldsRange` to
-  `PlayerbotCombatSpells.KiteHolds` is asserted non-null, and the hold false) fires no Shoot Bow hit (counted through
-  `SpellSystem.SpellHit`) and the creature never evades; a hurt warrior holding range against a creature, given a hostile player as
-  victim, is not held (`Update` false, `HoldRange` and `KiteHolds` read no hold).
+  a thrown weapon with none; a full-health warrior 20 yards from an engaged creature walks in and fights it in melee, fires no Shoot Bow hit (counted through
+  `SpellSystem.SpellHit`, with the same counter asserted at least 1 in the hurt-warrior test as a positive control) and the creature never evades (wiring
+  `PlayerbotKite.HoldsRange` to `PlayerbotCombatSpells.KiteHolds` is asserted non-null, and the hold false); a hurt warrior holding range against a creature,
+  given a hostile player on the same map as victim while the creature is still a live, non-evading pursuer, is not held (`Update` false, `HoldRange` and `KiteHolds` read no hold).
 - Scenarios `combat-warrior` .. `combat-druid` and `combat-tapped-wolf` (`Playerbots/Scenarios/ScenarioCombat.cs`, run by
   `ClassCombatScenarioTests`): a bot of each class (orc warrior, dwarf paladin, troll hunter, human rogue, undead priest, tauren
   shaman, gnome mage, human warlock, night elf druid) is created, taught its first spells by classic id, handed to its own brain

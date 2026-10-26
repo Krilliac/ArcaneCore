@@ -133,23 +133,35 @@ public sealed class PlayerbotKiteRangedWorldTests
                 return true;
             });
 
-            int ticks = 0, outside = 0, shots = 0;
+            // Positive control for W2's zero: the same Shoot Bow counter must see at least one hit here.
+            SpellSystem spellSystem = world.Session.Services.GetRequiredService<SpellFeature>().System;
+            int ticks = 0, outside = 0, shots = 0, bowHits = 0;
+            Action<Unit, Unit, SpellInfo> onHit = (_, _, spell) => { if (spell.Id == ShootBowId) bowHits++; };
+            spellSystem.SpellHit += onHit;
             uint lastHealth = await world.OnWorldAsync(() => mob.Health);
             float lastGap = await world.OnWorldAsync(() => Gap(world, mob));
-            await world.ThinkUntilAsync(8_000, () => false, each: () =>
+            try
             {
-                float gap = Gap(world, mob);
-                ticks++;
-                if (gap > 6f) outside++;
-                if (gap > 6f && lastGap > 6f && mob.Health < lastHealth) shots++;
-                lastHealth = mob.Health;
-                lastGap = gap;
-            });
+                await world.ThinkUntilAsync(8_000, () => false, each: () =>
+                {
+                    float gap = Gap(world, mob);
+                    ticks++;
+                    if (gap > 6f) outside++;
+                    if (gap > 6f && lastGap > 6f && mob.Health < lastHealth) shots++;
+                    lastHealth = mob.Health;
+                    lastGap = gap;
+                });
+            }
+            finally
+            {
+                spellSystem.SpellHit -= onHit;
+            }
 
             string why = await world.OnWorldAsync(() => Describe(world, mob));
             Assert.True(ticks >= 70, $"only {ticks} ticks were sampled");
             Assert.True(outside * 2 > ticks, $"outside melee reach for {outside} of {ticks} ticks: {why}");
             Assert.True(shots >= 1, $"the warrior never shot from range ({shots} damaging ticks out of reach): {why}");
+            Assert.True(bowHits >= 1, $"no Shoot Bow hit was counted, so W2's zero proves nothing: {why}");
             Assert.True(await world.OnWorldAsync(() => world.Brain.Kite.Steps) >= 1, "the warrior never stepped: " + why);
             Assert.False(await world.OnWorldAsync(() => world.Brain.Risk.Retreat.Active), "retreating: " + why);
         }
@@ -268,6 +280,9 @@ public sealed class PlayerbotKiteRangedWorldTests
                     Combat.PlayerbotPvpTestKit.Flag(other);
                     other.Relocate(player.X + 4, player.Y, player.Z, MathF.PI, world.Session.World.NowMs);
                     Assert.True(player.Combat.IsInCombat, "the warrior left combat, so the test proves nothing");
+                    Assert.Same(player.Map, other.Map);
+                    Assert.False(mob.IsInEvadeMode, "the creature is evading, so the test proves nothing");
+                    Assert.True(mob.IsAlive && mob.Combat.Victim?.Guid == player.Guid, "the creature is no longer pursuing the warrior, so the test proves nothing");
                     bool kiteOwns = world.Brain.Kite.Update(player, other, RiskTestWorld.ThinkMs, null, 0f, world.Brain.Risk, grouped: true);
                     return (kiteOwns, world.Brain.Kite.HoldRange(player, 0f), world.Brain.CombatSpells.KiteHolds!.Invoke(player, other));
                 });
