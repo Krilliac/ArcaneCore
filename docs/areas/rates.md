@@ -62,8 +62,11 @@ How it works: the rates are copied onto each player (`LocomotionState.Configured
 speed by them, so the aura recomputation, every `SMSG_FORCE_*_SPEED_CHANGE`, the create block and the server's own idea of the speed all
 carry the effective value. A loading character gets them before the world sees it (no force packets at login); `.reload config` and
 `.movement set` re-send the speeds of every online player (only the types that change). The turn rate is sent as
-`SMSG_FORCE_TURN_RATE_CHANGE` and taken by the server at once (it is not in the pending-change ledger); its ack relays
-`MSG_MOVE_SET_TURN_RATE` to the observers.
+`SMSG_FORCE_TURN_RATE_CHANGE` and taken by the server at once. The order is also recorded in the pending-change ledger as type
+`TurnRate`, which is never enforced on a timeout because the rate is already taken. Only an ack that matches the counter and the rate
+(within 0.01) and comes from the confirmed mover is stored and relayed as `MSG_MOVE_SET_TURN_RATE` to the observers; anything else is
+counted as a wrong ack. Limit: vmangos also applies and broadcasts a timed-out turn rate, and here observers get no
+`SMSG_SPLINE_SET_TURN_RATE` on a timeout.
 
 GM commands (Administrator, written to the GM command audit, a set also logged with old and new value):
 

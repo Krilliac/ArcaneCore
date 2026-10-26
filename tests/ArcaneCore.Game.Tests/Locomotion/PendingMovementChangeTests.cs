@@ -79,8 +79,8 @@ public sealed class PendingMovementChangeTests
         PendingMovementChange change = ledger.Push(4, MovementChangeType.TurnRate, apply: true, newValue: 1.5f);
         Assert.True(ledger.HasPending);
 
-        // A client that never acks (a dead or modified one) does not hold the ledger: the entry is popped at the ack time and
-        // MovementControl.Enforce ignores a TurnRate (the rate is already taken), so nothing stays pending.
+        // A client that never acks (a dead or modified one) does not hold the ledger: the entry is popped at the ack time, so
+        // nothing stays pending. That Enforce ignores a TurnRate is covered by MovementFlagControlTests.
         ledger.Age(Ack + 1);
         Assert.Same(change, ledger.CheckTimeout(Ack, teleporting: false, out bool dropped));
         Assert.False(dropped);

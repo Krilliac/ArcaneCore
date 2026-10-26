@@ -24,7 +24,7 @@ public enum MovementChangeType
     KnockBack,
 
     /// <summary>
-    /// A new turn rate (vmangos MOVE_TURN_RATE in SPEED_CHANGE_*); it carries <see cref="PendingMovementChange.NewValue"/>. The server took the rate when it sent the
+    /// A new turn rate (vmangos RATE_CHANGE_TURN, UnitDefines.h:52); it carries <see cref="PendingMovementChange.NewValue"/>. The server took the rate when it sent the
     /// order, so the ledger entry only gates the ack and is never enforced. It sits after the five speeds, outside <see cref="UnitSpeed.IsSpeedChange"/>.
     /// </summary>
     TurnRate,

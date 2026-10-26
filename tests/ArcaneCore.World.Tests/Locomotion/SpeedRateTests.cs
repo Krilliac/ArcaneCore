@@ -178,18 +178,63 @@ public sealed class SpeedRateTests
             player.Locomotion.ConfiguredSpeedRates = PlayerSpeedRates.Retail with { Turn = 2.0f };
             UnitSpeed.SetTurnRate(player, 1.0f);
         });
-        Assert.Equal(ForcedSpeed(await mover.ReadUntilAsync(WorldOpcode.SmsgForceTurnRateChange)), turn);
+        byte[] order = await mover.ReadUntilAsync(WorldOpcode.SmsgForceTurnRateChange);
+        Assert.Equal(ForcedSpeed(order), turn);
+        // SMSG_FORCE_TURN_RATE_CHANGE is packed GUID, u32 counter, f32 rate: echo the counter that was sent.
+        var orderReader = new PacketReader(order);
+        orderReader.ReadPackedGuid();
+        uint counter = orderReader.ReadUInt32();
 
         var info = new MovementInfo { Flags = MovementFlags.None, Time = 500, X = -8949.95f, Y = -132.493f, Z = 83.5312f };
         var ack = new PacketWriter(56);
         ack.WriteUInt64(player.Guid.Value);
-        ack.WriteUInt32(0);
+        ack.WriteUInt32(counter);
         info.Write(ack);
         ack.WriteSingle(turn);
         await mover.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, ack.ToArray());
 
         byte[] relayed = await watcher.ReadUntilAsync(WorldOpcode.MsgMoveSetTurnRate);
         Assert.Equal(turn, ForcedSpeed(relayed));
+    }
+
+    [Theory]
+    [InlineData(1u, 0f)]   // wrong counter, right rate
+    [InlineData(0u, 1.0f)] // right counter, wrong rate
+    public async Task ATurnRateAck_WithTheWrongCounterOrRate_IsIgnored_AndCounted(uint counterOffset, float rateOffset)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient mover = await host.EnterWorldAsync("MOVER", "Mover");
+        await using WorldTestClient watcher = await host.EnterWorldAsync("WATCHER", "Watcher");
+        await mover.CollectAsync();
+        await watcher.CollectAsync();
+        Player player = await host.PlayerAsync("Mover");
+        float turn = 3.141594f * 2;
+
+        await host.OnWorldAsync(() =>
+        {
+            player.Locomotion.ConfiguredSpeedRates = PlayerSpeedRates.Retail with { Turn = 2.0f };
+            UnitSpeed.SetTurnRate(player, 1.0f);
+        });
+        byte[] order = await mover.ReadUntilAsync(WorldOpcode.SmsgForceTurnRateChange);
+        var orderReader = new PacketReader(order);
+        orderReader.ReadPackedGuid();
+        uint counter = orderReader.ReadUInt32();
+
+        var info = new MovementInfo { Flags = MovementFlags.None, Time = 500, X = -8949.95f, Y = -132.493f, Z = 83.5312f };
+        var ack = new PacketWriter(56);
+        ack.WriteUInt64(player.Guid.Value);
+        ack.WriteUInt32(counter + counterOffset);
+        info.Write(ack);
+        ack.WriteSingle(turn + rateOffset);
+        await mover.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, ack.ToArray());
+        var beat = new PacketWriter(48);
+        new MovementInfo { Flags = MovementFlags.None, Time = 600, X = -8949.95f, Y = -132.493f, Z = 83.5312f }.Write(beat);
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, beat.ToArray());
+        List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat);
+
+        Assert.DoesNotContain(seen, p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
+        Assert.Equal(1, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
+        Assert.True(await host.OnWorldAsync(() => player.Locomotion.Pending.HasPending)); // the real order is still waiting
     }
 
     [Fact]
@@ -217,9 +262,8 @@ public sealed class SpeedRateTests
         // Sync on the heartbeat relayed to the watcher (as SpeedAckTests does): the world thread handled the ack before it, and every packet the watcher got up to then is kept.
         List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat);
 
-        // RED on origin/main: the unsolicited ack was relayed to the observers as MSG_MOVE_SET_TURN_RATE and was not counted as a wrong ack (the X jump is undone by the heartbeat either way).
+        // RED on origin/main: the unsolicited ack was relayed to the observers as MSG_MOVE_SET_TURN_RATE and was not counted as a wrong ack (the heartbeat resets the position either way, so the position is not asserted).
         Assert.DoesNotContain(seen, p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
-        Assert.Equal(x, await host.OnWorldAsync(() => player.Movement.X));
         Assert.Equal(1, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
     }
 }

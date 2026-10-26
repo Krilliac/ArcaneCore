@@ -99,7 +99,7 @@ public sealed class TurnRateAckHandler : IOpcodeHandlerGroup
             return;
         }
 
-        // A possessed or charmed player moves nothing (vmangos resolves the mover with GetMoverFromGuid, MovementHandler.cpp:457-459; here GetConfirmedMover, as HandleMovementOpcodes does at :298-300).
+        // A possessed or charmed player moves nothing (vmangos resolves the mover with GetMoverFromGuid, MovementHandler.cpp:459-461; here GetConfirmedMover, as HandleMovementOpcodes does at :298-300).
         Unit? mover = player.GetConfirmedMover();
         if (mover is null || !ReferenceEquals(mover, player) || player.Map is null)
         {

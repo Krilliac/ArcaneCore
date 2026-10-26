@@ -98,6 +98,27 @@ public sealed class MovementFlagControlTests
         Assert.Equal(MovementChangePackets.BuildEnforced(player.Guid.Value), payload);
     }
 
+    [Fact]
+    public void ATimedOutTurnRateOrder_IsNotEnforced_ThroughMovementControlEnforce()
+    {
+        (Player player, FakeSession session, _) = InWorld();
+        UnitSpeed.SetTurnRate(player, 2.0f); // taken at once, recorded in the ledger as TurnRate
+        float turn = player.TurnRate;
+        session.Clear();
+
+        player.Locomotion.Pending.Age(4001);
+        PendingMovementChange? timedOut = player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _);
+        Assert.NotNull(timedOut);
+        Assert.Equal(MovementChangeType.TurnRate, timedOut.Type);
+
+        // Without the TurnRate guard in Enforce this reaches ApplyReal -> MovementChangeInfo.FlagOf, which throws.
+        MovementControl.Enforce(player, timedOut, sendToClient: true);
+
+        Assert.Equal(turn, player.TurnRate);
+        Assert.Empty(session.Sent);
+        Assert.False(player.Locomotion.Pending.HasPending);
+    }
+
     // --- CorrectData ---------------------------------------------------------------------
 
     [Theory]

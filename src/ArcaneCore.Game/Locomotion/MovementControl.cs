@@ -130,6 +130,8 @@ public static class MovementControl
             // Knock back: "Not resendable change", dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
             // the resolve switch has no knock back case either.
             // Turn rate: applied when the order was sent (UnitSpeed.SetTurnRate), so there is nothing left to enforce.
+            // Deviation from vmangos, which resolves a timed-out turn rate with SetSpeedRateReal + SendSpeedChangeToAll
+            // (ResolvePendingMovementChange, Unit.cpp:6772-6774): observers get no SMSG_SPLINE_SET_TURN_RATE on a timeout.
             return;
         }
 
