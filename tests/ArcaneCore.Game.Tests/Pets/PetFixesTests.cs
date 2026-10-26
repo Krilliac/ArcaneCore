@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -51,5 +52,77 @@ public sealed class PetFixesTests
         r.Skip(8 + 4 + 4 + 40);
         Assert.Equal(1, r.ReadByte());
         Assert.Equal(ActionButton.Make(FireboltRank1, ActionType.Disabled).Packed, r.ReadUInt32());
+    }
+
+    private const uint CallPetSpell = 991002;
+
+    /// <summary>What the owner's session received, in order: a create block of a GUID, a values block of a GUID with its UNIT_FIELD_SUMMON, or the pet bar.</summary>
+    private static List<string> OwnerTimeline(FakeSession session, Player owner, Creature pet)
+    {
+        var events = new List<string>();
+        foreach ((WorldOpcode opcode, byte[] payload) in session.Sent)
+        {
+            if (opcode == WorldOpcode.SmsgPetSpells)
+            {
+                events.Add("petspells");
+            }
+            else if (opcode == WorldOpcode.SmsgUpdateObject)
+            {
+                foreach (ParsedBlock block in CreatureTestKit.ParseUpdateObject(payload))
+                {
+                    if (block.Type is ObjectUpdateType.CreateObject or ObjectUpdateType.CreateObject2 && block.Guids.Contains(pet.Guid.Value))
+                    {
+                        events.Add("create-pet");
+                    }
+                    else if (block.Type == ObjectUpdateType.Values && block.Guids.Contains(owner.Guid.Value)
+                        && block.Values.TryGetValue(UpdateFields.UnitFieldSummon, out uint low) && low == (uint)(pet.Guid.Value & 0xFFFFFFFFu))
+                    {
+                        events.Add("owner-summon");
+                    }
+                }
+            }
+        }
+
+        return events;
+    }
+
+    [Fact]
+    public void SummonImp_DeliversThePetCreateBlockAndTheOwnersSummonFieldBeforeThePetBar()
+    {
+        using PetTestKit kit = ImpKit();
+        (Player owner, FakeSession session) = kit.AddPlayer(1);
+        owner.Level = 10;
+        session.Clear();
+
+        kit.Cast(owner, SummonImpSpell);
+
+        Creature imp = Assert.Single(kit.Creatures.Creatures, c => c.IsPet);
+        List<string> events = OwnerTimeline(session, owner, imp);
+        Assert.Contains("create-pet", events);
+        Assert.Contains("owner-summon", events);
+        int bar = events.IndexOf("petspells");
+        Assert.True(bar > events.IndexOf("create-pet"), $"pet bar before the pet create block: {string.Join(", ", events)}");
+        Assert.True(bar > events.IndexOf("owner-summon"), $"pet bar before UNIT_FIELD_SUMMON: {string.Join(", ", events)}");
+    }
+
+    [Fact]
+    public async Task CallPet_DeliversThePetCreateBlockAndTheOwnersSummonFieldBeforeThePetBar()
+    {
+        using PetTestKit kit = new([Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))]);
+        (Player owner, FakeSession session) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 801, PetEntry, 5, 0, 50, 0, 0, 1, [1, 2, 3], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+        session.Clear();
+
+        kit.Cast(owner, CallPetSpell);
+
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        List<string> events = OwnerTimeline(session, owner, pet);
+        int bar = events.IndexOf("petspells");
+        Assert.True(bar >= 0, "no pet bar sent");
+        Assert.True(events.IndexOf("create-pet") is >= 0 and var create && create < bar, $"pet bar before the pet create block: {string.Join(", ", events)}");
+        Assert.True(events.IndexOf("owner-summon") is >= 0 and var summon && summon < bar, $"pet bar before UNIT_FIELD_SUMMON: {string.Join(", ", events)}");
     }
 }

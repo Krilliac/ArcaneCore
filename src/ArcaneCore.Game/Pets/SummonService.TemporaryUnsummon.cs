@@ -163,8 +163,7 @@ public sealed partial class SummonService
 
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
-        owner.Session.Send(WorldOpcode.SmsgPetSpells,
-            PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+        SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         if (_spells is { } auraSpells)
         {
             PetAuras.PetAuraService.For(auraSpells).CastPetAuras(pet, current: true);

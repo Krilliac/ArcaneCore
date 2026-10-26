@@ -90,7 +90,7 @@ public sealed partial class SummonService
         // Player::PetSpellInitialize; the spirit healer's re-summon remembers the pet (m_petEntry, m_petSpell, SpellEffects.cpp:3317-3324)
         if (caster is Player owner)
         {
-            owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+            SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
             RememberPetForSpiritHealer(owner, pet);
         }
 

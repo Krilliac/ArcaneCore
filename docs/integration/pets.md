@@ -109,6 +109,10 @@ dead with the pet out of combat, or when the spell duration ends.
   wow_messages and mangos-classic (`Unit::CharmCooldownInitialize`); vmangos' `WritePetSpellsCooldown`
   writes a u16 count and a u32 spell id, which agrees only for an empty list. The pet's running cooldowns
   come from the spell system (`SpellSystem.GetActiveCooldowns`).
+* **Packet order.** `SMSG_PET_SPELLS` leaves only after the owner has the pet's create block and its own `UNIT_FIELD_SUMMON`
+  (`SummonService.SendPetSpellsAfterCreate`: refresh the pet's visibility, flush the owner's values, then send), as vmangos adds the
+  pet to the map before `PetSpellInitialize` (`SpellEffects.cpp:3306-3321`). Without it the client's pet frame handlers ran before the
+  unit existed and the frame and loyalty never appeared.
 * **Client opcodes** (`PetHandlers`, in-world handlers calling `PetController`): `CMSG_PET_ACTION`
   (commands, reactions, spell buttons: `HandlePetAction`, `PetHandler.cpp:35-165`; the commands follow
   `Unit::HandlePetCommand`, `Unit.cpp:8646-8764`: stay saves the stay position, follow pushes the follow

@@ -712,8 +712,7 @@ public sealed partial class SummonService
         AttachPetAi(pet);
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
-        owner.Session.Send(WorldOpcode.SmsgPetSpells,
-            PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+        SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         if (_spells is { } auraSpells)
         {
