@@ -29,14 +29,14 @@ surface, complete within scope.
 |---|---|---|
 | Client build | 1.12.1 (5875) is the only build served. A multi-version design is a draft only ([design](design/multi-version.md)). | Supporting several builds multiplies every packet and field table. |
 | World content | Imported from the CMaNGOS classic-db full dump, mapped by column name. The data is never committed. | The dump is obtainable from git, targets 1.12.1 and is complete. The data is GPL-3, so it is never committed here. |
-| Client DBCs | Required for a full setup. `import-dbc` (in `src/ArcaneCore.Data/Content/Import/Cli`, hosted by `tools/ArcaneCore.ContentImporter`) fills the map, area, area trigger, taxi and spell tables. | The dump does not carry these client-side tables. |
+| Client DBCs | Required for a full setup. `import-dbc` (in `src/ArcaneCore.Data/Content/Import/Cli`, hosted by `tools/ArcaneCore.ContentImporter`) fills the map, area, area trigger, taxi and spell tables. | The map, area, area trigger and taxi tables are filled from client DBCs, and `verify` fails (exit 6) while any of them is empty ([installation](guide/installation.md)). Spells are read from five spell DBCs by `import-dbc` ([content-import](areas/content-import.md)). |
 | Content storage | ArcaneCore's own world schema, loaded into immutable in-memory stores at startup. No per-request DB reads in game logic. | Keeps the provider abstraction and gives O(1) lookups on the world thread. |
-| Databases | Three logical databases: auth, characters, world. Each has its own provider and connection string. MariaDB is primary; PostgreSQL and SQLite are supported. | SQLite gives zero-setup local runs and end-to-end tests of the real EF stores. |
+| Databases | Three logical databases: auth, characters, world. Each has its own provider and connection string. MariaDB is primary; PostgreSQL and SQLite are supported. | SQLite gives zero-setup local runs and end-to-end tests of the real EF stores. The reason for the other two providers is not recorded. |
 | Schema changes | Schema steps are defined by versioned data modules in code and applied by `arcane-db upgrade` (`tools/ArcaneCore.DbUpgrade`). `sql/updates` holds the generated per-provider SQL for each step ([README](../sql/updates/README.md)). There are no EF Migrations. A version mismatch fails closed at startup. Versions stay contiguous. The newest characters script is 0066, so the next is 0067; coordinate before taking it. | Per-component version rows replaced `EnsureCreated`, which skipped a context when another context already had tables in the same database. |
 | Threading | One authoritative world tick. Each map has a single writer. Socket decode, login loads and saves run off the world thread and post results back to it. Saves use snapshots taken on the world thread. Parallel map updates exist behind `World:Parallel:MapUpdateThreads` (default 1, so off). | A single writer per map keeps timer-driven combat, spell and AI logic lock-free and deterministic. A lock per map and an actor per object were rejected: locks add fan-out and ordering bugs, and actors make cross-object messaging the hot path. |
 | Slow clients | Outbound queues are per session. A session whose queue grows past its limit is disconnected; it never stalls a map. | One slow socket must not delay a map tick. |
 | Update fields | One generated 1.12.1 field table from `tools/codegen` (gtker/wow_messages, cross-checked against vmangos). Objects keep values plus a changed mask; owner-only fields go to the owner only. | Offsets and visibility flags come from a machine-readable source with a permissive license. |
-| Scripting | Both data-driven (EventAI, SmartAI) and C# scripts (instances, bosses, zones). | Both exist in code (`Creatures/AI`, `Instances/Scripts`). |
+| Scripting | Both data-driven (EventAI, SmartAI) and C# scripts (instances, bosses, zones); both exist in code (`Creatures/AI`, `Instances/Scripts`). | (rationale not recorded) |
 | Live reload | Content, config and code reload on a running server where documented ([tiers](design/hot-reload-tiers.md)). Reloads swap immutable snapshots on the owning thread. | Snapshots are never mutated in place, so readers on the world thread stay consistent. |
 | Extensibility | Assembly-level pack discovery for features, updaters and commands. There is no generic event bus or plugin API. | A plugin API without callers would be invented surface. |
 | Clustering | A separate gateway process plus world workers, with local single-process mode kept ([design](CLUSTERING_DESIGN.md)). | Requested by the developer on 2026-10-03; build-5875 compatibility and local mode must survive. |
@@ -48,7 +48,6 @@ surface, complete within scope.
   it. Where references disagree, the comment says so and which one was chosen.
 * No GPL or AGPL code is copied, so each reference below is read for behaviour and wire
   formats only.
-
 
 ### Reference set (extended 2026-10-02 and 2026-10-04 at the developer's request)
 
@@ -91,7 +90,7 @@ Every row is implemented on `main`. No area is client-accepted: each root `MILES
 | Runtime core and sessions | `src/ArcaneCore.World/Net`, `src/ArcaneCore.Kernel` | Opcode registry, session states, world tick, update fields, chat, GM commands. Implemented, not client-accepted ([M5](../MILESTONE_M5.md), [M5 acceptance procedure](M5_ACCEPTANCE.md)). |
 | Realm and login | `src/ArcaneCore.Realm` | SRP login and realm list. Autopatcher exists, off by default (`AutoPatchOptions`). |
 | Teleports | `src/ArcaneCore.Game/Teleport` | Near and far teleports, area triggers. Scope and gaps: [grid-terrain](integration/grid-terrain.md). |
-| Content import | `src/ArcaneCore.Data/Content/Import/Cli` (commands), `tools/ArcaneCore.ContentImporter` (13-line host), `src/ArcaneCore.Data/ClientData` | Commands `import`, `import-dbc`, `import-map-dbc`, `refresh`, `refresh-portals`, `verify`. |
+| Content import | `src/ArcaneCore.Data/Content/Import/Cli` (commands), `tools/ArcaneCore.ContentImporter` (13-line host), `src/ArcaneCore.Data/ClientData` | Commands include `plan`, `import`, `import-dbc`, `import-map-dbc`, `verify`, `class-masks`, `proc-events`, `refresh` and `refresh-portals`. |
 | Items | `src/ArcaneCore.Game/Items` | Inventory, equipment, item use. Scope and gaps: [items](integration/items.md). |
 | Creatures and game objects | `src/ArcaneCore.Game/Creatures`, `src/ArcaneCore.Game/GameObjects`, `src/ArcaneCore.Game/Loot` | Spawns, queries, waypoints, respawn, loot. Scope and gaps: [creatures](integration/creatures.md). |
 | Combat and AI | `src/ArcaneCore.Game/Combat`, `src/ArcaneCore.Game/Creatures/AI` | Hit table, threat, regen, death and ghost, EventAI and SmartAI (slices 1-3d; game objects through `SmartGameObjectAi`). Scope and gaps: [combat](integration/combat.md). |
@@ -111,7 +110,7 @@ Every row is implemented on `main`. No area is client-accepted: each root `MILES
 | Other mechanics | `src/ArcaneCore.Game/Conditions`, `src/ArcaneCore.Game/Stealth`, `src/ArcaneCore.Game/Totems` | Conditions, stealth, totems. |
 | Collision and pathing | `src/ArcaneCore.Game/Maps/Collision` | VMaps (line of sight, height) and MMaps (navmesh pathfinding). |
 | Parallel maps | `src/ArcaneCore.Game/Maps/Parallel` | Off by default. |
-| Anti-cheat | `src/ArcaneCore.Game/AntiCheat`, `src/ArcaneCore.World/AntiCheat` | Movement checks, packet heuristics (`PacketHeuristics`), commands and the feature ([area doc](areas/anticheat.md)). |
+| Anti-cheat | `src/ArcaneCore.Game/AntiCheat`, `src/ArcaneCore.World/AntiCheat` | Movement checks, packet heuristics (the `PacketHeuristics` namespace), commands and the feature ([area doc](areas/anticheat.md)). |
 | Warden | `src/ArcaneCore.World/Warden` | Windows 5875 module embedded ([area doc](areas/warden.md)). |
 | GM tickets | `src/ArcaneCore.World/Tickets` | Client ticket flow. |
 | Hot reload | `src/ArcaneCore.World/Reload`, `src/ArcaneCore.World/HotCode` | Content, config and code module reload. |
@@ -125,18 +124,17 @@ Every row is implemented on `main`. No area is client-accepted: each root `MILES
 This table owns M15 phase status; [CLUSTERING_DESIGN.md](CLUSTERING_DESIGN.md#phased-implementation-and-acceptance)
 owns the closure criteria. "Merged" means the named merge commit is an ancestor of `main`
 (check: `git merge-base --is-ancestor <sha> origin/main`). A merge does not mean the phase
-closed. The gaps listed in [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond)
-are tracked in Open work 3.
+closed. Open work 3 lists the gaps from [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond).
 
 | Phase | Merge commit(s) | What the merge subjects say | Closure status |
 |---|---|---|---|
 | M15.0 | `42f7cf9e3`, `8b801352e`, `1fbf3d37a`, `361a19dd3`, `ab0378823` | Reputation fencing, schema authority, durable ID block allocators, session generation claims, character flush barrier. | Merged. Closure not independently verified (unverified). |
-| M15.1 | `379768eed` | Roles, readiness and gateway-worker transport. | Merged. Real-client acceptance has not been run (gateway.md). |
+| M15.1 | `379768eed` | Roles, readiness and gateway-worker transport. | Merged. Open gap (gateway.md): real-client acceptance of the gateway path has not been run. Closure criteria: design doc. |
 | M15.2 | `7ef7ae3aa` | Presence directory, cross-worker social router, fenced economy lease. | Merged. Closure not independently verified (unverified). |
-| M15.3 | `c6f749c98` | Continent leases, instance placement, character handoff. | Merged. The handoff moves ownership and saved state but still disconnects the client; the seamless reroute is not built (gateway.md). |
+| M15.3 | `c6f749c98` | Continent leases, instance placement, character handoff. | Merged. Open gap (gateway.md): the handoff moves ownership and saved state but still disconnects the client; the seamless reroute is not built. Closure criteria: design doc. |
 | M15.4 | `38caa3a00` | Host supervisor, capacity admission, console multiplexer. | Merged. Closure not independently verified (unverified). |
-| M15.5 | `f3d42215d` | CLI maintenance guard, content revision compatibility, rollback coordinator, diagnostics. | Merged. The gateway has no conf catalog entry or metrics (gateway.md). |
-| M15.6 | `86a30ffcc` | Battleground matchmaking, world-state broadcast, LFG directory, GM command routing, SOAP lease fencing. | Merged. The design targets Warden on the gateway; Warden runs on the worker (gateway.md). |
+| M15.5 | `f3d42215d` | CLI maintenance guard, content revision compatibility, rollback coordinator, diagnostics. | Merged. Open gap (gateway.md): the gateway has no conf catalog entry or metrics. Closure criteria: design doc. |
+| M15.6 | `86a30ffcc` | Battleground matchmaking, world-state broadcast, LFG directory, GM command routing, SOAP lease fencing. | Merged. Open gap (gateway.md): the design targets Warden on the gateway; it runs on the worker. Closure criteria: design doc. |
 | All | `d1feacfce` | Integration merge of M15.0 to M15.6. | Merged. |
 
 To settle an "unverified" row, read that phase's "Required closure" cell in the design doc and
@@ -150,7 +148,7 @@ Not ranked by a measured score. Evidence is a file or audit line in this repo.
 |---|---|---|---|
 | 1 | Real-client acceptance | No area is accepted. Run the implemented areas against a build 5875 client. | Every root `MILESTONE_*.md` records acceptance as pending. Procedures: `docs/M1_ACCEPTANCE.md` to `docs/M6_ACCEPTANCE.md`, `docs/M13A_ACCEPTANCE.md`, `docs/M13B_ACCEPTANCE.md`, [MOCK_CLIENT_ACCEPTANCE.md](MOCK_CLIENT_ACCEPTANCE.md), [quest-client-acceptance.md](integration/quest-client-acceptance.md). |
 | 2 | Bot QA defects | Work the open `bot-qa` issues. | `gh issue list --label bot-qa` |
-| 3 | Clustering closure gaps | The seamless reroute; Warden on the gateway instead of the worker; a gateway conf catalog entry, `.conf.dist`, `--check-config` and metrics; real-client acceptance of the gateway path. | [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond); closure criteria in [CLUSTERING_DESIGN.md](CLUSTERING_DESIGN.md#phased-implementation-and-acceptance). |
+| 3 | Clustering closure gaps | The seamless reroute; Warden on the gateway instead of the worker; a gateway conf catalog entry, `.conf.dist`, `--check-config` and metrics; real-client acceptance of the gateway path; the movement anticheat receive time stamped on the worker (link jitter is added); manifest schema and content versions that are operator labels, not read from the databases; the restart of a gateway or World dropping every client, with no authenticated operator trigger; the link protocol living in `ArcaneCore.World` with no shared assembly. | [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond); closure criteria in [CLUSTERING_DESIGN.md](CLUSTERING_DESIGN.md#phased-implementation-and-acceptance). |
 | 4 | SmartAI remaining events and actions | Events 38 (DATA_SET), 40 (WAYPOINT_REACHED), 62 (GOSSIP_SELECT), 20 (REWARD_QUEST) and 52 (TEXT_OVER); actions 50 (SUMMON_GO) and 34 (SET_INST_DATA); MOVEMENTINFORM; the other rejected events, actions and targets; ending the area-trigger handler once a script ran. Basis: 9,285 of 12,448 `smart_scripts` rows of imported creatures can run in full. | Not in the enums in `src/ArcaneCore.Game/Creatures/AI/SmartAi/SmartTypes.cs`; list and counts in [smartai-slice3-20261012.md](integration/smartai-slice3-20261012.md), "Still open". |
 | 5 | Warden scans | API-hook scans, the EndScene and sysinfo scans, the InitialLogin flag. Mac clients cannot load the module. | [warden.md](areas/warden.md), "Not ported" and "Windows only". |
 | 6 | Helm and cloak show flags | Persist the toggles across relog. Needs a characters schema step (the next is 0067). | The `characters` table in `sql/updates/characters/sqlite/base_v0059.sql` has no player-flags column, and scripts 0060-0066 add none (0064 adds a playerbot relation table with its own `Flags`). `src/ArcaneCore.World/Handlers/AppearanceHandlers.cs` only toggles `player.Flags` in memory. |
@@ -160,7 +158,7 @@ Not ranked by a measured score. Evidence is a file or audit line in this repo.
 | 10 | Whois e-mail | The admin-only CMSG_WHOIS handler prints "e-mail: Unknown"; it needs an account e-mail column (an auth schema step). | `src/ArcaneCore.World/Handlers/GmClientHandlers.cs` (`HandleWhois`; ArcaneCore keeps no e-mail). There is no e-mail column under `sql/updates/auth`. |
 | 11 | Multi-version S1 and S2 | Build info on sessions, expansion columns, a content gate, then the movement codec. Decisions 4 and 6 (sections 6.1 and 6.2) are still open. | [multi-version.md](design/multi-version.md) is a draft with no code. |
 | 12 | Multithreading next steps | Bot think per map and stages inside one map. Design only; needs the owner's go. | [map-local stages design](research/map-local-stages-design-20261024.md), [parallel maps status](research/parallel-maps-status-20261017.md). |
-| 13 | Known test flakes | `VisibilityAllocationTests` (GC-window sensitive on busy runners) and the Mograine Divine Shield timing test (failed once, passed on rerun). Watch for recurrence. | `tests/ArcaneCore.Game.Tests/GridTerrain/VisibilityAllocationTests.cs`. The Mograine test file was not located (unverified); find it with `grep -rn "Mograine" tests/ArcaneCore.Game.Tests`. |
+| 13 | Known test flakes | `VisibilityAllocationTests` (GC-window sensitive on busy runners) and the Mograine Divine Shield timing test (failed once, passed on rerun). Watch for recurrence. | `tests/ArcaneCore.Game.Tests/GridTerrain/VisibilityAllocationTests.cs` (PR #427, merge `2917b77f3`, hardened `AllocationProbe`, which it uses; this is why recurrence is watched) and `tests/ArcaneCore.Game.Tests/Instances/ScriptFidelityTests.cs` (`Mograine_DivineShield_WaitsFortySeconds_AndIsReadyAgainAfterTheRevival`). |
 
 ## History
 
