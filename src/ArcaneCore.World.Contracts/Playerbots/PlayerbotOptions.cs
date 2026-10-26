@@ -187,10 +187,10 @@ public sealed class PlayerbotOptions
     /// The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw
     /// Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is
     /// exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the
-    /// tunnel's largest region inside it, as measured on the extracted mmaps by the NavRegionGraphRealTerrainTests probes
-    /// (BothContinents_CutRegionSizes_ArePrinted; 4882 polygons on the walking graph of map 1); re-run the probe after any mmaps regeneration,
-    /// since the default has only ~2% headroom over the tunnel's largest region (this real-terrain test skips in CI). Bots only; no retail behaviour depends on it.
+    /// Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps.
+    /// Bots only; no retail behaviour depends on it.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 0 to 1000000 (0: no region is exempt)")]
     public int CutRegionMaxPolygons { get; set; } = DefaultCutRegionMaxPolygons;
 
     /// <summary>
