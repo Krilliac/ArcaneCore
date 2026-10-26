@@ -1137,7 +1137,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         IPathfinder? pathfinder = _world is not null ? WorldCollision.Of(_world).Pathfinder : null;
         // A leader on another map has no path to ask about: the usual point (the walk there starts after the map change).
         group.Approach = !plainApproach && plan.Leader.MapId == goal.MeetingMap
-            ? ReachableApproach(pathfinder, goal, plan.Leader.Position)
+            ? ReachableApproach(pathfinder, goal, plan.Leader.Position, _options.MaxPathPoints)
             : SnapToMesh(pathfinder, goal.MeetingMap, plan.Leader.Position, ApproachPoint(goal, plan.Leader.Position));
         _groups.Add(group);
         Totals = (Totals.Formed + 1, Totals.Completed, Totals.Failed);
@@ -1576,22 +1576,32 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// point <see cref="ApproachPoint"/> chose lay under it, at the entrance's height, for good). The first choice is the usual point snapped
     /// to the mesh (<see cref="SnapToMesh"/>); when the pathfinder cannot take <paramref name="leader"/> to within <see cref="ApproachReachYards"/> of it, at a
     /// height within <see cref="ApproachHeightYards"/> of the meeting point, the same distance from the meeting point on other sides is tried
-    /// (<see cref="ApproachBearings"/>), and when none is reachable the meeting point itself. With no enabled pathfinder, or a leader farther than
-    /// <see cref="ApproachCheckYards"/> from the meeting point (a plan from there says nothing about the last stretch), the first choice stands.
+    /// (<see cref="ApproachBearings"/>), and when none is reachable the meeting point itself. The first choice stands, and nothing is asked, with no
+    /// enabled pathfinder, with none that has navigation data for the meeting map (the walker's query then goes to <see cref="WorldCollision.Fallback"/>
+    /// and its straight line becomes a stepped terrain route, which the probe cannot run), or with a leader farther than <see cref="ApproachCheckYards"/>
+    /// from the meeting point (a plan from there says nothing about the last stretch). <paramref name="maxPathPoints"/> is the walker's
+    /// <see cref="PlayerbotOptions.MaxPathPoints"/>.
     /// </summary>
-    internal static Vector3 ReachableApproach(IPathfinder? pathfinder, PlayerbotGroupGoal goal, Vector3 leader)
-        => ReachableApproach(pathfinder, goal, leader, goal.InInstance ? ApproachYards : QuestApproachYards);
+    internal static Vector3 ReachableApproach(IPathfinder? pathfinder, PlayerbotGroupGoal goal, Vector3 leader, int maxPathPoints = PathOptions.DefaultMaxPoints)
+        => ReachableApproach(pathfinder, goal, leader, goal.InInstance ? ApproachYards : QuestApproachYards, maxPathPoints, out _);
 
-    internal static Vector3 ReachableApproach(IPathfinder? pathfinder, PlayerbotGroupGoal goal, Vector3 leader, float yards)
+    /// <param name="decided">False when a probe answered <see cref="PathType.TilesPending"/> and the usual point stands for want of a verdict
+    /// (the caller may ask again later); true when the answer is final, the probes that were not asked included.</param>
+    internal static Vector3 ReachableApproach(IPathfinder? pathfinder, PlayerbotGroupGoal goal, Vector3 leader, float yards, int maxPathPoints, out bool decided)
     {
+        decided = true;
         Vector3 usual = SnapToMesh(pathfinder, goal.MeetingMap, leader, ApproachPoint(goal, leader, yards));
         if (pathfinder is not { Enabled: true }) return usual;
+        // The same rule as WorldCollision.PathfinderFor: a map the pathfinder has no data for is answered by the fallback, whose straight line
+        // (NotUsingPath) the walker turns into a stepped terrain route (PlayerbotMoveCheck.TerrainRoute). No probe can stand for that walk here.
+        if (pathfinder is IMapAwarePathfinder aware && !aware.HasNavigationData(goal.MeetingMap)) return usual;
         float flat = MathF.Sqrt(((leader.X - goal.Meeting.X) * (leader.X - goal.Meeting.X)) + ((leader.Y - goal.Meeting.Y) * (leader.Y - goal.Meeting.Y)));
         if (flat > ApproachCheckYards) return usual;
         // A leader already at the usual point's level, standing inside the ring, is as near as the point is.
         if (usual == leader && MathF.Abs(leader.Z - goal.Meeting.Z) <= ApproachHeightYards) return usual;
-        ApproachReach reach = ApproachReachable(pathfinder, goal, leader, usual);
-        if (reach == ApproachReach.Yes || reach == ApproachReach.Unknown) return usual;
+        ApproachReach reach = ApproachReachable(pathfinder, goal, leader, usual, maxPathPoints);
+        if (reach == ApproachReach.Yes) return usual;
+        if (reach == ApproachReach.Unknown) { decided = false; return usual; }
 
         Vector2 away = flat > 0.001f ? new Vector2(leader.X - goal.Meeting.X, leader.Y - goal.Meeting.Y) / flat : Vector2.UnitX;
         foreach (float degrees in ApproachBearings)
@@ -1601,9 +1611,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             var direction = new Vector2((away.X * cos) - (away.Y * sin), (away.X * sin) + (away.Y * cos));
             var ring = new Vector3(goal.Meeting.X + (direction.X * yards), goal.Meeting.Y + (direction.Y * yards), goal.Meeting.Z);
             Vector3 candidate = SnapToMesh(pathfinder, goal.MeetingMap, leader, ring);
-            reach = ApproachReachable(pathfinder, goal, leader, candidate);
+            reach = ApproachReachable(pathfinder, goal, leader, candidate, maxPathPoints);
             if (reach == ApproachReach.Yes) return candidate;
-            if (reach == ApproachReach.Unknown) return usual;
+            if (reach == ApproachReach.Unknown) { decided = false; return usual; }
         }
 
         return goal.Meeting;
@@ -1619,18 +1629,20 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     }
 
     /// <summary>
-    /// Whether the leader's own planner would take <paramref name="from"/> to <paramref name="point"/>: the same query options as its walk
-    /// (<c>PlayerbotNavigation.QueryOnce</c>: a player mover, steep slopes excluded, tiles loaded without blocking), and the same refusals. A path
-    /// that is a straight line because no mesh answered (<see cref="PathType.NotUsingPath"/>) is no proof, one that ends short of the point
-    /// (<see cref="PathType.Incomplete"/>) counts only when its end is within <see cref="ApproachReachYards"/> flat, and the end must lie
-    /// within <see cref="ApproachHeightYards"/> of the meeting point's height.
+    /// Whether the leader's planner would take <paramref name="from"/> to <paramref name="point"/> on a map with navigation data: the query
+    /// options of its walk (<c>PlayerbotNavigation.QueryOnce</c>: a player mover, steep slopes excluded, the walker's <paramref name="maxPathPoints"/>,
+    /// its search budget by distance, tiles loaded without blocking). A tile still being read (<see cref="PathType.TilesPending"/>) is no verdict.
+    /// A straight line flagged <see cref="PathType.NotUsingPath"/> means here that an endpoint lies on no tile of the mesh (the caller has
+    /// already ruled out a map without one); the walker would try a stepped terrain route there, which this probe has no map to run, so the
+    /// point counts as unreachable. A path that ends short counts only when its end is within <see cref="ApproachReachYards"/> flat of the point,
+    /// and the end must lie within <see cref="ApproachHeightYards"/> of the meeting point's height.
     /// </summary>
-    private static ApproachReach ApproachReachable(IPathfinder pathfinder, PlayerbotGroupGoal goal, Vector3 from, Vector3 point)
+    private static ApproachReach ApproachReachable(IPathfinder pathfinder, PlayerbotGroupGoal goal, Vector3 from, Vector3 point, int maxPathPoints)
     {
         if (MathF.Abs(point.Z - goal.Meeting.Z) > ApproachHeightYards) return ApproachReach.No;
         PathResult path = pathfinder.FindPath(goal.MeetingMap, from, point, new PathOptions
         {
-            MaxPoints = PathOptions.DefaultMaxPoints, Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes,
+            MaxPoints = Math.Max(2, maxPathPoints), Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes,
             MaxSearchNodes = PlayerbotNavigation.SearchNodes(from, point), LoadTiles = true, NonBlockingTiles = true,
         });
         if ((path.Type & PathType.TilesPending) != 0) return ApproachReach.Unknown;

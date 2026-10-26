@@ -445,7 +445,7 @@ internal sealed class PlayerbotGroupAI
             PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
             if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards);
             else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
-            if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
+            if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader, interval);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
         }
@@ -515,10 +515,13 @@ internal sealed class PlayerbotGroupAI
                 // A refusal that waited for a navigation tile is no verdict, and does not use up the one retry.
                 if (!approaching && !group.ApproachRetried && !PlayerbotNavigation.PendingSince(tileMark) && PlayerbotGroupCoordinator.WithinApproachRingFlat(player, group))
                 {
-                    // Inside the ring flat but refused at its own position (the hill above the entrance): it cannot get nearer on foot. The approach point is chosen again once from here, a point it can reach or the meeting point itself.
-                    group.ApproachRetried = true;
+                    // Inside the ring flat but refused at its own position (the hill above the entrance): it cannot get nearer on foot. The approach point is chosen
+                    // again once from here, a point it can reach or the meeting point itself. A probe that waited for a tile gives no verdict and keeps the retry.
                     IPathfinder? pathfinder = WorldCollision.Of(_session.World).Pathfinder;
-                    group.Approach = PlayerbotGroupCoordinator.ReachableApproach(pathfinder, group.Goal, new Vector3(player.X, player.Y, player.Z), group.WorldBoss is { } rallying ? rallying.RallyYards : group.Goal.InInstance ? PlayerbotGroupCoordinator.ApproachYards : PlayerbotGroupCoordinator.QuestApproachYards);
+                    group.Approach = PlayerbotGroupCoordinator.ReachableApproach(pathfinder, group.Goal, new Vector3(player.X, player.Y, player.Z),
+                        group.WorldBoss is { } rallying ? rallying.RallyYards : group.Goal.InInstance ? PlayerbotGroupCoordinator.ApproachYards : PlayerbotGroupCoordinator.QuestApproachYards,
+                        _options.MaxPathPoints, out bool decided);
+                    group.ApproachRetried = decided;
                     approach = group.Approach;
                 }
 
@@ -545,7 +548,7 @@ internal sealed class PlayerbotGroupAI
                 if (group.Run is null && group.Handoff?.Sweep is { } sweep) { LeadClear(player, group, sweep, interval); return; }
                 bool walked = WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
                 Step = walked ? "lead:walk-objective" : "lead:no-path-objective";
-                NoteRunProgress(group, walked);
+                NoteRunProgress(group, walked, interval);
                 return;
             case PlayerbotGroupState.Leaving:
                 // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
@@ -665,7 +668,7 @@ internal sealed class PlayerbotGroupAI
     /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c> or <c>no-path-to-approach</c>
     /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
     /// </summary>
-    private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned, uint interval = 0)
+    private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned, uint interval)
     {
         if (group.Run is null && (group.Handoff is not null || group.Members.Any(m => m.Real))) return;
         bool stuck = group.State == PlayerbotGroupState.Travelling
@@ -1337,7 +1340,7 @@ internal sealed class PlayerbotGroupAI
     /// does not choose it again at every think; a leader shuns it for the group for <see cref="NoPathShunMs"/> (never the siege objective, and
     /// never a run's boss, which counts toward <see cref="RunStuckMs"/> instead).
     /// </summary>
-    private void GiveUpUnreachable(PlayerbotGroupCoordinator.BotGroup group, Unit target, bool isLeader)
+    private void GiveUpUnreachable(PlayerbotGroupCoordinator.BotGroup group, Unit target, bool isLeader, uint interval)
     {
         _fightWatch.Reset();
         if (!isLeader)
@@ -1350,7 +1353,7 @@ internal sealed class PlayerbotGroupAI
             return;
         if (group.Run is { } run && target is Creature boss && (run.CurrentBoss?.Entry == boss.Entry || run.Plan.IsBoss(boss.Entry)))
         {
-            NoteRunProgress(group, planned: false);
+            NoteRunProgress(group, planned: false, interval);
             return;
         }
 
