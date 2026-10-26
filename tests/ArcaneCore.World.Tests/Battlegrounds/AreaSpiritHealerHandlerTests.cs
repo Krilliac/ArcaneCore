@@ -48,6 +48,29 @@ public sealed class AreaSpiritHealerHandlerTests
     }
 
     [Fact]
+    public async Task BattlefieldJoin_Flood_LogsAtMostOneLinePerWindow_AndScoresEveryPacket()
+    {
+        var logs = new ArcaneCore.World.Tests.Characters.Creation.LogCapture();
+        await using WorldTestHost host = WorldTestHost.Start(sessionLogger: logs.CreateLogger("session"));
+        await using WorldTestClient client = await host.EnterWorldAsync("ASHFLOOD", "Ashflood");
+        await client.CollectAsync(Quiet);
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture anomalies = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
+            n => n.Subsystem == "anticheat" && n.Code == "battlefield-join");
+
+        const int Packets = 25;
+        for (int i = 0; i < Packets; i++)
+        {
+            await client.SendAsync(WorldOpcode.CmsgBattlefieldJoin, BitConverter.GetBytes(489u));
+        }
+
+        await client.CollectAsync(Quiet);
+        await host.OnWorldAsync(() => true);
+
+        Assert.Single(logs.Lines, l => l.Contains("CMSG_BATTLEFIELD_JOIN", StringComparison.Ordinal));
+        Assert.Equal(Packets, anomalies.Notices.Count(n => n.Detail.Contains("map 489", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task SpiritGuideGossipTimer_IsWiredOnTheTick()
     {
         await using WorldTestHost host = WorldTestHost.Start();

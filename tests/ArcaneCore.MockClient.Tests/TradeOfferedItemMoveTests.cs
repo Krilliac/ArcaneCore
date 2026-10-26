@@ -301,6 +301,94 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(1u, await ReceiverCountAsync(rig, GiftEntry));
     }
 
+    [Fact]
+    public async Task AutoStoreBankItemOfABankStack_CannotTopUpTheOfferedStack()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte offeredSlot, Item offered, byte sourceSlot) = await StartTopUpAsync(rig);
+        byte bankSlot = await MoveToBankAsync(rig, sourceSlot);
+        await OpenAndOfferAsync(rig, offeredSlot);
+        await AcceptAsync(rig);
+
+        // The bank 5-stack is not offered, but CanStoreItem(NullBag, NullSlot) picks the offered 17-stack first: 17 -> 20.
+        await RefusedAsync(rig, WorldOpcode.CmsgAutostoreBankItem, [InventorySlots.Bag0, bankSlot], scored: false);
+
+        await AssertSenderAsync(rig, offered.Guid, expectedCount: 17, expectedTotal: 25);
+        await CompleteAsync(rig);
+        Assert.Equal(17u, await ReceiverCountAsync(rig));
+    }
+
+    [Fact]
+    public async Task AutoBankItemOfOfferedItem_AfterFirstAccept_IsRefused()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte slot, Item offered) = await StartOfferAsync(rig, [10]);
+        await OpenBankAsync(rig);
+        await OpenAndOfferAsync(rig, slot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgAutobankItem, [InventorySlots.Bag0, slot], scored: true);
+
+        await AssertOfferedStaysAsync(rig, offered.Guid, slot);
+        await CompleteAsync(rig);
+        Assert.Equal(10u, await ReceiverCountAsync(rig));
+    }
+
+    [Fact]
+    public async Task AutoStoreBankItemOfOfferedItem_AfterFirstAccept_IsRefused()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte slot, Item offered) = await StartOfferAsync(rig, [10]);
+        await OpenBankAsync(rig);
+        await OpenAndOfferAsync(rig, slot);
+        await AcceptAsync(rig);
+
+        await RefusedAsync(rig, WorldOpcode.CmsgAutostoreBankItem, [InventorySlots.Bag0, slot], scored: true);
+
+        await AssertOfferedStaysAsync(rig, offered.Guid, slot);
+        await CompleteAsync(rig);
+        Assert.Equal(10u, await ReceiverCountAsync(rig));
+    }
+
+    [Fact]
+    public async Task AutoEquipItemSlotOfOfferedItem_AfterFirstAccept_IsRefused()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (byte slot, Item offered) = await StartOfferAsync(rig, [10]);
+        await OpenAndOfferAsync(rig, slot);
+        await AcceptAsync(rig);
+
+        // CMSG_AUTOEQUIP_ITEM_SLOT: u64 item guid, u8 equipment slot (4 = chest).
+        byte[] payload = new byte[9];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, offered.Guid.Value);
+        payload[8] = 4;
+        await RefusedAsync(rig, WorldOpcode.CmsgAutoequipItemSlot, payload, scored: true);
+
+        await AssertOfferedStaysAsync(rig, offered.Guid, slot);
+        await CompleteAsync(rig);
+        Assert.Equal(10u, await ReceiverCountAsync(rig));
+    }
+
+    private static async Task OpenBankAsync(Rig rig)
+        => await rig.Server.World.InvokeAsync(() =>
+        {
+            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.Inventory.CanUseBank = static () => true;
+            return true;
+        }).WaitAsync(rig.Token);
+
+    /// <summary>Open the bank and move the stack at the backpack slot into the first bank slot; returns that bank slot.</summary>
+    private static async Task<byte> MoveToBankAsync(Rig rig, byte slot)
+    {
+        await OpenBankAsync(rig);
+        return await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            sender.Inventory.SwapItem(InventorySlots.Bag0, slot, InventorySlots.Bag0, InventorySlots.BankItemStart);
+            Assert.NotNull(sender.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
+            return InventorySlots.BankItemStart;
+        }).WaitAsync(rig.Token);
+    }
+
     /// <summary>
     /// Stacks A (17, room for 3, offered later), B (5) and C (3): B is not offered and would top A up. Built straight on the
     /// world thread before the trade opens.

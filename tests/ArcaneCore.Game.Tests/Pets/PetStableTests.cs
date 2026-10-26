@@ -23,7 +23,21 @@ public sealed class PetStableTests
         public Task<PetStableState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.FromResult(new PetStableState(Slots, Stabled.Select(p => new StabledPet(p.Key, p.Value)).ToArray()));
 
-        public Task SetPurchasedSlotsAsync(int characterId, byte slots, CancellationToken cancellationToken = default)
+        /// <summary>When set, the next slot write waits on it (and fails if it faults) so a test can act while the write is in flight.</summary>
+        public TaskCompletionSource? SlotGate { get; set; }
+
+        public async Task SetPurchasedSlotsAsync(int characterId, byte slots, CancellationToken cancellationToken = default)
+        {
+            if (SlotGate is { } gate)
+            {
+                SlotGate = null;
+                await gate.Task;
+            }
+
+            await SetPurchasedSlotsCoreAsync(slots);
+        }
+
+        private Task SetPurchasedSlotsCoreAsync(byte slots)
         {
             if (Fail) return Task.FromException(new InvalidOperationException("down"));
             Slots = slots;
@@ -138,6 +152,63 @@ public sealed class PetStableTests
         stable.HandleBuySlot(hunter, StableMaster);
 
         Assert.Equal((StableResult.ErrStable, 500u, (byte)0), (LastResult(session), hunter.Money, store.Slots));
+    }
+
+    [Fact]
+    public void BuySlot_FailedWrite_LeavesTheMoneyUntouchedWhileInFlightAndAfter()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store) = Stable(kit);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        hunter.Money = ArcaneCore.Game.Economy.EconomyOptions.MaxMoney;
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+
+        stable.HandleBuySlot(hunter, StableMaster);
+        // Deducted only once the write commits: a save taken while it is in flight still holds the full amount.
+        Assert.Equal(ArcaneCore.Game.Economy.EconomyOptions.MaxMoney, hunter.Money);
+
+        gate.SetException(new InvalidOperationException("down"));
+
+        Assert.Equal((StableResult.ErrStable, ArcaneCore.Game.Economy.EconomyOptions.MaxMoney, (byte)0), (LastResult(session), hunter.Money, store.Slots));
+    }
+
+    [Fact]
+    public void BuySlot_MoneySpentWhileTheWriteIsInFlight_TakesTheSlotBack()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store) = Stable(kit);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        hunter.Money = 500;
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+
+        stable.HandleBuySlot(hunter, StableMaster);
+        hunter.Money = 100;
+        gate.SetResult();
+
+        Assert.Equal((StableResult.ErrMoney, 100u, (byte)0), (LastResult(session), hunter.Money, store.Slots));
+        Assert.Equal((byte)0, stable.CachedState(1)?.PurchasedSlots ?? 0);
+    }
+
+    [Fact]
+    public void BuySlot_LoggedOutWhileTheWriteIsInFlight_TakesTheSlotBackWithoutTouchingThePlayer()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+        int saves = 0;
+        stable.MoneyChanged += _ => saves++;
+
+        stable.HandleBuySlot(hunter, StableMaster);
+        kit.Map.RemoveObject(hunter);
+        stable.Forget(1);
+        gate.SetResult();
+
+        Assert.Equal((500u, (byte)0, 0), (hunter.Money, store.Slots, saves));
     }
 
     [Fact]
