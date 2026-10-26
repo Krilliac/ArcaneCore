@@ -757,12 +757,13 @@ internal static class PlayerbotNavigation
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
         // The region search is cached per graph and region pair (PlayerbotRegionRoutes). A miss under a planning wrapper (its callers handle
-        // PlanOutcome.Pending) runs on the pool and the bot answers pending, like a path job; elsewhere it searches here once and keeps the answer.
+        // PlanOutcome.Pending) is queued for the pool (a bounded FIFO) and the bot answers pending, like a path job; elsewhere it searches here
+        // once and keeps the answer. A queued pair whose work is lost is searched here after the wait bound, within the jobs' sync budget.
         bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
         PlayerbotPathJobs? jobs = PlayerbotPathJobs.Bound;
         long wallMs = jobs?.WallMs() ?? System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
         if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals,
-            jobs?.Logger, wallMs, options.PathJobWaitMaxMs))
+            jobs?.Logger, wallMs, options.PathJobWaitMaxMs, jobs?.RegionSyncBudget))
         {
             PlayerbotPathJobs.NoteExternalPending();
             return null;

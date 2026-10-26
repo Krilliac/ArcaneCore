@@ -8,42 +8,65 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
-/// The portal lists of the region searches of <see cref="PlayerbotNavigation"/> (<see cref="NavRegionGraph.FindRoute"/>, up to
+/// The portal lists of the region searches of <see cref="PlayerbotNavigation"/> (<see cref="NavRegionGraph"/> FindRoute, up to
 /// <see cref="PlayerbotNavigation.RegionSearchNodes"/> portals settled), kept per graph and per (from-region, to-region) pair. A far goal
 /// is planned leg by leg, so the same pair is asked again on every leg and by every bot bound the same way.
 /// <para>
 /// Ownership: the cache of a graph lives in a <see cref="ConditionalWeakTable{TKey, TValue}"/> keyed by the graph's <em>reference</em>. The
 /// graph is built on the thread pool and a rebuild is a new instance (<see cref="NavMeshPathfinder.RegionGraph"/>), so a rebuilt graph
 /// starts with an empty cache and the old one is collected with its graph; a cached list never answers for another graph. Each cache is
-/// bounded (<see cref="MaxEntries"/>, oldest dropped first) and so is the work in flight (<see cref="MaxInFlight"/>). Thread affinity:
-/// <see cref="TryRoute"/> is called on the world thread; the miss search runs on a thread pool thread (the graph is immutable and the
-/// search keeps its sets per thread); every state of a cache is guarded by its lock.
+/// bounded (<see cref="MaxEntries"/>, oldest dropped first). Thread affinity: <see cref="TryRoute"/> is called on the world thread; a
+/// deferred miss is searched by a pool worker (the graph is immutable and the search keeps its sets per thread); every state of a cache is
+/// guarded by its lock.
 /// </para>
 /// <para>
-/// The portals of a pair are those of the first positions asked: the search's costs start from the asking position, so a later start
-/// in the same region may have chosen a slightly different first portal. The leg planner only uses them to pick a portal along the way
-/// and plans the real path query to it. One answer depends on the start so much that it is not shared: "unreachable" with no portal at
-/// all (no exit of the region is nearer the goal than the asking position itself) says nothing for a bot standing elsewhere in the
-/// region, so it answers only starts within <see cref="StartDependentYards"/> of the one searched and is searched again for others.
+/// An entry is start-independent: the search always chains to the settled portal nearest the goal, and "no exit of the region is nearer the
+/// goal than the asking position" is derived per asker at lookup (<see cref="RouteCache.TryGet"/>) from that chain, so bots at any
+/// distance apart share one entry and nothing is ever replaced. Found and Unreachable depend on the two regions only; the nearest portal is
+/// the one for the goal of the first asker of the pair (a limit: bots with different goals in one target region share it).
 /// </para>
 /// <para>
-/// A miss that stays unanswered (the pool is busy, or the search was lost) is not waited for forever: past the caller's wait bound the
-/// ask is searched on the asking thread.
+/// Deferred misses go through one process-wide FIFO (<see cref="MaxQueued"/> pairs) drained by at most <see cref="MaxInFlight"/> pool
+/// workers. A pair is Cached, Asked (its work is queued or running; remembered in the cache's asked map) or Unasked; an ask never resets,
+/// replaces or removes anything, so no order of asks can move a pair backwards. A pair whose work was lost is searched on the asking thread
+/// past the caller's wait bound, at most <see cref="SyncSearchBudget.MaxPerWindow"/> per <see cref="SyncSearchBudget.WindowMs"/>.
+/// Lock order: the queue's gate, then a cache's lock.
 /// </para>
 /// </summary>
 internal static class PlayerbotRegionRoutes
 {
     /// <summary>The most routes one graph's cache keeps.</summary>
-    internal const int MaxEntries = 256;
+    internal const int MaxEntries = 1024;
 
-    /// <summary>The most region searches running on the pool at once, across all graphs.</summary>
+    /// <summary>The most pool workers draining the queue at once, across all graphs.</summary>
     internal const int MaxInFlight = 8;
 
-    /// <summary>An "unreachable, no portal" answer (<see cref="RouteCache.TryGet"/>) holds for starts within this many yards of the one searched.</summary>
-    internal const float StartDependentYards = 32f;
+    /// <summary>The most deferred pairs queued at once, across all graphs (at least the bots asking at once).</summary>
+    internal const int MaxQueued = 4096;
 
     private static readonly ConditionalWeakTable<NavRegionGraph, RouteCache> Caches = [];
-    private static int s_inFlight;
+    private static readonly object QueueGate = new();
+    private static readonly Queue<Work> Queued = new();
+    private static readonly SyncSearchBudget DefaultBudget = new();
+    private static int s_workers;        // under QueueGate
+    private static long s_syncFallbacks; // Interlocked
+
+    private readonly record struct Work(RouteCache Cache, int From, Vector3 Start, int To, Vector3 Goal, ILogger? Logger);
+
+    /// <summary>The pairs waiting in the queue (test seam, telemetry).</summary>
+    internal static int QueuedCount
+    {
+        get { lock (QueueGate) return Queued.Count; }
+    }
+
+    /// <summary>The workers draining the queue (test seam, telemetry).</summary>
+    internal static int Workers
+    {
+        get { lock (QueueGate) return s_workers; }
+    }
+
+    /// <summary>The searches run on the asking thread because a queued pair was not answered in time or the queue was full.</summary>
+    internal static long SyncFallbacks => Interlocked.Read(ref s_syncFallbacks);
 
     /// <summary>The cache of <paramref name="graph"/>.</summary>
     internal static RouteCache Of(NavRegionGraph graph)
@@ -54,13 +77,14 @@ internal static class PlayerbotRegionRoutes
 
     /// <summary>
     /// The route between two regions: a cache hit, or a miss. A miss is searched at once on this thread unless <paramref name="mayDefer"/>
-    /// (the caller takes "pending" and asks again on a later think), when it is queued for the pool and false is returned (also when the
-    /// pool is busy with <see cref="MaxInFlight"/> searches: the ask is repeated). A miss that has been asked for longer than
-    /// <paramref name="maxWaitMs"/> (wall clock <paramref name="wallMs"/>) is searched here after all. <paramref name="portals"/> is a copy the
-    /// caller owns. Faults of the search are recorded and logged through <paramref name="logger"/>.
+    /// (the caller takes "pending" and asks again on a later think), when it is queued for the pool and false is returned. A pair asked for
+    /// longer than <paramref name="maxWaitMs"/> (wall clock <paramref name="wallMs"/>) whose answer never came, or one that finds the queue
+    /// full, is searched here after all, as far as <paramref name="budget"/> allows (otherwise the ask is repeated). <paramref name="portals"/>
+    /// is a copy the caller owns. Faults of the search are recorded and logged through <paramref name="logger"/>.
     /// </summary>
     internal static bool TryRoute(NavRegionGraph graph, int fromRegion, Vector3 from, int toRegion, Vector3 to, bool mayDefer,
-        out NavRegionRouteStatus status, out List<Vector3> portals, ILogger? logger = null, long wallMs = 0, long maxWaitMs = long.MaxValue)
+        out NavRegionRouteStatus status, out List<Vector3> portals, ILogger? logger = null, long wallMs = 0, long maxWaitMs = long.MaxValue,
+        SyncSearchBudget? budget = null)
     {
         if (fromRegion == toRegion)
         {
@@ -70,58 +94,148 @@ internal static class PlayerbotRegionRoutes
 
         RouteCache cache = Of(graph);
         if (cache.TryGet(fromRegion, toRegion, from, out status, out portals)) return true;
-        if (!mayDefer || cache.WaitedPast(fromRegion, toRegion, wallMs, maxWaitMs))
+        if (!mayDefer)
         {
             cache.Search(fromRegion, from, toRegion, to, logger, out status, out portals);
             return true;
         }
 
-        // Already queued by an earlier ask: nothing to start. Otherwise take a slot of the pool's bound, or leave the ask for a later think.
-        if (cache.MarkInFlight(fromRegion, toRegion))
+        budget ??= DefaultBudget;
+        if (cache.TryAskedSince(fromRegion, toRegion, out long since))
         {
-            bool started = false;
-            if (Interlocked.Increment(ref s_inFlight) <= MaxInFlight)
+            if (wallMs - since > maxWaitMs && budget.TryTake(wallMs))
             {
-                try
-                {
-                    Task.Run(() =>
-                    {
-                        try { cache.Search(fromRegion, from, toRegion, to, logger, out _, out _); }
-                        finally
-                        {
-                            cache.ClearInFlight(fromRegion, toRegion);
-                            Interlocked.Decrement(ref s_inFlight);
-                        }
-                    });
-                    started = true;
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("playerbot.region-route", ex);
-                    (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route search could not be queued");
-                }
+                Interlocked.Increment(ref s_syncFallbacks);
+                cache.Search(fromRegion, from, toRegion, to, logger, out status, out portals);
+                return true;
             }
 
-            if (!started)
+            lock (QueueGate) EnsureWorker(logger);
+            return Pending(out status, out portals);
+        }
+
+        lock (QueueGate)
+        {
+            if (Queued.Count < MaxQueued)
             {
-                Interlocked.Decrement(ref s_inFlight);
-                cache.ClearInFlight(fromRegion, toRegion);
+                switch (cache.Claim(fromRegion, toRegion, wallMs))
+                {
+                    case ClaimResult.Cached:
+                        return cache.TryGet(fromRegion, toRegion, from, out status, out portals) || Pending(out status, out portals);
+                    case ClaimResult.Claimed:
+                        Queued.Enqueue(new Work(cache, fromRegion, from, toRegion, to, logger));
+                        break;
+                }
+
+                EnsureWorker(logger);
+                return Pending(out status, out portals);
             }
         }
 
+        // The queue is full: nothing is recorded (the bot asks again on its next think); a search here only within the budget.
+        if (budget.TryTake(wallMs))
+        {
+            Interlocked.Increment(ref s_syncFallbacks);
+            cache.Search(fromRegion, from, toRegion, to, logger, out status, out portals);
+            return true;
+        }
+
+        return Pending(out status, out portals);
+    }
+
+    private static bool Pending(out NavRegionRouteStatus status, out List<Vector3> portals)
+    {
         status = NavRegionRouteStatus.Exhausted;
         portals = [];
         return false;
     }
 
+    /// <summary>Start a worker when work is queued and fewer than <see cref="MaxInFlight"/> run. The caller holds the queue's gate.</summary>
+    private static void EnsureWorker(ILogger? logger)
+    {
+        if (Queued.Count == 0 || s_workers >= MaxInFlight) return;
+        s_workers++;
+        try
+        {
+            Task.Run(Worker);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            s_workers--;
+            FaultLedger.Shared.Record("playerbot.region-route", ex);
+            (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route worker could not be started");
+        }
+    }
+
+    private static void Worker()
+    {
+        while (true)
+        {
+            Work work;
+            lock (QueueGate)
+            {
+                if (!Queued.TryDequeue(out work))
+                {
+                    s_workers--;
+                    return;
+                }
+            }
+
+            work.Cache.SearchQueued(work.From, work.Start, work.To, work.Goal, work.Logger);
+        }
+    }
+
+    internal enum ClaimResult
+    {
+        Cached,
+        Asked,
+        Claimed,
+    }
+
+    /// <summary>
+    /// Bounds the searches the asking (world) thread runs itself when the pool did not answer: at most <see cref="MaxPerWindow"/> per
+    /// <see cref="WindowMs"/> of wall clock. One per <see cref="PlayerbotPathJobs"/>.
+    /// </summary>
+    internal sealed class SyncSearchBudget
+    {
+        /// <summary>One world tick.</summary>
+        internal const int WindowMs = 50;
+
+        /// <summary>The searches allowed in one window.</summary>
+        internal const int MaxPerWindow = 1;
+
+        private readonly object _gate = new();
+        private long _windowStart = long.MinValue / 2;
+        private int _taken;
+
+        /// <summary>Take one search of the window containing <paramref name="wallMs"/>; false when the window is spent.</summary>
+        internal bool TryTake(long wallMs)
+        {
+            lock (_gate)
+            {
+                if (wallMs - _windowStart >= WindowMs)
+                {
+                    _windowStart = wallMs;
+                    _taken = 0;
+                }
+
+                if (_taken >= MaxPerWindow) return false;
+                _taken++;
+                return true;
+            }
+        }
+    }
+
     /// <summary>The routes of one graph.</summary>
     internal sealed class RouteCache(NavRegionGraph graph)
     {
+        // NearestYards: distance from the chain's last portal to Goal (infinite without portals); Found entries ignore it.
+        private readonly record struct Route(NavRegionRouteStatus Status, Vector3[] Portals, Vector3 Goal, float NearestYards);
+
         private readonly object _gate = new();
-        private readonly Dictionary<(int From, int To), (NavRegionRouteStatus Status, Vector3[] Portals, Vector3? Start)> _routes = [];
+        private readonly Dictionary<(int From, int To), Route> _routes = [];
         private readonly Queue<(int From, int To)> _order = new();
-        private readonly HashSet<(int From, int To)> _inFlight = [];
-        private readonly Dictionary<(int From, int To), long> _askedSince = [];
+        private readonly Dictionary<(int From, int To), long> _asked = [];
         private long _searches;
 
         /// <summary>The searches this cache ran (misses).</summary>
@@ -133,16 +247,23 @@ internal static class PlayerbotRegionRoutes
             get { lock (_gate) return _routes.Count; }
         }
 
-        /// <summary>The kept route of the pair, unless it is a start-dependent answer (<see cref="StartDependentYards"/>) for another start.</summary>
+        /// <summary>The pairs queued or running (or marked by <see cref="MarkAsked"/>).</summary>
+        internal int AskedCount
+        {
+            get { lock (_gate) return _asked.Count; }
+        }
+
+        /// <summary>
+        /// The kept route of the pair as it answers an asker at <paramref name="start"/>: the chain, or no portal when the route is not
+        /// found and no exit of the region is nearer the goal than the start (what a search from that start would have answered).
+        /// </summary>
         internal bool TryGet(int from, int to, Vector3 start, out NavRegionRouteStatus status, out List<Vector3> portals)
         {
             lock (_gate)
             {
-                if (_routes.TryGetValue((from, to), out var route)
-                    && (route.Start is not { } searched || Vector3.Distance(searched, start) <= StartDependentYards))
+                if (_routes.TryGetValue((from, to), out Route route))
                 {
-                    status = route.Status;
-                    portals = [.. route.Portals];
+                    Derive(route, start, out status, out portals);
                     return true;
                 }
             }
@@ -152,66 +273,98 @@ internal static class PlayerbotRegionRoutes
             return false;
         }
 
-        /// <summary>Note that the pair is asked for at <paramref name="wallMs"/>; true when it has been asked for longer than <paramref name="maxWaitMs"/>.</summary>
-        internal bool WaitedPast(int from, int to, long wallMs, long maxWaitMs)
+        /// <summary>Test seam: note the pair as asked at <paramref name="wallMs"/> without queueing work (a search that was lost).</summary>
+        internal void MarkAsked(int from, int to, long wallMs)
+        {
+            lock (_gate) _asked[(from, to)] = wallMs;
+        }
+
+        internal bool TryAskedSince(int from, int to, out long since)
+        {
+            lock (_gate) return _asked.TryGetValue((from, to), out since);
+        }
+
+        /// <summary>Cached, already asked, or now marked asked (the caller then queues the work). The caller holds the queue's gate.</summary>
+        internal ClaimResult Claim(int from, int to, long wallMs)
         {
             lock (_gate)
             {
-                if (!_askedSince.TryGetValue((from, to), out long since))
-                {
-                    _askedSince[(from, to)] = wallMs;
-                    return false;
-                }
-
-                return wallMs - since > maxWaitMs;
+                if (_routes.ContainsKey((from, to))) return ClaimResult.Cached;
+                return _asked.TryAdd((from, to), wallMs) ? ClaimResult.Claimed : ClaimResult.Asked;
             }
         }
 
-        internal bool MarkInFlight(int from, int to)
+        /// <summary>Run a queued search unless the pair was answered meanwhile (a fallback search on the asking thread). Does not throw.</summary>
+        internal void SearchQueued(int fromRegion, Vector3 from, int toRegion, Vector3 to, ILogger? logger)
         {
-            lock (_gate) return _inFlight.Add((from, to));
-        }
+            try
+            {
+                bool cached;
+                lock (_gate) cached = _routes.ContainsKey((fromRegion, toRegion));
+                if (cached)
+                {
+                    lock (_gate) _asked.Remove((fromRegion, toRegion));
+                    return;
+                }
 
-        internal void ClearInFlight(int from, int to)
-        {
-            lock (_gate) _inFlight.Remove((from, to));
+                Search(fromRegion, from, toRegion, to, logger, out _, out _);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("playerbot.region-route", ex);
+                (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Queued region route search from region {From} to region {To} failed", fromRegion, toRegion);
+                lock (_gate) _asked.Remove((fromRegion, toRegion));
+            }
         }
 
         /// <summary>Run the region search and keep its answer. A faulted search is kept as "no decision" (Exhausted, no portals), recorded and logged.</summary>
         internal void Search(int fromRegion, Vector3 from, int toRegion, Vector3 to, ILogger? logger = null)
             => Search(fromRegion, from, toRegion, to, logger, out _, out _);
 
-        /// <summary>As the overload without outputs; also gives the answer to the asker (which may be one the cache does not keep for others).</summary>
+        /// <summary>As the overload without outputs; also gives the answer to the asker (as <see cref="TryGet"/> would for its position).</summary>
         internal void Search(int fromRegion, Vector3 from, int toRegion, Vector3 to, ILogger? logger,
             out NavRegionRouteStatus status, out List<Vector3> portals)
         {
+            NavRegionRouteStatus found;
+            List<Vector3> chain;
             try
             {
                 Interlocked.Increment(ref _searches);
-                status = graph.FindRoute(fromRegion, from, toRegion, to, PlayerbotNavigation.RegionSearchNodes, out portals);
+                found = graph.FindRoute(fromRegion, from, toRegion, to, PlayerbotNavigation.RegionSearchNodes, nearestFromAnywhere: true, out chain, out _);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.region-route", ex);
                 (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route search from region {From} to region {To} failed", fromRegion, toRegion);
-                status = NavRegionRouteStatus.Exhausted;
-                portals = [];
+                found = NavRegionRouteStatus.Exhausted;
+                chain = [];
             }
 
-            Vector3? startKey = status == NavRegionRouteStatus.Unreachable && portals.Count == 0 ? from : null;
+            Vector3[] kept = [.. chain];
+            float nearest = kept.Length == 0 ? float.PositiveInfinity : Vector3.Distance(kept[^1], to);
+            var route = new Route(found, kept, to, nearest);
             lock (_gate)
             {
-                _askedSince.Remove((fromRegion, toRegion));
-                if (_routes.TryAdd((fromRegion, toRegion), (status, [.. portals], startKey)))
+                _asked.Remove((fromRegion, toRegion));
+                if (_routes.TryAdd((fromRegion, toRegion), route))
                 {
                     _order.Enqueue((fromRegion, toRegion));
                     while (_routes.Count > MaxEntries && _order.TryDequeue(out (int From, int To) oldest)) _routes.Remove(oldest);
                 }
-                else if (_routes[(fromRegion, toRegion)].Start is not null)
+                else
                 {
-                    _routes[(fromRegion, toRegion)] = (status, [.. portals], startKey); // a start-dependent answer gives way to the newer one
+                    route = _routes[(fromRegion, toRegion)]; // the earlier answer stands; this asker gets what a hit would give
                 }
             }
+
+            Derive(route, from, out status, out portals);
+        }
+
+        private static void Derive(Route route, Vector3 start, out NavRegionRouteStatus status, out List<Vector3> portals)
+        {
+            status = route.Status;
+            portals = route.Status != NavRegionRouteStatus.Found && route.Portals.Length > 0
+                && Vector3.Distance(start, route.Goal) <= route.NearestYards ? [] : [.. route.Portals];
         }
     }
 }

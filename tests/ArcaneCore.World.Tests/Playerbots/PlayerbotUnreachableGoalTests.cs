@@ -364,6 +364,22 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         });
         Assert.True(refused, "navigation into a remembered dead-end pin cell must be refused");
 
+        // A far goal in the pinned cell (beyond one chunk of MaxPathPoints - 2 yards) is refused on the first think, before any region
+        // search or path job is started for it.
+        var farOptions = new PlayerbotOptions { Enabled = true, MaxPathPoints = 20 };
+        Assert.True(Vector3.Distance(bindPos, pinPos) > farOptions.MaxPathPoints - 2);
+        PlanOutcome farOutcome = await world.Host.OnWorldAsync(() =>
+        {
+            TileWait wait = default;
+            return PlayerbotNavigation.PlanToward(world.Player, pinPos, farOptions, ref wait, world.Host.World.NowMs, out _);
+        });
+        Assert.Equal(PlanOutcome.Refused, farOutcome);
+        if (world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } building && await building is { } graph)
+        {
+            Assert.Equal(0, PlayerbotRegionRoutes.Of(graph).Searches);
+            Assert.Equal(0, PlayerbotRegionRoutes.Of(graph).Count);
+        }
+
         // The pin is remembered for ten minutes, not for good: real thinks over the world clock, and the cell is open again.
         for (int minute = 1; minute <= 9; minute++)
         {
@@ -405,11 +421,14 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
     }
 
     /// <summary>
-    /// "Unreachable" with no portal at all is the answer for a start already nearer the goal than any exit of its region: it is not the answer
-    /// for a bot standing elsewhere in the region, which is searched on its own and keeps its portals.
+    /// "Unreachable" with no portal at all is the answer for a start already nearer the goal than any exit of its region. It is derived per
+    /// asking position from one start-independent entry: whoever asks first, one search serves both, the near start gets no portal and the far
+    /// start the way to the portal nearest the goal.
     /// </summary>
-    [Fact]
-    public async Task AnUnreachableAnswerWithNoPortal_IsNotSharedWithAFarAwayStartInTheRegion()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnUnreachableAnswerWithNoPortal_IsDerivedPerStart_WhicheverStartAsksFirst(bool nearFirst)
     {
         await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
         await world.PlaceAsync(Start);
@@ -418,24 +437,66 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         var nearCliffEdge = new Vector3(37, 5, 0);
         int from = world.Nav.RegionAt(graph, nearCliffEdge, locate), to = world.Nav.RegionAt(graph, UnreachableSpawn, locate);
-        var farStart = new Vector3(2, 5, 0); // 35 yards from the edge: beyond PlayerbotRegionRoutes.StartDependentYards
+        var farStart = new Vector3(2, 5, 0);
         Assert.Equal(from, world.Nav.RegionAt(graph, farStart, locate));
         PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
 
-        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: false, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus edge, out List<Vector3> edgePortals));
+        List<Vector3> edgePortals, far;
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus edge, farStatus;
+        if (nearFirst)
+        {
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: false, out edge, out edgePortals));
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: true, out farStatus, out far));
+        }
+        else
+        {
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: false, out farStatus, out far));
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: true, out edge, out edgePortals));
+        }
+
         Assert.Equal(ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus.Unreachable, edge);
+        Assert.Equal(ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus.Unreachable, farStatus);
         Assert.Empty(edgePortals);
+        Assert.NotEmpty(far);
         Assert.Equal(1, cache.Searches);
 
-        // The same start (and one a few yards off) is answered from the cache.
+        // A start a few yards off the edge is answered from the same entry.
         Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge + new Vector3(-3, 0, 0), to, UnreachableSpawn, mayDefer: true, out _, out List<Vector3> again));
         Assert.Empty(again);
         Assert.Equal(1, cache.Searches);
+    }
 
-        // The far end of the region is another question.
-        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: false, out _, out List<Vector3> far));
-        Assert.Equal(2, cache.Searches);
-        Assert.NotEmpty(far);
+    /// <summary>
+    /// Two bots in one region, one standing at the cliff edge and one far from it, asking the same pair alternately under a waiting wrapper,
+    /// both get an answer within a few rounds from a single search: neither's answer replaces or restarts the other's.
+    /// </summary>
+    [Fact]
+    public async Task TwoStartsAskingAlternately_BothResolve_FromOneSearch()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        var nearCliffEdge = new Vector3(37, 5, 0);
+        var farStart = new Vector3(2, 5, 0);
+        int from = world.Nav.RegionAt(graph, nearCliffEdge, locate), to = world.Nav.RegionAt(graph, UnreachableSpawn, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        bool nearDone = false, farDone = false;
+        List<Vector3> nearPortals = [], farPortals = [];
+        for (int round = 0; round < 3 && !(nearDone && farDone); round++)
+        {
+            nearDone = PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: true, out _, out nearPortals, wallMs: round, budget: budget);
+            farDone = PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: true, out _, out farPortals, wallMs: round, budget: budget);
+            for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++) await Task.Delay(25);
+        }
+
+        Assert.True(nearDone && farDone, $"near answered {nearDone}, far answered {farDone}");
+        Assert.Empty(nearPortals);
+        Assert.NotEmpty(farPortals);
+        Assert.Equal(1, cache.Searches);
     }
 
     [Fact]

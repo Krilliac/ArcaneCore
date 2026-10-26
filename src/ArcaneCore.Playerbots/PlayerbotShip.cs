@@ -680,8 +680,9 @@ internal static partial class PlayerbotShip
             Vector3 dockTarget = ResolveDockTarget(map, at.Position, Position(player));
             if (dockTarget == at.Position && PathSearchCounters.TilesPending != dockMark && trip.Tiles.Hold(now))
             {
-                // No dry pier point found and a tile of the search is still being read: no verdict on the pier, and no refused plan to count.
-                // (A pier point found stands even when a probe beside it met an unread tile.) Ask again shortly.
+                // The dock resolved to the port itself (no dry point beside it, or the port read as dry) while a tile of a probe was still being
+                // read: no verdict on the pier yet, and no refused plan to count. (A dry point found stands even when a probe beside it met an
+                // unread tile.) Ask again shortly.
                 trip.NextPlanMs = unchecked(now + PlanRetryMs);
                 return;
             }

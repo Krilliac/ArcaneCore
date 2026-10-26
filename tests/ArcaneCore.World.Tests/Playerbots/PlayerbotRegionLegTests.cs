@@ -151,14 +151,79 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
         PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
-        Assert.True(cache.MarkInFlight(from, to)); // the pool never answers
+        cache.MarkAsked(from, to, 1_000); // the pool never answers
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
 
-        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 1_000, maxWaitMs: 30_000));
-        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 30_999, maxWaitMs: 30_000));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 1_000, maxWaitMs: 30_000, budget: budget));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 30_999, maxWaitMs: 30_000, budget: budget));
         Assert.Equal(0, cache.Searches);
-        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus status, out _, wallMs: 31_001, maxWaitMs: 30_000));
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus status, out _, wallMs: 31_001, maxWaitMs: 30_000, budget: budget));
         Assert.NotEqual(NavRegionRouteStatus.Exhausted, status);
         Assert.Equal(1, cache.Searches);
+    }
+
+    /// <summary>
+    /// The searches the asking thread runs for lost work are bounded: one per window of <see cref="PlayerbotRegionRoutes.SyncSearchBudget.WindowMs"/>.
+    /// A second lost pair waits for the next window.
+    /// </summary>
+    [Fact]
+    public async Task TheSyncFallback_IsLimitedToOneSearchPerWindow()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        int to2 = to + 1000, to3 = to + 1001; // no such region: answered Unreachable at once
+        cache.MarkAsked(from, to2, 0);
+        cache.MarkAsked(from, to3, 0);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to2, Goal, mayDefer: true, out _, out _, wallMs: 40_000, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(1, cache.Searches);
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to3, Goal, mayDefer: true, out _, out _, wallMs: 40_010, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(1, cache.Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to3, Goal, mayDefer: true, out _, out _, wallMs: 40_060, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(2, cache.Searches);
+    }
+
+    /// <summary>
+    /// The state of deferred asks is bounded and drains: many distinct pairs are queued, searched by the workers, and leave nothing asked
+    /// or queued behind; a stale mark is cleared by the search, and the ask of a pair that is no longer cached is queued, not searched at once.
+    /// </summary>
+    [Fact]
+    public async Task DeferredAsks_DrainToNothing_AndALostMarkIsClearedBySearching()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        for (int i = 0; i < 300; i++)
+            PlayerbotRegionRoutes.TryRoute(graph, from, Start, 1000 + i, Goal, mayDefer: true, out _, out _, wallMs: 0, budget: budget);
+        for (int tries = 0; tries < 400 && (cache.AskedCount > 0 || PlayerbotRegionRoutes.QueuedCount > 0 || PlayerbotRegionRoutes.Workers > 0); tries++)
+            await Task.Delay(25);
+
+        Assert.Equal(0, cache.AskedCount);
+        Assert.Equal(0, PlayerbotRegionRoutes.QueuedCount);
+        Assert.Equal(0, PlayerbotRegionRoutes.Workers);
+        Assert.Equal(300, cache.Count);
+        Assert.Equal(300, cache.Searches);
+
+        cache.MarkAsked(from, 5000, 0);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(0, cache.AskedCount);
+
+        // Evict pair 1000 (the oldest) by storing MaxEntries more pairs: bounded, and its next deferred ask is queued, not answered on this thread.
+        for (int extra = 0; extra < PlayerbotRegionRoutes.MaxEntries; extra++) cache.Search(from, Start, 6000 + extra, Goal);
+        Assert.True(cache.Count <= PlayerbotRegionRoutes.MaxEntries);
+        Assert.False(cache.TryGet(from, 1000, Start, out _, out _));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 1000, Goal, mayDefer: true, out _, out _, wallMs: 10_000_000, maxWaitMs: 30_000, budget: budget));
+        for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++) await Task.Delay(25);
+        Assert.Equal(0, cache.AskedCount);
+        Assert.True(cache.TryGet(from, 1000, Start, out _, out _));
     }
 
     /// <summary>A rebuilt graph is a new instance: it starts with an empty cache, and the old graph's routes never answer for it.</summary>

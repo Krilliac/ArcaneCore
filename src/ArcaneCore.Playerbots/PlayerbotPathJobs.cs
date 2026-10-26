@@ -151,6 +151,9 @@ internal sealed class PlayerbotPathJobs
     /// <summary>The logger of this service (faults of work done for it on other threads are logged here).</summary>
     internal ILogger Logger => _logger;
 
+    /// <summary>Bounds the region searches the world thread runs itself when a queued one is lost (<see cref="PlayerbotRegionRoutes.TryRoute"/>).</summary>
+    internal PlayerbotRegionRoutes.SyncSearchBudget RegionSyncBudget { get; } = new();
+
     /// <summary>The service the running think is bound to (<see cref="Bind"/>), if any.</summary>
     internal static PlayerbotPathJobs? Bound => t_bound;
 
