@@ -23,7 +23,7 @@ public sealed class WorldAuthStatusTests
     [Fact]
     public void AuthResponseCodes_MatchWowMessagesWorldResult()
     {
-        // D:\refs\wow_messages world/enums/world_result.wowm:35,57,59,63,65
+        // wow_messages world/enums/world_result.wowm:35,57,59,63,65
         Assert.Equal(0x10, (byte)AuthResponseCode.Unavailable);
         Assert.Equal(0x1C, (byte)AuthResponseCode.Banned);
         Assert.Equal(0x1D, (byte)AuthResponseCode.AlreadyOnline);

@@ -18,7 +18,7 @@ namespace ArcaneCore.World.Tests.Items;
 
 /// <summary>
 /// The optional client data of the live realm, read from the real files: the build-5875 DBCs of <c>ARCANECORE_TEST_DBC_DIR</c> (for example
-/// D:\refs\client-dbc-5875-effective) and the classic-db dump of <c>ARCANECORE_CLASSICDB_DUMP</c>, configured with exactly the keys
+/// client-dbc-5875-effective) and the classic-db dump of <c>ARCANECORE_CLASSICDB_DUMP</c>, configured with exactly the keys
 /// tools\content\set-optional-data.ps1 writes. The world starts without the five "missing optional data" warnings and each feature answers
 /// from the data: item set bonuses, random suffixes and their enchantments, readable pages and the character-creation appearance check.
 /// </summary>
@@ -26,7 +26,7 @@ public sealed class OptionalClientDataRealTests(ITestOutputHelper output)
 {
     private const uint RandomSword = 93_510;
 
-    /// <summary>The warnings the live world logged on 2026-10-08 (D:\ArcaneCore-lanes\_deploy\live-w3-r1\world.log) without this data.</summary>
+    /// <summary>The warnings the live world logged on 2026-10-08 (live-w3-r1\world.log) without this data.</summary>
     internal static readonly string[] MissingDataWarnings =
     [
         "ItemSets:DbcPath is not set",

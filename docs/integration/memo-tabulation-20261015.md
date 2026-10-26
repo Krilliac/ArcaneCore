@@ -7,7 +7,7 @@ All numbers below come from BenchmarkDotNet 0.15.8 (in-process emit toolchain, d
 back to back in one session from two worktrees: `89397354` plus only the benchmark project, and this branch. Nothing here was measured
 on the live server.
 
-Real data: the 5875 client DBCs (`ARCANECORE_TEST_DBC_DIR=D:\ArcaneCore-data\client-dbc-5875`, 22,357 spells) and an imported world
+Real data: the 5875 client DBCs (`ARCANECORE_TEST_DBC_DIR=<data-root>\client-dbc-5875`, 22,357 spells) and an imported world
 database snapshot (`ARCANECORE_TEST_WORLD_DB`, the `managed84-cadence-r2-before-world.db` copy of 2026-10-07, world schema 27, opened
 read-only and immutable; the live `world.db` files were empty when this ran). The equivalence tests and the benchmarks read its loot and
 item tables raw, so the older schema does not matter to them.

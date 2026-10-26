@@ -78,8 +78,8 @@ test('cursor readout names the files the extraction holds', { skip }, () => {
 test('every extracted file name round-trips through the tile maths', { skip }, () => {
     const real = load();
     // Transport (game object) navmeshes are named by display id, not by tile; the UI does not load them (out of scope).
-    //   ref: D:/refs/vmangos@0e3ff01/contrib/mmap/src/MapBuilder.cpp:791  "mmaps/go%04u.mmtile", displayId
-    //   ref: D:/refs/vmangos@0e3ff01/src/game/Maps/MoveMap.cpp:383        "mmaps/go%04i.mmtile", displayId
+    //   ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:791  "mmaps/go%04u.mmtile", displayId
+    //   ref: vmangos@0e3ff01 src/game/Maps/MoveMap.cpp:383        "mmaps/go%04i.mmtile", displayId
     const transport = /^go\d{4}\.mmtile$/;
     const kinds = [
         { dir: 'maps', suffix: '.map', pattern: /^(\d{3})(\d{2})(\d{2})\.map$/, order: 'xy', name: tiles.mapFileName, count: real.counts.map },

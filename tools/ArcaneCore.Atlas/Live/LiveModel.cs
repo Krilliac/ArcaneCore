@@ -23,7 +23,7 @@ public enum LiveKind
 /// <summary>The wire names of <see cref="LiveKind"/>.</summary>
 public static class LiveKinds
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:217 ("k":"player|bot|creature|gameobject")
+    // ref: ATLAS-2026-10-18.md:217 ("k":"player|bot|creature|gameobject")
     private static readonly string[] WireNames = ["player", "bot", "creature", "gameobject"];
 
     /// <summary>All wire names, in <see cref="LiveKind"/> order.</summary>
@@ -286,7 +286,7 @@ public sealed record LiveSubscription(uint Map, uint Instance, double Hz, IReadO
 public sealed record LiveQuery(string Kind, uint Map, uint Instance, WorldPoint A, WorldPoint? B)
 {
     /// <summary>The query kinds the protocol defines.</summary>
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:220 ("kind":"los|height|path|undermap")
+    // ref: ATLAS-2026-10-18.md:220 ("kind":"los|height|path|undermap")
     public static IReadOnlyList<string> Kinds { get; } = ["los", "height", "path", "undermap"];
 
     /// <summary>Whether <paramref name="kind"/> needs the second point.</summary>

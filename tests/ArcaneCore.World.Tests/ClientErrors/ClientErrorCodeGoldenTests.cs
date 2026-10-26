@@ -8,7 +8,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.ClientErrors;
 
 /// <summary>
-/// Golden values from the 1.12.1 client binary, recorded in D:/WoW-RE-Research/protocol/client-error-codes.md
+/// Golden values from the 1.12.1 client binary, recorded in WoW-RE-Research protocol/client-error-codes.md
 /// (summary: docs/areas/client-errors.md). The tables below are the client's own code-to-string-key mappings: the
 /// cast-result switch at 0x6E23E0 and the glue response-code table at 0x85CAE8. A failing test means an enum drifted
 /// from what the client displays; the binary wins over emulator headers.

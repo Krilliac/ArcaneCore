@@ -32,7 +32,7 @@ public sealed class NavLayerSource : ServerLayerSource
 
     /// <summary>The colour key of a polygon's flags (precedence magma, slime, water, steep slopes, ground), or null for flags with none of them.</summary>
     // ref: src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:205-214 NavTerrain ground 0x01, magma 0x02, slime 0x04, water 0x08, steep 0x10
-    // ref: D:/refs/vmangos/src/game/Maps/MoveMapSharedDefines.h:43-47 NAV_GROUND/NAV_MAGMA/NAV_SLIME/NAV_WATER/NAV_STEEP_SLOPES
+    // ref: vmangos@0e3ff01 src/game/Maps/MoveMapSharedDefines.h:43-47 NAV_GROUND/NAV_MAGMA/NAV_SLIME/NAV_WATER/NAV_STEEP_SLOPES
     public static string? NavColorKey(ushort flags)
     {
         var terrain = (NavTerrain)flags;
@@ -130,7 +130,7 @@ public sealed class NavLayerSource : ServerLayerSource
         };
     }
 
-    // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:47-50 Recast = (y, z, x); D:/refs/vmangos/src/game/Maps/PathFinder.cpp:164-165 {y, z, x}
+    // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:47-50 Recast = (y, z, x); vmangos@0e3ff01 src/game/Maps/PathFinder.cpp:164-165 {y, z, x}
     private static Vector3 World(Vector3 recast) => NavMeshFormat.ToWorld(recast);
 
     /// <summary>Twice the signed area of a polygon seen from above in world X/Y (positive: counter-clockwise, facing up).</summary>
@@ -463,7 +463,7 @@ public sealed class NavLayerSource : ServerLayerSource
                     continue;
                 }
 
-                // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:85-88,686-703 GetCrossPortals (Volatile-published cache); D:/refs/vmangos/dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:300-415 findConnectingPolys (slab overlap)
+                // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:85-88,686-703 GetCrossPortals (Volatile-published cache); vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:300-415 findConnectingPolys (slab overlap)
                 CrossPortal[] found = mesh.GetCrossPortals(p, e, other);
                 if (found.Length == 0)
                 {

@@ -9,7 +9,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Druid;
 
 /// <summary>
-/// ENVIRONMENT_FLAG_HIGH_LIQUID edge handling (D:\refs\vmangos\src\game\Objects\Player.cpp:848-855 and 20353-20419):
+/// ENVIRONMENT_FLAG_HIGH_LIQUID edge handling (vmangos@0e3ff01 src/game/Objects/Player.cpp:848-855 and 20353-20419):
 /// auras with AURA_INTERRUPT_UNDER_WATER_CANCELS (0x80) go on entering deep liquid, ABOVE_WATER_CANCELS (0x100) on
 /// leaving it. Spell ids in comments are classic-db rows the synthetic spells imitate: 783 Travel Form
 /// (AuraInterruptFlags 0x80), 1066 Aquatic Form (0x100).

@@ -12,7 +12,7 @@ namespace ArcaneCore.Game.Tests.GameObjects;
 /// <summary>
 /// GO1a: retail (vmangos) fidelity primitives of the game object map system: the per-type data helpers,
 /// auto-close in seconds * 0x10000 on a whole-second clock, GO_FLAG_NODESPAWN, random respawn delays and
-/// SMSG_GAMEOBJECT_DESPAWN_ANIM. References: D:\refs\vmangos\src\game\Objects\GameObjectDefines.h:536-668,
+/// SMSG_GAMEOBJECT_DESPAWN_ANIM. References: vmangos@0e3ff01 src/game/Objects/GameObjectDefines.h:536-668,
 /// GameObject.cpp:572-590, 656, 698-711, 985-1022, 1370-1383, 2467-2471.
 /// </summary>
 public sealed class GameObjectFidelityPrimitivesTests

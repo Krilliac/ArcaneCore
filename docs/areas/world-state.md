@@ -7,7 +7,7 @@ Branch `claude/vw2-world-state-exploration`. Pure rules live in
 
 Standing rule: retail (vmangos 1.12.1) behaviour is the default. A deliberate departure sits
 behind a config option that defaults to retail, or is listed under "Deviations" below.
-References are read-only (`D:\refs\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`);
+References are read-only (`<refs-root>\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`);
 nothing from them is copied into the repo.
 
 ## Delivered
@@ -82,7 +82,7 @@ entry, even with 0 XP (mangos-classic only when the area level is above 0; vmang
 is followed).
 
 `ClassicDbFact` tests read `exploration_basexp` straight from the classic-db dump
-(`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`, or `ARCANE_CLASSICDB_DUMP`) and are
+(`<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`, or `ARCANE_CLASSICDB_DUMP`) and are
 reported as skipped with that reason when it is absent; no game data is committed. Verified there:
 61 rows, level 60 = 660, and the XP examples in the tests.
 

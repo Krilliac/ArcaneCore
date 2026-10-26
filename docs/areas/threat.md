@@ -1,7 +1,7 @@
 # Area: threat, aggro and combat AI rules
 
 Status: wave 4 lane `threat-and-aggro` (branch `claude/vw5-threat-and-aggro`). Everything below is checked against the
-vmangos sources in `D:\refs\vmangos` (primary). Nothing here was run against a retail client or a vmangos server: the
+vmangos sources in `<refs-root>\vmangos` (primary). Nothing here was run against a retail client or a vmangos server: the
 evidence is the reference code plus this repository's tests.
 
 Delivered, in commit order: threat-list core, victim selection, taunt and threat auras, the threat pipeline (damage, heal, spell threat),

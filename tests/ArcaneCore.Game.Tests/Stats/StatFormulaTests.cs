@@ -6,7 +6,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Stats;
 
 /// <summary>
-/// Expected values are worked by hand from vmangos 4b3d241 (D:\refs\vmangos\src\game): StatSystem.cpp,
+/// Expected values are worked by hand from vmangos 4b3d241 src/game: StatSystem.cpp,
 /// Objects/Player.cpp, Objects/Unit.cpp, Objects/SpellCaster.cpp and ObjectMgr.cpp. The line numbers are in the
 /// production comments next to each formula.
 /// </summary>

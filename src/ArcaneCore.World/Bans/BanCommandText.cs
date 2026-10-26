@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Bans;
 /// <summary>
 /// The retail argument, duration and text rules of the ban commands, as faithful ports of the vmangos helpers
 /// (no code is copied: the behaviour is re-implemented and cited). Texts are the mangos_string rows 408-428
-/// (D:\refs\classic-db Full_DB mangos_string; the multi-line IP entry follows mangos-classic sql/base/mangos.sql:3776,
+/// (classic-db Full_DB mangos_string; the multi-line IP entry follows mangos-classic sql/base/mangos.sql:3776,
 /// because the classic-db dump lost its newlines).
 /// </summary>
 public static class BanCommandText

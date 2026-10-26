@@ -4,7 +4,7 @@ This lane starts at `ddebfd52`. It adds C# encounter scripts and deterministic G
 
 ## Behaviors and references
 
-The following are behavior adaptations from read-only GPL references, with no GPL source copied. Paths are relative to `D:/refs/mangos-classic/src/game/AI/ScriptDevAI/scripts/` (MC) and `D:/refs/vmangos/src/scripts/` (VM). In the table, MC `.../zulgurub/` expands to `eastern_kingdoms/zulgurub/` and VM `.../zulgurub/` expands to `eastern_kingdoms/stranglethorn_vale/zulgurub/`. ClassicDB is `ClassicDB_1_12_1_z2815.sql.gz`.
+The following are behavior adaptations from read-only GPL references, with no GPL source copied. Paths are relative to `<refs-root>/mangos-classic/src/game/AI/ScriptDevAI/scripts/` (MC) and `<refs-root>/vmangos/src/scripts/` (VM). In the table, MC `.../zulgurub/` expands to `eastern_kingdoms/zulgurub/` and VM `.../zulgurub/` expands to `eastern_kingdoms/stranglethorn_vale/zulgurub/`. ClassicDB is `ClassicDB_1_12_1_z2815.sql.gz`.
 
 | Encounter | Implemented | Reference file and function |
 |---|---|---|
