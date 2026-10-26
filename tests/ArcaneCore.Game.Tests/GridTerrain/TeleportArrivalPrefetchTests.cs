@@ -152,6 +152,24 @@ public sealed class TeleportArrivalPrefetchTests : IDisposable
         Assert.True(teleports.IsBeingTeleportedFar(a) || teleports.IsBeingTeleportedNear(a));
     }
 
+    /// <summary>A service that implements only <c>Prefetch</c> gets <c>PrefetchArrival</c> from the interface's default, which falls back to <c>Prefetch</c>.</summary>
+    [Fact]
+    public void ThePrefetchArrivalDefault_FallsBackToPrefetch()
+    {
+        var service = new PrefetchOnlyService();
+
+        ((ICollisionTilePrefetch)service).PrefetchArrival(1, 7, 9);
+
+        Assert.Equal([(1u, 7, 9)], service.Approaches);
+    }
+
+    private sealed class PrefetchOnlyService : ICollisionTilePrefetch
+    {
+        public List<(uint, int, int)> Approaches { get; } = [];
+
+        public void Prefetch(uint mapId, int tileX, int tileY) => Approaches.Add((mapId, tileX, tileY));
+    }
+
     private sealed class RecordingService(bool fails) : ILineOfSight, IPathfinder, ICollisionTilePrefetch
     {
         public ConcurrentQueue<(uint, int, int)> Arrivals { get; } = new();

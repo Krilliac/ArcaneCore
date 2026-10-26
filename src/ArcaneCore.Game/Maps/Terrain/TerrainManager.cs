@@ -284,6 +284,10 @@ public sealed class TerrainManager
             return;
         }
 
+        // Between the claim above and this write, a retry from SlotFailed still carries the old failure time in ChangedMs. That is safe only
+        // because lookups (TryGetBackgroundAreaFlag) run on the world thread alone (PlayerbotBrain, world tick), so no caller can read the
+        // slot in that window; a second caller thread would see Reading with a stale start time and could give up on it early.
+        // TerrainManager has no world-thread check helper to assert with, so this is documented rather than asserted.
         Volatile.Write(ref atlas.ChangedMs[index], Environment.TickCount64);
         Interlocked.Increment(ref _areaReadsInFlight);
         string path = Path.Combine(_mapsDirectory!, TerrainTile.FileName(mapId, tileX, tileY));
