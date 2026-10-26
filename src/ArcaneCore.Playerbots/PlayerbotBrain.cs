@@ -567,9 +567,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _overranReported = true;
         _overranReportMs = now;
         string slowest = PlayerbotThinkProbe.Active is { } probe ? $", slowest phase {probe.SlowestPhaseNow}" : string.Empty;
+        string collector = gcPauseMs > 0 ? string.Create(CultureInfo.InvariantCulture, $", {gcPauseMs:F0} ms of collector pause not counted") : string.Empty;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest}{collector})"));
     }
 
     internal void Update(uint elapsedMs)
