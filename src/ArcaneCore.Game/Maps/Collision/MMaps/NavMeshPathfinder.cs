@@ -692,7 +692,8 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// over it or a near-box hit on a slope was that far off; or
     /// (b) steep slopes are excluded by the filter, the walking hit is more than 0.1 yd off horizontally, and a lookup in the near box with nothing
     /// excluded finds a polygon more than <see cref="ExcludedGroundMarginYards"/> nearer (3D): the point lies on a steep slope.
-    /// With <c>EndTolerance</c> above 0 (the single {5, 10, 5} box) or <see cref="PathOptions.ExcludeOnlyInSearch"/> far is never set.
+    /// With <c>EndTolerance</c> above 0 (the single {5, 10, 5} box) far is never set. With <see cref="PathOptions.ExcludeOnlyInSearch"/>
+    /// rule (b) is never taken (the lookup already excludes nothing); rule (a) still applies.
     /// A point merely outside a polygon's footprint but within the near box is not far, whatever its horizontal distance.
     /// Rule (b) costs one more polygon lookup, paid only by this overload. Meaningful only when the result is not -1.
     /// </summary>
