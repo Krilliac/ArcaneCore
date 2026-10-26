@@ -949,6 +949,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             AllowPartial = true,
             MaxSearchNodes = 256,
             LoadTiles = true,
+            NonBlockingTiles = true, // a tile not in yet is read on the pool, never on the world thread: pending counts as walkable below
         });
         if ((reach.Type & PathType.TilesPending) != 0)
             return true;
