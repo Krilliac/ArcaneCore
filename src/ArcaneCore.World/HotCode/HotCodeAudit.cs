@@ -13,7 +13,8 @@ namespace ArcaneCore.World.HotCode;
 /// <see cref="Record"/> is called from GM commands and the feature host on the world thread, so it only queues the line; one
 /// background writer per file appends the lines in the order they were queued (every instance on the same path shares the writer).
 /// <see cref="Flush"/> waits until everything queued so far is on disk, and the queue is flushed when the process exits. A write
-/// that fails is counted in the <see cref="FaultLedger"/> (<c>hotcode.audit-write</c>) and its lines are lost.
+/// that fails is counted in the <see cref="FaultLedger"/> (<c>hotcode.audit-write</c>) and its lines are lost; a flush that times out is counted as
+/// <c>hotcode.audit-flush</c>.
 /// </para>
 /// </summary>
 public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null)
@@ -44,7 +45,10 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
     {
         if (HasFile && Appenders.TryGetValue(Path.GetFullPath(path!), out Appender? appender))
         {
-            appender.FlushAsync().Wait(FlushBudget);
+            if (!appender.FlushAsync().Wait(FlushBudget))
+            {
+                RecordFlushTimeout(Path.GetFullPath(path!));
+            }
         }
     }
 
@@ -52,8 +56,15 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
     public static void FlushAll()
     {
         Task[] pending = [.. Appenders.Values.Select(a => a.FlushAsync())];
-        Task.WaitAll(pending, FlushBudget);
+        if (!Task.WaitAll(pending, FlushBudget))
+        {
+            RecordFlushTimeout("all audit files");
+        }
     }
+
+    /// <summary>The flush gave up waiting (a wedged disk): the queued lines may be lost, so the timeout is counted, not silent.</summary>
+    private static void RecordFlushTimeout(string target)
+        => FaultLedger.Shared.Record("hotcode.audit-flush", new TimeoutException($"hot-code audit flush of {target} did not finish within {FlushBudget.TotalSeconds:0} s"));
 
     private sealed class Appender(string fullPath)
     {
