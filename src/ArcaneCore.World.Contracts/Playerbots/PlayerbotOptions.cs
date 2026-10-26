@@ -102,7 +102,7 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
-    /// (<c>PlayerbotSlowThinkLog</c>; 0 = off, 0..60000). Live: <c>.reload config</c> applies a change at once.
+    /// (<c>PlayerbotSlowThinkLog</c>; 0 = off, 0..60000). A think over it only because of garbage-collector pauses (think time minus GC pause under the threshold) is counted as <c>bot-brain/think-gc-stall</c> at Info instead of <c>think-slow</c>. Live: <c>.reload config</c> applies a change at once.
     /// </summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off")]
     public double SlowThinkLogMs { get; set; } = 50;

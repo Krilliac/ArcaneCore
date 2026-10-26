@@ -1144,6 +1144,22 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
     quests 400, 2160, 2997). These are navigation obstacles, not quest faults; the zone clip and the return teleport bring homed bots back from
     the first two, the third is on the Westfall-to-Ironforge line above.
 
+### Think time and the destination step budget
+
+A think is measured per phase (`PlayerbotThinkProbe`); `World:Playerbots:SlowThinkLogMs` logs the slow ones with their phases, and the
+destination planner's work is split into "destinations entries", "destinations transit", "destinations journey" and "destinations advance"
+(the plan queries stay in "grind destinations"). A think over the threshold only because the garbage collector paused the process (think
+time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA.
+
+`PlayerbotWorldDestinations.Update` checks a step budget before each costly step (the tram, lift and taxi block, the unreachable skip, the
+path plan, a water journey): the think is past 25 ms, the destination loop past 20 ms (once a candidate was judged), or the think has made
+too many path queries. A spent budget **defers** the step: nothing is stored against the spawn (no back-off, no blocked spawn, no refused
+plan), and the next think resumes at the same candidate while its list is unchanged. A deferral is never "planning" to the stall watch, so a
+bot that is over budget on every think is still seen as stalled. After three deferrals in a row the next think runs its step whatever the
+budget, so the destination loop itself always progresses; the brain's own 15 ms optional-work gate can still skip a destination update.
+The cached nearest-spawn lists are kept per identity (quest givers, one hunted entry, one quest return; three at most), and blocked spawns
+survive switches between them.
+
 ### Faults and quarantine
 
 An exception out of a bot's update (brain, scripted controller or `PlayerbotMotion`) is an

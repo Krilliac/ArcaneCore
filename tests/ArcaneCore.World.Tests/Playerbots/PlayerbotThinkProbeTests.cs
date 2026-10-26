@@ -206,6 +206,60 @@ public sealed class PlayerbotThinkProbeTests
         Assert.Equal(default, next.SlowestTile);
     }
 
+    [Fact]
+    public void AScopeInsideAPhase_GetsItsOwnTime_AndGivesThePhaseBack()
+    {
+        var probe = new PlayerbotThinkProbe(_clock);
+        probe.Begin();
+        try
+        {
+            PlayerbotThinkProbe.Phase("grind destinations");
+            Spin(2);
+            using (PlayerbotThinkProbe.Scope("destinations advance"))
+            {
+                Spin(30);
+                using (PlayerbotThinkProbe.Scope("destinations transit"))
+                    Spin(7);
+                Assert.Equal("destinations advance", PlayerbotThinkProbe.CurrentPhase);
+                Spin(3);
+            }
+
+            Assert.Equal("grind destinations", PlayerbotThinkProbe.CurrentPhase);
+            Spin(4);
+        }
+        finally
+        {
+            probe.End();
+        }
+
+        Dictionary<string, double> phases = probe.Phases().ToDictionary(p => p.Phase, p => p.Ms);
+        Assert.Equal(6, phases["grind destinations"], 3);
+        Assert.Equal(33, phases["destinations advance"], 3);
+        Assert.Equal(7, phases["destinations transit"], 3);
+        Assert.Equal("destinations advance", probe.SlowestPhase);
+        Assert.Equal(_clock.TicksFor(46), probe.ElapsedTicks);
+        Assert.Equal(default, PlayerbotThinkProbe.Scope("x")); // off a think: nothing to restore
+    }
+
+    [Fact]
+    public void RunningMs_IsTheThinkSoFar_WhereElapsedMsReadsZeroUntilTheEnd()
+    {
+        var probe = new PlayerbotThinkProbe(_clock);
+        probe.Begin();
+        try
+        {
+            Spin(12);
+            Assert.Equal(12, probe.RunningMs, 3);
+            Assert.Equal(0, probe.ElapsedMs);
+        }
+        finally
+        {
+            probe.End();
+        }
+
+        Assert.Equal(12, probe.ElapsedMs, 3);
+    }
+
     /// <summary>A clock that moves only when <see cref="Advance"/> is called (Stopwatch ticks, as the probe requires).</summary>
     internal sealed class ManualClock(long? frequency = null) : TimeProvider
     {

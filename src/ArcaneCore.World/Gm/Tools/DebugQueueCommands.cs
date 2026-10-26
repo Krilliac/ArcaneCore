@@ -40,7 +40,7 @@ public sealed class DebugQueueCommands : ICommandExtension
             "Syntax: .debug opcodes [on|off|reset|in|out|bytes] [#count]\nPer-opcode traffic since the last reset: packets and bytes in and out by protocol and opcode, busiest first (by packets in+out, 'in', 'out' or 'bytes'; default 15 rows). Counting runs while a metrics listener is attached or after '.debug opcodes on' (off again with 'off'); 'reset' starts a new window.",
             Opcodes, RetailLevel: 3),
         new("botthink", AccountSecurity.GameMaster,
-            "Syntax: .debug botthink [#count]\nShow playerbot think diagnostics: logged-in and running counts, split-brain latch, playerbot feature tick time, slow-think anomaly count and recent slowest phases, active goal distribution, and up to #count bots (default 10, max 60).",
+            "Syntax: .debug botthink [#count]\nShow playerbot think diagnostics: logged-in and running counts, split-brain latch, playerbot feature tick time, slow-think anomaly count and recent slowest phases (thinks over the threshold only for GC pauses are counted apart as think-gc-stall), active goal distribution, and up to #count bots (default 10, max 60).",
             BotThink, RetailLevel: 3),
     ];
 
@@ -192,11 +192,15 @@ public sealed class DebugQueueCommands : ICommandExtension
         AnomalySnapshot? slowThink = AnomalyLedger.Shared.Find("bot-brain/think-slow");
         long slowCount = slowThink?.Count ?? 0;
         string slowSubjects = slowThink?.SubjectsCountText ?? "0";
+        AnomalySnapshot? gcStall = AnomalyLedger.Shared.Find("bot-brain/think-gc-stall");
 
         context.Reply(string.Create(C,
             $"Playerbot think: {running} running ({loggedIn} logged in, {snapshot.Count} registered), split-brain {(splitBrain ? "YES" : "no")}, feature tick {featureCost}"));
         context.Reply(string.Create(C,
             $"  slow thinks (bot-brain/think-slow): {slowCount} total across {slowSubjects} bot(s)"));
+        if (gcStall is not null)
+            context.Reply(string.Create(C,
+                $"  thinks over the threshold only for GC pauses (bot-brain/think-gc-stall, Info): {gcStall.Count} total across {gcStall.SubjectsCountText} bot(s)"));
         if (slowThink is { RecentDetails.Count: > 0 })
         {
             foreach (string detail in slowThink.RecentDetails)

@@ -43,4 +43,40 @@ public sealed class PlayerbotQaUnreachableGoalTests
         Assert.Contains("unreachable on foot", PlayerbotQaAggregator.Subject(a, null), StringComparison.Ordinal);
         Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(a, new FakeFacts()).Cause);
     }
+
+    private const string TeldrassilReport = "goal unreachable on foot: goal=Grind target=2031 quest=456 at -3565.3,-4342.6,11.8 map 1 components=12764/284";
+
+    [Fact]
+    public void AGoalAcrossWater_IsABehaviourBug_NotMissingData()
+    {
+        var facts = new FakeFacts();
+        facts.SpawnPoints[(1, 2031)] = [(10270f, 744f), (10300f, 760f)];
+        QaSignal s = QaData.Parse("Playerbot " + QaData.Bot1 + " (A) " + TeldrassilReport);
+
+        QaClassification c = PlayerbotQaClassifier.Classify(s, facts);
+
+        Assert.Equal(QaCause.BehaviourBug, c.Cause);
+        Assert.Contains("goal across water", c.Detail, StringComparison.Ordinal);
+        Assert.Contains("bot-travel/leg-failed", c.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AGoalOnTheBotsOwnSide_StaysMissingData()
+    {
+        var facts = new FakeFacts();
+        facts.SpawnPoints[(1, 2031)] = [(-3600f, -4300f)];
+        QaSignal s = QaData.Parse("Playerbot " + QaData.Bot1 + " (A) " + TeldrassilReport);
+
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(s, facts).Cause);
+    }
+
+    [Fact]
+    public void AGoalWithSomeSpawnsOnTheBotsSide_StaysMissingData()
+    {
+        var facts = new FakeFacts();
+        facts.SpawnPoints[(1, 2031)] = [(10270f, 744f), (-3600f, -4300f)];
+        QaSignal s = QaData.Parse("Playerbot " + QaData.Bot1 + " (A) " + TeldrassilReport);
+
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(s, facts).Cause);
+    }
 }

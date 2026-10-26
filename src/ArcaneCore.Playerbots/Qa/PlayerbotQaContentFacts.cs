@@ -39,6 +39,9 @@ internal interface IQaContentFacts
 
     int SpawnCountAnyMap(uint entry);
 
+    /// <summary>The x/y of the spawns of <paramref name="entry"/> on <paramref name="map"/> (at most 64); empty when none or the content is unknown.</summary>
+    IReadOnlyList<(float X, float Y)> SpawnPositions(uint map, uint entry);
+
     QaTemplateFacts? Template(uint entry);
 
     /// <summary>
@@ -76,6 +79,8 @@ internal sealed class NoQaContentFacts : IQaContentFacts
     public int SpawnCount(uint map, uint entry) => 0;
 
     public int SpawnCountAnyMap(uint entry) => 0;
+
+    public IReadOnlyList<(float X, float Y)> SpawnPositions(uint map, uint entry) => [];
 
     public QaTemplateFacts? Template(uint entry) => null;
 
@@ -138,6 +143,19 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
         int total = 0;
         foreach (uint map in content.MapsWithSpawns) total += content.GetSpawns(map, entry).Count;
         return total;
+    }
+
+    public IReadOnlyList<(float X, float Y)> SpawnPositions(uint map, uint entry)
+    {
+        if (Creatures?.Content is not { } content) return [];
+        var found = new List<(float X, float Y)>();
+        foreach (CreatureSpawn spawn in content.GetSpawns(map, entry))
+        {
+            if (found.Count >= MaxEnderSpawns) break;
+            found.Add((spawn.X, spawn.Y));
+        }
+
+        return found;
     }
 
     public QaTemplateFacts? Template(uint entry)
