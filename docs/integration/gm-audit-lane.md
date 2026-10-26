@@ -134,3 +134,28 @@ and say so.
 host, with an in-memory `IGmAuditStore` that can be told to fail) and `tests/ArcaneCore.Data.Tests/Gm/GmAuditStoreTests.cs` (SQLite,
 MariaDB and PostgreSQL). The generated references (`docs/reference/*`: command, configuration and schema pages) are not regenerated here; their
 three comparison tests fail until the orchestrator does that after the merge.
+
+## The ticket assistant
+
+ArcaneCore only, off by default (`World:GmTicketAssistant:Enabled`). `GmTicketAssistant` (`src/ArcaneCore.World/Gm/TicketAssistant`) polls the open
+tickets and handles one at a time, skipping any it has handled or a GM has answered. A model, when the playerbot chat stack has one
+(`PlayerbotTicketAssistantModel`, behind the `ITicketAssistantModel` seam), may only choose a category (`TicketCategory`, parsed strictly:
+anything else is `Other`); with no model, or on a failure, a keyword classifier chooses and defaults to `Other`. The ticket text is untrusted.
+
+What the assistant does is decided by code from the category and the facts (`TicketPolicy`), each action behind a named evidence predicate, only
+for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `ActionCooldownSeconds`) and written to the GM audit tail
+(`.arcane gmlog`) with the assistant as actor:
+
+| Category | Action | Evidence |
+|---|---|---|
+| Question | an FAQ answer from the model (moderated, redacted), then close | the model drafted one |
+| Stuck | teleport to the bind point or graveyard, then close | an `under-map` or `fall-without-landing` anomaly for the character within `SignalWindowSeconds` |
+| Stuck | the `.unstuck` path, then close | no movement for `StuckIdleSeconds` |
+| Stuck | clear the combat state, then close | in combat for `StaleCombatSeconds` with no attacker, victim or threat |
+| DeadCantRes | graveyard resurrection with sickness, then close | dead or a ghost for `DeadSeconds` |
+| DeadCantRes | resurrection in place without sickness, then close | the same, after an `under-map` or `fall-without-landing` anomaly |
+| anything else | "logged for a GM", an internal note (`.ticket show`), the ticket stays open | none |
+
+Never given by any action: items, gold, experience, reputation, levels; never done: bans, kicks, mutes or account changes. Not delivered:
+a stuck taxi flight, transport passenger, cast, loot window or trade window reset (no clean API for the evidence), a visible persona on GM
+Island, and tickets from whispers. `.ticket assistant status|on|off|run $id` switches and tests it.

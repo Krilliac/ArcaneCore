@@ -53,8 +53,19 @@ public sealed class UnstuckCommands : ICommandGroup
 
     private static bool Unstuck(CommandContext context, string text)
     {
-        Player player = context.Player;
-        SpellSystem? spells = context.Session.Services.GetService<SpellFeature>()?.System;
+        TryApply(context.Session.Services, context.Player, out string reply);
+        context.Reply(reply);
+        return true;
+    }
+
+    /// <summary>
+    /// The unstuck rules and effect for <paramref name="player"/> (world thread), shared by <c>.unstuck</c> and the GM ticket assistant.
+    /// False with <see cref="Unavailable"/> when the rules refuse (nothing is changed); otherwise true with <see cref="Alive"/> (Undying
+    /// Soul cast, death when it expires) or <see cref="Dead"/> (a ghost: sickness, the cooldown and the graveyard at once).
+    /// </summary>
+    internal static bool TryApply(IServiceProvider services, Player player, out string reply)
+    {
+        SpellSystem? spells = services.GetService<SpellFeature>()?.System;
         SpellInfo? undying = spells?.Store.Get(UndyingSoul);
         if (spells is null || undying is null
             || player.Combat.IsInCombat
@@ -64,25 +75,25 @@ public sealed class UnstuckCommands : ICommandGroup
             || player.Combat.DeathState == DeathState.Corpse
             || player.Level < MinLevel)
         {
-            context.Reply(Unavailable);
-            return true;
+            reply = Unavailable;
+            return false;
         }
 
         if (player.IsAlive)
         {
             spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false);
-            context.Reply(Alive);
+            reply = Alive;
         }
         else
         {
             UnstuckFeature.ApplySickness(spells, player);
             spells.RestoreCooldowns(player, [new PersistedCooldown(SpellCooldownKind.Spell, UndyingSoul,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + GhostCooldownMs)], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            context.Session.Services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
-            context.Reply(Dead);
+            services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
+            reply = Dead;
         }
 
-        context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger<UnstuckCommands>().LogInformation(
+        services.GetService<ILoggerFactory>()?.CreateLogger<UnstuckCommands>().LogInformation(
             "Player {Name} (guid {Guid}) used unstuck command at map {Map} ({X}, {Y}, {Z}).",
             player.Name, player.Guid.Low, player.MapId, player.X, player.Y, player.Z);
         return true;

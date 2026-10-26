@@ -109,6 +109,15 @@ public sealed class TicketCommands : ICommandGroup
             context.Reply(GmAuditStrings.TicketResponse(ticket.Response));
         }
 
+        if (context.Session.Services.GetService<TicketAssistant.GmTicketAssistant>() is { } assistant && assistant.NeedsHuman(ticket.Id))
+        {
+            context.Reply("Needs a GM: the ticket assistant left this ticket for a human.");
+            foreach (string note in assistant.NotesOf(ticket.Id))
+            {
+                context.Reply("Assistant note: " + note);
+            }
+        }
+
         return true;
     }
 
