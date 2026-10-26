@@ -94,7 +94,7 @@ the root `MILESTONE_*.md` files (for example [M5](../MILESTONE_M5.md)); later ar
 | Combat and AI | `src/ArcaneCore.Game/Combat`, `src/ArcaneCore.Game/Creatures/AI` | Hit table, threat, regen, death and ghost, EventAI and SmartAI (slices 1-3d; game objects through `SmartGameObjectAi`). |
 | Spells | `src/ArcaneCore.Game/Spells` | Cast pipeline, auras, cooldowns, spell scripts. |
 | Quests and NPC services | `src/ArcaneCore.Game/Quests`, `src/ArcaneCore.Game/Npc` | Gossip, quests, vendors, trainers, taxi. |
-| Pets | `src/ArcaneCore.Game/Pets` | Summons, taming, training, happiness and loyalty, Far Sight. Pet loyalty and training points are persisted. |
+| Pets | `src/ArcaneCore.Game/Pets` | Summons, taming, training, happiness and loyalty, Far Sight, the stable master (`PetStableController`, `SummonService.Stable`). Pet loyalty and training points are persisted. |
 | Social | `src/ArcaneCore.Game/Social`, `src/ArcaneCore.Game/Groups`, `src/ArcaneCore.Game/Guilds`, `src/ArcaneCore.Game/Channels` | Groups, channels, friends and ignore, guilds. |
 | Economy | `src/ArcaneCore.Game/Economy`, `src/ArcaneCore.World/Economy` | Economy and trade rules, the auction house bot (`Economy/AuctionBot`). Mail and auction storage is in `src/ArcaneCore.Data/Economy`. |
 | Instances and scripts | `src/ArcaneCore.Game/Instances/Scripts`, `src/ArcaneCore.World/Scripting` | Dungeon and raid scripts; script hooks including addon chat. |
@@ -133,9 +133,8 @@ Ranked by impact. Evidence is a file or audit line in this repo.
 | 8 | World and zone script coverage | Recount by creature entry, not by script name, then port what is missing. | The old name-based count (72 of 186) cannot be reproduced. Zone batches 4-16, 21 and 22 are in `docs/integration`. |
 | 9 | Whois email | `.whois` prints "e-mail: Unknown". | `src/ArcaneCore.World/Handlers/GmClientHandlers.cs` |
 | 10 | Pet happiness emote | Send the emote when happiness changes. (unverified) | No emote send found in `src/ArcaneCore.Game/Pets`. |
-| 11 | Pet stable | The stable data module exists; the full handler flow is unverified. | `src/ArcaneCore.Data/Characters/Pets/PetStableDataModule.cs` |
-| 12 | Multi-version S1 and S2 | Build info on sessions, expansion columns, a content gate, then the movement codec. Decisions 4 and 6 are still open. | [multi-version.md](design/multi-version.md) is a draft with no code. |
-| 13 | Multithreading next steps | Bot think per map and stages inside one map. Design only; needs the owner's go. | [map-local stages design](research/map-local-stages-design-20261024.md), [parallel maps status](research/parallel-maps-status-20261017.md). |
+| 11 | Multi-version S1 and S2 | Build info on sessions, expansion columns, a content gate, then the movement codec. Decisions 4 and 6 are still open. | [multi-version.md](design/multi-version.md) is a draft with no code. |
+| 12 | Multithreading next steps | Bot think per map and stages inside one map. Design only; needs the owner's go. | [map-local stages design](research/map-local-stages-design-20261024.md), [parallel maps status](research/parallel-maps-status-20261017.md). |
 
 ## History
 
