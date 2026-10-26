@@ -1767,7 +1767,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
             if (CanShareDeadEndPin(player)
-                && _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now) is { } newPin)
+                && _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now,
+                    PlayerbotNavigation.IsCutRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z))) is { } newPin)
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
         }
         else if (worldPin)

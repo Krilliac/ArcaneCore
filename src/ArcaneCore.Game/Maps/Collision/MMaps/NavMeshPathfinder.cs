@@ -626,6 +626,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                 {
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     NavRegionGraph graph = builder(directory, mapId, include, exclude);
+                    graph.Prepare(); // the components and cut regions are computed here, not by the first bot that asks on the world thread
                     ReportSkippedTiles(logger, mapId, graph);
                     logger.LogInformation("MMaps: map {MapId} region graph built from {Tiles} tiles in {Ms} ms: {Regions} regions, {Links} portal links",
                         mapId, graph.TileCount, watch.ElapsedMilliseconds, graph.RegionCount, graph.LinkCount);

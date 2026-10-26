@@ -284,6 +284,38 @@ internal static class PlayerbotNavigation
             && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>
+    /// The least polygons each of the two parts a cut region joins must hold for the region to be a corridor between two real places
+    /// (<see cref="NavRegionGraph.JoinsLargeParts"/>): the same size as <see cref="FragmentPolygons"/>, below which a piece of mesh is a
+    /// pocket or sliver and not a place a bot is kept out of by pinning its doorway. The Timbermaw Hold tunnel joins Felwood and
+    /// Winterspring, each of tens of thousands of polygons.
+    /// </summary>
+    internal const int CutRegionPartPolygons = FragmentPolygons;
+
+    /// <summary>
+    /// Whether the walking region graph puts <paramref name="point"/> in a region that joins two large parts of the mesh
+    /// (<see cref="NavRegionGraph.JoinsLargeParts"/>, <see cref="CutRegionPartPolygons"/> polygons each): a doorway or tunnel, where stalled
+    /// bots are in each other's way and the ground is not at fault. False when the graph is not built yet or the point is on no region. A
+    /// region lookup (tiles read without blocking) and two array reads; world thread.
+    /// </summary>
+    internal static bool IsCutRegionAt(Player player, Vector3 point)
+    {
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        return IsCutRegion(graph, nav.RegionAt(graph, point, WalkingLocate));
+    }
+
+    /// <summary><paramref name="region"/> (-1: none) of <paramref name="graph"/> joins two parts of at least <see cref="CutRegionPartPolygons"/> polygons each.</summary>
+    internal static bool IsCutRegion(NavRegionGraph graph, int region) => region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons);
+
+    /// <summary>
+    /// Whether a plan must refuse a destination or leg end at <paramref name="point"/> for a dead-end pin of this bot (<see cref="IsDeadEndPin"/>):
+    /// not when the pinned cell is a cut region (<see cref="IsCutRegionAt"/>). A bot's way through a tunnel ends in its cells; refusing them
+    /// refused the only route (Timbermaw Hold, issues #1478 and #1479).
+    /// </summary>
+    private static bool PinRefuses(Player player, Vector3 point) => IsDeadEndPin(player, point) && !IsCutRegionAt(player, point);
+
+    /// <summary>
     /// Whether <paramref name="point"/> lies in a cell the bots of the world found a dead end (<see cref="PlayerbotSharedPins"/>). Asked by the
     /// explore filter only: unlike <see cref="IsDeadEndPin"/> it never makes a plan refuse a destination, so an NPC standing there stays reachable.
     /// </summary>
@@ -947,7 +979,7 @@ internal static class PlayerbotNavigation
         }
 
         // A destination given up after a loop or remembered as a dead-end pin is refused, so the goal picks another one.
-        if (PlayerbotMotion.IsBlacklisted(player, destination) || IsDeadEndPin(player, destination))
+        if (PlayerbotMotion.IsBlacklisted(player, destination) || PinRefuses(player, destination))
         {
             t_nonPathRefusal = true;
             return false;
@@ -1070,7 +1102,7 @@ internal static class PlayerbotNavigation
         // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination))
         {
-            if (PlayerbotMotion.IsBlacklisted(player, path.End) || IsDeadEndPin(player, path.End))
+            if (PlayerbotMotion.IsBlacklisted(player, path.End) || PinRefuses(player, path.End))
             {
                 t_nonPathRefusal = true;
                 return false;

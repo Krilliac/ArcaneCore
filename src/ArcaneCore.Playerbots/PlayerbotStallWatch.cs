@@ -259,9 +259,12 @@ internal sealed partial class PlayerbotStallWatch
 
     /// <summary>
     /// This bot dead-end-pinned the cell containing <c>(x, y)</c>: tell the world. Returns what newly became a world pin, or null.
+    /// <paramref name="inCutRegion"/> (the cell lies in a region that joins two large parts of the mesh,
+    /// <see cref="PlayerbotNavigation.IsCutRegionAt"/>) tells nothing: stalls in a tunnel are bots in each other's way, and a world pin
+    /// there would have every bot avoid the only way between the two parts (Timbermaw Hold, issues #1478 and #1479).
     /// </summary>
-    internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs)
-        => SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs);
+    internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs, bool inCutRegion = false)
+        => inCutRegion ? null : SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs);
 
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and

@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Characters;
@@ -152,6 +153,38 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         Assert.False(watch.IsWorldPin(0, 0, 35, 5, 1_000));
         Assert.Null(watch.ReportDeadEndPin(1, 0, 0, 35, 5, 1_000));
         Assert.False(watch.IsDeadEndPin(0, 35, 5, 1_000));
+    }
+
+    /// <summary>
+    /// Timbermaw Hold (issues #1478 and #1479): stalls inside the tunnel, a region that is the only way between two large parts of the
+    /// mesh, were shared as world pins, so every bot avoided the only route between Felwood and Winterspring. A region of a graph A - B - C
+    /// that joins two large parts is a cut region and tells the world nothing; a region of a part does.
+    /// </summary>
+    [Fact]
+    public void TwoBotsStallingInACutRegion_MakeNoWorldPin_ButTwoBotsStallingInAPartDo()
+    {
+        NavRegionGraph graph = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 1, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        Assert.True(PlayerbotNavigation.IsCutRegion(graph, 1));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 0));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 2));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, -1));
+
+        var pins = new PlayerbotSharedPins();
+        var botA = new PlayerbotStallWatch { SharedPins = pins };
+        var botB = new PlayerbotStallWatch { SharedPins = pins };
+        bool inB = PlayerbotNavigation.IsCutRegion(graph, 1);
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, inB));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, inB));
+        Assert.Equal(0, pins.Count);
+        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
+        Assert.False(botA.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
+
+        // The same two reports from a region of one of the parts: the second bot makes the cell a world pin.
+        bool inA = PlayerbotNavigation.IsCutRegion(graph, 0);
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, inA));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 6628f, -2025f, 2_000, inA));
+        Assert.True(pins.IsWorldPin(1, 0, 6627f, -2024f, 2_000));
     }
 
     // --- the brains ---------------------------------------------------------------------------------------------------------
