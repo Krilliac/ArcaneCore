@@ -79,7 +79,7 @@ consecutive priority picks, then one ordinary pick if any is waiting). Ordering 
 
 `Quests:SettlementBudgetSeconds`, `Economy:SettlementBudgetSeconds` and `GameObjects:LootSettlementBudgetSeconds` (shipped **15 s**, valid
 1-300) bound one settlement end to end: the pre-reward save, the drains, the reward transaction. A settlement can meet up to three lock
-waits in a row, each bounded by `Database:SqliteWriteTimeoutMs` (5 s): an unrelated character's write already in flight on the queue's
+waits in a row, each typically one `Database:SqliteWriteTimeoutMs` (5 s; a write-gate wait gives up after that long without a hand-off, or after 20 s of active waiting at most, and the settlement's budget token ends any wait it is passed to sooner): an unrelated character's write already in flight on the queue's
 one consumer (the priority lane cannot overtake a write that has started, and SQLite's busy wait cannot be cancelled), its own save, and
 the transaction. The budget used to be 5 s, equal to one write bound, so a single ordinary write sitting in the busy wait ahead of it used
 up the whole budget: on the live server on 2026-10-16 the settlement of character 3262 for quest 761 timed out at 23:54:09.424 with its
@@ -115,7 +115,7 @@ The consumer (and `Enqueue`) check the backlog at most once per second and warn 
 | Key | Default | Meaning |
 |---|---|---|
 | `World:SaveQueueWarnDepth` | `1000` | Warn while this many characters or more have a snapshot waiting or being written. 0 disables the depth check. |
-| `World:SaveQueueWarnAgeMs` | `5000` | Warn while the oldest waiting or in-flight snapshot has waited this long. 0 disables the age check. The default is the characters database's write bound (`Database:SqliteWriteTimeoutMs`): a snapshot that old has waited out at least one locked write. |
+| `World:SaveQueueWarnAgeMs` | `5000` | Warn while the oldest waiting or in-flight snapshot has waited this long. 0 disables the age check. The default is the characters database's write bound (`Database:SqliteWriteTimeoutMs`): a snapshot that old has waited out at least one write-gate bound (5 s without a hand-off). |
 
 The warning is `character save backlog: N characters pending, oldest waiting M ms (warns at ...)`, repeated at most every 30 s while
 the backlog persists, followed by one `character save backlog cleared: ...` line (Information) when it ends. An idle queue wakes once a
@@ -205,8 +205,12 @@ database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path
   takes it around the statement (a reader's statement until the reader is disposed).
 - Reads, statements inside a transaction, and transactions adopted with `UseTransaction` (the deferred read snapshots of `ReadSnapshot` and the
   auction snapshot) never take it. WAL readers do not block the writer.
-- A waiter is bounded by its connection's own write bound (`Database:SqliteWriteTimeoutMs` on the characters database),
-  and then fails with SQLite's own busy error (code 5), so every existing "locked: retain and retry" path behaves as before; the
+- An async waiter is bounded by progress, not by total elapsed time: it gives up when the gate has handed off to no one for its connection's
+  write bound (`Database:SqliteWriteTimeoutMs` on the characters database; every hand-off to any waiter restarts that countdown, measured from the
+  hand-off itself) or, as a hard cap, after four times the bound of active waiting (at most 30 s unless the bound itself is larger, so 20 s on the
+  characters database). Time the whole process was suspended (GC pauses only) counts toward neither. A blocking (synchronous) waiter keeps the
+  single bound as its total. A caller's cancellation token or settlement budget supersedes all of these: it ends the wait it is passed to
+  earlier, whatever the gate would still allow. A waiter that gives up then fails with SQLite's own busy error (code 5), so every existing "locked: retain and retry" path behaves as before; the
   message names the holder (context type, and the calling method when someone was queued behind it).
 - A hold older than 60 s (a transaction that was never ended) is released by the next waiter and logged at ERROR. That only
   lets the next writer try SQLite's lock itself, as it would without the gate.
