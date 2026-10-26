@@ -655,6 +655,21 @@ public sealed partial class EconomyFeature
             _mailboxes[id] = box;
         }
 
+        // One list read per mailbox at a time: a packet that arrives while one is running only asks for the list to be sent when it
+        // ends (the data is fresh unless a commit bumped the revision, and that case re-reads below). A flood of
+        // CMSG_GET_MAIL_LIST otherwise starts a background DB read per packet. vmangos answers from its in-memory mailbox
+        // (MailHandler.cpp HandleGetMailList) and has no read to repeat.
+        if (sendList)
+        {
+            if (box.ListReadInFlight)
+            {
+                box.SendWhenDone = true;
+                return;
+            }
+
+            box.ListReadInFlight = true;
+        }
+
         long revision = box.Revision;
         long readGeneration = ++box.ReadGeneration;
         Mailbox requestedBox = box;
@@ -667,27 +682,53 @@ public sealed partial class EconomyFeature
                 .Select(m => new MailView(m, m.HasItem ? items.GetValueOrDefault(m.ItemGuid) : null)).ToList();
         }, mails =>
         {
-            if (!ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) || !_mailboxes.TryGetValue(id, out Mailbox? current)
-                || !ReferenceEquals(current, requestedBox) || current.ReadGeneration != readGeneration)
+            bool queued = false;
+            if (sendList)
             {
+                requestedBox.ListReadInFlight = false;
+                queued = requestedBox.SendWhenDone;
+                requestedBox.SendWhenDone = false;
+            }
+
+            if (!ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) || !_mailboxes.TryGetValue(id, out Mailbox? current)
+                || !ReferenceEquals(current, requestedBox))
+            {
+                return;
+            }
+
+            if (current.ReadGeneration != readGeneration)
+            {
+                // A newer read owns the box; requests that waited on this one still get their list.
+                if (queued)
+                {
+                    LoadMailbox(player, sendList: true);
+                }
+
                 return;
             }
 
             if (current.Revision != revision)
             {
                 // A commit changed this box while the read ran; read again.
-                LoadMailbox(player, sendList);
+                LoadMailbox(player, sendList || queued);
                 return;
             }
 
             current.Mails = mails;
             current.Loaded = true;
             ScheduleNextDelivery(id);
-            if (sendList)
+            if (sendList || queued)
             {
                 long now = Now;
                 List<MailView> visible = [.. mails.Where(m => m.Mail.DeliverTime <= now && m.Mail.ExpireTime > now)];
                 player.Session.Send(WorldOpcode.SmsgMailListResult, EconomyPackets.MailList(visible, now, Templates.Find));
+            }
+        }, failed: () =>
+        {
+            if (sendList)
+            {
+                requestedBox.ListReadInFlight = false;
+                requestedBox.SendWhenDone = false;
             }
         });
     }
@@ -752,5 +793,11 @@ public sealed partial class EconomyFeature
         public bool Loaded { get; set; }
         public long Revision { get; set; }
         public long ReadGeneration { get; set; }
+
+        /// <summary>A read started by CMSG_GET_MAIL_LIST has not finished; later list requests wait for it.</summary>
+        public bool ListReadInFlight { get; set; }
+
+        /// <summary>A list request arrived while <see cref="ListReadInFlight"/>: send the list when that read ends.</summary>
+        public bool SendWhenDone { get; set; }
     }
 }
