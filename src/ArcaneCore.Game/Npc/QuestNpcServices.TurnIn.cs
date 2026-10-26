@@ -53,7 +53,7 @@ public sealed partial class QuestNpcServices
         }
 
         ArcaneCore.Game.Items.InventoryRewardGrant[] removals = RequiredItemRemovals(quest)
-            .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, player.Inventory.GetItemCount(r.Entry, exclude: offered is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null))))
+            .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, services is not null ? services.InventoryCount(player, r.Entry, offered: offered) : InventoryCountOf(player, r.Entry, false, offered))))
             .Where(r => r.Count > 0)
             .ToArray();
 
@@ -192,9 +192,7 @@ public sealed partial class QuestNpcServices
         {
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
-                uint count = player.Inventory.IsLoaded
-                    ? player.Inventory.GetItemCount(quest.ReqItemId[i], exclude: offered is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null)
-                    : InventoryCount(player, quest.ReqItemId[i]);
+                uint count = InventoryCount(player, quest.ReqItemId[i], offered: offered);
                 if (quest.ReqItemCount[i] != 0 && count < quest.ReqItemCount[i])
                 {
                     if (msg)
@@ -247,7 +245,7 @@ public sealed partial class QuestNpcServices
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
                 if (quest.ReqItemId[i] != 0 && quest.ReqItemCount[i] != 0
-                    && (state.Quests.Player.Inventory.IsLoaded ? state.Quests.Player.Inventory.GetItemCount(quest.ReqItemId[i], exclude: offered is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null) : InventoryCount(state.Quests.Player, quest.ReqItemId[i])) < quest.ReqItemCount[i])
+                    && InventoryCount(state.Quests.Player, quest.ReqItemId[i], offered: offered) < quest.ReqItemCount[i])
                 {
                     return false;
                 }
@@ -364,9 +362,7 @@ public sealed partial class QuestNpcServices
         {
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
-                uint count = player.Inventory.IsLoaded
-                    ? player.Inventory.GetItemCount(quest.ReqItemId[i], exclude: offered is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null)
-                    : InventoryCount(player, quest.ReqItemId[i]);
+                uint count = InventoryCount(player, quest.ReqItemId[i], offered: offered);
                 if (quest.ReqItemCount[i] != 0 && count < quest.ReqItemCount[i])
                     return $"missing required delivery item {quest.ReqItemId[i]} ({count}/{quest.ReqItemCount[i]})";
             }

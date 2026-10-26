@@ -141,6 +141,45 @@ public sealed class EconomyMailRefreshRaceTests
         Assert.Equal(2, result[0]);
     }
 
+    [Fact]
+    public async Task FailedNonListReadSupersedingTheListRead_StillAnswersTheWaitingListRequest()
+    {
+        var gate = new ListReadGate();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            services => services.AddScoped<IEconomyStore>(provider => new GatedReadStore(
+                new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), gate)));
+        EconomyFeature economy = rig.Server.Services.GetRequiredService<EconomyFeature>();
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        await SeedAsync(rig);
+
+        // The list read is the next store call, the superseding non-list read the one after it (it throws), and the list is read again after that.
+        gate.ThrowOnCall = Volatile.Read(ref gate.Calls) + 2;
+        gate.Armed = true;
+        try
+        {
+            await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+            await gate.FirstReadEntered.Task.WaitAsync(rig.Token);
+
+            await rig.Server.World.InvokeAsync(() =>
+            {
+                Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+                typeof(EconomyFeature).GetMethod("LoadMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(economy, [receiver, false]); return true;
+            }).WaitAsync(rig.Token);
+        }
+        finally
+        {
+            gate.Release.TrySetResult(true);
+        }
+
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        byte[] result = await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token);
+        Assert.Equal(2, result[0]);
+        Assert.Equal(gate.ThrowOnCall + 1, Volatile.Read(ref gate.Calls));
+    }
+
     private static async Task SeedAsync(Rig rig)
     {
         await using (AsyncServiceScope itemScope = rig.Server.Services.CreateAsyncScope())
@@ -179,6 +218,9 @@ public sealed class EconomyMailRefreshRaceTests
     {
         internal volatile bool Armed;
         internal int Calls;
+
+        /// <summary>The 1-based store call that throws instead of reading (0: none).</summary>
+        internal int ThrowOnCall;
         internal TaskCompletionSource<bool> FirstReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -187,7 +229,12 @@ public sealed class EconomyMailRefreshRaceTests
     {
         public async Task<IReadOnlyList<MailRecord>> GetMailsAsync(int id, CancellationToken cancellationToken = default)
         {
-            Interlocked.Increment(ref gate.Calls);
+            int call = Interlocked.Increment(ref gate.Calls);
+            if (call == gate.ThrowOnCall)
+            {
+                throw new InvalidOperationException("injected mail read failure");
+            }
+
             IReadOnlyList<MailRecord> result = await inner.GetMailsAsync(id, cancellationToken);
             if (gate.Armed)
             {

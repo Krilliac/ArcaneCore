@@ -72,7 +72,7 @@ public sealed partial class QuestNpcServices
         // items, money or bag space tells the client why and re-sends the offer window so the player can retry
         // (QuestHandler.cpp:262-271); the live state stays untouched.
         QuestStatusData? data = state.Quests.Get(questId);
-        if (!RewardRequirements(player, quest, msg: true))
+        if (!RewardRequirements(player, quest, msg: true, offered))
         {
             ResendOfferReward(player, guid, quest);
             return false;

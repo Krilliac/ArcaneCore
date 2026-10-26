@@ -40,6 +40,7 @@ For the build-5875 bags, bank and move-error audit, see [inventory-bags.md](inve
 - **Moves send values updates.** A moved item gets a values update (`ITEM_FIELD_CONTAINED`, the slot fields of its old and new holder); the create block goes to the owner once, the first time the item exists for the client (login or `SMSG_ITEM_PUSH_RESULT`). vmangos may re-send create blocks on some bag moves (`Bag::StoreItem` / `SendCreateUpdateToPlayer`); not needed for correctness here.
 - **No SMSG_OPEN_CONTAINER** after auto-equipping a bag; vmangos does not send one either (cmangos does in some builds).
 - **Unloadable rows are kept.** vmangos deletes inventory rows it cannot place (bad slot, missing template) with an error log. We keep them in memory and write them back on save, so a content import mistake does not destroy items.
+- **Two rows in one own slot.** `character_inventory` is keyed by item guid only, so two rows can name the same (character, bag 0, slot). Both reads agree on which one wins: rows come by bag, slot, item guid; the load places the first row the slot accepts (`PlayerInventory.CanOccupyOwnSlot`: the item's allowed equip slots, a bag in a bag slot, a key in the keyring) and keeps the rest as unloadable rows. The character list (`GetEquippedEntriesAsync`) applies the same rule through its `canOccupy` callback, so it shows the item the world will wear, and falls back to the lowest item guid when no row is accepted.
 
 ## Limitations (left for other areas or later)
 

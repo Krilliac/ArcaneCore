@@ -63,6 +63,10 @@ public sealed partial class QuestNpcFeature
         return done.WaitAsync(cancellationToken);
     }
 
+    /// <summary>The guids of the items in the traded slots of the player's open trade window, or null when no trade is open. World thread.</summary>
+    public IReadOnlySet<ObjectGuid>? OfferedInTrade(Player player)
+        => _services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade ? trade.SideOf(player).TradedItems.ToHashSet() : null;
+
     /// <summary>Capture and freeze one character on the world thread; every storage operation runs in the background.</summary>
     public void ChooseReward(WorldSession session, Player player, ObjectGuid guid, uint questId, uint choice)
     {
@@ -93,9 +97,7 @@ public sealed partial class QuestNpcFeature
 
             // Items in the player's open trade window are not delivered: the turn-in would shrink the offered stack in place after
             // the partner accepted (the same rule the vendor sale and spell reagents follow).
-            IReadOnlySet<ObjectGuid>? offered = _services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade
-                ? trade.SideOf(player).TradedItems.ToHashSet()
-                : null;
+            IReadOnlySet<ObjectGuid>? offered = OfferedInTrade(player);
             if (!Services.TryPrepareReward(player, guid, questId, choice, out QuestRewardPlan? plan, offered))
             {
                 return;

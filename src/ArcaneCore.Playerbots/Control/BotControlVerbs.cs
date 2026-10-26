@@ -490,7 +490,7 @@ internal static partial class BotControlVerbs
             {
                 if (BotControlUnits.Resolve(call.World, view.Player!, call.Args[1], out string? missing) is not { } giver) return outcome.Failure("no-unit", missing!);
                 Npc.QuestNpcFeature? feature = view.Session!.Services.GetService<Npc.QuestNpcFeature>();
-                if (feature?.Services.DiagnoseTurnInRefusal(view.Player!, giver.Guid, quest, choice) is { } refusal)
+                if (feature?.Services.DiagnoseTurnInRefusal(view.Player!, giver.Guid, quest, choice, feature.OfferedInTrade(view.Player!)) is { } refusal)
                     return outcome.Failure("not-rewarded", refusal);
                 long mark = BotController.CurrentSequence;
                 BotOutcome sent = Act(view, outcome, I($"choose reward {choice} of quest {quest}"), (WorldOpcode.CmsgQuestgiverChooseReward, ScenarioPackets.QuestChooseReward(giver.Guid.Value, quest, choice)));

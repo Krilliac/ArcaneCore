@@ -716,10 +716,21 @@ public sealed partial class EconomyFeature
             }
         }, failed: () =>
         {
-            if (requestedBox.ReadGeneration == readGeneration)
+            if (requestedBox.ReadGeneration != readGeneration)
             {
-                requestedBox.ListReadInFlight = false;
-                requestedBox.SendWhenDone = false;
+                // A newer read owns the flags and answers any waiting list request.
+                return;
+            }
+
+            // A list request that waited on a read that did not ask for the list (it superseded the list's own read) is still owed a reply:
+            // read once more as a list. A failed list read is not retried, so a store that stays down ends the loop after one more attempt.
+            bool owed = !sendList && requestedBox.SendWhenDone;
+            requestedBox.ListReadInFlight = false;
+            requestedBox.SendWhenDone = false;
+            if (owed && ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) && _mailboxes.TryGetValue(id, out Mailbox? current)
+                && ReferenceEquals(current, requestedBox))
+            {
+                LoadMailbox(player, sendList: true);
             }
         });
     }

@@ -291,8 +291,15 @@ public sealed class QuestInteractionWorldTests
         Assert.True(await client.IsClosedByServerAsync());
     }
 
-    [Fact]
-    public async Task ChooseReward_WhileDeliveryItemOfferedInOpenTrade_RefusesTurnInAndLeavesStackAlone()
+    /// <summary>
+    /// The quest is accepted and completed first (its two linen cloth are in the bags), so <c>RewardBase</c> passes and the open trade is the only
+    /// difference between the two cases: with no trade the turn-in settles (the positive control), with the delivery stack in a trade slot it is
+    /// refused and the stack keeps its two items.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChooseReward_DeliveryItemOfferedInOpenTrade_RefusesTurnInOnlyWhileTheTradeIsOpen(bool tradeOpen)
     {
         const uint cloth = 2589;
         var items = new ItemTestContent();
@@ -317,34 +324,102 @@ public sealed class QuestInteractionWorldTests
         {
             await VisibleAsync(host, "Crafter");
             await VisibleAsync(host, "Partner");
+            await crafter.SendAsync(WorldOpcode.CmsgQuestgiverAcceptQuest, QuestBody());
+            await crafter.ReadUntilAsync(WorldOpcode.SmsgGossipComplete);
+            QuestNpcFeature feature = await FeatureAsync(host, "Crafter");
 
-            (bool settlementStarted, uint countAfter) = await host.OnWorldAsync(() =>
+            (QuestStatus status, bool settlementStarted, uint countAfter) = await host.OnWorldAsync(() =>
             {
                 Player player = host.World.FindOnlinePlayer("Crafter")!;
                 Player other = host.World.FindOnlinePlayer("Partner")!;
+                QuestStatus status = feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Status;
                 Item stack = Assert.Single(player.Inventory.AllItems, i => i.Entry == cloth);
                 Assert.Equal(2u, stack.Count);
 
-                EconomyFeature economy = host.WorldServices.GetRequiredService<EconomyFeature>();
-                var trades = (IDictionary)typeof(EconomyFeature).GetField("_trades", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(economy)!;
-                var trade = new TradeSession(player, other) { Opened = true };
-                trades[player] = trade;
-                trades[other] = trade;
+                if (tradeOpen)
+                {
+                    OfferInOpenTrade(host, player, other, stack);
+                }
 
-                // Put the delivery item stack in trade slot 0 (one of the six TradedItems).
-                trade.SideOf(player)[0] = stack.Guid;
-
-                QuestNpcFeature feature = ((WorldSession)player.Session).Services.GetRequiredService<QuestNpcFeature>();
-
-                // Driving the real wiring: QuestNpcFeature.Rewards.cs:96-99 extracts TradeOf -> SideOf -> TradedItems.
+                // Drives the real wiring: QuestNpcFeature.ChooseReward extracts TradeOf -> SideOf -> TradedItems.
                 feature.ChooseReward((WorldSession)player.Session, player, QuestInteractionFixture.Guid, QuestInteractionFixture.QuestId, 0);
 
-                return (player.IsQuestSettlementPending, player.Inventory.GetItemCount(cloth));
+                return (status, player.IsQuestSettlementPending, player.Inventory.GetItemCount(cloth));
             });
 
-            Assert.False(settlementStarted);
+            Assert.Equal(QuestStatus.Complete, status);
+            Assert.Equal(!tradeOpen, settlementStarted);
             Assert.Equal(2u, countAfter);
+            if (!tradeOpen)
+            {
+                int id = await host.PlayerStateAsync("Crafter", p => checked((int)p.Guid.Low));
+
+                // Let the started settlement finish so the host does not shut down under it; only that it started is asserted here.
+                await feature.WaitForSettlementAsync(id).WaitAsync(TimeSpan.FromSeconds(30));
+            }
         }
+    }
+
+    /// <summary>
+    /// CMSG_QUESTGIVER_COMPLETE_QUEST previews the turn-in: the "completable" flag of the request-items window must follow the same offered-item
+    /// rule as the settlement (<c>QuestNpcInteractionHandlers.Complete</c> passes the open trade's items), or the client is told it may hand in a stack
+    /// the turn-in will then refuse.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CompleteQuest_DeliveryItemOfferedInOpenTrade_IsNotCompletableOnlyWhileTheTradeIsOpen(bool tradeOpen)
+    {
+        const uint cloth = 2589;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = cloth, Class = 7, Name = "Linen Cloth", DisplayId = 1, Stackable = 20, Quality = 1 });
+        items.Templates.StartingItems.Add(new StartingItem(1, 1, cloth, 2));
+
+        var fixture = new QuestInteractionFixture
+        {
+            RepeatableItem = cloth,
+            RepeatableItemCount = 2,
+            DeliverItems = true,
+        };
+
+        WorldTestHost host;
+        using (items.Use())
+        {
+            host = Start(fixture);
+        }
+
+        await using (host)
+        await using (WorldTestClient crafter = await host.EnterWorldAsync("CRAFTER", "Crafter"))
+        await using (WorldTestClient partner = await host.EnterWorldAsync("PARTNER", "Partner"))
+        {
+            await VisibleAsync(host, "Crafter");
+            await VisibleAsync(host, "Partner");
+            await crafter.SendAsync(WorldOpcode.CmsgQuestgiverAcceptQuest, QuestBody());
+            await crafter.ReadUntilAsync(WorldOpcode.SmsgGossipComplete);
+            if (tradeOpen)
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = host.World.FindOnlinePlayer("Crafter")!;
+                    OfferInOpenTrade(host, player, host.World.FindOnlinePlayer("Partner")!, Assert.Single(player.Inventory.AllItems, i => i.Entry == cloth));
+                });
+            }
+
+            await crafter.SendAsync(WorldOpcode.CmsgQuestgiverCompleteQuest, QuestBody());
+            byte[] window = await crafter.ReadUntilAsync(WorldOpcode.SmsgQuestgiverRequestItems);
+            Assert.Equal(!tradeOpen, QuestPackets.IsRequestItemsCompletable(window));
+        }
+    }
+
+    /// <summary>Opens a trade between the two players with <paramref name="stack"/> in the first of the offering side's six slots.</summary>
+    private static void OfferInOpenTrade(WorldTestHost host, Player player, Player other, Item stack)
+    {
+        EconomyFeature economy = host.WorldServices.GetRequiredService<EconomyFeature>();
+        var trades = (IDictionary)typeof(EconomyFeature).GetField("_trades", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(economy)!;
+        var trade = new TradeSession(player, other) { Opened = true };
+        trades[player] = trade;
+        trades[other] = trade;
+        trade.SideOf(player)[0] = stack.Guid;
     }
 
     private static WorldTestHost Start(QuestInteractionFixture fixture)
@@ -414,6 +489,9 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     /// <summary>An item-only repeatable starter, when set (the normal fixture remains a kill quest).</summary>
     public uint RepeatableItem { get; init; }
     public uint RepeatableItemCount { get; init; }
+
+    /// <summary>Marks the item-only starter as a delivery quest (QUEST_SPECIAL_FLAG_DELIVER), so the turn-in checks the items before staging.</summary>
+    public bool DeliverItems { get; init; }
     public bool EnderOnOtherMap { get; init; }
     public bool DistantEnder { get; init; }
 
@@ -426,7 +504,7 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30, SrcItemId = SourceItem, SrcItemCount = (byte)(SourceItem == 0 ? 0 : 1),
             Title = "Synthetic quest", Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
-            SpecialFlags = (byte)(RepeatableItem == 0 ? 0 : 1), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount,
+            SpecialFlags = (byte)((RepeatableItem == 0 ? 0 : 1) | (DeliverItems ? 8 : 0)), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount,
             ReqCreatureOrGOId1 = RepeatableItem == 0 && !NoObjectives ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 && !NoObjectives ? 1u : 0u },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],

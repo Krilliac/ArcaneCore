@@ -65,9 +65,13 @@ public interface IItemStore
     /// <summary>Replace a character's stored items with <paramref name="snapshot"/>.</summary>
     Task SaveInventoryAsync(int characterId, InventorySnapshot snapshot, CancellationToken cancellationToken = default);
 
-    /// <summary>Item entries in the character's own slots 0..19 (equipment + first bag slot), for the character list.</summary>
+    /// <summary>
+    /// Item entries in the character's own slots 0..19 (equipment + first bag slot), for the character list. Where several rows share
+    /// one slot, the row <paramref name="canOccupy"/> (character id, item entry, slot) accepts with the lowest item guid wins, the one the
+    /// inventory load places; when none is accepted, or <paramref name="canOccupy"/> is null, the lowest item guid wins.
+    /// </summary>
     Task<IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>>> GetEquippedEntriesAsync(
-        IReadOnlyCollection<int> characterIds, Func<uint, bool>? templateExists = null, CancellationToken cancellationToken = default);
+        IReadOnlyCollection<int> characterIds, Func<int, uint, byte, bool>? canOccupy = null, CancellationToken cancellationToken = default);
 
     /// <summary>The highest item GUID in use (0 when none), to seed the GUID allocator.</summary>
     Task<uint> GetMaxItemGuidAsync(CancellationToken cancellationToken = default);

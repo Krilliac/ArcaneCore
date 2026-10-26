@@ -79,19 +79,27 @@ public sealed class ItemStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task GetEquippedEntries_PrefersRowWithItemTemplate_OverLowestGuid(DatabaseProvider provider)
+    public async Task GetEquippedEntries_PrefersTheRowTheLoadCanPlace_OverLowestGuid(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
         await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
         var store = new EfItemStore(db);
 
-        // Stale unloadable row has lower item guid (101, entry 25 without template); equipped row has higher guid (102, entry 26 with template).
+        // Both entries 25 and 26 have templates, but 25 (the lower item guid, 101) is not legal for slot 15 (it is a head piece, say) and 26 (guid 102) is.
         await store.SaveInventoryAsync(7, new InventorySnapshot([new(0, 15, Item(101, 25)), new(0, 15, Item(102, 26)), new(0, 16, Item(103, 27))]));
 
         IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>> equipped =
-            await store.GetEquippedEntriesAsync([7], id => id == 26 || id == 27);
+            await store.GetEquippedEntriesAsync([7], (character, entry, slot) => character == 7 && !(entry == 25 && slot == 15));
         Assert.Equal(new Dictionary<byte, uint> { [15] = 26, [16] = 27 }, equipped[7]);
+
+        // Both legal: the lowest item guid wins, as the load (which reads rows by bag, slot, item guid) places it.
+        equipped = await store.GetEquippedEntriesAsync([7], (_, _, _) => true);
+        Assert.Equal(new Dictionary<byte, uint> { [15] = 25, [16] = 27 }, equipped[7]);
+
+        // None legal: the lowest item guid still shows rather than failing the list.
+        equipped = await store.GetEquippedEntriesAsync([7], (_, _, _) => false);
+        Assert.Equal(new Dictionary<byte, uint> { [15] = 25, [16] = 27 }, equipped[7]);
     }
 
     [Theory]

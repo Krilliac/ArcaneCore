@@ -485,7 +485,7 @@ public sealed class ItemInventoryTests
     {
         (Player player, FakeSession session) = CreatePlayer();
         PlayerInventory inv = player.Inventory;
-        Item worn = inv.GetItem(InventorySlots.Bag0, InventorySlots.Body)!;
+        Assert.Null(inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
         Item banked = Give(inv, RecruitsShirt);
         inv.CanUseBank = () => true;
         inv.SwapItem(banked.BagSlot, banked.Slot, InventorySlots.Bag0, InventorySlots.BankItemStart);
@@ -497,13 +497,14 @@ public sealed class ItemInventoryTests
         inv.AutoEquipItemSlot(banked.Guid, InventorySlots.Body);
         Assert.False(inv.AutoEquipItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
         Assert.Same(banked, inv.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
-        Assert.Same(worn, inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
+        Assert.Null(inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
         Assert.Equal([InventoryResult.TooFarAwayFromBank, InventoryResult.TooFarAwayFromBank], EquipErrors(session));
 
         // With a banker in range the swap still works.
         inv.CanUseBank = () => true;
         inv.AutoEquipItemSlot(banked.Guid, InventorySlots.Body);
         Assert.Same(banked, inv.GetItem(InventorySlots.Bag0, InventorySlots.Body));
+        Assert.Null(inv.GetItem(InventorySlots.Bag0, InventorySlots.BankItemStart));
     }
 
     [Fact]
@@ -597,7 +598,7 @@ public sealed class ItemInventoryTests
     }
 
     [Fact]
-    public void Load_DuplicateOwnSlot_PreservesDisplacedRow_AcrossSave()
+    public void Load_DuplicateOwnSlot_KeepsTheSecondRowUnloadable_AcrossSave()
     {
         (Player player, _) = CreatePlayer();
         var shirt1 = new ItemInstanceData { Guid = 10, Entry = RecruitsShirt, Count = 1 };
@@ -615,6 +616,22 @@ public sealed class ItemInventoryTests
         Assert.Equal(2, snapshot.Items.Count);
         Assert.Contains(snapshot.Items, r => r.Item.Guid == 10 && r.ContainerGuid == 0 && r.Slot == InventorySlots.Body);
         Assert.Contains(snapshot.Items, r => r.Item.Guid == 11 && r.ContainerGuid == 0 && r.Slot == InventorySlots.Body);
+    }
+
+    [Fact]
+    public void CanOccupyOwnSlot_FollowsTheAllowedEquipSlots_AndBagAndKeyringRules()
+    {
+        (Player player, _) = CreatePlayer();
+        ItemTemplate shirt = player.Inventory.Templates.Find(RecruitsShirt)!;
+        ItemTemplate pouch = player.Inventory.Templates.Find(SmallBrownPouch)!;
+        Class cls = player.Inventory.Class;
+
+        Assert.True(PlayerInventory.CanOccupyOwnSlot(shirt, cls, InventorySlots.Body));
+        Assert.False(PlayerInventory.CanOccupyOwnSlot(shirt, cls, InventorySlots.Head));
+        Assert.False(PlayerInventory.CanOccupyOwnSlot(shirt, cls, InventorySlots.BagStart));
+        Assert.True(PlayerInventory.CanOccupyOwnSlot(pouch, cls, InventorySlots.BagStart));
+        Assert.False(PlayerInventory.CanOccupyOwnSlot(pouch, cls, InventorySlots.Body));
+        Assert.False(PlayerInventory.CanOccupyOwnSlot(pouch, cls, InventorySlots.KeyringEnd));
     }
 
     [Fact]

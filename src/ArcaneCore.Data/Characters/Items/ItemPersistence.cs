@@ -252,7 +252,7 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
         // so every bag exists before its contents.
         return slots
             .Where(s => items.ContainsKey(s.ItemGuid))
-            .OrderBy(s => s.Bag == 0 ? 0 : 1).ThenBy(s => s.Bag).ThenBy(s => s.Slot)
+            .OrderBy(s => s.Bag == 0 ? 0 : 1).ThenBy(s => s.Bag).ThenBy(s => s.Slot).ThenBy(s => s.ItemGuid)
             .Select(s => new InventoryItemData(s.Bag, s.Slot, items[s.ItemGuid].ToData() with { Loot = loot.GetValueOrDefault(s.ItemGuid) }))
             .ToList();
     }
@@ -265,7 +265,7 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
     }
 
     public async Task<IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>>> GetEquippedEntriesAsync(
-        IReadOnlyCollection<int> characterIds, Func<uint, bool>? templateExists = null, CancellationToken cancellationToken = default)
+        IReadOnlyCollection<int> characterIds, Func<int, uint, byte, bool>? canOccupy = null, CancellationToken cancellationToken = default)
     {
         List<int> ids = [.. characterIds];
         var rows = await db.Set<CharacterInventoryRow>().AsNoTracking()
@@ -274,15 +274,14 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
             .Select(r => new { r.Guid, r.Slot, r.ItemId, r.ItemGuid })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
         // character_inventory is keyed by item_guid only, so two rows can share (guid, bag 0, slot).
-        // Prefer the row whose item template exists, then lowest item guid, so a stale unloadable row
+        // Prefer the row the inventory load would place (canOccupy), then the lowest item guid, so a stale unloadable row
         // does not hide the equipped item or fail the whole account's character list.
-
         var result = new Dictionary<int, IReadOnlyDictionary<byte, uint>>();
         foreach (var group in rows.GroupBy(r => r.Guid))
         {
             var slots = new Dictionary<byte, uint>();
             var ordered = group
-                .OrderByDescending(r => templateExists?.Invoke(r.ItemId) ?? true)
+                .OrderByDescending(r => canOccupy?.Invoke(r.Guid, r.ItemId, r.Slot) ?? true)
                 .ThenBy(r => r.ItemGuid);
             foreach (var row in ordered)
             {
