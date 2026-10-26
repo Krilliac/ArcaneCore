@@ -342,6 +342,68 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
     }
 
     /// <summary>
+    /// The missing-walker wiring through the coordinator: a tracked walk to a master that walks waypoints and is not in the world starts the
+    /// missing clock; the master found again clears it (a later absence does not inherit the old start); and once the master has been missing for the
+    /// grace time a bot at its goal takes the empty spot for a refusal and the walk ends as "could not walk" within seconds (and not before: the
+    /// control is that the walk is still on while the clock is young).
+    /// </summary>
+    [Fact]
+    public async Task AWalkToAWalkerMissingFromTheWorld_StartsAndClearsTheMissingClock_AndEndsOnceItRanOut()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-walker-missing", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bgmmissing", 1, characterClass: 1);
+            Vector3 start = await ally.ReadAsync(p => new Vector3(p.X, p.Y, p.Z));
+            await context.PlaceAsync(ally, 0, start.X + 150f, start.Y, start.Z);
+            await context.AutonomousAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            await context.WaitUntilAsync("the bot walks to the battlemaster", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Travel, TimeSpan.FromSeconds(60));
+            ObjectGuid real = await context.ReadAsync(() =>
+            {
+                PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
+                ObjectGuid master = t.Battlemaster;
+                ScenarioContext.Expect(ally.RequirePlayer().Map!.FindObject(master) is Creature { IsAlive: true }, "control: the master is in the world");
+                t.MasterWalks = true;
+                t.Battlemaster = ObjectGuid.WithEntry(HighGuid.Unit, master.Entry, 999_999u); // a walker no map has
+                return master;
+            });
+            await context.WaitUntilAsync("the missing clock starts", () => coordinator.Find(ally.BotId)?.MasterMissingSinceMs is not null, TimeSpan.FromSeconds(20));
+
+            // Found again: the clock is cleared.
+            await context.ReadAsync(() =>
+            {
+                coordinator.Find(ally.BotId)!.Battlemaster = real;
+                return true;
+            });
+            await context.WaitUntilAsync("the missing clock is cleared when the master is found", () => coordinator.Find(ally.BotId)?.MasterMissingSinceMs is null, TimeSpan.FromSeconds(20));
+
+            // Missing again, at its goal, with a young clock: the walk goes on.
+            await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
+                t.Battlemaster = ObjectGuid.WithEntry(HighGuid.Unit, real.Entry, 999_999u);
+                t.MasterAt = new Vector3(player.X, player.Y, player.Z);
+                return true;
+            });
+            await context.WaitUntilAsync("the missing clock starts again", () => coordinator.Find(ally.BotId)?.MasterMissingSinceMs is not null, TimeSpan.FromSeconds(20));
+            await context.IdleAsync(TimeSpan.FromSeconds(8));
+            await context.ReadAsync(() =>
+            {
+                PlayerbotBattlegroundCoordinator.Tracked? t = coordinator.Find(ally.BotId);
+                ScenarioContext.Expect(t is { Phase: PlayerbotBattlegroundPhase.Travel }, "control: the walk goes on while the missing clock is young");
+                ScenarioContext.Expect(!coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)), "control: not set aside yet");
+                // The clock ran out: shifted back by more than the grace time.
+                t!.MasterMissingSinceMs = unchecked(t.MasterMissingSinceMs!.Value - PlayerbotBattlegroundCoordinator.WalkerMissingRefuseMs - 1_000);
+                return true;
+            });
+            await context.WaitUntilAsync("the walk ends as could-not-walk", () => coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(30));
+        });
+    }
+
+    /// <summary>
     /// A bot at its goal takes an empty spot for a missing master at once when the master stands still, and for one that walks waypoints only
     /// once it has been missing for the grace time (so a missing walker costs about a minute, not the walk's stall time).
     /// </summary>
