@@ -342,7 +342,9 @@ public sealed class InstanceLoopbackTests
         await using WorldTestClient again = await host.ConnectAsync();
         await again.AuthenticateAsync("INSTPM", key);
         await again.SendAsync(WorldOpcode.CmsgPlayerLogin, BitConverter.GetBytes((ulong)id));
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await again.CollectAsync(Quiet);
+        // Not CollectAsync: its 200 ms quiet window starts at the send, and under load the character load answers later than that, so it
+        // returned before SMSG_LOGIN_VERIFY_WORLD. Read until the last login packet (SMSG_INIT_WORLD_STATES), then the quiet tail.
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await again.CollectFromAsync(WorldOpcode.SmsgInitWorldStates, Quiet);
 
         int verify = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgLoginVerifyWorld);
         int created = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgInstanceSaveCreated);

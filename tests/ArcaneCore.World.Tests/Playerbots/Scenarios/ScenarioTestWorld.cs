@@ -85,6 +85,12 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         {
             ["Database:Provider"] = "Sqlite",
             ["Database:ConnectionString"] = "Data Source=" + database + ";Pooling=False",
+            // The shipped 5 s lock wait (SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs/DefaultBusyTimeoutMs) is a wall-clock bound:
+            // under full-suite load a socket client's CMSG_CHAR_CREATE insert queued behind the running bots' saves on this one SQLite file
+            // outlasted it, the store threw "database is locked" and CharacterHandlers answered CharCreateError. Match the lock wait to the
+            // scenario step timeout, as the settlement budgets below do, so only the test's own bound decides.
+            ["Database:SqliteWriteTimeoutMs"] = ((int)DefaultStepTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["Database:SqliteBusyTimeoutMs"] = ((int)DefaultStepTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture),
         }).Build();
         await using (ServiceProvider bootstrap = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).BuildServiceProvider())
         {
