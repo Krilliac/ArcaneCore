@@ -248,15 +248,15 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
 
         Assert.Equal(2, signals.Select(s => s.FaultId).Distinct().Count());
         Assert.Equal(6, signals.Sum(s => s.Occurrences));
-        Assert.Contains(signals, s => s.Diag.Contains("[spell 100]", StringComparison.Ordinal));
-        Assert.Contains(signals, s => s.Diag.Contains("[spell 200]", StringComparison.Ordinal));
+        Assert.Contains(signals, s => s.Diag?.Contains("[spell 100]", StringComparison.Ordinal) == true);
+        Assert.Contains(signals, s => s.Diag?.Contains("[spell 200]", StringComparison.Ordinal) == true);
         Assert.All(signals, s => Assert.Equal("Anomaly:spell/effect-unhandled", s.ExceptionType));
         Assert.Empty(feed.Pull());
 
         anomalyLedger.Report("spell", "effect-unhandled", "spell 100", "kind=effect value=7", AnomalySeverity.Warning);
         QaSignal again = Assert.Single(feed.Pull());
         Assert.Equal(1, again.Occurrences);
-        Assert.Equal(signals.First(s => s.Diag.Contains("[spell 100]", StringComparison.Ordinal)).FaultId, again.FaultId);
+        Assert.Equal(signals.First(s => s.Diag?.Contains("[spell 100]", StringComparison.Ordinal) == true).FaultId, again.FaultId);
     }
 
     [Fact]
@@ -367,7 +367,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         IReadOnlyList<QaSignal> signals = feed.Pull();
         Assert.Equal(2, signals.Count);
         Assert.Contains(signals, s => s.Goal == "invariant" && s.Occurrences == 2 && s.Diag == "Step(MoveSpline.cs:88)");
-        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1 && s.Diag.StartsWith("persist/write-retry-exhausted: busy after 6 attempts", StringComparison.Ordinal));
+        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1 && s.Diag?.StartsWith("persist/write-retry-exhausted: busy after 6 attempts", StringComparison.Ordinal) == true);
         Assert.Empty(feed.Pull());
     }
 
