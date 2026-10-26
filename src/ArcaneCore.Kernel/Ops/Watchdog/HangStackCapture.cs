@@ -6,6 +6,13 @@ using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog;
 
+/// <summary>A finished hang stack capture, as handed to <see cref="HangStackCapture.Captured"/>.</summary>
+/// <param name="AtUtc">When the capture started (the hang was first reported).</param>
+/// <param name="RunningMs">How long the tick had been running at that moment (0 when the caller did not say).</param>
+/// <param name="WorldThreadFrames">The innermost <c>ArcaneCore</c> frames of the world thread (the one inside <c>WorldRuntime.RunTick</c>), as <c>Type.Method</c>; empty when the world thread was not found.</param>
+/// <param name="Path">The file the full capture was written to.</param>
+public sealed record HangStackReport(DateTime AtUtc, long RunningMs, IReadOnlyList<string> WorldThreadFrames, string Path);
+
 /// <summary>Runs the stack tool; the seam the tests replace so no process is started.</summary>
 public interface IHangStackRunner
 {
@@ -115,6 +122,12 @@ public sealed class HangStackCapture
         _processId = processId ?? Environment.ProcessId;
     }
 
+    /// <summary>
+    /// Set by the host to be told of each capture that produced a stack (exit code 0): called on the capture's thread-pool task after the file is written, never on the
+    /// watchdog thread. A handler that throws is swallowed.
+    /// </summary>
+    public Action<HangStackReport>? Captured { get; set; }
+
     /// <summary>The capture started by the last successful <see cref="TryCapture"/> (completes, never faults), for tests and shutdown.</summary>
     public Task Last { get; private set; } = Task.CompletedTask;
 
@@ -125,7 +138,7 @@ public sealed class HangStackCapture
     /// Watchdog thread, when a tick has been running past the hang threshold: start a capture unless one is running, the last started less
     /// than the interval ago, or no tool is available. True when a capture was started. Never throws.
     /// </summary>
-    public bool TryCapture(long nowMicros, string reason)
+    public bool TryCapture(long nowMicros, string reason, long runningMs = 0)
     {
         try
         {
@@ -159,7 +172,7 @@ public sealed class HangStackCapture
             _lastStartMicros = nowMicros;
             DateTime at = _utcNow();
             string directory = _options.StackCaptureDirectory;
-            Last = Task.Run(() => CaptureAsync(tool, directory, at, reason));
+            Last = Task.Run(() => CaptureAsync(tool, directory, at, reason, runningMs));
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -169,7 +182,108 @@ public sealed class HangStackCapture
         }
     }
 
-    private async Task CaptureAsync(string tool, string directory, DateTime at, string reason)
+    /// <summary>How many world-thread frames a <see cref="HangStackReport"/> carries.</summary>
+    public const int TopWorldFrames = 4;
+
+    private void NotifyCaptured(HangStackReport report)
+    {
+        try
+        {
+            Captured?.Invoke(report);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug(ex, "a hang stack capture handler failed");
+        }
+    }
+
+    /// <summary>
+    /// The innermost <c>ArcaneCore</c> frames of the thread inside <c>WorldRuntime.RunTick</c> in a <c>dotnet-stack report</c> text (<c>Thread (0x..):</c> blocks of
+    /// <c>assembly!Namespace.Type.Method(args)</c> lines, innermost first), as <c>Type.Method</c> with compiler artefacts removed, at most <paramref name="max"/>. Empty when
+    /// no thread is in <c>RunTick</c> (the tick ended before the capture ran).
+    /// </summary>
+    public static IReadOnlyList<string> WorldThreadFrames(string report, int max)
+    {
+        var frames = new List<string>(max);
+        if (string.IsNullOrEmpty(report) || max <= 0)
+        {
+            return frames;
+        }
+
+        var block = new List<string>();
+        foreach (string raw in report.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.StartsWith('#'))
+            {
+                continue; // the capture's own header, which names RunTick in prose
+            }
+
+            if (line.StartsWith("Thread (", StringComparison.Ordinal) || line.Trim().Length == 0)
+            {
+                if (TakeWorldBlock(block, max, frames))
+                {
+                    return frames;
+                }
+
+                block.Clear();
+                continue;
+            }
+
+            block.Add(line.Trim());
+        }
+
+        TakeWorldBlock(block, max, frames);
+        return frames;
+    }
+
+    private static bool TakeWorldBlock(List<string> block, int max, List<string> frames)
+    {
+        if (!block.Exists(line => line.Contains("WorldRuntime.RunTick", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        foreach (string line in block)
+        {
+            int bang = line.IndexOf('!', StringComparison.Ordinal);
+            if (bang <= 0 || !line.StartsWith("ArcaneCore.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string name = line[(bang + 1)..];
+            int paren = name.IndexOf('(', StringComparison.Ordinal);
+            if (paren > 0)
+            {
+                name = name[..paren];
+            }
+
+            string[] parts = name.Split('.');
+            if (parts.Length < 2)
+            {
+                continue;
+            }
+
+            string method = ArcaneCore.Kernel.Diagnostics.FaultLedger.CleanName(parts[^1]);
+            string type = ArcaneCore.Kernel.Diagnostics.FaultLedger.CleanName(parts[^2]);
+            string frame = type.Length == 0 ? method : method.Length == 0 ? type : type + "." + method;
+            if (frame.Length == 0 || (frames.Count > 0 && frames[^1] == frame))
+            {
+                continue;
+            }
+
+            frames.Add(frame);
+            if (frames.Count == max)
+            {
+                break;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task CaptureAsync(string tool, string directory, DateTime at, string reason, long runningMs)
     {
         try
         {
@@ -186,6 +300,7 @@ public sealed class HangStackCapture
             if (exitCode == 0)
             {
                 _logger.LogWarning("world tick hang: the stacks of every managed thread were written to {Path}", path);
+                NotifyCaptured(new HangStackReport(at, runningMs, WorldThreadFrames(output, TopWorldFrames), path));
             }
             else
             {

@@ -39,4 +39,12 @@ public interface IBotTickHangSink
 
     /// <summary>Report a hang: the tick phase, the kind of work in it, the alert text and how many hangs it stands for.</summary>
     void ReportHang(string phase, string work, string message, long occurrences);
+
+    /// <summary>
+    /// A hang stack capture finished: how long the tick had run (ms) and the innermost <c>ArcaneCore</c> frames of the world thread (<c>Type.Method</c>, innermost first).
+    /// Called on a thread-pool thread, not the watchdog thread; must not throw. The default does nothing.
+    /// </summary>
+    void ReportHangStack(long tickMs, IReadOnlyList<string> worldFrames)
+    {
+    }
 }

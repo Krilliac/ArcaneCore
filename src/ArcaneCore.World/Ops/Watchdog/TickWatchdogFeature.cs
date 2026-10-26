@@ -69,6 +69,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         monitor.HangDetail = inProgress => SafeDescribe(world, inProgress);
         monitor.CompletedHangDetail = SafeDescribeCompleted;
         monitor.HangClosed = frameMicros => RecordHungFrame(world, frameMicros);
+        if (monitor.StackCapture is { } stackCapture)
+        {
+            stackCapture.Captured = ReportHangStackToQa;
+        }
+
         if (services.GetService<HostLoadSampler>() is { Enabled: true } hostLoad)
         {
             monitor.HostLoad = hostLoad;
@@ -203,6 +208,25 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         {
             FaultLedger.Shared.Record("watchdog.qa", ex);
             logger.LogDebug(ex, "the tick hang could not be reported to bot QA");
+        }
+    }
+
+    /// <summary>
+    /// Thread-pool thread, after a hang stack capture finished: hand the world thread's top frames to bot QA (a world-hang fault, fingerprinted by those frames). Same gates as
+    /// <see cref="ReportHang"/> that can be known here (shutdown, the start-up warm-up); the host-load verdict is not, so a hang the machine caused still files under the
+    /// frames it was caught in. Never throws.
+    /// </summary>
+    private void ReportHangStackToQa(HangStackReport report)
+    {
+        if (_bots?.HangSink is not { } qa || report.WorldThreadFrames.Count == 0) return;
+        try
+        {
+            if (_stopping || _clock.NowMicros - _attachedMicros < (long)qa.Warmup.TotalMicroseconds) return;
+            qa.ReportHangStack(report.RunningMs, report.WorldThreadFrames);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("watchdog.qa-stack", ex);
         }
     }
 

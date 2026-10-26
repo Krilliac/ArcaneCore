@@ -356,7 +356,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             if (StackCapture is { } capture && _stackCapturedForStart != last)
             {
                 _stackCapturedForStart = last;
-                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)");
+                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)", Micros.ToMillis(nowMicros - last));
             }
         }
 
