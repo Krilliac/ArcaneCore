@@ -339,11 +339,12 @@ internal static class PlayerbotNavigation
 
     /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
     internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false,
+        PlayerbotRoutePlanWatch.Policy? watchPolicy = null)
     {
         using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now, watchPolicy), mark, ref wait, now, ref route);
     }
 
     /// <summary>
@@ -466,11 +467,12 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null,
+        PlayerbotRoutePlanWatch.Policy? watchPolicy = null)
     {
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
         if (nowMs is { } watchNow && origin.IsFinite() && goal.IsFinite()
-            && PlayerbotRoutePlanWatch.ShouldRefuse(player, origin, goal, watchNow))
+            && PlayerbotRoutePlanWatch.ShouldRefuse(player, origin, goal, watchNow, watchPolicy))
         {
             route = null;
             return false;
@@ -498,7 +500,7 @@ internal static class PlayerbotNavigation
             || (!routed && (t_nonPathRefusal || ((PlayerbotThinkProbe.Active?.Refused ?? 0) > probeRefusedBefore)));
         if (nowMs is { } recordNow && !inconclusive && origin.IsFinite() && goal.IsFinite())
         {
-            PlayerbotRoutePlanWatch.RecordOutcome(player, origin, goal, routed, route, recordNow);
+            PlayerbotRoutePlanWatch.RecordOutcome(player, origin, goal, routed, route, recordNow, watchPolicy);
         }
 
         // The outcome check (PlayerbotNavigationAnomalies): a pending tile read or a deferred async plan is no verdict, the rest is.

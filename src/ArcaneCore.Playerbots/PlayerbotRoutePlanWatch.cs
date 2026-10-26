@@ -48,6 +48,22 @@ internal static partial class PlayerbotRoutePlanWatch
     /// <summary>Duration (ms) for which a suppressed origin/goal pair is held in the negative cache.</summary>
     internal const uint SuppressMs = 180_000;
 
+    /// <summary>
+    /// Duration (ms) a battleground duty goal is held (<see cref="Policy.Duty"/>). A bot that respawns at the same graveyard plans the same duty
+    /// goal from the same spot every life, so the 180 s hold of <see cref="SuppressMs"/> shelved it for 12 idle bounds (#1498).
+    /// </summary>
+    internal const uint DutySuppressMs = 10_000;
+
+    /// <summary>How a caller wants a suppressed pair handled: how long it is held, and whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>.</summary>
+    internal readonly record struct Policy(uint SuppressMs, bool Blacklist)
+    {
+        /// <summary>The long hold with the blacklist (every caller but the battleground AI).</summary>
+        internal static readonly Policy Default = new(PlayerbotRoutePlanWatch.SuppressMs, true);
+
+        /// <summary>The short hold without the blacklist (a goal the bot must go on trying: <see cref="DutySuppressMs"/>).</summary>
+        internal static readonly Policy Duty = new(DutySuppressMs, false);
+    }
+
     private const int MaxSuppressedEntries = 8;
 
     private readonly record struct SuppressedPair(uint MapId, Vector3 Origin, Vector3 Goal, uint UntilMs);
@@ -73,7 +89,7 @@ internal static partial class PlayerbotRoutePlanWatch
     /// True when <paramref name="goal"/> from <paramref name="origin"/> is currently suppressed for <paramref name="player"/>,
     /// or when the active watch has already reached the unproductive-plan ceiling and must refuse the next attempt.
     /// </summary>
-    internal static bool ShouldRefuse(Player player, Vector3 origin, Vector3 goal, uint now)
+    internal static bool ShouldRefuse(Player player, Vector3 origin, Vector3 goal, uint now, Policy? policy = null)
     {
         if (!States.TryGetValue(player, out WatchState? state)) return false;
         PruneExpired(state, now);
@@ -107,7 +123,7 @@ internal static partial class PlayerbotRoutePlanWatch
             && state.Plans >= MaxUnproductivePlans
             && unchecked(now - state.FirstAt) >= MinLoopSpanMs)
         {
-            Suppress(player, state, mapId, state.Origin, goal, state.LastRouteEnd, now);
+            Suppress(player, state, mapId, state.Origin, goal, state.LastRouteEnd, now, policy ?? Policy.Default);
             return true;
         }
 
@@ -115,7 +131,8 @@ internal static partial class PlayerbotRoutePlanWatch
     }
 
     /// <summary>Records the outcome of a definitive (non-pending, non-deferred) timestamped <c>TryPlanToward</c> call.</summary>
-    internal static void RecordOutcome(Player player, Vector3 origin, Vector3 goal, bool planned, PlayerbotRoute? route, uint now)
+    internal static void RecordOutcome(Player player, Vector3 origin, Vector3 goal, bool planned, PlayerbotRoute? route, uint now,
+        Policy? policy = null)
     {
         WatchState state = States.GetValue(player, static _ => new WatchState());
         PruneExpired(state, now);
@@ -173,15 +190,16 @@ internal static partial class PlayerbotRoutePlanWatch
         state.Refusals++;
         if (state.Refusals >= MaxConsecutiveRefusals)
         {
-            Suppress(player, state, mapId, state.Origin, goal, goal, now);
+            Suppress(player, state, mapId, state.Origin, goal, goal, now, policy ?? Policy.Default);
         }
     }
 
     internal static void Clear(Player player) => States.Remove(player);
 
-    private static void Suppress(Player player, WatchState state, uint mapId, Vector3 origin, Vector3 goal, Vector3 routeEnd, uint now)
+    private static void Suppress(Player player, WatchState state, uint mapId, Vector3 origin, Vector3 goal, Vector3 routeEnd, uint now,
+        Policy policy)
     {
-        uint until = unchecked(now + SuppressMs);
+        uint until = unchecked(now + policy.SuppressMs);
         for (int i = state.Suppressed.Count - 1; i >= 0; i--)
         {
             SuppressedPair existing = state.Suppressed[i];
@@ -200,7 +218,7 @@ internal static partial class PlayerbotRoutePlanWatch
 
         state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until));
         state.Has = false;
-        if (player.IsAlive)
+        if (policy.Blacklist && player.IsAlive)
         {
             PlayerbotMotion.Blacklist(player, [goal, routeEnd], now);
         }

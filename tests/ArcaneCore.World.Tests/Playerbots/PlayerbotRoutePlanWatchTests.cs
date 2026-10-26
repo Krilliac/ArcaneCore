@@ -172,4 +172,56 @@ public sealed class PlayerbotRoutePlanWatchTests
         Assert.False(cap.Any(Key("goal-unreachable")), cap.Describe());
         Assert.False(cap.Any(Key("no-path-connected")), cap.Describe());
     }
+
+    /// <summary>
+    /// Seeds the watch with <see cref="PlayerbotRoutePlanWatch.MaxConsecutiveRefusals"/> definitive refusals toward a duty goal from one fixed
+    /// spot (a respawn at the graveyard), 1 s apart. The origin is fixed rather than read from the bot, which may walk while the clock runs.
+    /// </summary>
+    private static async Task<(Vector3 Origin, Vector3 Goal)> SeedRefusalsAsync(RiskTestWorld world, PlayerbotRoutePlanWatch.Policy? policy)
+    {
+        Vector3 origin = await world.OnWorldAsync(() => PlayerbotMotion.CurrentPosition(world.Player));
+        Vector3 goal = origin + new Vector3(80f, 0f, 0f);
+        for (int i = 0; i < PlayerbotRoutePlanWatch.MaxConsecutiveRefusals; i++)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                PlayerbotRoutePlanWatch.RecordOutcome(world.Player, origin, goal, planned: false, route: null, world.Host.World.NowMs, policy);
+                return true;
+            });
+            await world.Host.World.AdvanceClockAsync(1_000);
+        }
+
+        return (origin, goal);
+    }
+
+    /// <summary>11 s: past the 10 s duty hold, far inside the 180 s default hold.</summary>
+    private const uint PastDutyWindowMs = 11_000;
+
+    private static Task<bool> Refused(RiskTestWorld world, Vector3 origin, Vector3 goal)
+        => world.OnWorldAsync(() => PlayerbotRoutePlanWatch.ShouldRefuse(world.Player, origin, goal, world.Host.World.NowMs));
+
+    [Fact]
+    public async Task DutyPolicy_RefusedGoalFromTheGraveyard_IsPlannedAgainAfterTheShortWindow_NotShelvedFor180Seconds()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+
+        (Vector3 origin, Vector3 goal) = await SeedRefusalsAsync(world, PlayerbotRoutePlanWatch.Policy.Duty);
+        Assert.True(await Refused(world, origin, goal), "inside the short hold the duty goal is refused");
+        Assert.False(await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal)), "a duty goal is not blacklisted");
+
+        await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
+        Assert.False(await Refused(world, origin, goal), "past the short hold the duty goal is planned again");
+        Assert.True(PlayerbotRoutePlanWatch.DutySuppressMs < PlayerbotRoutePlanWatch.SuppressMs);
+    }
+
+    [Fact]
+    public async Task DefaultPolicy_RefusedGoal_StaysShelvedPastTheDutyWindow_AndIsBlacklisted()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+
+        (Vector3 origin, Vector3 goal) = await SeedRefusalsAsync(world, null);
+        Assert.True(await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal)), "the default hold blacklists the goal");
+        await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
+        Assert.True(await Refused(world, origin, goal), "other callers keep the 180 s hold");
+    }
 }
