@@ -60,8 +60,14 @@ public sealed class PlayerbotQaAnomalyFeedTests
     [Fact]
     public void TheFourWorldKeys_AreExactlyTheOnesTheServerReports()
     {
-        Assert.Equal(
-            ["gameobject/open-no-effect", "gameobject/use-failed", "loot/gameobject-loot-empty", "spell/gameobject-effect-skipped"],
-            PlayerbotQaAnomalyFeed.WorldKeys.Order(StringComparer.Ordinal));
+        // Built from the constants the reporting code passes to the ledger, so a renamed code breaks this test instead of silently leaving the feed.
+        string[] reported =
+        [
+            AnomalyLedger.KeyOf(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode),
+            AnomalyLedger.KeyOf("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedCode),
+            AnomalyLedger.KeyOf("gameobject", ArcaneCore.World.Skills.GatheringSpells.OpenNoEffectCode),
+            AnomalyLedger.KeyOf("spell", ArcaneCore.Game.Spells.SpellSystem.GameObjectEffectSkippedCode),
+        ];
+        Assert.Equal(reported.Order(StringComparer.Ordinal), PlayerbotQaAnomalyFeed.WorldKeys.Order(StringComparer.Ordinal));
     }
 }

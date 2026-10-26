@@ -7,6 +7,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -210,10 +211,14 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
                     }
                 }, _ => scriptTookOpen = true)
                 ?? GameObjectUseResult.Unsupported;
-            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && !scriptTookOpen && player.Map is { InstanceId: 0 } openMap
-                && Objects?.FindSystem(openMap)?.Loot?.OpenLootOf(player)?.Source != go.Guid)
+            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && !scriptTookOpen && player.Map is { } openMap
+                && Objects?.FindSystem(openMap)?.Loot is { } openLoot && openLoot.OpenLootOf(player)?.Source != go.Guid
+                && !(openMap.InstanceId != 0 && go.Spawn is { } openSpawn
+                    && openLoot.Durable?.IsPending(new LootStateKey(openMap.InstanceId, openSpawn.Guid)) == true))
             {
-                // A script that took the open is legitimate and leaves no window, so it is exempt (scriptTookOpen). A dungeon chest (instance map) says Ok when its generation is accepted and opens the window later, so it is exempt.
+                // A script that took the open is legitimate and leaves no window, so it is exempt (scriptTookOpen). A dungeon chest whose fresh
+                // generation was accepted (its durable key is pending) says Ok now and opens the window once the generation committed, so only
+                // that is exempt; a live bag or a restored record opens synchronously and is checked like any other chest.
                 ReportOpenNoEffect(context, player, go, "the open returned Ok for a chest but the player has no loot window on it");
             }
 

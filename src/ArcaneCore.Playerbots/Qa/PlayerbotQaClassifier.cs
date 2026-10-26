@@ -89,7 +89,7 @@ internal static class PlayerbotQaClassifier
                     + ": an effect that silently does nothing, or a rule that drops it", title);
 
             case QaSignalKind.Anomaly:
-                return new QaClassification(QaCause.BehaviourBug,
+                return new QaClassification(IsContentDefect(s) ? QaCause.MissingData : QaCause.BehaviourBug,
                     (s.Goal.Length != 0 && !s.Goal.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal) ? "recurring world anomaly " : "recurring bot outcome anomaly ")
                     + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                     + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
@@ -99,6 +99,17 @@ internal static class PlayerbotQaClassifier
                 throw new ArgumentOutOfRangeException(nameof(s), s.Kind, "no classification for this bot QA kind");
         }
     }
+
+    /// <summary>
+    /// A world anomaly whose cause is the imported content, not server behaviour: a chest whose loot template names no rows or only unknown items
+    /// (<c>loot/gameobject-loot-empty</c> reasons no-rows and all-unknown) and a use refused because the object's lock id has no Lock.dbc row
+    /// (<c>gameobject/use-failed</c>). Matched on the stable detail phrases those reporters write.
+    /// </summary>
+    private static bool IsContentDefect(QaSignal s)
+        => (string.Equals(s.Goal, "loot", StringComparison.Ordinal) && string.Equals(s.Reason, "gameobject-loot-empty", StringComparison.Ordinal)
+                && (s.Detail.Contains("reason no-rows", StringComparison.Ordinal) || s.Detail.Contains("reason all-unknown", StringComparison.Ordinal)))
+            || (string.Equals(s.Goal, "gameobject", StringComparison.Ordinal) && string.Equals(s.Reason, "use-failed", StringComparison.Ordinal)
+                && s.Detail.Contains("has no lock_template row", StringComparison.Ordinal));
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";

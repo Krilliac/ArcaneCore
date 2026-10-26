@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -21,13 +22,13 @@ internal sealed class PlayerbotQaAnomalyFeed(
     /// Ledger keys of world (non-bot) anomalies a bot can trigger by using the world: a chest that opens empty, a game object use refused as a
     /// defect, an open-lock cast that did nothing, and a game object effect dropped before it ran. They are admitted like <c>bot-*</c> keys.
     /// </summary>
-    internal static readonly HashSet<string> WorldKeys = new(StringComparer.Ordinal)
+    internal static readonly FrozenSet<string> WorldKeys = new[]
     {
         "loot/gameobject-loot-empty",
         "gameobject/use-failed",
         "gameobject/open-no-effect",
         "spell/gameobject-effect-skipped",
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
     internal const int DefaultMinCount = 5;
     internal const int DefaultMinDistinctSubjects = 3;
 

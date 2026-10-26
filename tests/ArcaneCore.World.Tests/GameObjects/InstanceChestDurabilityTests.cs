@@ -6,6 +6,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
@@ -162,6 +163,65 @@ public sealed class InstanceChestDurabilityTests
     }
 
     private static uint Count(Player player, uint entry) => player.Inventory.GetItemCount(entry);
+
+    // Lock.dbc 93 as imported (the Apple Bob lock): one skill case of lock type 12, no required skill; spell 6477 "Opening" opens it.
+    private static LockEntry OpeningLock() => new(93, [0, 2, 0, 0, 0, 0, 0, 0], [0, 12, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]);
+
+    private static AnomalyCapture OpenNoEffectCapture()
+        => AnomalyLedger.Shared.Capture(n => n.Key == "gameobject/open-no-effect"
+            && n.Subject == $"gameobject entry {ChestEntry} spell {AppleBobOpeningWorldTests.Opening}");
+
+    /// <summary>
+    /// A fresh dungeon chest opened by a spell says Ok when its generation is accepted and shows the window once the generation committed: that
+    /// pending generation is the only instance open exempt from <c>gameobject/open-no-effect</c>.
+    /// </summary>
+    [Fact]
+    public async Task OpenLockOnAFreshDungeonChest_WhoseWindowOpensAfterTheCommit_DoesNotReportOpenNoEffect()
+    {
+        await using Fixture f = Fixture.Start(chestLock: OpeningLock(), configureServices: AppleBobOpeningWorldTests.Configure);
+        await using WorldTestClient alice = await f.EnterWorldAsync("DLOOTG", "Dlootgg");
+        await f.EnterDungeonAsync(alice, "Dlootgg");
+        using AnomalyCapture cap = OpenNoEffectCapture();
+
+        await alice.SendAsync(WorldOpcode.CmsgCastSpell, AppleBobOpeningWorldTests.CastAt(AppleBobOpeningWorldTests.Opening, ChestGuid()));
+        Assert.Equal(ChestGuid(), AppleBobOpeningWorldTests.ReadLootResponse(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse)).Source);
+        await f.Host.OnWorldAsync(() => 0);
+
+        Assert.Empty(cap.Notices);
+    }
+
+    /// <summary>
+    /// A dungeon chest whose bag is already live (or restored from its stored record) opens synchronously, so a post-open hook that drops the
+    /// window leaves an Ok with no window and no pending generation: that must be reported, instance map or not.
+    /// </summary>
+    [Fact]
+    public async Task OpenLockOnADungeonChestWithALiveBag_WhenAPostOpenHookDropsTheWindow_ReportsOpenNoEffect()
+    {
+        await using Fixture f = Fixture.Start(chestLock: OpeningLock(), configureServices: AppleBobOpeningWorldTests.Configure);
+        await using WorldTestClient alice = await f.EnterWorldAsync("DLOOTH", "Dlootha");
+        uint instance = await f.EnterDungeonAsync(alice, "Dlootha");
+        await UseChestAsync(alice);
+        Window(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse)); // the generation committed: a stored chest now
+        await ReleaseAsync(alice);
+        int released = 0;
+        await f.Host.OnWorldAsync(() =>
+        {
+            GameObjectMapSystem system = f.SystemOf(instance);
+            system.Used += (player, go) =>
+            {
+                system.Loot!.Release(player, go.Guid);
+                released++;
+            };
+        });
+        using AnomalyCapture cap = OpenNoEffectCapture();
+
+        await alice.SendAsync(WorldOpcode.CmsgCastSpell, AppleBobOpeningWorldTests.CastAt(AppleBobOpeningWorldTests.Opening, ChestGuid()));
+        await alice.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await f.Host.OnWorldAsync(() => 0); // the cast's effects run on the world thread; this call is queued behind them
+
+        Assert.Equal(1, released);
+        Assert.Single(cap.Notices);
+    }
 
     [Fact]
     public async Task Use_OpensTheWindowAfterTheGenerationCommitted_EvenWhenTheInstanceRowIsStillBeingWritten()

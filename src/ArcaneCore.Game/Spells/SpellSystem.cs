@@ -796,7 +796,7 @@ public sealed partial class SpellSystem
                     : CombatRules.RollHit(this, caster, target, spell);
             if (entry.Miss is SpellMissInfo.Immune or SpellMissInfo.Immune2)
             {
-                ReportObjectEffectSkipped(cast, "the carrier missed as immune");
+                ReportObjectEffectSkipped(cast, target, "the carrier missed as immune");
             }
 
             if (entry.Miss == SpellMissInfo.None)

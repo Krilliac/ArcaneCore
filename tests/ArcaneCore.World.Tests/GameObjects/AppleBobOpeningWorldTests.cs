@@ -62,7 +62,7 @@ public sealed class AppleBobOpeningWorldTests
         }
     }
 
-    private static void Configure(IServiceCollection services)
+    internal static void Configure(IServiceCollection services)
     {
         GatheringWorldTests.Configure(services);
         services.AddSingleton<ISpellContentStore>(new InMemorySkillSpellContentStore(new SpellContent(
@@ -171,12 +171,12 @@ public sealed class AppleBobOpeningWorldTests
     }
 
     /// <summary>
-    /// The counterpart of the script test: no script takes the open, the chest opens normally (the open returns Ok) but the player is left with no
-    /// loot window on it (a Used handler releases it, standing in for any bug that loses the window). That must be reported, so the exemption
-    /// for a script-taken open cannot have silenced the check for every open.
+    /// The counterpart of the script test: no script takes the open and the chest opens normally (the open returns Ok), but a post-open hook (a
+    /// <c>Used</c> handler) drops the player's loot window. That guards one failure shape, a hook that drops the window after the open, and it proves
+    /// the exemption for a script-taken open did not silence the check for every other open.
     /// </summary>
     [Fact]
-    public async Task OpeningAppleBobWhenTheChestReturnsOkWithoutALootWindow_ReportsOpenNoEffect()
+    public async Task OpeningAppleBobWhenAPostOpenHookDropsTheLootWindow_ReportsOpenNoEffect()
     {
         await using WorldTestHost host = Start(out GameObjectTestContext context);
         await using WorldTestClient client = await host.EnterWorldAsync("BOBLOST", "Boblost");

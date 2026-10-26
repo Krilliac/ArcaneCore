@@ -154,13 +154,16 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// Report that a cast aimed at a game object lost its effect before any handler ran (a pending quest settlement, the application rules, or an
-    /// Immune miss on the carrier): the client sees a normal cast and nothing opens. The "target is a game object" test comes first and is two
-    /// field reads, so unit casts pay nothing; strings are built only when a report is due. Ids and guid low only, no names.
+    /// Immune miss on the carrier): the client sees a normal cast and nothing opens. The carrier of an effect aimed at an explicit game object is
+    /// the caster, so only the caster's own application is reported: a unit target of a mixed cast losing its effects is not this signal. The
+    /// "target is the caster" test and the "target is a game object" test come first and are a few field reads, so unit casts pay nothing; strings
+    /// are built only when a report is due. Ids and guid low only, no names.
     /// </summary>
-    private static void ReportObjectEffectSkipped(SpellCast cast, string why)
+    private static void ReportObjectEffectSkipped(SpellCast cast, Unit carrier, string why)
     {
         SpellCastTargets targets = cast.Targets;
-        if ((targets.Mask & (SpellCastTargetFlags.GameObject | SpellCastTargetFlags.Locked)) == 0 || targets.GameObject.IsEmpty)
+        if (!ReferenceEquals(carrier, cast.Caster)
+            || (targets.Mask & (SpellCastTargetFlags.GameObject | SpellCastTargetFlags.Locked)) == 0 || targets.GameObject.IsEmpty)
         {
             return;
         }
@@ -187,7 +190,7 @@ public sealed partial class SpellSystem
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
-            ReportObjectEffectSkipped(cast, "a quest settlement is pending for the caster or the carrier");
+            ReportObjectEffectSkipped(cast, target, "a quest settlement is pending for the caster or the carrier");
             return null;
         }
 
@@ -204,7 +207,7 @@ public sealed partial class SpellSystem
             effectMask = application.EffectMask;
             if (effectMask == 0)
             {
-                ReportObjectEffectSkipped(cast, "the application rules removed every effect");
+                ReportObjectEffectSkipped(cast, target, "the application rules removed every effect");
                 return null;
             }
         }

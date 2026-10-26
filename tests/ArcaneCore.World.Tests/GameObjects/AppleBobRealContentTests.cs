@@ -24,7 +24,7 @@ namespace ArcaneCore.World.Tests.GameObjects;
 /// listed in game_event_gameobject for event 12), the real lock 93, loot 17378 and spell 6477 rows, with the real spell data going through
 /// the application rules of the cast. Event 12 is started the way <c>.event start</c> does, a night elf rogue (an Alliance race, so the Darnassus guards leave it alone; whose create spells include 6477)
 /// teleports to the apple and sends CMSG_CAST_SPELL of 6477 with target mask 0x0800, as the 5875 client does
-/// (D:/WoW-RE-Research/protocol/gameobject-interaction.md). Skipped, with a message saying so, unless both variables are set.
+/// (the client's game object interaction flow). Skipped, with a message saying so, unless both variables are set.
 /// </summary>
 [Collection("Real battleground raid content")]
 public sealed class AppleBobRealContentTests(ITestOutputHelper output)

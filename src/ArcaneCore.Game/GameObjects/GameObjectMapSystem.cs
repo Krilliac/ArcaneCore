@@ -944,6 +944,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         string why;
         switch (result)
         {
+            case GameObjectUseResult.Unsupported when go.Type == GameObjectType.QuestGiver:
+                why = "the quest menu did not open (no quest giver service is wired, or it refused the object)";
+                break;
             case GameObjectUseResult.Unsupported:
                 why = "no handler for the object's type or its loot is unavailable";
                 break;
@@ -962,8 +965,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         AnomalyLedger.Shared.Report(
             "gameobject",
             UseFailedCode,
-            $"gameobject entry {go.Entry} type {go.Template.Type}",
-            $"use refused ({result}): {why}; spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} guid {guid.Low} map {Map.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}; player guid {player.Guid.Low}",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"gameobject entry {go.Entry} type {go.Template.Type}"),
+            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"use refused ({result}): {why}; spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} guid {guid.Low} map {Map.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}; player guid {player.Guid.Low}"),
             AnomalySeverity.Warning);
     }
 
