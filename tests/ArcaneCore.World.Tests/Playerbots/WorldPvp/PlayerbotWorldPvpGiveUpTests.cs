@@ -240,6 +240,52 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         Assert.False(await world.RunUntilAsync(20_000, () => world.BrainOf(bot).WorldPvp.Active), "the bot took the stalled geyser up again");
     }
 
+    /// <summary>
+    /// Stalled() starts the plain run cool-down after the give-up's ten-minute hold-off; the cool-down only ever extends. Without that, a stalled carry
+    /// would be seeking again after two minutes, while its own dropped mound (180 s) still stands at its feet.
+    /// </summary>
+    [Fact]
+    public async Task AStalledCarry_HoldsTheBotOffLongerThanTheRunCooldown_SoItDoesNotTakeItsOwnMoundUp()
+    {
+        await using SilithystWorld world = await StartAsync();
+        Guid bot = await world.AddBotAsync("Dustcarhold", 1);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.BrainOf(bot).WorldPvp.IsCarrying), "the bot never picked the flag up");
+        Assert.Equal(1, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
+
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotBrain brain = world.BrainOf(bot);
+            brain.HoldGoalForTests(PlayerbotGoalKind.WorldPvp, 0, 0);
+            world.World.Bots.FindSession(bot)!.ManagedBudget = new ManagedActionBudget(5);
+            brain.GiveUpStalledGoal(world.PlayerOf(bot));
+            Assert.False(world.HasAura(world.PlayerOf(bot), Flag), "the flag is still on after the give-up");
+            return true;
+        });
+
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
+            () => world.BrainOf(bot).WorldPvp.Active || world.BrainOf(bot).WorldPvp.Pickups > 1), "the bot sought again inside the give-up hold-off");
+    }
+
+    /// <summary>The negative side: a stall before the carry (no flag held) only costs the plain cool-down, not the ten-minute hold-off.</summary>
+    [Fact]
+    public async Task AStalledGoalBeforeTheCarry_StartsNoTenMinuteHoldOff()
+    {
+        await using SilithystWorld world = await StartAsync();
+        Guid bot = await world.AddBotAsync("Dustnohold", 1);
+        Assert.True(await world.RunUntilAsync(30_000, () => world.BrainOf(bot).WorldPvp.Active), "the bot never went for the geyser");
+        Assert.False(world.BrainOf(bot).WorldPvp.IsCarrying);
+        await world.OnWorldAsync(() =>
+        {
+            world.BrainOf(bot).HoldGoalForTests(PlayerbotGoalKind.WorldPvp, Geyser, 0);
+            world.BrainOf(bot).GiveUpStalledGoal(world.PlayerOf(bot));
+            return true;
+        });
+
+        // The geyser is set aside (60 s to a minute), the cool-down is two minutes: a run is back well inside the ten-minute hold-off a carry give-up costs.
+        Assert.True(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs - 60_000, () => world.BrainOf(bot).WorldPvp.Active),
+            "a give-up before the carry held the bot off like a carry give-up");
+    }
+
     [Fact]
     public async Task AStalledCarry_DropsTheFlag_AndDoesNotCarryItAgain()
     {
