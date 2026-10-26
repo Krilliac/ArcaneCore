@@ -573,6 +573,7 @@ public sealed class ClusterCommands : ICommandGroup
         // The decision store's COUNT would run inline on the world thread (the SQLite provider runs its async calls synchronously):
         // count on the pool and send the report from the world thread.
         WorldRuntime world = context.World;
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>(); // resolved here: the pool continuations below must not touch the session scope
         _ = Task.Run(async () =>
         {
             int pendingTransfers;
@@ -583,17 +584,32 @@ public sealed class ClusterCommands : ICommandGroup
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("cluster.diag-count", ex);
-                world.Post(() =>
-                {
-                    services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
-                    context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
-                });
+                logger?.LogWarning(ex, "cluster diag could not read the unresolved transfer count"); // logged here, not from the posted action: a stopped world never runs it
+                world.Post(() => context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store."));
                 return;
             }
 
             world.Post(() => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
         }).ContinueWith(
-            static t => FaultLedger.Shared.Record("cluster.diag-post", t.Exception!.GetBaseException()),
+            t =>
+            {
+                Exception ex = t.Exception!.GetBaseException();
+                if (ex is OperationCanceledException)
+                {
+                    return;
+                }
+
+                FaultLedger.Shared.Record("cluster.diag-post", ex);
+                logger?.LogFault("cluster-diag-post", ex, "cluster diag could not post its reply to the world thread");
+                try
+                {
+                    world.Post(() => context.Reply("Cluster diagnostics unavailable: the report could not be delivered."));
+                }
+                catch (Exception replyEx) when (replyEx is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("cluster.diag-post", replyEx); // the world cannot take the GM reply either (stopped): the fault above stands
+                }
+            },
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);

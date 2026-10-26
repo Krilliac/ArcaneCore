@@ -436,7 +436,7 @@ can write to the allowlist file or to the server's process can run code as the s
 5. **Failure keeps the old version.** A bad `reload` (unreadable file, not a managed assembly, clash,
    timeout) leaves the running version in force and unchanged; the rejected candidate's context is
    released. Every decision is audited (`module-load`, `module-reload`, `module-unload`,
-   `module-rejected`) with the dll's SHA-256, and logged (a rejection at error level).
+   `module-rejected`; lines dropped on a full queue are counted as `hotcode.audit-dropped`) with the dll's SHA-256, and logged (a rejection at error level).
 
 ### Creature AI and script hooks in a module
 

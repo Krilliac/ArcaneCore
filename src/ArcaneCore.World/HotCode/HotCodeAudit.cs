@@ -166,6 +166,10 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
                 {
                     log.LogFault("hotcode-audit-dropped", ex, "hot-code audit queue for {Path} is full; an audit line was dropped", fullPath);
                 }
+                else
+                {
+                    Console.Error.WriteLine($"hot-code audit queue for {fullPath} is full; an audit line was dropped: {ex.Message}");
+                }
             }
             catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
             {

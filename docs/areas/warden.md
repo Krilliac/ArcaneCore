@@ -65,4 +65,5 @@ For page, driver and module checks, `Wanted` says whether the pattern, driver or
 - **No Lua rows ship.** vmangos's 5875 set has none.
 - **Re-seeding.** An empty table is seeded again at every start. Delete the rows you don't want instead of emptying the table, or set `LoadFromDatabase` to false.
 - **Windows only.** The 5875 auth session does not carry the platform, so a Mac client cannot load the module. It gets `ProtocolAction`, and is kicked after `MaxProtocolFailures` strikes even under Log.
+- **Ban lands after the kick.** A Ban verdict disconnects the client at once and writes the ban row afterwards, off the world thread, so a client that reconnects within that window (or while a stalled database holds the write) can authenticate once before the row exists. A failed write is recorded in the fault ledger (`warden.ban`) and the log; the kick stands. Shutdown waits up to 5 s for writes in flight.
 - **Not ported:** API-hook scans, the vmangos sysinfo and EndScene scripted scans, the `InitialLogin` scan flag, and MaNGOS Zero's evidence classes and confirmation rescans.

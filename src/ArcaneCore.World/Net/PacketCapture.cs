@@ -153,6 +153,7 @@ public sealed class PacketCapture : IDisposable
 
     public void Write(bool fromClient, ushort opcode, ReadOnlySpan<byte> payload)
     {
+        bool queueFull = false;
         lock (_gate)
         {
             if (_closed) return;
@@ -179,13 +180,18 @@ public sealed class PacketCapture : IDisposable
                 else
                 {
                     Complete(); // the writer is far behind: stop the trace rather than block the session
-                    ReportQueueFull();
+                    queueFull = true;
                 }
             }
         }
+
+        if (queueFull)
+        {
+            ReportQueueFull(); // outside the gate: the logger is caller code and must not run under the trace's lock
+        }
     }
 
-    /// <summary>Under <see cref="_gate"/>, once per trace (the trace is closed right after): the stop is counted and logged, not silent.</summary>
+    /// <summary>Once per trace (the trace is closed under <see cref="_gate"/> just before this runs, after the lock is released): the stop is counted and logged, not silent.</summary>
     private void ReportQueueFull()
     {
         var ex = new InvalidOperationException($"packet capture {Path} stopped: the writer is {QueueCapacity} records behind");

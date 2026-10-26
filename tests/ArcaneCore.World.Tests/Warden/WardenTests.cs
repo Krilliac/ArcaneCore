@@ -1114,8 +1114,9 @@ public sealed class WardenTests
         Assert.Equal(3, verdicts.Count); // each failed scan is still its own verdict (logged, raised)
         List<string> lines = [.. (await ChatLinesAsync(staff)).Where(l => l.Contains("[Warden]", StringComparison.Ordinal))];
 
-        // BanAsync reaches the in-memory store before session.Kick() (see AProtocolFailure_UnderBan_ClosesTheSessionWithoutBanning), so every
-        // ban the batch started is a row by now. One batch: one staff line and one ban (both counts checked together).
+        // The kick is immediate and the ban write follows off the world thread, so StopAsync (which waits for the writes in flight) comes first:
+        // every ban the batch started is a row by then. One batch: one staff line and one ban (both counts checked together).
+        await feature.StopAsync();
         IReadOnlyList<AccountBanRecord> bans = await host.Bans.GetHistoryAsync(session.AccountId);
         Assert.Equal((Lines: 1, Bans: 1), (Lines: lines.Count, Bans: bans.Count));
         Assert.Contains("Warden banned an account", lines[0], StringComparison.Ordinal);
@@ -1142,10 +1143,10 @@ public sealed class WardenTests
         await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));
         await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the protocol failure closed the session");
 
-        // Deterministic: WardenFeature.OnVerdicts starts BanAsync before session.Kick(), and BanAsync reaches the in-memory store
-        // synchronously (no awaited I/O before it, and InMemoryBanStore.BanAccountAsync writes its row before returning). So a ban,
-        // had one been issued, is already stored by the time the session is closed.
+        // Deterministic: a Ban verdict kicks and then starts its write, and StopAsync waits for every write in flight, so a ban, had one
+        // been issued, is stored by the time it returns.
         Assert.Equal(WardenAction.Kick, Assert.Single(verdicts).Action);
+        await feature.StopAsync();
         Assert.Null(await host.Bans.GetActiveAccountBanAsync(session.AccountId));
     }
 
@@ -1232,6 +1233,126 @@ public sealed class WardenTests
         Assert.Equal(WardenFeature.BanAuthor, ban.BannedBy);
         Assert.True(ban.IsPermanent);
         Assert.Contains("failed scan 1", ban.Reason);
+    }
+
+    /// <summary>An in-memory ban store whose ban write waits until the test releases it, then commits or fails (a stalled database).</summary>
+    private sealed class GatedBanStore : IBanStore
+    {
+        private readonly ArcaneCore.World.Tests.Bans.InMemoryBanStore _inner = new();
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>When set, the released write throws this instead of committing.</summary>
+        public Exception? FailOnRelease { get; init; }
+
+        /// <summary>Completes when the Warden's ban write has reached the store (and is waiting).</summary>
+        public Task WriteEntered => _entered.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task BanAccountAsync(BanRequest request, CancellationToken cancellationToken = default)
+        {
+            _entered.TrySetResult();
+            await _release.Task.ConfigureAwait(false);
+            if (FailOnRelease is not null)
+            {
+                throw FailOnRelease;
+            }
+
+            await _inner.BanAccountAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<AccountBanRecord?> GetActiveAccountBanAsync(int accountId, CancellationToken cancellationToken = default) => _inner.GetActiveAccountBanAsync(accountId, cancellationToken);
+        public Task<IpBanRecord?> GetActiveIpBanAsync(string ip, CancellationToken cancellationToken = default) => _inner.GetActiveIpBanAsync(ip, cancellationToken);
+        public Task<IReadOnlySet<int>> FindBannedAccountsAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default) => _inner.FindBannedAccountsAsync(accountIds, cancellationToken);
+        public Task<IReadOnlySet<string>> FindBannedIpsAsync(IReadOnlyCollection<string> ips, CancellationToken cancellationToken = default) => _inner.FindBannedIpsAsync(ips, cancellationToken);
+        public Task<bool> BanIpAsync(IpBanRequest request, CancellationToken cancellationToken = default) => _inner.BanIpAsync(request, cancellationToken);
+        public Task<bool> UnbanAccountAsync(int accountId, string source, string message, CancellationToken cancellationToken = default) => _inner.UnbanAccountAsync(accountId, source, message, cancellationToken);
+        public Task<bool> UnbanIpAsync(string ip, CancellationToken cancellationToken = default) => _inner.UnbanIpAsync(ip, cancellationToken);
+        public Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default) => _inner.GetHistoryAsync(accountId, cancellationToken);
+        public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default) => _inner.FindAccountsWithHistoryAsync(accountIds, cancellationToken);
+        public Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default) => _inner.ListActiveAccountBansAsync(cancellationToken);
+        public Task<IReadOnlyList<IpBanRecord>> ListIpBansAsync(string prefix, CancellationToken cancellationToken = default) => _inner.ListIpBansAsync(prefix, cancellationToken);
+        public Task<int> PurgeExpiredAsync(CancellationToken cancellationToken = default) => _inner.PurgeExpiredAsync(cancellationToken);
+    }
+
+    private sealed class BanStoreDownException(string message) : Exception(message);
+
+    /// <summary>Runs the handshake and one failed Ban-action scan over a host whose ban store is <paramref name="store"/>; the session is not yet awaited.</summary>
+    private static async Task<(WorldTestHost Host, WorldTestClient Client, WorldSession Session)> FailedBanScanAsync(GatedBanStore store, string account)
+    {
+        WorldTestHost host = WardenHostWith(_ => { }, services => services.AddSingleton<IBanStore>(store), o =>
+        {
+            o.ScanIntervalMinSeconds = 1;
+            o.ScanIntervalMaxSeconds = 1;
+            o.BanSeconds = 0;
+            o.Checks = [new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Memory, Address = 0x00401000, Expected = "90", Action = WardenAction.Ban }];
+        });
+        byte[] key = await host.AddAccountAsync(account);
+        WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync(account, key);
+        WorldSession session = host.Registry.Sessions.Single(s => s.AccountName.Equals(account, StringComparison.OrdinalIgnoreCase));
+        var warden = new Client(key);
+        Assert.Equal((byte)WardenServerCommand.ModuleUse, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write((byte)WardenClientCommand.ModuleOk));
+        Assert.Equal((byte)WardenServerCommand.HashRequest, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write([(byte)WardenClientCommand.HashResult, .. WardenModuleProfile.ClientKeySeedHash]));
+        warden.SwitchToModuleKeys();
+        Assert.Equal((byte)WardenServerCommand.ModuleInitialize, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        Assert.Equal((byte)WardenServerCommand.CheatChecksRequest, warden.Read(await client.ReadUntilAsync(WorldOpcode.SmsgWardenData))[0]);
+        await client.SendAsync(WorldOpcode.CmsgWardenData, warden.Write(CheckResultBody(0, 0x91)));
+        return (host, client, session);
+    }
+
+    [Fact]
+    public async Task ABanVerdict_ClosesTheSessionBeforeTheBanWriteCompletes()
+    {
+        var store = new GatedBanStore();
+        (WorldTestHost host, WorldTestClient client, WorldSession session) = await FailedBanScanAsync(store, "wardengate");
+        await using (host)
+        await using (client)
+        {
+            try
+            {
+                await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
+                await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the ban verdict closed the session while the ban write was still blocked");
+                Assert.Null(await store.GetActiveAccountBanAsync(session.AccountId)); // not written yet
+            }
+            finally
+            {
+                store.Release();
+            }
+
+            await host.WorldServices.GetRequiredService<WardenFeature>().StopAsync(); // waits for the write in flight
+            AccountBanRecord ban = Assert.IsType<AccountBanRecord>(await store.GetActiveAccountBanAsync(session.AccountId));
+            Assert.Equal(WardenFeature.BanAuthor, ban.BannedBy);
+            Assert.True(ban.IsPermanent);
+        }
+    }
+
+    [Fact]
+    public async Task ABanVerdict_StillKicks_WhenTheBanWriteFails_AndTheFailureIsRecorded()
+    {
+        var store = new GatedBanStore { FailOnRelease = new BanStoreDownException("ban store down (wardenfail)") };
+        (WorldTestHost host, WorldTestClient client, WorldSession session) = await FailedBanScanAsync(store, "wardenfail");
+        await using (host)
+        await using (client)
+        {
+            try
+            {
+                await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
+                await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session was kicked although the ban write has not failed yet");
+            }
+            finally
+            {
+                store.Release(); // the write now fails
+            }
+
+            await host.WorldServices.GetRequiredService<WardenFeature>().StopAsync();
+            Assert.Contains(ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot(),
+                s => s.Site == "warden.ban" && s.ExceptionType == typeof(BanStoreDownException).FullName);
+            Assert.Equal(SessionState.Closed, session.State);
+        }
     }
 
     [Fact]

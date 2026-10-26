@@ -11,8 +11,33 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Characters;
 
+// Stopping a host drains every open packet trace in the process (PacketCapture.DrainAll), so this class shares the capture tests' serial collection.
+[Collection(Net.PacketCaptureCollection.Name)]
 public sealed class WorldHostCharacterFencingTests
 {
+    [Fact]
+    public async Task Stop_SavesPlayersFirst_ThenDrainsALiveCapture()
+    {
+        await using TestKit kit = TestKit.Create(enabled: true);
+        await kit.Host.StartAsync(CancellationToken.None);
+        var stream = new MemoryStream();
+        var capture = new ArcaneCore.World.Net.PacketCapture(stream, "host-stop.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        bool captureOpenDuringSave = false;
+        kit.Store.SaveOverride = _ =>
+        {
+            captureOpenDuringSave = capture.IsOpen;
+            return Task.CompletedTask;
+        };
+        kit.SaveQueue.Enqueue(new CharacterState(1, 0, 12, 0, 0, 83.5f, 0, 1, 0));
+
+        await kit.Host.StopAsync(CancellationToken.None);
+
+        Assert.True(captureOpenDuringSave); // the player save ran while the diagnostics trace was still open
+        Assert.False(capture.IsOpen);
+        Assert.Equal(66 + 24 + 16, stream.ToArray().Length); // the stop waited until the queued record was on disk
+    }
+
     [Fact]
     public async Task ClaimsBeforeFeatureAttachmentAndReleasesAfterAHealthyDrain()
     {

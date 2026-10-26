@@ -32,6 +32,8 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
 {
     public const string BanAuthor = "Warden";
 
+    private static readonly TimeSpan PendingBanStopWait = TimeSpan.FromSeconds(5);
+
     private const string StaffPrefix = "|cffff4040[Warden]|r ";
 
     private readonly ConcurrentDictionary<WorldSession, Tracked> _sessions = new(ReferenceEqualityComparer.Instance);
@@ -87,7 +89,8 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
             Drive(session, tracked, static (w, _) => w.Flush(), 0u);
         }
 
-        return Task.CompletedTask;
+        Task[] bans = [.. _pendingBans.Keys];
+        return bans.Length == 0 ? Task.CompletedTask : Task.WhenAny(Task.WhenAll(bans), Task.Delay(PendingBanStopWait));
     }
 
     /// <summary>The scans new sessions run: the table's for build 5875 merged with <c>Warden:Checks</c>.</summary>
@@ -276,10 +279,12 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 break;
             case WardenAction.Ban:
                 Announce(session, action, reason, "Warden banned an account", AnnounceSeverity.Error);
-                int accountId = session.AccountId;
-                // Not inline: SQLite runs the async ban write synchronously, and this runs on the world tick. The kick follows the ban
-                // (it is posted back to the world thread once the write has committed or failed), so a reconnect cannot slip in before the ban exists.
-                _ = BanThenKickAsync(session, accountId, reason);
+                // The kick is immediate (vmangos Warden::ApplyPenalty): a banned client must not keep sending opcodes (trade, mail, auction)
+                // while the ban commits, which is unbounded when the database stalls. The write runs off this thread (SQLite completes the
+                // async write synchronously, and this can be the world tick); BanAsync records its failure. Limit: an instant reconnect can
+                // authenticate before the ban row exists (docs/areas/warden.md).
+                session.Kick();
+                StartBan(session.AccountId, reason);
                 break;
         }
     }
@@ -363,17 +368,15 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
         }
     }
 
-    private async Task BanThenKickAsync(WorldSession session, int accountId, string reason)
+    // Bans still writing; StopAsync waits (bounded) so a ban started just before shutdown is not abandoned with the process.
+    private readonly ConcurrentDictionary<Task, byte> _pendingBans = new();
+
+    private void StartBan(int accountId, string reason)
     {
-        await Task.Run(() => BanAsync(accountId, reason)).ConfigureAwait(false); // BanAsync records its own failures and never throws
-        if (_world is { } world)
-        {
-            world.Post(session.Kick);
-        }
-        else
-        {
-            session.Kick();
-        }
+        Task write = Task.Run(() => BanAsync(accountId, reason)); // BanAsync records its own failures and never throws
+        _pendingBans.TryAdd(write, 0);
+        _ = write.ContinueWith(static (done, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(done, out _), _pendingBans,
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     private async Task BanAsync(int accountId, string reason)
