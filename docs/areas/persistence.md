@@ -79,7 +79,7 @@ consecutive priority picks, then one ordinary pick if any is waiting). Ordering 
 
 `Quests:SettlementBudgetSeconds`, `Economy:SettlementBudgetSeconds` and `GameObjects:LootSettlementBudgetSeconds` (shipped **15 s**, valid
 1-300) bound one settlement end to end: the pre-reward save, the drains, the reward transaction. A settlement can meet up to three lock
-waits in a row, each typically one `Database:SqliteWriteTimeoutMs` (5 s; a write-gate wait gives up after that long without a hand-off, or after 20 s of active waiting at most, and the settlement's budget token ends any wait it is passed to sooner): an unrelated character's write already in flight on the queue's
+waits in a row, each typically one `Database:SqliteWriteTimeoutMs` (5 s; a write-gate wait gives up after that long without a hand-off, or after 20 s of active waiting at most (20 s is 4 x the characters database's 5 s bound; a connection with another bound caps at 4 x that bound, never beyond 30 s unless the bound is larger), and the settlement's budget token ends any wait it is passed to sooner): an unrelated character's write already in flight on the queue's
 one consumer (the priority lane cannot overtake a write that has started, and SQLite's busy wait cannot be cancelled), its own save, and
 the transaction. The budget used to be 5 s, equal to one write bound, so a single ordinary write sitting in the busy wait ahead of it used
 up the whole budget: on the live server on 2026-10-16 the settlement of character 3262 for quest 761 timed out at 23:54:09.424 with its
@@ -209,7 +209,7 @@ database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path
   write bound (`Database:SqliteWriteTimeoutMs` on the characters database; every hand-off to any waiter restarts that countdown, measured from the
   hand-off itself) or, as a hard cap, after four times the bound of active waiting (at most 30 s unless the bound itself is larger, so 20 s on the
   characters database). Time the whole process was suspended (GC pauses only) counts toward neither. A blocking (synchronous) waiter keeps the
-  single bound as its total. A caller's cancellation token or settlement budget supersedes all of these: it ends the wait it is passed to
+  single bound as its total (the only blocking write path today is `EfTransferDecisionStore.SeedCharacterOwnership`, which has no production caller; the startup honor maintenance read in `HonorFeature` blocks on async store calls with `GetAwaiter().GetResult()`, which take the async path, so on a contended characters database that startup step can block up to 20 s instead of 5 s). A caller's cancellation token or settlement budget supersedes all of these: it ends the wait it is passed to
   earlier, whatever the gate would still allow. A waiter that gives up then fails with SQLite's own busy error (code 5), so every existing "locked: retain and retry" path behaves as before; the
   message names the holder (context type, and the calling method when someone was queued behind it).
 - A hold older than 60 s (a transaction that was never ended) is released by the next waiter and logged at ERROR. That only

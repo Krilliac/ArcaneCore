@@ -140,7 +140,7 @@ public sealed class SqliteWriteGate
         try
         {
             ReleaseIfStuck(maxHoldMs);
-            WaitProgress progress = NewProgress(start);
+            WaitProgress progress = NewProgress();
             double left = Advance(ref progress, timeoutMs, timeoutMs);
             while (left > 0)
             {
@@ -169,7 +169,7 @@ public sealed class SqliteWriteGate
         try
         {
             ReleaseIfStuck(maxHoldMs);
-            WaitProgress progress = NewProgress(start);
+            WaitProgress progress = NewProgress();
             double capMs = HardCapMs(timeoutMs);
             double left = Advance(ref progress, timeoutMs, capMs);
             while (left > 0)
@@ -217,12 +217,18 @@ public sealed class SqliteWriteGate
         public long SeenHandoffs;
     }
 
-    private WaitProgress NewProgress(double startNow)
+    /// <summary>
+    /// The baseline of a wait. The suspension total is read first and the clock after it: a pause that lands between the two reads is then in the baseline clock but not in the
+    /// baseline total, which can only make the waiter patient for a moment longer. The other order would put the pause in the total only and charge it to the waiter for good.
+    /// (The wait's reported start, for WaitedMs, is the separate reading taken before queueing.)
+    /// </summary>
+    private WaitProgress NewProgress()
     {
         double paused = _clock.PausedMs;
+        double now = _clock.NowMs;
         long handoffs;
         lock (_queueLock) handoffs = _handoffs;
-        return new WaitProgress { StartNow = startNow, StartPaused = paused, ResetNow = startNow, ResetPaused = paused, SeenHandoffs = handoffs };
+        return new WaitProgress { StartNow = now, StartPaused = paused, ResetNow = now, ResetPaused = paused, SeenHandoffs = handoffs };
     }
 
     /// <summary>
@@ -232,6 +238,13 @@ public sealed class SqliteWriteGate
     /// </summary>
     private double Advance(ref WaitProgress progress, int timeoutMs, double capMs)
     {
+        // Clock first, then the suspension total: a pause that lands between the two reads is in the total but not yet in the clock, which makes active time look
+        // briefly shorter and is made good by the next look (the cumulative difference then includes it in both), never lost.
+        double now = _clock.NowMs;
+        double paused = _clock.PausedMs;
+
+        // The hand-off snapshot is taken after the clock, so a hand-off the waiter has been stalled behind is never missed by this look (one that happens after the clock
+        // read has a later time than 'now'; its idle time is clamped to zero).
         long handoffs;
         double handoffNow;
         double handoffPaused;
@@ -242,10 +255,6 @@ public sealed class SqliteWriteGate
             handoffPaused = _lastHandoffPausedMs;
         }
 
-        // Clock first, then the suspension total: a pause that lands between the two reads is in the total but not yet in the clock, which makes active time look
-        // briefly shorter and is made good by the next look (the cumulative difference then includes it in both), never lost.
-        double now = _clock.NowMs;
-        double paused = _clock.PausedMs;
         if (handoffs != progress.SeenHandoffs)
         {
             progress.SeenHandoffs = handoffs;
@@ -285,8 +294,8 @@ public sealed class SqliteWriteGate
         lock (_queueLock)
         {
             _handoffs++;
+            _lastHandoffPausedMs = _clock.PausedMs; // suspension total first, then the clock (see NewProgress)
             _lastHandoffMs = _clock.NowMs;
-            _lastHandoffPausedMs = _clock.PausedMs;
             LinkedListNode<Waiter>? head = _queue.First;
             if (head is null)
             {
@@ -358,7 +367,7 @@ public sealed class SqliteWriteGate
         string held;
         if (holder is not null)
         {
-            held = $"held {holder.HeldMs:0} ms by {holder.Owner}";
+            held = $"held {holder.HeldMs.ToString("0", CultureInfo.InvariantCulture)} ms by {holder.Owner}";
         }
         else
         {
@@ -366,7 +375,7 @@ public sealed class SqliteWriteGate
             double since = Volatile.Read(ref _pendingGrantSinceMs);
             held = double.IsNaN(since)
                 ? "no current holder"
-                : $"handed to a waiter {Math.Max(0, _clock.NowMs - since):0} ms ago, not yet resumed";
+                : $"handed to a waiter {Math.Max(0, _clock.NowMs - since).ToString("0", CultureInfo.InvariantCulture)} ms ago, not yet resumed";
         }
 
         return new SqliteException($"SQLite Error 5: 'database is locked' (in-process write gate: waited {waitedMs.ToString("0", CultureInfo.InvariantCulture)} ms for {System.IO.Path.GetFileName(Path)}; {held}; {Waiting} waiting)", 5);

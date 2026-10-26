@@ -32,6 +32,7 @@ public sealed class SqliteWriteGateProgressTests
         private long _reads; // guarded by _lock
         private int _suspendBetweenReads;
         private double _pauseBetweenReadsMs;
+        private int _pauseBetweenReadsThread; // 0: the watched writer flow; otherwise the managed thread that armed it
 
         /// <summary>How many times a watched flow has read <see cref="NowMs"/> (counted under the same lock that reads the time, so a read counted after a change saw it).</summary>
         public long Reads
@@ -42,10 +43,14 @@ public sealed class SqliteWriteGateProgressTests
             }
         }
 
-        /// <summary>The next <see cref="PausedMs"/> read of a watched flow first suspends the process for <paramref name="ms"/>: a pause landing between the waiter's two reads.</summary>
-        public void SuspendBetweenNextReads(double ms)
+        /// <summary>
+        /// The next <see cref="PausedMs"/> read by a watched flow (<paramref name="watchedFlow"/> true: the waiter) or by the calling thread (false: the releasing thread, which
+        /// must be the one that goes on to release the gate; queued links poll on their own threads) first suspends the process for <paramref name="ms"/>: a pause landing between that flow's reads of the clock and of the suspension total.
+        /// </summary>
+        public void SuspendBetweenNextReads(double ms, bool watchedFlow = true)
         {
             _pauseBetweenReadsMs = ms;
+            _pauseBetweenReadsThread = watchedFlow ? 0 : Environment.CurrentManagedThreadId;
             Volatile.Write(ref _suspendBetweenReads, 1);
         }
 
@@ -75,7 +80,7 @@ public sealed class SqliteWriteGateProgressTests
         {
             get
             {
-                if (WatchThisFlow.Value && Interlocked.CompareExchange(ref _suspendBetweenReads, 0, 1) == 1) Suspend(_pauseBetweenReadsMs);
+                if (Volatile.Read(ref _suspendBetweenReads) == 1 && (_pauseBetweenReadsThread == 0 ? WatchThisFlow.Value : Environment.CurrentManagedThreadId == _pauseBetweenReadsThread) && Interlocked.CompareExchange(ref _suspendBetweenReads, 0, 1) == 1) Suspend(_pauseBetweenReadsMs);
                 lock (_lock) return _paused;
             }
         }
@@ -333,15 +338,66 @@ public sealed class SqliteWriteGateProgressTests
 
         clock.Armed = true; // the writer's next look at the clock parks it
         Assert.True(clock.Parked.Wait(TimeSpan.FromSeconds(10)), "the writer never reached the clock");
-        first.Release(); // the gate moves to the link at clock time 0 ...
+        clock.Advance(600); // 600 ms pass before the hand-off: counted from the start of the wait, the writer would already be 1500 ms in
+        first.Release(); // the gate moves to the link at clock time 600 ...
         await chain[0].Acquired;
-        clock.Advance(1100); // ... and nothing moves for longer than the bound before the writer wakes up and first sees that hand-off
-        clock.Armed = false;
-        clock.Resume.Set();
+        clock.Advance(900); // ... and 900 ms later (under the bound) the parked writer wakes up and first sees that hand-off
+        Observe(clock, writer, () =>
+        {
+            clock.Armed = false;
+            clock.Resume.Set();
+        });
+        Assert.False(writer.IsCompleted, "idle time was measured from the start of the wait instead of from the hand-off (900 ms idle, under the bound)");
 
+        // 200 ms more: 1100 ms since the hand-off. A countdown restarted when the writer noticed the hand-off would be at 200 ms and keep waiting.
+        clock.Advance(200);
         SqliteWriteGate.GateEntry entry = await writer.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Null(entry.Hold); // measured from the hand-off: 1100 ms idle. Measured from noticing it, the writer would have restarted the countdown and kept waiting
+        Assert.Null(entry.Hold);
         chain[0].Release();
+        await chain[0].Done;
+    }
+
+    [Fact]
+    public async Task APauseAtTheStartOfAWait_BetweenTheTwoBaselineReads_IsNotChargedToTheWaiter()
+    {
+        var clock = new FakeClock();
+        SqliteWriteGate gate = NewGate(clock);
+        SqliteWriteGate.Hold holder = gate.Enter(0, "H", 0)!;
+        using ReleaseAtEnd releaseHolder = new(holder);
+        clock.SuspendBetweenNextReads(6000); // lands inside the waiter's baseline: after it began, before it has both readings
+        Task<SqliteWriteGate.GateEntry> writer = StartWriter(gate);
+        WaitUntilWaiting(gate, 1);
+        WaitUntil(() => clock.Reads >= 2, "the writer to be polling");
+
+        Observe(clock, writer, () => clock.Advance(100));
+        Observe(clock, writer, () => clock.Advance(100));
+        Assert.False(writer.IsCompleted, "a pause inside the baseline reads was charged to the waiter");
+
+        Observe(clock, writer, () => clock.Advance(1000)); // 1200 ms of real waiting: now it may give up
+        SqliteWriteGate.GateEntry entry = await writer.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(entry.Hold);
+    }
+
+    [Fact]
+    public async Task APauseAtAHandOff_BetweenTheTwoBaselineReads_IsNotChargedToTheWaiter()
+    {
+        var clock = new FakeClock();
+        SqliteWriteGate gate = NewGate(clock);
+        (SqliteWriteGate.Hold first, Link[] chain, Task<SqliteWriteGate.GateEntry> writer) = QueueBehind(gate, links: 1);
+        using ReleaseAtEnd releaseFirst = new(first);
+        WaitUntil(() => clock.Reads >= 2, "the writer to be polling");
+
+        clock.SuspendBetweenNextReads(6000, watchedFlow: false); // inside the releasing thread's reads of the hand-off time
+        first.Release();
+        await chain[0].Acquired;
+        Observe(clock, writer, () => clock.Advance(100));
+        Observe(clock, writer, () => clock.Advance(100));
+        Assert.False(writer.IsCompleted, "a pause inside the hand-off's reads was charged to the waiter as idle time");
+
+        chain[0].Release();
+        SqliteWriteGate.GateEntry entry = await writer.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.NotNull(entry.Hold);
+        entry.Hold.Release();
         await chain[0].Done;
     }
 
