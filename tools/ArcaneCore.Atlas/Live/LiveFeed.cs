@@ -282,7 +282,7 @@ public sealed class LiveFeed : IDisposable
     /// </summary>
     public async Task<JsonObject> SubscribeAsync(LiveSubscription subscription, CancellationToken cancellationToken)
     {
-        // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:215,223 (subscribe names one map/instance; unsubscribe names none)
+        // ref: ATLAS-2026-10-18.md:215,223 (subscribe names one map/instance; unsubscribe names none)
         // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/WorldMapFeed.cs:299,314 (a subscribe replaces the connection's previous one)
         ArgumentNullException.ThrowIfNull(subscription);
         ThrowIfDisposed();

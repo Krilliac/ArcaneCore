@@ -11,8 +11,8 @@ namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 /// </summary>
 internal static class ClientChunks
 {
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\loadlib.h:35-40 (isChunk compares the tag reversed)
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\loadlib.h:45-54 (file_MVER: tag, u32 size, u32 version)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/loadlib.h:35-40 (isChunk compares the tag reversed)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/loadlib.h:45-54 (file_MVER: tag, u32 size, u32 version)
     // ref: D:\WoW-RE-Research\formats\terrain-adt.md:24-29 (all three terrain file types use this container)
     public const int HeaderBytes = 8;
 

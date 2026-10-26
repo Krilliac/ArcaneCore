@@ -1,6 +1,6 @@
 """Compare the vmangos Chat.cpp command table with ArcaneCore's generated reference.
 
-Usage: python tools/gm-command-gap-report.py D:/refs/vmangos/src/game/Chat/Chat.cpp
+Usage: python tools/gm-command-gap-report.py <path-to-vmangos>/src/game/Chat/Chat.cpp
 The script reads the reference and prints Markdown to stdout; it never edits it.
 """
 
@@ -51,7 +51,7 @@ def main() -> None:
     absent = [(path, line) for path, line in vmangos if path not in ours]
     print("# vmangos GM command paths absent from ArcaneCore")
     print()
-    print("Exact path comparison of `D:/refs/vmangos/src/game/Chat/Chat.cpp`'s `ChatHandler::getCommandTable` "
+    print("Exact path comparison of `vmangos@0e3ff01 src/game/Chat/Chat.cpp`'s `ChatHandler::getCommandTable` "
           "against `docs/reference/gm-commands.md` on this worktree. Parent groups are included; "
           "an equivalent operation under another path is still listed. vmangos bot, debug, "
           "console and later-era extensions are included because they are in its table. "

@@ -29,11 +29,11 @@ public static class MpqCrypto
     public const uint HashKeyMix = 0x400;
 
     /// <summary>Key of the hash table: <c>HashString("(hash table)", HashFileKey)</c>.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:295 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq.c:223
+    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:295 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:223
     public const uint HashTableKey = 0xC3AF3770;
 
     /// <summary>Key of the block table: <c>HashString("(block table)", HashFileKey)</c>.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:296 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq.c:242
+    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:296 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:242
     public const uint BlockTableKey = 0xEC83B3A3;
 
     /// <summary>Number of 32-bit entries of the crypt table (five 0x100-entry rows).</summary>
@@ -132,7 +132,7 @@ public static class MpqCrypto
     private static uint[] BuildCryptTable()
     {
         // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:219-244 (InitializeMpqCryptography); the same table is the
-        // literal array in D:\refs\vmangos\dep\libmpq\libmpq\crypt_buf.h.
+        // literal array in vmangos@0e3ff01 dep/libmpq/libmpq/crypt_buf.h.
         var table = new uint[CryptTableSize];
         uint seed = 0x00100001;
         for (uint index1 = 0; index1 < 0x100; index1++)
@@ -156,7 +156,7 @@ public static class MpqCrypto
 public static class MpqFileFlags
 {
     /// <summary>Whole-file PKWARE DCL implode (<c>MPQ_FILE_IMPLODE</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:219 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq-internal.h:43
+    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:219 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:43
     public const uint Implode = 0x00000100;
 
     /// <summary>Per-sector compression with a leading method-mask byte (<c>MPQ_FILE_COMPRESS</c>).</summary>

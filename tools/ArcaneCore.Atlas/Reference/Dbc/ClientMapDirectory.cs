@@ -6,7 +6,7 @@ namespace ArcaneCore.Atlas.Reference.Dbc;
 /// Map and area names read from the client's <c>Map.dbc</c> and <c>AreaTable.dbc</c>. Immutable once loaded and thread-safe.
 /// </summary>
 /// <remarks>
-/// Column positions are the 1.12.1.5875 layouts of WoWDBDefs (D:\ArcaneCore-lanes\_refs\csharp-cores\WoWDBDefs\definitions\Map.dbd:151-168,
+/// Column positions are the 1.12.1.5875 layouts of WoWDBDefs (WoWDBDefs definitions/Map.dbd:151-168,
 /// AreaTable.dbd:99-112), confirmed by the field counts the loader insists on and by D:\WoW-RE-Research\formats\dbc.md:238-262.
 /// A table with another field count is refused rather than read with guessed columns.
 /// </remarks>
@@ -19,11 +19,11 @@ public sealed class ClientMapDirectory : IMapDirectory
     public const string AreaTablePath = "DBFilesClient\\AreaTable.dbc";
 
     /// <summary>Cells per Map.dbc row in build 5875: ID, Directory, InstanceType, MapType, 9 name cells, ... Unk4.</summary>
-    // ref: D:\ArcaneCore-lanes\_refs\csharp-cores\WoWDBDefs\definitions\Map.dbd:151-168 ; D:\ArcaneCore-data\client-dbc-5875\README.txt (Map.dbc 42 fields)
+    // ref: WoWDBDefs definitions/Map.dbd:151-168 ; client-dbc-5875 README.txt (Map.dbc 42 fields)
     public const int MapFieldCount = 42;
 
     /// <summary>Cells per AreaTable.dbc row in build 5875: ID ... AreaName (9 cells), FactionGroupMask, LiquidTypeID[4].</summary>
-    // ref: D:\ArcaneCore-lanes\_refs\csharp-cores\WoWDBDefs\definitions\AreaTable.dbd:99-112 ; D:\ArcaneCore-data\client-dbc-5875\README.txt (AreaTable.dbc 25 fields)
+    // ref: WoWDBDefs definitions/AreaTable.dbd:99-112 ; client-dbc-5875 README.txt (AreaTable.dbc 25 fields)
     public const int AreaFieldCount = 25;
 
     // Map.dbc columns (ref: Map.dbd:151-157).

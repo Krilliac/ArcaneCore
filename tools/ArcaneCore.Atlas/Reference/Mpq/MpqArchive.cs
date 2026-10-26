@@ -96,7 +96,7 @@ public readonly record struct MpqEntry(int HashIndex, uint BlockIndex, ushort Lo
 public sealed class MpqArchive : IDisposable
 {
     /// <summary>Hash entry that never held a file; terminates a search.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:172 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq-internal.h:50
+    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:172 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:50
     public const uint HashEntryFree = 0xFFFFFFFF;
 
     /// <summary>Hash entry that held a file once; does not terminate a search.</summary>
@@ -468,7 +468,7 @@ public sealed class MpqArchive : IDisposable
         int sectorCount = (result.Length + sectorSize - 1) / sectorSize;
 
         // The sector offset table: sectorCount + 1 little-endian offsets, plus one more dword when the file has checksums.
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1242-1251,1277-1305 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq.c:627-642,705
+        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1242-1251,1277-1305 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:627-642,705
         int tableBytes = (sectorCount + 1) * 4;
         int readBytes = tableBytes + ((block.Flags & MpqFileFlags.SectorCrc) != 0 ? 4 : 0);
         byte[] tableRaw = new byte[readBytes];
@@ -694,7 +694,7 @@ public sealed class MpqArchive : IDisposable
 
     private static MpqHeader ParseHeader(ReadOnlySpan<byte> h, long position, long length, MpqUserData? userData, string name)
     {
-        // Layout: ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:538-576 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq-internal.h:67-84
+        // Layout: ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:538-576 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:67-84
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(h[4..]);
         uint archiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h[8..]);
         ushort version = BinaryPrimitives.ReadUInt16LittleEndian(h[12..]);

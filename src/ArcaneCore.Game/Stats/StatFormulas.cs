@@ -56,7 +56,7 @@ public readonly record struct DamageRange(float Min, float Max);
 
 /// <summary>
 /// Pure vanilla player stat and combat-stat formulas, reimplemented from the behaviour of
-/// vmangos/core 4b3d241 (D:\refs\vmangos\src\game). Nothing here reads or writes an entity; the
+/// vmangos/core 4b3d241 (vmangos@0e3ff01 src/game). Nothing here reads or writes an entity; the
 /// player stat system feeds in the modifier groups and applies the results. No reference code is
 /// copied. Float arithmetic mirrors the reference's float and int conversions so results agree
 /// bit for bit where the reference is deterministic.

@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Tests.Gm.Core;
 
 /// <summary>
 /// The additive GM-command plumbing: retail command levels with a configurable
-/// AccountSecurity map (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146),
+/// AccountSecurity map (vmangos AccountTypes, vmangos@0e3ff01 src/shared/Common.h:136-146),
 /// extension merging into shared roots, the GM command log and the HasLowerSecurity port
 /// (Chat.cpp:1521-1563). None of it changes how a command declared with only an
 /// <see cref="AccountSecurity"/> behaves.

@@ -94,12 +94,12 @@ public sealed class ClientMapDirectoryTests(ITestOutputHelper output)
             output.WriteLine($"  {map.Id,4} {map.InstanceType} {map.Directory} / {map.Name}");
         }
 
-        // Record counts printed by an independent reader (D:\ArcaneCore-data\client-dbc-5875\README.txt:26,104).
+        // Record counts printed by an independent reader (client-dbc-5875 README.txt:26,104).
         Assert.Equal(44, directory.Maps.Count);
         Assert.Equal(1081, directory.AreaCount);
         Assert.Equal("patch-2.MPQ", files.ArchiveOf(ClientMapDirectory.MapTablePath));
 
-        // Instance types are vmangos's MapTypes (D:\refs\vmangos\src\game\Database\DBCEnums.h:143-149): 0..3 only.
+        // Instance types are vmangos's MapTypes (vmangos@0e3ff01 src/game/Database/DBCEnums.h:143-149): 0..3 only.
         Assert.All(directory.Maps, m => Assert.InRange(m.InstanceType, 0u, 3u));
         Assert.True(directory.TryGetMap(0, out ClientMap azeroth));
         Assert.Equal("Azeroth", azeroth.Directory);

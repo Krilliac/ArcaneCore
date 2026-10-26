@@ -56,8 +56,8 @@ public readonly record struct LiquidSample(
 /// </remarks>
 public static class AdtGeometry
 {
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:411-452 (chunk i, j and sample y, x fill V9[i*8+y][j*8+x] and V8 the same way)
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:24-26 (TILESIZE 533.33333, CHUNKSIZE = TILESIZE / 16, UNITSIZE = CHUNKSIZE / 8)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:411-452 (chunk i, j and sample y, x fill V9[i*8+y][j*8+x] and V8 the same way)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:24-26 (TILESIZE 533.33333, CHUNKSIZE = TILESIZE / 16, UNITSIZE = CHUNKSIZE / 8)
     // ref: D:\WoW-RE-Research\formats\terrain-adt.md:372-386 (samples walk south = decreasing X and east = decreasing Y by UNIT_SIZE)
     // ref: D:\New folder\Worldforge\src\coords.hpp:60-68 (chunk corner = (32 - block) * TILE - index * CHUNK per axis)
     // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:399-407 (server row = (int)(128 * (32 - x / G)), column the same from y)
@@ -133,7 +133,7 @@ public static class AdtGeometry
         }
 
         // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:414-456 (h5 = 2 * centre; four planes a * x + b * y + c)
-        // ref: D:\refs\vmangos\src\game\Maps\GridMap.cpp:286-437 (GridMap::getHeightFromFloat, the original; isHole at :274-284)
+        // ref: vmangos@0e3ff01 src/game/Maps/GridMap.cpp:286-437 (GridMap::getHeightFromFloat, the original; isHole at :274-284)
         double h5 = 2.0 * chunk.InnerHeight(localRow, localColumn);
         double a;
         double b;

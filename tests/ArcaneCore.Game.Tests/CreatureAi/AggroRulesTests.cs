@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Tests.CreatureAi;
 /// <summary>
 /// vmangos proximity aggro: the detection-range formula, plain distances, the vertical limit, the react states, the
 /// post-respawn pacify, the AI relocation notify that drives it, and SMSG_AI_REACTION. Expected values come from the
-/// vmangos code cited on each test (D:\refs\vmangos\src\game), not from the previous implementation.
+/// vmangos code cited on each test (vmangos@0e3ff01 src/game), not from the previous implementation.
 /// </summary>
 public sealed class AggroRulesTests
 {

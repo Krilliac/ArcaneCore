@@ -179,7 +179,7 @@ public sealed class ClientTerrainService
             return new AdtLoad(wdt.State, wdt.Detail, null, null, null);
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:857-858 (the extractor converts only the tiles MAIN lists)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:857-858 (the extractor converts only the tiles MAIN lists)
         if (!wdtFile.HasTile(tile.X, tile.Y))
         {
             return new AdtLoad(TileState.Missing, $"The WDT of {map.Directory} does not list tile ({tile.X}, {tile.Y}); the client never loads it.", null, null, null);

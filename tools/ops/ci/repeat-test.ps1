@@ -1,13 +1,13 @@
 # Flake hunter: builds a test project once, then runs a filtered test selection N times with `dotnet test --no-build` and counts
 # pass/fail PER TEST FROM THE TRX XML, never from console text (a console-scraping loop once reported "failed=0" over a failed run).
-#   pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.World.Tests -Filter "FullyQualifiedName~Siege" -Runs 20 [-Load 8] [-Parallel -Concurrency 4] [-StopOnFirstFailure] [-OutDir <dir>] [-Slot]
+#   pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.World.Tests -Filter "FullyQualifiedName~Siege" -Runs 20 [-Load 8] [-Parallel -Concurrency 4] [-StopOnFirstFailure] [-OutDir <dir>] [-Slot [-LanesRoot <dir>]]
 # - A run is ERROR (never a pass) when its TRX is missing or unreadable, when it executed 0 tests (the filter matched nothing, or every
 #   match was skipped), when dotnet exited non-zero although no test failed (host crash, aborted run), or on timeout.
 # - -Load N starts N CPU burner processes for the whole session. Only processes this script started are tracked and killed (process tree),
 #   in a finally block, so Ctrl+C and failures clean up. A burner also exits by itself when this script's process is gone.
 # - -Parallel runs up to -Concurrency dotnet test processes at once (the tests themselves load the machine). Tests that bind fixed ports
 #   or share files will collide; use it for tests that are isolated.
-# - -Slot wraps each run in D:\ArcaneCore-lanes\tools\run-in-slot.ps1 (the fleet's build-slot cap) when that file exists; else runs directly.
+# - -Slot wraps each run in the fleet's run-in-slot.ps1 (the fleet's build-slot cap) when that file exists; else runs directly.
 # - Each run gets ARCANECORE_REPEAT_RUN_INDEX=<n> (1-based) in its environment, so a test can vary its seed per run.
 # - Writes <OutDir>\summary.json plus per-run run-NNNN\ (TRX, stdout.txt, stderr.txt). Last line: `runs=N ok=A failed=B error=C`.
 # Exit code: 0 = every run executed tests and none failed; 1 = a test failed (and no run was ERROR); 2 = any run was ERROR or the build failed.
@@ -21,6 +21,7 @@ param(
     [switch]$StopOnFirstFailure,
     [string]$OutDir,
     [switch]$Slot,
+    [string]$LanesRoot,
     [string]$Configuration = 'Debug',
     [ValidateRange(1, 1440)] [int]$TimeoutMin = 30
 )
@@ -47,8 +48,9 @@ $dotnetRoot = $env:DOTNET_ROOT
 $dotnet = if ($dotnetRoot -and (Test-Path (Join-Path $dotnetRoot 'dotnet.exe'))) { Join-Path $dotnetRoot 'dotnet.exe' }
           elseif ($dotnetRoot -and (Test-Path (Join-Path $dotnetRoot 'dotnet'))) { Join-Path $dotnetRoot 'dotnet' }
           else { 'dotnet' }
-$slotScript = 'D:\ArcaneCore-lanes\tools\run-in-slot.ps1'
-$useSlot = $Slot.IsPresent -and (Test-Path -LiteralPath $slotScript)
+if (-not $LanesRoot) { $LanesRoot = $env:ARCANECORE_LANES_ROOT }
+$slotScript = if ($LanesRoot) { Join-Path $LanesRoot 'tools\run-in-slot.ps1' } else { '' }
+$useSlot = $Slot.IsPresent -and $slotScript -and (Test-Path -LiteralPath $slotScript)
 if ($Slot -and -not $useSlot) { Write-Warning "-Slot requested but $slotScript does not exist; running dotnet directly." }
 $concurrency = if ($Parallel) { $Concurrency } else { 1 }
 $pwshPath = (Get-Process -Id $PID).Path

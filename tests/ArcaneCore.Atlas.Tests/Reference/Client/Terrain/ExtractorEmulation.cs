@@ -14,10 +14,10 @@ internal static class ExtractorEmulation
     public const int Squares = 128;
 
     /// <summary>Extractor <c>CONF_use_minHeight</c>.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:92 (CONF_use_minHeight = -500.0f)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:92 (CONF_use_minHeight = -500.0f)
     public const float MinHeight = -500f;
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:286-300 (liquid layer order, LiquidType.dbc entry and map type flag)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:286-300 (liquid layer order, LiquidType.dbc entry and map type flag)
     private static readonly (AdtLiquidKind Kind, ushort Entry, byte MapFlag)[] LayerTypes =
     [
         (AdtLiquidKind.River, 1, 8),
@@ -27,7 +27,7 @@ internal static class ExtractorEmulation
     ];
 
     /// <summary>The 129 x 129 corner grid and 128 x 128 centre grid with the extractor's last-writer-wins rule, unclamped.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:410-454 (chunk i, j writes V9[i*8+y][j*8+x] for y, x in 0..8; later chunks overwrite)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:410-454 (chunk i, j writes V9[i*8+y][j*8+x] for y, x in 0..8; later chunks overwrite)
     public static (float[] V9, float[] V8) RawHeights(AdtFile adt)
     {
         var v9 = new float[(Squares + 1) * (Squares + 1)];
@@ -59,7 +59,7 @@ internal static class ExtractorEmulation
     }
 
     /// <summary>Lowest and highest sample over both grids.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:456-477
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:456-477
     public static (float Min, float Max) Range(float[] v9, float[] v8)
     {
         float min = 20000f;
@@ -80,7 +80,7 @@ internal static class ExtractorEmulation
     }
 
     /// <summary>Clamps every sample below <see cref="MinHeight"/> to it when the lowest sample is below it; returns whether it did.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:479-494 (CONF_allow_height_limit is on by default, System.cpp:91)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:479-494 (CONF_allow_height_limit is on by default, System.cpp:91)
     public static bool ClampLow(float[] v9, float[] v8, ref float min, ref float max)
     {
         if (!(min < MinHeight))
@@ -133,7 +133,7 @@ internal static class ExtractorEmulation
         int StackedChunks);
 
     /// <summary>Merges an ADT's liquid layers the way the extractor does and packs the result the way it stores it.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:557-741
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:557-741
     public static LiquidModel Liquid(AdtFile adt)
     {
         const int vertices = Squares + 1;
@@ -262,7 +262,7 @@ internal static class ExtractorEmulation
                 else
                 {
                     // A vertex some shown square read, whose own square is hidden: the extractor writes the floor over it.
-                    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:703-706
+                    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:703-706
                     resetVertices += grid[at] != MinHeight ? 1 : 0;
                     grid[at] = MinHeight;
                     minLevel = Math.Min(minLevel, MinHeight);
@@ -270,7 +270,7 @@ internal static class ExtractorEmulation
             }
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:716-720 (offset = first shown square, width and height count the closing vertex)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:716-720 (offset = first shown square, width and height count the closing vertex)
         return new LiquidModel(
             HasLiquid: true,
             NoType: !fullType,

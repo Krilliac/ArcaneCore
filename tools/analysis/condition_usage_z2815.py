@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Count ClassicDB condition rows and nonzero references without copying dump data.
 
-Usage: py -3 tools/analysis/condition_usage_z2815.py D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz
+Usage: py -3 tools/analysis/condition_usage_z2815.py <path-to>/ClassicDB_1_12_1_z2815.sql.gz
 Only condition_id and quest_template.RequiredCondition name the conditions table.
 combat_condition.*ConditionID and creature_spell_targeting.UnitCondition name other tables.
 """

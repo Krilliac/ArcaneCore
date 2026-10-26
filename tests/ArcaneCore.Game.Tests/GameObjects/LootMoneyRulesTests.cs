@@ -5,7 +5,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.GameObjects;
 
 /// <summary>
-/// LootMoneyRules ports vmangos Loot::GenerateMoneyLoot (D:\refs\vmangos\src\game\LootMgr.cpp:735-746).
+/// LootMoneyRules ports vmangos Loot::GenerateMoneyLoot (vmangos@0e3ff01 src/game/LootMgr.cpp:735-746).
 /// Fixtures use real classic-db creature gold ranges (Onyxia 937551..1273511, a max&lt;min row).
 /// </summary>
 public sealed class LootMoneyRulesTests

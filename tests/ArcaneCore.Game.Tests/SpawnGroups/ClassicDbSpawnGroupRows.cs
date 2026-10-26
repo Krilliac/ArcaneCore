@@ -3,7 +3,7 @@ using ArcaneCore.Kernel.WorldData.SpawnGroups;
 namespace ArcaneCore.Game.Tests.SpawnGroups;
 
 /// <summary>
-/// cmangos spawn groups and alternative entries as classic-db 1.12.1 z2815 (D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz) has
+/// cmangos spawn groups and alternative entries as classic-db 1.12.1 z2815 (classic-db Full_DB/ClassicDB_1_12_1_z2815.sql.gz) has
 /// them: the group, member, entry and flag values are the dump's rows; the members' positions are moved next to the test player (the
 /// dump's are hundreds of yards apart, outside the test map's loaded grid), keeping their order. The dump is GPL data and is not
 /// committed; these few values are fixtures, as the other real-row tests keep theirs.

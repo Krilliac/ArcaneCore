@@ -56,10 +56,10 @@ public sealed record AdtWmoObject(
 /// <summary>Readers for the two placement tables.</summary>
 internal static class AdtPlacements
 {
-    // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\adtfile.cpp:209 (MDDF entries are size / 36)
+    // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/adtfile.cpp:209 (MDDF entries are size / 36)
     public const int DoodadBytes = 36;
 
-    // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\adtfile.cpp:222 and wdtfile.cpp:97 (MODF entries are size / 64)
+    // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/adtfile.cpp:222 and wdtfile.cpp:97 (MODF entries are size / 64)
     public const int WmoBytes = 64;
 
     /// <summary>
@@ -78,8 +78,8 @@ internal static class AdtPlacements
         var result = new List<AdtDoodad>(mddf.Length / DoodadBytes);
         for (int offset = 0; offset < mddf.Length; offset += DoodadBytes)
         {
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\model.cpp:155 id, :156-157 position, :158-159 rotation,
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\model.cpp:162 scale (u16), :163 flags (u16), :166 scale / 1024
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/model.cpp:155 id, :156-157 position, :158-159 rotation,
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/model.cpp:162 scale (u16), :163 flags (u16), :166 scale / 1024
             // ref: D:\WoW-RE-Research\formats\terrain-adt.md:160-170 (MDDF layout)
             uint index = ClientChunks.U32(mddf, offset);
             if (index >= (uint)paths.Count)
@@ -117,9 +117,9 @@ internal static class AdtPlacements
         var result = new List<AdtWmoObject>(modf.Length / WmoBytes);
         for (int offset = 0; offset < modf.Length; offset += WmoBytes)
         {
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\wmo.cpp:544 unique id, :545-546 position, :547-548 rotation,
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\wmo.cpp:549-550 bounds.min, :551-552 bounds.max, :553 flags,
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\wmo.cpp:554 doodad set, :556-557 name set and padding
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:544 unique id, :545-546 position, :547-548 rotation,
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:549-550 bounds.min, :551-552 bounds.max, :553 flags,
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:554 doodad set, :556-557 name set and padding
             // ref: D:\WoW-RE-Research\formats\terrain-adt.md:172-190 (MODF layout; extent order flagged as unconfirmed there)
             uint index = ClientChunks.U32(modf, offset);
             if (index >= (uint)paths.Count)

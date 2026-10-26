@@ -112,7 +112,7 @@ internal static class RefNavLinkGeometry
 
         // The portal is the part of the source polygon's edge the link covers: bmin and bmax are its ends as fractions of the edge from
         // vertex `edge` to the next, scaled to 0-255 (DotRecast writes them in ConnectExtLinks, DtNavMeshQuery.GetPortalPoints reads them).
-        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:424-445 (connectExtLinks: side = dir, bmin/bmax =
+        // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:424-445 (connectExtLinks: side = dir, bmin/bmax =
         // clamp(t, 0, 1) * 255) and tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:728-763 (the same in DotRecast).
         WorldPoint a = NavGeometry.ToWorld(tile.data.verts, source.verts[edge]);
         WorldPoint b = NavGeometry.ToWorld(tile.data.verts, source.verts[(edge + 1) % source.vertCount]);

@@ -5,9 +5,9 @@ namespace ArcaneCore.Game.Tests.Economy;
 
 /// <summary>
 /// Deposit and cut arithmetic against vmangos single-precision math
-/// (D:\refs\vmangos\src\game\AuctionHouse\AuctionHouseMgr.cpp:98-110 GetAuctionDeposit, :845-848 GetAuctionCut).
+/// (vmangos@0e3ff01 src/game/AuctionHouse/AuctionHouseMgr.cpp:98-110 GetAuctionDeposit, :845-848 GetAuctionCut).
 /// Expected values were computed with float32 operations in the vmangos order from item_template SellPrice rows of
-/// D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz; integer math differs by 1 copper in these rows.
+/// classic-db Full_DB\ClassicDB_1_12_1_z2815.sql.gz; integer math differs by 1 copper in these rows.
 /// </summary>
 public sealed class AuctionFormulaTests
 {

@@ -9,17 +9,17 @@ namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 public sealed class WdtFile
 {
     /// <summary>MVER value of every 1.12.1 WDT.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\loadlib.h:33 and loadlib.cpp:52-55 (the same FILE_FORMAT_VERSION 18 check)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/loadlib.h:33 and loadlib.cpp:52-55 (the same FILE_FORMAT_VERSION 18 check)
     public const uint FormatVersion = 18;
 
     /// <summary>MPHD flag: the map has no terrain and is one global WMO.</summary>
     // ref: D:\WoW-RE-Research\formats\terrain-adt.md:68-71 (MPHD flag 0x0001 = global WMO)
     public const uint GlobalWmoFlag = 0x1;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\wdt.h:40-59 (MPHD: eight u32; the first is the flag word)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/wdt.h:40-59 (MPHD: eight u32; the first is the flag word)
     private const int MphdBytes = 32;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\wdt.h:61-78 (MAIN: adt_list[64][64] of {u32 exist, u32 data1})
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/wdt.h:61-78 (MAIN: adt_list[64][64] of {u32 exist, u32 data1})
     private const int MainBytes = 64 * 64 * 8;
 
     private readonly uint[] _main;
@@ -65,7 +65,7 @@ public sealed class WdtFile
             return false;
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:857-861 (adt_list[y][x] names file _x_y and the server tile (y, x))
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:857-861 (adt_list[y][x] names file _x_y and the server tile (y, x))
         // ref: D:\WoW-RE-Research\formats\terrain-adt.md:87-90 (row-major, y outer then x inner)
         return (_main[(tileX * WorldGrid.TilesPerSide) + tileY] & 1) != 0;
     }
@@ -106,7 +106,7 @@ public sealed class WdtFile
 
         List<ClientChunks.Chunk> chunks = ClientChunks.Walk(data, 0, context);
 
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\wdt.cpp:47-63 (MVER, MPHD, MAIN, MWMO follow each other)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/wdt.cpp:47-63 (MVER, MPHD, MAIN, MWMO follow each other)
         ClientChunks.Chunk mver = chunks.Count > 0 && chunks[0].Id == "MVER"
             ? chunks[0]
             : throw new InvalidDataException($"{context}: the first chunk is not MVER.");
@@ -144,7 +144,7 @@ public sealed class WdtFile
         AdtWmoObject[] objects = [];
         if (chunks.Any(c => c.Id == "MODF"))
         {
-            // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\wdtfile.cpp:92-108 (a WDT MODF entry's id is the ordinal of its name in MWMO)
+            // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wdtfile.cpp:92-108 (a WDT MODF entry's id is the ordinal of its name in MWMO)
             // ref: D:\WoW-RE-Research\formats\terrain-adt.md:61 (the WDT MODF has the same 64-byte layout as the ADT one)
             ClientChunks.Chunk modf = Single(chunks, "MODF", context);
             objects = [.. AdtPlacements.ReadWmoObjects(data.Slice(modf.DataStart, modf.Size), names, context)];
