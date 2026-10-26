@@ -56,10 +56,15 @@ public sealed partial class SummonService
             done.SetResult();
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pet.stable", ex);
-            AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
+            if (ex is not OperationCanceledException)
+            {
+                FaultLedger.Shared.Record("pet.stable", ex);
+                AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
+                _logger.LogFault("pet-stable", ex, "persistent pet stable write failed for character {CharacterId}", characterId);
+            }
+
             done.SetException(ex);
             throw;
         }

@@ -317,6 +317,14 @@ public sealed class PetStableTests
         Assert.False(hunter.PetGuid.IsEmpty);
         Assert.Empty(store.Stabled);
 
+        // Let the stable's load and write run as far as they can while the save is still gated: they must still be waiting behind it.
+        await Task.Delay(200);
+        await pump.UntilAsync(() => true);
+        lock (log) Assert.Equal(["save-begin"], log);
+        Assert.Empty(store.Stabled);
+        Assert.Equal([StableResult.ErrStable], Results(session));
+        Assert.False(hunter.PetGuid.IsEmpty);
+
         gate.SetResult();
         await pump.UntilAsync(() => Results(session).Count == 2);
 
@@ -368,6 +376,53 @@ public sealed class PetStableTests
         await kit.Service.StopAsync().WaitAsync(HangBound);
 
         Assert.Equal(0, Volatile.Read(ref deletesAfterRecovery));
+        Assert.NotNull(store.Current);
+        Assert.True(kit.Service.TryGetCachedCurrentPet(hunter, out PersistentPetSnapshot cached));
+        Assert.Equal(500u, cached.PetNumber);
+    }
+
+    [Fact]
+    public async Task FailedAbandonDelete_RetryQueuedByABarrier_DoesNotDeleteThePetAnUnstableWroteMeanwhile()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 1);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        PersistentPetSnapshot dead = new(1, 500, BeastEntry, 20, 0, 0, 0, 0, 1, [], []);
+        store.Stabled[1] = dead with { IsCurrent = false };
+        stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null); // the unstable below must queue its write at once, not behind a load
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        int deletesThatSucceeded = 0;
+        kit.Service.DeletePersistence = async (_, _) =>
+        {
+            int call = Interlocked.Increment(ref calls);
+            entered.TrySetResult();
+            await release.Task.ConfigureAwait(false);
+            if (call <= 3) throw new IOException("database is locked"); // the abandon delete exhausts its three attempts
+            Interlocked.Increment(ref deletesThatSucceeded);
+            store.Current = null;
+        };
+
+        Creature abandoned = Tame(kit, hunter);
+        kit.Service.QueueDeletePet(hunter); // D: in flight, will fail
+        kit.Service.Unsummon(abandoned);
+        await entered.Task.WaitAsync(HangBound);
+        Task barrier = kit.Service.FlushCharacterAsync(1); // captures D as the tail, then retries the delete once D has failed
+
+        session.Clear();
+        stable.HandleUnstable(hunter, StableMaster, 500); // U: queued behind D, and behind nothing the barrier sees
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgStableResult);
+
+        release.SetResult();
+        await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgStableResult) && barrier.IsCompleted);
+        await barrier.WaitAsync(HangBound);
+        await kit.Service.StopAsync().WaitAsync(HangBound);
+
+        Assert.Equal(StableResult.SuccessUnstable, LastResult(session));
+        Assert.Equal(0, Volatile.Read(ref deletesThatSucceeded));
         Assert.NotNull(store.Current);
         Assert.True(kit.Service.TryGetCachedCurrentPet(hunter, out PersistentPetSnapshot cached));
         Assert.Equal(500u, cached.PetNumber);

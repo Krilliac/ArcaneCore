@@ -154,10 +154,15 @@ public sealed partial class SummonService
             prior = _saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask;
             _saveTails[characterId] = done.Task;
         }
-        _ = Task.Run(() => DeleteQueuedAsync(characterId, prior, done)); // the store call never runs on the calling (world/map) thread
+        _ = Task.Run(() => DeleteQueuedAsync(characterId, prior, done, retry: false)); // the store call never runs on the calling (world/map) thread
     }
 
-    private async Task DeleteQueuedAsync(int characterId, Task prior, TaskCompletionSource done)
+    /// <param name="retry">
+    /// True for a barrier's retry of a failed abandon delete. A write queued ahead of it (a stable, an unstable, a tame save) may have replaced the
+    /// character_pet row, which cancels the owed delete; the retry then completes without touching the store. A first-time abandon delete
+    /// always runs.
+    /// </param>
+    private async Task DeleteQueuedAsync(int characterId, Task prior, TaskCompletionSource done, bool retry)
     {
         try
         {
@@ -170,6 +175,17 @@ public sealed partial class SummonService
                 FaultLedger.Shared.Record("pet.persistence", ex);
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
                 _logger.LogWarning(ex, "previous persistent pet write failed for character {CharacterId}; continuing with abandon delete", characterId);
+            }
+
+            if (retry)
+            {
+                bool stillOwed;
+                lock (_cacheGate) stillOwed = _failedDeletes.Contains(characterId);
+                if (!stillOwed)
+                {
+                    done.SetResult(); // an earlier queued write replaced the row this delete was owed for
+                    return;
+                }
             }
 
             for (int attempt = 1; ; attempt++)
@@ -227,7 +243,7 @@ public sealed partial class SummonService
             _saveTails[characterId] = done.Task;
         }
         _logger.LogInformation("retrying failed persistent pet delete for character {CharacterId}", characterId);
-        _ = Task.Run(() => DeleteQueuedAsync(characterId, prior, done));
+        _ = Task.Run(() => DeleteQueuedAsync(characterId, prior, done, retry: true));
         return done.Task;
     }
 
