@@ -17,9 +17,9 @@ using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
-/// Expiry, return and delete of letters against vmangos: D:\refs\vmangos\src\game\ObjectMgr.cpp:6995-7044
+/// Expiry, return and delete of letters against vmangos: vmangos@0e3ff01 src/game/ObjectMgr.cpp:6995-7044
 /// (ReturnOrDeleteOldMails: only letters with an item are returned, COD payments and returned letters are deleted),
-/// D:\refs\vmangos\src\game\Handlers\MailHandler.cpp:469-491 (delete refuses only COD letters).
+/// vmangos@0e3ff01 src/game/Handlers/MailHandler.cpp:469-491 (delete refuses only COD letters).
 /// Only SQLite is exercised here; the settlement shapes are the existing DeleteMail/DeleteEscrowItem/InsertMail changes.
 /// </summary>
 public sealed class EconomyMailExpiryParityTests

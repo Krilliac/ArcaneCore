@@ -10204,7 +10204,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "How far beyond `GridActivationDistance` a player looks for grids that do not exist yet, so their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created (`GridContainer.GridApproaching`); other objects, active ones included, look half this distance around themselves. 0 turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside the update): it changes when the files are read, not what is loaded or when.",
+      "meaning": "How far beyond `GridActivationDistance` a player looks for grids that do not exist yet, so their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created (`GridContainer.GridApproaching`); other objects, active ones included, look half this distance around themselves. 0 turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside the update): it changes when the files are read, not what is loaded or when. It also turns off the arrival prefetch (the tiles of a teleport's destination are read when the teleport starts), which has a budget of its own so it never evicts the approach prefetches.",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#world",
       "isCollection": false
@@ -13334,7 +13334,7 @@
       ],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The retail account level (vmangos AccountTypes, D:\\refs\\vmangos\\src\\shared\\Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4).",
+      "meaning": "The retail account level (vmangos AccountTypes, vmangos@0e3ff01 src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4).",
       "allowed": "a map: one key per entry name; each value is a whole number, 0 to 255",
       "docs": "docs/reference/configuration.md#worldgmcommands",
       "isCollection": true
@@ -16784,6 +16784,22 @@
       "reload": "live",
       "meaning": "Seconds a bot leaves a mob alone after it found it to be someone else's (1..600), and the least between two decisions about the same mob.",
       "allowed": "a whole number from 1 to 600 (seconds)",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:CutRegionMaxPolygons",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "5000",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps. Bots only; no retail behaviour depends on it.",
+      "allowed": "a whole number from 0 to 1000000 (0: no region is exempt)",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
@@ -23734,7 +23750,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "Seconds before an offline group leader yields to an online member. Zero disables the handoff. D:\\refs\\vmangos\\src\\game\\World.cpp:811,2063-2072 defaults to 300 seconds.",
+      "meaning": "Seconds before an offline group leader yields to an online member. Zero disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072 defaults to 300 seconds.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false

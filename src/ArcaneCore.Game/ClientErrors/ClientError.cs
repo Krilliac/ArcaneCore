@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.ClientErrors;
 /// One typed way to tell a player "the server failed". The player gets the client's own generic failure text for
 /// the action they were doing. The real cause goes to the log and to <see cref="FaultLedger.Shared"/>, never to the
 /// client. The packet for each context was checked against the 1.12.1 client binary (docs/areas/client-errors.md,
-/// D:/WoW-RE-Research/protocol/client-error-codes.md):
+/// WoW-RE-Research protocol/client-error-codes.md):
 /// <list type="table">
 /// <item><term><see cref="ClientErrorKind.SpellCast"/></term><description>SMSG_CAST_RESULT, result 0x1C SPELL_FAILED_ERROR: red "Internal error".</description></item>
 /// <item><term><see cref="ClientErrorKind.ItemMove"/></term><description>SMSG_INVENTORY_CHANGE_FAILURE 40 ERR_INTERNAL_BAG_ERROR: red "Internal Bag Error".</description></item>

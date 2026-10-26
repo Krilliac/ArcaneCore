@@ -81,7 +81,7 @@ Two `Assert.Single` predicate-overload analyzer corrections preserved the Game a
 
 ## Client acceptance and next handoff
 
-Computer Use is **deferred by the user** to their selected desktop-enabled chat. No Windows/client interaction is needed for this slice's deterministic implementation and coding proof. When Nathan resumes actual acceptance, the parent should notify him that the Windows PC is needed for the two-session aura/logout/relog/UI observations. Do not launch an alternative client route, operate the selected chat, or reuse that session's files from this coding lane.
+Computer Use is **deferred by the user** to their selected desktop-enabled chat. No Windows/client interaction is needed for this slice's deterministic implementation and coding proof. When the maintainer resumes actual acceptance, the parent should notify him that the Windows PC is needed for the two-session aura/logout/relog/UI observations. Do not launch an alternative client route, operate the selected chat, or reuse that session's files from this coding lane.
 
 The separately supplied real-client observations remain attributed only to `f8ae6e8b5f805e94f145194a82f80e876fa2dec3`: auth/realm list, character creation, world entry, and bounded movement/jump observations. They are user-reported evidence, not this lane's independent verification. Standard logout, a fresh login with saved position, and world restart/relog were not observed. See [the reported client run](client-run-f8ae6e8-20261003.md).
 

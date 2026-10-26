@@ -233,6 +233,400 @@ public sealed class PlayerbotGatherLootWaitTests
         Assert.Equal(1, capture.Count(CraftFailed));
     }
 
+    private static ArcaneCore.Game.GameObjects.GameObject NodeOf(Rig rig)
+        => (ArcaneCore.Game.GameObjects.GameObject)rig.Player.Map!.FindObject(new ObjectGuid(ChestGuid(Node)))!;
+
+    private static int ViewersOf(Rig rig) => NodeOf(rig).Loot?.Viewers.Count ?? 0;
+
+    private static byte[] GatherCastPacket(Rig rig)
+    {
+        var writer = new PacketWriter(15);
+        writer.WriteUInt32(SlowHerbSpell);
+        writer.WriteUInt16((ushort)ArcaneCore.Game.Spells.SpellCastTargetFlags.GameObject);
+        writer.WritePackedGuid(ChestGuid(Node));
+        return writer.ToArray();
+    }
+
+    [Fact]
+    public async Task ALootWindowDrainedBySomeoneElse_IsReleasedByTheTimeout_SoTheNodeIsNotLeftInUse()
+    {
+        // Live (#1468): the reply was drained elsewhere, the bot timed out and walked off, and the server kept the window open: the node
+        // stayed "in use" (ChestInUse for every later cast), never despawned or respawned.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(rig.Think); // the timeout
+        await rig.Host.World.AdvanceClockAsync(200);
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
+    [Fact]
+    public async Task TheTimeoutRelease_ClosesTheWindow_EvenWhenTheManagedActionBudgetIsSpent()
+    {
+        // The release used to be a managed CMSG_LOOT_RELEASE whose refusal (a spent budget) was ignored, dropping it for good.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(0);
+            Assert.False(rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgLootRelease, new byte[8]), "the budget was not spent");
+            rig.Crafting.UpdateGatherLoot(rig.Player); // the timeout, with every managed action refused
+            return true;
+        });
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Null(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+    }
+
+    [Fact]
+    public async Task TheTimeoutRelease_LeavesAWindowOfAnotherSourceOpen()
+    {
+        // The release is for the gather's own window: a window opened on another source during the wait (a corpse) is not closed by it.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+        await rig.Host.OnWorldAsync(() =>
+        {
+            typeof(PlayerbotCrafting).GetField("_gatheringTarget", Private)!.SetValue(rig.Crafting, new ObjectGuid(ChestGuid(Node) + 1));
+            return true;
+        });
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
+
+        // The timeout really ran (the wait ended and the other target is backed off), and it left the node's window alone.
+        Assert.False(await rig.Host.OnWorldAsync(() => Field<bool>(rig.Crafting, "_waitingForGatherLoot")));
+        Assert.True(await rig.Host.OnWorldAsync(() => Field<Dictionary<ulong, uint>>(rig.Crafting, "_refusedUntil").ContainsKey(ChestGuid(Node) + 1)));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotNull(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+    }
+
+    [Fact]
+    public async Task TheTimeoutRelease_IsSkippedWhileAQuestSettlementIsPending()
+    {
+        // The client path drops requests while a settlement freezes the character; the bot's server-side release follows it (a later mount step still closes the window).
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+        var operation = Guid.NewGuid();
+        Assert.True(await rig.Host.OnWorldAsync(() => rig.Player.BeginQuestSettlement(operation)));
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
+        // The timeout really ran (the wait ended, the node is backed off) and the release was skipped.
+        Assert.False(await rig.Host.OnWorldAsync(() => Field<bool>(rig.Crafting, "_waitingForGatherLoot")));
+        Assert.True(await rig.Host.OnWorldAsync(() => Field<Dictionary<ulong, uint>>(rig.Crafting, "_refusedUntil").ContainsKey(ChestGuid(Node))));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
+    [Fact]
+    public async Task AMountStep_LeavesTheWindowOpen_WhileAQuestSettlementIsPending()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        var operation = Guid.NewGuid();
+        Assert.True(await rig.Host.OnWorldAsync(() => rig.Player.BeginQuestSettlement(operation)));
+
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
+
+        // The settlement skipped the flag clear too: once it ends, the next mount step closes the window.
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
+    private static readonly System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+
+    private static T Field<T>(PlayerbotCrafting crafting, string name)
+        => (T)typeof(PlayerbotCrafting).GetField(name, Private)!.GetValue(crafting)!;
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(64, false)]
+    public async Task AFailedCast_ClearsTheNonDiceStreaksOnlyWhenTheCastTableIsFull(int tracked, bool keptStreaksSurvive)
+    {
+        // Pins the braces of the Count >= 64 reset in OnLootCastFailed: the non-dice set is cleared with the cast table, not on every failure.
+        await using Rig rig = await Rig.StartAsync();
+        await rig.Host.OnWorldAsync(() =>
+        {
+            var casts = Field<Dictionary<ulong, int>>(rig.Crafting, "_failedLootCasts");
+            var nonDice = Field<HashSet<ulong>>(rig.Crafting, "_failedLootNonDice");
+            for (ulong key = 1; key <= (ulong)tracked; key++)
+                casts[key] = 1;
+            nonDice.Add(1);
+            typeof(PlayerbotCrafting).GetField("_gatheringTarget", Private)!.SetValue(rig.Crafting, new ObjectGuid(ChestGuid(Node)));
+            typeof(PlayerbotCrafting).GetMethod("OnLootCastFailed", Private)!.Invoke(rig.Crafting, [rig.Player]);
+
+            Assert.Equal(keptStreaksSurvive, nonDice.Contains(1));
+            Assert.Equal(keptStreaksSurvive ? tracked + 1 : 1, casts.Count);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ANodeAnotherPlayerHasOpen_IsNeverPicked_AndIsPickedOnceItIsFree()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        Bot other = await EnterAsync(rig.Host, "OTHERGATHER", "Gathertwo", 1, new PlayerbotOptions { Enabled = true }, new PlayerbotClaims(8), () => 0);
+        int casts = 0;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            var node = NodeOf(rig);
+            var bag = new ArcaneCore.Game.Loot.LootBag(node.Guid, ArcaneCore.Game.Loot.LootSourceKind.GameObject, ArcaneCore.Game.Loot.LootType.Corpse) { Gold = 1 };
+            bag.Viewers.Add(other.Player); // another looter holds the node
+            node.Loot = bag;
+            rig.Bot.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.CmsgCastSpell) casts++; };
+            rig.Think();
+            return true;
+        });
+        Assert.Equal(0, casts);
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            NodeOf(rig).Loot!.Viewers.Clear();
+            rig.Think();
+            return true;
+        });
+        Assert.Equal(1, casts);
+        other.Brain.Stop();
+        other.Session.Kick();
+        await other.Session.ManagedClosed;
+    }
+
+    [Fact]
+    public async Task ANodeOnlyTheBotItselfHasOpen_IsStillPicked()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        int casts = 0;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            var node = NodeOf(rig);
+            var bag = new ArcaneCore.Game.Loot.LootBag(node.Guid, ArcaneCore.Game.Loot.LootSourceKind.GameObject, ArcaneCore.Game.Loot.LootType.Corpse) { Gold = 1 };
+            bag.Viewers.Add(rig.Player);
+            node.Loot = bag;
+            rig.Bot.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.CmsgCastSpell) casts++; };
+            rig.Think();
+            return true;
+        });
+        Assert.Equal(1, casts);
+    }
+
+    [Fact]
+    public async Task ATurnOnlyMovementBlock_KeepsTheNodeWindowOpen()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        Assert.True(await rig.Host.OnWorldAsync(() =>
+        {
+            MovementInfo turning = rig.Player.Movement;
+            turning.Flags |= MovementFlags.TurnLeft; // not MOVEFLAG_MASK_MOVING; position unchanged
+            var writer = new PacketWriter(64);
+            turning.Write(writer);
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.MsgMoveStartTurnLeft, writer.AsMemory().ToArray());
+        }));
+
+        // The handler provably ran: the turn flag is on the player now.
+        Assert.NotEqual(MovementFlags.None, await rig.Host.OnWorldAsync(() => rig.Player.Movement.Flags & MovementFlags.TurnLeft));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        // Revert guard: a MASK_MOVING block through the same path does close it, so "open" above is the turn exclusion, not a missing release.
+        await rig.Host.OnWorldAsync(() =>
+        {
+            MovementInfo moving = rig.Player.Movement;
+            moving.Flags = (moving.Flags & ~MovementFlags.TurnLeft) | MovementFlags.Forward;
+            moving.X -= 0.5f;
+            var writer = new PacketWriter(64);
+            moving.Write(writer);
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.MsgMoveStartForward, writer.AsMemory().ToArray());
+        });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
+    [Fact]
+    public async Task ACastRefusedChestInUse_BacksTheNodeOffAtOnce_WithoutACraftFailedReport()
+    {
+        // ChestInUse is raised where the cast lands (GatheringSpells: the non-strict check), after the 5 s bar.
+        await using Rig rig = await Rig.StartAsync();
+        using AnomalyCapture capture = await rig.Host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        int casts = 0;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.CmsgCastSpell) casts++; };
+            return rig.Think();
+        });
+        Assert.Equal(1, casts);
+        Assert.True(await rig.Host.OnWorldAsync(rig.Casting), "the bot did not start on the node");
+
+        // Another looter takes the node while the bar runs: the landing is refused with ChestInUse.
+        await rig.Host.OnWorldAsync(() =>
+        {
+            NodeOf(rig).Flags |= ArcaneCore.Game.GameObjects.GameObjectFlags.InUse;
+            return true;
+        });
+        Assert.True(await rig.Host.World.AdvanceClockUntilAsync(6_000, () => !rig.Casting()), "the cast never ended");
+        await rig.Host.OnWorldAsync(() =>
+        {
+            NodeOf(rig).Flags &= ~ArcaneCore.Game.GameObjects.GameObjectFlags.InUse; // free again: the back-off, not the flag, holds the bot
+            return true;
+        });
+
+        for (int i = 0; i < 4; i++)
+        {
+            await rig.Host.OnWorldAsync(rig.Think);
+            await rig.Host.World.AdvanceClockAsync(1_000);
+        }
+
+        Assert.Equal(1, casts);
+        Assert.False(await rig.Host.OnWorldAsync(rig.Casting), "the bot cast again at the node it had just been refused");
+        Assert.False(capture.Any(CraftFailed), capture.Describe());
+    }
+
+    [Fact]
+    public async Task AGatherersMovement_ClosesItsOpenNodeWindow_ThroughTheMovementHandler()
+    {
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1106-1110).
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            MovementInfo moving = rig.Player.Movement;
+            moving.Flags |= MovementFlags.Forward;
+            moving.X -= 0.5f;
+            var writer = new PacketWriter(64);
+            moving.Write(writer);
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.MsgMoveStartForward, writer.AsMemory().ToArray());
+        });
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Equal(UnitFlags.None, await rig.Host.OnWorldAsync(() => rig.Player.UnitFlags & UnitFlags.Looting));
+    }
+
+    [Fact]
+    public async Task ACastRequest_ClosesTheCastersOpenWindow_SoItsOwnStaleWindowDoesNotRefuseIt()
+    {
+        // vmangos@0e3ff01 HandleCastSpellOpcode (SpellHandler.cpp:301-306): casting spells interrupts looting.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgCastSpell, GatherCastPacket(rig));
+        });
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.True(await rig.Host.OnWorldAsync(rig.Casting), "the cast was refused against the caster's own stale window");
+    }
+
+    private static void MountStep(Rig rig)
+    {
+        rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+        var route = new PlayerbotRoute(
+            [new System.Numerics.Vector3(rig.Player.X, rig.Player.Y, rig.Player.Z), new System.Numerics.Vector3(rig.Player.X + 200f, rig.Player.Y, rig.Player.Z)], 200f);
+        PlayerbotMount.BeforeStep(rig.Bot.Session, rig.Player, route, new PlayerbotOptions { Enabled = true });
+    }
+
+    [Fact]
+    public async Task ARouteStepsMountStep_ReleasesTheOpenNodeWindow_NotJustTheFlag()
+    {
+        // The mount step used to clear UnitFlags.Looting and leave the bag listing the bot, which switched off both release triggers
+        // (they gate on the flag) and left the node in use for everyone.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Null(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+        Assert.Equal(UnitFlags.None, await rig.Host.OnWorldAsync(() => rig.Player.UnitFlags & UnitFlags.Looting));
+    }
+
+    [Fact]
+    public async Task AGatherCastAfterARouteStep_IsNotRefusedAgainstTheBotsOwnStaleWindow()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+        await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse));
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgCastSpell, GatherCastPacket(rig));
+        });
+        Assert.True(await rig.Host.OnWorldAsync(rig.Casting), "the cast did not start");
+        Assert.True(await rig.Host.World.AdvanceClockUntilAsync(6_000, () => !rig.Casting()), "the 5 s cast never landed");
+
+        // Refused with CHEST_IN_USE against its own viewer, the landing would open no window.
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+    }
+
+    private static byte[] CastPacket(uint spellId)
+    {
+        var writer = new PacketWriter(8);
+        writer.WriteUInt32(spellId);
+        writer.WriteUInt16(0); // no targets
+        return writer.ToArray();
+    }
+
+    private static ArcaneCore.Game.Loot.LootBag? OpenLootOf(Rig rig)
+        => rig.Bot.Session.Services.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().FindSystem(rig.Player.Map!)?.Loot?.OpenLootOf(rig.Player);
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(HerbSpell)]
+    public async Task ACastRequestTheServerRefuses_LeavesTheCastersOpenWindowOpen(uint spellId)
+    {
+        // vmangos@0e3ff01 HandleCastSpellOpcode (SpellHandler.cpp:283-306): an unknown spell (0 is in no store) and a spell the player does not know
+        // (HerbSpell exists but the bot only learned SlowHerbSpell) return before the loot release.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgCastSpell, CastPacket(spellId));
+        });
+
+        Assert.NotNull(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Equal(UnitFlags.Looting, await rig.Host.OnWorldAsync(() => rig.Player.UnitFlags & UnitFlags.Looting));
+
+        // Revert guard: a request the server accepts does close the same window, so "left open" above is the refusal, not a missing release.
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgCastSpell, GatherCastPacket(rig));
+        });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
     [Fact]
     public async Task LargeBoundingRadiusNodeBeyondCentreReach_IsNotCastFromAfar_AndDespawnedNodeWaitDoesNotReportTimeout()
     {

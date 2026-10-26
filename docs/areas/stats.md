@@ -2,8 +2,8 @@
 
 Lane `stats-combat-formulas` (branch `claude/vw-stats-combat-formulas`). Everything below is
 reimplemented from the behaviour of the references; no reference code or data is copied into this
-repository. `D:\refs\vmangos` is the primary reference (commit 4b3d241), `D:\refs\mangos-classic`
-the cross-check, `D:\refs\classic-db` the base data.
+repository. `<refs-root>\vmangos` is the primary reference (commit 4b3d241), `<refs-root>\mangos-classic`
+the cross-check, `<refs-root>\classic-db` the base data.
 
 Code: `src/ArcaneCore.Game/Stats/`, `src/ArcaneCore.Game/Combat/ICombatStatSource.cs`,
 `src/ArcaneCore.Kernel/WorldData/PlayerStats/`, `src/ArcaneCore.Data/World/PlayerStats/`,
@@ -70,7 +70,7 @@ points are the importer methods:
 ```csharp
 var importer = new PlayerStatsDumpImporter();
 importer.Read(textReaderOverTheClassicDbDump);          // classic-db player_* tables
-importer.ApplyMigrationDirectory(@"D:\refs\vmangos\sql\migrations");
+importer.ApplyMigrationDirectory(@"<refs-root>\vmangos\sql\migrations");
 PlayerStatsImportReport report = await importer.WriteAsync(worldDb, replace: true);
 ```
 
@@ -237,7 +237,7 @@ Code: `Spells/Auras/CombatStatAuras.cs`, `Spells/Auras/CombatTableAuras.cs`, `St
 `Combat/Melee/WeaponAuraModifiers.cs`, `Combat/Melee/MeleeDamageBonus.cs`, `Combat/MeleeHitTable.cs`, `Combat/MapCombat.Melee.cs`,
 `Spells/SpellCombatRules.cs`, `Spells/Casters/Bonus/SpellBonusModule.cs`. Tests: `Game.Tests/CombatMechanics/HitChanceAuraTests.cs`,
 `MeleeDamageBonusTests.cs`, `Game.Tests/Stats/CombatStatAurasTests.cs`, `Game.Tests/Spells/Casters/SpellDamageVersusTests.cs`,
-`World.Tests/Playerbots/Scenarios/CombatStatScenarioTests.cs` (scenario `combat-stat-auras`). Reference: vmangos (`D:/refs/vmangos`).
+`World.Tests/Playerbots/Scenarios/CombatStatScenarioTests.cs` (scenario `combat-stat-auras`). Reference: vmangos (`<refs-root>/vmangos`).
 
 | Area | Behaviour | vmangos |
 |---|---|---|

@@ -15,7 +15,7 @@
   suffix is added.
 
 .PARAMETER Dump
-  Path to the dump, e.g. D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz (.sql or .sql.gz).
+  Path to the dump, e.g. <path-to>/ClassicDB_1_12_1_z2815.sql.gz (.sql or .sql.gz).
 
 .PARAMETER WorkDir
   Scratch directory for world.db and the reports (created if missing; an existing world.db is replaced).
@@ -28,7 +28,7 @@
   Path to arcane-content-importer(.exe). Default: the Release build under tools/ArcaneCore.ContentImporter.
 
 .EXAMPLE
-  powershell -NoProfile -File tools\content\verify-classic-db.ps1 -Dump D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz -WorkDir C:\Temp\acimp
+  powershell -NoProfile -File tools\content\verify-classic-db.ps1 -Dump <path-to>/ClassicDB_1_12_1_z2815.sql.gz -WorkDir C:\Temp\acimp
 #>
 [CmdletBinding()]
 param(

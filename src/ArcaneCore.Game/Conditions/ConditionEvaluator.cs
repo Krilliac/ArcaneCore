@@ -13,7 +13,7 @@ public sealed record ConditionSummary(int Total, int Evaluable, IReadOnlyDiction
 /// <summary>
 /// <see cref="IConditionEvaluator"/> over a <see cref="ConditionTable"/>: cmangos
 /// <c>IsConditionSatisfied</c> / <c>ConditionEntry::Meets</c> / <c>Evaluate</c>
-/// (D:\refs\mangos-classic\src\game\Globals\Conditions.cpp:109-514, 1023-1028).
+/// (mangos-classic src/game/Globals/Conditions.cpp:109-514, 1023-1028).
 /// <para>
 /// The caller shape is the one cmangos gossip, vendor, trainer and quest checks use: the player is
 /// the target, the NPC (when there is one) the source. <see cref="ConditionFlags.SwapTargets"/>

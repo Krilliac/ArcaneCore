@@ -5,7 +5,7 @@ public readonly record struct FormBoosts(uint Spell1, uint Spell2, uint HeartOfT
 
 /// <summary>
 /// The spell ids vmangos Aura::HandleShapeshiftBoosts links to each druid form
-/// (D:\refs\vmangos\src\game\Spells\SpellAuras.cpp:5433-5480), the Leader of the Pack rule (:5497-5503)
+/// (vmangos@0e3ff01 src/game/Spells/SpellAuras.cpp:5433-5480), the Leader of the Pack rule (:5497-5503)
 /// and the Heart of the Wild lookup constants (:5505-5530). Ids verified against classic-db spell_template:
 /// 3025 Cat Form (Passive), 1178 Bear Form (Passive), 21178 Bear Form (Passive2), 9635 Dire Bear Form
 /// (Passive), 5419 Travel Form (Passive), 5421 Aquatic Form (Passive), 5420 Tree Form (Passive) 2,

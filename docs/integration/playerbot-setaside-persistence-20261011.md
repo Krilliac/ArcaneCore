@@ -1,6 +1,6 @@
 # Playerbot quest set-asides across restarts (2026-10-11)
 
-Base: `ebdd4a37`. The live analysis in `D:/ArcaneCore-lanes/_wf/analysis/bot-xp-analysis.md` §4.2 observed 48 bots holding completed quest 1361, 251 completed unturned quests in total, and repeated stalls across five restarts. Those measurements are from the prior deployment; this lane has no new live or client acceptance.
+Base: `ebdd4a37`. The live analysis in `<lanes-root>/_wf/analysis/bot-xp-analysis.md` §4.2 observed 48 bots holding completed quest 1361, 251 completed unturned quests in total, and repeated stalls across five restarts. Those measurements are from the prior deployment; this lane has no new live or client acceptance.
 
 ## Root cause and rule
 
@@ -12,7 +12,7 @@ A home-bound bot keeps a completed quest when a present ender is in its home or 
 
 ## QA quest content check
 
-Read-only imported world DB: `C:/Users/Nathan/Documents/Codex/2026-10-04/c/work/playable-content-20261005/complete-r5/world.db`, opened using SQLite `?mode=ro`. Quest template, creature starter/ender relation, NPC template and spawn were present for all six. These checks establish content presence, not successful live pathing or turn-in.
+Read-only imported world DB: `<work-dir>/playable-content-20261005/complete-r5/world.db`, opened using SQLite `?mode=ro`. Quest template, creature starter/ender relation, NPC template and spawn were present for all six. These checks establish content presence, not successful live pathing or turn-in.
 
 | QA issue | Quest | Starter → ender in imported DB | Content verdict |
 |---|---|---|---|
@@ -38,8 +38,8 @@ Exact final commands, from this worktree (PowerShell; both test data environment
 ```powershell
 (Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue
 dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false -p:NuGetAudit=false -v:q
-$env:ARCANECORE_TEST_TERRAIN_DIR='D:/ArcaneCore-data/terrain-5875'
-$env:ARCANECORE_TEST_DBC_DIR='D:/ArcaneCore-data/client-dbc-5875'
+$env:ARCANECORE_TEST_TERRAIN_DIR='<data-root>/terrain-5875'
+$env:ARCANECORE_TEST_DBC_DIR='<data-root>/client-dbc-5875'
 dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQualifiedName~PlayerbotSetAsidePersistenceTests|FullyQualifiedName~ManagedPlayerbotSetAsideRestartTests|FullyQualifiedName~PlayerbotCompletedReturnTests|FullyQualifiedName~PlayerbotQuestReturnTests.CompletedOutOfHomeBreadcrumb_IsAbandonedThroughTheQuestHandler'
 dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQualifiedName~PlayerbotSetAsidePersistenceTests|FullyQualifiedName~ManagedPlayerbotSetAsideRestartTests|FullyQualifiedName~PlayerbotCompletedReturnTests|FullyQualifiedName~ManagedPlayerbotLifecycleTests|FullyQualifiedName~PlayerbotQuestReturnTests|FullyQualifiedName~PlayerbotQuestGoalsTests|FullyQualifiedName~PlayerbotSharedSetAsideTests|FullyQualifiedName~ManagedPlayerbotHomeTests'
 dotnet test tests/ArcaneCore.Data.Tests -c Release --no-build --filter 'FullyQualifiedName~ManagedPlayerbotSetAsideStoreTests|FullyQualifiedName~IntegratedSchemaTests'
@@ -70,6 +70,6 @@ Behavioral RED before production edits, then GREEN after them:
 | `RepeatedSharedSuspensions_KeepPersistedRepeatCountWithinStoreLimit` | Exported repeat count was 257. | After 257 suspensions it remains at 256, which the store accepts. |
 | `RestoreTwice_KeepsEachLocalSetBounded` | Two 80-row restores left more than 64 quest entries. | Export contains at most 64 quest entries. |
 
-Final validation: free RAM checked through `Get-Counter '\Memory\Available MBytes'` before `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false -p:NuGetAudit=false -v:q`; build exit 0, 0 warnings/errors. With `ARCANECORE_TEST_TERRAIN_DIR=D:/ArcaneCore-data/terrain-5875` and `ARCANECORE_TEST_DBC_DIR=D:/ArcaneCore-data/client-dbc-5875`, `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQualifiedName~PlayerbotSetAsidePersistenceTests|FullyQualifiedName~PlayerbotSharedSetAsideTests|FullyQualifiedName~ManagedPlayerbotSetAsideRestartTests|FullyQualifiedName~PlayerbotStallTests|FullyQualifiedName~PlayerbotQuestGoalsTests|FullyQualifiedName~PlayerbotQuestReturnTests|FullyQualifiedName~PlayerbotEventQuestTests|FullyQualifiedName~ManagedPlayerbotLifecycleTests'` passed 52/52. `dotnet test tests/ArcaneCore.Data.Tests -c Release --no-build --filter 'FullyQualifiedName~IntegratedSchemaTests'` passed 5/5. DLL timestamps postdate source edits; `git diff --check` reported no whitespace errors. Real-client behavior, crash recovery after a missed checkpoint, and a forced checkpoint/brain-replacement interleaving were not exercised in this follow-up.
+Final validation: free RAM checked through `Get-Counter '\Memory\Available MBytes'` before `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false -p:NuGetAudit=false -v:q`; build exit 0, 0 warnings/errors. With `ARCANECORE_TEST_TERRAIN_DIR=<data-root>/terrain-5875` and `ARCANECORE_TEST_DBC_DIR=<data-root>/client-dbc-5875`, `dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter 'FullyQualifiedName~PlayerbotSetAsidePersistenceTests|FullyQualifiedName~PlayerbotSharedSetAsideTests|FullyQualifiedName~ManagedPlayerbotSetAsideRestartTests|FullyQualifiedName~PlayerbotStallTests|FullyQualifiedName~PlayerbotQuestGoalsTests|FullyQualifiedName~PlayerbotQuestReturnTests|FullyQualifiedName~PlayerbotEventQuestTests|FullyQualifiedName~ManagedPlayerbotLifecycleTests'` passed 52/52. `dotnet test tests/ArcaneCore.Data.Tests -c Release --no-build --filter 'FullyQualifiedName~IntegratedSchemaTests'` passed 5/5. DLL timestamps postdate source edits; `git diff --check` reported no whitespace errors. Real-client behavior, crash recovery after a missed checkpoint, and a forced checkpoint/brain-replacement interleaving were not exercised in this follow-up.
 
 Changed production files: `src/ArcaneCore.Playerbots/PlayerbotQuestGoals.cs`, `ManagedPlayerbotFeature.cs`, `PlayerbotStallWatch.cs`, `src/ArcaneCore.Kernel/Characters/PlayerbotSetAside.cs`, `src/ArcaneCore.Data/Characters/Playerbots/ManagedPlayerbotSetAsideDataModule.cs`. Changed tests: `tests/ArcaneCore.World.Tests/Playerbots/PlayerbotQuestReturnTests.cs`, `PlayerbotEventQuestTests.cs`, `ManagedPlayerbotSetAsideRestartTests.cs`, `PlayerbotSharedSetAsideTests.cs`, `PlayerbotSetAsidePersistenceTests.cs`.

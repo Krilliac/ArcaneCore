@@ -2,7 +2,7 @@
 
 Base: `ddebfd52`. The coordinator owns review and integration. This worktree contains no commit, push, schema step, imported reference code or live server run.
 
-Reference paths below are relative to the read-only `D:/refs/vmangos/src/scripts/eastern_kingdoms/burning_steppes/blackwing_lair/` (VM) and `D:/refs/mangos-classic/src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/blackwing_lair/` (MC). These are GPL repositories used for behavior and data facts only; no code was copied. The existing Broodlord, Firemaw and Flamegor scripts were kept.
+Reference paths below are relative to the read-only `<refs-root>/vmangos/src/scripts/eastern_kingdoms/burning_steppes/blackwing_lair/` (VM) and `<refs-root>/mangos-classic/src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/blackwing_lair/` (MC). These are GPL repositories used for behavior and data facts only; no code was copied. The existing Broodlord, Firemaw and Flamegor scripts were kept.
 
 | Encounter | Adapted behavior | Reference file and function |
 |---|---|---|
@@ -73,7 +73,7 @@ Still not established: the orb's Possess under real client control, imported-wor
 
 ## Rework after review (2026-10-08)
 
-Review findings and what was done. Spell targets were re-read from `D:/ArcaneCore-data/client-dbc-5875/Spell.dbc` and the ClassicDB z2815 `spell_script_target` rows (`(19832,1,12435)`, `(19873,0,177807)`, `(23642,1,13020)`, `(23362,0,179804)`).
+Review findings and what was done. Spell targets were re-read from `<data-root>/client-dbc-5875/Spell.dbc` and the ClassicDB z2815 `spell_script_target` rows (`(19832,1,12435)`, `(19873,0,177807)`, `(23642,1,13020)`, `(23362,0,179804)`).
 
 | # | Finding | Result |
 |---|---|---|

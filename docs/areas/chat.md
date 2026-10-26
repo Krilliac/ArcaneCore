@@ -5,7 +5,7 @@ Channel join/leave/moderation, the channel packets, say/yell/emote/whisper and A
 delivered by the social and M6 work (see [social.md](social.md)); this lane added the gates that
 vmangos puts around them and removed the vmangos-only channel names from the default behaviour.
 
-Reference precedence: **vmangos (`D:\refs\vmangos\src\game`) > mangos-classic > wow_messages**.
+Reference precedence: **vmangos (`<refs-root>\vmangos\src\game`) > mangos-classic > wow_messages**.
 Retail first: every vmangos-only behaviour is behind an option that defaults to retail (the two
 sanitising options, `FakeMessagePreventing` and `StrictLinkSeverity`, default off as in mangos-classic and
 are opt-in at vmangos' values), and every option names the reference value it follows. No reference code or data is copied into the repository.

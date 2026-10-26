@@ -13,7 +13,7 @@ public sealed class GmOptions
 
 
     /// <summary>
-    /// The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146:
+    /// The retail account level (vmangos AccountTypes, vmangos@0e3ff01 src/shared/Common.h:136-146:
     /// PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5,
     /// ADMINISTRATOR 6, CONSOLE 7) each stored <see cref="AccountSecurity"/> stands for.
     /// ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by

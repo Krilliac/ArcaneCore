@@ -11,8 +11,8 @@ From the worktree root in PowerShell:
 ```powershell
 New-Item -ItemType Directory -Force local-data/bg-raid-acceptance | Out-Null
 dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false
-dotnet tools/ArcaneCore.ContentImporter/bin/Release/net10.0/arcane-content-importer.dll import D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz --database local-data/bg-raid-acceptance/world.db
-dotnet tools/ArcaneCore.ContentImporter/bin/Release/net10.0/arcane-content-importer.dll refresh D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz --database local-data/bg-raid-acceptance/world.db --dbc-dir D:/refs/client-dbc-5875-effective
+dotnet tools/ArcaneCore.ContentImporter/bin/Release/net10.0/arcane-content-importer.dll import <refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz --database local-data/bg-raid-acceptance/world.db
+dotnet tools/ArcaneCore.ContentImporter/bin/Release/net10.0/arcane-content-importer.dll refresh <refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz --database local-data/bg-raid-acceptance/world.db --dbc-dir <refs-root>/client-dbc-5875-effective
 $env:ARCANECORE_TEST_WORLD_DB = (Resolve-Path local-data/bg-raid-acceptance/world.db).Path
 dotnet test tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj -c Release --no-build --filter FullyQualifiedName~RealBattlegroundRaidEntryTests
 ```

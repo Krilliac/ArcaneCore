@@ -8339,6 +8339,9 @@ World.Maps.GridCleanUpDelayMs = 300000
 #                     objects, active ones included, look half this distance around themselves. 0
 #                     turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside
 #                     the update): it changes when the files are read, not what is loaded or when.
+#                     It also turns off the arrival prefetch (the tiles of a teleport's destination
+#                     are read when the teleport starts), which has a budget of its own so it never
+#                     evicts the approach prefetches.
 #        Type: float
 #        Default: 200
 #        Allowed: a number, '.' is the decimal point
@@ -10841,12 +10844,12 @@ World.GmCommands.RetailLevels = true
 
 #
 #    World.GmCommands.SecurityMap
-#        Description: The retail account level (vmangos AccountTypes,
-#                     D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1,
-#                     TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6,
-#                     CONSOLE 7) each stored AccountSecurity stands for. ArcaneCore stores four
-#                     levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored
-#                     level onto them (an operator may remap, e.g. GameMaster=4).
+#        Description: The retail account level (vmangos AccountTypes, vmangos@0e3ff01
+#                     src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER
+#                     3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored
+#                     AccountSecurity stands for. ArcaneCore stores four levels, so the retail
+#                     levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an
+#                     operator may remap, e.g. GameMaster=4).
 #        Type: Dictionary<AccountSecurity, byte>
 #        Default: Player = 0; Moderator = 1; GameMaster = 3; Administrator = 6
 #        Allowed: a map: one key per entry name; each value is a whole number, 0 to 255
@@ -13580,6 +13583,24 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
+
+#
+#    World.Playerbots.CutRegionMaxPolygons
+#        Description: The most polygons a cut region (a navigation region that is the only way
+#                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
+#                     hold and still be exempt from shared world pins and from refusing a bot's
+#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
+#                     whole region, so a larger bound lets more real snags go unshared. The default,
+#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
+#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
+#                     retail behaviour depends on it.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CutRegionMaxPolygons = 5000
 
 #
 #    World.Playerbots.Economy.BankDeposit
@@ -18948,7 +18969,7 @@ World.Social.MaxJoinedChannels = 0
 #
 #    World.Social.OfflineLeaderDelaySeconds
 #        Description: Seconds before an offline group leader yields to an online member. Zero
-#                     disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072
+#                     disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072
 #                     defaults to 300 seconds.
 #        Type: int
 #        Default: 300

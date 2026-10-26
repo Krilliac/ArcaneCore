@@ -381,14 +381,16 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         Vector3 here = new(player.X, player.Y, player.Z);
         Vector3 away = Away(player);
         float straight = MathF.Atan2(away.Y, away.X);
-        goal = OnGround(player, here + (away * ExtendYards));
+        // The bot's own region is looked up once for the up to six goal points below.
+        PlayerbotNavigation.FloorProbe? floors = player.Map is { } map ? new PlayerbotNavigation.FloorProbe(map, here) : null;
+        goal = OnGround(floors, here + (away * ExtendYards));
         PlayerbotRoute? fallbackRoute = null;
         Vector3 fallbackGoal = goal;
         foreach (float degrees in FanDegrees)
         {
             float angle = straight + (degrees * MathF.PI / 180f);
             Vector3 candidate = degrees == 0f ? goal
-                : OnGround(player, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
+                : OnGround(floors, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
             if (PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) && route is not null)
             {
                 if (!CrossesNewHazard(player, route))
@@ -434,13 +436,13 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         return false;
     }
 
-    /// <summary><paramref name="point"/> on the ground below it (searched from 20 yards above), or as it is where there is none within 30 yards.</summary>
-    private static Vector3 OnGround(Player player, Vector3 point)
-    {
-        if (player.Map is not { } map) return point;
-        float floor = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
-        return PlayerbotNavigation.InvalidHeight(floor) || MathF.Abs(floor - point.Z) > 30f ? point : point with { Z = floor };
-    }
+    /// <summary>
+    /// <paramref name="point"/> on the floor nearest the bot's own height (<see cref="PlayerbotNavigation.GroundNear(ArcaneCore.Game.Maps.Map, Vector3, Vector3)"/>:
+    /// searched from 2 yards above the bot, then from 20), or as it is where there is none within 30 yards or the floor is no ground the
+    /// bot can walk to. The search once started 20 yards above the point only, which in a cave or tunnel is inside the rock: the goal
+    /// stayed at the bot's height, on no region of the region graph (Timbermaw Hold, issues #1478 and #1479).
+    /// </summary>
+    private static Vector3 OnGround(PlayerbotNavigation.FloorProbe? floors, Vector3 point) => floors is null ? point : floors.Near(point);
 
     /// <summary>A route to <paramref name="goal"/>: the navigation's, else back along the trail itself.</summary>
     private PlayerbotRoute? Plan(Player player, Vector3 goal, IReadOnlyList<Vector3> crumbs)

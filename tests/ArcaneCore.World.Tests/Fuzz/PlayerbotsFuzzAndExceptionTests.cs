@@ -213,6 +213,8 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.MoveSpeed = 101f);
         AssertInvalid(o => o.StallSeconds = 9);
         AssertInvalid(o => o.StallSeconds = 86401);
+        AssertInvalid(o => o.CutRegionMaxPolygons = -1);
+        AssertInvalid(o => o.CutRegionMaxPolygons = 1_000_001);
         AssertInvalid(o => o.ClientFidelity = (PlayerbotClientFidelity)99);
         AssertInvalid(o => o.AllowedMaps = null!);
         AssertInvalid(o => o.AllowedMaps = []);
@@ -247,6 +249,15 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.Battlegrounds = null!);
         AssertInvalid(o => o.Chaos = null!);
         AssertInvalid(o => o.Policy = null!);
+    }
+
+    [Fact]
+    public void PlayerbotOptions_CutRegionMaxPolygons_ValidationBoundaries()
+    {
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { CutRegionMaxPolygons = -1 }.Validate());
+        new PlayerbotOptions { CutRegionMaxPolygons = 0 }.Validate();
+        new PlayerbotOptions { CutRegionMaxPolygons = 1_000_000 }.Validate();
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { CutRegionMaxPolygons = 1_000_001 }.Validate());
     }
 
     [Fact]
