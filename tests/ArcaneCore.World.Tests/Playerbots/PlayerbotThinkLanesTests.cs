@@ -856,6 +856,61 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    public void AWorldStall_IsNotARotationGap_TheSilenceIsJudgedWithoutIt()
+    {
+        // A world thread that stood still about 16.5 s made the first tick after report 974 of 1000 bots, one at 19745 ms against a
+        // 12254 ms bound (8169 ms pass). The excess over StallTickMs is the stall.
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(50));
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(PlayerbotThinkStarvation.StallTickMs));
+        Assert.Equal(15_500u, PlayerbotThinkStarvation.StallMs(16_500));
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(uint.MaxValue)); // a clock that went backwards
+        uint bound = PlayerbotThinkStarvation.ReportBoundMs(10_000, 8169);
+        Assert.Equal(12_254u, bound);
+        bool reported = false;
+        // 19745 ms silent, 15500 of them the world stood still: 4245 ms behind the rotation, not starved.
+        Assert.False(PlayerbotThinkStarvation.ShouldReport(119_745, 100_000, bound, ref reported, stalledMs: 15_500));
+        Assert.False(reported);
+        // The same silence with no stall is a starved bot, as before.
+        Assert.True(PlayerbotThinkStarvation.ShouldReport(119_745, 100_000, bound, ref reported, stalledMs: 0));
+        // A real straggler is still reported through a stall: 30 s silent, 15.5 s stalled, 14.5 s behind.
+        reported = false;
+        Assert.True(PlayerbotThinkStarvation.ShouldReport(130_000, 100_000, bound, ref reported, stalledMs: 15_500));
+        // A stall larger than the silence (credited after the think) is no silence, not a wrap.
+        reported = false;
+        Assert.False(PlayerbotThinkStarvation.ShouldReport(101_000, 100_000, bound, ref reported, stalledMs: 5_000));
+    }
+
+    [Fact]
+    public async Task AWorldStall_ReportsNoStarvedBot()
+    {
+        // A zero budget thinks one bot per tick, in rotation (about 150 ms between the thinks of one bot): none is behind it. A 3 s command
+        // blocks the world thread (in the commands phase, before the features), so the two bots the first tick after it does not think for
+        // are 3 s silent, past the 2 s bound, though the rotation is as fair as before.
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 2000, burnMs: 0, "Stallbot");
+        try
+        {
+            // A measured pass (not the 3 x cold-start bound) and every bot primed.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < deadline && !await host.World.InvokeAsync(() => feature.MainPassMs > 0 && thinks.Count == 3 && thinks.Values.All(n => n >= 5)))
+                await Task.Delay(50);
+            (int before, int thinksBefore, uint bound) = await host.World.InvokeAsync(() => (capture.Notices.Count, thinks.Values.Sum(),
+                PlayerbotThinkStarvation.ReportBoundMs(2000, feature.MainPassMs)));
+            Assert.True(thinksBefore >= 15, "the bots did not warm up");
+            Assert.Equal(2000u, bound); // a short pass leaves the configured bound
+            await host.World.InvokeAsync(() => { Thread.Sleep(3000); return true; });
+            while (DateTime.UtcNow < deadline.AddSeconds(20) && await host.World.InvokeAsync(() => thinks.Values.Sum()) < thinksBefore + 9) await Task.Delay(50);
+            (int after, string described) = await host.World.InvokeAsync(() => (capture.Notices.Count, capture.Describe()));
+            Assert.True(after == before, $"{after - before} bots were reported starved by a world stall: {described}");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public void TheStarvedBound_IsFairness_NotAbsoluteSlowness()
     {
         // Off stays off; unmeasured is a cold start (3 x the bound).
