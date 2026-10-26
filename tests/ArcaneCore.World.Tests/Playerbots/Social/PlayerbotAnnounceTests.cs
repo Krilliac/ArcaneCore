@@ -211,4 +211,44 @@ public sealed class PlayerbotAnnounceTests
         BotChatAsk ask = Announcement() with { Topic = new BotChatTopic("guild.welcome", "Welcome.", new Dictionary<string, string> { ["guild"] = Guild }, Guild) };
         Assert.Null(await rig.AnswerAsync(ask));
     }
+
+    // --- output screening that runs out of time ------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(PlayerbotChatOutputAction.BuiltinReply)]
+    [InlineData(PlayerbotChatOutputAction.Drop)]
+    public async Task AModelLineWhoseScreeningRunsOutOfTime_IsNeverSaid_ItTakesTheBlockedLinePath(PlayerbotChatOutputAction action)
+    {
+        await using var rig = new Rig(chat => { ChatSamples.NoScreeningDeadline(chat); chat.Safety.OnOutputFlagged = action; });
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        // Only the model's line ("fake reply") is out of time; the topic's sentence is judged in time and the model is asked.
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("fake", StringComparison.Ordinal);
+
+        BotChatReply? reply = await rig.AnswerAsync(Announcement());
+
+        Assert.Single(rig.Client.Calls);
+        if (action == PlayerbotChatOutputAction.Drop) Assert.Null(reply);
+        else
+        {
+            Assert.NotNull(reply);
+            Assert.Equal("Builtin", reply.Provider);
+            Assert.NotEqual("fake reply", reply.Text);
+        }
+
+        Assert.Empty(rig.Chat.Safety.Flags()); // a timeout is no finding: no flag record, no excerpt of the model's text
+    }
+
+    [Fact]
+    public async Task ABuiltinLineWhoseScreeningRunsOutOfTime_IsNotSaid()
+    {
+        await using var rig = new Rig(chat => ChatSamples.NoScreeningDeadline(chat), model: false);
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        // The topic's sentence does not name the member, so only the filled template ("... Zed ...") is out of time.
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("Zed", StringComparison.Ordinal);
+
+        Assert.Null(await rig.AnswerAsync(Announcement(who: "Zed", sentence: "A new member joined the guild.")));
+        Assert.Empty(rig.Chat.Safety.Flags());
+    }
 }
