@@ -802,6 +802,11 @@ public sealed partial class SpellSystem
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
+            if (entry.Miss is SpellMissInfo.Immune or SpellMissInfo.Immune2)
+            {
+                ReportObjectEffectSkipped(cast, target, "the carrier missed as immune");
+            }
+
             if (entry.Miss == SpellMissInfo.None)
             {
                 if (!objectOnly) hits.Add(target.Guid); // a carrier for GO effects is not itself a hit

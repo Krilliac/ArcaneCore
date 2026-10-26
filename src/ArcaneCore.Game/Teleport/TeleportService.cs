@@ -429,6 +429,11 @@ public sealed partial class TeleportService
             return true;
         }
 
+        // A far transfer ends the client's flight and fixed Z (the client enters the world afresh), so a leftover GM cheat would only keep
+        // whitelisting the fly hack's own flags (MovementCheats.GrantedFor) for a player who is no longer flying. A near teleport keeps the
+        // client's swimming and levitating (ArriveNear), so the cheat stays there.
+        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
+
         var pending = new Pending(this, player, destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {
             StartedMs = _world.NowMs,

@@ -227,6 +227,28 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>)
+    /// began the trip with a goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s no-progress bound, failing the trip. It begins
+    /// none until it is within reach; then it does.
+    /// </summary>
+    [Fact]
+    public async Task ABotBeyondOneRoutesReachOfTheLift_BeginsNoTrip_UntilItIsWithinReach()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float far = options.MaxRouteYards + 500f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + far, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
+            $"a trip began {far:F0} yards from the lift");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+
+        await world.PlaceAsync(new Vector3(lift.Centre.X + (options.MaxRouteYards - 500f), lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
+            "no trip began within reach of the lift");
+    }
+
+    /// <summary>
     /// A bot sent to a lift's level it cannot walk to (the top, from the canyon floor: the way ends at the cliff) gives the ride up once it
     /// has gained nothing for <see cref="PlayerbotElevator.NoProgressMs"/>, with the reason, and does not walk at the cliff for ever.
     /// </summary>

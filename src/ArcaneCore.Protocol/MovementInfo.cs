@@ -28,6 +28,10 @@ public enum MovementFlags : uint
     FallingFar = 0x00004000,
     Swimming = 0x00200000,
     SplineEnabled = 0x00400000,
+
+    /// <summary>MOVEFLAG_MOVED (vmangos MovementInfo.h:54, "only used in older client versions"); part of the flag word <c>.cheat fly</c> sets.</summary>
+    Moved = 0x00800000,
+
     Flying = 0x01000000,
     OnTransport = 0x02000000,
     SplineElevation = 0x04000000,

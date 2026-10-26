@@ -527,7 +527,7 @@ public sealed class PlayerbotGatherLootWaitTests
     [Fact]
     public async Task ACastRequest_ClosesTheCastersOpenWindow_SoItsOwnStaleWindowDoesNotRefuseIt()
     {
-        // vmangos HandleCastSpellOpcode (SpellHandler.cpp:301-306): casting spells interrupts looting.
+        // vmangos@0e3ff01 HandleCastSpellOpcode (SpellHandler.cpp:301-306): casting spells interrupts looting.
         await using Rig rig = await Rig.StartAsync();
         await CastAndLandAsync(rig);
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
@@ -602,7 +602,7 @@ public sealed class PlayerbotGatherLootWaitTests
     [InlineData(HerbSpell)]
     public async Task ACastRequestTheServerRefuses_LeavesTheCastersOpenWindowOpen(uint spellId)
     {
-        // vmangos HandleCastSpellOpcode (SpellHandler.cpp:283-306): an unknown spell (0 is in no store) and a spell the player does not know
+        // vmangos@0e3ff01 HandleCastSpellOpcode (SpellHandler.cpp:283-306): an unknown spell (0 is in no store) and a spell the player does not know
         // (HerbSpell exists but the bot only learned SlowHerbSpell) return before the loot release.
         await using Rig rig = await Rig.StartAsync();
         await CastAndLandAsync(rig);

@@ -42,6 +42,25 @@ internal sealed class PlayerbotThinkProbe
         _time = time;
     }
 
+    /// <summary>
+    /// A test seam to synthesize a finished think probe with deterministic elapsed time, GC pause, and optional phase,
+    /// isolating unit tests from wall-clock preemption and process-wide garbage-collection pauses.
+    /// </summary>
+    internal static PlayerbotThinkProbe SpentForTest(double elapsedMs, double gcPauseMs = 0, string slowestPhase = "start")
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(elapsedMs);
+        ArgumentOutOfRangeException.ThrowIfNegative(gcPauseMs);
+        ArgumentNullException.ThrowIfNull(slowestPhase);
+        var probe = new PlayerbotThinkProbe();
+        probe._elapsed = (long)Math.Round(elapsedMs * Stopwatch.Frequency / 1000);
+        probe.GcPauseMs = gcPauseMs;
+        probe._phase = slowestPhase;
+        probe._names[0] = slowestPhase;
+        probe._ticks[0] = probe._elapsed;
+        probe._phases = 1;
+        return probe;
+    }
+
     private const int MaxPhases = 48;
     private readonly string[] _names = new string[MaxPhases];
     private readonly long[] _ticks = new long[MaxPhases];

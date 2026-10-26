@@ -609,6 +609,7 @@ public sealed partial class LootService : IViewerFieldFilter
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
                 LootTableKind.GameObject, lootId, recipients);
             fresh.Gold = Math.Min(LootMoneyRules.GenerateForGameObject(go.Template, lootId, Options.MoneyRate, _random), MaxMoneyAmount);
+            CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
             Group? looterGroup = UsesGroupLootRules(go) ? group : null;
             ApplyLooterPlan(fresh, looterGroup, PlanLooter(looterGroup, recipients, fresh.Recipients));
             ConfigureDistribution(fresh, looterGroup, recipients);
@@ -701,6 +702,7 @@ public sealed partial class LootService : IViewerFieldFilter
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
+        CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
         LooterPlan plan = PlanLooter(looterGroup, recipients, fresh.Recipients, durable: true);
         fresh.Owner = plan.Owner;
