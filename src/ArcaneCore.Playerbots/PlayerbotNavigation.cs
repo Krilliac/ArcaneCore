@@ -1385,30 +1385,36 @@ internal static class PlayerbotNavigation
     }
 
     /// <summary>
-    /// The most one leg of a way off steep ground may drop. It is <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>, the
-    /// height from which the motion check still brings a step down onto the floor under it: a deeper drop is a void or a cliff
-    /// there ("rejecting 30 yd voids/cliffs"), so a leg that drops more can never be walked.
+    /// Whether any step along the leg from <paramref name="from"/> to <paramref name="to"/> hangs in the air without ground
+    /// support (<see cref="PlayerbotMotionAnomalies.AirwalkYards"/>), testing the floor under the chord exactly as
+    /// <see cref="PlayerbotMotion.Validate"/> does so the planner never plans a cliff fall the mover will refuse.
     /// </summary>
-    internal const float SteepEscapeLegDropYards = PlayerbotMoveCheck.DirectStepMaxDrapeYards;
-
-    /// <summary>
-    /// The most a way off steep ground may have dropped, per flat yard from where the bot stands, at any corner (1.5, about 56
-    /// degrees): a slide the bot's steps can follow, not a cliff face. Drops of no more than
-    /// <see cref="PlayerbotMoveCheck.DirectStepMaxStepUpYards"/> (one step) are exempt, so a corner almost above the bot is not a fall.
-    /// </summary>
-    internal const float SteepEscapeDropPerYard = 1.5f;
-
-    /// <summary>
-    /// Whether the steep-allowed path's corner <paramref name="point"/> (reached from <paramref name="previous"/>) is reached by a fall
-    /// from <paramref name="start"/> rather than a slide: its leg drops more than <see cref="SteepEscapeLegDropYards"/>, or the drop
-    /// from the start exceeds <see cref="SteepEscapeDropPerYard"/> per flat yard.
-    /// </summary>
-    internal static bool IsSteepEscapeFall(Vector3 start, Vector3 previous, Vector3 point)
+    internal static bool IsSteepEscapeFall(Player player, Map map, PlayerbotOptions options, Vector3 from, Vector3 to)
     {
-        if (previous.Z - point.Z > SteepEscapeLegDropYards) return true;
-        float drop = start.Z - point.Z;
-        return drop > PlayerbotMoveCheck.DirectStepMaxStepUpYards
-            && drop > Vector2.Distance(Flat(start), Flat(point)) * SteepEscapeDropPerYard;
+        Vector2 legFlat = Flat(to) - Flat(from);
+        float legDist = legFlat.Length();
+        if (legDist <= 0.05f) return false;
+
+        float speed = PlayerbotMotion.Speed(player, options.MoveSpeed, out float s, out _) ? s : Unit.BaseRunSpeed;
+        float step = MathF.Max(speed * (PlayerbotMotion.HeartbeatIntervalMs / 1000f), 2f);
+
+        Vector3 stepFrom = from;
+        for (float walked = MathF.Min(step, legDist); ; walked += step)
+        {
+            float along = MathF.Min(walked, legDist);
+            Vector3 candidate = from + ((to - from) * (along / legDist));
+            if (!candidate.IsFinite()) return true;
+
+            float maxCeilingZ = MathF.Max(stepFrom.Z, candidate.Z) + 1.25f;
+            float directFloor = PlayerbotMotion.ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
+            if (PlayerbotMotion.ValidHeight(directFloor) && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
+                return true;
+
+            if (along >= legDist) break;
+            stepFrom = candidate;
+        }
+
+        return false;
     }
 
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
@@ -1444,8 +1450,8 @@ internal static class PlayerbotNavigation
             if (!point.IsFinite() || point.Z > start.Z + SteepEscapeClimbYards) return false;
             // A fall is not a slide (#1501): the motion check refuses a walk through the air, so a route down a cliff face was planned,
             // refused at its first step and planned again, 78 483 times.
-            if (IsSteepEscapeFall(start, steep.Points[index - 1], point)) return false;
-            distance +=Vector3.Distance(steep.Points[index - 1], point);
+            if (IsSteepEscapeFall(player, map, options, steep.Points[index - 1], point)) return false;
+            distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
             if (Vector3.Distance(point, destination) > 1f)
