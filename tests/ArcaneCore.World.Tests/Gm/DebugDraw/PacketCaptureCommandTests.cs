@@ -83,6 +83,25 @@ public sealed class PacketCaptureCommandTests
             }
 
             string trace = Assert.Single(Directory.GetFiles(directory, "*.pkt"));
+
+            // Stop returns before the background writer has drained and closed the file: wait until it can be opened exclusively.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (true)
+            {
+                try
+                {
+                    using (new FileStream(trace, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                    }
+
+                    break;
+                }
+                catch (IOException) when (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(20);
+                }
+            }
+
             using var text = new StringWriter();
             _ = await SniffDecoder.DecodeAsync(trace, text);
             string decoded = text.ToString();

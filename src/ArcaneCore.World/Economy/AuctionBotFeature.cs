@@ -305,8 +305,16 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         _ = Task.Run(async () =>
         {
-            Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
-            world.Post(() => Apply(loaded));
+            try
+            {
+                Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
+                world.Post(() => Apply(loaded));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // world.Post can throw once the world has shut down; the reload is dropped, but not silently.
+                logger.LogFault("ahbot.reload-post", ex, "AHBot reload could not be applied");
+            }
         });
     }
 

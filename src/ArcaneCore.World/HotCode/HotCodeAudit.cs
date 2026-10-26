@@ -151,15 +151,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("hotcode.audit-write", ex);
-                        if (Volatile.Read(ref _logger) is { } log)
-                        {
-                            log.LogFault("hotcode-audit-write", ex, "hot-code audit write to {Path} failed; its queued lines are lost", fullPath);
-                        }
-                        else
-                        {
-                            Console.Error.WriteLine($"hot-code audit write to {fullPath} failed; its queued lines are lost: {ex.Message}");
-                        }
+                        ReportWriteFailure(ex);
                     }
                 }
 
@@ -167,6 +159,27 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
                 {
                     barrier.TrySetResult();
                 }
+            }
+        }
+
+        /// <summary>Count and log a failed write. Reporting must never end the writer loop: a throwing logger or console is swallowed (the fault is already counted).</summary>
+        private void ReportWriteFailure(Exception ex)
+        {
+            FaultLedger.Shared.Record("hotcode.audit-write", ex);
+            try
+            {
+                if (Volatile.Read(ref _logger) is { } log)
+                {
+                    log.LogFault("hotcode-audit-write", ex, "hot-code audit write to {Path} failed; its queued lines are lost", fullPath);
+                }
+                else
+                {
+                    Console.Error.WriteLine($"hot-code audit write to {fullPath} failed; its queued lines are lost: {ex.Message}");
+                }
+            }
+            catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("hotcode.audit-report", reportEx);
             }
         }
 

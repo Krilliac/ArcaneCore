@@ -110,6 +110,24 @@ public sealed class PacketCaptureTests
         Assert.Equal(2, CaptureFaults() - faultsBefore); // the failed write and the failed close
     }
 
+    [Fact]
+    public async Task CloseFailureAlone_FaultsTheCaptureAndDisposeDoesNotThrow()
+    {
+        long faultsBefore = CaptureFaults();
+        var stream = new GatedStream { Fail = false, FailDispose = true };
+        var capture = new PacketCapture(stream, "failing-close-only.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        capture.Stop(); // the writer drains, then closes the stream; only the close fails
+        stream.Release.SetResult();
+        await stream.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Exception? thrown = Record.Exception(capture.Dispose);
+
+        Assert.Null(thrown);
+        Assert.True(capture.Faulted);
+        Assert.Equal(1, CaptureFaults() - faultsBefore); // only the failed close
+    }
+
     private static long CaptureFaults()
         => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "net.packet-capture").Sum(s => s.Count);
 
