@@ -33,7 +33,8 @@ public sealed class WorldHost(
     IOptions<WorldOptions>? worldOptions = null,
     IServiceProvider? rootServices = null,
     IOptions<Cluster.Gateway.GatewayWorkerOptions>? workerOptions = null,
-    Cluster.Gateway.WorkerAdmission? admission = null) : IHostedService
+    Cluster.Gateway.WorkerAdmission? admission = null,
+    ShutdownDrain? drain = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
     private readonly Cluster.Gateway.GatewayWorkerOptions? _worker = workerOptions?.Value;
@@ -395,6 +396,7 @@ public sealed class WorldHost(
             failures.Add(ex);
         }
         finally { world.Stop(); }
+        drain?.Features.Begin(); // the feature write queues share this stall-only lane; the save queue's lane is begun separately below
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -405,6 +407,9 @@ public sealed class WorldHost(
             FaultLedger.Shared.Record("world-host.stop-features", ex);
             failures.Add(ex);
         }
+
+        ReportStopDrain(drain?.Features);
+        drain?.Saves.Begin();
         bool queueStopped = false;
         try
         {
@@ -416,6 +421,8 @@ public sealed class WorldHost(
             FaultLedger.Shared.Record("world-host.stop-save-queue", ex);
             failures.Add(ex);
         }
+
+        ReportStopDrain(drain?.Saves);
 
         if (failures.Count == 0 && queueStopped)
         {
@@ -431,6 +438,15 @@ public sealed class WorldHost(
         if (failures.Count == 0) logger.LogInformation("World saved and stopped");
         else logger.LogError("World stop did not complete; durable ownership was retained");
         if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
+    }
+
+    /// <summary>Logs how a shutdown stall lane ended. A refusal is recorded once per refusing queue (its stop report); the host adds no second ledger entry.</summary>
+    private void ReportStopDrain(StopDrainBudget? lane)
+    {
+        if (lane is not null)
+        {
+            logger.LogInformation("{Drain}", lane.Describe());
+        }
     }
 
     /// <summary>
