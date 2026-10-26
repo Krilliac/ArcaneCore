@@ -318,7 +318,7 @@ public sealed class GmMovementCheatTests
             await SayAsync(gm, on);
         }
 
-        await gm.CollectAsync();
+        await gm.CollectRepliesAsync();
         await SayAsync(gm, ".cheat status");
         string[] expected = ["Cheats active on Movegm:", "- Fly", "- God", "- Fixed Z", "- Feather fall"];
         foreach (string line in expected)
