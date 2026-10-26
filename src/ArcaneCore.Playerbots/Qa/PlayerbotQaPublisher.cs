@@ -23,6 +23,7 @@ internal sealed class QaLedger
     private readonly List<DateTime> _comments = [];
     private readonly List<DateTime> _spellCreates = [];
     private readonly List<DateTime> _statusEdits = [];
+    private readonly List<DateTime> _serverCreates = [];
 
     internal bool CanCreate(DateTime now, int max)
     {
@@ -31,6 +32,21 @@ internal sealed class QaLedger
             Prune(_creates, now);
             return _creates.Count < max;
         }
+    }
+
+    /// <summary>Whether another server-fault issue may be created within the rolling hour (its own cap, apart from <see cref="CanCreate"/>).</summary>
+    internal bool CanCreateServer(DateTime now, int max)
+    {
+        lock (_gate)
+        {
+            Prune(_serverCreates, now);
+            return _serverCreates.Count < max;
+        }
+    }
+
+    internal void RecordServerCreate(DateTime now)
+    {
+        lock (_gate) _serverCreates.Add(now);
     }
 
     internal bool CanComment(DateTime now, int max)
@@ -84,7 +100,7 @@ internal sealed class QaLedger
 
     internal QaLedgerState Export()
     {
-        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates], [.. _statusEdits]);
+        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates], [.. _statusEdits], [.. _serverCreates]);
     }
 
     internal void Restore(QaLedgerState? state)
@@ -95,11 +111,13 @@ internal sealed class QaLedger
             _comments.Clear();
             _spellCreates.Clear();
             _statusEdits.Clear();
+            _serverCreates.Clear();
             if (state is null) return;
             _creates.AddRange(state.CreatesUtc ?? []);
             _comments.AddRange(state.CommentsUtc ?? []);
             _spellCreates.AddRange(state.SpellCreatesUtc ?? []);
             _statusEdits.AddRange(state.StatusEditsUtc ?? []);
+            _serverCreates.AddRange(state.ServerCreatesUtc ?? []);
         }
     }
 
@@ -178,7 +196,7 @@ internal sealed class PlayerbotQaPublisher
         PlayerbotQaGitHubOptions git = _options.GitHub;
         if (!git.Enabled) return;
         QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
-            .OrderBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
+            .OrderBy(f => QaKinds.Of(f.Kind).ServerSide ? 0 : 1).ThenBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
         DateTime start = _time.GetUtcNow().UtcDateTime;
         if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0 && !findings.Any(f => QuietFor(f, start) is not null)) return;
         if (!git.Publish)
@@ -337,12 +355,7 @@ internal sealed class PlayerbotQaPublisher
             if (current.Publication.Issue <= 0)
             {
                 // No known issue: only a create can make progress, and the cap forbids it, so nothing is looked up.
-                if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
-                {
-                    _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
-                    return true;
-                }
-
+                if (!CreateAllowed(current, now)) return true;
                 if (!SpellCreateAllowed(current, pass, now)) return true;
             }
             else if (current.Publication.State == QaPublicationState.Published && !commentDue && !statusDue)
@@ -387,16 +400,12 @@ internal sealed class PlayerbotQaPublisher
 
             if (found is null)
             {
-                if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
-                {
-                    _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
-                    return true;
-                }
-
+                if (!CreateAllowed(current, now)) return true;
                 if (!SpellCreateAllowed(current, pass, now)) return true;
                 QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(current, LabelsFor(current), _build, redactor);
                 QaIssueRef created = await client.CreateIssueAsync(draft.Title, draft.Body, draft.Labels, cancellationToken).ConfigureAwait(false);
-                Ledger.RecordCreate(now);
+                if (QaKinds.Of(current.Kind).ServerSide) Ledger.RecordServerCreate(now);
+                else Ledger.RecordCreate(now);
                 if (QaKinds.Of(current.Kind).SpellKind)
                 {
                     pass.SpellCreates++;
@@ -693,6 +702,22 @@ internal sealed class PlayerbotQaPublisher
     /// The spell caps on top of the hourly one: at most <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/> spell issues per pass and
     /// <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerDay"/> per rolling day. Other kinds are not limited by them.
     /// </summary>
+    /// <summary>Whether the hourly create cap of the finding's lane (server faults have their own) allows one more issue; logs the finding as pending when not.</summary>
+    private bool CreateAllowed(QaFindingView finding, DateTime now)
+    {
+        PlayerbotQaGitHubOptions git = _options.GitHub;
+        if (QaKinds.Of(finding.Kind).ServerSide)
+        {
+            if (Ledger.CanCreateServer(now, git.MaxServerFaultIssuesPerHour)) return true;
+            _logger.LogInformation("Bot QA: the hourly server-fault issue cap ({Cap}) is reached; {Id} stays pending", git.MaxServerFaultIssuesPerHour, finding.ShortId);
+            return false;
+        }
+
+        if (Ledger.CanCreate(now, git.MaxIssuesPerHour)) return true;
+        _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, finding.ShortId);
+        return false;
+    }
+
     private bool SpellCreateAllowed(QaFindingView finding, Pass pass, DateTime now)
     {
         if (!QaKinds.Of(finding.Kind).SpellKind) return true;

@@ -46,6 +46,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     private WorldRuntime? _world;
     private PlayerbotQaFaultFeed? _faultFeed;
     private PlayerbotQaAnomalyFeed? _anomalyFeed;
+    private PlayerbotQaFirstChanceWatch? _firstChance;
     private System.Diagnostics.Metrics.Meter? _findingsMeter;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
@@ -126,6 +127,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         _bus = null;
         _faultFeed = null;
         _anomalyFeed = null;
+        _firstChance = null;
         _findingsMeter = null;
         _facts = NoQaContentFacts.Instance;
         _options = new();
@@ -149,7 +151,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         if (registry is not null && services.GetService<IPlayerbotQaSink>() is { Enabled: true } hangSink)
         {
             int warmupMinutes = services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.TickHangWarmupMinutes ?? 5;
-            subscriptions.Add(registry.UseHangSink(new QaHangSink(hangSink, TimeSpan.FromMinutes(warmupMinutes))));
+            bool worldHang = services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.Faults.WorldHangEnabled ?? true;
+            subscriptions.Add(registry.UseHangSink(new QaHangSink(hangSink, TimeSpan.FromMinutes(warmupMinutes), worldHang)));
         }
 
         _bus = services.GetService<PlayerbotQaSignalBus>();
@@ -222,6 +225,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
 
         if (anomalyLedger is not null) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
+        if (_bus is not null)
+        {
+            // The crash hooks' exception stream, as objects: repeated first-chance exceptions, and unobserved/unhandled ones the ledger did not record.
+            _firstChance = new PlayerbotQaFirstChanceWatch(_bus, options.Faults, Time);
+            subscriptions.Add(FaultObservers.Add(_firstChance));
+        }
         if (services.GetService<SpellFeature>() is { } spells)
         {
             // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).
@@ -264,6 +273,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     {
         try
         {
+            _firstChance?.Flush();
             Drain();
             PollServerFaults();
             PollAnomalies();
@@ -387,6 +397,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     internal void RunPass(CancellationToken cancellationToken)
     {
         if (Aggregator is null || _publisher is null) return;
+        _firstChance?.Flush();
         Drain();
         PollServerFaults();
         PollAnomalies();
@@ -550,10 +561,38 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
     }
 
+    /// <summary>The goal and exception type of the world-hang fault (subject <c>server: world-hang</c>).</summary>
+    internal const string WorldHangGoal = "server";
+
+    internal const string WorldHangType = "world-hang";
+
+    /// <summary>
+    /// The fault of a hung world tick: identified by the world thread's top <c>ArcaneCore</c> frames and nothing else (a longer hang at the same place is the same finding),
+    /// the tick's length in the diagnostic text only.
+    /// </summary>
+    internal static QaSignal WorldHangSignal(long tickMs, IReadOnlyList<string> frames, DateTime atUtc) => new()
+    {
+        Kind = QaSignalKind.ServerFault,
+        AtUtc = atUtc,
+        FaultId = FaultLedger.HashSignature("world-hang|" + string.Join("|", frames)),
+        Goal = WorldHangGoal,
+        ExceptionType = WorldHangType,
+        Reason = WorldHangType,
+        Detail = string.Join(" > ", frames),
+        Diag = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"world tick running {tickMs} ms; the world thread was in {string.Join(" <- ", frames)}"),
+        Message = string.Empty,
+        Occurrences = 1,
+    };
+
     /// <summary>The tick watchdog's hang seam over the QA sink (watchdog thread; never throws past the sink's own contract).</summary>
-    private sealed class QaHangSink(IPlayerbotQaSink sink, TimeSpan warmup) : IBotTickHangSink
+    private sealed class QaHangSink(IPlayerbotQaSink sink, TimeSpan warmup, bool worldHang = true) : IBotTickHangSink
     {
         public TimeSpan Warmup => warmup;
+
+        public void ReportHangStack(long tickMs, IReadOnlyList<string> worldFrames)
+        {
+            if (worldHang && sink.Enabled && worldFrames.Count > 0) sink.Report(WorldHangSignal(tickMs, worldFrames, DateTime.UtcNow));
+        }
 
         public void ReportHang(string phase, string work, string message, long occurrences)
         {

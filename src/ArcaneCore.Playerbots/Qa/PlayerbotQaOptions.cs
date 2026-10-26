@@ -38,6 +38,9 @@ public sealed class PlayerbotQaOptions
     /// <summary>Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it.</summary>
     public int SignalQueueCapacity { get; set; } = 4096;
 
+    /// <summary>What counts as a server fault beyond the fault ledger: logged exceptions, first-chance exceptions, world-thread hangs (<c>World:Playerbots:Qa:Faults</c>).</summary>
+    public PlayerbotQaFaultOptions Faults { get; set; } = new();
+
     /// <summary>The GitHub issue reporter (<c>World:Playerbots:Qa:GitHub</c>).</summary>
     public PlayerbotQaGitHubOptions GitHub { get; set; } = new();
 
@@ -48,6 +51,11 @@ public sealed class PlayerbotQaOptions
         IConfigurationSection section = configuration.GetSection(SectionName);
         // ConfigurationBinder appends array elements to a non-empty initialised array: explicit labels replace the default.
         string githubKey = nameof(GitHub);
+        if (section.GetSection(nameof(Faults)).GetSection(nameof(PlayerbotQaFaultOptions.FirstChanceDenylist)).GetChildren().Any())
+        {
+            options.Faults.FirstChanceDenylist = [];
+        }
+
         if (section.GetSection(githubKey).GetChildren().Any(child => string.Equals(child.Key, nameof(PlayerbotQaGitHubOptions.Labels), StringComparison.OrdinalIgnoreCase)))
         {
             options.GitHub.Labels = [];
@@ -76,8 +84,64 @@ public sealed class PlayerbotQaOptions
         if (TickHangWarmupMinutes is < 0 or > 1440) problems.Add("TickHangWarmupMinutes must be 0..1440");
         if (MaxSamples is < 1 or > 20) problems.Add("MaxSamples must be 1..20");
         if (SignalQueueCapacity is < 64 or > 1_000_000) problems.Add("SignalQueueCapacity must be 64..1000000");
+        if (Faults is null) problems.Add("Faults is missing");
+        else problems.AddRange(Faults.Validate());
         if (GitHub is null) problems.Add("GitHub is missing");
         else problems.AddRange(GitHub.Validate());
+        return problems;
+    }
+}
+
+/// <summary>
+/// What bot QA files as a server fault besides what the fault ledger already carries (<c>World:Playerbots:Qa:Faults</c>). Read once at start.
+/// </summary>
+public sealed class PlayerbotQaFaultOptions
+{
+    /// <summary>The types (and sites) of first-chance exceptions that are expected and never reported by default.</summary>
+    internal static readonly string[] DefaultFirstChanceDenylist =
+    [
+        // Cancellation is how a shutdown, a timeout or a disconnecting client ends an awaited operation: thrown and caught on purpose, on every cancel path.
+        "System.OperationCanceledException",
+        "System.Threading.Tasks.TaskCanceledException",
+        // A peer that resets, aborts or closes its socket (client disconnects, 10053/10054/995) is the network, not a server defect. An IOException that wraps one matches through its inner chain.
+        "System.Net.Sockets.SocketException",
+    ];
+
+    /// <summary>
+    /// Report a log entry that carries an exception (Warning and above, any category, <c>Microsoft.*</c> and <c>System.*</c> included) and an Error from any
+    /// category as a server fault, unless it already went through the fault ledger (on by default).
+    /// </summary>
+    public bool LogExceptions { get; set; } = true;
+
+    /// <summary>Report exceptions that are thrown over and over, from the first-chance stream (on by default). The hook costs one stack walk per throw.</summary>
+    public bool FirstChanceEnabled { get; set; } = true;
+
+    /// <summary>A first-chance group (exception type and the first <c>ArcaneCore</c> frame) is reported once it was thrown this many times inside <see cref="FirstChanceWindowSeconds"/> (2..1000000).</summary>
+    public int FirstChanceMinRepeats { get; set; } = 5;
+
+    /// <summary>The window, in seconds, in which <see cref="FirstChanceMinRepeats"/> throws make a group reportable (10..86400).</summary>
+    public int FirstChanceWindowSeconds { get; set; } = 600;
+
+    /// <summary>
+    /// Exceptions never reported from the first-chance stream: an exception type's full name (it matches that type, a type derived from it, and any exception
+    /// whose inner chain holds one), or <c>Type@Frame</c> to deny the type only where the first <c>ArcaneCore</c> frame contains <c>Frame</c>. A configured list replaces the default.
+    /// Unobserved task exceptions and unhandled exceptions are never filtered by it.
+    /// </summary>
+    public string[] FirstChanceDenylist { get; set; } = [.. DefaultFirstChanceDenylist];
+
+    /// <summary>File a <c>server: world-hang</c> fault, fingerprinted by the world thread's top frames, when the hang stack capture runs (on by default; needs <c>Ops:Watchdog:TickMonitor:StackCaptureTool</c>).</summary>
+    public bool WorldHangEnabled { get; set; } = true;
+
+    internal IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+        if (FirstChanceMinRepeats is < 2 or > 1_000_000) problems.Add("Faults:FirstChanceMinRepeats must be 2..1000000");
+        if (FirstChanceWindowSeconds is < 10 or > 86_400) problems.Add("Faults:FirstChanceWindowSeconds must be 10..86400");
+        if (FirstChanceDenylist is null || FirstChanceDenylist.Length > 200 || FirstChanceDenylist.Any(entry => string.IsNullOrWhiteSpace(entry) || entry.Length > 200 || entry.Any(char.IsControl)))
+        {
+            problems.Add("Faults:FirstChanceDenylist must hold at most 200 non-empty entries of at most 200 characters");
+        }
+
         return problems;
     }
 }
@@ -134,6 +198,13 @@ public sealed class PlayerbotQaGitHubOptions
 
     /// <summary>The most issues created per rolling hour (0..1000; 0 creates none); the rest stay pending.</summary>
     public int MaxIssuesPerHour { get; set; } = 5;
+
+    /// <summary>
+    /// The most issues for server faults (exceptions, tick hangs, world hangs, unobserved and unhandled exceptions) created per rolling hour, on top of and apart from
+    /// <see cref="MaxIssuesPerHour"/> (0..1000; 0 creates none). Server faults are also published before every other kind, so a flood of bot findings cannot keep
+    /// them pending behind the shared cap.
+    /// </summary>
+    public int MaxServerFaultIssuesPerHour { get; set; } = 5;
 
     /// <summary>The most comments added per rolling hour (0..1000; 0 adds none).</summary>
     public int MaxCommentsPerHour { get; set; } = 10;
@@ -212,6 +283,7 @@ public sealed class PlayerbotQaGitHubOptions
         if (MinOccurrences is < 1 or > 1_000_000) problems.Add("GitHub:MinOccurrences must be 1..1000000");
         if (MinDistinctBots is < 1 or > 10_000) problems.Add("GitHub:MinDistinctBots must be 1..10000");
         if (MaxIssuesPerHour is < 0 or > 1000) problems.Add("GitHub:MaxIssuesPerHour must be 0..1000");
+        if (MaxServerFaultIssuesPerHour is < 0 or > 1000) problems.Add("GitHub:MaxServerFaultIssuesPerHour must be 0..1000");
         if (MaxCommentsPerHour is < 0 or > 1000) problems.Add("GitHub:MaxCommentsPerHour must be 0..1000");
         if (CommentIntervalHours is < 1 or > 720) problems.Add("GitHub:CommentIntervalHours must be 1..720");
         if (MaxSpellIssuesPerPass is < 0 or > 100) problems.Add("GitHub:MaxSpellIssuesPerPass must be 0..100");

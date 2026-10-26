@@ -59,6 +59,9 @@ internal static class PlayerbotQaClassifier
             case QaSignalKind.SpellUnsupported:
                 return new QaClassification(QaCause.NotImplemented, SpellPrefix(s) + QaSpellGaps.Explain(s.Reason, s.Detail), title);
 
+            case QaSignalKind.ServerFault when s.ExceptionType == PlayerbotQaFeature.WorldHangType:
+                return new QaClassification(QaCause.ServerFault, "the world tick hung and the world thread was caught in the frames below (innermost first); the code at the top of them is where the server stood still", title);
+
             case QaSignalKind.ServerFault:
                 return new QaClassification(QaCause.ServerFault, "the server caught " + (s.ExceptionType.Length != 0 ? s.ExceptionType : "an exception") + " at its '"
                     + s.Goal + "' catch site and recovered; the frames below are where it was thrown", title);

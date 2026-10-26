@@ -58,6 +58,18 @@ internal sealed partial class PlayerbotQaRedactor
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespacePattern();
 
+    [GeneratedRegex(@"(?<name>@\w+)\s*=\s*'(?:[^']|'')*'", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlParameterPattern();
+
+    [GeneratedRegex(@"\b(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex SqlVerbPattern();
+
+    [GeneratedRegex(@"'(?:[^']|'')*'", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlStringLiteralPattern();
+
+    [GeneratedRegex(@"(?<![\w@.:])-?\d+(?:\.\d+)?(?![\w.])", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlNumberPattern();
+
     [GeneratedRegex(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s""'<>|*?]*|\\\\[^\s\\""'<>|*?]+\\[^\s""'<>|*?]*|(?<![\w:/.\\-])/(?:[\w.@+-]+/)+[\w.@+-]*", RegexOptions.CultureInvariant)]
     private static partial Regex FilePathPattern();
 
@@ -86,9 +98,24 @@ internal sealed partial class PlayerbotQaRedactor
     public string RedactFault(string? text)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
+        text = StripSqlValues(text);
         text = FilePathPattern().Replace(text, "<path>"); // before Redact: its user-folder rule would leave a path tail behind
         text = Redact(text);
         return GameIdPattern().Replace(text, m => m.Groups["k"].Success ? m.Groups["k"].Value + m.Groups["s"].Value + "<id>" : "<id>");
+    }
+
+    /// <summary>
+    /// Keeps the shape of SQL text and drops every value in it: the quoted value of an EF Core parameter (<c>@p0='Name' (Size = 4)</c> becomes <c>@p0='?' (Size = 4)</c>) and,
+    /// in text that holds a SQL statement, every string literal and number (<c>SET name = 'x' WHERE guid = 42</c> becomes <c>SET name = '?' WHERE guid = ?</c>). Text with no SQL is
+    /// left alone apart from the parameter rule. A value can be a player name, a guid or an item: none of it belongs in a public issue.
+    /// </summary>
+    internal static string StripSqlValues(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        text = SqlParameterPattern().Replace(text, "${name}='?'");
+        if (!SqlVerbPattern().IsMatch(text)) return text;
+        text = SqlStringLiteralPattern().Replace(text, "'?'");
+        return SqlNumberPattern().Replace(text, "?");
     }
 
     /// <summary>A redactor with the same names that also removes the literal <paramref name="token"/> wherever it appears.</summary>
