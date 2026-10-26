@@ -740,23 +740,53 @@ public sealed class PlayerbotPathJobTests
             Assert.True(h.Think(() => PlayerbotNavigation.TryPlanFar(h.Player, far, h.Options, 12_000, out _)));
             Assert.Equal(3, h.Nav.OwnerCalls);
 
-            // A chase and a trial answer this think, even through the waiting wrapper.
+            // A chase answers this think, even through the waiting wrapper (a trial through it is a job: ATrialSearch_...).
             Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_000, out _, chase: true));
             Assert.Equal(4, h.Nav.OwnerCalls);
-            Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_000, out _, trial: true));
-            Assert.Equal(5, h.Nav.OwnerCalls);
 
             // A query within the vmangos search budget (a goal under 100 yards), and one that cannot take a pending answer.
             Assert.Equal(PlanOutcome.Route, h.Plan(h.Far(50), ref wait, 1_000, out _));
-            Assert.Equal(6, h.Nav.OwnerCalls);
+            Assert.Equal(5, h.Nav.OwnerCalls);
             PathOptions blocking = Harness.Query(12_000) with { NonBlockingTiles = false };
             h.Think(() =>
             {
                 using PlayerbotPathJobs.DeferrableScope scope = PlayerbotPathJobs.Deferrable();
                 return PlayerbotThinkProbe.Find(h.Collision, h.Origin, far, blocking);
             });
-            Assert.Equal(7, h.Nav.OwnerCalls);
+            Assert.Equal(6, h.Nav.OwnerCalls);
             Assert.Empty(h.Runner.Submitted);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A trial search (a candidate weighed through <see cref="PlayerbotNavigation.PlanExact"/>) is a path job: the think answers pending
+    /// without a search on the world thread, and a later think uses the finished answer. A trial through a bool planner keeps searching at once.
+    /// </summary>
+    [Fact]
+    public async Task ATrialSearch_IsSubmittedAsAJob_AndItsResultIsUsedOnALaterThink()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            var wait = new TileWait();
+
+            Assert.Equal(PlanOutcome.Pending, h.Plan(far, ref wait, 1_000, out PlayerbotRoute? first, trial: true));
+            Assert.Null(first);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Single(h.Runner.Submitted);
+
+            h.Runner.CompleteAll();
+            Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_500, out PlayerbotRoute? later, trial: true));
+            Assert.NotNull(later);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+
+            // A bool planner cannot tell pending from refused: its trial still searches on the think.
+            Assert.True(h.Think(() => PlayerbotNavigation.TryPlan(h.Player, far, h.Options, out _, trial: true)));
+            Assert.Equal(1, h.Nav.OwnerCalls);
             return true;
         });
     }

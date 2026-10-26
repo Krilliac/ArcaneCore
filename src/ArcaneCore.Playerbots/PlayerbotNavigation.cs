@@ -325,7 +325,7 @@ internal static class PlayerbotNavigation
         using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
         return Outcome(TryPlan(player, destination, options, out route, trial: trial, completedQuestReturn: completedQuestReturn,
-            friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd), mark, ref wait, now, ref route);
+            friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd, deferTrial: trial), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
@@ -411,14 +411,17 @@ internal static class PlayerbotNavigation
 
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
+    /// <param name="deferTrial">The caller handles a pending answer (<see cref="PlanExact"/>): a trial search may then run as a path job
+    /// (<see cref="PlayerbotPathJobs"/>) and be decided on a later think instead of searching on this one.</param>
     /// <param name="nearestEnd">The caller takes the mesh's nearest end to an off-mesh destination as its answer, however far it lies (a
     /// revive spot re-checked by its caller); a chase does too (<paramref name="chase"/>: a ranged bot fights from where the mesh ends).
     /// Other exact plans refuse such an end beyond <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/> (<see cref="Usable"/>).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
         out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false,
-        bool chase = false, bool nearestEnd = false)
+        bool chase = false, bool nearestEnd = false, bool deferTrial = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd,
+            deferTrial: deferTrial);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -800,7 +803,7 @@ internal static class PlayerbotNavigation
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
-        bool friendlyTownEnder = false, bool chase = false, bool nearestEnd = false)
+        bool friendlyTownEnder = false, bool chase = false, bool nearestEnd = false, bool deferTrial = false)
     {
         if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
         {
@@ -808,8 +811,10 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
-        // A chase answers this think (combat responsiveness) and a trial weighs candidates: neither can wait for a path job.
-        using PlayerbotPathJobs.NoDeferScope noDefer = chase || trial ? PlayerbotPathJobs.NoDefer() : default;
+        // A chase answers this think (combat responsiveness). A trial weighs a candidate: through a planning wrapper (PlanExact, whose
+        // callers handle PlanOutcome.Pending: deferTrial) it is a path job like any far query and the candidate waits for a later think;
+        // a bool caller (TryPlan) cannot tell a pending answer from a refusal and keeps its synchronous search.
+        using PlayerbotPathJobs.NoDeferScope noDefer = chase || (trial && !deferTrial) ? PlayerbotPathJobs.NoDefer() : default;
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase,
                 nearestEnd: chase || nearestEnd) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
