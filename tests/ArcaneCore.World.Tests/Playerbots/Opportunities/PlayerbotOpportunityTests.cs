@@ -1278,7 +1278,7 @@ public sealed class PlayerbotOpportunityTests
     }
 
     /// <summary>
-    /// A far chest whose tile is never read (the read does not finish) answers pending while the tile wait runs, and is set aside once the
+    /// A far chest while the tile under the bot is never read (the read does not finish) answers pending while the tile wait runs, and is set aside once the
     /// wait is spent (<see cref="TileWait.MaxMs"/>, wall clock and game clock): it is not asked again at every scan for ever.
     /// </summary>
     [Fact]
@@ -1315,7 +1315,7 @@ public sealed class PlayerbotOpportunityTests
         };
         try
         {
-            Assert.True(nav.LoadTile(0, fileX, fileY)); // the bot's own tile is in; the chest's tile is read on the pool and never finishes
+            // The graph is built from the files; no tile is resident, so the first query of the bot starts a read on the pool that never finishes.
             Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
             blockReads = true;
 
