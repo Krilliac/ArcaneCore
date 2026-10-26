@@ -184,7 +184,7 @@ public sealed class LootAnomalyTests
     [Fact]
     public void ALooterWhoMoves_LosesACorpseWindow_SoItsViewersEmpty()
     {
-        // vmangos HandleMoverRelocation (MovementHandler.cpp:1108-1109): moving closes a non-item loot window.
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1106-1110): moving closes a non-item loot window.
         Rig rig = CreateRig(7106, 0, ItemTestData.ToughJerky);
         Player alice = rig.Join(7106);
         Creature wolf = rig.Kill(alice);

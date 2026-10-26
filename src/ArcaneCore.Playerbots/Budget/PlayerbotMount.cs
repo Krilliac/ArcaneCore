@@ -7,7 +7,6 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Protocol;
-using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,7 +81,8 @@ internal sealed class PlayerbotMount
         {
             // Close the window for real (the cast path's release), not just the flag: the movement and cast release triggers gate on the
             // flag, so a bare clear would leave the bag listing the bot and its node in use. The flag clear stays for a flag with no window.
-            session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
+            if (!player.IsQuestSettlementPending)
+                session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
 
             player.UnitFlags &= ~UnitFlags.Looting;
         }

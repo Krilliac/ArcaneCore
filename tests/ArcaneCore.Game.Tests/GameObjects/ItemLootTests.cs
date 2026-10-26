@@ -88,7 +88,7 @@ public sealed class ItemLootTests
     [Fact]
     public void AnItemLootWindow_StaysOpenWhenItsOwnerMoves()
     {
-        // vmangos closes only non-item loot on a moving block (HandleMoverRelocation, MovementHandler.cpp:1108-1109).
+        // vmangos closes only non-item loot on a moving block (HandleMoverRelocation, MovementHandler.cpp:1106-1110).
         var rig = new Rig();
         Item clams = rig.Give(Clam, 3);
         Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(rig.Player, clams));

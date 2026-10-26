@@ -1619,6 +1619,13 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return false;
     }
 
+    /// <summary>The source of the loot window <paramref name="player"/> has open, or the empty guid.</summary>
+    private ObjectGuid OpenWindowSourceOf(Player player)
+        => player.Map is { } map
+            && _session.Services.GetService<ArcaneCore.World.GameObjects.GameObjectLootFeature>()?.FindSystem(map)?.Loot?.OpenLootOf(player) is { } bag
+                ? bag.Source
+                : default;
+
     private bool DrainGatherLoot(Player player, uint now)
     {
         if (_waitingForGatherLoot)
@@ -1650,7 +1657,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             // The window may be open server side with its reply lost: close it, or the node stays "in use" and is never gatherable, despawned
             // or respawned. Released server side through the cast path's release (no managed action: a spent budget cannot drop it); a
             // release when no window is held does nothing.
-            if (!timedOutTarget.IsEmpty)
+            // Only the gather's own window, and not while a quest settlement freezes the character (the client path drops requests then).
+            if (!timedOutTarget.IsEmpty && !player.IsQuestSettlementPending && OpenWindowSourceOf(player) == timedOutTarget)
                 _session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
             if (timedOutTarget.High == HighGuid.GameObject)
             {

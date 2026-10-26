@@ -286,6 +286,61 @@ public sealed class PlayerbotGatherLootWaitTests
         Assert.Null(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
     }
 
+    [Fact]
+    public async Task TheTimeoutRelease_LeavesAWindowOfAnotherSourceOpen()
+    {
+        // The release is for the gather's own window: a window opened on another source during the wait (a corpse) is not closed by it.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+        await rig.Host.OnWorldAsync(() =>
+        {
+            typeof(PlayerbotCrafting).GetField("_gatheringTarget", Private)!.SetValue(rig.Crafting, new ObjectGuid(ChestGuid(Node) + 1));
+            return true;
+        });
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
+
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotNull(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+    }
+
+    [Fact]
+    public async Task TheTimeoutRelease_IsSkippedWhileAQuestSettlementIsPending()
+    {
+        // The client path drops requests while a settlement freezes the character; the bot's server-side release follows it (a later mount step still closes the window).
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+        var operation = Guid.NewGuid();
+        Assert.True(await rig.Host.OnWorldAsync(() => rig.Player.BeginQuestSettlement(operation)));
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+    }
+
+    [Fact]
+    public async Task AMountStep_LeavesTheWindowOpen_WhileAQuestSettlementIsPending()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        var operation = Guid.NewGuid();
+        Assert.True(await rig.Host.OnWorldAsync(() => rig.Player.BeginQuestSettlement(operation)));
+
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
+    }
+
     private static readonly System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
 
     private static T Field<T>(PlayerbotCrafting crafting, string name)
@@ -439,7 +494,7 @@ public sealed class PlayerbotGatherLootWaitTests
     [Fact]
     public async Task AGatherersMovement_ClosesItsOpenNodeWindow_ThroughTheMovementHandler()
     {
-        // vmangos HandleMoverRelocation (MovementHandler.cpp:1108-1109).
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1106-1110).
         await using Rig rig = await Rig.StartAsync();
         await CastAndLandAsync(rig);
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
