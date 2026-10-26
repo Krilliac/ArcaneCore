@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
@@ -446,7 +447,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             return null;
         }
 
-        Quest? found = null;
+        ArcaneCore.Game.Quests.Quest? found = null;
         try
         {
             foreach (Match match in QuestIdPattern.Matches(text))
