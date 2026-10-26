@@ -403,9 +403,20 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
             _autocastSent.Clear();
         }
 
-        if (_autocastSent.Count >= charm.SpellStates.Count)
+        // Compare spell ids, not counts: a rank that replaces another keeps the count but is a new spell to handle. The sent set is
+        // walked with its struct enumerator, so the common think allocates nothing.
+        int handled = 0;
+        foreach (uint sent in _autocastSent)
         {
-            return; // every spell was handled for this pet: no allocation on the common think
+            if (charm.SpellStates.ContainsKey(sent))
+            {
+                handled++;
+            }
+        }
+
+        if (handled >= charm.SpellStates.Count)
+        {
+            return; // every spell the pet knows was handled
         }
 
         // a snapshot: the handler may change the state while the loop runs

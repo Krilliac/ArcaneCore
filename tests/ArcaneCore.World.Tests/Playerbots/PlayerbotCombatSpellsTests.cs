@@ -514,6 +514,20 @@ public sealed class PlayerbotCombatSpellsTests
                     return true;
                 });
                 Assert.Equal(1, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast)); // not repeated
+
+                // A rank that replaces a known spell keeps the spell count, but it is a new spell: autocast is sent for it too.
+                await host.World.InvokeAsync(() =>
+                {
+                    ArcaneCore.Game.Pets.CharmInfo charm = pet.Summon!.Charm!;
+                    Assert.True(charm.UnlearnSpell(SpellTestServices.Bolt));
+                    Assert.True(charm.LearnSpell(9101, ArcaneCore.Game.Pets.ActionType.Disabled));
+                    Assert.Single(charm.SpellStates);
+                    session.ManagedBudget = new ManagedActionBudget(8);
+                    helper.Update(session.Player!, target, 0);
+                    return true;
+                });
+                Assert.Equal(2, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast));
+                Assert.Equal(ArcaneCore.Game.Pets.ActionType.Enabled, await host.World.InvokeAsync(() => pet.Summon!.Charm!.SpellStates[9101]));
             }
             finally
             {
