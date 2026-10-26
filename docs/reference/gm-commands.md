@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 390 |
-| `Administrator` | 6 | 590 |
+| `GameMaster` | 3 | 396 |
+| `Administrator` | 6 | 596 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -48,6 +48,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cheat immunepc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunepc on\|off [$name] Players cannot attack the player. |
 | `.cheat immunenpc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunenpc on\|off [$name] Creatures cannot attack the player. |
 | `.cheat untargetable` | 3 | GameMaster | declared retail level | Syntax: .cheat untargetable on\|off [$name] Nobody can select the player. |
+| `.cheat fly` | 3 | GameMaster | declared retail level | Syntax: .cheat fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
+| `.cheat fixedz` | 3 | GameMaster | declared retail level | Syntax: .cheat fixedz on\|off The selected player or you get a fixed height: a jump glides across the map (MOVEFLAG_FIXED_Z). |
+| `.cheat wallclimb` | 3 | GameMaster | declared retail level | Syntax: .cheat wallclimb on\|off The selected player or you climb walls (UNIT_FLAG_SERVER_CONTROLLED). |
+| `.cheat featherfall` | 3 | GameMaster | declared retail level | Syntax: .cheat featherfall on\|off [$name] Falls never hurt (not a vmangos command). |
 | `.cheat status` | 3 | GameMaster | declared retail level | Syntax: .cheat status [$name] List the cheats active on the player. |
 | `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
 | `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
@@ -109,6 +113,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.gm ingame` | 1 | Moderator | stored level through the map | Syntax: .gm ingame List the game masters online with their GM mode on, and whether they accept whispers. |
 | `.gm list` | 6 | Administrator | stored level through the map | Syntax: .gm list List every staff member online with their security level. |
 | `.gm visible` | 3 | GameMaster | declared retail level | Syntax: .gm visible [on/off] Show or hide yourself from players of a lower security level, or show the current state. |
+| `.gm fly` | 3 | GameMaster | declared retail level | Syntax: .gm fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
 | `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
 | `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
 | `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
@@ -288,6 +293,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
 | `.demorph` | 3 | GameMaster | declared retail level | Syntax: .demorph Restore the native model of the selected unit or yourself. |
 | `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
+| `.knockback` | 3 | GameMaster | declared retail level | Syntax: .knockback [#horizontal_speed [#vertical_speed]] Knock the selected player or yourself back from you (10 and 10 by default); a creature is not moved. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.dismount` | 0 | Player | declared retail level | Syntax: .dismount Dismount you, if you are mounted. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
