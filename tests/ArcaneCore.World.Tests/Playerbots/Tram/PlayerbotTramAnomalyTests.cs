@@ -244,9 +244,9 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
     }
 
-    /// <summary>#1499: a missed car is chosen again by the per-tick pump, not at the next (12-23 s later) think.</summary>
+    /// <summary>#1499: a missed car is reported and dropped by the per-tick pump (not at the next, 12-23 s later, think) when the bot is not beside the soonest new spot.</summary>
     [Fact]
-    public async Task MissedCar_IsChosenAgain_ByThePump_WithoutAThink()
+    public async Task MissedCar_IsReportedAndDropped_ByThePump_WhenTheBotIsNotBesideTheSoonestSpot()
     {
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
@@ -283,7 +283,10 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     [Fact]
     public async Task MissedCar_IsKeptByThePump_WhenTheBotIsAlreadyBesideTheNewSpot()
     {
-        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        // One car only: its next stop is the soonest, and the bot stands beside it.
+        await using TramTestWorld world = await TramTestWorld.StartAsync(animation: TramTestData.SyntheticAnimation(176080));
+        await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)), "the trip did not begin");
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram && Stage(world) is TramStage.Waiting);
         (uint departMs, uint chosenMs) = await world.OnWorldAsync(() =>
@@ -310,6 +313,63 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         Assert.True(hasCar, "the bot stands beside the spot: the choice is kept");
         Assert.False(hasRoute);
         Assert.Equal(TramStage.Waiting, stage);
+    }
+
+    /// <summary>
+    /// #1499 (review B1): with both trains running, a bot beside its missed car's spot must not have the pump lock in that car's next
+    /// stop (a full cycle later) over the other train's, which stops sooner on the other track. The pump keeps the soonest stop or none,
+    /// so a kept car's arrival equals the one a full choice (the think) makes.
+    /// </summary>
+    [Fact]
+    public async Task MissedCar_PumpNeverKeepsALaterStop_ThanAFullChoice()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram && Stage(world) is TramStage.Waiting);
+        (uint departMs, uint missedGuid) = await world.OnWorldAsync(() =>
+        {
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            return (trip.Dock.DepartMs, trip.Car!.Guid.Entry);
+        });
+
+        await world.AdvanceAsync(departMs + 5_000);
+        (uint? keptArrive, uint fullArrive, uint fullEntry) = await world.OnWorldAsync(() =>
+        {
+            PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs);
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            uint? kept = trip.Car is not null ? trip.Dock.ArriveMs : null;
+            trip.Car = null;
+            Drive(world, options);
+            return (kept, trip.Dock.ArriveMs, trip.Car!.Guid.Entry);
+        });
+
+        output.WriteLine($"missed={missedGuid} keptArrive={keptArrive} fullArrive={fullArrive} fullCar={fullEntry}");
+        Assert.NotEqual(missedGuid, fullEntry);
+        if (keptArrive is { } arrive) Assert.Equal(fullArrive, arrive);
+    }
+
+    /// <summary>
+    /// #1499: a bot that misses its car still finishes inside the slow bound: the wait for the next stop is under one cycle (the other
+    /// train stops sooner), so the whole trip stays under 2 cycles + 60 s and is reported neither slow nor failed.
+    /// </summary>
+    [Fact]
+    public async Task MissedCar_TripDuration_StaysInsideTheSlowBound()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        uint startMs = await world.OnWorldAsync(() => world.Host.World.NowMs);
+        await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram && Stage(world) is TramStage.Waiting);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        uint departMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Dock.DepartMs);
+
+        await world.AdvanceAsync(departMs + 5_000);
+        await DriveUntilAsync(world, options, () => Stage(world) is TramStage.Done or TramStage.Failed);
+        uint tripMs = await world.OnWorldAsync(() => world.Host.World.NowMs - startMs);
+
+        output.WriteLine($"tripMs={tripMs} bound={SlowBoundMs}");
+        Assert.Equal(TramStage.Done, await world.OnWorldAsync(() => Stage(world)));
+        Assert.True(tripMs < SlowBoundMs, $"trip took {tripMs} ms, bound {SlowBoundMs} ms");
+        Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
     }
 
     /// <summary>

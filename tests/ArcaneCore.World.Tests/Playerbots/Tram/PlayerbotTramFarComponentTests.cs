@@ -112,6 +112,13 @@ public sealed class PlayerbotTramFarComponentTests : IDisposable
 
         Assert.True(onFragment, "the pocket is not read as a fragment");
         Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.InOtherWalkingComponent(world.Player, new Vector3(30, 5, 0))));
+        // Control: the two places really are in different components, so it is the fragment exemption that makes the answer false.
+        (int from, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotNavigation.IsUnreachableOnFoot(world.Player, new Vector3(30, 5, 0), out int f, out int t);
+            return (f, t);
+        });
+        Assert.True(from >= 0 && to >= 0 && from != to, $"components from={from} to={to}");
     }
 
     // PlayerbotMeshFragmentTests.Fragment(4): the pocket (X 0-10, Y 0-30) is one region touching no tile border; the rest joins four tiles.

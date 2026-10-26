@@ -347,6 +347,8 @@ internal static partial class PlayerbotTram
     /// Note the order of the bounds: a bot that never gets aboard fails first (<c>no-car-stopped</c> after 2 cycles + 30 s in
     /// <see cref="AtPlatform"/>), before this bound (2 cycles + 60 s). In practice trip-slow means a trip that boarded and then took
     /// too long (a slow ride, a slow walk out); a bot stuck waiting is reported as a failed trip.
+    /// <para>The bound cannot flag a single missed cycle: one missed car costs at most one cycle (the next car stops within a cycle), which
+    /// is inside 2 cycles + 60 s. Only a trip that lost two or more cycles, or lost one and then also walked or rode slowly, is reported.</para>
     /// </remarks>
     internal const uint SlowTramCycles = 2;
 
@@ -521,11 +523,11 @@ internal static partial class PlayerbotTram
         {
             TramPlatform platform = trip.Network.Other(trip.To);
             ReportBoardMissed(player, trip, missedCar, platform, new Vector3(player.X, player.Y, player.Z), now, CanReport(session, player));
-            PlayerbotThinkProbe.Phase("tram choose car");
+            // The pump cannot walk (no TryAdvance without the think's elapsed time): it keeps the soonest car (first in Ready order) only when
+            // the bot already stands beside its spot (no route is planned, so none is thrown away), and boards it while the stop window is
+            // open. Never a later car: that would lock in a later stop over a sooner one on the other track. Otherwise Car stays null and
+            // the next think chooses and walks in one step.
             bool chosen = ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _, standingOnly: true);
-            // The pump cannot walk (no TryAdvance without the think's elapsed time): it keeps a car only when the bot already stands
-            // beside the spot (no route is planned, so none is thrown away), the pump then boards it while the stop window is open.
-            // Otherwise Car stays null and the next think chooses and walks in one step.
             if (!chosen)
             {
                 trip.Car = null;
@@ -975,8 +977,10 @@ internal static partial class PlayerbotTram
 
         foreach ((GameObject car, TramDock dock, _) in candidates.OrderBy(c => c.Ready).ThenBy(c => c.Car.Guid.Value))
         {
+            // standingOnly: the soonest car or none (no later stop is locked in by DockChosenMs over a sooner one).
             if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending, standingOnly) is not { } spot)
             {
+                if (standingOnly) return false;
                 waitingForTiles |= pending;
                 continue;
             }
