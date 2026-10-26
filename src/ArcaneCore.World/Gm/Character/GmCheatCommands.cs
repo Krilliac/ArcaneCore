@@ -330,6 +330,9 @@ public sealed class GmCheatCommands : ICommandGroup
 
     // The shared shape of the on/off cheats: ExtractOnOff then ExtractPlayerTarget (name, selection or self, with the security check),
     // "You set %s to %s for %s." and, to anyone else, "Your %s has been turned %s by %s.".
+    // Limits:
+    // - .cheat featherfall <name> can reach a player on another map, as the god, cooldown and immune cheats on main already do.
+    // - fly, fixedz and wallclimb ignore a trailing name, which matches vmangos and the help text.
     private static bool Toggle(CommandContext context, string text, string what, Action<Player, bool> apply)
     {
         var args = new CommandArgs(text);

@@ -210,7 +210,7 @@ internal static class MpqTestWriter
     public static void Encrypt(Span<byte> data, uint key)
     {
         // The stream cipher of the format: key2 starts at 0xEEEEEEEE, advances by the table row 4 entry selected by key1's
-        // low byte, and both keys are updated from the plaintext word. ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:436-474
+        // low byte, and both keys are updated from the plaintext word. ref: StormLib src/SBaseCommon.cpp:436-474
         uint key1 = key;
         uint key2 = 0xEEEEEEEE;
         ReadOnlySpan<uint> table = MpqCrypto.Table;
@@ -228,7 +228,7 @@ internal static class MpqTestWriter
     public static byte[] SparseEncode(ReadOnlySpan<byte> data)
     {
         // The operations of the format: a high-bit byte plus (n & 0x7F) + 1 literal bytes, or a clear byte for (n & 0x7F) + 3 zeros.
-        // ref: D:\mangos-unified\dep\StormLib\src\sparse\sparse.cpp:225-287
+        // ref: StormLib src/sparse/sparse.cpp:225-287
         var output = new List<byte>
         {
             (byte)(data.Length >> 24),

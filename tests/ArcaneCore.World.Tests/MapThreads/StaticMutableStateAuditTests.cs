@@ -42,6 +42,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.Gm.Inspect.InspectSectionRegistry._problems"] = "guarded by the registry's Gate lock; list set once at discovery",
         ["ArcaneCore.World.Gm.Inspect.InspectSectionRegistry._registered"] = "guarded by the registry's Gate lock; immutable array replaced whole",
         ["ArcaneCore.World.Gm.Tools.DebugQueueCommands._baseline"] = "volatile reference to an immutable snapshot, replaced whole by .debug opcodes on/reset",
+        ["ArcaneCore.World.HotCode.HotCodeAudit.BeforeWriteHook (property)"] = "test seam, a delegate reference (atomic write) swapped by tests only (HotCodeAuditTests, which filter by their own temp path); production never writes it",
         ["ArcaneCore.World.HotCode.HotCodeMetadataHandler.s_active"] = "Volatile/Interlocked reference",
         ["ArcaneCore.World.Ops.MapFeed.MapFeedConnection.s_lastConnectionId"] = "connection id counter, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafety.s_nextLogin"] = "login sequence, Interlocked.Increment",

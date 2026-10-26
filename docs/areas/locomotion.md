@@ -345,7 +345,7 @@ the movement part is `Locomotion/Knockback/Knockback.cs` (vmangos `Unit::KnockBa
   and relays `MSG_MOVE_KNOCK_BACK` (packed GUID, block, the four numbers) to the observers, not to the mover. Mismatches are ignored and counted.
   The server does not move the unit: the client's next movement packets carry the launch.
 * **Timeout**: an unacknowledged knock back is not resendable, so after `Locomotion:PendingAckResponseTimeMs` it is dropped and counted as a failed ack, not
-  enforced (`CheckPendingMovementChanges`, `Unit.cpp:6653-6658`).
+  enforced (`CheckPendingMovementChanges`, `Unit.cpp:6670-6675`).
 
 Not delivered: `SetLaunched` / the anticheat's knock back tolerance and `SetJumpInitialSpeed` (extrapolation only); damage-immunity interactions (a spell
 immunity that stops knock back belongs to the spell combat rules). Unverified against a 1.12.1 client (packed GUID width, see slice 1).

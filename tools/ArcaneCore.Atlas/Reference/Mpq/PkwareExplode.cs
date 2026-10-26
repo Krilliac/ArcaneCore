@@ -16,7 +16,7 @@ public static class PkwareExplode
 {
     // Every table below is a fact of the PKWARE stream format, transcribed from the reader named in each comment.
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:34-40 (DistBits)
+    // ref: StormLib src/pklib/explode.c:34-40 (DistBits)
     private static readonly byte[] DistBits =
     [
         0x02, 0x04, 0x04, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
@@ -25,7 +25,7 @@ public static class PkwareExplode
         0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
     ];
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:42-48 (DistCode)
+    // ref: StormLib src/pklib/explode.c:42-48 (DistCode)
     private static readonly byte[] DistCode =
     [
         0x03, 0x0D, 0x05, 0x19, 0x09, 0x11, 0x01, 0x3E, 0x1E, 0x2E, 0x0E, 0x36, 0x16, 0x26, 0x06, 0x3A,
@@ -34,26 +34,26 @@ public static class PkwareExplode
         0xF0, 0x70, 0xB0, 0x30, 0xD0, 0x50, 0x90, 0x10, 0xE0, 0x60, 0xA0, 0x20, 0xC0, 0x40, 0x80, 0x00,
     ];
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:50-53 (ExLenBits)
+    // ref: StormLib src/pklib/explode.c:50-53 (ExLenBits)
     private static readonly byte[] ExtraLengthBits =
     [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
     ];
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:55-59 (LenBase)
+    // ref: StormLib src/pklib/explode.c:55-59 (LenBase)
     private static readonly ushort[] LengthBase =
     [
         0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
         0x0008, 0x000A, 0x000E, 0x0016, 0x0026, 0x0046, 0x0086, 0x0106,
     ];
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:61-64 (LenBits)
+    // ref: StormLib src/pklib/explode.c:61-64 (LenBits)
     private static readonly byte[] LengthBits =
     [
         0x03, 0x02, 0x03, 0x03, 0x04, 0x04, 0x04, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x07, 0x07,
     ];
 
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:66-69 (LenCode)
+    // ref: StormLib src/pklib/explode.c:66-69 (LenCode)
     private static readonly byte[] LengthCode =
     [
         0x05, 0x03, 0x01, 0x06, 0x0A, 0x02, 0x0C, 0x14, 0x04, 0x18, 0x08, 0x30, 0x10, 0x20, 0x40, 0x00,
@@ -64,7 +64,7 @@ public static class PkwareExplode
     private static readonly byte[] LengthLookup = BuildLookup(LengthCode, LengthBits);
 
     /// <summary>The length value (before adding 2) that marks the end of the stream.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:266-267,403 (literal 0x305 = length_code 0x205 + 0x100)
+    // ref: StormLib src/pklib/explode.c:266-267,403 (literal 0x305 = length_code 0x205 + 0x100)
     private const uint EndOfStreamLength = 0x205;
 
     /// <summary>
@@ -74,7 +74,7 @@ public static class PkwareExplode
     /// <exception cref="NotSupportedException">The stream uses ASCII literal mode.</exception>
     public static int Decompress(ReadOnlySpan<byte> input, Span<byte> output)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\pklib\explode.c:486-505
+        // ref: StormLib src/pklib/explode.c:486-505
         if (input.Length <= 4)
         {
             throw new InvalidDataException("PKWARE stream is too short.");

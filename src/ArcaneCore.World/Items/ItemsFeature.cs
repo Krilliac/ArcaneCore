@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -31,6 +32,9 @@ namespace ArcaneCore.World.Items;
 public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger, IConfiguration? configuration = null) : IWorldFeature, ICharacterHooks
 {
     private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private readonly object _backgroundLoadGate = new();
+    private Task? _backgroundLoad;
+    private long _backgroundRetryAtTick;
     private readonly LiveItemTemplateStore _live = new();
     private volatile IItemTemplateStore? _templates;
 
@@ -43,6 +47,9 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
 
     /// <summary>The immutable store lookups currently go to (empty until loaded).</summary>
     public IItemTemplateStore LoadedStore => _templates ?? ItemTemplateStore.Empty;
+
+    /// <summary>True once the item content has been loaded (an empty store is still loaded).</summary>
+    public bool IsLoaded => _templates is not null;
 
     /// <summary>Built SMSG_ITEM_QUERY_SINGLE_RESPONSE replies (cleared when the templates are loaded or replaced).</summary>
     public Packets.QueryResponseCache<ItemTemplate> QueryCache { get; } = new();
@@ -132,6 +139,56 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         finally
         {
             _loadLock.Release();
+        }
+    }
+
+    /// <summary>How long after a failed background load <see cref="StartLoadInBackground"/> waits before it tries again.</summary>
+    internal static readonly TimeSpan BackgroundRetryDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>The latest background load task (tests: tells whether a call started a new load).</summary>
+    internal Task? BackgroundLoad
+    {
+        get
+        {
+            lock (_backgroundLoadGate)
+            {
+                return _backgroundLoad;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: every caller shares the one running
+    /// load, and a failed load is not started again until <see cref="BackgroundRetryDelay"/> has passed). The SQLite provider runs its
+    /// async calls synchronously, so the world thread must never start the load itself.
+    /// </summary>
+    public void StartLoadInBackground()
+    {
+        if (_templates is not null)
+        {
+            return;
+        }
+
+        lock (_backgroundLoadGate)
+        {
+            if (_backgroundLoad is not { IsCompleted: false } && Environment.TickCount64 >= Volatile.Read(ref _backgroundRetryAtTick))
+            {
+                _backgroundLoad = Task.Run(LoadInBackgroundAsync);
+            }
+        }
+    }
+
+    private async Task LoadInBackgroundAsync()
+    {
+        try
+        {
+            await EnsureLoadedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Volatile.Write(ref _backgroundRetryAtTick, Environment.TickCount64 + (long)BackgroundRetryDelay.TotalMilliseconds);
+            FaultLedger.Shared.Record("items.background-load", ex);
+            logger.LogFault("items-background-load", ex, "Loading item content in the background failed; retrying in {Seconds} s", BackgroundRetryDelay.TotalSeconds);
         }
     }
 

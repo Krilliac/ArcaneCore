@@ -7,7 +7,7 @@ namespace ArcaneCore.Data.World.GameObjects;
 /// <summary>
 /// The game object spawn data step of the world schema (<see cref="IDataModule"/>): the respawn delay upper bound
 /// (<c>spawntimesecsmax</c>, vmangos <c>GameObjectData::spawntimesecsmax</c>) and <c>spawn_flags</c> that retail uses
-/// to roll the respawn delay (D:\refs\vmangos\src\game\Objects\GameObject.cpp:698-711, GameObjectDefines.h:814-832).
+/// to roll the respawn delay (vmangos@0e3ff01 src/game/Objects/GameObject.cpp:698-711, GameObjectDefines.h:814-832).
 /// Both columns are additive on <c>gameobject_spawn</c>: the max is nullable (rows from before the step keep the fixed
 /// minimum delay) and the flags default to 0.
 /// <para>

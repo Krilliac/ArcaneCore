@@ -88,9 +88,9 @@ public sealed class PlayerbotQaRedactorTests
     [Fact]
     public void Email_IsRemoved()
     {
-        string text = Redact("report by nathan.w+bots@example.co.uk today");
+        string text = Redact("report by someone.w+bots@example.co.uk today");
 
-        Assert.DoesNotContain("nathan", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("someone", text, StringComparison.Ordinal);
         Assert.DoesNotContain("example.co.uk", text, StringComparison.Ordinal);
         Assert.Contains("<email>", text, StringComparison.Ordinal);
     }
@@ -126,10 +126,10 @@ public sealed class PlayerbotQaRedactorTests
     }
 
     [Theory]
-    [InlineData("C:\\Users\\Nathan\\AppData\\x.log", "Nathan")]
-    [InlineData("C:/Users/Nathan/x.log", "Nathan")]
-    [InlineData("/home/nathan/x.log", "nathan")]
-    [InlineData("/Users/nathan/x.log", "nathan")]
+    [InlineData("C:\\Users\\someone\\AppData\\x.log", "someone")]
+    [InlineData("C:/Users/someone/x.log", "someone")]
+    [InlineData("/home/someone/x.log", "someone")]
+    [InlineData("/Users/someone/x.log", "someone")]
     public void UserFolders_AreRemoved(string path, string user)
     {
         string text = Redact("opened " + path);

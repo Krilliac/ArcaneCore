@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Honor;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -253,5 +254,57 @@ public sealed class HonorWriteQueueTests
         Assert.Equal(50, store.Rows(1).Count);
         Assert.Equal(["cp:1:50"], store.Journal);
         await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task Stopping_makes_one_final_attempt_per_retained_character_without_inline_retries()
+    {
+        var store = new MemoryHonorStore { FailWrites = true };
+        await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(store).BuildServiceProvider();
+        var queue = new HonorWriteQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+        queue.Start();
+        queue.AppendCp(1, Row(1));
+        await queue.FlushAsync().WaitAsync(Budget);
+        Assert.True(queue.HasRetainedFailure(1));
+        Assert.Equal(3, store.WriteAttempts); // the ordinary write used all its inline attempts
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(Budget));
+        Assert.Equal(4, store.WriteAttempts); // the shutdown retry is one attempt: no inline retries, no retry delays
+    }
+
+    [Fact]
+    public async Task ADrainThatKeepsFailingSlowly_StopsStartingAttemptsOnceItsBudgetIsSpent_AndStillNamesEveryCharacter()
+    {
+        const int characters = 10;
+        var store = new MemoryHonorStore { FailWrites = true };
+        await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(store).BuildServiceProvider();
+        var queue = new HonorWriteQueue(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger.Instance,
+            new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) })
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+        };
+        queue.Start();
+        for (int id = 1; id <= characters; id++)
+        {
+            queue.AppendCp(id, Row((uint)id));
+        }
+
+        await queue.FlushAsync().WaitAsync(Budget);
+        Assert.Equal(characters, queue.RetainedCharacters.Count);
+        int attemptsBeforeStop = store.WriteAttempts;
+
+        store.WriteDelayMs = 150; // every attempt now takes 150 ms, as a contended database would make it
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(Budget));
+        elapsed.Stop();
+
+        int drainAttempts = store.WriteAttempts - attemptsBeforeStop;
+        Assert.InRange(drainAttempts, 1, 5); // unbounded, all 10 characters would each be attempted
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2.5), $"the drain took {elapsed.Elapsed}");
+        Assert.Contains(string.Join(", ", Enumerable.Range(1, characters)), refused.Message); // nothing is dropped: every character is still named
+
+        Assert.Equal(characters, queue.RetainedCharacters.Count);
     }
 }

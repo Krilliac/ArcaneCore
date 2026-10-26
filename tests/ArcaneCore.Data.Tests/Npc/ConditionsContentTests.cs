@@ -79,7 +79,7 @@ public sealed class ConditionsContentTests : IAsyncLifetime
     public void AVmangosLayoutDump_IsRefused_BecauseItsNumberingDiffers()
     {
         // vmangos conditions: (condition_entry, type, value1, value2, flags) and a different type numbering
-        // (D:\refs\vmangos\sql\custom: REPLACE INTO conditions VALUES (99900, 43, 0, 0, 3)).
+        // (vmangos@0e3ff01 sql/custom: REPLACE INTO conditions VALUES (99900, 43, 0, 0, 3)).
         var importer = new ConditionsDumpImporter();
         InvalidDataException error = Assert.Throws<InvalidDataException>(() => importer.Read(new StringReader(
             "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`flags`) VALUES (99900,43,0,0,3);")));

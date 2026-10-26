@@ -151,7 +151,7 @@ public sealed class QuestChestUseWorldTests
     [Fact]
     public async Task CastingOpeningOnTheCactusApple_WithTheQuest_RunsTheCastBar_OpensTheLoot_CountsTheApple_AndUsesTheChestUp()
     {
-        // What the 5875 client does for lock 43 (lock type 13, docs: D:/WoW-RE-Research/protocol/gameobject-interaction.md): CMSG_CAST_SPELL of the
+        // What the 5875 client does for lock 43 (lock type 13, docs: WoW-RE-Research protocol/gameobject-interaction.md): CMSG_CAST_SPELL of the
         // known "Opening" spell at the object, never CMSG_GAMEOBJ_USE. The chest is ready (state 1) and not locked (flag 0x2 clear).
         QuestJournalFixture quests = Quests();
         await using WorldTestHost host = Start(quests, out GameObjectTestContext context);

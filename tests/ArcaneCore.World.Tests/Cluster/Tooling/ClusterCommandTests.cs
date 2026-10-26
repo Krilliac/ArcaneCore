@@ -199,10 +199,39 @@ public sealed class ClusterCommandTests
         Assert.DoesNotContain("xferPending", lines[0], StringComparison.Ordinal);
     }
 
-    /// <summary>A decision store whose aggregate count fails, as a database fault would.</summary>
-    private sealed class UncountableTransferStore : ITransferDecisionStore
+    [Fact]
+    public async Task ClusterDiag_CountsTheUnresolvedTransfersOffTheWorldThread_AndRepliesWithTheCount()
     {
-        public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+        var store = new ThreadRecordingTransferStore(5);
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(store));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMW", "Admworld");
+        int worldThread = await host.OnWorldAsync(() => Environment.CurrentManagedThreadId);
+
+        string[] lines = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Contains("xferPending=5", lines[0], StringComparison.Ordinal);
+        Assert.NotEqual(0, store.CountThread);
+        Assert.NotEqual(worldThread, store.CountThread);
+    }
+
+    /// <summary>A decision store that answers the count and records the thread it was asked on.</summary>
+    private sealed class ThreadRecordingTransferStore(int unresolved) : UncountableTransferStore
+    {
+        private int _countThread;
+
+        public int CountThread => Volatile.Read(ref _countThread);
+
+        public override Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _countThread, Environment.CurrentManagedThreadId);
+            return Task.FromResult(unresolved);
+        }
+    }
+
+    /// <summary>A decision store whose aggregate count fails, as a database fault would.</summary>
+    private class UncountableTransferStore : ITransferDecisionStore
+    {
+        public virtual Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
             => Task.FromException<int>(new InvalidOperationException("store offline"));
 
         public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => throw new NotSupportedException();

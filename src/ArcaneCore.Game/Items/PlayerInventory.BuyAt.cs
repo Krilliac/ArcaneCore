@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Items;
 /// <summary>
 /// Where a bought item goes when the client names a position (CMSG_BUY_ITEM_IN_SLOT): the
 /// placement half of vmangos <c>Player::BuyItemFromVendor</c>
-/// (D:\refs\vmangos\src\game\Objects\Player.cpp:18453-18496).
+/// (vmangos@0e3ff01 src/game/Objects/Player.cpp:18453-18496).
 /// </summary>
 public sealed partial class PlayerInventory
 {
