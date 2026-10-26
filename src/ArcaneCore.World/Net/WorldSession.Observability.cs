@@ -86,12 +86,14 @@ public sealed partial class WorldSession
                 rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
                 NoteRejectionForStorm(opcode, rejection);
                 NoteServerErrorRejection(opcode, rejection);
+                NoteRejectionSpike(rejection);
             }
         }
         else if (ClientRejectionDecoder.IsCandidate(opcode) && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection unlogged))
         {
             NoteRejectionForStorm(opcode, unlogged);
             NoteServerErrorRejection(opcode, unlogged);
+            NoteRejectionSpike(unlogged);
         }
 
         if (_duplicates is { } detector && (!_managed || detector.IncludeBots))
@@ -149,6 +151,27 @@ public sealed partial class WorldSession
             "rejection-server-error",
             AnomalySubject,
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{rejection.Kind} {rejection.ReasonName} sent for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    private static readonly ClientRejectionRateTracker RejectionRates = new(static () => Environment.TickCount64);
+
+    /// <summary>
+    /// Outcome check <c>client/rejection-spike</c>: one (kind, reason) refusal sent at least <see cref="ClientRejectionRateTracker.Threshold"/> times to at least
+    /// <see cref="ClientRejectionRateTracker.MinAccounts"/> accounts within <see cref="ClientRejectionRateTracker.WindowMs"/> ms is a server-wide defect, not one client.
+    /// Chaos probes and sessions without an account are not counted. Cost: two interlocked operations per decoded refusal; the text is built only when it reports.
+    /// </summary>
+    private void NoteRejectionSpike(in ClientRejection rejection)
+    {
+        if (AccountId == 0 || IsInChaosProbe || !RejectionRates.Note(rejection.Kind, rejection.Reason, AccountId, out long count, out int accounts))
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "client",
+            "rejection-spike",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{rejection.Kind} {rejection.ReasonName}"),
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} refusals sent to at least {accounts} accounts within {ClientRejectionRateTracker.WindowMs / 60_000} minutes (latest entry {rejection.Entry}, bot {IsPlayerbot})"));
     }
 
     /// <summary>

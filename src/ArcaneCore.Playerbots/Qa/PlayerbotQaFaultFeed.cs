@@ -46,7 +46,7 @@ internal sealed class PlayerbotQaFaultFeed(
     /// </summary>
     internal static readonly HashSet<string> PerSubjectKeys = new(StringComparer.Ordinal)
     {
-        "spell/effect-unhandled", "creature/waypoint-path-missing", "creature-ai/script-action-unsupported", "loot/guaranteed-drop-missing",
+        "client/rejection-spike", "spell/effect-unhandled", "creature/waypoint-path-missing", "creature-ai/script-action-unsupported", "loot/guaranteed-drop-missing",
     };
 
     internal const int DefaultMinServerWarningCount = 5;
