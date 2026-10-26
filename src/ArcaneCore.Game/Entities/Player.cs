@@ -543,7 +543,8 @@ public sealed partial class Player : Unit
             (int)Guid.Low, mapId, ZoneId, x, y, z, orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
             inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount,
-            Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this), Ownership: CharacterOwnership);
+            Drunk: ArcaneCore.Game.Spells.SpellSystem.GetDrunkValue(this), Ownership: CharacterOwnership,
+            CharacterFlags: (uint)(Flags & (PlayerFlags.HideHelm | PlayerFlags.HideCloak)));
     }
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
@@ -611,6 +612,9 @@ public sealed partial class Player : Unit
         SetUInt32(UpdateFields.PlayerNextLevelXp, appearance.NextLevelXp);
         Money = c.Money;
         ActionBarToggles = c.ActionBarToggles;
+        // vmangos Player::LoadFromDB (Player.cpp:14678-14681, 0e3ff01): CHARACTER_FLAG_HIDE_HELM/CLOAK set the same PLAYER_FLAGS bits
+        // (Player.h:298-299 and :325-326 share 0x400 and 0x800).
+        Flags |= (PlayerFlags)(c.CharacterFlags & CharacterAppearanceFlags.Mask);
     }
 
     /// <summary>Apply native display geometry before the player enters a map or emits its create block.</summary>

@@ -50,6 +50,13 @@ public sealed class CharacterRecord
     /// <summary>Unix seconds of the last save (vmangos characters.logout_time); the drunk value sobers from it at login.</summary>
     public long LogoutTime { get; set; }
 
+    /// <summary>
+    /// The CHARACTER_FLAG_* word of vmangos characters.character_flags (Player.h:298-299; saved at Player.cpp:16339-16340,
+    /// restored to PLAYER_FLAGS at Player.cpp:14678-14681, sent in SMSG_CHAR_ENUM at Player.cpp:1682-1683, vmangos 0e3ff01).
+    /// Only HIDE_HELM (0x400) and HIDE_CLOAK (0x800) are owned here; the rename, PvP and ghost bits are not stored in it yet.
+    /// </summary>
+    public uint CharacterFlags { get; set; }
+
     /// <summary>Hearthstone bind point (SMSG_BINDPOINTUPDATE). Defaults to the start position.</summary>
     public uint HomeMapId { get; set; }
 
