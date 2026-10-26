@@ -105,6 +105,8 @@ internal class FakeFacts : IQaContentFacts
 
     public Dictionary<uint, List<QaEnderFact>> Enders { get; } = [];
 
+    public Dictionary<(uint Map, uint Entry), List<(float X, float Y)>> SpawnPoints { get; } = [];
+
     public Dictionary<uint, QaTemplateFacts> Templates { get; } = [];
 
     public HashSet<(uint Entry, uint Path)> Paths { get; } = [];
@@ -127,6 +129,8 @@ internal class FakeFacts : IQaContentFacts
     public int SpawnCount(uint map, uint entry) => Spawns.GetValueOrDefault((map, entry));
 
     public int SpawnCountAnyMap(uint entry) => Spawns.Where(pair => pair.Key.Entry == entry).Sum(pair => pair.Value);
+
+    public IReadOnlyList<(float X, float Y)> SpawnPositions(uint map, uint entry) => SpawnPoints.GetValueOrDefault((map, entry)) ?? [];
 
     public QaTemplateFacts? Template(uint entry) => Templates.TryGetValue(entry, out QaTemplateFacts t) ? t : null;
 
