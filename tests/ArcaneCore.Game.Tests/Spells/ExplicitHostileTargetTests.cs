@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -35,6 +36,39 @@ public sealed class ExplicitHostileTargetTests
         kit.System.Relations = new HostileSetRelations(foe.Guid);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid)));
+    }
+
+    [Fact]
+    public void TriggeredCast_WithAClientNamedTarget_IsCheckedLikeAnyOther()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, 3);
+        kit.System.Relations = CombatHookRelations.Instance;
+        uint before = ally.Health;
+
+        // The target block as an item-use packet carries it: the second on-use spell of an item is cast triggered with the client's block.
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(ally.Guid.Value);
+        var reader = new PacketReader(wire.ToArray());
+        SpellCastTargets fromClient = SpellCastTargets.Read(ref reader);
+        Assert.True(fromClient.FromClient);
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.CastSpell(caster, Bolt, fromClient, triggered: true));
+        Assert.Equal(before, ally.Health);
+    }
+
+    [Fact]
+    public void TriggeredCast_WithAServerChosenTarget_IsNotGated()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, 3);
+        kit.System.Relations = CombatHookRelations.Instance;
+
+        // A proc or script trigger names its own target; the explicit-target gate is for what a client can name.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(ally.Guid), triggered: true));
     }
 
     /// <summary>Only the listed units are attackable; the explicit-target gate takes its default (<see cref="ISpellTargetRelations.IsHostile"/>).</summary>

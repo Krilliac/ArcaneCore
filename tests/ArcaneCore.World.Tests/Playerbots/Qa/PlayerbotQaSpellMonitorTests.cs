@@ -79,7 +79,8 @@ internal sealed class QaSpellKit : IDisposable
         if (brokenHeal) System.RegisterEffect(SpellEffectName.Heal, static _ => { }); // a handler that silently does nothing
         if (brokenDamage) System.RegisterEffect(SpellEffectName.SchoolDamage, static _ => { });
         Bot = AddPlayer(1, Class.Mage);
-        Human = AddPlayer(2, Class.Mage);
+        // The explicit-target gate (vmangos Spell.cpp:5604-5610) lets a bot aim a harmful spell only at what it may attack: the non-bot is a PvP-flagged Horde player.
+        Human = AddPlayer(2, Class.Mage, Race.Orc, pvpFlagged: true);
         Sink = sink ?? new RecordingQaSink();
         Monitor = new PlayerbotQaSpellMonitor(Sink, System, unit => ReferenceEquals(unit, Bot) ? new QaBot(BotKey, (byte)Class.Mage) : null, () => NowMs,
             (_, spell) => spell == SelfHeal);
@@ -114,16 +115,17 @@ internal sealed class QaSpellKit : IDisposable
 
     public void Dispose() => World.Dispose();
 
-    private Player AddPlayer(uint guid, Class playerClass)
+    private Player AddPlayer(uint guid, Class playerClass, Race race = Race.Human, bool pvpFlagged = false)
     {
         var character = new CharacterRecord
         {
-            Id = (int)guid, AccountId = (int)guid, Name = $"P{guid}", Race = (byte)Race.Human, Class = (byte)playerClass, Gender = 0, Level = 10, MapId = 0,
+            Id = (int)guid, AccountId = (int)guid, Name = $"P{guid}", Race = (byte)race, Class = (byte)playerClass, Gender = 0, Level = 10, MapId = 0,
             ZoneId = 12, X = guid * 3, Y = 0, Z = 83.5f,
         };
         var player = new Player(character, new PlayerAppearance(49, 1, PowerType.Mana, 100, 100, 100, 1000, 1000, 400), new NullPlayerSession());
         World.AddPlayer(player);
         World.RunTick(0);
+        if (pvpFlagged) MapCombat.UpdatePvp(player, true); // after the tick: a flag with no timer or desire is dropped by it
         return player;
     }
 

@@ -1407,8 +1407,10 @@ public sealed partial class SpellSystem
             checkedTarget = target;
 
             // vmangos Spell::CheckCast (Spell.cpp:5604-5610): an explicit negative selector (TARGET_UNIT_ENEMY) needs
-            // IsValidAttackTarget, else SPELL_FAILED_BAD_TARGETS. Server-initiated (triggered) casts stay unchecked.
-            if (!triggered)
+            // IsValidAttackTarget, else SPELL_FAILED_BAD_TARGETS, and that loop has no triggered gate. Here a triggered cast whose
+            // target the server chose itself (a proc, aura or script trigger) is not checked; a target block that came from a
+            // client packet (SpellCastTargets.FromClient, e.g. the second on-use spell of an item, cast triggered) always is.
+            if (!triggered || targets.FromClient)
             {
                 SpellCastResult hostile = CheckExplicitHostileTargetRules(caster, spell, target);
                 if (hostile != SpellCastResult.CastOk)

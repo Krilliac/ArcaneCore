@@ -39,6 +39,13 @@ public sealed class SpellCastTargets
     /// <summary>Set only by the server trade resolver after validating slot 6; never populated by wire parsing.</summary>
     public Item? ServerValidatedTradeItem { get; set; }
 
+    /// <summary>
+    /// True for a block parsed from a client packet (<see cref="Read"/>) and false for one the server built (<see cref="ForSelf"/>,
+    /// <see cref="ForUnit"/>). A triggered cast that carries a client-named target (an item's second and later on-use spells) is still checked
+    /// for an attackable explicit target, as vmangos checks every cast (Spell.cpp:5577-5612 has no triggered gate).
+    /// </summary>
+    public bool FromClient { get; private set; }
+
     public bool IsRawNonTradedTradeTarget
         => Mask == SpellCastTargetFlags.TradeItem && Item.Value == 6;
 
@@ -58,7 +65,7 @@ public sealed class SpellCastTargets
 
     public static SpellCastTargets Read(ref PacketReader reader)
     {
-        var targets = new SpellCastTargets { Mask = (SpellCastTargetFlags)reader.ReadUInt16() };
+        var targets = new SpellCastTargets { Mask = (SpellCastTargetFlags)reader.ReadUInt16(), FromClient = true };
         SpellCastTargetFlags mask = targets.Mask;
         if (mask == SpellCastTargetFlags.Self)
         {
