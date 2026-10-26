@@ -650,6 +650,36 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.Equal(reported, scenario.Capture.Any(Key(Code.Airwalk)));
     }
 
+    /// <summary>
+    /// #1475 review: a bot walking on air up to 3 yd beyond a ledge's edge still gets the ledge polygon from the zero-length walk (its
+    /// start polygon is the nearest within NavMeshPathfinder.NearExtents, 3 yd sideways), which answers a hit on the edge at ledge
+    /// height. That edge is not a floor under the bot, so the airwalk is still reported, while the floor query
+    /// (<see cref="IMeshFloorQuery"/>) sees no polygon straight under it. The control (0 yd, no hit): the polygon is under the bot.
+    /// </summary>
+    [Theory]
+    [InlineData(1f, true)]
+    [InlineData(2f, true)]
+    [InlineData(3f, true)]
+    [InlineData(0f, false)]
+    public async Task ABotBeyondALedgeEdge_TheStartPolygonAnswersTheEdge_IsStillAirwalk(float sidewaysYards, bool reported)
+    {
+        var mesh = new ScriptedMesh
+        {
+            StartPolygon = at => new MeshRaycastResult(true, sidewaysYards > 0f, sidewaysYards > 0f ? 0f : 1f,
+                new Vector3(at.X + sidewaysYards, at.Y, at.Z - 0.5f)),
+            FloorStraightUnder = static (_, _, _) => null,
+        };
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        await scenario.Host.OnWorldAsync(() =>
+        {
+            Player player = scenario.Session.Player!;
+            var at = new Vector3(player.X, player.Y, Floor + 9f);
+            PlayerbotMotionAnomalies.CheckGround(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), at, scenario.Host.World.NowMs);
+            return true;
+        });
+        Assert.Equal(reported, scenario.Capture.Any(Key(Code.Airwalk)));
+    }
+
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotRoute LineRoute(Player player, float yards, bool navigated)
@@ -721,9 +751,21 @@ public sealed class PlayerbotMotionAnomalyTests
     /// A navigation mesh everywhere (a straight-line path), whose surface lies at <see cref="Surface"/> and whose walks stop at the edges
     /// the test scripts (<see cref="Edge"/>).
     /// </summary>
-    internal sealed class ScriptedMesh : IPathfinder, IMeshPointQuery
+    internal sealed class ScriptedMesh : IPathfinder, IMeshPointQuery, IMeshFloorQuery
     {
         internal float Surface { get; set; } = Floor;
+
+        /// <summary>
+        /// When set, the whole answer of a zero-length walk (the start polygon's surface under a point), so a test can model the walk
+        /// and the floor query (<see cref="FloorStraightUnder"/>) disagreeing.
+        /// </summary>
+        internal Func<Vector3, MeshRaycastResult>? StartPolygon { get; set; }
+
+        /// <summary>
+        /// The polygon surface straight under or over (x, y) the floor query (<see cref="IMeshFloorQuery.TryGetMeshFloor"/>) answers, or
+        /// null for none. Unset: the floor query finds nothing, as when this mesh did not answer it.
+        /// </summary>
+        internal Func<float, float, float, float?>? FloorStraightUnder { get; set; }
         internal Func<Vector3, Vector3, bool>? Edge { get; set; }
 
         /// <summary>When set, the height a walk from the first point to the second ends at (else <see cref="Surface"/>).</summary>
@@ -741,10 +783,18 @@ public sealed class PlayerbotMotionAnomalyTests
         public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             Walks++;
+            if (start == end && StartPolygon is { } startPolygon) return startPolygon(start);
             float surface = SurfaceOf?.Invoke(start, end) ?? Surface;
             return Edge?.Invoke(start, end) == true
                 ? new MeshRaycastResult(true, true, 0.5f, Vector3.Lerp(start, end, 0.5f) with { Z = surface })
                 : new MeshRaycastResult(true, false, 1f, end with { Z = surface });
+        }
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
+        {
+            float? found = FloorStraightUnder?.Invoke(x, y, z);
+            height = found ?? 0f;
+            return found is { } h && h >= z - below && h <= z + above;
         }
     }
 
