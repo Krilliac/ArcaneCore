@@ -230,8 +230,9 @@ public sealed class PlayerbotWorldBossWorldTests
     {
         using var counts = new OutcomeCounts();
         await using GroupTestWorld world = await StartAsync(boss => { boss.PlayersNearCount = 3; boss.PlayersNearYards = 100f; boss.HoldSeconds = 900; });
+        string[] names = ["Wbnearone", "Wbneartwo", "Wbnearthree"];
         // Create the players' characters before any bot exists, so the creates do not overlap the bots' character saves.
-        foreach (string name in new[] { "Wbnearone", "Wbneartwo", "Wbnearthree" })
+        foreach (string name in names)
             await world.World.PrepareCharacterAsync(name.ToUpperInvariant(), name, AccountSecurity.Player);
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         Creature boss = await SpawnAsync(world, bots[0].Id, Boss(), BossAt);
@@ -240,12 +241,12 @@ public sealed class PlayerbotWorldBossWorldTests
         var clients = new List<WorldTestClient>();
         try
         {
-            foreach (string name in new[] { "Wbnearone", "Wbneartwo", "Wbnearthree" })
+            foreach (string name in names)
                 clients.Add(await world.World.EnterWorldAsync(name.ToUpperInvariant(), name, AccountSecurity.Player));
             List<Player> players = await world.OnWorldAsync(() =>
             {
                 var found = new List<Player>();
-                foreach (string name in new[] { "Wbnearone", "Wbneartwo", "Wbnearthree" })
+                foreach (string name in names)
                 {
                     Player p = world.World.Host.World.FindOnlinePlayer(name)!;
                     p.Relocate(BossAt.X, BossAt.Y + 60f, BossAt.Z, 0f, world.World.Host.World.NowMs);
