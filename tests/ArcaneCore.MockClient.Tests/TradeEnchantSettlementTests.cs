@@ -42,6 +42,7 @@ public sealed class TradeEnchantSettlementTests
                 StartRecoveryTime = 1500,
                 StartRecoveryCategory = SpellConstants.GlobalCooldownCategory,
                 Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)TradeEnchantId }],
+                Targets = 0x10, // Spell.dbc: an enchant is aimed at an item (TARGET_FLAG_ITEM)
                 Reagents = [new SpellReagent((int)SyntheticArcaneServer.FixedRewardItem, 1)],
             }], [], []);
             feature.System.ItemEnchantments = new ItemEnchantmentCatalog([new ItemEnchantmentDefinition(TradeEnchantId, [])]);
@@ -156,6 +157,7 @@ public sealed class TradeEnchantSettlementTests
                 Id = TradeEnchantSpell,
                 Name = "Synthetic trade enchant",
                 Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)TradeEnchantId }],
+                Targets = 0x10, // Spell.dbc: an enchant is aimed at an item (TARGET_FLAG_ITEM)
             }], [], []);
             feature.System.ItemEnchantments = new ArcaneCore.Kernel.WorldData.Items.ItemEnchantmentCatalog(
                 [new ArcaneCore.Kernel.WorldData.Items.ItemEnchantmentDefinition(TradeEnchantId,

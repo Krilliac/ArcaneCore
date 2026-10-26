@@ -30,7 +30,7 @@ public sealed class EnchantSpellWorldTests
         SpellContent content = SpellTestServices.Content();
         content = content with { Spells = [.. content.Spells, new SpellTemplateRow
         {
-            Id = spellId, SpellName = "Synthetic owned enchant", RangeIndex = 1, Effect1 = effect, EquippedItemClass = -1,
+            Id = spellId, SpellName = "Synthetic owned enchant", RangeIndex = 1, Targets = 0x10, Effect1 = effect, EquippedItemClass = -1, // Spell.dbc: an enchant targets an item
             EffectBasePoints1 = 9, EffectBaseDice1 = 1, EffectDieSides1 = 1,
             EffectMiscValue1 = (int)enchantId, EffectImplicitTargetA1 = 1,
         }] };

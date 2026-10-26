@@ -43,6 +43,7 @@ public sealed class TradeEnchantCommitFailureTests
             {
                 Id = spellId,
                 Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)enchantId }],
+                Targets = 0x10, // Spell.dbc: an enchant is aimed at an item (TARGET_FLAG_ITEM)
                 Reagents = [new SpellReagent((int)SyntheticArcaneServer.FixedRewardItem, 1)],
             }], [], []);
             spells.System.ItemEnchantments = new ItemEnchantmentCatalog([new ItemEnchantmentDefinition(enchantId, [])]);

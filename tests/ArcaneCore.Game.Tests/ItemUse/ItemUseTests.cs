@@ -263,6 +263,29 @@ public sealed class ItemUseTests
         Assert.True(rig.Player.Health > 10);
     }
 
+    [Fact]
+    public void ABagItemNamedAsTheUseTarget_OfASpellThatTakesNoItem_IsBadTargets_AndNothingIsConsumed()
+    {
+        // vmangos Player::CastItemUseSpell marks the cast client-started (Player.cpp:7390), so Spell::ValidateExplicitTargetMask
+        // (Spell.cpp:6685-6711) refuses an ITEM flag the spell does not allow, as CMSG_CAST_SPELL does.
+        using var rig = new Rig();
+        Item potion = rig.Give(Potion, 2);
+        Item other = rig.Give(ManaPotion);
+        rig.Player.Health = 10;
+
+        // RED on main: the heal is cast (CastOk), a potion is spent and the player is healed. HandleItemUse is the CMSG_USE_ITEM entry.
+        rig.Kit.Session.Clear();
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.HandleItemUse(rig.Player, potion.BagSlot, potion.Slot, 0,
+            new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = other.Guid }));
+        Assert.Equal(SpellCastResult.BadTargets, rig.LastCastResult());
+        Assert.Equal(2u, rig.Inventory.GetItemCount(Potion));
+        Assert.Equal(10u, rig.Player.Health);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.HandleItemUse(rig.Player, potion.BagSlot, potion.Slot, 0, SpellCastTargets.ForSelf()));
+        Assert.Equal(1u, rig.Inventory.GetItemCount(Potion));
+        Assert.True(rig.Player.Health > 10);
+    }
+
     // --- the cast item checks ----------------------------------------------------------------------------------------
 
     [Fact]

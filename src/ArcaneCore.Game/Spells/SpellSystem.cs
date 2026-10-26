@@ -158,10 +158,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
-        // vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6685-6711, asked for a client's own cast at :5346): a target flag the spell
-        // does not allow fails the cast with BAD_TARGETS. Only the item flags are enforced here: a bag item named as the target of a spell
-        // that takes none would otherwise satisfy the equipped-item requirement (EquippedItemCastCheck skips a cast that names an item).
-        if ((targets.Mask & (SpellCastTargetFlags.Item | SpellCastTargetFlags.TradeItem)) != 0 && !AllowsItemTarget(spell))
+        if (NamesUnallowedItemTarget(spell, targets))
         {
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spellId, SpellCastResult.BadTargets));
             return SpellCastResult.BadTargets;
@@ -177,6 +174,16 @@ public sealed partial class SpellSystem
 
         return Prepare(player, spell, targets, triggered: false);
     }
+
+    /// <summary>
+    /// vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6685-6711), asked for a client-started cast (:5346; Player::CastItemUseSpell sets
+    /// it for a use-item cast, Player.cpp:7390): a target flag the spell does not allow fails the cast with BAD_TARGETS. Only the item flags are
+    /// enforced: a bag item named as the target of a spell that takes none would otherwise satisfy the equipped-item requirement
+    /// (EquippedItemCastCheck skips a cast that names an item). Asked by the two client paths only, CMSG_CAST_SPELL
+    /// (<see cref="HandleCastRequest"/>) and CMSG_USE_ITEM (<see cref="HandleItemUse"/>); server, script and item-equip casts skip it.
+    /// </summary>
+    internal static bool NamesUnallowedItemTarget(SpellInfo spell, SpellCastTargets targets)
+        => (targets.Mask & (SpellCastTargetFlags.Item | SpellCastTargetFlags.TradeItem)) != 0 && !AllowsItemTarget(spell);
 
     /// <summary>
     /// Whether the spell may be aimed at an item: vmangos AllowedTargetMask (SpellMgr.cpp:3449-3477, SpellEntry.h:419-462), the item flag of
