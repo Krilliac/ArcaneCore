@@ -57,4 +57,60 @@ public sealed class PacketCaptureTests
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
+
+    [Fact]
+    public async Task Stop_ReturnsWhileTheWriterIsStillDraining_AndTheFileCompletesAfterwards()
+    {
+        var stream = new GatedStream();
+        var capture = new PacketCapture(stream, "gated.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        await stream.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The writer is stuck in the disk write. Stop must not wait for it (the session calls it under its send lock).
+        var stopped = Task.Run(capture.Stop);
+        await stopped.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(capture.IsOpen);
+        capture.Write(true, 0x01DC, new byte[16]); // after Stop: dropped, not queued
+
+        stream.Release.SetResult();
+        await stream.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(capture.Faulted);
+        Assert.Equal(66 + 24 + 16, stream.ToArray().Length);
+    }
+
+    [Fact]
+    public async Task WriterDiskError_FaultsAndClosesTheCapture()
+    {
+        var stream = new GatedStream { Fail = true };
+        var capture = new PacketCapture(stream, "failing.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        stream.Release.SetResult();
+        await stream.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(capture.Faulted);
+        Assert.False(capture.IsOpen);
+    }
+
+    /// <summary>Header bytes pass through; the first asynchronous write waits for <see cref="Release"/> and then fails or completes.</summary>
+    private sealed class GatedStream : MemoryStream
+    {
+        public TaskCompletionSource WriteStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Fail { get; init; }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteStarted.TrySetResult();
+            await Release.Task.ConfigureAwait(false);
+            if (Fail) throw new IOException("disk full");
+            Write(buffer.Span);
+        }
+
+        public override ValueTask DisposeAsync()
+        {
+            Disposed.TrySetResult();
+            return base.DisposeAsync();
+        }
+    }
 }

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Kernel.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Net;
 
@@ -24,14 +25,16 @@ public sealed class PacketCaptureOptions
 /// PKT 3.1 writer, using the fields read by WPP BinaryPacketReader.ReadHeader/Read. <see cref="Write"/> only copies the record into a bounded
 /// queue (it is called from the session's send and receive paths under the session send lock); one background writer per file appends the
 /// records in the order they were queued. A trace whose queue is full (the disk cannot keep up) stops like one that reached its size limit.
-/// <see cref="Dispose"/> waits until everything queued is on disk.
+/// <see cref="Stop"/> ends the trace without waiting (the writer drains the queue and closes the file in the background); <see cref="Dispose"/>
+/// waits until everything queued is on disk and is for process shutdown and tests only. A disk error in the writer is recorded in the
+/// <see cref="FaultLedger"/> (and logged when a logger was given), ends the trace and sets <see cref="Faulted"/>.
 /// </summary>
 public sealed class PacketCapture : IDisposable
 {
     private const int HeaderLength = 66;
     private const int QueueCapacity = 8192;
     private readonly object _gate = new();
-    private readonly FileStream _stream;
+    private readonly Stream _stream;
     private readonly Channel<byte[]> _queue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(QueueCapacity)
     {
         SingleReader = true,
@@ -40,19 +43,25 @@ public sealed class PacketCapture : IDisposable
     });
     private readonly Task _writer;
     private readonly long _maxBytes;
+    private readonly ILogger? _logger;
+    private volatile bool _faulted;
     private long _position = HeaderLength;
     private bool _closed;
 
     public string Path { get; }
 
-    public PacketCapture(string directory, long maxBytes)
+    public PacketCapture(string directory, long maxBytes, ILogger? logger = null)
+        : this(OpenFile(directory, maxBytes, out string path), path, maxBytes, logger)
     {
-        if (maxBytes < HeaderLength + 24 || maxBytes > 1024L * 1024 * 1024)
-            throw new ArgumentOutOfRangeException(nameof(maxBytes));
-        Directory.CreateDirectory(directory);
-        Path = System.IO.Path.Combine(directory, $"arcane-{DateTimeOffset.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}.pkt");
-        _stream = new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, bufferSize: 64 * 1024, FileOptions.Asynchronous);
+    }
+
+    /// <summary>Capture onto an already open stream (the public constructor's file; tests pass a failing stream).</summary>
+    internal PacketCapture(Stream stream, string path, long maxBytes, ILogger? logger = null)
+    {
+        Path = path;
+        _stream = stream;
         _maxBytes = maxBytes;
+        _logger = logger;
         using var header = new MemoryStream(HeaderLength);
         using (var writer = new BinaryWriter(header, Encoding.ASCII, leaveOpen: true))
         {
@@ -72,19 +81,35 @@ public sealed class PacketCapture : IDisposable
         _writer = Task.Run(WriteLoopAsync);
     }
 
+    private static FileStream OpenFile(string directory, long maxBytes, out string path)
+    {
+        if (maxBytes < HeaderLength + 24 || maxBytes > 1024L * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        Directory.CreateDirectory(directory);
+        path = System.IO.Path.Combine(directory, $"arcane-{DateTimeOffset.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}.pkt");
+        return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, bufferSize: 64 * 1024, FileOptions.Asynchronous);
+    }
+
     public bool IsOpen { get { lock (_gate) return !_closed; } }
+
+    /// <summary>True once the background writer hit a disk error: the trace is dead and every later record is dropped.</summary>
+    public bool Faulted => _faulted;
+
+    /// <summary>Accept no more records and return at once; the background writer drains the queue and closes the file.</summary>
+    public void Stop()
+    {
+        lock (_gate) Complete();
+    }
 
     public void Write(bool fromClient, ushort opcode, ReadOnlySpan<byte> payload)
     {
-        bool drain = false;
         lock (_gate)
         {
             if (_closed) return;
             long recordLength = 24L + payload.Length;
             if (_position + recordLength > _maxBytes)
             {
-                Complete();
-                drain = true; // the size limit is reached: the file is complete when this returns
+                Complete(); // the size limit is reached: the writer finishes the file in the background
             }
             else
             {
@@ -107,8 +132,6 @@ public sealed class PacketCapture : IDisposable
                 }
             }
         }
-
-        if (drain) _writer.Wait();
     }
 
     /// <summary>Under <see cref="_gate"/>: accept no more records; the writer closes the file once the queue is empty.</summary>
@@ -136,7 +159,9 @@ public sealed class PacketCapture : IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The capture stops here; the connection must not.
+            _faulted = true;
             FaultLedger.Shared.Record("net.packet-capture", ex);
+            _logger?.LogFault("net-packet-capture", ex, "packet capture {Path} stopped by a disk error", Path);
             lock (_gate) Complete();
         }
         finally
