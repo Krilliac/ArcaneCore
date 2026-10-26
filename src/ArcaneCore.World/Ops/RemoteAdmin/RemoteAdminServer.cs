@@ -173,6 +173,56 @@ public sealed class RemoteAdminServer : IHostedService
         }
     }
 
+    /// <summary>
+    /// Creates the token file readable by the daemon's own account only (and SYSTEM on Windows), the standard the control pipe sets
+    /// (<see cref="ArcaneCore.World.Ops.Control.ControlPipeSecurity"/>): a protected DACL owned by the daemon's account on Windows, mode 0600 on Unix.
+    /// An existing file is replaced, so permissions an earlier run or another user left on it do not carry over. Any failure throws
+    /// (the caller turns <c>@token</c> login off) and a half-written file is removed.
+    /// </summary>
+    internal static void WriteTokenFile(string path, byte[] token)
+    {
+        File.Delete(path);
+        byte[] content = [.. token, (byte)'
+'];
+        FileStream stream;
+        if (OperatingSystem.IsWindows())
+        {
+            System.Security.Principal.SecurityIdentifier user = ArcaneCore.World.Ops.Control.ControlPipeSecurity.CurrentUser();
+            var security = new System.Security.AccessControl.FileSecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.SetOwner(user);
+            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(user, System.Security.AccessControl.FileSystemRights.FullControl,
+                System.Security.AccessControl.AccessControlType.Allow));
+            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(ArcaneCore.World.Ops.Control.ControlPipeSecurity.LocalSystem,
+                System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+            stream = System.IO.FileSystemAclExtensions.Create(new FileInfo(path), FileMode.CreateNew, System.Security.AccessControl.FileSystemRights.Write,
+                FileShare.Read, bufferSize: 4096, FileOptions.None, security);
+        }
+        else
+        {
+            stream = new FileStream(path, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.Read,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+        }
+
+        try
+        {
+            using (stream)
+            {
+                stream.Write(content);
+            }
+        }
+        catch
+        {
+            File.Delete(path);
+            throw;
+        }
+    }
+
     private async Task AcceptAsync(TcpListener listener, CancellationToken token)
     {
         while (!token.IsCancellationRequested)

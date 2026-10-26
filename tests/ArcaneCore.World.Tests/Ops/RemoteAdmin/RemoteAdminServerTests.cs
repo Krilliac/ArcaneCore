@@ -309,6 +309,41 @@ public sealed class RemoteAdminServerTests
     }
 
     [Fact]
+    public async Task TokenFile_IsReadableByTheDaemonAccountOnly_EvenWhenAnOpenFileWasThere()
+    {
+        // Not proven: the effective access of a particular other account (needs a second OS user); this checks the descriptor and mode that grant it.
+        await using WorldTestHost host = PartyTestHost.Start();
+        string path = Path.Combine(Path.GetTempPath(), "ra-token-acl-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "stale
+"); // a file from an earlier run, with whatever permissions the directory gave it
+        RemoteAdminServer server = NewServer(host, Options0(path));
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(server.Token, File.ReadAllText(path).Trim());
+            if (OperatingSystem.IsWindows())
+            {
+                System.Security.AccessControl.FileSecurity security = new FileInfo(path).GetAccessControl();
+                Assert.True(security.AreAccessRulesProtected, "the token file inherits the directory's ACL");
+                foreach (System.Security.AccessControl.FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
+                {
+                    var sid = (System.Security.Principal.SecurityIdentifier)rule.IdentityReference;
+                    Assert.True(sid == System.Security.Principal.WindowsIdentity.GetCurrent().User || sid.IsWellKnown(System.Security.Principal.WellKnownSidType.LocalSystemSid),
+                        "unexpected ACL entry for " + sid);
+                }
+            }
+            else
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+            }
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public void ProductionRegistration_AddsRemoteAdmin_OnByDefault_OnLoopback()
     {
         var services = new ServiceCollection();
