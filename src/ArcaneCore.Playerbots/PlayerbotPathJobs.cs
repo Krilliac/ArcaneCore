@@ -55,10 +55,12 @@ internal enum JobAnswer : byte
 /// <summary>Counters of a <see cref="PlayerbotPathJobs"/>.</summary>
 internal readonly record struct PlayerbotPathJobTotals(long Submitted, long Applied, long Waits, long Stale, long Canceled, long Faulted,
     long BudgetRefused, long Escalations, long DeadlineHits,
-    long StaleInvalid = 0, long StaleReachesAsked = 0, long StaleJoinsFrom = 0, long StaleWalked = 0, long StaleAway = 0);
+    long StaleInvalid = 0, long StaleReachesAsked = 0, long StaleJoinsFrom = 0, long StaleWalked = 0, long StaleAway = 0,
+    long NoPathCached = 0);
 // Stale is the sum of the five Stale* reasons: the answer's player, map, pathfinder or dataset changed (Invalid); its route ends too far
 // from the destination asked now (ReachesAsked); the bot stands off the route (JoinsFrom); the bot walked past the entry's bound before
-// the ask (Walked); the bot left the map or the world (Away).
+// the ask (Walked); the bot left the map or the world (Away). NoPathCached counts the queries answered "no path" from a bot's negative
+// cache (NoteNoPath) instead of a job or a synchronous search.
 
 /// <summary>
 /// The bots' far navigation-mesh searches as detached jobs (multithreading plan W5): <see cref="PlayerbotThinkProbe.Find"/> routes a
@@ -111,6 +113,22 @@ internal sealed class PlayerbotPathJobs
 
     /// <summary>A wait longer than this (wall ms) is reported once (<c>nav/job-wait-long</c>).</summary>
     internal const long WaitLongMs = 5_000;
+
+    /// <summary>
+    /// How long (wall ms) a synchronous search's "no path" for a (start cell, goal cell) pair of one bot is kept (<see cref="NoteNoPath"/>).
+    /// A bot whose jobs failed three times escalated to a world-thread search on every episode, 27 to 37 times per bot at the Timbermaw
+    /// Hold tunnel (issues #1478 and #1479); the mesh does not change within half a minute, and the bot is told "no path" at once
+    /// meanwhile instead of queueing jobs that escalate again. <see cref="PlayerbotRoutePlanWatch"/> already suppresses a plan pair
+    /// after repeated refusals, but it works on the plan (<see cref="PlayerbotNavigation.TryPlanToward"/>) and only for a bot that has not
+    /// moved; this is the query's, whichever plan asked.
+    /// </summary>
+    internal const long NoPathMs = 30_000;
+
+    /// <summary>The side (yards) of the cells a negative answer is keyed by: a bot that shifts a few yards between thinks asks the same pair.</summary>
+    internal const float NoPathCellYards = 8f;
+
+    /// <summary>The most negative answers one bot keeps (the oldest is dropped).</summary>
+    internal const int MaxNoPathsPerBot = 4;
 
     [ThreadStatic] private static PlayerbotPathJobs? t_bound;
     [ThreadStatic] private static Guid t_botId;
@@ -292,6 +310,72 @@ internal sealed class PlayerbotPathJobs
         shared = tiled;
         return true;
     }
+
+    // ---- negative answers -----------------------------------------------------------------------------------------------------
+
+    private static (int X, int Y) Cell(Vector3 point)
+        => ((int)MathF.Floor(point.X / NoPathCellYards), (int)MathF.Floor(point.Y / NoPathCellYards));
+
+    /// <summary>
+    /// Whether the bound bot was told "no path" for the pair of cells holding <paramref name="from"/> and <paramref name="to"/> by a
+    /// synchronous search less than <see cref="NoPathMs"/> ago (<see cref="NoteNoPath"/>). Expired answers are dropped here. World thread;
+    /// a dictionary lookup and at most <see cref="MaxNoPathsPerBot"/> comparisons under the lock.
+    /// </summary>
+    internal bool KnownNoPath(Vector3 from, Vector3 to)
+    {
+        Guid botId = t_botId;
+        long wallMs = WallMs();
+        (int X, int Y) fromCell = Cell(from), toCell = Cell(to);
+        lock (_gate)
+        {
+            if (!_bots.TryGetValue(botId, out BotState? state) || state.NoPaths is not { Count: > 0 } known) return false;
+            for (int i = known.Count - 1; i >= 0; i--)
+            {
+                NoPathAnswer answer = known[i];
+                if (answer.UntilWallMs <= wallMs)
+                {
+                    known.RemoveAt(i);
+                }
+                else if (answer.From == fromCell && answer.To == toCell)
+                {
+                    _totals = _totals with { NoPathCached = _totals.NoPathCached + 1 };
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Remember that the synchronous search an escalation ran (<see cref="JobAnswer.Escalated"/>) found no path from <paramref name="from"/>
+    /// to <paramref name="to"/> (a complete answer: not capped, not pending) for <see cref="NoPathMs"/> for the bound bot, so that
+    /// <see cref="KnownNoPath"/> answers the same pair without a job or another world-thread search.
+    /// </summary>
+    internal void NoteNoPath(Vector3 from, Vector3 to)
+    {
+        Guid botId = t_botId;
+        long until = WallMs() + NoPathMs;
+        (int X, int Y) fromCell = Cell(from), toCell = Cell(to);
+        lock (_gate)
+        {
+            if (!_bots.TryGetValue(botId, out BotState? state)) _bots[botId] = state = new BotState();
+            List<NoPathAnswer> known = state.NoPaths ??= new List<NoPathAnswer>(MaxNoPathsPerBot);
+            for (int i = 0; i < known.Count; i++)
+            {
+                if (known[i].From == fromCell && known[i].To == toCell)
+                {
+                    known.RemoveAt(i);
+                    break;
+                }
+            }
+
+            if (known.Count >= MaxNoPathsPerBot) known.RemoveAt(0);
+            known.Add(new NoPathAnswer(fromCell, toCell, until));
+        }
+    }
+
+    private readonly record struct NoPathAnswer((int X, int Y) From, (int X, int Y) To, long UntilWallMs);
 
     // ---- the query ------------------------------------------------------------------------------------------------------------
 
@@ -823,6 +907,7 @@ internal sealed class PlayerbotPathJobs
     internal void Sweep()
     {
         uint now = _clockMs();
+        long wall = WallMs();
         uint unasked = UnaskedAbandonMs();
         lock (_gate)
         {
@@ -842,7 +927,8 @@ internal sealed class PlayerbotPathJobs
                     }
                 }
 
-                if (state.Entries.Count == 0 && unchecked(now - state.LastAskMs) > UnclaimedMs) (gone ??= []).Add(id);
+                state.NoPaths?.RemoveAll(a => a.UntilWallMs <= wall);
+                if (state.Entries.Count == 0 && state.NoPaths is not { Count: > 0 } && unchecked(now - state.LastAskMs) > UnclaimedMs) (gone ??= []).Add(id);
             }
 
             if (gone is not null)
@@ -902,6 +988,9 @@ internal sealed class PlayerbotPathJobs
     {
         internal readonly List<Entry> Entries = [];
         internal uint LastAskMs;
+
+        /// <summary>The "no path" answers of synchronous searches still in force (<see cref="KnownNoPath"/>); null until the first.</summary>
+        internal List<NoPathAnswer>? NoPaths;
 
         /// <summary>Consecutive deadline-capped answers dropped for a retry; reset by a full answer.</summary>
         internal int CappedStreak;
