@@ -162,13 +162,14 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         private readonly WorldTestHost _host;
         private readonly WorldSession _session;
         private readonly PlayerbotTownGoals _goals;
-        private readonly PlayerbotThinkProbe _probe = new();
+        private readonly PlayerbotThinkProbe _probe;
 
-        private RepairHazardWorld(WorldTestHost host, WorldSession session, HazardPathfinder path)
+        private RepairHazardWorld(WorldTestHost host, WorldSession session, HazardPathfinder path, TimeProvider thinkClock)
         {
             _host = host;
             _session = session;
             Path = path;
+            _probe = new PlayerbotThinkProbe(thinkClock);
             _goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
         }
 
@@ -180,7 +181,13 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         /// so a test of the query-count budget does not depend on how fast this machine answers (a loaded one once stopped a think after
         /// 13 queries on the 5 ms budget).
         /// </param>
-        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long queryTicksLimit = long.MaxValue)
+        /// <param name="frozenThinkClock">
+        /// Whether the think probe runs on a clock that never moves (<see cref="PlayerbotThinkProbeTests.ManualClock"/>), so no budget read
+        /// off the think's own time can stop a plan: neither the query time (<see cref="PlayerbotTownGoals.RepairQueryTicksLimit"/>) nor the
+        /// think's running time (the 20 ms check, live since the probe's RunningMs replaced ElapsedMs, which read 0 during a think). On
+        /// the system clock the first think of a fresh process, JIT and all, ran past 20 ms after one plan, every time.
+        /// </param>
+        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long queryTicksLimit = long.MaxValue, bool frozenThinkClock = false)
         {
             var items = new ItemTestContent();
             items.Templates.Templates.Add(new ItemTemplate
@@ -198,7 +205,7 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
                 services.AddSingleton<IWorldFeature, ManualClock>();
             });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
-            var world = new RepairHazardWorld(host, session, path);
+            var world = new RepairHazardWorld(host, session, path, frozenThinkClock ? new PlayerbotThinkProbeTests.ManualClock() : TimeProvider.System);
             world._goals.RepairQueryTicksLimit = queryTicksLimit;
             await host.OnWorldAsync(() =>
             {
@@ -276,11 +283,12 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
     /// The repair trip stops planning to further NPCs in a think once the think has made <see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>
     /// queries, and the next think goes on. Each refused plan here runs the hazard detours (<see cref="RefusedPlanQueries"/>).
     /// The managed feature runs every think inside a <see cref="PlayerbotThinkProbe"/> (ManagedPlayerbotFeature.Think), the budget's source.
+    /// The think's clock is frozen so the count is the only budget that can stop it (the time budgets have their own test below).
     /// </summary>
     [Fact]
     public async Task RepairTrip_StopsPlanningInAThink_OnceTheQueryBudgetIsSpent_AndGoesOnNextThink()
     {
-        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true);
+        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, frozenThinkClock: true);
         (int queries, int plans) = await world.ThinkAsync(withProbe: true);
         output.WriteLine($"think 1: {queries} queries, {plans} plans");
         Assert.Equal(2, plans); // 13 queries after the first plan, 26 (over 16) after the second: no third
