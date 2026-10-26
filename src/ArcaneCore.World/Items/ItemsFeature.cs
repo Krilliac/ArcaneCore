@@ -31,6 +31,8 @@ namespace ArcaneCore.World.Items;
 public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger, IConfiguration? configuration = null) : IWorldFeature, ICharacterHooks
 {
     private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private readonly object _backgroundLoadGate = new();
+    private Task? _backgroundLoad;
     private readonly LiveItemTemplateStore _live = new();
     private volatile IItemTemplateStore? _templates;
 
@@ -132,6 +134,42 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         finally
         {
             _loadLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: a load already running is not
+    /// started again). The SQLite provider runs its async calls synchronously, so the world thread must never start the load itself.
+    /// <paramref name="whenDone"/> runs on the pool when the load ends, whether it loaded or failed.
+    /// </summary>
+    public void StartLoadInBackground(Action? whenDone = null)
+    {
+        if (_templates is not null)
+        {
+            whenDone?.Invoke();
+            return;
+        }
+
+        lock (_backgroundLoadGate)
+        {
+            if (_backgroundLoad is { IsCompleted: false })
+            {
+                return;
+            }
+
+            _backgroundLoad = Task.Run(async () =>
+            {
+                try
+                {
+                    await EnsureLoadedAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogError(ex, "Loading item content in the background failed; the next request retries");
+                }
+
+                whenDone?.Invoke();
+            });
         }
     }
 

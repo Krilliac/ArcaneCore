@@ -83,10 +83,20 @@ public sealed class LookupCommands : ICommandGroup
 
         string needle = args.ToLowerInvariant();
         Player? caller = context.IsConsole ? null : context.Player;
-        IItemTemplateStore? templates = caller?.Inventory.Templates
-            ?? (context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
-                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult())
-                : null);
+        IItemTemplateStore? templates = caller?.Inventory.Templates;
+        if (templates is null && context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items)
+        {
+            if (items.Templates.Count == 0)
+            {
+                // Console commands run on the world thread: load on the pool and ask for a retry instead of waiting here.
+                items.StartLoadInBackground();
+                context.Reply("Item content is not loaded yet; loading now. Run the command again shortly.");
+                return true;
+            }
+
+            templates = items.Templates;
+        }
+
         if (templates is null || LiveItemTemplateStore.Unwrap(templates) is not { } store)
         {
             context.Reply(GmStrings.NoItemsFound);

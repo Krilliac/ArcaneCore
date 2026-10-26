@@ -42,11 +42,18 @@ public sealed class ArcaneInfoCommands : ICommandExtension
         WorldMaps maps = WorldMaps.Of(context.World);
         context.Reply(Line("maps", string.Create(c, $"{maps.Registry.Count} maps, {maps.Areas.Count} areas, {maps.GameTeles.Count} tele locations, {maps.AreaTriggers.Count} area triggers")));
         int itemCount = context.IsConsole
-            ? (services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
-                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult()).Count
-                : 0)
+            ? (services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items ? items.Templates.Count : 0)
             : context.Player.Inventory.Templates.Count;
-        context.Reply(Line("items", string.Create(c, $"{itemCount} templates")));
+        if (itemCount == 0 && context.IsConsole && services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } unloaded)
+        {
+            // This runs on the world thread: start the load on the pool instead of waiting for it here.
+            unloaded.StartLoadInBackground();
+            context.Reply(Line("items", "not loaded yet (loading now; run the command again shortly)"));
+        }
+        else
+        {
+            context.Reply(Line("items", string.Create(c, $"{itemCount} templates")));
+        }
         if (services.GetService<CreatureWorldFeature>() is { } creatures)
         {
             context.Reply(Line("creatures", string.Create(c, $"{creatures.Content.TemplateCount} templates, {creatures.Content.SpawnCount} spawns, definitions generation {creatures.Content.DefinitionsVersion}")));

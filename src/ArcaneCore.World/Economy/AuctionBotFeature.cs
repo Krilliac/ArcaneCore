@@ -257,19 +257,44 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
     /// <summary>
     /// World thread: <c>.ahbot reload</c> (cMaNGOS ReloadAllConfig): re-read the options and the <c>ahbot_items</c> rows and rebuild the
-    /// item pool. <c>Enabled</c> and the update interval only change on restart. Returns the option corrections.
+    /// item pool. <c>Enabled</c> and the update interval only change on restart. The options are re-bound at once; the
+    /// <c>ahbot_items</c> read runs on the thread pool (the SQLite provider runs its async calls synchronously, so it must not
+    /// run on the tick), and the overrides are applied, the pool rebuilt and <paramref name="done"/> called with the option
+    /// corrections back on the world thread.
     /// </summary>
-    public IReadOnlyList<string> Reload()
+    public void Reload(Action<IReadOnlyList<string>> done)
     {
+        ArgumentNullException.ThrowIfNull(done);
         bool enabled = Options.Enabled;
         uint interval = Options.UpdateIntervalSeconds;
         IReadOnlyList<string> fixes = BindOptions();
         Options.Enabled = enabled;
         Options.UpdateIntervalSeconds = interval;
-        LoadOverrides();
-        _planner = null;
-        _loot = null;
-        return fixes;
+        WorldRuntime? world = _world;
+        _ = Task.Run(async () =>
+        {
+            Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
+            void Apply()
+            {
+                if (loaded is not null)
+                {
+                    _overrides = loaded;
+                }
+
+                _planner = null;
+                _loot = null;
+                done(fixes);
+            }
+
+            if (world is null)
+            {
+                Apply();
+            }
+            else
+            {
+                world.Post(Apply);
+            }
+        });
     }
 
     /// <summary>
@@ -390,24 +415,36 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         return fixes;
     }
 
+    /// <summary>Attach time only (before the world thread runs): the blocking read of the <c>ahbot_items</c> rows.</summary>
     private void LoadOverrides()
+    {
+        if (ReadOverridesAsync().GetAwaiter().GetResult() is { } loaded)
+        {
+            _overrides = loaded;
+        }
+    }
+
+    /// <summary>Read the <c>ahbot_items</c> rows: null when there is no store (keep what is held), empty when the read failed.</summary>
+    private async Task<Dictionary<uint, AuctionBotItemOverride>?> ReadOverridesAsync()
     {
         using IServiceScope scope = services.CreateScope();
         if (scope.ServiceProvider.GetService<IAuctionBotItemStore>() is not { } store)
         {
-            return;
+            return null;
         }
 
         try
         {
-            _overrides = store.LoadAsync().GetAwaiter().GetResult().Where(o => o.Item != 0).GroupBy(o => o.Item).ToDictionary(g => g.Key, g => g.Last());
-            logger.LogInformation("AHBot: {Count} ahbot_items rows", _overrides.Count);
+            IReadOnlyList<AuctionBotItemOverride> rows = await store.LoadAsync().ConfigureAwait(false);
+            Dictionary<uint, AuctionBotItemOverride> loaded = rows.Where(o => o.Item != 0).GroupBy(o => o.Item).ToDictionary(g => g.Key, g => g.Last());
+            logger.LogInformation("AHBot: {Count} ahbot_items rows", loaded.Count);
+            return loaded;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("economy.ahbot-load-overrides", ex);
             logger.LogFault("ahbot.load-overrides", ex, "AHBot: loading ahbot_items failed; no item overrides");
-            _overrides = [];
+            return [];
         }
     }
 
@@ -700,7 +737,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             // The item content (and the item GUID seed) is not loaded yet; never mint before the allocator is seeded.
             if (_items is not null && ReferenceEquals(_items.LoadedStore, ItemTemplateStore.Empty))
             {
-                _ = _items.EnsureLoadedAsync();
+                _items.StartLoadInBackground(); // never inline: SQLite's async calls run synchronously on the tick
             }
 
             return null;

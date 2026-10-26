@@ -84,8 +84,8 @@ public sealed class AuctionBotCommands : ICommandGroup
             return true;
         }
 
-        IReadOnlyList<string> fixes = bot.Reload();
-        context.Reply(fixes.Count == 0 ? "AHBot config reloaded." : $"AHBot config reloaded with {fixes.Count} corrections: {string.Join(" ", fixes)}");
+        // The ahbot_items read runs off the world thread; the reply is sent from the world thread when it is applied.
+        bot.Reload(fixes => context.Reply(fixes.Count == 0 ? "AHBot config reloaded." : $"AHBot config reloaded with {fixes.Count} corrections: {string.Join(" ", fixes)}"));
         return true;
     }
 
