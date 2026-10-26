@@ -284,6 +284,9 @@ public sealed class PlayerbotWorldBossWorldTests
     {
         using var counts = new OutcomeCounts();
         await using GroupTestWorld world = await StartAsync();
+        // Create the player's character before any bot exists: created inside EnterWorldAsync, after RaidersAsync, the create
+        // overlapped the bots' character saves on the shared SQLite file and was answered CharCreateError under load.
+        await world.World.PrepareCharacterAsync("WBKILLER1", "Wbkillerone", AccountSecurity.Player);
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         Creature boss = await SpawnAsync(world, bots[0].Id, Boss(health: 5000), BossAt);
         await using WorldTestClient client = await world.World.EnterWorldAsync("WBKILLER1", "Wbkillerone", AccountSecurity.Player);

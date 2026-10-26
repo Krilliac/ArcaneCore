@@ -39,6 +39,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 internal sealed class ScenarioTestWorld : IAsyncDisposable
 {
     private readonly string _database;
+    private readonly ConcurrentDictionary<string, WorldTestClient> _prepared = new(StringComparer.OrdinalIgnoreCase);
 
     private ScenarioTestWorld(WorldTestHost host, ScenarioTimeProvider time, string database)
     {
@@ -85,12 +86,6 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         {
             ["Database:Provider"] = "Sqlite",
             ["Database:ConnectionString"] = "Data Source=" + database + ";Pooling=False",
-            // The shipped 5 s lock wait (SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs/DefaultBusyTimeoutMs) is a wall-clock bound:
-            // under full-suite load a socket client's CMSG_CHAR_CREATE insert queued behind the running bots' saves on this one SQLite file
-            // outlasted it, the store threw "database is locked" and CharacterHandlers answered CharCreateError. Match the lock wait to the
-            // scenario step timeout, as the settlement budgets below do, so only the test's own bound decides.
-            ["Database:SqliteWriteTimeoutMs"] = ((int)DefaultStepTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["Database:SqliteBusyTimeoutMs"] = ((int)DefaultStepTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture),
         }).Build();
         await using (ServiceProvider bootstrap = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).BuildServiceProvider())
         {
@@ -138,15 +133,37 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     }
 
     /// <summary>A real socket client (e.g. a GM) in this world; characters live in the SQLite store, not the host's memory store.</summary>
+    /// <remarks>A character made earlier by <see cref="PrepareCharacterAsync"/> for <paramref name="account"/> is only logged in.</remarks>
     public async Task<WorldTestClient> EnterWorldAsync(string account, string character, AccountSecurity security)
+    {
+        if (!_prepared.TryRemove(account, out WorldTestClient? client))
+        {
+            client = await CreateCharacterClientAsync(account, character, security);
+        }
+
+        int id = (await WithScopeAsync(sp => sp.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync()))
+            .Single(identity => identity.Name.Equals(character, StringComparison.OrdinalIgnoreCase)).Id;
+        await client.LoginAsync((ulong)id);
+        return client;
+    }
+
+    /// <summary>
+    /// Create <paramref name="character"/> on a socket client now (authenticated, not logged in) and keep the client for a later
+    /// <see cref="EnterWorldAsync"/>. Call it before adding bots: a create issued by EnterWorldAsync while bots run overlaps their
+    /// character saves on this one SQLite file, and creating first removes that overlap.
+    /// </summary>
+    public async Task PrepareCharacterAsync(string account, string character, AccountSecurity security)
+    {
+        WorldTestClient client = await CreateCharacterClientAsync(account, character, security);
+        Xunit.Assert.True(_prepared.TryAdd(account, client), $"account {account} was already prepared");
+    }
+
+    private async Task<WorldTestClient> CreateCharacterClientAsync(string account, string character, AccountSecurity security)
     {
         byte[] key = await Host.AddAccountAsync(account, security);
         WorldTestClient client = await Host.ConnectAsync();
         await client.AuthenticateAsync(account, key);
         await client.CreateCharacterAsync(character);
-        int id = (await WithScopeAsync(sp => sp.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync()))
-            .Single(identity => identity.Name.Equals(character, StringComparison.OrdinalIgnoreCase)).Id;
-        await client.LoginAsync((ulong)id);
         return client;
     }
 
