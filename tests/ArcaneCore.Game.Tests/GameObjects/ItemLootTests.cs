@@ -85,6 +85,22 @@ public sealed class ItemLootTests
         public ParsedLoot Window() => ParsedLoot.Parse(Assert.Single(Packets(Session, WorldOpcode.SmsgLootResponse)).Payload);
     }
 
+    [Fact]
+    public void AnItemLootWindow_StaysOpenWhenItsOwnerMoves()
+    {
+        // vmangos closes only non-item loot on a moving block (HandleMoverRelocation, MovementHandler.cpp:1106-1110).
+        var rig = new Rig();
+        Item clams = rig.Give(Clam, 3);
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(rig.Player, clams));
+        LootBag bag = Assert.IsType<LootBag>(rig.Loot.OpenLootOf(rig.Player));
+        Assert.Equal(LootSourceKind.Item, bag.Kind);
+
+        rig.Loot.ReleaseOnMovement(rig.Player);
+
+        Assert.Same(bag, rig.Loot.OpenLootOf(rig.Player));
+        Assert.Contains(rig.Player, bag.Viewers);
+    }
+
     private static Item Unlocked(Item item)
     {
         item.DynamicFlags |= ItemDynFlags.Unlocked;

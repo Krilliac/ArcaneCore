@@ -2,7 +2,7 @@
 
 Branch `claude/vw2-class-casters` (wave 2, lane `class-casters`). The shared-file edits and the merge notes are in
 [docs/integration/casters.md](../integration/casters.md). Directive: everything as close to retail 1.12.1 as possible,
-mechanics and data, verified against the vmangos reference (`D:\refs\vmangos`, primary), cmangos-classic, wow_messages
+mechanics and data, verified against the vmangos reference (`<refs-root>\vmangos`, primary), cmangos-classic, wow_messages
 and classic-db. Nothing from those trees is copied: the code is a re-implementation, the tests carry a handful of
 numeric oracle constants quoted with their source, and every formula cites `file:line` in its doc comment.
 

@@ -1,6 +1,6 @@
 # Aura 88 health regeneration integration
 
-This slice adds `SPELL_AURA_MOD_HEALTH_REGEN_PERCENT` (AuraType 88) using the vmangos `Player::RegenerateHealth` ordering (`D:\refs\vmangos\src\game\Objects\Player.cpp:2369-2392`). The active Aura88 holders contribute a multiplicative product of `(100 + amount) / 100` to the spirit health result only while out of combat.
+This slice adds `SPELL_AURA_MOD_HEALTH_REGEN_PERCENT` (AuraType 88) using the vmangos `Player::RegenerateHealth` ordering (`<refs-root>\vmangos\src\game\Objects\Player.cpp:2369-2392`). The active Aura88 holders contribute a multiplicative product of `(100 + amount) / 100` to the spirit health result only while out of combat.
 
 Aura88 does not make a player eligible for combat spirit regeneration. Aura116 remains the combat spirit gate/scaler; Aura161 remains the always-applied `Rate.Health * 2 * (sum161 / 5)` flat contribution. Food remains out-of-combat-only and is not `Rate.Health` scaled. Existing fractional carry, max-health cap, and nonnegative clamp remain in `MapCombat.Regen`.
 

@@ -145,6 +145,48 @@ public sealed class RepoHygieneTests : IDisposable
         Assert.Contains(ScanOne(path), v => v.Path == path);
     }
 
+    private const string UserDir = "C:\\" + "Users\\someone\\x.log";
+    private const string FirstName = "Nat" + "han";
+
+    [Theory]
+    [InlineData("notes/a.md", "see " + UserDir)]
+    [InlineData("notes/a.md", "see C:/Users/someone/x.log")]
+    [InlineData("notes/a.md", "see /c/Users/someone/x.log")]
+    [InlineData("notes/a.md", @"see C:\Users\Public\x.log")] // pinned: any drive-letter Users folder is refused, Public included
+    [InlineData("README.md", @"profile D:\ArcaneCore-lanes\fx")]
+    [InlineData("notes/a.md", "owner " + FirstName + " decides")]
+    [InlineData("notes/a.md", "owner Nat" + "e's call")]
+    [InlineData("notes/a.md", "owner " + "nat" + "han decides")] // the name rule is case-insensitive
+    [InlineData("notes/a.md", "owner " + "NAT" + "HAN decides")]
+    [InlineData("notes/a.md", "file " + "Nat" + "e_notes.txt")] // an underscore is not a word break
+    [InlineData("notes/a.md", @"clone in D:\refs\vmangos")]
+    [InlineData("notes/a.md", "clone in d:/refs/classic-db")]
+    [InlineData("notes/a.md", @"extracted to E:\Server-Zero\dbc")]
+    [InlineData("notes/a.md", @"tools in D:\terrain-tools")]
+    [InlineData("notes/a.md", "cloned to /home/someone/refs")]
+    [InlineData("notes/a.md", "see /Users/someone/Library")]
+    [InlineData("THIRD_PARTY_NOTICES.md", "snapshot at " + UserDir)] // the notice is exempt from the name rule only
+    [InlineData("THIRD_PARTY_NOTICES.md", "snapshot at D:/ArcaneCore-lanes/_refs/x")]
+    public void MarkdownNamingAPersonOrMachine_IsRefused(string path, string text)
+    {
+        Plant(path, Encoding.UTF8.GetBytes(text));
+        Assert.Contains(ScanOne(path), v => v.Path == path);
+    }
+
+    [Theory]
+    [InlineData("notes/a.md", "<live-profile> via ARCANECORE_LIVE_PROFILE, owner is the maintainer, Nathanael and Natesville are other words")]
+    [InlineData("notes/a.md", @"example roots D:\arcane\bin, D:\refstuff\x and C:\tmp stay fine")] // not a refs root
+    [InlineData("notes/a.md", "generic homes /home/user/refs, /Users/you/x, /home/<user>/x and /home/runner/work are not a person")]
+    [InlineData("notes/a.md", "urls https://example.com/home/page and api/users/list are not paths")]
+    [InlineData("THIRD_PARTY_NOTICES.md", "upstream NOTICE: Copyright " + FirstName)] // Apache section 4(d): verbatim attribution
+    [InlineData("docs/reference/configuration.md", @"D:\refs\vmangos " + FirstName)] // generated from source comments; both a path rule and the name rule match
+    [InlineData("src/Note.cs", "// " + FirstName + " " + UserDir)] // text rules apply to markdown only
+    public void MarkdownText_ExemptionsAndNeutralWording_AreAllowed(string path, string text)
+    {
+        Plant(path, Encoding.UTF8.GetBytes(text));
+        Assert.Empty(ScanOne(path));
+    }
+
     [Fact]
     public void OrdinarySourceAndSmallSql_AreAllowed()
     {

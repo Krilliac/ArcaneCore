@@ -70,7 +70,7 @@ daemon then reads those tables, not the files.
 
 ## Against the real client set (2026-10-08)
 
-`D:\ArcaneCore-data\client-dbc-5875` (154 files): all 154 have reference layouts and match their field count and record size.
+`<data-root>\client-dbc-5875` (154 files): all 154 have reference layouts and match their field count and record size.
 The 59 primary layouts still match (every vmangos format string of build 5875, ItemDisplayInfo's commented-out one, and four ArcaneCore layouts).
 The reviewed DBC-to-DBC scan of this extraction checks 173 columns: 151 clean, 22 known client-data-gap groups with 147 distinct absent ids in 291 rows, no unexpected dangling ids and none skipped. The [build-5875 review](../integration/dbc-content-review-20261008.md) records the verdict for every former dangling group and the world-DB rows below.
 Examples include AreaTable.ContinentID -> Map (17, 150), AreaTrigger.ContinentID -> Map (24, 28), and

@@ -68,13 +68,7 @@ internal sealed class DiagnosticsHostedService(
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
         FaultLedger.Shared.Configure(value);
-        string crashJournal = Path.Combine(AppContext.BaseDirectory, "crash-faults.jsonl");
-        FaultLedger.Shared.ConfigureCrashJournal(crashJournal);
-        int replayedCrashes = FaultLedger.Shared.ReplayCrashJournal(crashJournal);
-        if (replayedCrashes > 0)
-        {
-            crashLogger.LogWarning("Diagnostics: replayed {Count} prior terminating crash fault(s) from {Path} into FaultLedger", replayedCrashes, crashJournal);
-        }
+        CrashJournalPaths.ConfigureAndReplay(FaultLedger.Shared, AppContext.BaseDirectory, CrashJournalPaths.ProcessName(), crashLogger);
 
         AnomalyLedger.Shared.Configure(loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Anomaly"), value.FaultLogLimit);
         CrashHandler handler = CrashHandler.Install(value, new LoggerCrashSink(crashLogger), [.. providers]);

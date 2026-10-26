@@ -378,6 +378,7 @@ public sealed partial class TeleportService
 
         // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
         current.Combat.ReviveForDungeonEntry(player, mapId);
+        WorldMaps maps = WorldMaps.Of(_world);
 
         // vmangos TeleportTo (Player.cpp:1868-1872): leave the ship unless told to stay on it.
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
@@ -390,6 +391,10 @@ public sealed partial class TeleportService
         ResetMovementForTeleport(player, staysAboard);
 
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
+
+        // The grids the player will load on arrival (Map.AddPlayer, or the relocation of a near teleport's ack) are read on the thread pool
+        // from now, while the transfer screen or the ack round trip runs, instead of inside the tick that places the player. Timing only.
+        maps.PrefetchArrival(mapId, x, y);
         if (current.MapId == mapId && !staysAboard && (options & TeleportOptions.ForceFar) == 0)
         {
             bool leavesCombat = (options & TeleportOptions.NotLeaveCombat) == 0;
@@ -428,6 +433,11 @@ public sealed partial class TeleportService
                 TeleportPackets.BuildMoveTeleportAck(player.Guid, player.NextMovementCounter(), moved));
             return true;
         }
+
+        // A far transfer ends the client's flight and fixed Z (the client enters the world afresh), so a leftover GM cheat would only keep
+        // whitelisting the fly hack's own flags (MovementCheats.GrantedFor) for a player who is no longer flying. A near teleport keeps the
+        // client's swimming and levitating (ArriveNear), so the cheat stays there.
+        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
 
         var pending = new Pending(this, player, destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {

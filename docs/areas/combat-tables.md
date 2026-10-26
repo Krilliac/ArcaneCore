@@ -1,25 +1,25 @@
 # Combat table audit (1.12.1)
 
 This audit covers the integrated white melee and magic spell tables. The primary
-reference is the read-only vmangos clone at `D:/refs/vmangos`. Its GPL source and
+reference is the read-only vmangos clone at `<refs-root>/vmangos`. Its GPL source and
 resistance rows were not copied into ArcaneCore. The arithmetic tests are in
 `tests/ArcaneCore.Game.Tests/Combat/CombatTableReferenceTests.cs`, alongside the older
 `CombatHitTableTests`, `SpellRules/*`, and `CombatMechanics/PowerRulesTests`.
 
 Full reference locations (line ranges are from this clone):
 
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:336-412` — white miss and dual wield.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:446-725` — swing roll order, avoidance, glancing and crushing.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:795-925` — magic hit and resistance conversion.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:958-993` — spell critical damage.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:1121-1145` — armor reduction.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1364-1565` — melee damage schools, block, absorb and hit flags.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1571-1601` — glancing damage range.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1875-1918` and `:2397-2458` — resistance buckets and interpolation.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1920-2083` — school and mana shields.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:2552-2595` and `:5212-5327` — melee and spell critical chance.
-- `D:\refs\vmangos\src\game\Objects\Player.cpp:2243-2267` — rage from damage.
-- `D:\refs\wow_messages\wow_message_parser\wowm\world\combat\smsg_attackerstateupdate.wowm:1-52` — 1.12 hit flags and per-school damage/absorb/resist packet fields.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:336-412` — white miss and dual wield.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:446-725` — swing roll order, avoidance, glancing and crushing.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:795-925` — magic hit and resistance conversion.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:958-993` — spell critical damage.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:1121-1145` — armor reduction.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1364-1565` — melee damage schools, block, absorb and hit flags.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1571-1601` — glancing damage range.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1875-1918` and `:2397-2458` — resistance buckets and interpolation.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1920-2083` — school and mana shields.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:2552-2595` and `:5212-5327` — melee and spell critical chance.
+- `<refs-root>\vmangos\src\game\Objects\Player.cpp:2243-2267` — rage from damage.
+- `<refs-root>\wow_messages\wow_message_parser\wowm\world\combat\smsg_attackerstateupdate.wowm:1-52` — 1.12 hit flags and per-school damage/absorb/resist packet fields.
 
 | Stage | Retail behavior and reference | ArcaneCore status |
 | --- | --- | --- |

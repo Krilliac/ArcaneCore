@@ -2,7 +2,7 @@
 
 Lane `gm-commands` of wave 2, branch `claude/vw2-gm-commands`. Goal: the chat-command layer behaves like
 vmangos for the commands a GM uses during acceptance (names, abbreviations, security levels, argument
-grammar, reply texts, side effects). References are read-only checks against `D:\refs`; nothing was copied
+grammar, reply texts, side effects). References are read-only checks against `<refs-root>`; nothing was copied
 from them. Reply texts come from mangos-classic `sql\base\mangos.sql` at the vmangos `LANG_*` id (vmangos'
 base `mangos_string` rows are not in the reference tree; the one text vmangos changed that this lane uses,
 id 50, is quoted from `sql\migrations\20240107103630_world.sql:14`). Each text is cited next to its member
@@ -187,12 +187,12 @@ Skipped because the primitive belongs to another lane or is absent, or because i
 
 ## Reference citations
 
-`D:\refs\vmangos\src\game\Chat\Chat.cpp` 65-1366 (tables), 1488-1563 (isAvailable, HasLowerSecurity), 1566-1600
+`<refs-root>\vmangos\src\game\Chat\Chat.cpp` 65-1366 (tables), 1488-1563 (isAvailable, HasLowerSecurity), 1566-1600
 (hasStringAbbr), 1767-1860 (FindCommand), 1873-1970 (ExecuteCommand), 2081-2163 (help), 2690-3290 (Extract*), 3364,
 3717-3800; `Chat.h:134`; `src\shared\Common.h:136-146`; `src\shared\Util.cpp:197-282`;
 `Commands\CharacterCommands.cpp` 695-762, 1241-1259, 1849-1872, 3267-3450, 4460-4523; `Commands\UnitCommands.cpp`
 2283-2403; `Commands\TeleportCommands.cpp` 28-46, 657-760, 1039-1346; `Commands\LookupCommands.cpp` 167-258, 604-667,
 790-850, 1264-1304; `Commands\ServerCommands.cpp` 46-69, 302-323, 370-495; `Commands\MiscCommands.cpp` 37-58, 103-151;
 `Commands\AccountCommands.cpp` 489-514; `src\game\World.cpp` 2667-2780; `World.h` 64-81; `Objects\Player.cpp`
-2602-2688, 5999-6006, 14881; `Language.h` ids cited in `GmStrings.cs`; `D:\refs\mangos-classic\sql\base\mangos.sql`
-3423-3880, 4083-4129; `D:\refs\wow_messages\...\smsg_server_message.wowm`.
+2602-2688, 5999-6006, 14881; `Language.h` ids cited in `GmStrings.cs`; `<refs-root>\mangos-classic\sql\base\mangos.sql`
+3423-3880, 4083-4129; `<refs-root>\wow_messages\...\smsg_server_message.wowm`.

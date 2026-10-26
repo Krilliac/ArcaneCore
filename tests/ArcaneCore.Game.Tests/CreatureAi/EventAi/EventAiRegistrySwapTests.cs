@@ -170,6 +170,27 @@ public sealed class EventAiRegistrySwapTests
         Assert.Empty(EventAiRegistry.Default.ModuleActionTypes);
     }
 
+    [Fact]
+    public void AnActionThatThrows_DoesNotLeaveTheEventInProgress_SoItFiresAgainOnTheNextBatch()
+    {
+        // The caller of the AI swallows the exception; the engine must still unwind its depth and the InProgress flag.
+        CreatureEventAI wolf = Wolf([Row(1, EventAiEventType.Aggro, a1: new CreatureAiAction(ModuleType, 0, 0, 0))], out WorldRuntime world, out Player player);
+        using WorldRuntime w = world;
+        EventAiRegistry registry = Fresh();
+        var ai = new CreatureEventAI(wolf.Me, wolf.AiContent, registry);
+        var action = new ThrowOnFirstRunAction(ModuleType);
+        registry.CommitSwap([], [], [], [action]);
+        EventAiHolder holder = Assert.Single(ai.Engine.Holders);
+
+        Assert.Throws<InvalidOperationException>(() => ai.OnAggro(player));
+        Assert.False(holder.InProgress);
+
+        holder.Enabled = true;
+        ai.OnAggro(player);
+
+        Assert.Equal(2, action.Runs); // RED on main: the holder stays InProgress and the second batch never runs it
+    }
+
     private static EventAiRegistry Registry(EventAiEngine engine)
         => (EventAiRegistry)typeof(EventAiEngine).GetField("_registry", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .GetValue(engine)!;
@@ -198,6 +219,23 @@ public sealed class EventAiRegistrySwapTests
         public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
         {
             Runs++;
+            return true;
+        }
+    }
+
+    private sealed class ThrowOnFirstRunAction(byte type) : EventAiActionHandler
+    {
+        public int Runs { get; private set; }
+
+        public override byte ActionType => type;
+
+        public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
+        {
+            if (++Runs == 1)
+            {
+                throw new InvalidOperationException("action fault");
+            }
+
             return true;
         }
     }

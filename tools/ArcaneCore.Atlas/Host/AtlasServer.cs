@@ -35,6 +35,21 @@ public sealed record AtlasServerOptions
     /// <summary>How long <c>capture</c> waits for the UI (15 s).</summary>
     public TimeSpan CaptureTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// Presence messages from one UI connection closer together than this are dropped (50 ms; the UI sends at most about five per
+    /// second). Zero accepts every message.
+    /// </summary>
+    public TimeSpan PresenceMinInterval { get; init; } = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>How long an agent session (<c>session.join</c>) lives without a join or move before it is removed (10 minutes).</summary>
+    public TimeSpan AgentSessionTimeout { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Largest number of agent sessions at once (16).</summary>
+    public int MaxAgentSessions { get; init; } = 16;
+
+    /// <summary>The clock the presence rate limit and agent session expiry read; tests substitute their own.</summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
     /// <summary>Whether to publish the discovery file <c>ctl</c> finds this instance through.</summary>
     public bool WriteDiscovery { get; init; } = true;
 }
@@ -63,6 +78,9 @@ public sealed partial class AtlasServer : IAsyncDisposable
     private const long MaxCommandBodyBytes = 4L * 1024 * 1024;
     private const long MaxCaptureBodyBytes = 64L * 1024 * 1024;
 
+    /// <summary>How often expired agent sessions are swept when no command or snapshot read does it first.</summary>
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(30);
+
     private readonly AtlasContext _context;
     private readonly AtlasServerOptions _options;
     private readonly UiHub _hub;
@@ -73,6 +91,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly WebApplication _app;
     private IDisposable? _events;
+    private ITimer? _sweeper;
     private DiscoveryRecord? _discovery;
     private int _port;
     private int _disposed;
@@ -88,6 +107,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
         Token = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
         _tokenBytes = Encoding.UTF8.GetBytes(Token);
         _hub.CaptureTimeout = options.CaptureTimeout;
+        _hub.Attach(options);
         _port = options.Port;
 
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [], ContentRootPath = AppContext.BaseDirectory });
@@ -115,7 +135,18 @@ public sealed partial class AtlasServer : IAsyncDisposable
     public Uri BaseAddress => new($"{Uri.UriSchemeHttp}://127.0.0.1:{_port}/");
 
     /// <summary>The address a browser opens: the base address with the token in the fragment, which never reaches a request line or log.</summary>
-    public Uri BrowserAddress => new($"{BaseAddress}#t={Token}");
+    public Uri BrowserAddress => new(BrowserUrl(_port, Token));
+
+    /// <summary>
+    /// The address a browser opens for the instance on <paramref name="port"/>: <c>http://127.0.0.1:&lt;port&gt;/#t=&lt;token&gt;</c>, plus
+    /// <c>&amp;name=&lt;url-encoded&gt;</c> when <paramref name="name"/> is given (the UI joins under that display name). The URL carries
+    /// the token: treat it as a secret.
+    /// </summary>
+    public static string BrowserUrl(int port, string token, string? name = null)
+    {
+        string url = $"{Uri.UriSchemeHttp}://127.0.0.1:{port}/#t={token}";
+        return string.IsNullOrEmpty(name) ? url : $"{url}&name={Uri.EscapeDataString(name)}";
+    }
 
     /// <summary>The discovery file this instance published, or null.</summary>
     public string? DiscoveryFile => _discovery is null ? null : Discovery.FileFor(_state, _discovery.Pid);
@@ -141,6 +172,7 @@ public sealed partial class AtlasServer : IAsyncDisposable
                 ?? throw new InvalidOperationException("The web server reports no listening address.");
             server._port = new Uri(addresses.Addresses.First()).Port;
             server._events = context.Events.Subscribe(server._hub.Broadcast);
+            server._sweeper = options.Time.CreateTimer(_ => server.Sweep(), null, SweepInterval, SweepInterval);
             if (options.WriteDiscovery)
             {
                 server._discovery = new DiscoveryRecord(Environment.ProcessId, server._port, server.Token, DateTimeOffset.UtcNow, AtlasVersion.Current, context.Paths.TerrainData, context.Paths.ClientRoot);
@@ -157,6 +189,19 @@ public sealed partial class AtlasServer : IAsyncDisposable
         return server;
     }
 
+    /// <summary>Timer callback: drops expired agent sessions. A fault is logged and the next tick tries again; it never escapes to the timer thread.</summary>
+    private void Sweep()
+    {
+        try
+        {
+            _hub.SweepExpired();
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            _log.LogWarning(e, "Sweeping expired agent sessions failed; it is retried on the next tick.");
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -165,6 +210,12 @@ public sealed partial class AtlasServer : IAsyncDisposable
         }
 
         _events?.Dispose();
+        if (_sweeper is not null)
+        {
+            await _sweeper.DisposeAsync().ConfigureAwait(false);
+        }
+
+        _hub.Detach();
         await _shutdown.CancelAsync().ConfigureAwait(false);
         if (_discovery is not null)
         {

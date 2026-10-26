@@ -123,18 +123,76 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
     }
 }
 
-/// <summary>
-/// The AreaTable zone and area at a position of one map, for <see cref="ElevatorNetwork.Choose"/>: the map's terrain
-/// (<see cref="Map.GetZoneAndAreaId"/>, vmangos TerrainInfo::GetZoneAndAreaId); tests give a fixture.
-/// </summary>
-internal sealed class ElevatorSurvey(Func<Vector3, (uint Zone, uint Area)> regionAt)
-{
-    public (uint Zone, uint Area) RegionAt(Vector3 at) => float.IsFinite(at.X) && float.IsFinite(at.Y) ? regionAt(at) : (0, 0);
+/// <summary>An AreaTable region lookup that may not know yet (<see cref="ElevatorSurvey.TryRegionAt"/>).</summary>
+internal delegate bool ElevatorRegionLookup(Vector3 at, out (uint Zone, uint Area) region);
 
+/// <summary>
+/// The AreaTable zone and area at a position of one map, for <see cref="ElevatorNetwork.Choose(uint, Vector3, Vector3, ElevatorSurvey)"/>:
+/// the map's terrain without reading a tile on the world thread (<see cref="Map.TryGetZoneAndAreaIdWithoutLoading"/>; a goal anywhere on
+/// the continent used to read its whole tile inside the tick, seconds on a paging host); tests give a fixture.
+/// </summary>
+internal sealed class ElevatorSurvey
+{
+    private readonly ElevatorRegionLookup _lookup;
+
+    /// <summary>A survey that always knows (fixtures).</summary>
+    public ElevatorSurvey(Func<Vector3, (uint Zone, uint Area)> regionAt)
+    {
+        ArgumentNullException.ThrowIfNull(regionAt);
+        _lookup = (Vector3 at, out (uint Zone, uint Area) region) =>
+        {
+            region = regionAt(at);
+            return true;
+        };
+    }
+
+    /// <summary>A survey that may not know yet (<see cref="TryRegionAt"/>).</summary>
+    public ElevatorSurvey(ElevatorRegionLookup lookup)
+    {
+        ArgumentNullException.ThrowIfNull(lookup);
+        _lookup = lookup;
+    }
+
+    /// <summary>The region at a position; (0, 0) while it is not known yet (<see cref="TryRegionAt"/>) and at a non-finite one.</summary>
+    public (uint Zone, uint Area) RegionAt(Vector3 at) => TryRegionAt(at, out (uint Zone, uint Area) region) ? region : (0, 0);
+
+    /// <summary>
+    /// The region at a position, or false while it is not known yet: the terrain under it is being read in the background
+    /// (<see cref="Map.TryGetZoneAndAreaIdWithoutLoading"/>); ask again on a later think. A non-finite position is in no region (true, (0, 0)).
+    /// </summary>
+    public bool TryRegionAt(Vector3 at, out (uint Zone, uint Area) region)
+    {
+        if (!float.IsFinite(at.X) || !float.IsFinite(at.Y))
+        {
+            region = (0, 0);
+            return true;
+        }
+
+        return _lookup(at, out region);
+    }
+
+    /// <summary>
+    /// The survey of a map's terrain. On a map with a lift (<see cref="ElevatorRegions.Known"/>) the areas of all its tiles start being read
+    /// in the background at once (<see cref="ArcaneCore.Game.Maps.Terrain.TerrainInfo.WarmAreasInBackground"/>), so a goal rarely waits.
+    /// </summary>
     public static ElevatorSurvey Of(Map map)
     {
         ArgumentNullException.ThrowIfNull(map);
-        return new ElevatorSurvey(at => map.GetZoneAndAreaId(at.X, at.Y, at.Z));
+        foreach (ElevatorRegions row in ElevatorRegions.Known)
+        {
+            if (row.MapId == map.MapId)
+            {
+                map.Terrain.WarmAreasInBackground();
+                break;
+            }
+        }
+
+        return new ElevatorSurvey((Vector3 at, out (uint Zone, uint Area) region) =>
+        {
+            bool known = map.TryGetZoneAndAreaIdWithoutLoading(at.X, at.Y, at.Z, out (uint ZoneId, uint AreaId) found);
+            region = found;
+            return known;
+        });
     }
 }
 
@@ -269,17 +327,28 @@ internal sealed class ElevatorNetwork
     /// lift only from <see cref="MesaYards"/> below its top up; lower down it is the foot); null for neither.
     /// </summary>
     public static ElevatorLevel? LevelOf(ElevatorLift lift, ElevatorRegions regions, ElevatorSurvey survey, Vector3 at)
+        => LevelOf(lift, regions, survey, at, out _);
+
+    /// <param name="unknown">True when the answer waits for the region at <paramref name="at"/> (<see cref="ElevatorSurvey.TryRegionAt"/>):
+    /// null then means "not known yet", not "neither level".</param>
+    public static ElevatorLevel? LevelOf(ElevatorLift lift, ElevatorRegions regions, ElevatorSurvey survey, Vector3 at, out bool unknown)
     {
         ArgumentNullException.ThrowIfNull(lift);
         ArgumentNullException.ThrowIfNull(regions);
         ArgumentNullException.ThrowIfNull(survey);
+        unknown = false;
         if (Vector2.Distance(Flat(at), lift.Centre) <= NearLiftYards)
         {
             ElevatorLevel nearer = MathF.Abs(at.Z - lift.LowZ) <= MathF.Abs(at.Z - lift.HighZ) ? ElevatorLevel.Low : ElevatorLevel.High;
             if (MathF.Abs(at.Z - lift.LevelZ(nearer)) <= LevelYards) return nearer;
         }
 
-        (uint Zone, uint Area) region = survey.RegionAt(at);
+        if (!survey.TryRegionAt(at, out (uint Zone, uint Area) region))
+        {
+            unknown = true;
+            return null;
+        }
+
         if (regions.VaultLow)
         {
             float dist = Vector2.Distance(Flat(at), lift.Centre);
@@ -309,15 +378,23 @@ internal sealed class ElevatorNetwork
     /// sure the goal is not walkable without it.
     /// </summary>
     public (ElevatorLift Lift, ElevatorLevel From)? Choose(uint mapId, Vector3 bot, Vector3 goal, ElevatorSurvey survey)
+        => Choose(mapId, bot, goal, survey, out _);
+
+    /// <param name="pending">True when a region the choice depends on is still being read (<see cref="ElevatorSurvey.TryRegionAt"/>): no
+    /// choice is made (null), and the caller decides again on a later think instead of taking null for "no lift is the way".</param>
+    public (ElevatorLift Lift, ElevatorLevel From)? Choose(uint mapId, Vector3 bot, Vector3 goal, ElevatorSurvey survey, out bool pending)
     {
         ArgumentNullException.ThrowIfNull(survey);
+        pending = false;
         if (!bot.IsFinite() || !goal.IsFinite()) return null;
         (ElevatorLift Lift, ElevatorLevel From)? best = null;
         float bestVia = float.PositiveInfinity;
+        bool unknown = false;
         foreach (ElevatorLift lift in Lifts)
         {
             if (lift.MapId != mapId || RegionsOf(lift) is not { MesaTop: true } regions
-                || LevelOf(lift, regions, survey, bot) != ElevatorLevel.High || LevelOf(lift, regions, survey, goal) == ElevatorLevel.High) continue;
+                || Level(lift, regions, survey, bot, ref unknown) != ElevatorLevel.High
+                || Level(lift, regions, survey, goal, ref unknown) == ElevatorLevel.High) continue;
             float via = Vector2.Distance(Flat(bot), lift.Centre);
             if (via < bestVia)
             {
@@ -326,11 +403,18 @@ internal sealed class ElevatorNetwork
             }
         }
 
+        if (unknown)
+        {
+            pending = true; // a mesa's regions are not all known yet: whether the bot must ride down first is open
+            return null;
+        }
+
         if (best is not null) return best; // off the mesa first
         foreach (ElevatorLift lift in Lifts)
         {
             if (lift.MapId != mapId || RegionsOf(lift) is not { } regions) continue;
-            if (LevelOf(lift, regions, survey, bot) is not { } from || LevelOf(lift, regions, survey, goal) is not { } to || from == to) continue;
+            if (Level(lift, regions, survey, bot, ref unknown) is not { } from || Level(lift, regions, survey, goal, ref unknown) is not { } to
+                || from == to) continue;
             float toLift = Vector2.Distance(Flat(bot), lift.Centre);
             float via = regions.VaultLow && (from == ElevatorLevel.High ? toLift <= NearLiftYards : toLift <= PlayerbotElevator.ApproachYards)
                 ? toLift
@@ -342,7 +426,20 @@ internal sealed class ElevatorNetwork
             }
         }
 
+        if (unknown)
+        {
+            pending = true; // a lift left out for a region not known yet might be the way (or a shorter one)
+            return null;
+        }
+
         return best;
+    }
+
+    private static ElevatorLevel? Level(ElevatorLift lift, ElevatorRegions regions, ElevatorSurvey survey, Vector3 at, ref bool unknown)
+    {
+        ElevatorLevel? level = LevelOf(lift, regions, survey, at, out bool notKnown);
+        unknown |= notKnown;
+        return level;
     }
 }
 
@@ -646,7 +743,17 @@ internal static partial class PlayerbotElevator
         uint now = session.World.NowMs;
         if (NetworkOf(session) is not { } network) return false;
         Vector3 bot = new(player.X, player.Y, player.Z);
-        if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
+        // A region the choice needs is still being read in the background (ElevatorSurvey.TryRegionAt): no verdict on the lift yet, which
+        // IsHeldOff reports to the callers that defer on it. No tile is read on the world thread for it.
+        if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map), out _) is not { } choice) return false;
+        // A bot farther from the lift than one route reaches is not sent at it: the approach (ToStop, Walk) plans each leg with
+        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift, and the walk ends after MaxRefusedPlans
+        // refusals in a row or the 60 s no-progress bound. This is a coarse guard, not the fix: of the "no way to the Great Lift"
+        // failures of bot QA #1482 (2026-10-25), those that began more than 2000 yards out are covered, most of that day's; those that
+        // began inside it are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, nor the "in the shaft pit" trip failures at the lift itself. The journey or
+        // the walk leg brings the bot within reach first, and the trip begins on a later think. Every lift shares this (a mesa top is
+        // always within reach of its lifts).
+        if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > options.MaxRouteYards) return false;
         // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
         // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
         PlanOutcome directPlan = PlanOutcome.Refused;
@@ -692,17 +799,20 @@ internal static partial class PlayerbotElevator
 
     /// <summary>
     /// Whether a lift is the way to <paramref name="goal"/> but a failed ride keeps <see cref="TryBegin"/> from riding it now (that lift's
-    /// backoff after a failure): the caller defers the goal for a short retry instead of judging the walk there refused. Unlike
-    /// <see cref="TryBegin"/> this does not weigh the mesh walk, so a caller asks it only after <see cref="TryBegin"/> returned false without a
-    /// walk. World thread, no side effects.
+    /// backoff after a failure), or whether a lift might be the way but a region that decides it is still being read in the background
+    /// (<see cref="ElevatorNetwork.Choose(uint, Vector3, Vector3, ElevatorSurvey, out bool)"/> pending; once the map's areas are read, which
+    /// starts with its first survey, that no longer happens): the caller defers the goal for a short retry instead of judging the walk there
+    /// refused. Unlike <see cref="TryBegin"/> this does not weigh the mesh walk, so a caller asks it only after <see cref="TryBegin"/> returned
+    /// false without a walk. World thread, no side effects (apart from asking for the background read of a region).
     /// </summary>
     internal static bool IsHeldOff(WorldSession session, Player player, Vector3 goal)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
         if (IsTraveling(player) || !player.IsAlive || !player.IsInWorld || player.Map is not { } map || NetworkOf(session) is not { } network) return false;
-        return network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal, SurveyOf(session.World, map)) is { } choice
-            && IsHeldOff(session, player, choice.Lift);
+        (ElevatorLift Lift, ElevatorLevel From)? choice = network.Choose(map.MapId, new Vector3(player.X, player.Y, player.Z), goal,
+            SurveyOf(session.World, map), out bool pending);
+        return pending || (choice is { } chosen && IsHeldOff(session, player, chosen.Lift));
     }
 
     /// <summary>
