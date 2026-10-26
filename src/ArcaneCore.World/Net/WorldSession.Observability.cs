@@ -85,11 +85,13 @@ public sealed partial class WorldSession
                 Interlocked.Increment(ref _rejectionsSent);
                 rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
                 NoteRejectionForStorm(opcode, rejection);
+                NoteServerErrorRejection(opcode, rejection);
             }
         }
         else if (ClientRejectionDecoder.IsCandidate(opcode) && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection unlogged))
         {
             NoteRejectionForStorm(opcode, unlogged);
+            NoteServerErrorRejection(opcode, unlogged);
         }
 
         if (_duplicates is { } detector && (!_managed || detector.IncludeBots))
@@ -128,6 +130,25 @@ public sealed partial class WorldSession
             "rejection-storm",
             AnomalySubject,
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} client refusals within {RejectionStormTracker.WindowMs} ms; latest {rejection.Kind} {rejection.ReasonName} for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    /// <summary>
+    /// Outcome check <c>client/rejection-server-error</c>: a refusal whose reason says the server itself failed (<see cref="ClientRejectionDecoder.IsServerError"/>:
+    /// a mail or auction internal error, an unknown cast failure, an item or vendor the server cannot find), not that the player asked for something not allowed.
+    /// A synthetic chaos probe is expected to be refused and is not reported. Cost on the hot path: one table load per decoded refusal; the text is built only when it reports.
+    /// </summary>
+    private void NoteServerErrorRejection(WorldOpcode opcode, in ClientRejection rejection)
+    {
+        if (!ClientRejectionDecoder.IsServerError(rejection) || IsInChaosProbe)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "client",
+            "rejection-server-error",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{rejection.Kind} {rejection.ReasonName} sent for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
     }
 
     /// <summary>
