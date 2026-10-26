@@ -7,7 +7,7 @@ features in `src/ArcaneCore.World/Spells/` and `src/ArcaneCore.World/Stats/`. Te
 `tests/ArcaneCore.World.Tests/Spells/`, `tests/ArcaneCore.Data.Tests/Spells/ShapeshiftFormDbcTests.cs`.
 
 Directive: as close to vanilla 1.12.1 as possible, verified against the references. Primary reference is vmangos
-(`D:\refs\vmangos`); mangos-classic differs (no model scale, a different druid attack power) and is not followed. Nothing
+(`<refs-root>\vmangos`); mangos-classic differs (no model scale, a different druid attack power) and is not followed. Nothing
 was copied from the references; only numbers and behaviour with a `file:line` citation in the source comment. Companion
 document: `docs/areas/druid.md` (the wave-2 pure rules; its "not wired" and "not delivered" lists are superseded by this one).
 

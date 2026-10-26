@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Dump;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Commands;
@@ -94,7 +95,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             string? dump = await new PlayerDumpWriter(services.GetRequiredService<CharacterDbContext>()).GetDumpAsync(target.Id).ConfigureAwait(false);
             if (dump is null)
             {
-                context.Reply(GmStrings.PlayerNotFound);
+                ReplyLater(context, GmStrings.PlayerNotFound);
                 return;
             }
 
@@ -105,11 +106,11 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
+                ReplyLater(context, string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
                 return;
             }
 
-            context.Reply(ExportSuccess);
+            ReplyLater(context, ExportSuccess);
         }, ExportFailed);
         return true;
     }
@@ -167,7 +168,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
         {
             if (await FindAccountAsync(services, account).ConfigureAwait(false) is not { } owner)
             {
-                context.Reply(string.Format(CultureInfo.InvariantCulture, AccountNotExist, account.ToUpperInvariant()));
+                ReplyLater(context, string.Format(CultureInfo.InvariantCulture, AccountNotExist, account.ToUpperInvariant()));
                 return;
             }
 
@@ -178,7 +179,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
+                ReplyLater(context, string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
                 return;
             }
 
@@ -191,19 +192,19 @@ public sealed class PlayerDumpCommands : ICommandGroup
                     Kernel.Characters.CharacterRecord record = (await db.Characters.FindAsync(load.CharacterId).ConfigureAwait(false))!;
                     world.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(record.Id, record.AccountId, record.Name,
                         record.Race, record.Gender, record.Class, record.Level, record.ZoneId));
-                    context.Reply(ImportSuccess);
+                    ReplyLater(context, ImportSuccess);
                     break;
                 case DumpReturn.FileBroken or DumpReturn.UnexpectedEnd:
-                    context.Reply(DumpBroken);
+                    ReplyLater(context, DumpBroken);
                     break;
                 case DumpReturn.TooManyChars:
-                    context.Reply(string.Format(CultureInfo.InvariantCulture, AccountFull, owner.Username, owner.Id));
+                    ReplyLater(context, string.Format(CultureInfo.InvariantCulture, AccountFull, owner.Username, owner.Id));
                     break;
                 case DumpReturn.NameInUse:
-                    context.Reply(InvalidName);
+                    ReplyLater(context, InvalidName);
                     break;
                 default:
-                    context.Reply(ImportFailed);
+                    ReplyLater(context, ImportFailed);
                     break;
             }
         }, ImportFailed);
@@ -246,6 +247,9 @@ public sealed class PlayerDumpCommands : ICommandGroup
         return System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, file));
     }
 
+    /// <summary>Reply from a pool thread: the line is written to the invoker (session or console) on the world thread.</summary>
+    private static void ReplyLater(CommandContext context, string text) => context.World.Post(() => context.Reply(text));
+
     private static void Run(CommandContext context, Func<IServiceProvider, Task> work, string failure)
     {
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
@@ -259,8 +263,9 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("gm.pdump", ex);
                 logger.LogError(ex, "the .pdump command failed");
-                context.Reply(failure);
+                ReplyLater(context, failure);
             }
         });
     }

@@ -16,7 +16,7 @@ public sealed record ChatLink(string Text, string LinkType, int TypeIndex, strin
 
 /// <summary>
 /// A cursor over a chat-command argument string, porting the vmangos ChatHandler Extract*
-/// family (D:\refs\vmangos\src\game\Chat\Chat.cpp:2690-3290). Every extractor leaves the cursor
+/// family (vmangos@0e3ff01 src/game/Chat/Chat.cpp:2690-3290). Every extractor leaves the cursor
 /// untouched when it fails, so a handler can retry another grammar; on success it moves past the
 /// argument and the whitespace after it.
 /// </summary>

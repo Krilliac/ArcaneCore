@@ -151,7 +151,7 @@ public sealed class TerrainLayerSourceTests : IDisposable
     public void Liquid_DrawsOneQuadPerSquare_AttributedByType()
     {
         // ref: src/ArcaneCore.Game/Maps/Terrain/LiquidStatus.cs:36-50 magma 1, ocean 2, slime 4, water 8, deep 0x10
-        // (vmangos D:\refs\vmangos\src\game\Maps\GridMapDefines.h:67-74 MAP_LIQUID_TYPE_*)
+        // (vmangos vmangos@0e3ff01 src/game/Maps/GridMapDefines.h:67-74 MAP_LIQUID_TYPE_*)
         var types = new byte[256];
         types[0] = 0x08;
         types[1] = 0x01;
@@ -259,7 +259,7 @@ public sealed class TerrainLayerSourceTests : IDisposable
     [Fact]
     public void VMapLiquid_DrawsQuadsOn00To11Diagonal_Skips0x0FMask_AndMatchesWmoLiquidGetLiquidHeight()
     {
-        // ref: D:\refs\vmangos\src\game\vmap\WorldModel.cpp:158-204 WmoLiquid::GetLiquidHeight (flag & 0x0F == 0x0F, (0,0)-(1,1) diagonal)
+        // ref: vmangos@0e3ff01 src/game/vmap/WorldModel.cpp:158-204 WmoLiquid::GetLiquidHeight (flag & 0x0F == 0x0F, (0,0)-(1,1) diagonal)
         float[] heights =
         [
             10f, 12f, 14f,

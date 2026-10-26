@@ -122,6 +122,31 @@ public sealed class PlayerbotBrainAnomalyTests
     }
 
     [Fact]
+    public async Task AThinkLongOnlyForACollectorPause_IsNotReportedOverran_BotQa1483()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            using AnomalyCapture cap = H1AnomalyKit.CaptureFor(session.Player!);
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                // 504 ms of which the collector held the process 480: 24 ms of the bot's own work.
+                brain.CheckThinkOverran(player, 504, 1000, gcPauseMs: 480);
+                brain.CheckThinkOverran(player, 900, 2000, gcPauseMs: 900);
+                Assert.False(cap.Any(BrainKey("think-overran")));
+                // Control: a pause that leaves the bot's own time over the line still reports.
+                brain.CheckThinkOverran(player, 900, 3000, gcPauseMs: 100);
+                return true;
+            });
+            Assert.Equal(1, cap.Count(BrainKey("think-overran")));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task AStall_IsReported_AndWhenGivingTheGoalUpDoesNotFreeTheBot_ItIsReportedUnresolved()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());

@@ -42,6 +42,25 @@ internal sealed class PlayerbotThinkProbe
         _time = time;
     }
 
+    /// <summary>
+    /// A test seam to synthesize a finished think probe with deterministic elapsed time, GC pause, and optional phase,
+    /// isolating unit tests from wall-clock preemption and process-wide garbage-collection pauses.
+    /// </summary>
+    internal static PlayerbotThinkProbe SpentForTest(double elapsedMs, double gcPauseMs = 0, string slowestPhase = "start")
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(elapsedMs);
+        ArgumentOutOfRangeException.ThrowIfNegative(gcPauseMs);
+        ArgumentNullException.ThrowIfNull(slowestPhase);
+        var probe = new PlayerbotThinkProbe();
+        probe._elapsed = (long)Math.Round(elapsedMs * Stopwatch.Frequency / 1000);
+        probe.GcPauseMs = gcPauseMs;
+        probe._phase = slowestPhase;
+        probe._names[0] = slowestPhase;
+        probe._ticks[0] = probe._elapsed;
+        probe._phases = 1;
+        return probe;
+    }
+
     private const int MaxPhases = 48;
     private readonly string[] _names = new string[MaxPhases];
     private readonly long[] _ticks = new long[MaxPhases];
@@ -354,8 +373,11 @@ internal sealed class PlayerbotThinkProbe
         }
 
         // A far query of a planning wrapper runs on the path-job pool; the bot answers pending until a later think finds it done.
+        PlayerbotPathJobs? escalatedJobs = null;
         if (PlayerbotPathJobs.Bound is { } jobs && jobs.Eligible(collision, options, out ISharedTiledPathSearch shared))
         {
+            // An escalated search of this pair came back "no path" a moment ago: the same answer, with no job and no world-thread search.
+            if (jobs.KnownNoPath(from, to, options)) return PathResult.None(from);
             PathResult answer = jobs.Resolve(shared, collision.Map, from, to, options, out JobAnswer how, out NavJob? job);
             if (how != JobAnswer.Escalated)
             {
@@ -365,12 +387,14 @@ internal sealed class PlayerbotThinkProbe
             }
 
             probe.Escalations++;
+            escalatedJobs = jobs;
         }
 
         // The search runs here, on the world thread: held to a wall-time deadline so that one pathological search cannot stall the tick.
         bool deadline = probe.SyncQueryMaxMs > 0 && options.MaxSearchMs <= 0;
         if (deadline) options = options with { MaxSearchMs = probe.SyncQueryMaxMs };
         long deadlinesBefore = PathSearchCounters.DeadlineHits;
+        long cappedBefore = PathSearchCounters.CappedSearches;
         long started = probe._time.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
         long ticks = probe._time.GetTimestamp() - started;
@@ -381,6 +405,11 @@ internal sealed class PlayerbotThinkProbe
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
         if ((path.Type & PathType.TilesPending) != 0) PlayerbotPathJobs.NoteTilePending();
+        // The escalated search is the whole answer, so a complete "no path" (not capped, not waiting for a tile) holds for the pair for a
+        // while: the next episode of failed jobs does not escalate to another search on this thread (PlayerbotPathJobs.NoteNoPath).
+        if (escalatedJobs is not null && (path.Type & PathType.NoPath) != 0 && (path.Type & PathType.TilesPending) == 0
+            && PathSearchCounters.CappedSearches == cappedBefore)
+            escalatedJobs.NoteNoPath(from, to, options);
         if (PathSearchCounters.DeadlineHits != deadlinesBefore)
         {
             t_lastCachedCapped = true;

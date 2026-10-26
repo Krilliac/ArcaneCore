@@ -1,7 +1,7 @@
 # Zone scripts, batch 5 — 2026-10-16
 
 Lane `zone-scripts-batch5`, base `f5b8bb4e`. References (read-only, local): mangos-classic `src/game/AI/ScriptDevAI/scripts/` at `8ec338a170`
-(`D:\refs\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` at `ec4f596146` (`D:\refs\classic-db`), spell ids checked against the 5875
+(`<refs-root>\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` at `ec4f596146` (`<refs-root>\classic-db`), spell ids checked against the 5875
 client `Spell.dbc`. Structure as in [batch 4](zone-scripts-batch4-20261016.md): creature scripts are `CreatureAI` classes in
 `src/ArcaneCore.Game/Creatures/Scripts/`, registered by creature entry in `CreatureAiFactory` (the entry-script table and, for an event quest,
 `_entryScriptQuests`), and object scripts are `IGameObjectAi` classes in `src/ArcaneCore.World/GameObjects/` registered by

@@ -108,6 +108,7 @@ public sealed class HotCodeCommandTests
             Assert.Contains("Process diverged from build: yes, 1 code edits applied in memory", status);
             Assert.Contains("Refreshes applied: 1, rejected: 0", status);
 
+            HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
             string[] kinds = File.ReadAllLines(log).Select(l => l.Split('\t')[1]).ToArray();
             Assert.Equal(
                 ["hotcode-command", "hotcode-command", "refresh-frozen", "hotcode-command", "hotcode-command", "refresh-applied"],

@@ -4,11 +4,11 @@ Branch `claude/vw2-talents`. Vanilla 1.12.1 (build 5875) talent system: points, 
 Talent **effects** (spell modifiers, procs, stat auras) belong to the spell system and are not part of this area; the
 startup report below says exactly how many talent rank spells that still leaves unhandled.
 
-References (read-only, never copied): **vmangos** `D:\refs\vmangos` (primary; `src/game/Objects/Player.cpp`,
+References (read-only, never copied): **vmangos** `<refs-root>\vmangos` (primary; `src/game/Objects/Player.cpp`,
 `Handlers/SkillHandler.cpp`, `Database/DBCfmt.h`, `Database/DBCStructure.h`, `Database/DBCStores.cpp`, `World.cpp`),
-**mangos-classic** `D:\refs\mangos-classic` (where it differs), **wow_messages** `D:\refs\wow_messages`
+**mangos-classic** `<refs-root>\mangos-classic` (where it differs), **wow_messages** `<refs-root>\wow_messages`
 (`wowm/world/spell/cmsg_learn_talent.wowm`, `msg_talent_wipe_confirm_*.wowm`, `cmsg_unlearn_talents.wowm`),
-**classic-db** `D:\refs\classic-db` (spell 14867). Every formula below cites its source line.
+**classic-db** `<refs-root>\classic-db` (spell 14867). Every formula below cites its source line.
 
 ## Delivered
 

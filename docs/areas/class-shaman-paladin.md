@@ -6,9 +6,9 @@ and most shaman imbue content were **not** delivered by this lane; the wave-2 cl
 blessing/aura/seal stacking, Holy Light and Flash of Light, Blessing of Light, the resistance auras, Forbearance, Holy Shock, Hammer of Wrath,
 Consecration (persistent area auras) and the Flametongue/Rockbiter imbue procs: see [class-scripts](class-scripts.md).
 
-References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), **mangos-classic**
-`D:\refs\mangos-classic`, **wow_messages** `D:\refs\wow_messages`, **classic-db**
-`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`. Every formula cites file:line inline in the code.
+References (read only, never copied): **vmangos** `<refs-root>\vmangos` (primary), **mangos-classic**
+`<refs-root>\mangos-classic`, **wow_messages** `<refs-root>\wow_messages`, **classic-db**
+`<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`. Every formula cites file:line inline in the code.
 
 ## Delivered
 

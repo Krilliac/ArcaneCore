@@ -1,7 +1,7 @@
 # Zone scripts, batch 6 — 2026-10-16
 
 Lane `zone-scripts-batch6`, base `df7e31c8`. References (read-only, local): mangos-classic `src/game/AI/ScriptDevAI/scripts/` at `8ec338a170`
-(`D:\refs\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` (`creature_template`, `creature`, `quest_template`, `script_texts`,
+(`<refs-root>\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` (`creature_template`, `creature`, `quest_template`, `script_texts`,
 `spell_script_target`, `creature_movement_template`), spell ids and effects checked against the 5875 client `Spell.dbc`. Structure as in
 [batch 5](zone-scripts-batch5-20261016.md): creature scripts are `CreatureAI` classes in `src/ArcaneCore.Game/Creatures/Scripts/`, registered by
 creature entry in `CreatureAiFactory` (the entry-script table and, for an event quest, `_entryScriptQuests`); gossip scripts are
@@ -103,7 +103,7 @@ and `ScriptQuestEvents` to `QuestNpcServices.TalkedToCreature`); Katrana's event
 
 ## Verification
 
-All runs went through `D:\ArcaneCore-lanes\tools\run-in-slot.ps1` (BelowNormal, with the terrain and DBC test variables set).
+All runs went through `<lanes-root>\tools\run-in-slot.ps1` (BelowNormal, with the terrain and DBC test variables set).
 
 - Build: `dotnet build ArcaneCore.slnx -m:2 -nodeReuse:false -p:UseSharedCompilation=false`, 0 warnings, 0 errors.
 - Full Game tests: 9545 passed, 7 skipped, 0 failed (9552). Full World tests: 7566 passed, 49 skipped, 0 failed (7615).

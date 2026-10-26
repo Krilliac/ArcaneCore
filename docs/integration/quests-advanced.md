@@ -5,7 +5,7 @@ default, adds the autocomplete (Method 0) turn-in, retail refusal replies, quest
 PvP quests, event credit through `SPELL_EFFECT_QUEST_COMPLETE`, reputation-objective re-evaluation, and several retail corrections to
 the giver marks. Everything not delivered is listed under "Limits" below.
 
-Provenance (read-only references, never copied): `D:\refs\vmangos` (primary), `D:\refs\wow_messages` for packet layouts. Every
+Provenance (read-only references, never copied): `<refs-root>\vmangos` (primary), `<refs-root>\wow_messages` for packet layouts. Every
 formula and message below carries its vmangos `file:line`. The classic-db counts quoted in this file come from the lane's design
 survey of `ClassicDB_1_12_1_z2815` and were not re-derived in this run.
 

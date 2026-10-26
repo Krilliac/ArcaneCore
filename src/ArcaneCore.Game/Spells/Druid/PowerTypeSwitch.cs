@@ -5,7 +5,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
-/// Port of vmangos Unit::SetPowerType (D:\refs\vmangos\src\game\Objects\Unit.cpp:4386-4427) and the
+/// Port of vmangos Unit::SetPowerType (vmangos@0e3ff01 src/game/Objects/Unit.cpp:4386-4427) and the
 /// create-power maxima of Unit::GetCreatePowers (Unit.cpp:8245-8264). A druid is created with the mana
 /// power type, so without this rage and energy have a maximum of 0 and every write clamps to 0
 /// (<see cref="MapCombat.SetPower"/>). The group PowerType update flag of the vmangos function is

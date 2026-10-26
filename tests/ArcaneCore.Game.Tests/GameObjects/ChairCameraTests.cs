@@ -10,7 +10,7 @@ using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 namespace ArcaneCore.Game.Tests.GameObjects;
 
 /// <summary>
-/// GO5: chairs and cameras. References: D:\refs\vmangos\src\game\Objects\GameObject.cpp:1515-1533 (chair Use), :1613-1634 (camera Use),
+/// GO5: chairs and cameras. References: vmangos@0e3ff01 src/game/Objects/GameObject.cpp:1515-1533 (chair Use), :1613-1634 (camera Use),
 /// :2229-2236 (PlayerCanUse chair), :2536-2582 (GetClosestChairSlotPosition), GameObjectDefines.h:799, ObjectMgr.cpp:8108-8118,
 /// Player.cpp:6049-6056 and Server/Packets/Misc.cpp:789-797 (TriggerCinematic).
 /// </summary>

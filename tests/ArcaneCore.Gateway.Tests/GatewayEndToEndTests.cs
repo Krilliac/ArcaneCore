@@ -37,6 +37,9 @@ public sealed class GatewayEndToEndTests
         Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync("GATEHERO", logon.SessionKey, cts.Token));
 
         // Exactly one worker-side session, carrying the client's own address (not the gateway's) for per-IP guards.
+        // The session is tracked in Sessions when the link host starts it, which follows the accept reply the client's AuthResponse
+        // is built from, so wait for it (bounded by the test deadline) before asserting.
+        await WaitUntilAsync(() => Task.FromResult(stack.Endpoint.Acceptor!.Sessions.Count == 1), cts.Token);
         RemoteWorldSession remote = Assert.Single(stack.Endpoint.Acceptor!.Sessions.Values);
         Assert.Equal(client.LocalEndPoint!.ToString(), remote.Session.RemoteEndpoint);
         Assert.Equal(SessionState.CharacterSelect, remote.Session.State);

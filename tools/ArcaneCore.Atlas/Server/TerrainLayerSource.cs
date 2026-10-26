@@ -9,7 +9,7 @@ namespace ArcaneCore.Atlas.Server;
 /// The terrain layers of the server view, built from the parsed <c>.map</c> files: <c>terrain</c> (the triangle fan
 /// <see cref="TerrainTile.GetHeight"/> interpolates), <c>terrain.holes</c>, <c>terrain.noheight</c>, <c>area</c> and <c>liquid</c>.
 /// <para>
-/// Format facts, each checked against two sources (vmangos 0e3ff01 at D:\refs\vmangos and cmangos-classic at D:\refs\mangos-classic) and the real
+/// Format facts, each checked against two sources (vmangos 0e3ff01 at vmangos@0e3ff01 and cmangos-classic at mangos-classic) and the real
 /// data: tile (tx, ty) holds 128 x 128 height squares; V9 is the 129 x 129 grid of corner heights and V8 the 128 x 128 square centres
 /// (src/game/Maps/GridMap.cpp:286-352, <c>getHeightFromFloat</c>: row from world X, column from world Y, <c>x = MAP_RESOLUTION * (32 - x / SIZE_OF_GRIDS)</c>
 /// at lines 291-292). A square is four triangles around its centre: (V9[r][c], V9[r+1][c], centre) when x + y &lt; 1 and x &gt; y,
@@ -33,7 +33,7 @@ public sealed class TerrainLayerSource : ServerLayerSource
     /// <summary>The colour key of a liquid type byte (precedence magma, slime, deep water, ocean, water), or null for an unknown bit pattern.</summary>
     /// <remarks>Bits are the server's <see cref="LiquidTypeFlags"/> (vmangos GridMapDefines.h:66-75 <c>MAP_LIQUID_TYPE_*</c>).</remarks>
     // ref: src/ArcaneCore.Game/Maps/Terrain/LiquidStatus.cs:31-41 LiquidTypeFlags magma 0x01, ocean 0x02, slime 0x04, water 0x08, deep 0x10
-    // ref: D:/refs/vmangos/src/game/Maps/GridMapDefines.h:67-74 MAP_LIQUID_TYPE_MAGMA/OCEAN/SLIME/WATER/DEEP_WATER
+    // ref: vmangos@0e3ff01 src/game/Maps/GridMapDefines.h:67-74 MAP_LIQUID_TYPE_MAGMA/OCEAN/SLIME/WATER/DEEP_WATER
     public static string? LiquidColorKey(byte type)
     {
         var flags = (LiquidTypeFlags)type;
@@ -191,7 +191,7 @@ public sealed class TerrainLayerSource : ServerLayerSource
             for (int c = 0; c < Resolution; c++)
             {
                 // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:472-480 hole bit (row % 8 / 2) * 4 + (col % 8 / 2) of cell (row / 8, col / 8), checked by float tiles only (:244)
-                // ref: D:/refs/vmangos/src/game/Maps/GridMap.cpp:274-284 isHole with holetab_h / holetab_v, called from getHeightFromFloat only (:301)
+                // ref: vmangos@0e3ff01 src/game/Maps/GridMap.cpp:274-284 isHole with holetab_h / holetab_v, called from getHeightFromFloat only (:301)
                 if (terrain.IsServerHole(r, c))
                 {
                     holes++;
@@ -211,7 +211,7 @@ public sealed class TerrainLayerSource : ServerLayerSource
                 }
 
                 // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:483-503 GetHeightFromFloat picks one of four triangles around h5 = 2 * V8
-                // ref: D:\refs\vmangos\src\game\Maps\GridMap.cpp:286-345 getHeightFromFloat (same four cases; the plane through h1, h2 and h5 / 2)
+                // ref: vmangos@0e3ff01 src/game/Maps/GridMap.cpp:286-345 getHeightFromFloat (same four cases; the plane through h1, h2 and h5 / 2)
                 // Upward-facing winding (world X north, Y west, Z up): the server's four triangles, each as (corner, corner, centre).
                 uint a = Corner(r, c);
                 uint b = Corner(r + 1, c);
@@ -392,7 +392,7 @@ public sealed class TerrainLayerSource : ServerLayerSource
         {
             for (int j = 0; j < CellsPerSide; j++)
             {
-                // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:326 GetAreaFlag reads the 16 x 16 area map by cell; D:/refs/vmangos/src/game/Maps/GridMap.cpp:257-272 getArea
+                // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:326 GetAreaFlag reads the 16 x 16 area map by cell; vmangos@0e3ff01 src/game/Maps/GridMap.cpp:257-272 getArea
                 flags[i, j] = terrain.GetAreaFlag((float)(origin.X - ((i + 0.5) * cell)), (float)(origin.Y - ((j + 0.5) * cell)));
                 distinct.Add(flags[i, j]);
             }

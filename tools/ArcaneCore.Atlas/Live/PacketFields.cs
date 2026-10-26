@@ -15,8 +15,8 @@ namespace ArcaneCore.Atlas.Live;
 /// </summary>
 internal static class PacketFields
 {
-    // ref: D:/refs/vmangos@0e3ff01/src/framework/Utilities/ByteConverter.h:51-56 (EndianConvert is a no-op on little-endian hosts: integers and floats go on the wire as the x86 client keeps them)
-    // ref: D:/refs/vmangos@0e3ff01/src/shared/ByteBuffer.h:180-185 (a std::string is appended with a trailing 0)
+    // ref: vmangos@0e3ff01 src/framework/Utilities/ByteConverter.h:51-56 (EndianConvert is a no-op on little-endian hosts: integers and floats go on the wire as the x86 client keeps them)
+    // ref: vmangos@0e3ff01 src/shared/ByteBuffer.h:180-185 (a std::string is appended with a trailing 0)
     // ref: src/ArcaneCore.Protocol/PacketWriter.cs:27-55 (the server's WriteUInt16/32/64 and WriteSingle: BinaryPrimitives little-endian)
     // ref: src/ArcaneCore.Protocol/PacketWriter.cs:105-117 (WriteCString: UTF-8 then a 0 byte)
 

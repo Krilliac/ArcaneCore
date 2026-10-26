@@ -2,8 +2,8 @@
 
 This supersedes the outstanding behavior limitations and completion claim in
 `pet-kill-credit-20261011.md` for the changes below. Base: `51c731b2` on `claude/w22-pet-xp`.
-Contract: `D:/ArcaneCore-lanes/_wf/specs/kill-credit.md`; reference: vmangos `0e3ff01`.
-Logs: `D:/ArcaneCore-lanes/_codex/w6/runs/pet-xp-r2/`.
+Contract: `<lanes-root>/_wf/specs/kill-credit.md`; reference: vmangos `0e3ff01`.
+Logs: `<lanes-root>/_codex/w6/runs/pet-xp-r2/`.
 
 ## Coordinator action before review #3
 
@@ -113,8 +113,8 @@ All section 7 items above are resolved. No C# files were edited after the final 
 Exact commands (PowerShell, from the lane worktree):
 
 ```powershell
-$env:ARCANECORE_TEST_TERRAIN_DIR='D:/ArcaneCore-data/terrain-5875'
-$env:ARCANECORE_TEST_DBC_DIR='D:/ArcaneCore-data/client-dbc-5875'
+$env:ARCANECORE_TEST_TERRAIN_DIR='<data-root>/terrain-5875'
+$env:ARCANECORE_TEST_DBC_DIR='<data-root>/client-dbc-5875'
 dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false
 dotnet test tests/ArcaneCore.World.Tests -c Release --no-build --filter FullyQualifiedName~OwnedKillerRewardTests --logger 'console;verbosity=detailed'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter FullyQualifiedName~HonorKillRewardsTests --logger 'console;verbosity=detailed'

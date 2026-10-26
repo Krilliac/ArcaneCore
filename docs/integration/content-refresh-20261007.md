@@ -1,6 +1,6 @@
 # Content refresh of the live world (wave 3, content-import lane, 2026-10-07)
 
-Branch `claude/w3-content-import` (base `56fc4d18`). Logs: `D:/ArcaneCore-lanes/_logs/w3-content-import/` (`red/`, `green/`, `run-before/`,
+Branch `claude/w3-content-import` (base `56fc4d18`). Logs: `<lanes-root>/_logs/w3-content-import/` (`red/`, `green/`, `run-before/`,
 `run-after/`, `run-transports/`). No schema version was taken: every table written already exists at world 41.
 
 ## What the live world log showed, and why
@@ -78,12 +78,12 @@ spawned event with the zone condition (6). They stay in the per-entry warning.
 1. Merge and build the deploy that will serve the world afterwards; step 3 uses its importer (`-Importer`).
 2. Stop the World daemon (the script refuses a database in use).
 3. `powershell -NoProfile -File <worktree or deploy>\tools\content\refresh-world-content.ps1 -WorldDatabase
-   C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\playable-content-20261005\complete-r5\world.db -DbcDirectory
-   D:\refs\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll`
-   (default dump `D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`; the backup, database and `-wal`, goes to
+   <work-dir>\playable-content-20261005\complete-r5\world.db -DbcDirectory
+   <refs-root>\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll`
+   (the dump defaults to a `classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` file at a fixed host path set inside the script, not read from `ARCANECORE_REFS_ROOT`; pass `-Dump` for another location; the backup, database and `-wal`, goes to
    `complete-r5\content-refresh-backups\`). The DBC directory is a durable copy of the files extracted from the client's patch-2.MPQ,
    with `SHA256SUMS` and a provenance `README.txt` beside them; the script checks the hashes. Without it, `-MpqTool
-   C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\playable-content-20261005\mpqcli-v0.11.0-windows-amd64.exe` extracts them again.
+   <work-dir>\playable-content-20261005\mpqcli-v0.11.0-windows-amd64.exe` extracts them again.
 4. Schema: this branch takes no schema version, and the refresh writes only tables that exist at world 41. Whether the live world
    migrates depends on the deploy, not on this branch. If a lane merged with it raised the world schema (42-44 are reserved), the
    deploy's importer refuses the world-41 database (exit 3, nothing written) instead of migrating it on the side; then either start

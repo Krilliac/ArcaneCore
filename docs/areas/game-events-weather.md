@@ -8,7 +8,7 @@ event schedule maths this lane builds on.
 
 Standing rule: retail (vmangos 1.12.1, then mangos-classic) behaviour is the default. Every deliberate departure sits
 behind a `World:GameEvents` option that defaults to retail, or is listed under "Deviations". References are read-only
-(`D:\refs\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`); nothing is copied into the repository, and the
+(`<refs-root>\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`); nothing is copied into the repository, and the
 classic-db checks are skipped, visibly, when the dump is absent.
 
 ## Delivered

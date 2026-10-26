@@ -1,7 +1,7 @@
 # Operations and performance (ops-perf lane)
 
 Delivered scope, limits and provenance. Reference sources are read-only GPL projects used to
-verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
+verify behaviour; nothing is copied. `<refs-root>\vmangos` is the primary reference.
 
 ## Load benchmark (2026-10-08)
 
@@ -59,7 +59,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
 - By default slow world frames and slow map updates are not one line each: `PerformanceLog:SummaryIntervalSeconds` (60) writes ONE
   `Slow update summary` per interval, and only when something was slow (world frames over the threshold as N of M with p50/p95/max; per map
   instance the count, p50/p95/max of its own work and the top three contributors by summed ms; the host-starved / quiet / gc verdict counts;
-  the number of suppressed detail lines). Verdicts are host-starved, quiet and gc (gc-pauses and gc-paging are both counted as gc), plus process-busy and process-stalled when they occur; `unknown`
+  the number of suppressed detail lines). Verdicts are host-starved, quiet and gc (gc-pauses and gc-paging are both counted as gc), plus process-busy, process-stalled, memory-starved and process-blocked when they occur; `unknown`
   (the old "other") counts samples with no host sampler or no verdict. The label is the real elapsed time (a stop or a hitch gives a different
   length), the contributor table holds 64 names per map and prints `(+N ms unattributed)` past that, and the detail cap restarts at each interval. An update over `SlowWorldUpdateDetail` (250) / `SlowMapUpdateDetail` (200) ms still gets its own
   line, at most `DetailLinesPerMapPerInterval` (1) per map instance (and for the world) per interval. `SummaryIntervalSeconds = 0` restores
@@ -88,8 +88,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
 - On expiry `ExitCodes.Current` is set and `IHostApplicationLifetime.StopApplication()` is
   called; the existing `WorldHost.StopAsync` order (world stop and final save, features, save
   queue) runs, so no second shutdown path exists. `Program.cs` returns `ExitCodes.Current`.
-- `HostOptions` is now bound from configuration; the shipped `HostOptions:ShutdownTimeout` is one
-  minute so a large save drain is not cut short by the host default.
+- `HostOptions` is bound from configuration. The shipped `HostOptions:ShutdownTimeout` (one minute) is a signal, not a cut-off: `Host.StopAsync` cancels the token it hands to each hosted service after that time and then keeps awaiting the service, and `WorldHost` does not forward the token to the write queues, so a large save drain is never cut short by the host. What bounds the stop is the write queues' own stall budget (`ShutdownDrain`, completed attempts that landed nothing: 10 s on the feature lane, 15 s on the save lane); a healthy drain runs to its end, a stalled one ends within the budget plus one in-flight attempt per lane (at most 30 s and 35 s, 65 s together, plus one in-flight attempt per queue that was mid-write when its stop began). See docs/areas/persistence.md, "Other queues".
 - Timer lifetime: the one second timer runs only while a countdown is pending. Start and end
   are decided on the world thread alone (`AfterChange`; `Cancel` also ends the timer), each run
   has an id and a tick from an ended or replaced run is ignored, so cancel followed at once by a

@@ -223,6 +223,7 @@ public sealed class ModuleLaneExtensionTests : IDisposable
         HotSwapEvent evt = Assert.Single(_reporter.Events);
         Assert.Equal(HotSwapResult.Failed, evt.Result);
         Assert.Equal("load", evt.Action);
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
         string audit = await File.ReadAllTextAsync(Path.Combine(_dir, "audit.log"));
         Assert.Contains("module-failed", audit);
         Assert.DoesNotContain("module-load", audit);

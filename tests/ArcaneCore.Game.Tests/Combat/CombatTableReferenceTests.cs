@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Tests.CombatCore;
 /// <summary>
 /// Independent boundary vectors from vmangos SpellCaster.cpp:336-412, 446-725, 795-879,
 /// 882-925, 1121-1145; Unit.cpp:1571-1601; Player.cpp:2243-2267. Reference data
-/// stays in D:/refs; these cases pin the arithmetic and level transitions.
+/// stays in the reference checkout; these cases pin the arithmetic and level transitions.
 /// </summary>
 public sealed class CombatTableReferenceTests
 {

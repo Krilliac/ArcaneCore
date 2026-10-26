@@ -21,7 +21,7 @@ internal sealed record Deviation(string Key, string Default, Stance Stance, stri
 /// <summary>
 /// The release caveats of docs/guide/operations.md. <see cref="Deviation.Default"/> is asserted against the options default in a test, so flipping a
 /// default in code fails until this register (and the guide) is reviewed. The retail text is authored: where it cites vmangos, the line was read in
-/// D:\refs\vmangos at the time of writing and is not asserted by CI (hosted CI has no reference clones).
+/// vmangos@0e3ff01 at the time of writing and is not asserted by CI (hosted CI has no reference clones).
 /// </summary>
 internal static class DeviationRegister
 {

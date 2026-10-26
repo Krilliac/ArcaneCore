@@ -3,7 +3,7 @@ using Xunit;
 
 namespace ArcaneCore.Game.Tests.SpellRules;
 
-/// <summary>Golden bytes of the spell-rule packets (layouts from D:\refs\wow_messages smsg_*.md, 1.12 blocks).</summary>
+/// <summary>Golden bytes of the spell-rule packets (layouts from wow_messages smsg_*.md, 1.12 blocks).</summary>
 public sealed class SpellRulePacketTests
 {
     private static readonly ObjectGuid Caster = new(0x0102);

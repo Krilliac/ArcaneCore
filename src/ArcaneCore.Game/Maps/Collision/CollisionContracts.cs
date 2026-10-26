@@ -382,6 +382,12 @@ public interface ICollisionTilePrefetch
 {
     /// <summary>Start reading the tile's data in the background (no effect when it is loaded or already on its way).</summary>
     void Prefetch(uint mapId, int tileX, int tileY);
+
+    /// <summary>
+    /// As <see cref="Prefetch"/>, for a teleport's destination: a service that bounds its prefetches counts it against a budget of its own,
+    /// so arrivals do not evict the prefetches of players approaching grids. The default is <see cref="Prefetch"/>.
+    /// </summary>
+    void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY);
 }
 
 /// <summary>

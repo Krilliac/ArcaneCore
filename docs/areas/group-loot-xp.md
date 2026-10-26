@@ -1,7 +1,7 @@
 # Group loot and group experience
 
 Lane `group-loot-xp` (branch `claude/vw2-group-loot-xp`). Standing directive: vanilla 1.12.1 behaviour
-as read from the references (vmangos primary, `D:\refs`), deviations only behind a config option.
+as read from the references (vmangos primary, `<refs-root>`), deviations only behind a config option.
 
 ## Delivered: looter-selection-fix
 
@@ -39,7 +39,7 @@ bounding radii; a raid map is unlimited; a world boss victim adds 150 yd; a dead
 his corpse (a living one never does). `CorpseRaid` is a hook for `CREATURE_STATIC_FLAG_CORPSE_RAID`
 (Object.cpp:1485-1486): no creature data sets it (0 rows in the classic-db dump), so it is null by default.
 
-References: `D:\refs\vmangos\src\game\Objects\Object.cpp:1478-1499` and `:1738-1752`,
+References: `<refs-root>\vmangos\src\game\Objects\Object.cpp:1478-1499` and `:1738-1752`,
 `Objects\Player.cpp:20034-20050`.
 
 Adopted by `LootService.RecipientsFor` (loot recipients, and through them the round-robin eligibility).
@@ -59,10 +59,10 @@ SMSG_LOOT_ALL_PASSED (24, field order differs from START_ROLL), SMSG_LOOT_MASTER
 error form of SMSG_LOOT_RESPONSE (10 bytes), plus `TryParseLootRoll` (13 bytes, votes >= 3 rejected) and
 `TryParseMasterGive` (17 bytes).
 
-References: `D:\refs\vmangos\src\game\Server\Packets\Loot.cpp:20-215`, `Packets\Group.cpp:264-275`,
+References: `<refs-root>\vmangos\src\game\Server\Packets\Loot.cpp:20-215`, `Packets\Group.cpp:264-275`,
 `Group\Group.cpp:747-850` and `:957-972`, `Handlers\GroupHandler.cpp:370-391`,
-`D:\refs\mangos-classic\src\game\Entities\Player.cpp:20115-20122` (SendLootError),
-`D:\refs\wow_messages\wow_message_parser\wowm\world\loot\*.wowm`. wow_messages lists gold and items after the
+`<refs-root>\mangos-classic\src\game\Entities\Player.cpp:20115-20122` (SendLootError),
+`<refs-root>\wow_messages\wow_message_parser\wowm\world\loot\*.wowm`. wow_messages lists gold and items after the
 error code in the error form; vmangos and mangos-classic both stop at the code, which is followed here.
 
 Tests: `GameObjects/GroupLootPacketTests.cs` (literal byte arrays).

@@ -1,7 +1,7 @@
 # Client error codes (build 5875)
 
 How the 1.12.1 client shows a failure, and which code the server sends when the server itself failed.
-The evidence is the clean-room note `D:/WoW-RE-Research/protocol/client-error-codes.md`. That note records
+The evidence is the clean-room note `<re-research-root>/protocol/client-error-codes.md`. That note records
 facts only, read from the owned `Wow.exe` (tag **BIN**) and from the client's own `GlobalStrings.lua` /
 `GlueStrings.lua` (tag **DATA**). Where emulator sources disagree with the binary, the binary wins.
 
