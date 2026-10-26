@@ -104,8 +104,9 @@ public sealed class PlayerbotRiskModelTests
     [Fact]
     public void AHybridBelowRestManaBelowPct_RestsBeforeAnEasyPull_BotQa1480()
     {
-        // A hybrid (ManaDependence 0.4) at 1% mana still weighs an easy mob as fine, so it was pulled with nothing to cast.
-        PlayerbotEngagementFacts hybrid = Bot(Mob()) with { BotManaPct = 1f, ManaDependence = 0.4f };
+        // A hybrid (ManaDependence 0.4) at 1% mana still weighs an easy mob as fine (risk 0.45 against 0.62 accepted; the 7 dps default mob
+        // is 0.63 there, which the old rule already rested for), so it was pulled with nothing to cast.
+        PlayerbotEngagementFacts hybrid = Bot(Mob(dps: 5f)) with { BotManaPct = 1f, ManaDependence = 0.4f };
         PlayerbotEngagement dry = PlayerbotRiskModel.Assess(hybrid, Defaults);
         Assert.Equal(PlayerbotEngageDecision.Rest, dry.Decision);
         Assert.Equal("low-mana", dry.Reason);
