@@ -27,7 +27,9 @@ namespace ArcaneCore.World.Playerbots.Combat;
 /// continuous combat: the counters reset when the bot leaves combat, dies, or the option is turned off.
 /// </para>
 /// <para>
-/// Cost: the per-think gates allocate nothing (a handful of field reads, a walk of the attacker set with its struct enumerator).
+/// Cost: the kite's own per-think gates are a handful of field reads and a walk of the attacker set with its struct enumerator; they
+/// allocate nothing themselves. The <c>SpellSystem.IsRooted</c> calls they make allocate that method's small <c>params</c> array, which
+/// is the spell system's own cost and is outside this type.
 /// Only a think that actually decides to step searches for a spot: at most seven directions, each a few floor probes, one clipped
 /// line-of-sight cast and a sampled walk over the visible aggro radii; no path search and no I/O. A step is at most once every
 /// <see cref="PlayerbotKiteModel.StepCooldownMs"/> and at most <c>MaxStepsPerFight</c> times.
@@ -54,6 +56,10 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     private bool _over;
     private uint _lastUpdateMs;
 
+    // The kite holds the bot at its casting range once it has slowed or stepped (see HoldRange); cleared when it ends or cannot work.
+    private bool _holding;
+    private float _holdRange;
+
     /// <summary>A gap this long between two kite thinks (the bot was elsewhere) starts a new fight's counters.</summary>
     internal const uint FightGapMs = 10_000;
 
@@ -77,6 +83,20 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     /// <summary>Kiting ended for this fight, by a give-up or an evading pursuer (inspection and tests).</summary>
     internal bool Over => _over;
 
+    /// <summary>
+    /// The range the caller's positioning (<c>PlayerbotBrain.DecidePosition</c>, the party and group chase) should hold the bot at:
+    /// <paramref name="rotationRange"/> (the class rotation's preferred range) unless a kite is under way for this fight (it has slowed
+    /// or stepped, has not given up, the pursuers are not too many or casters, and the bot is still at or below the kite's health line),
+    /// in which case it is the kite's own range. Without this a warrior or rogue, whose rotation prefers melee, would walk back in after
+    /// every step. Allocation-free; reads state the last <see cref="Update"/> left.
+    /// </summary>
+    internal float HoldRange(Player player, float rotationRange)
+    {
+        if (!_holding || _over || !options.Combat.Kite.Enabled || !player.IsAlive || player.MaxHealth == 0) return rotationRange;
+        if (player.Health * 100f / player.MaxHealth > options.Combat.Kite.HealthPct) return rotationRange;
+        return MathF.Max(rotationRange, _holdRange);
+    }
+
     /// <summary>Whether a step is being walked.</summary>
     internal bool Walking => _routeSlot is { Complete: false };
 
@@ -99,7 +119,10 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     /// <param name="leashCentre">A party or group bot's leash centre (its master or leader, a siege waypoint), or null (the brain).</param>
     /// <param name="leashYards">The yards from <paramref name="leashCentre"/> a step may end within.</param>
     /// <param name="risk">The bot's risk object (null: no hazard check, no fight anchors).</param>
-    internal bool Update(Player player, Unit victim, uint interval, Vector3? leashCentre, float leashYards, PlayerbotRisk? risk)
+    /// <param name="grouped">The bot fights in a party or group: a bot that is the group's tank (<see cref="PlayerbotCombatSpells.RoleOf"/>
+    /// is <see cref="PlayerbotRole.Tank"/>, from its group role or talents) holds its ground and does not kite.</param>
+    internal bool Update(Player player, Unit victim, uint interval, Vector3? leashCentre, float leashYards, PlayerbotRisk? risk,
+        bool grouped = false)
     {
         PlayerbotKiteOptions kite = options.Combat.Kite;
         uint now = session.World.NowMs;
@@ -124,6 +147,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         if (player.MaxHealth == 0) return false;
         float healthPct = player.Health * 100f / player.MaxHealth;
         if (healthPct > kite.HealthPct) return false;
+        if (grouped && spells.RoleOf(player) == PlayerbotRole.Tank) return false;
         if (player.Map is not { } map || !ReferenceEquals(victim.Map, map)) return false;
         if (PlayerbotMotion.ControlLost(player) || (player.Movement.Flags & MovementFlags.Swimming) != 0) return false;
         if (session.Services.GetService<SpellFeature>() is not { } feature) return false;
@@ -138,7 +162,13 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         }
 
         if (pursuers == 0 || _nearest is not { } nearest) return false;
-        if (!Qualifies(player, out float preferredRange)) return false;
+        if (!Qualifies(player, out float preferredRange))
+        {
+            _holding = false;
+            return false;
+        }
+
+        _holdRange = preferredRange;
         if (PlayerbotWater.Submerged(player) || feature.System.IsRooted(player)) return false;
 
         ResolveSlows(player);
@@ -154,12 +184,16 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
                 Finish(player, report: true, $"steps {_steps}/{kite.MaxStepsPerFight}, {facts.KiteMs} ms, failed spots {_failedSpots}");
                 return false;
             case KiteDecision.Slow:
+                _holding = true;
                 if (_kiteStartMs == 0) _kiteStartMs = Math.Max(1u, now);
                 return CastSlow(player, nearest);
             case KiteDecision.Step:
+                _holding = true;
                 if (_kiteStartMs == 0) _kiteStartMs = Math.Max(1u, now);
                 return BeginStep(player, map, victim, hunter, preferredRange, leashCentre, leashYards, risk, interval, kite);
             default:
+                // Too many pursuers or a caster: kiting cannot work here, so the bot fights as its rotation says (melee for a warrior).
+                if (pursuers > PlayerbotKiteModel.MaxPursuers || facts.NearestCaster) _holding = false;
                 return false;
         }
     }
@@ -306,7 +340,8 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         return true;
     }
 
-    private static bool HasUsableRangedWeapon(Player player)
+    /// <summary>A ranged weapon (not a wand) with durability left, and for a bow, gun or crossbow the selected ammunition in the bags (a thrown weapon needs none).</summary>
+    internal static bool HasUsableRangedWeapon(Player player)
     {
         Item? ranged = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged);
         if (ranged?.Template is not { Class: ItemClassWeapon } template || template.SubClass == SubClassWand) return false;
@@ -419,7 +454,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
             // (d) nothing outside the fight wakes up along the leg or at its end.
             if (LegReachesThreat(player, here, clipped)) continue;
 
-            // (e) no hazard (brain only).
+            // (e) no hazard on the leg (needs the bot's risk object; the brain, party AI and group AI all pass theirs).
             if (risk is not null)
             {
                 _leg[0] = here;
@@ -489,6 +524,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     {
         EndStep(player, stop: true);
         _over = true;
+        _holding = false;
         if (report)
             PlayerbotAnomalies.Report(player, "combat", "kite-gave-up", $"kiting given up for this fight: {why}", AnomalySeverity.Info);
     }
@@ -507,5 +543,6 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         _hasStepped = false;
         _kiteStartMs = 0;
         _over = false;
+        _holding = false;
     }
 }

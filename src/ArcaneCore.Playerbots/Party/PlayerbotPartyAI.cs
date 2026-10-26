@@ -1885,7 +1885,7 @@ internal sealed class PlayerbotPartyAI
         {
             Player? kiteMaster = _session.World.FindOnlinePlayer(_master);
             Vector3? centre = kiteMaster is not null && ReferenceEquals(kiteMaster.Map, player.Map) ? new Vector3(kiteMaster.X, kiteMaster.Y, kiteMaster.Z) : null;
-            if (_kite.Update(player, target, interval, centre, KiteLeashYards, _risk))
+            if (_kite.Update(player, target, interval, centre, KiteLeashYards, _risk, grouped: true))
             {
                 _route = null;
                 _rangedIdleMs = 0;
@@ -1906,7 +1906,7 @@ internal sealed class PlayerbotPartyAI
         }
 
         float distance = Distance(player, target);
-        float preferredRange = _combatSpells.PreferredRange(player);
+        float preferredRange = _kite.HoldRange(player, _combatSpells.PreferredRange(player));
         bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
         PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(preferredRange, distance,
             player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),

@@ -85,7 +85,9 @@ nothing is hitting the bot in melee and Recently Bandaged has worn off; friendly
 Warriors and rogues with a ranged weapon equipped use it on a creature out of melee reach, standing still, in a fight: Shoot Bow, Shoot
 Gun, Shoot Crossbow, Throw, in that order, the first known and castable (`RotationState.CanCast` judges the weapon type, ammunition
 and range). They are ordinary abilities, not Auto Shot, and come last in the warrior's list and after Sprint in the rogue's. The
-cast is made at a creature the bot is closing in on, so the bot stops for it; a pull out of combat is not changed.
+cast is made at a creature the bot is closing in on, so the bot stops for it; a pull out of combat is not changed. A rogue does not
+shoot or throw at a target whose crowd control breaks on damage (a Gouged creature: `RotationUnit.IsCrowdControlled`), so the shot
+does not undo the Gouge.
 
 Deliberate differences from the party bots, for a bot that also grinds alone: a healer with nobody to heal fights with its damage
 spells instead of idling; tanks taunt a victim that turned to a group mate; rogues and cats finish early on a nearly dead victim;
@@ -141,10 +143,16 @@ class rotation, so a retreat always wins and kiting is the fight-on branch.
   candidate is taken only if the ground under its end is within 3 yards of the bot's height (probed from 20 yards above and from 2,
   nearest the bot's height), the clipped walk reaches 75% of the leg, the end is not under water, no creature outside the fight would
   aggro along the leg or at its end (`PlayerbotRecovery.Threats`, margin 2 yards, sampled every 2 yards), no hazard lies on it (the
-  brain), it stays inside every pursuer's leash zone less 8 yards (or no farther from the anchor than the bot is), the spell line of
+  bot's own risk object, which the brain, party AI and group AI all pass), it stays inside every pursuer's leash zone less 8 yards (or no farther from the anchor than the bot is), the spell line of
   sight to the victim holds with the victim within casting range, and a party or group bot ends within 30 yards of its master
   (siege or rally point, else its leader).
 * **Arrival.** The bot stops, faces the victim and the same think returns to the rotation, which casts.
+* **Holding the range.** Once a kite has slowed or stepped in a fight, and until it gives up, the pursuers are too many or cast, or the
+  bot is above `HealthPct`, the positioning of the brain, party AI and group AI uses the kite's range (`PlayerbotKite.HoldRange`)
+  instead of the rotation's. A warrior or rogue, whose rotation prefers melee, therefore stands and shoots at casting range after a step
+  instead of walking back in; a creature that reaches melee reach is still fought in melee.
+* **Not the tank.** A party or group bot whose role is Tank (`PlayerbotCombatSpells.RoleOf`: the group role, else its talents) does not
+  kite: it holds its ground so the creature stays on it.
 * **Giving up.** After `MaxStepsPerFight` steps, 30 s of kiting in one fight, or two steps in a row with no spot (or a refused walk),
   the bot fights on for the rest of the fight and reports `combat/kite-gave-up` once (Info). A pursuer starting to evade ends the kite
   silently. The counters reset when the bot leaves combat.
@@ -167,11 +175,15 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
   through the ordinary cast handler.
 - `Playerbots/Combat/PlayerbotKiteModelTests.cs`: the kite decision (no slow, slow ready, half-speed or rooted pursuer, health over the
   line, three pursuers, a caster, the step cooldown, the step, time and failed-spot caps) and the step geometry.
-- `Playerbots/Combat/PlayerbotRangedWeaponRotationTests.cs`: the warrior and rogue shots (out of melee, in melee, moving, order).
+- `Playerbots/Combat/PlayerbotRangedWeaponRotationTests.cs`: the warrior and rogue shots (out of melee, in melee, moving, order, not at a Gouged target).
 - `Playerbots/Risk/PlayerbotKiteWorldTests.cs` on `RiskTestWorld`: a mage at 45% health snares a creature, backs away to 8 yards and
   casts again with no retreat; no slow means no kite; an idle creature on the away line is side-stepped and not woken; a pit behind the
   bot is not entered; `Enabled` off reproduces the old behaviour. `PlayerbotEscapeSpellDataTests` has a client-data fact that every
   listed slow derives an effect (`ARCANECORE_TEST_DBC_DIR`; skipped without it). `ConfigReloadTests` checks the keys are live.
+- `Playerbots/Risk/PlayerbotKiteRangedWorldTests.cs` on `RiskTestWorld` with real bow, thrown-weapon and arrow items: a warrior at 45%
+  health with a bow, arrows and Hamstring stays outside melee reach for most of eight seconds and shoots from there instead of walking
+  back after every step; `PlayerbotKite.HasUsableRangedWeapon` is false for a bow with no ammunition and at zero durability, and true for
+  a thrown weapon with none.
 - Scenarios `combat-warrior` .. `combat-druid` and `combat-tapped-wolf` (`Playerbots/Scenarios/ScenarioCombat.cs`, run by
   `ClassCombatScenarioTests`): a bot of each class (orc warrior, dwarf paladin, troll hunter, human rogue, undead priest, tauren
   shaman, gnome mage, human warlock, night elf druid) is created, taught its first spells by classic id, handed to its own brain

@@ -95,6 +95,15 @@ public sealed class PlayerbotRangedWeaponRotationTests
     }
 
     [Fact]
+    public void ARogueDoesNotThrow_AtAGougedTarget_WhoseCrowdControlBreaksOnDamage()
+    {
+        RotationState gouged = State(Rogue, [Hostile("Throw", 0)], Self(4), Victim(20f, crowdControlled: true), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Null(Next(Rogue.InCombat(gouged)));
+        RotationState free = State(Rogue, [Hostile("Throw", 0)], Self(4), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Equal("Throw", Next(Rogue.InCombat(free)));
+    }
+
+    [Fact]
     public void TheShotsAreAbilitiesOfBothClasses()
     {
         foreach (PlayerbotClassRotation rotation in new PlayerbotClassRotation[] { Warrior, Rogue })

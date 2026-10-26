@@ -1466,7 +1466,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
             float distance = Distance(player, target);
             bool fightingBot = player.Combat.ThreatenedBy.Contains(target) || ReferenceEquals(target.Combat.Victim, player);
-            PlayerbotFightPosition position = DecidePosition(_combatSpells.PreferredRange(player), distance,
+            PlayerbotFightPosition position = DecidePosition(Kite.HoldRange(player, _combatSpells.PreferredRange(player)), distance,
                 player.Class == Game.Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
                 _rangedIdleMs >= RangedIdleLimitMs && !fightingBot, MapCombat.CanReachWithMeleeAutoAttack(player, target));
             if (position == PlayerbotFightPosition.Hold)
@@ -1525,7 +1525,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                             float progress = System.Numerics.Vector2.Distance(new(player.X, player.Y), new(end.X, end.Y));
                             bool endsShort = !fightingBot && (position == PlayerbotFightPosition.ChaseToMelee
                                 ? endFlat > PlayerbotNavigationAnomalies.PathEndShortYards || MathF.Abs(end.Z - chaseGoal.Z) > PlayerbotNavigation.ProjectedEndYards
-                                : System.Numerics.Vector3.Distance(end, chaseGoal) > _combatSpells.PreferredRange(player));
+                                : System.Numerics.Vector3.Distance(end, chaseGoal) > Kite.HoldRange(player, _combatSpells.PreferredRange(player)));
                             if (progress < PlayerbotNavigation.PartialProgressYards || endsShort)
                             {
                                 MarkUnreachable(target);

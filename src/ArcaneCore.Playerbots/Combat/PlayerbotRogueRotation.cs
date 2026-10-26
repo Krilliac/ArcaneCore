@@ -95,7 +95,7 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
             ?? Do(s, Hemorrhage, v)
             ?? Do(s, SinisterStrike, v)
             ?? Do(s, Sprint, s.Self, s.InCombat && !v.InMeleeRange && !s.IsRooted)
-            ?? (s.InCombat ? RangedShot(s, v) : null);
+            ?? (s.InCombat && !v.IsCrowdControlled ? RangedShot(s, v) : null); // not at a Gouged target: the shot would break it
     }
 
     /// <summary>

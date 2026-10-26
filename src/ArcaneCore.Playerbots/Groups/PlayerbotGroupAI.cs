@@ -194,6 +194,21 @@ internal sealed class PlayerbotGroupAI
     /// <summary>What the bot did at its last think (inspection, the group stall line): <c>lead:hold-not-ready</c>, <c>fight:114:hold</c>, ...</summary>
     internal string Step { get; private set; } = "none";
 
+    private string _kiteStepLabel = "";
+    private string _kiteStep = "";
+
+    /// <summary>The kite step text for a target label, built once per label (a kite think repeats for the whole fight).</summary>
+    private string KiteStep(string targetLabel)
+    {
+        if (!string.Equals(_kiteStepLabel, targetLabel, StringComparison.Ordinal))
+        {
+            _kiteStepLabel = targetLabel;
+            _kiteStep = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:kite");
+        }
+
+        return _kiteStep;
+    }
+
     /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
     internal PlayerbotRisk Risk => _risk;
 
@@ -1225,11 +1240,11 @@ internal sealed class PlayerbotGroupAI
         Vector3? kiteCentre = leashCentre;
         if (kiteCentre is null && leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map))
             kiteCentre = new Vector3(leader.X, leader.Y, leader.Z);
-        if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk))
+        if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk, grouped: true))
         {
             _route = null;
             _rangedIdleMs = 0;
-            Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:kite");
+            Step = KiteStep(targetLabel);
             return;
         }
 
@@ -1245,7 +1260,7 @@ internal sealed class PlayerbotGroupAI
         // while nobody fights the target closes in after RangedIdleLimitMs, as the brain does (PlayerbotBrain.Update). Before, the
         // group AI never did: a healer leading a pair stood 15-22 yards from the objective for good (replays 2026-10-11, quest 9).
         bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
-        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
+        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_kite.HoldRange(player, _spells.PreferredRange(player)), distance,
             player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
             idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs && !engaged,
             inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));
