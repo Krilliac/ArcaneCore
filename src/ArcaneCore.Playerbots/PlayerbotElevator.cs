@@ -661,7 +661,7 @@ internal static partial class PlayerbotElevator
     internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, PlayerbotOptions options)
         => TryBegin(session, player, goal, options, out _);
 
-    /// <param name="walk">When false, the route the caller walks instead of planning again (so a think still costs one path query), or null
+    /// <param name="walk">When false, the route the caller walks instead of planning again (so a think costs one path query when the mesh joins the goal, and up to one per car more for the far approach), or null
     /// when the caller plans its own. Either the direct route the mesh check planned to the goal itself, when it reaches it; or, for a bot
     /// farther than <see cref="ElevatorNetwork.NearLiftYards"/> from the lift whose goal the mesh does not join, the route towards the
     /// landing beside the lift (<see cref="PlayerbotRoute.ToLiftLanding"/>: it ends at the lift, not at the goal, so a caller must not
@@ -745,6 +745,7 @@ internal static partial class PlayerbotElevator
             float endYards = Vector2.Distance(Flat(route.Points[^1]), lift.Centre);
             if (endYards > ElevatorNetwork.NearLiftYards && endYards > botYards - ApproachProgressYards) continue;
             route.ToLiftLanding = true;
+            route.LiftLanding = landing;
             memo.LiftKey = 0;
             return route;
         }
@@ -754,7 +755,7 @@ internal static partial class PlayerbotElevator
         return null;
     }
 
-    /// <summary>The landing beside <paramref name="car"/> at <paramref name="level"/> (<see cref="LandingBeside"/>, nearest the stop itself), cached per map once found.</summary>
+    /// <summary>The landing beside <paramref name="car"/> at <paramref name="level"/> (<see cref="LandingBeside"/>: the first of its ring of candidates, all the same distance from the stop, that has a floor), cached per map once found.</summary>
     private static Vector3? ApproachLanding(Map map, ElevatorCar car, ElevatorLevel level)
     {
         var landings = ApproachLandings.GetValue(map, static _ => new System.Collections.Concurrent.ConcurrentDictionary<(uint SpawnGuid, ElevatorLevel Level), Vector3>());

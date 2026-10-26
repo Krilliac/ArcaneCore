@@ -113,6 +113,16 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool ToLiftLanding { get; set; }
 
+    /// <summary>The landing <see cref="ToLiftLanding"/> walks towards (the point every leg of the approach closes on; a leg's own end is only
+    /// as far as one route reaches). Meaningless unless <see cref="ToLiftLanding"/>.</summary>
+    internal Vector3 LiftLanding { get; set; }
+
+    /// <summary>
+    /// What a caller's progress clock measures this walk against: the lift's landing for a <see cref="ToLiftLanding"/> route (walking to
+    /// the lift may lead away from the goal, e.g. a canyon floor under a plateau), the goal otherwise.
+    /// </summary>
+    internal Vector3 ProgressAim(Vector3 goal) => ToLiftLanding ? LiftLanding : goal;
+
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
 

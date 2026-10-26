@@ -454,6 +454,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private uint _repairTripBackoffUntil;
     private uint _repairStuckMs;
     private float _repairBest = float.PositiveInfinity;
+    private bool _repairToLift; // _repairBest measures to a lift's landing (PlayerbotRoute.ToLiftLanding), not to the NPC
 
     /// <summary>
     /// The trip worth starting to a service NPC out of sight, as the service it is for (<see cref="NpcFlags.None"/>: none). A repair
@@ -588,6 +589,10 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             && PlayerbotWorldDestinations.TryResolveSpawnPosition(player, current.Spawn, requireLivePatroller: true, out Vector3 at))
         {
             float left = Vector3.Distance(here, at);
+            // The walk to a lift's landing may lead away from the NPC: the stuck clock measures to the landing then, and starts over when it switches.
+            bool toLift = _repairRoute is { ToLiftLanding: true };
+            float walked = toLift ? Vector3.Distance(here, _repairRoute!.LiftLanding) : left;
+            if (toLift != _repairToLift) { _repairToLift = toLift; _repairBest = walked; _repairStuckMs = 0; }
             // Arrived at the repair NPC's own spawn point with no live creature of that entry there: the NPC is not there.
             if (left <= RepairArrivedYards && current.Spawn.MovementType != 2 && _repairMissReported != _repairSpawn
                 && !HasVisibleEntry(player, current.Entry)
@@ -597,7 +602,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                 PlayerbotAnomalies.Report(player, "town", "service-npc-missing",
                     $"stands {left:F1} yd from the spawn of {(service == NpcFlags.Repair ? "repair NPC" : "vendor")} {current.Entry} (spawn {_repairSpawn}) and finds no usable service NPC in sight");
             }
-            if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
+            if (walked < _repairBest - 0.5f) { _repairBest = walked; _repairStuckMs = 0; }
             else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
             _repairClockedThisThink = true;
             if (_repairStuckMs < RepairTripStuckMs && Suspensions?.IsEntrySuspended(current.Entry, now) != true)
@@ -734,6 +739,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _repairMissReported = 0;
         _repairStuckMs = 0;
         _repairBest = float.PositiveInfinity;
+        _repairToLift = false;
     }
 
     /// <summary>
