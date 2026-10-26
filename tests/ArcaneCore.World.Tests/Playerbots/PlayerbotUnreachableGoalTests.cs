@@ -201,7 +201,7 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
     /// <c>bot-nav/no-path-connected</c>.
     /// </summary>
     [Fact]
-    public async Task AGoalAboveTheFloor_FoundOnlyByTheFarBox_HasNoComponent_AndReportsNoPathConnected()
+    public async Task AGoalAboveTheFloor_FoundOnlyByTheFarBox_HasNoComponent_AndIsNotReportedNoPathConnected()
     {
         await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
         await world.PlaceAsync(Start);
@@ -234,6 +234,28 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         });
         Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("nav", "goal-unreachable")));
         Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "no-path-connected")));
+    }
+
+    /// <summary>
+    /// Issue #1497 review: a goal inside the near box but past the edge of the walkable cells of the unjoined tile (the mesh is eroded
+    /// by the agent radius, so spawns lie there) is still told unreachable, and its component is the tile's own.
+    /// </summary>
+    [Fact]
+    public async Task AGoalJustOutsideAWalkableCellOfTheUnjoinedTile_IsStillToldUnreachable_WithItsOwnComponent()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 besideTheHole = new(69.5f, 5, 0);
+        (bool unreachable, int from, int to, int spawnComponent) = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out int spawn), "the control");
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, besideTheHole, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent, spawn);
+        });
+        Assert.True(unreachable, "a goal 0.5 yd past the walkable cells is still on the unjoined tile");
+        Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
+        Assert.Equal(spawnComponent, to);
     }
 
     [Fact]

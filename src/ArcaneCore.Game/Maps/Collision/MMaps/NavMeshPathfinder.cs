@@ -681,9 +681,10 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>
     /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the polygon is <paramref name="far"/> from <paramref name="at"/>
-    /// (the <c>far</c> flag of the locate: with a zero <see cref="PathOptions.EndTolerance"/>, found only past the near box, or off it by more than
-    /// a tenth of a yard horizontally, or more than its height). A far polygon is the floor beside a point in the air or on excluded ground, not
-    /// the place itself. Meaningful only when the result is not -1.
+    /// (a vertical miss: the polygon's nearest point lies more than <c>NearExtents.Y</c> (5) above or below <paramref name="at"/>, so the near box
+    /// found nothing and the far box snapped to the floor under or over it). A point merely outside a polygon's footprint but within the near box
+    /// is not far, whatever its horizontal distance. A far polygon is the floor beside a point in the air or on excluded ground, not the place
+    /// itself. Meaningful only when the result is not -1.
     /// </summary>
     public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options, out bool far)
     {
@@ -704,8 +705,14 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
-        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, options.EndTolerance, out NavPolyRef poly, out _, out far)
-            ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
+        if (!mesh.HaveTileAt(recast) || !TryLocate(mesh, recast, options, options.EndTolerance, out NavPolyRef poly, out Vector3 onMesh, out _))
+        {
+            return -1;
+        }
+
+        // Not TryLocate's own flag, which also counts a near-box hit past a tenth of a yard horizontally (a spawn beside an eroded edge).
+        far = MathF.Abs(onMesh.Y - recast.Y) > NearExtents.Y;
+        return graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly);
     }
 
     /// <summary>The histogram every completed <see cref="FindPath"/> adds to (the shared <c>nav.path_query</c> one unless a test supplies its own).</summary>
