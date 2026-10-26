@@ -457,7 +457,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         AnomalyLedger.Shared.Report(
             "move",
             "non-finite",
-            $"player {player.Name} (guid {player.Guid.Low})",
+            $"player (guid {player.Guid.Low})",
             detail,
             AnomalySeverity.Error);
     }
