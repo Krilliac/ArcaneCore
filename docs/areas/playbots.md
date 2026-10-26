@@ -72,7 +72,7 @@ logout queues its character state and waits for that character's save to flush; 
 all stops in the current group settle. The world thread and final save queue stop afterward.
 
 Before a pull the brain weighs each candidate's risk against its reward, and in a fight it retreats past the creatures' leash when
-it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
+it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. A hurt ranged bot also kites: it slows the creature on it and backs away to casting range (`World:Playerbots:Combat`, live): `docs/areas/playbots-combat.md`, Kiting. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line. Chests, locked chests it can open, rares and the guards of gathering nodes are weighed the same
 way (`World:Playerbots:Opportunities`, live): `docs/areas/playbots-opportunities.md`.
 

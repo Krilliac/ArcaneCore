@@ -106,6 +106,10 @@ stand. Then `time to kill = enemies' health / damage dealt`, `time to die = bot 
 
 The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
 
+Fighting on is where kiting lives (`World:Playerbots:Combat:Kite`, `docs/areas/playbots-combat.md`, Kiting). `ObserveFight` runs first
+in every think and a retreat always wins; a bot that stays in the fight, including after `cornered-no-escape` or a cornered retreat,
+may still slow its pursuer and walk back to casting range. A running retreat drops a kite step in progress.
+
 ## Retreat
 
 `PlayerbotRetreat` stops the attack (CMSG_ATTACKSTOP) and, each think:

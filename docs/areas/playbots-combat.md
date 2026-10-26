@@ -82,6 +82,11 @@ nothing is hitting the bot in melee and Recently Bandaged has worn off; friendly
   Demoralizing Roar / Swipe, Maul; caster: Entangling Roots in a group, Insect Swarm, Moonfire, Starfire above 50%, Wrath.
   Abolish / Cure Poison, Remove Curse.
 
+Warriors and rogues with a ranged weapon equipped use it on a creature out of melee reach, standing still, in a fight: Shoot Bow, Shoot
+Gun, Shoot Crossbow, Throw, in that order, the first known and castable (`RotationState.CanCast` judges the weapon type, ammunition
+and range). They are ordinary abilities, not Auto Shot, and come last in the warrior's list and after Sprint in the rogue's. The
+cast is made at a creature the bot is closing in on, so the bot stops for it; a pull out of combat is not changed.
+
 Deliberate differences from the party bots, for a bot that also grinds alone: a healer with nobody to heal fights with its damage
 spells instead of idling; tanks taunt a victim that turned to a group mate; rogues and cats finish early on a nearly dead victim;
 Fear-type crowd control only in a group; hunters do not tame a random beast (vmangos summons one for a pet-less bot); no
@@ -106,6 +111,47 @@ stayed "out of melee" while the bot already stood at it: the chase had nowhere c
 the same rule lets hit, wore the bot down (Dawnrover against Kobold Laborers in the 2026-10-08 replays, `ttk=860s reason=behind`, a
 retreat and once a death). The replay trace (`ARCANECORE_TEST_BOT_REPLAY_TRACE`) prints the melee geometry against the bot's target.
 
+## Kiting (`PlayerbotKite`)
+
+A hurt bot that can attack from range slows the creature on it and walks back out to its casting range, then goes on casting
+(`World:Playerbots:Combat:Kite`, live; the choice is the pure `PlayerbotKiteModel`, the walk is `Combat/PlayerbotKite.cs`, one instance
+in each brain, party AI and group AI; the battleground AI does not kite). It runs after `PlayerbotRisk.ObserveFight` and before the
+class rotation, so a retreat always wins and kiting is the fight-on branch.
+
+| Key (`World:Playerbots:Combat:Kite:`) | Default | Range |
+|---|---|---|
+| `Enabled` | true | |
+| `HealthPct` | 50 | 10..95 |
+| `StepYards` | 10 | 4..20 |
+| `MaxStepsPerFight` | 8 | 1..32 |
+
+* **Who.** The bot's preferred range is past melee (a caster, a healer, a hunter with Auto Shot), or it is a warrior or rogue with a
+  ranged weapon, its ammunition (a bow, gun or crossbow needs arrows or bullets; a thrown weapon none) and a known shot. Alive, in
+  combat, not casting, not rooted, not stunned, feared or confused, not swimming; health at or below `HealthPct`.
+* **Pursuers.** Live creatures that are attacking the bot within 8 yards (a hunter: its 8-yard dead zone plus 2) and are not evading.
+  None, more than two, or a nearest one that casts spells of its own (an EventAI CAST action, `PlayerbotCreatureSpells`): fight on.
+* **Slow first.** The class's slows, in order: mage Frost Nova (pursuer within 10 yards), Cone of Cold, Frostbolt; hunter Concussive
+  Shot, Wing Clip; warlock Curse of Exhaustion, Death Coil; shaman Frost Shock; druid Entangling Roots; warrior Hamstring; rogue
+  Gouge. A spell counts as a slow only if its own data says so (`PlayerbotEscapes.EffectOf`: a root, stun or fear with a duration, or a
+  negative movement-speed aura); no number is assumed. Earthbind Totem is left out until a test shows its pulse landing.
+* **Then step.** When the nearest pursuer is rooted, stunned or at most 80% of the bot's run speed (the slow landed, or it is slow by
+  nature), the bot walks one leg away, at most once every 1.5 s. At the same speed with no slow ready it fights on.
+* **The spot** (no path search; at most seven directions: away from the pursuers, then 35, 70 and 105 degrees either side). The leg is
+  the yards still wanted to reach the casting range less 3 (10..22 yards; a hunter 14..28), between 4 yards and `StepYards`. A
+  candidate is taken only if the ground under its end is within 3 yards of the bot's height (probed from 20 yards above and from 2,
+  nearest the bot's height), the clipped walk reaches 75% of the leg, the end is not under water, no creature outside the fight would
+  aggro along the leg or at its end (`PlayerbotRecovery.Threats`, margin 2 yards, sampled every 2 yards), no hazard lies on it (the
+  brain), it stays inside every pursuer's leash zone less 8 yards (or no farther from the anchor than the bot is), the spell line of
+  sight to the victim holds with the victim within casting range, and a party or group bot ends within 30 yards of its master
+  (siege or rally point, else its leader).
+* **Arrival.** The bot stops, faces the victim and the same think returns to the rotation, which casts.
+* **Giving up.** After `MaxStepsPerFight` steps, 30 s of kiting in one fight, or two steps in a row with no spot (or a refused walk),
+  the bot fights on for the rest of the fight and reports `combat/kite-gave-up` once (Info). A pursuer starting to evade ends the kite
+  silently. The counters reset when the bot leaves combat.
+
+`World:Playerbots:Combat:PetTank` (`Enabled`, `OpenerHoldMs`, `MasterThreatPct`) is read and validated like the kite keys but nothing
+acts on it yet: the hunter and warlock pet-tank behaviour follows in a later change, after the pet-recognition fix.
+
 ## Target etiquette (PlayerbotBrain.FindTarget)
 
 Idle grinding skips a creature that is someone else's (vmangos `IsValidHostileTarget` and the client's grey name): tapped by a
@@ -122,6 +168,13 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
 - `Playerbots/Combat/PlayerbotTargetEtiquetteTests.cs`: the tap, engaged and grey filters (RED on 08ea5ff6).
 - `Playerbots/PlayerbotCombatSpellsTests.cs`: the spell data rebuild on SMSG_LEARNED_SPELL and the role change; the stance taken
   through the ordinary cast handler.
+- `Playerbots/Combat/PlayerbotKiteModelTests.cs`: the kite decision (no slow, slow ready, half-speed or rooted pursuer, health over the
+  line, three pursuers, a caster, the step cooldown, the step, time and failed-spot caps) and the step geometry.
+- `Playerbots/Combat/PlayerbotRangedWeaponRotationTests.cs`: the warrior and rogue shots (out of melee, in melee, moving, order).
+- `Playerbots/Risk/PlayerbotKiteWorldTests.cs` on `RiskTestWorld`: a mage at 45% health snares a creature, backs away to 8 yards and
+  casts again with no retreat; no slow means no kite; an idle creature on the away line is side-stepped and not woken; a pit behind the
+  bot is not entered; `Enabled` off reproduces the old behaviour. `PlayerbotEscapeSpellDataTests` has a client-data fact that every
+  listed slow derives an effect (`ARCANECORE_TEST_DBC_DIR`; skipped without it). `ConfigReloadTests` checks the keys are live.
 - Scenarios `combat-warrior` .. `combat-druid` and `combat-tapped-wolf` (`Playerbots/Scenarios/ScenarioCombat.cs`, run by
   `ClassCombatScenarioTests`): a bot of each class (orc warrior, dwarf paladin, troll hunter, human rogue, undead priest, tauren
   shaman, gnome mage, human warlock, night elf druid) is created, taught its first spells by classic id, handed to its own brain
