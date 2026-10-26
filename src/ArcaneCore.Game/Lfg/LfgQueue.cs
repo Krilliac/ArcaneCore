@@ -181,11 +181,19 @@ public sealed class LfgQueue(ILfgGroups groups)
 
     /// <summary>
     /// Group::AddMember (Group.cpp:418-424) for a member who did not come through the queue: a queued party recounts its roles and size
-    /// (LFGQueue::UpdateGroup), and a party that became full leaves the queue complete.
+    /// (LFGQueue::UpdateGroup), and a party that became full leaves the queue complete. A member who was queued alone and joined a party
+    /// some other way leaves the solo queue (SETQUEUE LEAVE_QUEUE): vmangos has no such hook, but its FindRoleToGroup evicts the stale entry at
+    /// the first role match (LFGQueue.cpp), while here a failed AddMember keeps it, so it would out-wait every later candidate and be
+    /// picked as a party leader it cannot lead.
     /// </summary>
-    public void OnMemberJoined(Group group)
+    public void OnMemberJoined(Group group, ObjectGuid member)
     {
         ArgumentNullException.ThrowIfNull(group);
+        if (member.Value != _fillingPlayer)
+        {
+            RemovePlayer(member, systemLeave: false);
+        }
+
         if (GroupAreaOf(group) != 0)
         {
             UpdateGroup(group);
@@ -444,7 +452,18 @@ public sealed class LfgQueue(ILfgGroups groups)
         }
 
         queued.PlayerCount++;
-        if (!groups.AddMember(queued.Group, player))
+        _fillingPlayer = playerGuid.Value;
+        bool added;
+        try
+        {
+            added = groups.AddMember(queued.Group, player);
+        }
+        finally
+        {
+            _fillingPlayer = 0;
+        }
+
+        if (!added)
         {
             queued.AvailableRoles = openRoles;
             queued.DpsCount = openDps;
@@ -535,6 +554,9 @@ public sealed class LfgQueue(ILfgGroups groups)
             RemoveGroup(group, systemLeave: true);
         }
     }
+
+    /// <summary>The queued player whose own AddMember is running in FillRole: the group hook keeps his entry until FillRole removes it silently.</summary>
+    private ulong _fillingPlayer;
 
     /// <summary>
     /// LFGQueue::RemovePlayerFromQueue (LFGQueue.cpp:386-418): a client leave sends SETQUEUE LEAVE_QUEUE and clears the player's area; a leave by

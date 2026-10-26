@@ -21,7 +21,7 @@ public sealed class MeetingStoneQueueTests : IDisposable
     {
         GroupManager groups = _f.Context.Groups;
         _queue = new LfgQueue(new Groups(groups, _f));
-        groups.MemberAdded += (group, _) => _queue.OnMemberJoined(group);
+        groups.MemberAdded += _queue.OnMemberJoined;
         groups.MemberLeft += _queue.OnMemberRemoved;
         groups.Disbanding += (group, _) => _queue.OnDisbanding(group);
     }
@@ -349,5 +349,20 @@ public sealed class MeetingStoneQueueTests : IDisposable
         Pass();
         Assert.Single(_f.Sent(warrior, WorldOpcode.SmsgMeetingstoneInProgress));
         Assert.Single(_f.Sent(mage, WorldOpcode.SmsgMeetingstoneInProgress));
+    }
+
+    [Fact]
+    public void SoloPlayer_JoiningAnOrdinaryParty_LeavesTheSoloQueue_AndDoesNotBlockOthers()
+    {
+        Player warrior = Add(1, Class.Warrior);
+        Player mage = Add(2, Class.Mage);
+        _queue.Join(mage, Area);
+        _f.ClearAll();
+
+        Party(warrior, mage);
+
+        Assert.False(_queue.IsPlayerQueued(mage.Guid)); // RED on main: the entry stays until logout
+        Assert.Equal([(0u, MeetingStoneStatus.LeaveQueue)], SetQueues(mage));
+        Assert.Equal(0u, _queue.PlayerAreaOf(mage.Guid));
     }
 }

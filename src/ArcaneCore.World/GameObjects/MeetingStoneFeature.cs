@@ -61,7 +61,7 @@ public sealed class MeetingStoneFeature(IServiceProvider services, ILogger<Meeti
         Queue = queue;
         world.Updated += queue.Update;
         world.PlayerLoggingOut += queue.OnLoggingOut;
-        groups.MemberAdded += (group, _) => queue.OnMemberJoined(group);
+        groups.MemberAdded += queue.OnMemberJoined;
         groups.MemberLeft += queue.OnMemberRemoved;
         groups.Disbanding += (group, _) => queue.OnDisbanding(group);
     }
