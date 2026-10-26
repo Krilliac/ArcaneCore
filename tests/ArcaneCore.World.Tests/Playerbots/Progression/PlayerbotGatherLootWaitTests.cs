@@ -265,6 +265,56 @@ public sealed class PlayerbotGatherLootWaitTests
     }
 
     [Fact]
+    public async Task TheTimeoutRelease_ClosesTheWindow_EvenWhenTheManagedActionBudgetIsSpent()
+    {
+        // The release used to be a managed CMSG_LOOT_RELEASE whose refusal (a spent budget) was ignored, dropping it for good.
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.NotEmpty(await rig.Host.OnWorldAsync(() => rig.Bot.Session.DrainManagedPackets(WorldOpcode.SmsgLootResponse)));
+
+        await rig.Host.World.AdvanceClockAsync(8_000);
+        await rig.Host.OnWorldAsync(() =>
+        {
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(0);
+            Assert.False(rig.Bot.Session.TryManagedAction(WorldOpcode.CmsgLootRelease, new byte[8]), "the budget was not spent");
+            rig.Crafting.UpdateGatherLoot(rig.Player); // the timeout, with every managed action refused
+            return true;
+        });
+
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+        Assert.Null(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
+    }
+
+    private static readonly System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+
+    private static T Field<T>(PlayerbotCrafting crafting, string name)
+        => (T)typeof(PlayerbotCrafting).GetField(name, Private)!.GetValue(crafting)!;
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(64, false)]
+    public async Task AFailedCast_ClearsTheNonDiceStreaksOnlyWhenTheCastTableIsFull(int tracked, bool keptStreaksSurvive)
+    {
+        // Pins the braces of the Count >= 64 reset in OnLootCastFailed: the non-dice set is cleared with the cast table, not on every failure.
+        await using Rig rig = await Rig.StartAsync();
+        await rig.Host.OnWorldAsync(() =>
+        {
+            var casts = Field<Dictionary<ulong, int>>(rig.Crafting, "_failedLootCasts");
+            var nonDice = Field<HashSet<ulong>>(rig.Crafting, "_failedLootNonDice");
+            for (ulong key = 1; key <= (ulong)tracked; key++)
+                casts[key] = 1;
+            nonDice.Add(1);
+            typeof(PlayerbotCrafting).GetField("_gatheringTarget", Private)!.SetValue(rig.Crafting, new ObjectGuid(ChestGuid(Node)));
+            typeof(PlayerbotCrafting).GetMethod("OnLootCastFailed", Private)!.Invoke(rig.Crafting, [rig.Player]);
+
+            Assert.Equal(keptStreaksSurvive, nonDice.Contains(1));
+            Assert.Equal(keptStreaksSurvive ? tracked + 1 : 1, casts.Count);
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task ANodeAnotherPlayerHasOpen_IsNeverPicked_AndIsPickedOnceItIsFree()
     {
         await using Rig rig = await Rig.StartAsync();
@@ -389,7 +439,7 @@ public sealed class PlayerbotGatherLootWaitTests
     [Fact]
     public async Task AGatherersMovement_ClosesItsOpenNodeWindow_ThroughTheMovementHandler()
     {
-        // vmangos HandleMovementOpcodes (MovementHandler.cpp:1104-1110).
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1108-1109).
         await using Rig rig = await Rig.StartAsync();
         await CastAndLandAsync(rig);
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));

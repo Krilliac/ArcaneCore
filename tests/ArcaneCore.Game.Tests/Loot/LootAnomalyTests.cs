@@ -184,7 +184,7 @@ public sealed class LootAnomalyTests
     [Fact]
     public void ALooterWhoMoves_LosesACorpseWindow_SoItsViewersEmpty()
     {
-        // vmangos HandleMovementOpcodes (MovementHandler.cpp:1104-1110): moving closes a non-item loot window.
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1108-1109): moving closes a non-item loot window.
         Rig rig = CreateRig(7106, 0, ItemTestData.ToughJerky);
         Player alice = rig.Join(7106);
         Creature wolf = rig.Kill(alice);
@@ -202,7 +202,7 @@ public sealed class LootAnomalyTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void ADeadOrFarLooter_IsReleasedAfterTwoAudits_AndReported(bool dead)
+    public void ADeadOrFarLooter_IsReleasedAfterTwoAudits_WithoutAnAnomaly(bool dead)
     {
         Rig rig = CreateRig(dead ? 7107u : 7108u, 0, ItemTestData.ToughJerky);
         Player alice = rig.Join(dead ? 7107u : 7108u);
@@ -223,10 +223,10 @@ public sealed class LootAnomalyTests
         }
 
         rig.Loot.Rolls.Update(rig.Map, 1000);
-        Assert.Empty(cap.Notices); // the first strike
-        Assert.NotNull(rig.Loot.OpenLootOf(alice));
+        Assert.NotNull(rig.Loot.OpenLootOf(alice)); // the first strike
         rig.Loot.Rolls.Update(rig.Map, 1000);
-        Assert.Equal(1, cap.Count("loot/window-left-open"));
+        Assert.Empty(cap.Notices); // dying or walking off with the window open is an ordinary event, not window-left-open
+        Assert.Equal(0, cap.Count("loot/window-left-open"));
         Assert.Null(rig.Loot.OpenLootOf(alice));
         Assert.Empty(bag.Viewers);
     }

@@ -1278,7 +1278,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
                 || (!go.User.IsEmpty && go.User != player.Guid)
                 || go.Loot is { IsEmpty: true }
-                || (go.Loot is { Viewers.Count: > 0 } looted && looted.Viewers.Any(v => !ReferenceEquals(v, player))) // another looter holds the window: the cast is refused with CHEST_IN_USE (GatheringSpells)
+                || HeldByAnotherLooter(go, player) // another looter holds the window: the cast is refused with CHEST_IN_USE (GatheringSpells)
                 || go.Template.GetData(GameObjectMapSystem.ChestLevelData) > player.Level + GameObjectMapSystem.ChestLevelLeeway
                 || (reqQuest != 0
                     && (goSystem?.Quests is { } goQuests
@@ -1605,6 +1605,20 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return DrainGatherLoot(player, _session.World.NowMs);
     }
 
+    /// <summary>True when a looter other than <paramref name="player"/> holds the node's loot window open (the cast is refused with CHEST_IN_USE, GatheringSpells).</summary>
+    private static bool HeldByAnotherLooter(GameObject go, Player player)
+    {
+        if (go.Loot is not { Viewers.Count: > 0 } looted)
+            return false;
+        foreach (Player viewer in looted.Viewers)
+        {
+            if (!ReferenceEquals(viewer, player))
+                return true;
+        }
+
+        return false;
+    }
+
     private bool DrainGatherLoot(Player player, uint now)
     {
         if (_waitingForGatherLoot)
@@ -1633,10 +1647,11 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             ObjectGuid timedOutTarget = _gatheringTarget;
             EndLootWait();
-            // The window may be open server side with its reply lost: close it as the corpse loot timeout does (PlayerbotBrain), or the node
-            // stays "in use" and is never gatherable, despawned or respawned. A release of a window not held is answered and ignored.
+            // The window may be open server side with its reply lost: close it, or the node stays "in use" and is never gatherable, despawned
+            // or respawned. Released server side through the cast path's release (no managed action: a spent budget cannot drop it); a
+            // release when no window is held does nothing.
             if (!timedOutTarget.IsEmpty)
-                _session.TryManagedAction(WorldOpcode.CmsgLootRelease, PlayerbotNavigation.GuidPayload(timedOutTarget.Value));
+                _session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
             if (timedOutTarget.High == HighGuid.GameObject)
             {
                 _refusedUntil[timedOutTarget.Value] = unchecked(now + RefusalBackoffMs);

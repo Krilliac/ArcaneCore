@@ -80,13 +80,9 @@ internal sealed class PlayerbotMount
         uint now = session.World.NowMs;
         if ((player.UnitFlags & UnitFlags.Looting) != 0)
         {
-            // Close the window for real (the CMSG_LOOT_RELEASE path), not just the flag: the movement and cast release triggers gate on the
+            // Close the window for real (the cast path's release), not just the flag: the movement and cast release triggers gate on the
             // flag, so a bare clear would leave the bag listing the bot and its node in use. The flag clear stays for a flag with no window.
-            if (player.Map is { } lootMap && session.Services.GetService<GameObjectLootFeature>()?.FindSystem(lootMap)?.Loot is { } loot
-                && loot.OpenLootOf(player) is { } openWindow)
-            {
-                loot.Release(player, openWindow.Source);
-            }
+            session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
 
             player.UnitFlags &= ~UnitFlags.Looting;
         }
