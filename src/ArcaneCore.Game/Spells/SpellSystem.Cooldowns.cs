@@ -9,6 +9,13 @@ namespace ArcaneCore.Game.Spells;
 public sealed partial class SpellSystem
 {
     /// <summary>
+    /// Whether a cooldown end stored on the wrapping uint millisecond clock (<see cref="NowMs"/>, 49.7 days) is still ahead of <paramref name="now"/>.
+    /// The signed difference stays correct across the wrap while every stored span is below 2^31 ms (<see cref="MaxReasonableCooldownMs"/> is 7 days).
+    /// vmangos keeps 64-bit time points (SpellCaster.h:56-60) and never wraps.
+    /// </summary>
+    internal static bool IsCooldownRunning(uint until, uint now) => unchecked((int)(until - now)) > 0;
+
+    /// <summary>
     /// vmangos SpellCaster::IsSpellReady + HasGCD: no running spell cooldown, category cooldown or
     /// global cooldown of the spell's StartRecoveryCategory.
     /// </summary>
@@ -40,24 +47,24 @@ public sealed partial class SpellSystem
         }
 
         uint now = NowMs;
-        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
+        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && IsCooldownRunning(until, now))
         {
             return false;
         }
 
         // crafting lane: an item spell may carry its own category (Player.cpp:22139-22160); an explicit item use passes it.
         uint category = itemCategory ?? cooldown.Category;
-        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && until > now)
+        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && IsCooldownRunning(until, now))
         {
             return false;
         }
 
-        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
+        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && IsCooldownRunning(until, now))
         {
             return false;
         }
 
-        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
+        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && IsCooldownRunning(until, now));
     }
 
     /// <summary>vmangos Player::AddGCD (see <see cref="SpellConstants.GlobalCooldownCategory"/>).</summary>
@@ -171,7 +178,7 @@ public sealed partial class SpellSystem
         if (category != 0 && categoryRecovery > 0)
         {
             // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
-            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
+            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || !IsCooldownRunning(running, now))
             {
                 state.CategoryOwners[category] = spell.Id;
             }
@@ -233,11 +240,11 @@ public sealed partial class SpellSystem
         var result = new List<InitialSpellCooldown>();
         foreach ((uint spellId, uint until) in state.SpellCooldowns)
         {
-            if (until > now && Store.Get(spellId) is { } spell)
+            if (IsCooldownRunning(until, now) && Store.Get(spellId) is { } spell)
             {
                 ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
                 uint categoryId = owner.Category != 0 ? owner.Category : spell.Category;
-                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && catUntil > now
+                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && IsCooldownRunning(catUntil, now)
                     ? catUntil - now : 0;
                 result.Add(new InitialSpellCooldown(spellId, owner.ItemId, categoryId, until - now, category));
             }
@@ -245,8 +252,8 @@ public sealed partial class SpellSystem
 
         foreach ((uint spellId, ItemCooldownOwner owner) in state.CooldownOwners)
         {
-            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && spellUntil > now)
-                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || until <= now
+            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && IsCooldownRunning(spellUntil, now))
+                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || !IsCooldownRunning(until, now)
                 || Store.Get(spellId) is not { } spell)
                 continue;
             result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
@@ -257,7 +264,7 @@ public sealed partial class SpellSystem
         // category (vmangos "client keeps track of category cd by original spellId"), so name the recorded owner or else a known spell.
         foreach ((uint categoryId, uint categoryUntil) in state.CategoryCooldowns.OrderBy(c => c.Key))
         {
-            if (categoryUntil <= now || result.Any(c => c.Category == categoryId))
+            if (!IsCooldownRunning(categoryUntil, now) || result.Any(c => c.Category == categoryId))
             {
                 continue;
             }
@@ -303,7 +310,7 @@ public sealed partial class SpellSystem
         Expire(state.GlobalCooldowns, now);
         foreach ((SpellSchool school, uint until) in state.SchoolLockouts.ToArray())
         {
-            if (until <= now)
+            if (!IsCooldownRunning(until, now))
             {
                 state.SchoolLockouts.Remove(school);
             }
@@ -313,7 +320,7 @@ public sealed partial class SpellSystem
         {
             foreach ((uint key, uint until) in cooldowns.ToArray())
             {
-                if (until <= now)
+                if (!IsCooldownRunning(until, now))
                 {
                     cooldowns.Remove(key);
                 }

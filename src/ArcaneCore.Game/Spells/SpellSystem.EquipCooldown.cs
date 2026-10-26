@@ -54,14 +54,14 @@ public sealed partial class SpellSystem
     private void AddEquipCooldown(UnitSpellState state, SpellInfo spell)
     {
         uint now = NowMs;
-        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
+        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && IsCooldownRunning(until, now))
         {
             return;
         }
 
         foreach ((uint ownedCategory, uint owner) in state.CategoryOwners)
         {
-            if (owner == spell.Id && state.CategoryCooldowns.TryGetValue(ownedCategory, out until) && until > now)
+            if (owner == spell.Id && state.CategoryCooldowns.TryGetValue(ownedCategory, out until) && IsCooldownRunning(until, now))
             {
                 return;
             }
@@ -77,7 +77,7 @@ public sealed partial class SpellSystem
         if (category != 0 && spell.CategoryRecoveryTime > 0)
         {
             // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
-            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
+            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || !IsCooldownRunning(running, now))
             {
                 state.CategoryOwners[category] = spell.Id;
             }
