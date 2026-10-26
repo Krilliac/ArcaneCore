@@ -167,17 +167,17 @@ public sealed class HotCodeGuardTests : IDisposable
     }
 
     [Fact]
-    public void Flush_WaitsForLinesRecordedOnAnotherThread()
+    public async Task Flush_WaitsForLinesRecordedOnAnotherThread()
     {
         string log = Path.Combine(_dir, "threads", "audit.log");
         var audit = new HotCodeAudit(log);
-        Task.Run(() =>
+        await Task.Run(() =>
         {
             for (int i = 0; i < 100; i++)
             {
                 audit.Record("probe", $"line {i}");
             }
-        }).Wait();
+        });
 
         audit.Flush();
 
