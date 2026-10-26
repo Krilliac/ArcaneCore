@@ -162,7 +162,7 @@ public sealed partial class WorldSession
     /// </summary>
     private void NoteRejectionSpike(in ClientRejection rejection)
     {
-        if (AccountId == 0 || IsInChaosProbe || !RejectionRates.Note(rejection.Kind, rejection.Reason, AccountId, out long count, out int accounts))
+        if (AccountId == 0 || IsInChaosProbe || !RejectionRates.Note(rejection.Kind, rejection.Reason, (uint)AccountId, out long count, out int accounts))
         {
             return;
         }
