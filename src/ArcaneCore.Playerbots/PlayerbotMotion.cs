@@ -912,7 +912,7 @@ internal static partial class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
         => Validate(map, route, fromPoint, toPoint, from, candidate, out _);
 
-    private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
+    internal static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
         out string? rejectReason)
     {
         rejectReason = null;
@@ -965,8 +965,16 @@ internal static partial class PlayerbotMotion
                         && route.MeshPoints is not null
                         && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
                     {
-                        rejectReason = "NoGroundSupport";
-                        return null;
+                        // The leg's chord hangs over a drop, but the mesh it was planned on may still have a polygon here within the
+                        // leg's own heights (a steep ramp, a switchback, a tunnel floor the model probe misses): stand on it. A real
+                        // cliff has no polygon there and is still refused.
+                        if (!TryMeshFloorOnLeg(map, route, toPoint, from, candidate, out float meshFloor))
+                        {
+                            rejectReason = "NoGroundSupport";
+                            return null;
+                        }
+
+                        best = meshFloor;
                     }
                 }
             }
@@ -1001,8 +1009,15 @@ internal static partial class PlayerbotMotion
             if (map.Collision.ClassifyUnderMap(resolved.X, resolved.Y, resolved.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
                 && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
             {
-                rejectReason = "NoGroundSupport";
-                return null;
+                // Under the terrain with no model or mesh floor in the under-map window: a mesh polygon within the leg's own heights
+                // (a WMO cave or tunnel below the terrain, the chord of a steep leg inside it) is the floor the route was planned on.
+                if (!TryMeshFloorOnLeg(map, route, toPoint, from, resolved, out float meshFloor))
+                {
+                    rejectReason = "NoGroundSupport";
+                    return null;
+                }
+
+                resolved = resolved with { Z = meshFloor + 0.05f };
             }
 
             return resolved;
@@ -1012,6 +1027,29 @@ internal static partial class PlayerbotMotion
         if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
         return draped;
+    }
+
+    /// <summary>How far above and below the leg's own heights a mesh polygon still counts as the leg's floor (<see cref="TryMeshFloorOnLeg"/>).</summary>
+    internal const float MeshLegFloorSlackYards = 2f;
+
+    /// <summary>
+    /// Whether the navigation mesh has a polygon straight under or over <paramref name="at"/> whose surface lies within the leg's own
+    /// height range: from <paramref name="from"/> to the corner at <paramref name="toPoint"/>, widened by
+    /// <see cref="MeshLegFloorSlackYards"/> (<see cref="MapCollision.TryGetMeshFloor"/>, nearest to the point's own height). The
+    /// mesh-route ground check asks this before it refuses a point for <c>NoGroundSupport</c>: the leg is a chord between corners, so
+    /// on a steep leg or inside a model below the terrain the point can lie far from every model floor while the mesh it was planned on
+    /// has a polygon right there. False when the map has no mesh, the tile is not loaded, or no polygon lies in that range.
+    /// </summary>
+    private static bool TryMeshFloorOnLeg(Map map, PlayerbotRoute route, int toPoint, Vector3 from, Vector3 at, out float height)
+    {
+        height = 0f;
+        if (route.Points.Count == 0 || !at.IsFinite()) return false;
+        float legEndZ = route.Points[Math.Clamp(toPoint, 0, route.Points.Count - 1)].Z;
+        float low = MathF.Min(from.Z, legEndZ) - MeshLegFloorSlackYards;
+        float high = MathF.Max(from.Z, legEndZ) + MeshLegFloorSlackYards;
+        if (!float.IsFinite(low) || !float.IsFinite(high)) return false;
+        float z = Math.Clamp(at.Z, low, high);
+        return map.Collision.TryGetMeshFloor(at.X, at.Y, z, z - low, high - z, out height) && height >= low && height <= high;
     }
 
     private static string MoveModeOf(PlayerbotRoute route, int fromPoint, int toPoint)
