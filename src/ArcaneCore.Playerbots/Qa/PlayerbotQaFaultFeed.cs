@@ -69,7 +69,7 @@ internal sealed class PlayerbotQaFaultFeed(
             foreach (FaultSnapshot fault in ledger.Snapshot())
             {
                 if (fault.Id == FaultLedger.OverflowId || string.Equals(fault.Site, BotSite, StringComparison.Ordinal) || IsConnectionNoise(fault)
-                    || EnvironmentSites.Contains(fault.Site))
+                    || EnvironmentSites.Contains(fault.Site) || IsRetryAttempt(fault))
                 {
                     continue;
                 }
@@ -174,6 +174,13 @@ internal sealed class PlayerbotQaFaultFeed(
         => string.Equals(fault.Site, "session", StringComparison.Ordinal)
             && fault.ExceptionType is "System.Net.Sockets.SocketException" or "System.IO.IOException" or "System.IO.EndOfStreamException"
                 or "System.ObjectDisposedException" or "System.OperationCanceledException" or "System.Threading.Tasks.TaskCanceledException";
+
+    /// <summary>
+    /// One failed attempt of a write that is retried (<c>writequeue.keyed-attempt</c>): the write's episode records its own fault when the retries run out
+    /// (<c>writequeue.keyed</c>), with the same exception, so filing every attempt would file one episode twice (and a busy database that clears on the next try once per attempt).
+    /// The attempts stay in the ledger and its counts.
+    /// </summary>
+    internal static bool IsRetryAttempt(FaultSnapshot fault) => fault.Site.EndsWith("-attempt", StringComparison.Ordinal);
 
     private static QaSignal SignalOf(FaultSnapshot fault, DateTimeOffset at, long occurrences) => new()
     {
