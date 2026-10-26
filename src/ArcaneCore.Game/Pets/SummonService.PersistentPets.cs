@@ -172,9 +172,12 @@ public sealed partial class SummonService
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("pet.persistence", ex);
-                AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
-                _logger.LogWarning(ex, "previous persistent pet write failed for character {CharacterId}; continuing with abandon delete", characterId);
+                if (ex is not OperationCanceledException)
+                {
+                    FaultLedger.Shared.Record("pet.persistence", ex);
+                    AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
+                    _logger.LogFault(LogLevel.Warning, "pet-persistence", ex, "previous persistent pet write failed for character {CharacterId}; continuing with abandon delete", characterId);
+                }
             }
 
             if (retry)
@@ -299,24 +302,28 @@ public sealed partial class SummonService
         try
         {
             // The tail slot above fixed the order; the store call itself runs on the thread pool, never on the caller.
-            await Task.Run(() => WriteSnapshotAsync(prior, snapshot, cancellationToken)).ConfigureAwait(false);
+            bool wrote = await Task.Run(() => WriteSnapshotAsync(prior, snapshot, cancellationToken)).ConfigureAwait(false);
             lock (_cacheGate)
             {
                 if (ReferenceEquals(_retained.GetValueOrDefault(snapshot.CharacterId), snapshot))
                 {
                     _retained.Remove(snapshot.CharacterId);
                 }
-                // A different pet's row replaced the one a failed delete targeted, so that delete must not run again.
-                _failedDeletes.Remove(snapshot.CharacterId);
+                if (wrote)
+                {
+                    // A different pet's row replaced the one a failed delete targeted, so that delete must not run again.
+                    _failedDeletes.Remove(snapshot.CharacterId);
+                }
             }
             done.SetResult();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             if (ex is not OperationCanceledException)
             {
                 FaultLedger.Shared.Record("pet.persistence", ex);
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
+                _logger.LogFault("pet-persistence", ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId);
             }
             lock (_cacheGate)
             {
@@ -334,7 +341,8 @@ public sealed partial class SummonService
     private bool IsAbandonedLocked(PersistentPetSnapshot snapshot)
         => _abandonedPets.TryGetValue(snapshot.CharacterId, out uint petNumber) && petNumber == snapshot.PetNumber;
 
-    private async Task WriteSnapshotAsync(Task prior, PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+    /// <returns>True when a store write ran (the character_pet row or a detached row was written); false when nothing was written.</returns>
+    private async Task<bool> WriteSnapshotAsync(Task prior, PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
     {
         try
         {
@@ -342,31 +350,38 @@ public sealed partial class SummonService
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pet.persistence", ex);
-            AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
-            // A failed predecessor is retained (or superseded by this snapshot) and logged by its caller; it must not
-            // poison the next authoritative snapshot for this character.
-            _logger.LogWarning(ex, "previous persistent pet save failed for character {CharacterId}; continuing with newer state", snapshot.CharacterId);
+            // A failed predecessor is retained (or superseded by this snapshot); it must not poison the next authoritative
+            // snapshot for this character.
+            if (ex is not OperationCanceledException)
+            {
+                FaultLedger.Shared.Record("pet.persistence", ex);
+                AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
+                _logger.LogFault(LogLevel.Warning, "pet-persistence", ex, "previous persistent pet save failed for character {CharacterId}; continuing with newer state", snapshot.CharacterId);
+            }
         }
         bool abandoned;
         lock (_cacheGate) abandoned = IsAbandonedLocked(snapshot);
         if (abandoned)
         {
-            return; // the pet was deleted while this save waited: never write it back
+            return false; // the pet was deleted while this save waited: never write it back
         }
         if (!snapshot.IsCurrent && SaveDetachedPersistence is { } detachedSave)
         {
             await detachedSave(snapshot, cancellationToken).ConfigureAwait(false);
+            return true;
         }
-        else if (snapshot.IsCurrent && SavePersistence is { } save)
+        if (snapshot.IsCurrent && SavePersistence is { } save)
         {
             await save(snapshot, cancellationToken).ConfigureAwait(false);
+            return true;
         }
-        else if (Persistence is { } store)
+        if (Persistence is { } store)
         {
             if (snapshot.IsCurrent) await store.SaveCurrentAsync(snapshot, cancellationToken).ConfigureAwait(false);
             else await store.SaveDetachedAsync(snapshot, cancellationToken).ConfigureAwait(false);
+            return true;
         }
+        return false;
     }
 
     /// <summary>

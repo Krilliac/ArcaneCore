@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
@@ -16,7 +17,7 @@ public sealed class PetStableTests
     private static readonly TimeSpan HangBound = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Stands in for the world thread: the controller's store work runs on the thread pool and posts its continuation here, and the test
+    /// Stands in for the world thread: the controller's store work (loads and writes) runs on the thread pool and posts its continuation here, and the test
     /// runs it on its own thread while it waits (so the assertions only ever see settled state; the wait is a hang bound, not a timing).
     /// </summary>
     private sealed class WorldPump
@@ -45,6 +46,7 @@ public sealed class PetStableTests
         public PersistentPetSnapshot? Current { get; set; }
         public bool Fail { get; set; }
         public List<string>? Log { get; set; }
+        public Task? UnstableGate { get; set; }
 
         public Task<PetStableState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.FromResult(new PetStableState(Slots, Stabled.Select(p => new StabledPet(p.Key, p.Value)).ToArray()));
@@ -65,14 +67,15 @@ public sealed class PetStableTests
             return Task.CompletedTask;
         }
 
-        public Task<PersistentPetSnapshot?> UnstableAsync(int characterId, uint petNumber, PersistentPetSnapshot? active, CancellationToken cancellationToken = default)
+        public async Task<PersistentPetSnapshot?> UnstableAsync(int characterId, uint petNumber, PersistentPetSnapshot? active, CancellationToken cancellationToken = default)
         {
+            if (UnstableGate is { } gate) await gate.ConfigureAwait(false);
             var hit = Stabled.FirstOrDefault(p => p.Value.PetNumber == petNumber);
-            if (hit.Value is null) return Task.FromResult<PersistentPetSnapshot?>(null);
+            if (hit.Value is null) return null;
             Stabled.Remove(hit.Key);
             if (active is not null) Stabled[hit.Key] = active with { IsCurrent = false };
             Current = hit.Value with { IsCurrent = true };
-            return Task.FromResult<PersistentPetSnapshot?>(Current);
+            return Current;
         }
     }
 
@@ -318,6 +321,8 @@ public sealed class PetStableTests
         Assert.Empty(store.Stabled);
 
         // Let the stable's load and write run as far as they can while the save is still gated: they must still be waiting behind it.
+        // A negative cannot be awaited for exactly; this delay can only make the check weaker on a starved pool (never a false failure),
+        // and the exact ordering is asserted below once the gate opens.
         await Task.Delay(200);
         await pump.UntilAsync(() => true);
         lock (log) Assert.Equal(["save-begin"], log);
@@ -357,7 +362,7 @@ public sealed class PetStableTests
         {
             if (Volatile.Read(ref storageDown)) return Task.FromException(new IOException("database is locked"));
             Interlocked.Increment(ref deletesAfterRecovery);
-            store.Current = null; // what the store does: DeleteAsync removes every row of the character
+            store.Current = null; // what the store does: DeleteAsync removes the character_pet row
             return Task.CompletedTask;
         };
 
@@ -394,6 +399,8 @@ public sealed class PetStableTests
 
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unstableGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.UnstableGate = unstableGate.Task;
         int calls = 0;
         int deletesThatSucceeded = 0;
         kit.Service.DeletePersistence = async (_, _) =>
@@ -416,7 +423,14 @@ public sealed class PetStableTests
         stable.HandleUnstable(hunter, StableMaster, 500); // U: queued behind D, and behind nothing the barrier sees
         Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgStableResult);
 
-        release.SetResult();
+        Task unstableTail = SaveTail(kit.Service, 1);
+        release.SetResult(); // D fails; the barrier then queues its delete retry R behind U, whose store write is still gated
+        while (ReferenceEquals(SaveTail(kit.Service, 1), unstableTail))
+        {
+            await Task.Delay(1).WaitAsync(HangBound); // polls for R's queue slot: a state, not a timing
+        }
+
+        unstableGate.SetResult(); // only now may U finish (and clear the owed delete), so R is guaranteed to have been queued first
         await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgStableResult) && barrier.IsCompleted);
         await barrier.WaitAsync(HangBound);
         await kit.Service.StopAsync().WaitAsync(HangBound);
@@ -426,6 +440,14 @@ public sealed class PetStableTests
         Assert.NotNull(store.Current);
         Assert.True(kit.Service.TryGetCachedCurrentPet(hunter, out PersistentPetSnapshot cached));
         Assert.Equal(500u, cached.PetNumber);
+    }
+
+    /// <summary>The current tail of a character's pet write queue (a private seam; the test needs to know when a retry has taken its slot).</summary>
+    private static Task SaveTail(SummonService service, int characterId)
+    {
+        var tails = (Dictionary<int, Task>)typeof(SummonService).GetField("_saveTails", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        var gate = (Lock)typeof(SummonService).GetField("_cacheGate", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        using (gate.EnterScope()) return tails[characterId];
     }
 
     private static List<StableResult> Results(FakeSession session)

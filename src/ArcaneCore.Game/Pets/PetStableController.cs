@@ -356,7 +356,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         {
             FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
-            _logger.LogError(ex, "pet stable load failed for character {CharacterId}", id);
+            _logger.LogFault("pet-stable", ex, "pet stable load failed for character {CharacterId}", id);
         }
 
         Post(() =>
@@ -401,7 +401,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         {
             FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
-            _logger.LogError(ex, "pet stable write failed for character {CharacterId}", id);
+            _logger.LogFault("pet-stable", ex, "pet stable write failed for character {CharacterId}", id);
         }
 
         Post(() =>

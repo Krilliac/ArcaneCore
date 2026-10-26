@@ -49,6 +49,24 @@ public sealed class PersistentPetOffThreadTests
     }
 
     [Fact]
+    public async Task QueueSerializedWriteAsync_DoesNotRunTheWriteOnTheCallingThread()
+    {
+        using PetTestKit kit = new();
+        int callerThread = Environment.CurrentManagedThreadId;
+        int writeThread = -1;
+
+        int result = await kit.Service.QueueSerializedWriteAsync(1, _ =>
+        {
+            writeThread = Environment.CurrentManagedThreadId;
+            return Task.FromResult(7);
+        }).WaitAsync(HangBound);
+
+        Assert.Equal(7, result);
+        Assert.NotEqual(-1, writeThread);
+        Assert.NotEqual(callerThread, writeThread); // an idle queue used to run the stable's store call inline on the world thread
+    }
+
+    [Fact]
     public async Task QueueDeletePet_DoesNotCallTheStoreOnTheCallingThread()
     {
         (PetTestKit kit, Player player) = HunterWithPet();
