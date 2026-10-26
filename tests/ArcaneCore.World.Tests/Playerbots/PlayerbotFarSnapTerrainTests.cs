@@ -26,7 +26,7 @@ public sealed class PlayerbotFarSnapTerrainTests : RealTerrainNavigationTestBase
 
     /// <summary>
     /// All five goals are far, in the bot's own component, and give no verdict (goal component -1), so no refused plan toward them reads
-    /// as no-path-connected. Four are a vertical miss; the third (6783.5,-4429.1,737.3) lies on a steep slope beside the walkable polygon the bot
+    /// as no-path-connected. Four are a vertical miss (more than 5 yd off); the third (6783.5,-4429.1,737.3) lies on a steep slope beside the walkable polygon the bot
     /// stands on, so its walking hit is 3.2 yd off horizontally while a lookup with nothing excluded finds the slope 0.17 yd away.
     /// </summary>
     [RealTerrainBotFact]
@@ -51,7 +51,7 @@ public sealed class PlayerbotFarSnapTerrainTests : RealTerrainNavigationTestBase
             });
             output.WriteLine($"goal {goal} (bot {bot}): bot region {seen.from} comp {seen.own}, goal region {seen.to} comp {seen.goalComponent} far={seen.far}; "
                 + $"IsUnreachableOnFoot={seen.unreachable} (components {seen.fromComponent}, {seen.toComponent})");
-            Assert.True(seen.far, $"sample {sample} is a vertical miss");
+            Assert.True(seen.far, $"sample {sample} is far (vertical miss, or on a steep slope for sample 2)");
             Assert.Equal(seen.own, seen.goalComponent);
             Assert.False(seen.unreachable);
             Assert.Equal(-1, seen.toComponent);
