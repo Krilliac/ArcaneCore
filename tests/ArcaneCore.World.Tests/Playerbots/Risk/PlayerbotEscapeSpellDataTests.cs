@@ -1,6 +1,8 @@
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.ClientData;
 using Xunit;
@@ -140,6 +142,30 @@ public sealed class PlayerbotEscapeSpellDataTests
                 .Any(e => e.SelfSpeed > 1f || e.VictimSpeed < 1f);
             Assert.True(any, $"{name} is a speed escape but no rank derives a speed");
         }
+    }
+
+    /// <summary>
+    /// Every slow the kite model lists for a class (<see cref="PlayerbotKiteModel.SlowsOf"/>) is in Spell.dbc and, for some rank, holds
+    /// or slows by its own data (a root, stun or fear with a duration, or a negative speed aura), so no class lists a name that never
+    /// derives an effect. Which classes the model covers is the model's table; what each spell does is only ever read from the rows.
+    /// </summary>
+    [RealClientDbcFact]
+    public void EverySlowTheKiteListsForAClass_DerivesAnEffectForSomeRank()
+    {
+        SpellDbcContent content = Content.Value;
+        int checkedNames = 0;
+        foreach (Class playerClass in Enum.GetValues<Class>())
+        {
+            foreach (string name in PlayerbotKiteModel.SlowsOf(playerClass))
+            {
+                SpellTemplateRow[] rows = [.. content.Spells.Where(r => string.Equals(r.SpellName, name, StringComparison.Ordinal))];
+                Assert.True(rows.Length > 0, $"{name} ({playerClass}) is not in Spell.dbc");
+                Assert.True(rows.Any(r => PlayerbotKiteModel.IsSlow(name, ToInfo(r))), $"{name} ({playerClass}) derives no slow for any rank");
+                checkedNames++;
+            }
+        }
+
+        Assert.True(checkedNames >= 10, $"only {checkedNames} slow names were checked");
     }
 
     private static readonly Lazy<SpellDbcContent> Content = new(() => SpellDbcImporter.ReadDirectory(RealClientDbcFactAttribute.DbcDirectory));

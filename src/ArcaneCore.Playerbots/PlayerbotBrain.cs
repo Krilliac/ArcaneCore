@@ -181,7 +181,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotKite? _kite;
 
     /// <summary>The kite of this brain's fights (<see cref="PlayerbotKite"/>; <c>World:Playerbots:Combat:Kite</c>).</summary>
-    private PlayerbotKite Kite => _kite ??= new PlayerbotKite(_session, _options, _combatSpells);
+    internal PlayerbotKite Kite => _kite ??= new PlayerbotKite(_session, _options, _combatSpells);
     private readonly Combat.PlayerbotInvincibleWatch _invincibleWatch = new();
     private PlayerbotPvpFight? _pvpFight;
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);

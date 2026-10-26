@@ -230,6 +230,7 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.Scenarios.StepTimeoutSeconds = 601);
         AssertInvalid(o => o.Party = null!);
         AssertInvalid(o => o.Risk = null!);
+        AssertInvalid(o => o.Combat = null!);
         AssertInvalid(o => o.Opportunities = null!);
         AssertInvalid(o => o.Chat = null!);
         AssertInvalid(o => o.Groups = null!);
@@ -622,6 +623,20 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid<PlayerbotRiskOptions>(o => o.RecoverHealthPct = 5f, o => o.Validate());
         AssertInvalid<PlayerbotRiskOptions>(o => o.DangerMemorySeconds = -1, o => o.Validate());
         AssertInvalid<PlayerbotRiskOptions>(o => o.DeathLoopMemorySeconds = -1, o => o.Validate());
+
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = 1f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = 96f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = float.NaN, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.StepYards = 3f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.StepYards = 21f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 0, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 33, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite = null!, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.OpenerHoldMs = -1, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.OpenerHoldMs = 6001, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.MasterThreatPct = 49f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.MasterThreatPct = 126f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank = null!, o => o.Validate());
 
         AssertInvalid<PlayerbotSocialOptions>(o => o.Guilds = null!, o => o.Validate());
         AssertInvalid<PlayerbotSocialOptions>(o => o.GuildChat = null!, o => o.Validate());
