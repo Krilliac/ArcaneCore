@@ -107,6 +107,12 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool PartialToGoal { get; set; }
 
+    /// <summary>
+    /// A route towards the landing beside a lift (<see cref="PlayerbotElevator.TryBegin"/>, a bot beyond <see cref="ElevatorNetwork.NearLiftYards"/>
+    /// of it), not towards the goal the caller asked for: where it ends says nothing about whether that goal is reachable.
+    /// </summary>
+    internal bool ToLiftLanding { get; set; }
+
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
 

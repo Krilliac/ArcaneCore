@@ -506,15 +506,23 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
-  reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
-  (2000), nor farther than `ElevatorNetwork.NearLiftYards` (150): a trip is the local ride, and begun from hundreds of yards out its
-  approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, so the walk ended
-  after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482: six failures 889 to 1473 yards
-  out, inside `MaxRouteYards`). Beyond 150 yards `TryBegin` hands the caller a plain route to the landing beside the lift's stop (when
-  `PlanToward` finds one) and the trip begins on a later think, once the bot is near (all lifts share the rule). This moves the approach
-  out of the trip; it does not make the canyon floor of Thousand Needles any easier to cross, so a bot there whose plan is refused is
-  now reported by its caller as an unreachable goal instead of as `bot-elevator/trip-failed`. The "in the shaft pit" failures at the lift
-  itself and the Undercity ones are not touched. A failed ride is not tried again for 10 minutes.
+  reach, however far the lift is (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from
+  the lift than `MaxRouteYards` (2000), nor farther than `ElevatorNetwork.NearLiftYards` (150): a trip is the local ride, and begun from
+  far out its approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, so the
+  walk ended after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). Of the five
+  evidence lines in the issue, measured from the lift's coordinates it names: three began 2057 to 5453 yards out (past `MaxRouteYards`),
+  one 1181 yards out (the Great Lift, -3557.6,-2240.7) and one 450 yards out (the Undercity lift, 1877.4,-161.6). Between 150 and 2000
+  yards, when no direct walk reaches the goal and the lift is not backed off, `TryBegin` hands the caller a route towards the landing beside
+  the nearest car that `PlanToward` finds a route to (`PlayerbotRoute.ToLiftLanding`; the landing of each car is cached per map, a refused
+  approach is not planned again for 5 s) and the trip begins on a later think, once the bot is near (all lifts share the rule). The route
+  must end within 150 yards of the lift or at least 30 yards nearer it than the bot, so a leg that gains nothing is not handed back for
+  ever. Callers walk it as they walk a direct route, skip the flight-path and held-off checks as they do for one, and the explore cell is
+  not blocked because it ends away from the goal. When the approach is refused or its tiles are still being read the caller plans the goal
+  itself as before. This moves the approach out of the trip; it does not make the canyon floor of Thousand Needles any easier to cross, so
+  a bot there whose approach is refused is reported by its caller as an unreachable goal instead of as `bot-elevator/trip-failed`.
+  Undercity starts more than 150 yards from the lift (the one in the evidence is about 450) now take this approach route instead of a
+  trip; that change is not verified against the live data. The "in the shaft pit" failures at the lift itself and the Thunder Bluff
+  lifts (not analysed) are not addressed. A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a

@@ -4,6 +4,8 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
@@ -228,12 +230,13 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
 
     /// <summary>
     /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>),
-    /// or farther than <see cref="ElevatorNetwork.NearLiftYards"/> (the live failures began 889 to 1473 yards out), began the trip with a
-    /// goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s
-    /// no-progress bound, failing the trip. It begins none until it is within <see cref="ElevatorNetwork.NearLiftYards"/>; then it does.
+    /// or farther than <see cref="ElevatorNetwork.NearLiftYards"/> (the Great Lift failure in the issue's evidence began 1181 yards out),
+    /// began the trip with a goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a
+    /// row or at the 60 s no-progress bound, failing the trip. It begins none until it is within <see cref="ElevatorNetwork.NearLiftYards"/>;
+    /// then it does.
     /// </summary>
     [Fact]
-    public async Task ABotBeyondOneRoutesReachOfTheLift_BeginsNoTrip_UntilItIsWithinReach()
+    public async Task ABotBeyondOneRoutesReachOfTheLift_BeginsNoTrip_UntilItIsNearTheLift()
     {
         await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
         PlayerbotOptions options = Options();
@@ -244,7 +247,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
             $"a trip began {far:F0} yards from the lift");
         Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
 
-        // Inside one route's reach but beyond the lift's near range (the 889 to 1473 yard failures of #1482): no trip either.
+        // Inside one route's reach but beyond the lift's near range (the 1181 yard failure of #1482): no trip either.
         float mid = ElevatorNetwork.NearLiftYards + 850f;
         Assert.True(mid < options.MaxRouteYards, "the check proves nothing: the mid distance is not inside MaxRouteYards");
         await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
@@ -255,6 +258,184 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         await world.PlaceAsync(new Vector3(lift.Centre.X + (ElevatorNetwork.NearLiftYards - 50f), lift.Centre.Y, ElevatorTestWorld.TopFloor));
         Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
             "no trip began within reach of the lift");
+    }
+
+    /// <summary>
+    /// A bot beyond <see cref="ElevatorNetwork.NearLiftYards"/> but inside one route's reach, whose goal the mesh does not join, begins no
+    /// trip and is handed the route to the landing beside a car at its level (<see cref="PlayerbotRoute.ToLiftLanding"/>), which ends at
+    /// that landing.
+    /// </summary>
+    [Fact]
+    public async Task ABotFarFromTheLift_IsHandedTheRouteToTheLandingBesideACar()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        options.MaxPathPoints = 4096; // one route holds the whole way (the default cuts a leg at 126 yards)
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float mid = ElevatorNetwork.NearLiftYards + 850f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        (bool began, PlayerbotRoute? walk, float fromLanding) = await world.OnWorldAsync(() =>
+        {
+            bool begun = PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options, out PlayerbotRoute? route);
+            Map map = world.Player.Map!;
+            float nearest = float.PositiveInfinity;
+            foreach (ElevatorCar car in lift.Cars)
+            {
+                if (route is { Points.Count: > 0 } && PlayerbotElevator.LandingBeside(map, car.High, car.High) is { } landing)
+                    nearest = MathF.Min(nearest, Vector2.Distance(new(route.Points[^1].X, route.Points[^1].Y), new(landing.X, landing.Y)));
+            }
+
+            return (begun, route, nearest);
+        });
+        Assert.False(began, "a trip began beyond the lift's near range");
+        Assert.NotNull(walk);
+        Assert.True(walk.ToLiftLanding, "the route is not marked as the way to the lift");
+        Assert.True(fromLanding <= PlayerbotElevator.ReachedYards, $"the route ends {fromLanding:F1} yards from the nearest landing");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+    }
+
+    /// <summary>
+    /// A goal the mesh joins to the bot is walked to directly, however far the lift is: the far-lift approach must not take it over. The
+    /// mesh here joins everything (a straight line), so the goal across the cliff is reachable on foot.
+    /// </summary>
+    [Fact]
+    public async Task AGoalTheMeshJoins_IsWalkedDirectly_NotViaTheFarLift()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float mid = ElevatorNetwork.NearLiftYards + 850f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(pathfinder: new JoiningPathfinder()));
+        (bool began, PlayerbotRoute? walk) = await world.OnWorldAsync(() =>
+            (PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options, out PlayerbotRoute? route), route));
+        Assert.False(began, "a trip began to a goal the mesh joins");
+        Assert.NotNull(walk);
+        Assert.False(walk.ToLiftLanding, "the goal the mesh joins was sent to the lift's landing");
+        Assert.True(Vector2.Distance(new(walk.Points[^1].X, walk.Points[^1].Y), new(ElevatorTestWorld.CanyonStart.X, ElevatorTestWorld.CanyonStart.Y))
+            <= PlayerbotElevator.ReachedYards, "the direct route does not end at the goal");
+    }
+
+    /// <summary>A lift that failed lately (its backoff) is not walked to either: the caller's own deferral for a held-off lift applies.</summary>
+    [Fact]
+    public async Task AHeldOffLift_IsNotApproachedFromFarOut()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float mid = ElevatorNetwork.NearLiftYards + 850f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        PlayerbotRoute? control = await world.OnWorldAsync(() =>
+        {
+            PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options, out PlayerbotRoute? route);
+            return route;
+        });
+        Assert.NotNull(control); // the approach is planned before the lift fails
+        await world.OnWorldAsync(() => PlayerbotTransitBackoff.Fail(world.Player, TransitKind.Lift, lift.Key, world.Host.World.NowMs, options));
+        (bool began, PlayerbotRoute? walk) = await world.OnWorldAsync(() =>
+            (PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options, out PlayerbotRoute? route), route));
+        Assert.False(began);
+        Assert.Null(walk);
+        Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.CanyonStart)));
+    }
+
+    /// <summary>
+    /// An approach route that ends far from the lift and gains no ground towards it is refused (a caller counts a leg of 20 yards as
+    /// progress, so it would be handed back and walked for ever), and the refusal is remembered for <see cref="PlayerbotElevator.ApproachRetryMs"/>:
+    /// the next plans of the same bot do not query the landing paths again.
+    /// </summary>
+    [Fact]
+    public async Task AnApproachThatGainsNothing_IsRefused_AndNotPlannedAgainAtOnce()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float mid = ElevatorNetwork.NearLiftYards + 850f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + mid, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        var stub = new StubPathfinder();
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(pathfinder: stub));
+
+        async Task<(PlayerbotRoute? Walk, int Queries)> PlanAsync()
+        {
+            int before = stub.Calls;
+            PlayerbotRoute? walk = await world.OnWorldAsync(() =>
+            {
+                Assert.False(PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options, out PlayerbotRoute? route));
+                return route;
+            });
+            return (walk, stub.Calls - before);
+        }
+
+        (PlayerbotRoute? first, int firstQueries) = await PlanAsync();
+        Assert.Null(first);
+        (PlayerbotRoute? second, int secondQueries) = await PlanAsync();
+        Assert.Null(second);
+        Assert.True(secondQueries < firstQueries, $"the second plan queried {secondQueries} paths, the first {firstQueries}: the refusal was not remembered");
+        await world.AdvanceAsync(PlayerbotElevator.ApproachRetryMs + 100);
+        (PlayerbotRoute? third, int thirdQueries) = await PlanAsync();
+        Assert.Null(third);
+        Assert.Equal(firstQueries, thirdQueries);
+    }
+
+    /// <summary>
+    /// The caller's side (#1482): a bot on the canyon floor 1000 yards from the Great Lift whose destination is up on the plateau walks
+    /// towards the lift (no trip on the first think), and the trip begins once it is within <see cref="ElevatorNetwork.NearLiftYards"/>.
+    /// </summary>
+    [Fact]
+    public async Task ADestinationsBotFarFromTheLift_WalksTowardsIt_ThenBeginsTheTrip()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(creatures: RatchetEnder());
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float start = ElevatorNetwork.NearLiftYards + 850f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X - start, lift.Centre.Y, ElevatorTestWorld.BottomFloor));
+        await world.OnWorldAsync(() => world.Player.Level = 10);
+        var destinations = new PlayerbotWorldDestinations(world.Session, options);
+        Assert.True(await world.TickAsync(() => destinations.Update(world.Player, Dizzywig, 100)), "the destination attempted nothing");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotMotion.IsActive(world.Player)), "the bot does not walk towards the lift");
+
+        ElevatorTrip? trip = null;
+        float atBegin = float.PositiveInfinity;
+        for (int step = 0; step < 6_000 && trip is null; step++)
+        {
+            (trip, atBegin) = await world.TickAsync(() =>
+            {
+                destinations.Update(world.Player, Dizzywig, 100);
+                return (PlayerbotElevator.TripOf(world.Player), Vector2.Distance(new(world.Player.X, world.Player.Y), lift.Centre));
+            });
+        }
+
+        Assert.NotNull(trip);
+        Assert.Equal(ElevatorLevel.Low, trip.From);
+        Assert.True(atBegin <= ElevatorNetwork.NearLiftYards, $"the trip began {atBegin:F0} yards from the lift");
+    }
+
+    /// <summary>The mesh of a world that joins everything: a straight line.</summary>
+    private sealed class JoiningPathfinder : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => PathResult.StraightLine(start, end, PathType.Normal);
+    }
+
+    /// <summary>A mesh that answers every query with ten yards of the way (an incomplete path), counting its queries.</summary>
+    private sealed class StubPathfinder : IPathfinder
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Interlocked.Increment(ref _calls);
+            Vector3 way = end - start;
+            if (way.Length() < 1f) return PathResult.None(start);
+            return new PathResult(PathType.Incomplete, [start, start + (Vector3.Normalize(way) * 10f)]);
+        }
     }
 
     /// <summary>
