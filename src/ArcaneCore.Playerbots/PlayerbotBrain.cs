@@ -149,6 +149,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotExploreAtlas? _exploreSearchAtlas;
     private FactionTemplateCatalog? _exploreSearchFactions;
     private FactionTemplateRecord? _exploreSearchSelf;
+    private ArcaneCore.Game.Reputation.INpcReactionSource? _exploreSearchReactions;
     private PlayerbotHomeArea? _exploreSearchHome;
     private IReadOnlyList<PlayerbotHazard> _exploreSearchHazards = [];
     private uint _exploreSearchMap;
@@ -3810,6 +3811,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreSearchAtlas = atlas;
             _exploreSearchFactions = factions;
             _exploreSearchSelf = self;
+            _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
+                as ArcaneCore.Game.Reputation.INpcReactionSource;
             _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
             _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
             _exploreSearchMap = mapId;
@@ -3888,11 +3891,35 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         FactionTemplateRecord? npc = _exploreSearchFactions?.Find(faction);
         FactionTemplateRecord? self = _exploreSearchSelf;
         if (npc is null || self is null) return false;
-        // FactionCombatHooks.ReactionTo: hostility wins over friendly bits in each direction. A player may attack a
-        // neutral creature, but CanAttack refuses when either direction's resulting reaction is Friendly.
+        return ExploreAttackable(_exploreSearchPlayer, npc, self, _exploreSearchReactions);
+    }
+
+    /// <summary>
+    /// Whether the bot may attack a creature of faction template <paramref name="npc"/>: its reputation reaction
+    /// (<see cref="ArcaneCore.Game.Reputation.INpcReactionSource"/>, as <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/> and
+    /// <see cref="PlayerbotQuestGoals.IsKillable"/> judge it) is below Friendly. The template alone says nothing of standing: Timbermaw
+    /// Hold's creatures read as a hostile faction to the bot's template, but a bot with Timbermaw reputation is not their enemy (issues
+    /// #1478 and #1479). Without a reaction source, or when it cannot resolve this pair, the templates decide: hostility wins over the
+    /// friendly bits in each direction (<c>FactionCombatHooks.ReactionTo</c>), and a player may attack a neutral creature, but CanAttack
+    /// refuses when either direction's resulting reaction is Friendly.
+    /// </summary>
+    internal static bool ExploreAttackable(Player? player, FactionTemplateRecord npc, FactionTemplateRecord self,
+        ArcaneCore.Game.Reputation.INpcReactionSource? reactions)
+    {
+        if (reactions is not null && player is not null
+            && reactions.TryGetNpcReaction(player, npc, self, out ArcaneCore.Game.Reputation.ReputationRank reaction))
+            return reaction < ArcaneCore.Game.Reputation.ReputationRank.Friendly;
         bool friendly = self.IsFriendlyTo(npc) || npc.IsFriendlyTo(self);
         return !friendly || self.IsHostileTo(npc) && npc.IsHostileTo(self);
     }
+
+    /// <summary>
+    /// Whether a creature with <paramref name="npcFlags"/> offers a service (gossip, quests or a vendor's wares): not a target for an
+    /// exploring bot, which walks to creatures to fight. The Timbermaw Hold vendors and quest givers drew bots into the tunnel
+    /// (issues #1478 and #1479).
+    /// </summary>
+    internal static bool IsExploreServiceNpc(uint npcFlags)
+        => (npcFlags & (uint)(ArcaneCore.Game.Npc.NpcFlags.Gossip | ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Vendor)) != 0;
 
     private bool ExploreHostileFaction(uint faction)
         => _exploreSearchFactions?.Find(faction) is { } npc && _exploreSearchSelf is { } self && npc.IsHostileTo(self);
@@ -3928,7 +3955,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
             return false;
         CreatureTemplate? template = content.FindTemplate(spawn.Entry);
-        if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
+        if (template is null || IsExploreServiceNpc(template.NpcFlags) || !PlayerbotWorldDestinations.IsPresent(player, spawn)
             || _exploreSearchHome is { } home && home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
