@@ -22,6 +22,12 @@ public sealed class PlayerbotRiskOptions
     public float RetreatHealthPct { get; set; } = 35f;
 
     /// <summary>
+    /// A bot that spends mana and has less than this percentage left (0..100; 0 turns it off) recovers before its next pull when the
+    /// fight would be fine at full health and mana, instead of pulling with nothing to cast.
+    /// </summary>
+    public float RestManaBelowPct { get; set; } = 35f;
+
+    /// <summary>
     /// A fight against a single enemy at or below this health percentage is nearly won and is not abandoned (0..60), unless the bot
     /// would die in less than half the time it needs to finish it.
     /// </summary>
@@ -56,6 +62,7 @@ public sealed class PlayerbotRiskOptions
         if (Check(RetreatHealthPct, 5, 95) is { } retreat) throw new InvalidOperationException($"{section}: RetreatHealthPct {retreat}");
         if (Check(NearlyWonHealthPct, 0, 60) is { } won) throw new InvalidOperationException($"{section}: NearlyWonHealthPct {won}");
         if (Check(RecoverHealthPct, 10, 100) is { } recover) throw new InvalidOperationException($"{section}: RecoverHealthPct {recover}");
+        if (Check(RestManaBelowPct, 0, 100) is { } restMana) throw new InvalidOperationException($"{section}: RestManaBelowPct {restMana}");
         if (DangerMemorySeconds is < 0 or > 86_400) throw new InvalidOperationException($"{section}: DangerMemorySeconds must be 0..86400.");
         if (DeathLoopMemorySeconds is < 0 or > 86_400) throw new InvalidOperationException($"{section}: DeathLoopMemorySeconds must be 0..86400.");
     }
