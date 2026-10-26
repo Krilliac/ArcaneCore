@@ -136,8 +136,15 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         Assert.True(shared is { Count: > 0 }, "no one walking component has a region at every through-route sample point: the tunnel is cut");
         int main = shared!.OrderByDescending(c => walking.ComponentPolygons(routeRegions.First(r => walking.ComponentOf(r) == c))).First();
 
+        bool cutRegion = false;
         foreach (int region in routeRegions.Where(r => walking.ComponentOf(r) == main).Distinct())
+        {
             output.WriteLine($"walking: route region {region}: articulation {walking.IsArticulation(region)}, joins large parts {walking.JoinsLargeParts(region, 500)}");
+            cutRegion |= walking.IsArticulation(region) && walking.JoinsLargeParts(region, 500);
+        }
+
+        // The gate run of e7254494a: three route regions are articulation regions joining large parts, which the L2 cut-region rule relies on.
+        Assert.True(cutRegion, "no region on the through route is an articulation region joining large parts");
 
         foreach ((float x, float y) in TimbermawOffRoute)
         {
@@ -154,6 +161,8 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         {
             HashSet<int> components = ComponentsAt(steep, finder, steepAllowed, x, y, []);
             output.WriteLine($"steep allowed: off route {x},{y}: components [{string.Join(", ", components.Order())}]; joins the Felwood mouth's: {components.Overlaps(mainSteep)}");
+            // The gate run of e7254494a: with steep polygons allowed 6957.6,-2044.4 joins the Felwood mouth's component and 6940,-2090 does not.
+            Assert.Equal(x == 6957.6f, components.Overlaps(mainSteep));
         }
     }
 
