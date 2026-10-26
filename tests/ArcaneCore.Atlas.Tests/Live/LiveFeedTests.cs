@@ -386,7 +386,7 @@ public sealed class LiveFeedTests
         await rig.Log.NextAsync(EventHub.Topics.LiveStatus);
 
         await server.WriteAsync(Wire.Frame(
-            0, 0, 1, Wire.Entity("0x1A", "player", -9462.66, 16.19, 57.05, "Nathan"), Wire.Entity("2B", "creature", -9400, 10, 55), Wire.Entity("3C", "bot", -9300, 5, 50)));
+            0, 0, 1, Wire.Entity("0x1A", "player", -9462.66, 16.19, 57.05, "Testplayer"), Wire.Entity("2B", "creature", -9400, 10, 55), Wire.Entity("3C", "bot", -9300, 5, 50)));
         JsonObject pushed = (await rig.Log.NextAsync(EventHub.Topics.LiveFrame))!.AsObject();
 
         Assert.Equal(1, pushed["seq"]!.GetValue<long>());
@@ -394,7 +394,7 @@ public sealed class LiveFeedTests
         Assert.Equal("1A", pushed["entities"]![0]!["g"]!.GetValue<string>());
         Assert.Equal(3, rig.Feed.Store.EntityCount);
         Assert.True(rig.Feed.Store.TryGetEntity(0x1A, out LiveEntity? player));
-        Assert.Equal("Nathan", player.Name);
+        Assert.Equal("Testplayer", player.Name);
         Assert.Equal(new WorldPoint(-9462.66, 16.19, 57.05), player.Position);
 
         JsonObject status = rig.Feed.Status();
@@ -1100,6 +1100,26 @@ public sealed class LiveFeedTests
         Assert.Null(stop.Data!["following"]);
         Assert.Null(rig.View.Current.FollowGuid);
         Assert.Equal(new WorldPoint(100, 200, 30), rig.View.Current.Camera.Target);
+    }
+
+    [Fact]
+    public async Task Follow_StopFromAUiThatDoesNotOwnTheFollow_ReportsTheFollowThatContinues()
+    {
+        await using var rig = new LiveRig();
+        rig.View.Patch(Obj("""{"follow":"1A"}"""), "ui:a");
+        rig.View.Patch(Obj("""{"follow":"2B"}"""), "ui:b");
+
+        JsonObject refused = rig.Feed.Follow(null, "ui:a");
+
+        Assert.Equal("2B", refused["following"]!.GetValue<string>());
+        Assert.Contains("owned by another session", refused["note"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("2B", rig.View.Current.FollowGuid);
+        Assert.Equal("ui:b", rig.View.FollowOrigin);
+
+        JsonObject stopped = rig.Feed.Follow(null, "ui:b");
+
+        Assert.Null(stopped["following"]);
+        Assert.Null(rig.View.Current.FollowGuid);
     }
 
     [Fact]

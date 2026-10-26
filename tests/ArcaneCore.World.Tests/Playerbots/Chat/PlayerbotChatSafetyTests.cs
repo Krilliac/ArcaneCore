@@ -44,7 +44,7 @@ public sealed class PlayerbotChatSafetyTests
 
         public PlayerbotChatSafetyOptions Safety => Options.Chat.Safety;
 
-        public Task<BotChatReply?> AnswerAsync(string text, ulong sender = 0x42, string name = "Nathan", int account = 0)
+        public Task<BotChatReply?> AnswerAsync(string text, ulong sender = 0x42, string name = "Testplayer", int account = 0)
             => Chat.AnswerAsync(ChatSamples.Ask(text, sender: sender, name: name, account: account));
 
         public ValueTask DisposeAsync() => Chat.DisposeAsync();
@@ -71,8 +71,8 @@ public sealed class PlayerbotChatSafetyTests
         Assert.Equal("Builtin", reply.Provider);
         Assert.Contains(reply.Text, PlayerbotChatTemplates.Lines["abuse"]);
         BotChatFlag flag = Assert.Single(rig.Chat.Safety.Flags());
-        Assert.Equal((category, BotChatFlagSource.Local, "Nathan", 0x42UL, 77, "Chatbot"), (flag.Category, flag.Source, flag.PlayerName, flag.PlayerGuid, flag.AccountId, flag.Bot));
-        Assert.Contains(rig.Log.Lines, l => l.Contains($"flagged {category} from Nathan", StringComparison.Ordinal));
+        Assert.Equal((category, BotChatFlagSource.Local, "Testplayer", 0x42UL, 77, "Chatbot"), (flag.Category, flag.Source, flag.PlayerName, flag.PlayerGuid, flag.AccountId, flag.Bot));
+        Assert.Contains(rig.Log.Lines, l => l.Contains($"flagged {category} from Testplayer", StringComparison.Ordinal));
         Assert.Equal(1, rig.Chat.Status().Safety.Flagged);
     }
 
@@ -120,7 +120,7 @@ public sealed class PlayerbotChatSafetyTests
         await using var rig = new Rig(chat => chat.Safety.StrikesBeforeCutoff = 1);
         BotChatReply reply = (await rig.AnswerAsync("i want to kill myself"))!;
         Assert.Empty(rig.Client.Calls);
-        Assert.Contains(reply.Text!.Replace("Nathan", "{player}", StringComparison.Ordinal), PlayerbotChatTemplates.Lines["safety.selfharm"]);
+        Assert.Contains(reply.Text!.Replace("Testplayer", "{player}", StringComparison.Ordinal), PlayerbotChatTemplates.Lines["safety.selfharm"]);
         Assert.Equal("SelfHarm", Assert.Single(rig.Chat.Safety.Flags()).Category);
         Assert.Equal("fake reply", (await rig.AnswerAsync("ok thanks"))!.Text); // not cut off
     }
@@ -129,9 +129,9 @@ public sealed class PlayerbotChatSafetyTests
     public async Task PersonalData_IsKeptFromTheProvider_WithACaution_AndNoStrike()
     {
         await using var rig = new Rig(chat => chat.Safety.StrikesBeforeCutoff = 1);
-        BotChatReply reply = (await rig.AnswerAsync("mail me at nathan.w@example.com"))!;
+        BotChatReply reply = (await rig.AnswerAsync("mail me at testplayer.w@example.com"))!;
         Assert.Empty(rig.Client.Calls);
-        Assert.Contains(reply.Text!.Replace("Nathan", "{player}", StringComparison.Ordinal), PlayerbotChatTemplates.Lines["safety.personal"]);
+        Assert.Contains(reply.Text!.Replace("Testplayer", "{player}", StringComparison.Ordinal), PlayerbotChatTemplates.Lines["safety.personal"]);
         BotChatFlag flag = Assert.Single(rig.Chat.Safety.Flags());
         Assert.Equal("PersonalData", flag.Category);
         Assert.Equal("mail me at [email]", flag.Excerpt); // the excerpt itself never holds the address
@@ -201,14 +201,14 @@ public sealed class PlayerbotChatSafetyTests
         await rig.AnswerAsync("kys");
         rig.Time.Advance(TimeSpan.FromMinutes(61)); // both strikes fall away
         await rig.AnswerAsync("kys");
-        Assert.Equal(1, rig.Chat.Safety.Player("Nathan")!.Strikes);
+        Assert.Equal(1, rig.Chat.Safety.Player("Testplayer")!.Strikes);
         Assert.Equal("fake reply", (await rig.AnswerAsync("hello"))!.Text);
 
         await rig.AnswerAsync("kys");
         await rig.AnswerAsync("kys"); // the third within the window
-        BotChatPlayerSafety standing = rig.Chat.Safety.Player("Nathan")!;
+        BotChatPlayerSafety standing = rig.Chat.Safety.Player("Testplayer")!;
         Assert.Equal(30 * 60, standing.CutoffSeconds);
-        Assert.Contains(rig.Log.Lines, l => l.Contains("Nathan (guid 66, account 0) is cut off from the model providers for 30 minutes after 3 strikes", StringComparison.Ordinal));
+        Assert.Contains(rig.Log.Lines, l => l.Contains("Testplayer (guid 66, account 0) is cut off from the model providers for 30 minutes after 3 strikes", StringComparison.Ordinal));
 
         int calls = rig.Client.Calls.Count;
         BotChatReply cut = (await rig.AnswerAsync("what level are you?"))!;
@@ -229,8 +229,8 @@ public sealed class PlayerbotChatSafetyTests
         await using var rig = new Rig(chat => chat.Safety.StrikesBeforeCutoff = 1);
         await rig.AnswerAsync("kys");
         Assert.Equal("Builtin", (await rig.AnswerAsync("hello"))!.Provider);
-        Assert.True(rig.Chat.Safety.Pardon("nathan"));
-        Assert.False(rig.Chat.Safety.Pardon("nathan"));
+        Assert.True(rig.Chat.Safety.Pardon("testplayer"));
+        Assert.False(rig.Chat.Safety.Pardon("testplayer"));
         Assert.Equal("fake reply", (await rig.AnswerAsync("hello"))!.Text);
     }
 
@@ -248,7 +248,7 @@ public sealed class PlayerbotChatSafetyTests
         await rig.AnswerAsync("kys", account: 501);
         Assert.Empty(rig.Chat.DrainMutes());
         await rig.AnswerAsync("kys", account: 501);
-        Assert.Equal(new BotChatMute(501, 0x42, "Nathan", 15), Assert.Single(rig.Chat.DrainMutes()));
+        Assert.Equal(new BotChatMute(501, 0x42, "Testplayer", 15), Assert.Single(rig.Chat.DrainMutes()));
         Assert.Empty(rig.Chat.DrainMutes());
         Assert.Equal(1, rig.Chat.Status().Safety.AutoMutes);
     }
@@ -345,7 +345,7 @@ public sealed class PlayerbotChatSafetyTests
         Assert.Equal(["first", "fake reply", "write to [email] or call [phone]"], prompt.Messages.Select(m => m.Text));
         string body = HttpBotChatClient.OpenAIBody(Model(), prompt).ToJsonString() + HttpBotChatClient.AnthropicBody(Model(), prompt).ToJsonString();
         Assert.Contains("speaking with Thrall by whisper", body);
-        foreach (string leak in new[] { "example.com", "555", "7946", guid.ToString(), "1234567890", account.ToString(), "Nathan" })
+        foreach (string leak in new[] { "example.com", "555", "7946", guid.ToString(), "1234567890", account.ToString(), "Testplayer" })
             Assert.DoesNotContain(leak, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("my old number", body); // two exchanges back: past MemoryExchanges
     }
@@ -376,7 +376,7 @@ public sealed class PlayerbotChatSafetyTests
         Assert.Contains(reply.Text, PlayerbotChatTemplates.Lines["abuse"]);
         BotChatFlag flag = Assert.Single(rig.Chat.Safety.Flags());
         Assert.Equal((BotChatFlagSource.Moderation, "harassment/threatening"), (flag.Source, flag.Category));
-        Assert.True(rig.Chat.Safety.Player("Nathan")!.CutoffSeconds > 0);
+        Assert.True(rig.Chat.Safety.Player("Testplayer")!.CutoffSeconds > 0);
     }
 
     [Fact]
@@ -784,11 +784,11 @@ public sealed class PlayerbotChatSafetyTests
         BotChatReply reply = (await rig.AnswerAsync("hello there"))!;
 
         Assert.Empty(rig.Client.Calls);
-        Assert.Contains(PlayerbotChatTemplates.Lines["safety.personal"], line => line.Replace("{player}", "Nathan", StringComparison.Ordinal) == reply.Text);
+        Assert.Contains(PlayerbotChatTemplates.Lines["safety.personal"], line => line.Replace("{player}", "Testplayer", StringComparison.Ordinal) == reply.Text);
         BotChatFlag flag = Assert.Single(rig.Chat.Safety.Flags());
         Assert.Equal(("PersonalData", BotChatFlagSource.Local), (flag.Category, flag.Source));
         Assert.Equal("[removed]", flag.Excerpt); // the excerpt's strip ran out of time on the same pattern: fails closed
-        Assert.Equal("Nathan: no strikes, no cut-off.", PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "Nathan").First());
+        Assert.Equal("Testplayer: no strikes, no cut-off.", PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "Testplayer").First());
         Assert.Equal(2, rig.Chat.Status().Safety.TimedOut); // the input screening and the excerpt's strip
     }
 
@@ -955,9 +955,9 @@ public sealed class PlayerbotChatSafetyTests
 
         string safety = PlayerbotCommands.ChatStatusLines(rig.Chat.Status()).Last();
         Assert.StartsWith("Bot chat safety: screening=on screened=3 flagged=2 moderation-flagged=0 output-flagged=0 builtin-only=0 timed-out=0 cut-offs=1 cut-off-now=1", safety);
-        string[] flags = [.. PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "nathan")];
-        Assert.Equal("Nathan: strikes=0 cut-off=60m ai=default", flags[0]);
-        Assert.Matches(@"^2026-10-08 12:00:00 Nathan \(guid 66, account 12\) -> Chatbot: Harassment \(local filter\) ""kys, mail me at \[email\]""$", flags[1]);
+        string[] flags = [.. PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "testplayer")];
+        Assert.Equal("Testplayer: strikes=0 cut-off=60m ai=default", flags[0]);
+        Assert.Matches(@"^2026-10-08 12:00:00 Testplayer \(guid 66, account 12\) -> Chatbot: Harassment \(local filter\) ""kys, mail me at \[email\]""$", flags[1]);
         Assert.All(flags, line => Assert.DoesNotContain("b.example.org", line));
         Assert.Equal(["Other: no strikes, no cut-off.", "No flagged lines."], PlayerbotCommands.ChatFlagLines(rig.Chat.Safety, "Other"));
     }

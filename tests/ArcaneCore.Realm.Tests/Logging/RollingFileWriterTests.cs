@@ -148,7 +148,7 @@ public sealed class RollingFileWriterTests : IDisposable
     /// pending when the next writer opens it) is a name it cannot own, like one held by another writer: it falls back instead of
     /// failing and dropping lines.
     /// </summary>
-    [Fact]
+    [NotPrivilegedFact]
     public void AccessDeniedOnTheLock_IsTreatedAsHeld_AndTheWriterFallsBack()
     {
         Directory.CreateDirectory(_dir);
@@ -169,7 +169,26 @@ public sealed class RollingFileWriterTests : IDisposable
         }
         finally
         {
-            File.SetAttributes(lockPath, FileAttributes.Normal);
+            // A writer that wrongly took the lock deletes it on dispose (delete-on-close); do not let this cleanup mask the assertion.
+            if (File.Exists(lockPath))
+            {
+                File.SetAttributes(lockPath, FileAttributes.Normal);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The read-only attribute is a permission the test relies on being enforced. Root bypasses
+    /// permission checks on Unix, so the writer legitimately opens the "denied" lock, owns the name, and deletes the lock when it is disposed.
+    /// </summary>
+    private sealed class NotPrivilegedFactAttribute : FactAttribute
+    {
+        public NotPrivilegedFactAttribute()
+        {
+            if (!OperatingSystem.IsWindows() && Environment.IsPrivilegedProcess)
+            {
+                Skip = "Running as root (effective uid 0): permission checks are bypassed, so a read-only lock file is not access-denied and the writer opens it.";
+            }
         }
     }
 

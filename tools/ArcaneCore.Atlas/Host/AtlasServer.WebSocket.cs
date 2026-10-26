@@ -12,8 +12,9 @@ namespace ArcaneCore.Atlas.Host;
 
 /// <summary>
 /// The UI WebSocket (doc section 13). Messages are JSON text frames:
-/// client to server <c>auth</c>, <c>command</c>, <c>captureFailed</c>; server to client <c>hello</c>, <c>event</c>,
-/// <c>result</c>, <c>capture</c>, <c>error</c>.
+/// client to server <c>auth</c>, <c>command</c>, <c>presence</c>, <c>captureFailed</c>; server to client <c>hello</c>
+/// (with the connection's default <c>name</c> and the other sessions' presence), <c>event</c> (including <c>ui.presence</c>
+/// and <c>ui.presence.left</c>), <c>result</c>, <c>capture</c>, <c>error</c>.
 /// </summary>
 public sealed partial class AtlasServer
 {
@@ -21,6 +22,12 @@ public sealed partial class AtlasServer
     public const int CloseUnauthorized = 4401;
 
     private const int MaxMessageBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Invalid presence messages are answered from a token bucket of this many answers per connection, refilled by one per
+    /// <see cref="AtlasServerOptions.PresenceMinInterval"/>; beyond it they are dropped without an answer. A zero interval disables the limit.
+    /// </summary>
+    internal const int PresenceErrorBurst = 16;
 
     private async Task WebSocketAsync(HttpContext http)
     {
@@ -69,9 +76,8 @@ public sealed partial class AtlasServer
             connection = _hub.Add(socket, Guid.NewGuid().ToString("N")[..12]);
 
             // The connection is registered before the view is read, so no change can fall between the hello and the first event;
-            // the version is read first so a view newer than the reported version only produces a repeat the UI ignores.
-            long viewVersion = _context.View.Version;
-            ViewState view = _context.View.Current;
+            // the view, its version and the follow owner come from one snapshot, so they describe the same moment.
+            (ViewState view, long viewVersion, string? followOrigin) = _context.View.Snapshot();
             var hello = new JsonObject
             {
                 ["op"] = "hello",
@@ -79,6 +85,9 @@ public sealed partial class AtlasServer
                 ["version"] = AtlasVersion.Current,
                 ["view"] = view.ToJson(),
                 ["viewVersion"] = viewVersion,
+                ["followOrigin"] = followOrigin,
+                ["name"] = connection.Name,
+                ["sessions"] = new JsonArray([.. _hub.PresenceSnapshot(connection.Id).Select(p => (JsonNode)p.ToJson())]),
             };
             await connection.SendAsync(hello.ToJsonString(), ct).ConfigureAwait(false);
             pump = PumpEventsAsync(connection, ct);
@@ -122,9 +131,21 @@ public sealed partial class AtlasServer
             if (connection is not null)
             {
                 _hub.Remove(connection);
+
+                // The follower left: the host stops moving the shared camera for it.
+                _context.View.ReleaseFollow($"{UiHub.OriginPrefix}{connection.Id}");
             }
 
             await Task.WhenAll(commands.Append(pump)).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+            // Defence in depth: any follow set before the connection was removed from the hub was cleared by the first release
+            // above, and later sets are refused by the view store's OriginConnected check. This second release ensures no follow
+            // lingers if OriginConnected was unset or bypassed.
+            if (connection is not null)
+            {
+                _context.View.ReleaseFollow($"{UiHub.OriginPrefix}{connection.Id}");
+            }
+
             await TryCloseAsync(socket, WebSocketCloseStatus.NormalClosure, "bye").ConfigureAwait(false);
         }
     }
@@ -224,6 +245,9 @@ public sealed partial class AtlasServer
                 }
 
                 break;
+            case "presence":
+                HandlePresence(connection, message, ct);
+                break;
             case "captureFailed":
                 if (message["id"] is JsonValue captureId && captureId.TryGetValue(out string? failedId))
                 {
@@ -240,9 +264,76 @@ public sealed partial class AtlasServer
         }
     }
 
+    /// <summary>
+    /// Validates a <c>presence</c> message and, when valid and not rate limited, stores it on the connection and tells the other
+    /// UIs. An invalid message answers <c>bad-request</c> and changes nothing; a valid message arriving within
+    /// <see cref="AtlasServerOptions.PresenceMinInterval"/> of the last accepted one is dropped silently, whatever it changes.
+    /// Runs on the connection's receive loop.
+    /// </summary>
+    private void HandlePresence(UiConnection connection, JsonObject message, CancellationToken ct)
+    {
+        TimeProvider time = _options.Time;
+        long now = time.GetTimestamp();
+        if (!TryReadPresence(connection, message, out UiPresence? presence))
+        {
+            // Answering costs a send per frame, so a client that streams bad presence is answered only while its error budget lasts.
+            if (TakePresenceErrorToken(connection, time, now))
+            {
+                _ = SendErrorAsync(connection, "bad-request", "A presence message needs an integer 'map' (0 to 4294967295), 'at' as three finite numbers within +-100000, a finite 'yaw', a 'mode' of orbit, fly or top, and a text 'name' when it has one.", ct);
+            }
+
+            return;
+        }
+
+        if (_options.PresenceMinInterval > TimeSpan.Zero
+            && connection.LastPresenceStamp is { } last
+            && time.GetElapsedTime(last, now) < _options.PresenceMinInterval)
+        {
+            return;
+        }
+
+        connection.LastPresenceStamp = now;
+        connection.Name = presence.Name;
+        connection.Presence = presence;
+        _hub.BroadcastPresence(presence);
+    }
+
+    /// <summary>True when an invalid presence message may be answered now. Runs on the connection's receive loop, the only writer of the bucket.</summary>
+    private bool TakePresenceErrorToken(UiConnection connection, TimeProvider time, long now)
+    {
+        TimeSpan interval = _options.PresenceMinInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return true;
+        }
+
+        double tokens = connection.PresenceErrorTokens;
+        if (connection.LastPresenceErrorStamp is { } last)
+        {
+            tokens = Math.Min(PresenceErrorBurst, tokens + (time.GetElapsedTime(last, now) / interval));
+        }
+
+        connection.LastPresenceErrorStamp = now;
+        bool allowed = tokens >= 1;
+        connection.PresenceErrorTokens = allowed ? tokens - 1 : tokens;
+        return allowed;
+    }
+
+    /// <summary>
+    /// Reads and validates a presence message (the rules are <see cref="UiPresence.TryRead"/> and <see cref="UiPresence.TryResolveName"/>,
+    /// shared with the session commands). A <c>name</c> that is present and empty after cleaning resets the name to the connection's
+    /// default; an absent <c>name</c> keeps the current one.
+    /// </summary>
+    private static bool TryReadPresence(UiConnection connection, JsonObject message, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out UiPresence? presence)
+    {
+        presence = null;
+        return UiPresence.TryResolveName(message, connection.Name, connection.DefaultName, out string name)
+            && UiPresence.TryRead(message, null, connection.Id, name, UiPresence.KindUi, out presence, out _);
+    }
+
     private async Task RunCommandAsync(UiConnection connection, JsonNode? id, string name, JsonObject? args, CancellationToken ct)
     {
-        using IDisposable scope = HostOrigin.With($"ui:{connection.Id}");
+        using IDisposable scope = HostOrigin.With($"{UiHub.OriginPrefix}{connection.Id}");
         CommandResult result;
         try
         {

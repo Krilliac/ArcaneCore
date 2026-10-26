@@ -7,7 +7,7 @@
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # ARCANE_IMAGE_TAG is required (no default: a VPS must say which release it runs): the git tag the publish workflow was run for
-# (for example v0.3.0), edge, or sha-<7 hex> (the commit of a push to main). ARCANE_REALM_ADDRESS is required too: the address the realm
+# (for example v0.3.0), edge or edge-release (the nightly Debug or Release build), or sha-<7 hex>-debug / sha-<7 hex>-release (the commit a nightly built). ARCANE_REALM_ADDRESS is required too: the address the realm
 # list sends to players is the VPS's public IP and port 8085, and a loopback default would be unreachable for every player. ARCANE_IMAGE_REPO is the registry path the images live under; the default
 # is this repository's owner, change it only for a fork's images.
 #

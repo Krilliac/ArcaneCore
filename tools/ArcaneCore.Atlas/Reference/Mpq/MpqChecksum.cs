@@ -9,15 +9,15 @@ public static class MpqChecksum
     private const uint Base = 65521;
 
     // The largest n for which the 32-bit sums cannot overflow before the next modulo, given a and b below BASE on entry
-    // ref: D:\mangos-unified\dep\StormLib\src\zlib\adler32.c:14-15
+    // ref: StormLib src/zlib/adler32.c:14-15
     private const int MaxRun = 5552;
 
     /// <summary>Seed StormLib uses for sector checksums.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\SFileReadFile.cpp:153 ; SFileAddFile.cpp:238 (adler32(0, sector, length))
+    // ref: StormLib src/SFileReadFile.cpp:153 ; SFileAddFile.cpp:238 (adler32(0, sector, length))
     public const uint SectorSeed = 0;
 
     /// <summary>Seed of a standard Adler-32 (RFC 1950, and the trailer of every zlib stream).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\zlib\adler32.c:84-85 (adler32(adler, Z_NULL, 0) returns 1)
+    // ref: StormLib src/zlib/adler32.c:84-85 (adler32(adler, Z_NULL, 0) returns 1)
     public const uint ZlibSeed = 1;
 
     /// <summary>
@@ -26,7 +26,7 @@ public static class MpqChecksum
     /// </summary>
     public static uint Adler32(uint adler, ReadOnlySpan<byte> data)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\zlib\adler32.c:60-128 ; RFC 1950 section 8.2
+        // ref: StormLib src/zlib/adler32.c:60-128 ; RFC 1950 section 8.2
         // With a and b below BASE on entry, one modulo per run of MaxRun bytes keeps both sums inside 32 bits.
         uint a = adler & 0xFFFF;
         uint b = adler >> 16;
@@ -64,7 +64,7 @@ internal static class MpqSectorTable
     /// <param name="storedSize">Stored length of the checksum table.</param>
     public static bool TryLocateChecksums(ReadOnlySpan<uint> offsets, int sectorCount, int sectorSize, out uint offset, out uint storedSize)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1405-1437 (AllocateSectorChecksums)
+        // ref: StormLib src/SBaseCommon.cpp:1405-1437 (AllocateSectorChecksums)
         offset = 0;
         storedSize = 0;
         if (offsets.Length < sectorCount + 2 || offsets[0] == 0 || offsets[0] != (uint)(sectorCount + 2) * 4)

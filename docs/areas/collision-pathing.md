@@ -11,11 +11,11 @@ descriptions; vmangos is read only to confirm layouts and semantics, and no extr
 ### mmap parameter files written by vmangos load (NavMeshFormat, NavMeshTile)
 
 vmangos' generator builds Detour with 64-bit polygon references and writes `maxPolys = 0` into
-`NNN.mmap` (`D:\refs\vmangos\contrib\mmap\src\MapBuilder.cpp:462`, "Unused if DT_POLYREF64 set");
+`NNN.mmap` (`<refs-root>\vmangos\contrib\mmap\src\MapBuilder.cpp:462`, "Unused if DT_POLYREF64 set");
 the server reads the 28 bytes raw (`src\game\Maps\MoveMap.cpp:86-92`). `NavMeshParams.Parse` used to reject
 `maxPolys <= 0`, so every vmangos-generated map silently degraded to straight lines. It now accepts
 `maxPolys >= 0` and ignores the value; length, finite-origin and `maxTiles > 0` checks stay.
-A tile with `MMAP_VERSION 8` (mangos-classic, `D:\refs\mangos-classic\src\game\MotionGenerators\MoveMapSharedDefines.h:26`)
+A tile with `MMAP_VERSION 8` (mangos-classic, `<refs-root>\mangos-classic\src\game\MotionGenerators\MoveMapSharedDefines.h:26`)
 is refused with a message that names the cMaNGOS generator; vmangos reads only version 6
 (`MoveMapSharedDefines.h:26`, `MoveMap.cpp:170-176`).
 
@@ -59,7 +59,7 @@ tile without a usable polygon.
 ### Corridor selection, cross-tile portals, and detail heights follow Detour (NavMeshQuery, NavMeshTile)
 
 The A* search keeps the node rules of `dtNavMeshQuery::findPath`
-(`D:\refs\vmangos\dep\recastnavigation\Detour\Source\DetourNavMeshQuery.cpp`). A node is a polygon plus the
+(`<refs-root>\vmangos\dep\recastnavigation\Detour\Source\DetourNavMeshQuery.cpp`). A node is a polygon plus the
 tile side crossed into it. Its position stays at the first portal midpoint. A cheaper route reopens a closed
 node, the parent polygon is not expanded, and the goal's heuristic is zero. Cross-tile portal linking in
 `NavMesh.TryOverlap`, `NavMeshTile.BuildCrossPortals`, and `NavMesh.CollectNeighbours` matches `dtNavMesh::connectExtLinks`

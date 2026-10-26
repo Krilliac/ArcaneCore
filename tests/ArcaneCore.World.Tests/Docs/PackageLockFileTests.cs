@@ -97,8 +97,11 @@ public sealed class PackageLockFileTests
         string readme = RepoRoot.ReadText("README.md");
         foreach (string rid in matrix)
         {
-            Assert.Contains("arcanecore-" + rid + ".", workflow, StringComparison.Ordinal);
-            Assert.Contains("arcanecore-" + rid + ".", readme, StringComparison.Ordinal);
+            foreach (string cfg in new[] { "debug", "release" })
+            {
+                Assert.Contains("arcanecore-" + rid + "-" + cfg + ".", workflow, StringComparison.Ordinal);
+                Assert.Contains("arcanecore-" + rid + "-" + cfg + ".", readme, StringComparison.Ordinal);
+            }
         }
     }
 

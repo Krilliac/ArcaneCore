@@ -39,23 +39,44 @@ docker compose up -d --build
 
 The `CONFIGURATION` build argument of `apps/docker/Dockerfile` defaults to `Release`. The live server runs the Debug configuration, and
 the images follow that when asked: `docker build -f apps/docker/Dockerfile --target world --build-arg CONFIGURATION=Debug -t arcanecore/world:debug .`
-(compose: `args: CONFIGURATION: Debug` under `build:` in `docker-compose.override.yml`). The published images are Release for a `v*`
-tag and Debug for `edge` (see below).
+(compose: `args: CONFIGURATION: Debug` under `build:` in `docker-compose.override.yml`). Both are published: `edge` is Debug and `edge-release` is Release
+(see below).
 
 ## Image tags and the registry
 
-[`.github/workflows/docker-publish.yml`](../../.github/workflows/docker-publish.yml) builds `world`, `realm` and `tools` for `linux/amd64`
-and `linux/arm64` and pushes them to `ghcr.io/krilliac/arcanecore-world`, `arcanecore-realm` and `arcanecore-tools`. It runs on a push to
-`main` (tag `edge`, Debug, plus `sha-<7 hex>` of the pushed commit), on a `v*` tag (only that tag, Release; no `sha-` tag, because the
-commit usually has one from its push to `main` already) and by hand on a branch (only `sha-<7 hex>-debug` or `sha-<7 hex>-release`, so a hand-run build
-never overwrites the tag of a push; a hand run on a `v*` tag is refused, because it would re-push the release tag). Pushes that change only `docs/**` or `*.md` files do not run it. A pull request that touches the
-Dockerfile, the build props, a project file or a lock file (not C# sources alone; `docker-smoke` builds the amd64 image from those) runs the same multi-arch build without pushing, so a `linux/arm64` failure shows before
-the merge.
+[`.github/workflows/docker-publish.yml`](../../.github/workflows/docker-publish.yml) builds `world`, `realm` and `tools` in both
+configurations (Debug and Release) for `linux/amd64` and `linux/arm64` and pushes them to `ghcr.io/krilliac/arcanecore-world`,
+`arcanecore-realm` and `arcanecore-tools`. The owner and repository names are hard-coded in the docs and in `docker-compose.prod.yml`
+(`ARCANE_IMAGE_REPO` overrides the image path); change them when the repository moves.
+
+| Run | Tags pushed per image |
+|---|---|
+| Nightly (cron) | `edge` (Debug), `edge-release` (Release), `sha-<7 hex>-debug`, `sha-<7 hex>-release` |
+| `v*` tag | the tag (Release) and `<tag>-debug` (Debug); no `sha-` tag |
+| Hand run on a branch | `manual-sha-<7 hex>-debug` and `manual-sha-<7 hex>-release`, a prefix no nightly tag has |
+
+Every tag names its configuration, so the two configurations and the different kinds of run never overwrite each other's tags. A hand run
+on a `v*` tag is refused, because it would re-push the release tag. The nightly run is skipped when `main` has no new commit since the last
+successful scheduled run; a push to `main` does not start it. A pull request that touches the Dockerfile, the build props, a project file or
+a lock file (not C# sources alone; `docker-smoke` builds the amd64 image from those) runs the same multi-arch build without pushing, so a
+`linux/arm64` failure shows before the merge.
+
+`linux/arm64` is best effort: if the multi-arch build fails, the same tags are pushed for `linux/amd64` only, the run stays green, and the
+run summary and a warning annotation name the image and configuration that lack arm64.
 
 GHCR packages start **private**. After the first push, the repository owner makes each of the three packages public once (GitHub:
 profile or organization, Packages, the package, Package settings, Change visibility, Public) so a VPS can pull without a login; until
 then `docker pull` answers `denied` and a VPS needs `docker login ghcr.io` with a token that has `read:packages`. The workflow never
 changes visibility.
+
+### Pruning
+
+Old `sha-` tags are not pruned yet (about 4 new tags per image per night). Deleting package versions needs a token with package
+delete permission on the package, and a multi-arch image is an index plus per-platform manifests that are untagged versions: a naive
+"delete old versions" would delete manifests that a live tag still needs. That cannot be verified without a first push, so it is a
+follow-up: after the packages exist, add a pruning job that deletes only versions whose tags are all `sha-*` and older than 30 days,
+and check it on a copy first.
+
 Pick a version and pull it: set `ARCANE_IMAGE_TAG` in `.env` (for example to `edge`, or to a release tag), then
 `docker compose -f docker-compose.prod.yml pull`.
 

@@ -174,6 +174,16 @@ public sealed class PlayerbotThinkProbeTests
     }
 
     [Fact]
+    public void SpentForTest_CreatesDeterministicProbe_WithoutWallClockOrGcDependency()
+    {
+        PlayerbotThinkProbe probe = PlayerbotThinkProbe.SpentForTest(8.5, gcPauseMs: 0, slowestPhase: "controller");
+        Assert.Equal(8.5, probe.ElapsedMs, precision: 1);
+        Assert.Equal(0, probe.GcPauseMs);
+        Assert.Equal("controller", probe.SlowestPhase);
+        Assert.Contains("controller", probe.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AClockThatDoesNotTickInStopwatchTicks_IsRejected()
     {
         var clock = new ManualClock(frequency: Stopwatch.Frequency / 10);

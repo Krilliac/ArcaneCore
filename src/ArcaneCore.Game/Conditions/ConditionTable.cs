@@ -27,7 +27,7 @@ public sealed record ConditionTableOptions
 
 /// <summary>
 /// The loaded <c>conditions</c> table: cmangos <c>sConditionStorage</c> after
-/// <c>ObjectMgr::LoadConditions</c> (D:\refs\mangos-classic\src\game\Globals\ObjectMgr.cpp:5526-5543)
+/// <c>ObjectMgr::LoadConditions</c> (mangos-classic src/game/Globals/ObjectMgr.cpp:5526-5543)
 /// erased every row <c>ConditionEntry::IsValid</c> refused (Conditions.cpp:600-1000). Rows are
 /// validated in ascending entry order, so an AND/OR/NOT may only reference a lower, still-valid
 /// entry, which also makes evaluation recursion finite. Validation that needs other content

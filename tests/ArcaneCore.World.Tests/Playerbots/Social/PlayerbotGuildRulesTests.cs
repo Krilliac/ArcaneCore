@@ -57,13 +57,13 @@ public sealed class PlayerbotGuildRulesTests
     [InlineData(PlayerbotInvitePolicy.GuildOrFriends, false, true, true)]
     public void ARealPlayersInvitation_IsAcceptedByTheInvitePolicy_AndTheAllowlistAlways(PlayerbotInvitePolicy policy, bool friend, bool allowlisted, bool accepted)
     {
-        string[] allowlist = allowlisted ? ["Nathan"] : ["Someoneelse"];
-        Assert.Equal(accepted, PlayerbotGuildMembership.AcceptsRealPlayer(policy, allowlist, "nathan", friend));
+        string[] allowlist = allowlisted ? ["Testplayer"] : ["Someoneelse"];
+        Assert.Equal(accepted, PlayerbotGuildMembership.AcceptsRealPlayer(policy, allowlist, "testplayer", friend));
     }
 
     [Fact]
     public void AnEmptyInviterName_IsNeverAccepted()
-        => Assert.False(PlayerbotGuildMembership.AcceptsRealPlayer(PlayerbotInvitePolicy.Anyone, ["Nathan"], string.Empty, onBotsFriendList: true));
+        => Assert.False(PlayerbotGuildMembership.AcceptsRealPlayer(PlayerbotInvitePolicy.Anyone, ["Testplayer"], string.Empty, onBotsFriendList: true));
 
     // --- ranks --------------------------------------------------------------------------------------------------------
 

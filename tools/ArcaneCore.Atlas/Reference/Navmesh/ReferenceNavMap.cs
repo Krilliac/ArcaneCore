@@ -129,7 +129,7 @@ public sealed class ReferenceNavMap : IDisposable
             maxTiles = parameters.MaxTiles,
 
             // vmangos writes maxPolys = 0 because its Detour uses 64-bit polygon references.
-            // ref: D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:462 (maxPolys = 0; // Unused if DT_POLYREF64 set.)
+            // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:462 (maxPolys = 0; // Unused if DT_POLYREF64 set.)
             // DotRecast's Init stores the value without reading it, so any positive number serves.
             // ref: tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:50-77 (Init copies the parameters; maxPolys is never used).
             maxPolys = parameters.MaxPolys > 0 ? parameters.MaxPolys : 1 << 16,

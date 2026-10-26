@@ -26,7 +26,7 @@ internal static class TerrainDiff
 
     private const int MaxExamples = 20;
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:286-300 (liquid layer order, LiquidType.dbc entry and map type flag)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:286-300 (liquid layer order, LiquidType.dbc entry and map type flag)
     private static readonly (AdtLiquidKind Kind, ushort Entry, byte MapFlag)[] LayerTypes =
     [
         (AdtLiquidKind.River, 1, 8),
@@ -357,7 +357,7 @@ internal static class TerrainDiff
                     }
                 }
 
-                // ref: D:\refs\vmangos\contrib\extractor\System.cpp:755-763 (holes[i][j] = the MCNK hole word, unchanged)
+                // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:755-763 (holes[i][j] = the MCNK hole word, unchanged)
                 report.HoleWordsChecked++;
                 ushort serverHoleWord = ServerHoleWord(server, i, j);
                 if (serverHoleWord != chunk.Holes)
@@ -439,7 +439,7 @@ internal static class TerrainDiff
         {
             if (clamped && client < ExtractorMinHeight)
             {
-                // ref: D:\refs\vmangos\contrib\extractor\System.cpp:479-494 (CONF_allow_height_limit clamps below -500.0f)
+                // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:479-494 (CONF_allow_height_limit clamps below -500.0f)
                 report.Clamped++;
                 report.NoteExpected("height-clamped-at-min");
                 DrawHeightDelta(builder, wx, wy, client, server, attrExpected, ColorKeys.Expected, "height-clamped-at-min",
@@ -449,7 +449,7 @@ internal static class TerrainDiff
 
             if (sharedEdge)
             {
-                // ref: D:\refs\vmangos\contrib\extractor\System.cpp:410-454 (later MCNK overwrites shared border V9 sample)
+                // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:410-454 (later MCNK overwrites shared border V9 sample)
                 report.EdgeOverwritten++;
                 report.NoteExpected("shared-chunk-edge-overwrite");
                 DrawHeightDelta(builder, wx, wy, client, server, attrExpected, ColorKeys.Expected, "shared-chunk-edge-overwrite",
@@ -682,19 +682,19 @@ internal static class TerrainDiff
                                 float best = chunkMax[(vy * 9) + vx];
                                 if (merged == ExtractorMinHeight)
                                 {
-                                    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:703-706 (hidden square resets its own NW vertex to -500)
+                                    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:703-706 (hidden square resets its own NW vertex to -500)
                                     report.LiquidNotKeptReset++;
                                     report.NoteExpected("liquid-hidden-vertex-reset");
                                 }
                                 else if (Math.Abs(best - merged) <= Tolerance && own < best)
                                 {
-                                    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:604-614 (multiple MCLQ layers keep max vertex height)
+                                    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:604-614 (multiple MCLQ layers keep max vertex height)
                                     report.LiquidNotKeptMaxOfLayers++;
                                     report.NoteExpected("multi-layer-liquid-merge");
                                 }
                                 else if (vy is 0 or 8 || vx is 0 or 8)
                                 {
-                                    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:626-633 (neighbouring MCNK overwrites shared edge vertex)
+                                    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:626-633 (neighbouring MCNK overwrites shared edge vertex)
                                     report.LiquidNotKeptEdgeRewrite++;
                                     report.NoteExpected("liquid-chunk-edge-overwrite");
                                 }
@@ -731,7 +731,7 @@ internal static class TerrainDiff
         return mask;
     }
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:410-454
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:410-454
     private static (float[] V9, float[] V8) RawHeights(AdtFile adt)
     {
         var v9 = new float[(Squares + 1) * (Squares + 1)];
@@ -762,7 +762,7 @@ internal static class TerrainDiff
         return (v9, v8);
     }
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:456-477
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:456-477
     private static (float Min, float Max) Range(float[] v9, float[] v8)
     {
         float min = 20000f;
@@ -782,7 +782,7 @@ internal static class TerrainDiff
         return (min, max);
     }
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:479-494
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:479-494
     private static bool ClampLow(float[] v9, float[] v8, ref float min, ref float max)
     {
         if (!(min < ExtractorMinHeight))
@@ -825,7 +825,7 @@ internal static class TerrainDiff
             : TerrainTile.InvalidHeightValue;
     }
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:557-741
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:557-741
     private static LiquidModel EmulateLiquid(AdtFile adt)
     {
         const int vertices = Squares + 1;

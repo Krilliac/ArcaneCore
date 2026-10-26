@@ -94,8 +94,8 @@ export class Navigator {
         if (!drag.moved) {
             drag.moved = true;
             this.viewport.pointerDragging();
-            if (drag.button !== 0 && this.app.view.follow) {
-                this.app.patchView({ follow: null });
+            if (drag.button !== 0) {
+                this.app.releaseFollow();
             }
         }
         const aspect = p.w / p.h;
@@ -169,9 +169,7 @@ export class Navigator {
         if (!this.#keyFlight) {
             this.#keyFlight = true;
             this.app.beginInteraction();
-            if (this.app.view.follow) {
-                this.app.patchView({ follow: null });
-            }
+            this.app.releaseFollow();
         }
         this.viewport.requestRender();
     }

@@ -7,7 +7,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Gm.Core;
 
 /// <summary>
-/// The vmangos command-table semantics (D:\refs\vmangos\src\game\Chat\Chat.cpp): table order and
+/// The vmangos command-table semantics (vmangos@0e3ff01 src/game/Chat/Chat.cpp): table order and
 /// abbreviation (1185-1366, 1566-1600, 1767-1860), resolve-then-authorise and the reply texts
 /// (1873-1970, 2081-2163), and the retail levels of the pre-existing commands.
 /// </summary>

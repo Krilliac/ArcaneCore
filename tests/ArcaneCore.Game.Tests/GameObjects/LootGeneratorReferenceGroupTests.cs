@@ -6,7 +6,7 @@ using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 namespace ArcaneCore.Game.Tests.GameObjects;
 
 /// <summary>
-/// vmangos LootTemplate::AddEntry/Process (D:\refs\vmangos\src\game\LootMgr.cpp:1193-1244): reference
+/// vmangos LootTemplate::AddEntry/Process (vmangos@0e3ff01 src/game/LootMgr.cpp:1193-1244): reference
 /// rows are never group members, roll by their own chance, and a reference row's groupid selects only that
 /// group of the referenced template; maxcount 0 processes it zero times. Shapes mirror classic-db
 /// fishing entries 443/445 (reference 11103 group 1) and creature entry 639 (several reference rows in one group id).

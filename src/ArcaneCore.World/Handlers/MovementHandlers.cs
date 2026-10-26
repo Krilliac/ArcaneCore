@@ -6,6 +6,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Teleport;
@@ -139,6 +140,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // "Do not accept packets sent before this time" (vmangos HandleMovementOpcodes, MovementHandler.cpp:293-296): the 100 ms after the
+        // server set the movement flags itself (.cheat fly / fixedz), so a packet sent before the client saw them cannot undo them.
+        if (player.Locomotion.ShouldRejectMovement(session.CurrentPacketReceivedMs))
+        {
+            return;
+        }
+
         // Client→server movement is the MovementInfo alone (gtker MSG_MOVE_*_Client, 1.12).
         var reader = new PacketReader(payload);
         MovementInfo movement = MovementInfo.Read(ref reader);
@@ -162,6 +170,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         {
             MoveControlled(session, player, mover, opcode, movement, relay);
             return;
+        }
+
+        // "Do not jump or flying mode will be removed": a jump takes the client out of the air-swim, so the cheat ends with it.
+        if (opcode == WorldOpcode.MsgMoveJump)
+        {
+            MovementCheats.EndFlyOnJump(player);
         }
 
         // The anticheat judges the block as the client sent it, before the observers correct it (docs/areas/anticheat.md).
@@ -380,6 +394,15 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
             {
                 player.ClearEmoteState();
+            }
+
+            // vmangos@0e3ff01 HandleMoverRelocation (MovementHandler.cpp:1106-1110): a block with MOVEFLAG_MASK_MOVING closes a loot window that is not an
+            // item's. Without it a looter whose client lost the window walks off and keeps the node "in use" for everyone. Managed bots
+            // move through the same handlers, so they are covered. The UnitFlags test keeps the common (not looting) case to one load.
+            if ((player.UnitFlags & UnitFlags.Looting) != 0 && (stored.Flags & MovementFlags.MaskMoving) != 0
+                && player.Map is { } lootMap)
+            {
+                session.Services.GetService<GameObjectLootFeature>()?.FindSystem(lootMap)?.Loot?.ReleaseOnMovement(player);
             }
         }
         finally

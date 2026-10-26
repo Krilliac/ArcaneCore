@@ -23,6 +23,31 @@ The repository ships its operator scripts under `tools/ops/`. Every host-specifi
 | `ARCANECORE_SONDER_MCP_URL` | Optional endpoint URL for the local Sonder MCP offload service. |
 | `ANTHROPIC_API_KEY` | Anthropic API key used by `tools/ops/llm/*` (read from the environment or `HKCU\Environment`; never logged). |
 
+
+### Placeholders used in the documents
+
+Documents name host locations with placeholders instead of real paths. They are not shell syntax: replace each with your own directory. Where a variable exists, scripts read it; otherwise the script's own default or parameter applies.
+
+| Placeholder | Meaning | Variable |
+|---|---|---|
+| `<lanes-root>` | Directory holding lane worktrees, `_deploy`, `_logs` and the slot files | `ARCANECORE_LANES_ROOT` |
+| `<deploy-root>` | Deploy artifacts and per-run deploy logs | `ARCANECORE_DEPLOY_ROOT` |
+| `<data-root>` | Extracted build-5875 client data (`terrain-5875`, `client-dbc-5875`) | `ARCANECORE_DATA_ROOT` |
+| `<refs-root>` | Reference checkouts and SQL dumps (`vmangos`, `mangos-classic`, `classic-db`) | `ARCANECORE_REFS_ROOT` |
+| `<live-home>` | Local live install root (`bin/`, `logs/`) | `ARCANECORE_LIVE_HOME` |
+| `<live-profile>` | Live server profile directory | `ARCANECORE_LIVE_PROFILE` |
+| `<wow-client-dir>` | The 1.12.1 client folder | `ARCANECORE_TEST_CLIENT_DIR` |
+| `<work-dir>` | A scratch directory outside the repository | fixed in the script or chosen per run, no variable |
+| `<continuation-checkout>` | A local checkout used to continue earlier work | no variable |
+| `<client-acceptance-checkout>` | A clean checkout used for a real-client acceptance run | no variable |
+| `<sweep-root>` | The coordination directory of one live-sweep fleet run | no variable |
+| `<server-zero-run>` | A MaNGOS Zero extraction directory (`maps`, `vmaps`, `mmaps`, `dbc`) | no variable |
+| `<terrain-tools-dir>` | The extractor tools directory passed as `-ToolsDir` to `tools/terrain/build-terrain-data.ps1` | script parameter |
+| `<re-research-root>` | A private clean-room research notes directory | no variable |
+| `<claude-home>` | The assistant's per-user configuration directory | no variable |
+
+Paths fixed inside a script (the default dump of `tools/content/refresh-world-content.ps1`, the slot script of `tools/ops/ci/repeat-test.ps1`) are not controlled by these variables.
+
 ---
 
 ## Top-level scripts (`tools/ops/`)
@@ -104,7 +129,7 @@ A log file has one writer (`RollingFileWriter` locks `<file>.lock`). A daemon th
 | `tools/ops/ci/node-ci-queue.ps1` | Read-only on live server (runs `node-ci.ps1` sequentially on Node1) | Serializes `node-ci.ps1` runs across a list of git refs, waiting for any active `node-ci.ps1` process to finish before starting the next. Usage: `pwsh -NoProfile -File tools/ops/ci/node-ci-queue.ps1 -Repo <dir> -Refs <ref1,ref2,...>`. |
 | `tools/ops/ci/wait-checks.sh` | Read-only | Polls `gh pr checks` or `gh run view` using `gh --jq` until all checks on a PR or workflow run complete. Uses `ARCANECORE_GH_REPO`. Usage: `bash tools/ops/ci/wait-checks.sh <pr\|run> <id> [max-minutes=120]`. |
 | `tools/ops/ci/wt-hygiene.sh` | Read-only on live server (removes clean, merged git worktrees) | Removes clean lane worktrees whose `HEAD` is already an ancestor of `origin/main` and deletes their local branch, sleeping between removals to avoid disk thrash. Usage: `bash tools/ops/ci/wt-hygiene.sh [repo-dir] [worktree-grep-pattern]`. |
-| `tools/ops/ci/repeat-test.ps1` | Read-only on live server (CPU load: use `-Slot` or a small `-Load` while the server runs) | Flake hunter. Builds a test project once, then runs `dotnet test --no-build --filter <f>` `-Runs` times, each with its own results directory, and counts pass/fail per test from the TRX XML, never from console text. A run is ERROR, not a pass, when its TRX is missing or unreadable, when it executed 0 tests (filter matched nothing, or every match skipped), when dotnet exited non-zero with no failed test in the TRX, or on timeout. Prints per-test `runs/fails/rate` with the first failure's message and stack top, and a last line `runs=N ok=A failed=B error=C`; writes `summary.json` and per-run `run-NNNN/` (TRX, stdout, stderr) to `-OutDir` (default: a temp folder). Exit 0 = every run executed tests and none failed, 1 = a test failed, 2 = any run was ERROR or the build failed. `-Load N` starts N CPU burner processes and kills exactly those (process tree, in `finally`, so Ctrl+C is covered; a burner also exits if the script's process is gone). `-Parallel [-Concurrency 4]` runs several `dotnet test` processes at once (tests that bind fixed ports or share files will collide). `-StopOnFirstFailure` stops launching runs after the first FAILED or ERROR run. `-Slot` wraps each run in `D:\ArcaneCore-lanes\tools\run-in-slot.ps1` when that file exists. Each run sees `ARCANECORE_REPEAT_RUN_INDEX=<n>`. Self-test: `ARCANECORE_REPEAT_TEST_SELFTEST=1` (and `ARCANECORE_REPEAT_TEST_SELFTEST_SEED=<int>`) enables `RepeatTestSelfTest.Flaky` (fails ~1/2 of runs, deterministic per seed and run) and `.Stable` in `tests/ArcaneCore.Kernel.Tests`; they are Skipped otherwise. Usage: `pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.World.Tests -Filter "FullyQualifiedName~Siege" -Runs 20 -Load 8 -OutDir D:\tmp\siege-flake`; self-test proof: `$env:ARCANECORE_REPEAT_TEST_SELFTEST=1; pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.Kernel.Tests -Filter "FullyQualifiedName~RepeatTestSelfTest.Flaky" -Runs 6` (exit 1), a filter matching nothing (exit 2), `...Stable` (exit 0). |
+| `tools/ops/ci/repeat-test.ps1` | Read-only on live server (CPU load: use `-Slot` or a small `-Load` while the server runs) | Flake hunter. Builds a test project once, then runs `dotnet test --no-build --filter <f>` `-Runs` times, each with its own results directory, and counts pass/fail per test from the TRX XML, never from console text. A run is ERROR, not a pass, when its TRX is missing or unreadable, when it executed 0 tests (filter matched nothing, or every match skipped), when dotnet exited non-zero with no failed test in the TRX, or on timeout. Prints per-test `runs/fails/rate` with the first failure's message and stack top, and a last line `runs=N ok=A failed=B error=C`; writes `summary.json` and per-run `run-NNNN/` (TRX, stdout, stderr) to `-OutDir` (default: a temp folder). Exit 0 = every run executed tests and none failed, 1 = a test failed, 2 = any run was ERROR or the build failed. `-Load N` starts N CPU burner processes and kills exactly those (process tree, in `finally`, so Ctrl+C is covered; a burner also exits if the script's process is gone). `-Parallel [-Concurrency 4]` runs several `dotnet test` processes at once (tests that bind fixed ports or share files will collide). `-StopOnFirstFailure` stops launching runs after the first FAILED or ERROR run. `-Slot` wraps each run in the `tools\run-in-slot.ps1` of the lanes directory when that file exists; that location is a fixed host path set inside `tools/ops/ci/repeat-test.ps1`, not derived from `ARCANECORE_LANES_ROOT`. Each run sees `ARCANECORE_REPEAT_RUN_INDEX=<n>`. Self-test: `ARCANECORE_REPEAT_TEST_SELFTEST=1` (and `ARCANECORE_REPEAT_TEST_SELFTEST_SEED=<int>`) enables `RepeatTestSelfTest.Flaky` (fails ~1/2 of runs, deterministic per seed and run) and `.Stable` in `tests/ArcaneCore.Kernel.Tests`; they are Skipped otherwise. Usage: `pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.World.Tests -Filter "FullyQualifiedName~Siege" -Runs 20 -Load 8 -OutDir D:\tmp\siege-flake`; self-test proof: `$env:ARCANECORE_REPEAT_TEST_SELFTEST=1; pwsh -NoProfile -File tools/ops/ci/repeat-test.ps1 -Project tests/ArcaneCore.Kernel.Tests -Filter "FullyQualifiedName~RepeatTestSelfTest.Flaky" -Runs 6` (exit 1), a filter matching nothing (exit 2), `...Stable` (exit 0). |
 
 ---
 

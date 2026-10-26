@@ -12,20 +12,20 @@ namespace ArcaneCore.Atlas.Reference.Navmesh;
 public static class MmapParamsReader
 {
     /// <summary>Size of <c>dtNavMeshParams</c> in bytes.</summary>
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:339-346 (float orig[3], float tileWidth,
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:339-346 (float orig[3], float tileWidth,
     // float tileHeight, int maxTiles, int maxPolys: seven four-byte fields, no padding).
     public const int ByteSize = 28;
 
     /// <summary>The most tiles one map can have: the generator makes one Detour tile per terrain tile of the 64 x 64 grid.</summary>
-    // ref: D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:450 (maxTiles = tiles.size(), the map's terrain tiles).
+    // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:450 (maxTiles = tiles.size(), the map's terrain tiles).
     public const int MaxTilesPerMap = 64 * 64;
 
     /// <summary>Parses the whole <c>.mmap</c> file.</summary>
     /// <exception cref="InvalidDataException">The file is not a usable parameter block; the message says why.</exception>
     public static NavMeshParams Parse(ReadOnlySpan<byte> file)
     {
-        // ref: D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:487 (the generator fwrites the struct raw) and
-        // D:\refs\vmangos@0e3ff01\src\game\Maps\MoveMap.cpp:86-87 (the server freads sizeof(dtNavMeshParams) raw), so the file is the
+        // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:487 (the generator fwrites the struct raw) and
+        // vmangos@0e3ff01 src/game/Maps/MoveMap.cpp:86-87 (the server freads sizeof(dtNavMeshParams) raw), so the file is the
         // struct and nothing else; the extractor ran on little-endian x86.
         if (file.Length != ByteSize)
         {
@@ -55,7 +55,7 @@ public static class MmapParamsReader
             throw new InvalidDataException($"navmesh maxTiles {maxTiles} is outside 1..{MaxTilesPerMap}");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:462 (maxPolys = 0, unused with 64-bit polygon references).
+        // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:462 (maxPolys = 0, unused with 64-bit polygon references).
         if (maxPolys < 0)
         {
             throw new InvalidDataException($"navmesh maxPolys {maxPolys} is negative");

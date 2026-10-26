@@ -1,7 +1,7 @@
 namespace ArcaneCore.World.Tests.Npc;
 
 /// <summary>
-/// An excerpt of the classic-db 1.12.1 world dump z2815 (D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz), the rows as the dump has
+/// An excerpt of the classic-db 1.12.1 world dump z2815 (classic-db Full_DB/ClassicDB_1_12_1_z2815.sql.gz), the rows as the dump has
 /// them (only the columns the importers read, and no quest texts): four scripted quests, their givers and enders, their DB scripts and Ruul
 /// Snowhoof's escort path.
 /// <list type="bullet">

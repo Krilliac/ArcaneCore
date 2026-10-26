@@ -8,7 +8,7 @@ namespace ArcaneCore.Atlas.Reference.Navmesh;
 internal static class NavGeometry
 {
     // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:46-50 (ToRecast(world) = (Y, Z, X), ToWorld(rc) = (Z, X, Y)); the
-    // generator's Recast axes are x = world Y, y = height, z = world X (D:\refs\vmangos@0e3ff01\contrib\mmap\src\MapBuilder.cpp:503-506
+    // generator's Recast axes are x = world Y, y = height, z = world X (vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:503-506
     // takes tile bounds as bmax[0] = (32 - tileX) * GRID_SIZE for the Recast x axis and bmax[2] for z).
 
     /// <summary>World position of a Recast-space position.</summary>

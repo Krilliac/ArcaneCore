@@ -133,6 +133,7 @@ public sealed class FallObserver : IClientMovementObserver
     {
         if (state.SuppressAnomalies
             || player.IsGameMaster
+            || player.HasCheat(PlayerCheats.FeatherFall)
             || player.Transport is not null
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
             || (flags & (MovementFlags.OnTransport | MovementFlags.Swimming | MovementFlags.Flying | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating)) != 0
@@ -188,6 +189,7 @@ public sealed class FallObserver : IClientMovementObserver
         float zDiff = state.FallStartZ - currentZ;
         AuraLedger auras = player.Locomotion.Auras;
         if (zDiff < FallDamageCalculator.MinFallDistance || !player.IsAlive || player.IsGameMaster
+            || player.HasCheat(PlayerCheats.FeatherFall)
             || auras.Has(AuraType.Hover) || auras.Has(AuraType.FeatherFall))
         {
             return;

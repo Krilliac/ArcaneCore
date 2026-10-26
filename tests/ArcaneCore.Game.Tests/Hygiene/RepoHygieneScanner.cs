@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
@@ -65,6 +66,29 @@ internal static class RepoHygieneScanner
         ("MMAP (extracted navmesh tile)", LittleEndian(NavMeshFormat.MmapMagic)),
     ];
 
+    /// <summary>Markdown never names a person or a machine: the repository is public. Each rule is a pattern that must not occur in
+    /// a document; the first-name pattern is assembled from fragments so this file does not itself contain the name. The name rule
+    /// is the only one the upstream copyright notice is exempt from (its Apache NOTICE text has to stay verbatim).</summary>
+    private static readonly (string Rule, Regex Pattern, bool NameRule)[] DocTextRules =
+    [
+        ("per-user Windows profile path (use a placeholder or an ARCANECORE_* variable)", new Regex(@"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]+Users[\\/]|/[a-z]/Users/", RegexOptions.CultureInvariant), false),
+        ("per-user home directory (/home/<name> or /Users/<name>; generic user, you, name, runner and me are allowed)", new Regex(@"(?i)(?<![A-Za-z0-9._-])/(?:home|Users)/(?!(?:user|username|you|name|runner|me)(?![A-Za-z0-9_]))[A-Za-z0-9._-]+", RegexOptions.CultureInvariant), false),
+        ("host checkout path under a lanes/data/live directory (use <lanes-root>, <data-root>, <live-home>)", new Regex(@"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]+ArcaneCore-", RegexOptions.CultureInvariant), false),
+        ("host reference, extraction or tools root such as a refs, server-zero or terrain-tools directory (use <refs-root> or another placeholder)", new Regex(@"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]+(?:refs(?![A-Za-z0-9_-])|server-?zero|terrain-tools)", RegexOptions.CultureInvariant), false),
+        ("personal first name (say \"the maintainer\")", new Regex(@"(?i)(?<![A-Za-z])Nat(?:e|han)(?![A-Za-z])", RegexOptions.CultureInvariant), true),
+    ];
+
+    /// <summary>Documents the text rules apply to: every <c>.md</c> except the generated <c>docs/reference/</c> and
+    /// <c>docs/ops/exception-audit.md</c> (their text comes from source comments).</summary>
+    private static bool IsScannedDocument(string path) =>
+        !path.StartsWith("docs/reference/", StringComparison.OrdinalIgnoreCase)
+        && !path.Equals("docs/ops/exception-audit.md", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The upstream notice quotes a copyright holder verbatim (Apache-2.0 section 4(d)), so only the name rule skips it;
+    /// the path rules still apply to it.</summary>
+    private static bool IsUpstreamNotice(string path) =>
+        path.Equals("THIRD_PARTY_NOTICES.md", StringComparison.OrdinalIgnoreCase);
+
     private static readonly string[] SqlDumpBanners = ["-- MySQL dump", "-- MariaDB dump", "-- Host:", "LOCK TABLES `"];
 
     /// <summary>Applies every rule to each repo-relative path (files read from <paramref name="root"/>).</summary>
@@ -113,6 +137,19 @@ internal static class RepoHygieneScanner
             if (probe.AsSpan().StartsWith(bytes))
             {
                 yield return $"{name} magic header";
+            }
+        }
+
+        if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase) && IsScannedDocument(path))
+        {
+            string doc = File.ReadAllText(full);
+            bool notice = IsUpstreamNotice(path);
+            foreach ((string rule, Regex pattern, bool nameRule) in DocTextRules)
+            {
+                if (!(notice && nameRule) && pattern.IsMatch(doc))
+                {
+                    yield return rule;
+                }
             }
         }
 

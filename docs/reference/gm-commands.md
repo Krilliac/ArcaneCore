@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 390 |
-| `Administrator` | 6 | 590 |
+| `GameMaster` | 3 | 396 |
+| `Administrator` | 6 | 596 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -48,6 +48,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cheat immunepc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunepc on\|off [$name] Players cannot attack the player. |
 | `.cheat immunenpc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunenpc on\|off [$name] Creatures cannot attack the player. |
 | `.cheat untargetable` | 3 | GameMaster | declared retail level | Syntax: .cheat untargetable on\|off [$name] Nobody can select the player. |
+| `.cheat fly` | 3 | GameMaster | declared retail level | Syntax: .cheat fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
+| `.cheat fixedz` | 3 | GameMaster | declared retail level | Syntax: .cheat fixedz on\|off The selected player or you get a fixed height: a jump glides across the map (MOVEFLAG_FIXED_Z). |
+| `.cheat wallclimb` | 3 | GameMaster | declared retail level | Syntax: .cheat wallclimb on\|off The selected player or you climb walls (UNIT_FLAG_SERVER_CONTROLLED). |
+| `.cheat featherfall` | 3 | GameMaster | declared retail level | Syntax: .cheat featherfall on\|off [$name] Falls never hurt (not a vmangos command). |
 | `.cheat status` | 3 | GameMaster | declared retail level | Syntax: .cheat status [$name] List the cheats active on the player. |
 | `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
 | `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
@@ -64,7 +68,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
 | `.debug script` | 3 | GameMaster | declared retail level | Syntax: .debug script $entry [$map] Say which AI the creature entry gets on the map (default: your map): the layer (map entry AI, dungeon boss AI, ScriptName, entry script, EventAI, SmartAI, built-in or default), the implementing type, and whether its ScriptName is implemented. From the console the map is required. |
 | `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
-| `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
+| `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. The trace stops by itself at the size limit or when the disk writer falls 8192 records behind; the file is finished asynchronously after a stop. |
 | `.debug tick` | 3 | GameMaster | declared retail level | Syntax: .debug tick Show the world tick: target interval, body p50/p99/max over the last minute, each phase (commands, world-tick handlers, features, maps, autosave) over the last minute, late and skipped starts, and what the world thread is doing right now. |
 | `.debug slowticks` | 3 | GameMaster | declared retail level | Syntax: .debug slowticks [#seconds] List the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600). The ring holds only 8 ticks: when it is full a new slow tick replaces an entry older than 60 s first, else the fastest one, and the hang log itself uses only the last 60 s; an older entry stays listed until it is replaced, and faster ticks may be missing when the ring is full. Shows duration, phase split, GC and the slowest features of each. |
 | `.debug features` | 3 | GameMaster | declared retail level | Syntax: .debug features [#count] List the world features by their smoothed per-tick time (about the last 50 ticks) with their allocation per tick, slowest first (default 15 rows). The playerbot think pass is one of them. |
@@ -109,6 +113,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.gm ingame` | 1 | Moderator | stored level through the map | Syntax: .gm ingame List the game masters online with their GM mode on, and whether they accept whispers. |
 | `.gm list` | 6 | Administrator | stored level through the map | Syntax: .gm list List every staff member online with their security level. |
 | `.gm visible` | 3 | GameMaster | declared retail level | Syntax: .gm visible [on/off] Show or hide yourself from players of a lower security level, or show the current state. |
+| `.gm fly` | 3 | GameMaster | declared retail level | Syntax: .gm fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
 | `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
 | `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
 | `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
@@ -166,7 +171,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.list object` | 3 | GameMaster | declared retail level | Syntax: .list object #object_id [#max_count] Output the database spawns of the gameobject template (default 10). |
 | `.list auras` | 3 | GameMaster | declared retail level | Syntax: .list auras List the auras of the selected unit, or yours. |
 | `.lookup` ... | 1 | Moderator | declared retail level | Syntax: .lookup $subcommand |
-| `.lookup item` | 2 | GameMaster | declared retail level | Syntax: .lookup item $itemname Looks up an item by name. |
+| `.lookup item` | 2 | GameMaster | declared retail level | Syntax: .lookup item $itemname Looks up an item by name. From the console, the first use replies that item content is not loaded yet while it loads in the background; run the command again shortly. |
 | `.lookup creature` | 2 | GameMaster | declared retail level | Syntax: .lookup creature $namepart Looks up a creature by name. |
 | `.lookup object` | 2 | GameMaster | declared retail level | Syntax: .lookup object $objname Looks up a gameobject by name. |
 | `.lookup tele` | 2 | GameMaster | declared retail level | Syntax: .lookup tele $substring Search and output all teleport locations containing $substring. |
@@ -288,6 +293,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
 | `.demorph` | 3 | GameMaster | declared retail level | Syntax: .demorph Restore the native model of the selected unit or yourself. |
 | `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
+| `.knockback` | 3 | GameMaster | declared retail level | Syntax: .knockback [#horizontal_speed [#vertical_speed]] Knock the selected player or yourself back from you (10 and 10 by default); a creature is not moved. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.dismount` | 0 | Player | declared retail level | Syntax: .dismount Dismount you, if you are mounted. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
@@ -422,7 +428,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
 | `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
 | `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
-| `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
+| `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. From the console, the items line reads "not loaded yet" while item content loads in the background; run the command again shortly. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |

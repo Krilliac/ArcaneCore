@@ -3,7 +3,7 @@
 [![CI](https://github.com/Krilliac/ArcaneCore/actions/workflows/ci.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Krilliac/ArcaneCore/actions/workflows/codeql.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/codeql.yml)
 [![Docker smoke](https://github.com/Krilliac/ArcaneCore/actions/workflows/docker-smoke.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/docker-smoke.yml)
-[![Nightly (Debug)](https://img.shields.io/badge/nightly%20(Debug)-download-blue?style=flat-square)](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly)
+[![Nightly downloads](https://img.shields.io/badge/nightly-Debug%20%2B%20Release%20downloads-blue?style=flat-square)](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly)
 [![Last commit](https://img.shields.io/github/last-commit/Krilliac/ArcaneCore.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/Krilliac/ArcaneCore/commits/main)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat)](docs/guide/contributing.md)
 
@@ -40,16 +40,7 @@ to retail.
 > by automated tests only. The documentation index is [`docs/README.md`](docs/README.md); every configuration key and default is in
 > the generated [configuration reference](docs/reference/configuration.md).
 
-This integration candidate also combines creatures, grids/terrain/teleports, items, spells, social systems, and the partial
-quests/NPC draft. Exact branch heads, schema allocations, integration repairs, validation, and remaining client acceptance work are in
-[the fleet integration record](docs/integration/fleet-20261003.md). Later NPC, instance, AI, loot, progression, spell persistence and
-economy work is in [the takeover ledger](docs/integration/takeover-20261003.md). Continue from
-[the Claude handoff](docs/integration/claude-handoff-20261003.md).
-
-The [M13a follow-up](MILESTONE_M13A.md) restores saved quest journals before login, serves quest/NPC text queries, and persists timed
-expiry across relogs and map transfers. Full quest/NPC interaction and [real-client acceptance](docs/M13A_ACCEPTANCE.md) remain
-pending. The [M13b slice](MILESTONE_M13B.md) adds guarded live-creature quest status, details, acceptance and abandonment for
-ordinary non-repeatable quests; rewards, objective event adapters and broader NPC services remain subsequent work.
+Integration records, takeover ledgers and the milestone follow-up notes are in [the status notes](docs/integration/status-notes.md).
 
 The native [mock client](MILESTONE_MOCK_CLIENT.md) exercises the real realm and world sessions with synthetic SQLite content and
 independent client packets. [Mock checks](docs/MOCK_CLIENT_ACCEPTANCE.md) run in CI; actual build 5875 UI and content acceptance will
@@ -74,25 +65,27 @@ It prints assertion results as JSON and returns a failing exit code if a stage f
 
 ## Download
 
-Prebuilt binaries are attached to [GitHub releases](https://github.com/Krilliac/ArcaneCore/releases). Asset names never change, so
-these links are stable.
+Both configurations are offered for every runtime. The files are attached to the rolling
+[`nightly` pre-release](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly) and to every
+[versioned release](https://github.com/Krilliac/ArcaneCore/releases); the file names never change, so these links are stable.
 
-**Nightly is a Debug pre-release**, rebuilt on every push to `main` and replaced in place; the live development server runs the same
-configuration. Tagged `v*` releases are built in Release configuration.
+- **Nightly** is rebuilt every night when `main` has a new commit since the last run, and replaced in place. It carries **Debug** (the
+  configuration the live development server runs) and **Release** builds.
+- Tagged `v*` releases carry the same set of files, built from the tagged commit.
 
-| Platform | Nightly (Debug) |
-|---|---|
-| Windows x64 | [arcanecore-win-x64.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-x64.zip) |
-| Linux x64 | [arcanecore-linux-x64.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-x64.tar.gz) |
-| Windows arm64 | [arcanecore-win-arm64.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-arm64.zip) |
-| Linux arm64 | [arcanecore-linux-arm64.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-arm64.tar.gz) |
-| Checksums | [SHA256SUMS](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/SHA256SUMS) |
+| Platform | Debug | Release |
+|---|---|---|
+| Windows x64 | [arcanecore-win-x64-debug.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-x64-debug.zip) | [arcanecore-win-x64-release.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-x64-release.zip) |
+| Linux x64 | [arcanecore-linux-x64-debug.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-x64-debug.tar.gz) | [arcanecore-linux-x64-release.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-x64-release.tar.gz) |
+| Windows arm64 | [arcanecore-win-arm64-debug.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-arm64-debug.zip) | [arcanecore-win-arm64-release.zip](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-win-arm64-release.zip) |
+| Linux arm64 | [arcanecore-linux-arm64-debug.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-arm64-debug.tar.gz) | [arcanecore-linux-arm64-release.tar.gz](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/arcanecore-linux-arm64-release.tar.gz) |
+| Checksums | [SHA256SUMS](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/SHA256SUMS) | (same file) |
 
-The same file names exist under every release tag, for example `.../releases/download/<tag>/arcanecore-linux-x64.tar.gz`. The arm64
-archives are built on a best-effort basis: when an arm64 build fails, the release has no arm64 archive for that run (assets of earlier
-runs are removed, never left behind next to newer x64 ones), so check `SHA256SUMS` for what the release carries. The two arm64 links above 404 for a run whose arm64 build failed. The assets are
-swapped in place after the `nightly` tag moves, so a download during the few minutes of an upload can mix files of two builds; compare
-against `SHA256SUMS` (and its commit in the release notes).
+For a versioned release replace `nightly` with the tag, for example `.../releases/download/<tag>/arcanecore-linux-x64-release.tar.gz`.
+The arm64 archives are built on a best-effort basis: when an arm64 build fails, the release has no arm64 archive of that configuration for
+that run (assets of earlier runs are removed, never left behind next to newer x64 ones), so those links 404 and `SHA256SUMS` lists what the
+release carries. The assets are swapped in place after the `nightly` tag moves, so a download during the few minutes of an upload can mix
+files of two builds; compare against `SHA256SUMS` (and the commit in the release notes).
 
 Each archive unpacks to `arcanecore-<platform>/`, self-contained and laid out like the Docker images, plus the `*.conf.dist` files of every key
 (the images do not carry those):
@@ -105,18 +98,25 @@ dbupgrade/   arcane-db
 account/     arcane-account
 ```
 
-**Docker images** (`linux/amd64` and `linux/arm64`), published to `ghcr.io` by the [publish workflow](.github/workflows/docker-publish.yml).
-GHCR packages start private: the images are public once the repository owner sets each package (`arcanecore-world`, `arcanecore-realm`,
-`arcanecore-tools`) to public visibility, a one-time step after the first push ([Docker guide](docs/guide/docker.md#image-tags-and-the-registry)):
+**Docker images** (`linux/amd64`, and `linux/arm64` on a best-effort basis), published to `ghcr.io` by the
+[publish workflow](.github/workflows/docker-publish.yml). GHCR packages start private: pulls need no login only once the repository owner
+has set each package (`arcanecore-world`, `arcanecore-realm`, `arcanecore-tools`) to public visibility, a one-time step after the first
+push ([Docker guide](docs/guide/docker.md#image-tags-and-the-registry)).
 
 ```bash
-docker pull ghcr.io/krilliac/arcanecore-world:edge      # edge: every push to main, Debug configuration
+# Debug (what the live server runs)
+docker pull ghcr.io/krilliac/arcanecore-world:edge
 docker pull ghcr.io/krilliac/arcanecore-realm:edge
-docker pull ghcr.io/krilliac/arcanecore-tools:edge      # content importer, arcane-db, arcane-account
+docker pull ghcr.io/krilliac/arcanecore-tools:edge           # content importer, arcane-db, arcane-account
+
+# Release
+docker pull ghcr.io/krilliac/arcanecore-world:edge-release
+docker pull ghcr.io/krilliac/arcanecore-realm:edge-release
+docker pull ghcr.io/krilliac/arcanecore-tools:edge-release
 ```
 
-Version tags (`v*`) are Release builds (a tag run pushes only the version tag); `sha-<7 hex>` pins the commit of a push to `main` (Debug).
-Running them: [Docker guide](docs/guide/docker.md).
+`edge` and `edge-release` follow the nightly build. `sha-<7 hex>-debug` and `sha-<7 hex>-release` pin the commit a nightly built; a version
+tag `v*` is the Release image and `<tag>-debug` its Debug twin. Running them: [Docker guide](docs/guide/docker.md).
 
 ## Build from source
 

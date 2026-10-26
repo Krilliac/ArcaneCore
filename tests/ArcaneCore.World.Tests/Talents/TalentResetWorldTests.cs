@@ -155,6 +155,23 @@ public sealed class TalentResetWorldTests
     }
 
     [Fact]
+    public async Task TheRequestIsClearedAfterTheLoginReset_OffTheWorldThread()
+    {
+        var fixture = new TalentWorldFixture();
+        await using WorldTestHost host = Start(fixture);
+        (WorldTestClient client, CharacterRecord record) = await EnterAsync(host, "CLEAROFF", money: 10 * Gold);
+        await using WorldTestClient clientScope = client;
+        fixture.ResetFlags.Flag(record.Id);
+
+        await RelogAsync(host, client, record);
+        await host.WaitForWorldAsync(() => !fixture.ResetFlags.IsFlagged(record.Id), "the request is cleared");
+
+        int worldThread = await host.OnWorldAsync(() => Environment.CurrentManagedThreadId);
+        Assert.NotEqual(0, fixture.ResetFlags.ClearThread);
+        Assert.NotEqual(worldThread, fixture.ResetFlags.ClearThread); // SQLite runs the async clear inline: it must not start on the world thread
+    }
+
+    [Fact]
     public async Task WithoutARequest_TheLoginKeepsTheTalents_AndSendsNoNotification()
     {
         var fixture = new TalentWorldFixture();

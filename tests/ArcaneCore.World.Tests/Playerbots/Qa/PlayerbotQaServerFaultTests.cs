@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 public sealed class PlayerbotQaServerFaultTests : IDisposable
 {
     private const string TokenVariable = "ARCANECORE_GITHUB_TOKEN";
-    private const string Dirty = "player Zorblax failed for 3f2b1c9e-0a4d-4e1b-9c55-7d1a2b3c4d5e at 203.0.113.9 file C:\\Users\\Nathan\\data\\x.db and /var/lib/arcane/secret.db "
+    private const string Dirty = "player Zorblax failed for 3f2b1c9e-0a4d-4e1b-9c55-7d1a2b3c4d5e at 203.0.113.9 file C:\\Users\\someone\\data\\x.db and /var/lib/arcane/secret.db "
         + "guid 4294967296 0x0000000000001234 token=hunter2hunter2 " + QaData.FakeToken + " mail a@b.example";
 
     private readonly string _directory = QaData.NewTempDirectory();
@@ -191,7 +191,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         Assert.DoesNotContain("Zorblax", body, StringComparison.Ordinal);
         string title = (string)JsonNode.Parse(github.Http.Requests.Single(r => r.Method == HttpMethod.Post && r.PathAndQuery.Split('?')[0].EndsWith("/issues", StringComparison.Ordinal)).Body)!["title"]!;
         Assert.DoesNotContain("Zorblax", title, StringComparison.Ordinal);
-        foreach (string leak in new[] { "3f2b1c9e", "203.0.113.9", "Nathan", "/var/lib", "x.db", "4294967296", "0x0000000000001234", "hunter2", QaData.FakeToken, "a@b.example" })
+        foreach (string leak in new[] { "3f2b1c9e", "203.0.113.9", "someone", "/var/lib", "x.db", "4294967296", "0x0000000000001234", "hunter2", QaData.FakeToken, "a@b.example" })
         {
             Assert.DoesNotContain(leak, body, StringComparison.Ordinal);
         }
@@ -226,7 +226,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     public void RedactFault_RemovesPathsAndIds_ButKeepsOrdinaryText()
     {
         string clean = new PlayerbotQaRedactor().RedactFault(Dirty);
-        Assert.DoesNotContain("Nathan", clean, StringComparison.Ordinal);
+        Assert.DoesNotContain("someone", clean, StringComparison.Ordinal);
         Assert.DoesNotContain("/var/lib", clean, StringComparison.Ordinal);
         Assert.Contains("failed for", clean, StringComparison.Ordinal); // RedactFault still keeps ordinary text; the composer simply never calls it on a message
         Assert.Equal("see http://example.org/a and a/b", new PlayerbotQaRedactor().RedactFault("see http://example.org/a and a/b"));
