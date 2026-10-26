@@ -85,54 +85,78 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         Assert.Equal(1, graph.ReachableCount(finder.RegionAt(graph, Neeka, Walking), int.MaxValue));
     }
 
-    // Timbermaw Hold, the tunnel between Felwood and Winterspring (map 1): the points the bots' stall, dead-end-pin and goal-unreachable
-    // lines name (bot QA, issues #1478 and #1479), from the Felwood mouth at 6627,-2024 through 6901,-2020, 6957.6,-2044.4, 6940,-2090
-    // and 7020,-2090 to the Winterspring exit at 7020,-2140. Only x and y are known from those lines.
-    private static readonly (float X, float Y)[] TimbermawPath =
-    [
-        (6627f, -2024f), (6901f, -2020f), (6957.6f, -2044.4f), (6940f, -2090f), (7020f, -2090f), (7010f, -2140f), (7020f, -2140f),
-    ];
+    // Timbermaw Hold, the tunnel between Felwood and Winterspring (map 1). The points are the ones the bots' stall, dead-end-pin and
+    // goal-unreachable lines name (bot QA, issues #1478 and #1479; only x and y are known, no Z). The route array holds the ones on the
+    // through route from the Felwood mouth to the Winterspring pin at 7020,-2140 (no separate exit point is known).
+    private static readonly (float X, float Y)[] TimbermawRoute =
+        [(6627f, -2024f), (6901f, -2020f), (7020f, -2090f), (7010f, -2140f), (7020f, -2140f)];
+
+    // Named in the same lines but off the route: the gate run (5b596dd0d) put them in small components of their own on the walking graph.
+    private static readonly (float X, float Y)[] TimbermawOffRoute = [(6957.6f, -2044.4f), (6940f, -2090f)];
+
+    private const float ProbeTopZ = 500f, ProbeBottomZ = -100f, ProbeStepZ = 5f;
+
+    private HashSet<int> ComponentsAt(NavRegionGraph graph, NavMeshPathfinder finder, PathOptions options, float x, float y, List<int> regions)
+    {
+        HashSet<int> components = [];
+        (int tx, int ty) = TerrainTile.TileOf(x, y)!.Value;
+        Assert.True(finder.LoadTile(graph.MapId, tx, ty), $"no navigation tile at {x},{y}");
+        for (float z = ProbeTopZ; z >= ProbeBottomZ; z -= ProbeStepZ)
+        {
+            int region = finder.RegionAt(graph, new Vector3(x, y, z), options);
+            if (region >= 0 && components.Add(graph.ComponentOf(region))) regions.Add(region);
+        }
+
+        return components;
+    }
 
     /// <summary>
-    /// Probe for issues #1478 and #1479: is the walking region graph really cut inside the Timbermaw Hold tunnel? Each sample's x and y
-    /// are looked up at every height from <see cref="ProbeTopZ"/> down to <see cref="ProbeBottomZ"/> (the lines carry no Z), collecting
-    /// the components of every region found; the tunnel is walkable end to end when one component has a region at every sample. Checked
-    /// on the graph with steep slopes excluded (what a walking bot plans on) and on the one with them allowed. A failure of the walking
-    /// graph is the finding (the mesh is cut there, the pile-up has a data cause as well as the bot logic); the test prints each sample's
-    /// components either way.
+    /// Issues #1478 and #1479: the Timbermaw Hold tunnel is not cut on the walking graph (steep slopes excluded). The through-route samples
+    /// share one component (12764 in the 2026-10-25 gate run), so the pile-up is not a data cut. 6957.6,-2044.4 and 6940,-2090 are not in
+    /// it: they sit in small components of their own (ledges or pockets only steep polygons may join), which is why a goal there is
+    /// unreachable on foot. The graph with steep slopes allowed is printed for those two, not asserted (not known when written). Whether the
+    /// route's regions are cut regions (<see cref="NavRegionGraph.JoinsLargeParts"/>) is printed too.
     /// </summary>
     [RealTerrainFact]
-    public void Kalimdor_TimbermawHoldTunnel_SamplePoints_ShareOneComponent_WithAndWithoutTheSteepSlopeExclusion()
+    public void Kalimdor_TimbermawHoldTunnel_ThroughRouteIsOneWalkingComponent_AndTheOffRoutePointsAreNotInIt()
     {
         NavMeshPathfinder finder = new(Mmaps);
-        var steepAllowed = Walking with { ExcludeFlags = NavTerrain.Empty };
-        foreach ((string name, NavTerrain exclude, PathOptions options) in new (string, NavTerrain, PathOptions)[]
-            {("walking (steep slopes excluded)", NavTerrain.SteepSlopes, Walking), ("steep slopes allowed", NavTerrain.Empty, steepAllowed)})
+        NavRegionGraph walking = NavRegionGraph.Build(Mmaps, 1, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        HashSet<int>? shared = null;
+        List<int> routeRegions = [];
+        foreach ((float x, float y) in TimbermawRoute)
         {
-            NavRegionGraph graph = NavRegionGraph.Build(Mmaps, 1, PathMover.Player.IncludeFlags, exclude);
-            HashSet<int>? shared = null;
-            foreach ((float x, float y) in TimbermawPath)
-            {
-                HashSet<int> components = [];
-                (int tx, int ty) = TerrainTile.TileOf(x, y)!.Value;
-                Assert.True(finder.LoadTile(graph.MapId, tx, ty), $"no navigation tile at {x},{y}");
-                for (float z = ProbeTopZ; z >= ProbeBottomZ; z -= ProbeStepZ)
-                {
-                    int region = finder.RegionAt(graph, new Vector3(x, y, z), options);
-                    if (region >= 0) components.Add(graph.ComponentOf(region));
-                }
+            HashSet<int> components = ComponentsAt(walking, finder, Walking, x, y, routeRegions);
+            output.WriteLine($"walking: route {x},{y}: components [{string.Join(", ", components.Order())}]");
+            Assert.NotEmpty(components);
+            if (shared is null) shared = components;
+            else shared.IntersectWith(components);
+        }
 
-                output.WriteLine($"{name}: {x},{y}: components [{string.Join(", ", components.Order())}]");
-                Assert.NotEmpty(components);
-                if (shared is null) shared = components;
-                else shared.IntersectWith(components);
-            }
+        Assert.True(shared is { Count: > 0 }, "no one walking component has a region at every through-route sample point: the tunnel is cut");
+        int main = shared!.OrderByDescending(c => walking.ComponentPolygons(routeRegions.First(r => walking.ComponentOf(r) == c))).First();
 
-            Assert.True(shared is { Count: > 0 }, $"{name}: no one component has a region at every tunnel sample point, so the graph is cut inside Timbermaw Hold");
+        foreach (int region in routeRegions.Where(r => walking.ComponentOf(r) == main).Distinct())
+            output.WriteLine($"walking: route region {region}: articulation {walking.IsArticulation(region)}, joins large parts {walking.JoinsLargeParts(region, 500)}");
+
+        foreach ((float x, float y) in TimbermawOffRoute)
+        {
+            HashSet<int> components = ComponentsAt(walking, finder, Walking, x, y, []);
+            output.WriteLine($"walking: off route {x},{y}: components [{string.Join(", ", components.Order())}] (main {main})");
+            Assert.DoesNotContain(main, components);
+        }
+
+        NavRegionGraph steep = NavRegionGraph.Build(Mmaps, 1, PathMover.Player.IncludeFlags, NavTerrain.Empty);
+        var steepAllowed = Walking with { ExcludeFlags = NavTerrain.Empty };
+        List<int> steepRoute = [];
+        HashSet<int> mainSteep = ComponentsAt(steep, finder, steepAllowed, TimbermawRoute[0].X, TimbermawRoute[0].Y, steepRoute);
+        foreach ((float x, float y) in TimbermawOffRoute)
+        {
+            HashSet<int> components = ComponentsAt(steep, finder, steepAllowed, x, y, []);
+            output.WriteLine($"steep allowed: off route {x},{y}: components [{string.Join(", ", components.Order())}]; joins the Felwood mouth's: {components.Overlaps(mainSteep)}");
         }
     }
 
-    private const float ProbeTopZ = 500f, ProbeBottomZ = -100f, ProbeStepZ = 5f;
 
     private (NavRegionGraph Graph, NavMeshPathfinder Finder) Build(uint map)
     {
