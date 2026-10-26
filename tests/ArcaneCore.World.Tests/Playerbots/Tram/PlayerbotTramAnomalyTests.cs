@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,9 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     private static readonly Vector3 IronforgeGoal = new(-4918.9f, -982.5f, 501.5f);
 
     private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100, Population = { TramMinLevel = 0 } };
+
+    /// <summary>The fixture's car cycle (TramTestData.SyntheticAnimation: 120 s) and the slow bound derived from it.</summary>
+    private static readonly uint SlowBoundMs = PlayerbotTram.SlowBoundMs(120_000);
 
     private static string Key(string code) => PlayerbotAnomalies.Key("tram", code);
 
@@ -190,14 +194,14 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     // --- trip-slow -------------------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task TripSlow_Fires_OnceWhenTheBotHasBeenOnTheTramMapPastOneAndAHalfCycles()
+    public async Task TripSlow_Fires_OnceWhenTheBotHasBeenOnTheTramMapPastTwoCyclesAndTheWalkAllowance()
     {
         await using TramTestWorld world = await StartAtStormwindWithTripAsync();
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram);
         using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
 
-        await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs + 10_000);
+        await world.AdvanceAsync(SlowBoundMs + 10_000);
         await world.OnWorldAsync(() => Drive(world, options));
         Assert.Equal(1, capture.Count(Key("trip-slow")));
         Assert.Contains("stage=", Report(capture, "trip-slow"));
@@ -217,8 +221,81 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         uint sinceMs = await world.OnWorldAsync(() => world.Host.World.NowMs - PlayerbotTram.TripOf(world.Player)!.PlatformSinceMs);
 
-        await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs - sinceMs - 2_000);
+        await world.AdvanceAsync(SlowBoundMs - sinceMs - 2_000);
         await world.OnWorldAsync(() => Drive(world, options));
+        Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
+    }
+
+    /// <summary>
+    /// #1499: a legitimate trip (walk, a wait for the next car, the ride, the walk out) can pass 180 s on the tram map. The synthetic
+    /// fixture has a 120 s cycle; 200 s on the map is under two cycles and is no slow trip.
+    /// </summary>
+    [Fact]
+    public async Task TripSlow_StaysSilent_ForALegitimateTripOfAbout200Seconds()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        uint sinceMs = await world.OnWorldAsync(() => world.Host.World.NowMs - PlayerbotTram.TripOf(world.Player)!.PlatformSinceMs);
+
+        await world.AdvanceAsync(200_000 - sinceMs);
+        await world.OnWorldAsync(() => Drive(world, options));
+        Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
+    }
+
+    /// <summary>#1499: a missed car is chosen again by the per-tick pump, not at the next (12-23 s later) think.</summary>
+    [Fact]
+    public async Task MissedCar_IsChosenAgain_ByThePump_WithoutAThink()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => OnTramWaiting(world));
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        (uint departMs, uint chosenMs) = await world.OnWorldAsync(() =>
+        {
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            return (trip.Dock.DepartMs, trip.DockChosenMs);
+        });
+
+        await world.AdvanceAsync(departMs + 5_000);
+        uint now = await world.OnWorldAsync(() =>
+        {
+            PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs);
+            return world.Host.World.NowMs;
+        });
+
+        (uint rechosenMs, GameObject? car) = await world.OnWorldAsync(() =>
+        {
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            return (trip.DockChosenMs, trip.Car);
+        });
+        Assert.NotEqual(chosenMs, rechosenMs);
+        Assert.Equal(now, rechosenMs);
+        Assert.NotNull(car);
+        Assert.Equal(1, capture.Count(Key("board-missed")));
+    }
+
+    /// <summary>
+    /// #1499: a trip that already failed (no car runs: the bot leaves by the platform it stands at) is a failed trip. It is reported as
+    /// <c>trip-failed</c> when the bot is out, and never as <c>trip-slow</c>, however long the way out takes.
+    /// </summary>
+    [Fact]
+    public async Task FailedTrip_IsReportedAsFailed_NotSlow()
+    {
+        await using TramTestWorld world = await TramTestWorld.StartAsync(animation: TransportAnimationCatalog.Empty);
+        await world.PlaceAsync(0, TramTestData.StormwindExitLanding);
+        Assert.True(await world.OnWorldAsync(() => PlayerbotTram.TryBegin(world.Session, world.Player, IronforgeGoal, TramTestData.ZoneAt)), "the trip did not begin");
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => Stage(world) is TramStage.ToExit && world.Player.MapId == TramTestData.Tram);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        Assert.NotNull(await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Failure));
+
+        await world.AdvanceAsync(400_000);
+        await DriveUntilAsync(world, options, () => Stage(world) is TramStage.Done or TramStage.Failed);
+
+        Assert.True(capture.Any(Key("trip-failed")), capture.Describe());
+        Assert.Contains("reason=no-car", Report(capture, "trip-failed"));
         Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
     }
 
@@ -469,7 +546,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
         PlayerbotOptions options = Options();
 
-        await world.AdvanceAsync(PlayerbotTram.SlowTramMapMs + 30_000);
+        await world.AdvanceAsync(SlowBoundMs + 30_000);
         await world.PlaceAsync(TramTestData.Tram, TramTestData.StormwindPlatform);
 
         TramStep step = await world.OnWorldAsync(() => Drive(world, options));

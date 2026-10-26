@@ -227,6 +227,9 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
     public float ClosestToDestination { get; set; } = float.PositiveInfinity;
     public PlayerbotRoute? Route { get; set; }
 
+    /// <summary>The options of the last think (<see cref="PlayerbotTram.Drive"/>); the pump chooses a missed car again with them. Null before the first think.</summary>
+    public PlayerbotOptions? Options { get; set; }
+
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) when the platform spot beside a car is planned.</summary>
     public TileWait Tiles;
     public float Best { get; set; } = float.PositiveInfinity;
@@ -334,8 +337,19 @@ internal static partial class PlayerbotTram
     /// <summary>Tolerance around the intended exit teleport landing on the continent.</summary>
     internal const float WrongStationYards = 80f;
 
-    /// <summary>Time on the tram map beyond 1.5 car cycles (180 s) is reported as a slow trip.</summary>
-    internal const uint SlowTramMapMs = 180_000;
+    /// <summary>
+    /// A legitimate trip on the tram map, measured from arrival: the walk to the dock, a wait for the chosen car's next stop (up to one
+    /// full cycle when the bot just missed a car, and the choice is made again at a think), then the ride (about 57 s of the real
+    /// 143,333 ms cycle), the walk to the exit. That is up to <see cref="SlowTramCycles"/> cycles plus
+    /// <see cref="SlowTramWalkAllowanceMs"/>. (The old fixed 180 s assumed a 120 s cycle; the real one is 143.3 s, so it fired on trips that were fine, #1499.)
+    /// </summary>
+    internal const uint SlowTramCycles = 2;
+
+    /// <summary>The walks to the dock and to the exit, and a think's slack, on top of <see cref="SlowTramCycles"/> cycles.</summary>
+    internal const uint SlowTramWalkAllowanceMs = 60_000;
+
+    /// <summary>The time on the tram map beyond which a trip is reported slow, for a car cycle of <paramref name="cycleMs"/> ms (0 when no car runs).</summary>
+    internal static uint SlowBoundMs(uint cycleMs) => unchecked((SlowTramCycles * cycleMs) + SlowTramWalkAllowanceMs);
 
     private static readonly ConditionalWeakTable<Player, TramTrip> Trips = [];
     private static readonly ConditionalWeakTable<Player, StrongBox<uint>> SentHomeAt = [];
@@ -486,6 +500,18 @@ internal static partial class PlayerbotTram
             EnterTramMapFromEntrance(player, trip, now);
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
+
+        // The chosen car has left without the bot: choose again now. At a think 12-23 s apart a missed car cost the bot a full cycle (#1499).
+        // A choice that finds nothing leaves Car null, and the next think decides (wait, or leave after the failure).
+        if (trip.Stage is TramStage.ToPlatform or TramStage.Waiting && trip.Options is { } thinkOptions
+            && trip.Car is { IsInWorld: true } missedCar && ReferenceEquals(missedCar.Map, map)
+            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000
+            && map.FindUpdater<GameObjectMapSystem>() is { } carSystem)
+        {
+            TramPlatform platform = trip.Network.Other(trip.To);
+            ReportBoardMissed(player, trip, missedCar, platform, new Vector3(player.X, player.Y, player.Z), now, CanReport(session, player));
+            ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _);
+        }
 
         switch (trip.Stage)
         {
@@ -693,10 +719,15 @@ internal static partial class PlayerbotTram
             EnterTramMapFromEntrance(player, trip, now);
         }
 
-        if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported)
+        trip.Options = options;
+        // A trip that already failed (it leaves by the platform it stands at) is a failed trip, reported as trip-failed once the bot is
+        // out; it is not also a slow one. Without a running car there is no cycle to measure against (AtPlatform fails that trip).
+        if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported && trip.Failure is null && map.FindUpdater<GameObjectMapSystem>() is { } carSystem)
         {
+            uint cycle = 0;
+            foreach (GameObject running in carSystem.MapWideElevators) cycle = Math.Max(cycle, carSystem.ElevatorCycle(running));
             uint mapStartMs = trip.PlatformSinceMs != 0 ? trip.PlatformSinceMs : trip.StartedMs;
-            if (unchecked(now - mapStartMs) > SlowTramMapMs)
+            if (cycle != 0 && unchecked(now - mapStartMs) > SlowBoundMs(cycle))
             {
                 trip.SlowReported = true;
                 if (CanReport(session, player))
@@ -762,6 +793,19 @@ internal static partial class PlayerbotTram
         return TramStep.Traveling;
     }
 
+    /// <summary>Reports the missed car once per choice (the caller has found <c>now - DockChosenMs &gt; DepartMs + 1000</c>).</summary>
+    private static void ReportBoardMissed(Player player, TramTrip trip, GameObject missedCar, TramPlatform here, Vector3 bot, uint now, bool canReport)
+    {
+        if (trip.BoardMissedChosenMs == trip.DockChosenMs) return;
+        trip.BoardMissedChosenMs = trip.DockChosenMs;
+        if (canReport)
+        {
+            PlayerbotAnomalies.Report(player, AnomalyArea, "board-missed",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stage={trip.Stage} platform={here.Name} car={missedCar.Guid.Entry} arriveMs={trip.Dock.ArriveMs} departMs={trip.Dock.DepartMs} elapsedMs={unchecked(now - trip.DockChosenMs)} pos=({bot.X:F1},{bot.Y:F1},{bot.Z:F1})"));
+        }
+    }
+
     private static TramStep AtPlatform(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
     {
         if (map.MapId != TramNetwork.TramMapId) return Fail(session, player, trip, now, "tram: left the tram map before boarding", "left-map");
@@ -783,16 +827,9 @@ internal static partial class PlayerbotTram
         GameObjectMapSystem system = map.FindUpdater<GameObjectMapSystem>()!;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (trip.Car is { IsInWorld: true } missedCar && ReferenceEquals(missedCar.Map, map)
-            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000
-            && trip.BoardMissedChosenMs != trip.DockChosenMs)
+            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000)
         {
-            trip.BoardMissedChosenMs = trip.DockChosenMs;
-            if (CanReport(session, player))
-            {
-                PlayerbotAnomalies.Report(player, AnomalyArea, "board-missed",
-                    string.Create(CultureInfo.InvariantCulture,
-                        $"stage={trip.Stage} platform={here.Name} car={missedCar.Guid.Entry} arriveMs={trip.Dock.ArriveMs} departMs={trip.Dock.DepartMs} elapsedMs={unchecked(now - trip.DockChosenMs)} pos=({bot.X:F1},{bot.Y:F1},{bot.Z:F1})"));
-            }
+            ReportBoardMissed(player, trip, missedCar, here, bot, now, CanReport(session, player));
         }
 
         if (trip.Car is null || !trip.Car.IsInWorld || !ReferenceEquals(trip.Car.Map, map)
