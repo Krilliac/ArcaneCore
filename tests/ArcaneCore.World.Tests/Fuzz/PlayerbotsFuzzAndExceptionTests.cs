@@ -632,11 +632,6 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 0, o => o.Validate());
         AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 33, o => o.Validate());
         AssertInvalid<PlayerbotCombatOptions>(o => o.Kite = null!, o => o.Validate());
-        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.OpenerHoldMs = -1, o => o.Validate());
-        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.OpenerHoldMs = 6001, o => o.Validate());
-        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.MasterThreatPct = 49f, o => o.Validate());
-        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank.MasterThreatPct = 126f, o => o.Validate());
-        AssertInvalid<PlayerbotCombatOptions>(o => o.PetTank = null!, o => o.Validate());
 
         AssertInvalid<PlayerbotSocialOptions>(o => o.Guilds = null!, o => o.Validate());
         AssertInvalid<PlayerbotSocialOptions>(o => o.GuildChat = null!, o => o.Validate());

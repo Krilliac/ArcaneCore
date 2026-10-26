@@ -149,9 +149,6 @@ class rotation, so a retreat always wins and kiting is the fight-on branch.
   the bot fights on for the rest of the fight and reports `combat/kite-gave-up` once (Info). A pursuer starting to evade ends the kite
   silently. The counters reset when the bot leaves combat.
 
-`World:Playerbots:Combat:PetTank` (`Enabled`, `OpenerHoldMs`, `MasterThreatPct`) is read and validated like the kite keys but nothing
-acts on it yet: the hunter and warlock pet-tank behaviour follows in a later change, after the pet-recognition fix.
-
 ## Target etiquette (PlayerbotBrain.FindTarget)
 
 Idle grinding skips a creature that is someone else's (vmangos `IsValidHostileTarget` and the client's grey name): tapped by a

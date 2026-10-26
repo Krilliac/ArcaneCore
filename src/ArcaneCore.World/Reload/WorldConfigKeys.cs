@@ -202,18 +202,13 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
-        // Not vmangos keys: kiting and the pet holding aggro (docs/areas/playbots-combat.md). PlayerbotKite and the rotations read the
+        // Not vmangos keys: kiting (docs/areas/playbots-combat.md). PlayerbotKite and the rotations read the
         // shared PlayerbotOptions.Combat at every decision.
         LivePlayerbots("Combat:Kite:Enabled", o => o.Combat.Kite.Enabled, (o, v) => o.Combat.Kite.Enabled = v),
         LivePlayerbotsValue("Combat:Kite:HealthPct", o => o.Combat.Kite.HealthPct, (o, v) => o.Combat.Kite.HealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 95)),
         LivePlayerbotsValue("Combat:Kite:StepYards", o => o.Combat.Kite.StepYards, (o, v) => o.Combat.Kite.StepYards = v, v => PlayerbotRiskOptions.Check(v, 4, 20)),
         LivePlayerbotsValue("Combat:Kite:MaxStepsPerFight", o => o.Combat.Kite.MaxStepsPerFight, (o, v) => o.Combat.Kite.MaxStepsPerFight = v,
             v => v is >= 1 and <= 32 ? null : "must be 1..32"),
-        LivePlayerbots("Combat:PetTank:Enabled", o => o.Combat.PetTank.Enabled, (o, v) => o.Combat.PetTank.Enabled = v),
-        LivePlayerbotsValue("Combat:PetTank:OpenerHoldMs", o => o.Combat.PetTank.OpenerHoldMs, (o, v) => o.Combat.PetTank.OpenerHoldMs = v,
-            v => v is >= 0 and <= 6000 ? null : "must be 0..6000"),
-        LivePlayerbotsValue("Combat:PetTank:MasterThreatPct", o => o.Combat.PetTank.MasterThreatPct, (o, v) => o.Combat.PetTank.MasterThreatPct = v,
-            v => PlayerbotRiskOptions.Check(v, 50, 125)),
 
         // Not vmangos keys: chests, nodes and rares weighed against their guards (docs/areas/playbots-opportunities.md).
         // PlayerbotOpportunities reads the shared PlayerbotOptions.Opportunities at every scan and decision.

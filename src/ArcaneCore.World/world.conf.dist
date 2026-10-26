@@ -13482,42 +13482,6 @@ World.Playerbots.Combat.Kite.MaxStepsPerFight = 8
 World.Playerbots.Combat.Kite.StepYards = 10
 
 #
-#    World.Playerbots.Combat.PetTank.Enabled
-#        Description: Let the pet hold aggro when it can (on by default).
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Combat.PetTank.Enabled = true
-
-#
-#    World.Playerbots.Combat.PetTank.MasterThreatPct
-#        Description: The master holds its attacks while its threat is above this percentage of the
-#                     pet's (50..125); kept under the 130% threshold at which a ranged attacker
-#                     takes the victim from the current target.
-#        Type: float
-#        Default: 110
-#        Allowed: a number, '.' is the decimal point
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Combat.PetTank.MasterThreatPct = 110
-
-#
-#    World.Playerbots.Combat.PetTank.OpenerHoldMs
-#        Description: Milliseconds the master holds its attacks after the pet engages, so the pet
-#                     builds threat first (0..6000).
-#        Type: int
-#        Default: 1500
-#        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Combat.PetTank.OpenerHoldMs = 1500
-
-#
 #    World.Playerbots.CombatLaneShare
 #        Description: The share (0.1..0.9) of the think time budget and of MaxActionsPerTick the
 #                     combat lane may use. The lane gets floor(share × MaxActionsPerTick) actions of
