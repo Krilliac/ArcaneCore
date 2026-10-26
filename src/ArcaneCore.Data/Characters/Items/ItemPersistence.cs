@@ -270,11 +270,24 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
         List<int> ids = [.. characterIds];
         var rows = await db.Set<CharacterInventoryRow>().AsNoTracking()
             .Where(r => ids.Contains(r.Guid) && r.Bag == 0 && r.Slot < 20)
+            .OrderBy(r => r.ItemGuid)
             .Select(r => new { r.Guid, r.Slot, r.ItemId })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
-        return rows.GroupBy(r => r.Guid).ToDictionary(
-            g => g.Key,
-            g => (IReadOnlyDictionary<byte, uint>)g.ToDictionary(r => r.Slot, r => r.ItemId));
+        // character_inventory is keyed by item_guid only, so two rows can share (guid, bag 0, slot); the lowest item guid wins instead of
+        // one bad row failing the whole account's character list.
+        var result = new Dictionary<int, IReadOnlyDictionary<byte, uint>>();
+        foreach (var group in rows.GroupBy(r => r.Guid))
+        {
+            var slots = new Dictionary<byte, uint>();
+            foreach (var row in group)
+            {
+                slots.TryAdd(row.Slot, row.ItemId);
+            }
+
+            result[group.Key] = slots;
+        }
+
+        return result;
     }
 
     public async Task<uint> GetMaxItemGuidAsync(CancellationToken cancellationToken = default)
