@@ -9,10 +9,15 @@ public sealed partial class SpellSystem
     /// vmangos Spell::CheckRange, game-object branch (Spell.cpp:6922-6927): a player's cast that names a game object in its target block
     /// fails with OUT_OF_RANGE unless the object is at interact distance of the spell's maximum range plus the cast's range leeway
     /// (GameObject::IsAtInteractDistance, GameObject.cpp:2512-2534). A named object that is not on the map or not spawned is left to the
-    /// effect, as in vmangos (getGOTarget is then null). Limit: the oriented display-bounds box of IsAtInteractDistance needs model bounds
-    /// this codebase does not load, so the centre distance is compared with the larger of the spell reach and the object's own interaction
-    /// distance (<see cref="GameObjectMapSystem.InteractionDistanceFor"/>). vmangos' no-bounds path is only GetDistance3dToCenter <= maxRange
-    /// (GameObject.cpp:2525-2526, 2608); taking the max is a deliberate leniency that stands in for the missing bounds box and is wider than vmangos. Line of sight is not checked: vmangos has none for this branch.
+    /// effect, as in vmangos (getGOTarget is then null).
+    /// <para>
+    /// Deliberate leniency, not a vmangos branch: IsAtInteractDistance tests an oriented display-bounds box this codebase has no model
+    /// bounds for, so the centre distance is compared with the larger of the spell reach and the object's own interaction distance
+    /// (<see cref="GameObjectMapSystem.InteractionDistanceFor"/>, up to 100 yards for a chair or fishing node). With a spell range and
+    /// display info, vmangos compares only the centre distance with the spell range (GameObject.cpp:2525-2526, 2608) and uses the type
+    /// distance only without display info or for a zero range; this check is therefore wider than vmangos. Line of sight is not
+    /// checked: vmangos has none for this branch.
+    /// </para>
     /// </summary>
     private SpellCastResult CheckGameObjectTargetRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool strict)
     {
