@@ -617,19 +617,31 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         (_, AnomalyCapture capture, uint t0) = await DroppedMoundSetupAsync(world, bot);
         using AnomalyCapture owned = capture;
 
-        // The dropped mound stands 3 minutes, so it is gone long before the back-off ends: the bot is idle for all of it (nothing to take up).
-        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs,
+        // Inside the back-off the bot starts nothing (the mound it dropped is gone after 3 minutes; the geyser stands ready all the time but is not sought).
+        // The phase stops 10 s short of the end: the hold-off ends at the give-up time plus the back-off, a little before t0 plus the back-off.
+        const uint Margin = 10_000;
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs - Margin,
             () => world.BrainOf(bot).WorldPvp.Active || capture.Count(Key("silithyst-unreachable-trigger")) > 1), "the bot started a carry inside the back-off; " + capture.Describe());
 
-        // A new flag after the back-off is carried again and reports the fault once more.
-        Assert.True(await world.CastOnSelfAsync(bot, Flag));
-        Assert.True(await world.RunUntilAsync(60_000,
-            () => capture.Count(Key("silithyst-unreachable-trigger")) >= 2), "no second report after the back-off; " + capture.Describe());
+        // Ten idle minutes: the brain's explore rung may have walked the bot off, and a bot outside zone 1377 seeks nothing. Put it back (the script entry
+        // is idempotent) so the seek is judged by the controller, not by where the idle walk ended; the state before the put-back goes into the failure message.
+        string before = await world.OnWorldAsync(() =>
+        {
+            Player player = world.PlayerOf(bot);
+            return $"zone={player.ZoneId} pos=({player.X:F1},{player.Y:F1},{player.Z:F1}) goal={world.BrainOf(bot).Goal} {world.BrainOf(bot).WorldPvp.Description}";
+        });
+        await world.MoveBotAsync(bot, Start);
+        await world.OnWorldAsync(() => { world.Pvp.OnZoneChanged(world.PlayerOf(bot), 0, SilithusCatalog.SilithusZone, 0, null); return true; });
+
+        // After the back-off the bot seeks the geyser again, carries it, and (an Alliance carrier, no trigger) reports the fault once more.
+        Assert.True(await world.RunUntilAsync(Margin + 60_000,
+            () => capture.Count(Key("silithyst-unreachable-trigger")) >= 2), "no second report after the back-off; before the put-back: " + before + "; now: "
+            + await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Description) + "; " + capture.Describe());
         uint t1 = await world.OnWorldAsync(() => world.World.Host.World.NowMs);
-        Assert.True(unchecked(t1 - t0) >= PlayerbotWorldPvpObjectives.GiveUpBackoffMs, $"the second report came {t1 - t0} ms after the give-up, inside the back-off");
+        Assert.True(unchecked(t1 - t0) >= PlayerbotWorldPvpObjectives.GiveUpBackoffMs - Margin, $"the second report came {t1 - t0} ms after the give-up, inside the back-off");
         Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
         Assert.Equal("no-trigger", await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.LastOutcome));
-        Assert.Equal(0, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
+        Assert.Equal(1, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
         Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
             () => world.BrainOf(bot).WorldPvp.Active || capture.Count(Key("silithyst-unreachable-trigger")) > 2), "a third carry inside the new back-off");
         Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));

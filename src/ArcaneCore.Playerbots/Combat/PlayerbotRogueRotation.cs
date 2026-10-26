@@ -81,7 +81,7 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
 
         bool hidden = s.IsStealthed;
         return (hidden ? null : Do(s, Vanish, s.Self, s.InCombat && !s.NoStealth && s.Self.HealthPercent < 10f))
-            ?? (hidden ? null : Do(s, Preparation, s.Self, s.InCombat && s.Self.HealthPercent < 10f && s.Spells.Has(Vanish) && !s.CanCast(s.Spells[Vanish]!, s.Self)))
+            ?? (hidden ? null : Do(s, Preparation, s.Self, s.InCombat && !s.NoStealth && s.Self.HealthPercent < 10f && s.Spells.Has(Vanish) && !s.CanCast(s.Spells[Vanish]!, s.Self)))
             ?? Finisher(s, v)
             ?? Do(s, Blind, FirstAttackerOtherThan(s, v), s.InGroup)
             ?? Do(s, AdrenalineRush, s.Self, s.InCombat && s.Power == 0)
