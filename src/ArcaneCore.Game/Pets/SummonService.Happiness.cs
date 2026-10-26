@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Pets;
 

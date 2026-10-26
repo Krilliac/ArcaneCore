@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.World.Creatures;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.World.Pets;
