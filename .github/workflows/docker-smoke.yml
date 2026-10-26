@@ -50,10 +50,12 @@ jobs:
           DOCKER_DB_PASSWORD: smoke-only
         run: |
           docker compose --profile tools --profile monitoring config --quiet
-          ARCANE_IMAGE_TAG=smoke docker compose -f docker-compose.prod.yml --profile tools --profile monitoring config --quiet
-          # The production file must refuse to start without a release tag.
-          if out=$(docker compose -f docker-compose.prod.yml config --quiet 2>&1); then echo "docker-compose.prod.yml accepted a missing ARCANE_IMAGE_TAG"; exit 1; fi
+          ARCANE_IMAGE_TAG=smoke ARCANE_REALM_ADDRESS=203.0.113.7:8085 docker compose -f docker-compose.prod.yml --profile tools --profile monitoring config --quiet
+          # The production file must refuse to start without a release tag, and without the public realm address.
+          if out=$(ARCANE_REALM_ADDRESS=203.0.113.7:8085 docker compose -f docker-compose.prod.yml config --quiet 2>&1); then echo "docker-compose.prod.yml accepted a missing ARCANE_IMAGE_TAG"; exit 1; fi
           echo "$out" | grep -q ARCANE_IMAGE_TAG
+          if out=$(ARCANE_IMAGE_TAG=smoke docker compose -f docker-compose.prod.yml config --quiet 2>&1); then echo "docker-compose.prod.yml accepted a missing ARCANE_REALM_ADDRESS"; exit 1; fi
+          echo "$out" | grep -q ARCANE_REALM_ADDRESS
 
       # The three targets share the build stage, so the second and third reuse its cached layers.
       - name: Build world image
@@ -145,6 +147,17 @@ jobs:
           docker compose --profile tools run --rm -T -e ARCANE_ACCOUNT_PASSWORD --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll create smokeacct
           docker compose --profile tools run --rm -T --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll list | tee list.txt
           grep -qi smokeacct list.txt
+
+      - name: arcane-db sees each component in its own database
+        # arcane-db resolves a connection string per component; one without its own falls back to Database:ConnectionString. If the tools
+        # service named only some of them, a component would be checked (or upgraded) against the wrong schema.
+        run: |
+          docker compose --profile tools run --rm -T --entrypoint dotnet arcane-tools /arcanecore/dbupgrade/arcane-db.dll status --json --no-fail-on-pending | tee status.json
+          for c in auth characters world; do
+            target=$(jq -r --arg c "$c" '[.components[] | select(.component == $c)] | if length == 1 then .[0].target else "MISSING" end' status.json)
+            echo "$c -> $target"
+            case "$target" in */arcanecore_"$c") ;; *) echo "arcane-db reports $c against '$target', expected a database named arcanecore_$c"; exit 1 ;; esac
+          done
 
       - name: Back up the database with the ops script
         run: |

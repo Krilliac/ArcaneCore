@@ -55,6 +55,8 @@ public sealed class RepoHygieneTests : IDisposable
     [InlineData("a/b/model.vmo")]
     [InlineData("a/b/0010101.mmtile")]
     [InlineData("a/common.MPQ")]
+    [InlineData("backups/arcanecore-20261026T040000Z.sql.gz")]
+    [InlineData("a/Dump.SQL.GZ")]
     public void ForbiddenExtension_IsRefused(string path)
     {
         Plant(path, [1, 2, 3]);
@@ -159,7 +161,7 @@ public sealed class RepoHygieneTests : IDisposable
     {
         string root = RepoHygieneScanner.FindRepoRoot();
         string[] lines = File.ReadAllLines(Path.Combine(root, ".gitignore")).Select(l => l.Trim()).ToArray();
-        foreach (string required in new[] { "/data/", "/local-data/", "*.dbc", "*.mpq", "*.map", "*.vmtree", "*.vmtile", "*.vmo", "*.mmtile" })
+        foreach (string required in new[] { "/data/", "/local-data/", "*.dbc", "*.mpq", "*.map", "*.vmtree", "*.vmtile", "*.vmo", "*.mmtile", "*.sql.gz", "/backups/", "/env/" })
         {
             Assert.Contains(required, lines);
         }

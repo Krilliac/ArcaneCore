@@ -129,8 +129,10 @@ services:
     networks: [arcane-network]
     environment:
       <<: *arcane-db
-      # The account tool (arcane-account) and arcane-db read the single Database:ConnectionString: the auth schema here.
-      Database__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
+      # arcane-db resolves each component on its own (a component without its own section falls back to Database:ConnectionString), and its
+      # default --component is all three: every schema is named explicitly. arcane-account reads the auth one.
+      Database__Auth__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
+      Database__Characters__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_characters;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
       Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
     volumes:
       - ${DOCKER_VOL_IMPORT:-./env/import}:/arcanecore/import

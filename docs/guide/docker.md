@@ -24,8 +24,9 @@ docker compose up -d --build
 - **Configuration**: any key as an environment variable with `__` for `:` (docs/reference/configuration.md), in
   `docker-compose.override.yml`. The heartbeat is set to `Stdout`; `docker compose stop` gives the world 90 s to drain saves.
 - **Client data**: nothing ships. `env/data` is mounted read-only at `/arcanecore/data`.
-- **Accounts**: the tools image carries the account tool (`arcane-account`) and `arcane-db` beside the content importer. Both read
-  the auth schema from `Database__ConnectionString`, which compose sets. Run them with `--entrypoint dotnet`:
+- **Accounts**: the tools image carries the account tool (`arcane-account`) and `arcane-db` beside the content importer. Compose gives
+  the tools service one connection string per schema (`Database__Auth__`, `Database__Characters__` and `Database__World__ConnectionString`),
+  because `arcane-db` resolves each component separately and a component without its own string would fall back to the auth one. Run them with `--entrypoint dotnet`:
   `docker compose --profile tools run --rm --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll create NAME`
   (it prompts for the password; or pass `-e ARCANE_ACCOUNT_PASSWORD`), and `... /arcanecore/dbupgrade/arcane-db.dll status`.
 - **Monitoring**: `ARCANE_METRICS_ENABLED=true docker compose --profile monitoring up -d` starts Prometheus (:9090)
@@ -45,7 +46,16 @@ tag and Debug for `edge` (see below).
 
 [`.github/workflows/docker-publish.yml`](../../.github/workflows/docker-publish.yml) builds `world`, `realm` and `tools` for `linux/amd64`
 and `linux/arm64` and pushes them to `ghcr.io/krilliac/arcanecore-world`, `arcanecore-realm` and `arcanecore-tools`. It runs on a push to
-`main` (tag `edge`, Debug), on a `v*` tag (that tag, Release) and by hand; every run also pushes `sha-<7 hex>`. The images are public.
+`main` (tag `edge`, Debug, plus `sha-<7 hex>` of the pushed commit), on a `v*` tag (only that tag, Release; no `sha-` tag, because the
+commit usually has one from its push to `main` already) and by hand (`sha-<7 hex>-debug` or `sha-<7 hex>-release`, so a hand-run build
+never overwrites the tag of a push). Pushes that change only `docs/**` or `*.md` files do not run it. A pull request that touches the
+Dockerfile or anything the build depends on runs the same multi-arch build without pushing, so a `linux/arm64` failure shows before
+the merge.
+
+GHCR packages start **private**. After the first push, the repository owner makes each of the three packages public once (GitHub:
+profile or organization, Packages, the package, Package settings, Change visibility, Public) so a VPS can pull without a login; until
+then `docker pull` answers `denied` and a VPS needs `docker login ghcr.io` with a token that has `read:packages`. The workflow never
+changes visibility.
 Pick a version and pull it: set `ARCANE_IMAGE_TAG` in `.env` (for example to `edge`, or to a release tag), then
 `docker compose -f docker-compose.prod.yml pull`.
 
@@ -105,7 +115,9 @@ new version already applied is not undone: restore the backup for that).
 
 [`tools/ops/deploy/backup-database.sh`](../../tools/ops/deploy/backup-database.sh) dumps the three schemas into
 `arcanecore-<UTC time>.sql.gz` under `BACKUP_DIR` and deletes dumps older than `KEEP_DAYS` (default 14). It runs `mariadb-dump`
-inside the database container with `--single-transaction`, so the realm and world keep running and no password is on a command line:
+inside the database container with `--single-transaction`, so the realm and world keep running. The root password reaches it through the
+`MYSQL_PWD` environment variable inside the container, so it is on no command line. `BACKUP_DIR` defaults to `/var/backups/arcanecore`
+(outside the checkout; the dumps hold every account and character, and `*.sql.gz` is git-ignored and refused by the repository hygiene test):
 
 ```sh
 COMPOSE_FILE=docker-compose.prod.yml BACKUP_DIR=/srv/backups tools/ops/deploy/backup-database.sh
@@ -115,8 +127,8 @@ COMPOSE_FILE=docker-compose.prod.yml BACKUP_DIR=/srv/backups tools/ops/deploy/ba
 By hand:
 
 ```sh
-docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction --databases arcanecore_auth arcanecore_characters arcanecore_world' | gzip > backup.sql.gz
-gunzip -c backup.sql.gz | docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"'   # restore, with the realm and world stopped
+docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'export MYSQL_PWD="$MARIADB_ROOT_PASSWORD"; exec mariadb-dump -uroot --single-transaction --databases arcanecore_auth arcanecore_characters arcanecore_world' | gzip > backup.sql.gz
+gunzip -c backup.sql.gz | docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'export MYSQL_PWD="$MARIADB_ROOT_PASSWORD"; exec mariadb -uroot'   # restore, with the realm and world stopped
 ```
 
 Copy the dumps off the VPS; a backup on the same disk is not one.

@@ -3,7 +3,7 @@
 [![CI](https://github.com/Krilliac/ArcaneCore/actions/workflows/ci.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Krilliac/ArcaneCore/actions/workflows/codeql.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/codeql.yml)
 [![Docker smoke](https://github.com/Krilliac/ArcaneCore/actions/workflows/docker-smoke.yml/badge.svg)](https://github.com/Krilliac/ArcaneCore/actions/workflows/docker-smoke.yml)
-[![Nightly](https://img.shields.io/github/v/release/Krilliac/ArcaneCore?include_prereleases&label=nightly&style=flat-square)](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly)
+[![Nightly (Debug)](https://img.shields.io/badge/nightly%20(Debug)-download-blue?style=flat-square)](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly)
 [![Last commit](https://img.shields.io/github/last-commit/Krilliac/ArcaneCore.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/Krilliac/ArcaneCore/commits/main)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat)](docs/guide/contributing.md)
 
@@ -89,9 +89,11 @@ configuration. Tagged `v*` releases are built in Release configuration.
 | Checksums | [SHA256SUMS](https://github.com/Krilliac/ArcaneCore/releases/download/nightly/SHA256SUMS) |
 
 The same file names exist under every release tag, for example `.../releases/download/<tag>/arcanecore-linux-x64.tar.gz`. The arm64
-archives are built on a best-effort basis and may be missing from a given release.
+archives are built on a best-effort basis: when an arm64 build fails, the release has no arm64 archive for that run (assets of earlier
+runs are removed, never left behind next to newer x64 ones), so check `SHA256SUMS` for what the release carries.
 
-Each archive unpacks to `arcanecore-<platform>/` with the layout of the Docker images:
+Each archive unpacks to `arcanecore-<platform>/`, self-contained and laid out like the Docker images, plus the `*.conf.dist` files of every key
+(the images do not carry those):
 
 ```
 world/       ArcaneCore.World, the Playerbots pack beside it, world.conf.dist, appsettings.json
@@ -101,7 +103,9 @@ dbupgrade/   arcane-db
 account/     arcane-account
 ```
 
-**Docker images** (public, `linux/amd64` and `linux/arm64`), built by the [publish workflow](.github/workflows/docker-publish.yml):
+**Docker images** (`linux/amd64` and `linux/arm64`), published to `ghcr.io` by the [publish workflow](.github/workflows/docker-publish.yml).
+GHCR packages start private: the images are public once the repository owner sets each package (`arcanecore-world`, `arcanecore-realm`,
+`arcanecore-tools`) to public visibility, a one-time step after the first push ([Docker guide](docs/guide/docker.md#image-tags-and-the-registry)):
 
 ```bash
 docker pull ghcr.io/krilliac/arcanecore-world:edge      # edge: every push to main, Debug configuration
@@ -109,7 +113,8 @@ docker pull ghcr.io/krilliac/arcanecore-realm:edge
 docker pull ghcr.io/krilliac/arcanecore-tools:edge      # content importer, arcane-db, arcane-account
 ```
 
-Version tags (`v*`) are Release builds; `sha-<7 hex>` pins an exact commit. Running them: [Docker guide](docs/guide/docker.md).
+Version tags (`v*`) are Release builds (a tag run pushes only the version tag); `sha-<7 hex>` pins the commit of a push to `main` (Debug).
+Running them: [Docker guide](docs/guide/docker.md).
 
 ## Build from source
 
@@ -178,7 +183,9 @@ The full walk-through is [`docs/guide/installation.md`](docs/guide/installation.
    and shell history, and prints a warning.
 4. **Start**: the realm daemon, then the world daemon (`realm/ArcaneCore.Realm`, `world/ArcaneCore.World`, or
    `dotnet run --project src/ArcaneCore.Realm -c Release` and `dotnet run --project src/ArcaneCore.World -c Release`). Run the
-   world's `check-config` verb first to validate the configuration without starting anything.
+   world's `check-config` verb first to validate the configuration without starting anything. The world daemon shares the auth
+   database with the realm daemon (it reads the session key produced at logon), so its `Database:Auth` connection must point at the
+   same database as the realm's.
 5. **Client**: put `set realmlist 127.0.0.1` (or your host) in the client's `realmlist.wtf`, log in, pick the realm and create a
    character. Acceptance procedures: [`docs/M1_ACCEPTANCE.md`](docs/M1_ACCEPTANCE.md), `docs/M2_ACCEPTANCE.md` ...
    `docs/M6_ACCEPTANCE.md`.

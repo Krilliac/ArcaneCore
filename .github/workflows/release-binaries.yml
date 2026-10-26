@@ -9,10 +9,16 @@ name: Release binaries
 # Asset names never change, so a link such as .../releases/download/nightly/arcanecore-win-x64.zip stays valid:
 #   arcanecore-win-x64.zip  arcanecore-linux-x64.tar.gz  arcanecore-win-arm64.zip  arcanecore-linux-arm64.tar.gz  SHA256SUMS
 # A pull request that changes this workflow or the publish script only builds and smoke-checks (no release); a manual run does the same.
+# A push that changes only docs/** or Markdown files is skipped (path filters are not evaluated for tag pushes, so a v* tag always builds).
+# The arm64 builds are best effort: when one fails the release gets no arm64 archive for that run, and the release step deletes the assets
+# an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one.
 on:
   push:
     branches: ["main"]
     tags: ["v*"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   pull_request:
     paths:
       - ".github/workflows/release-binaries.yml"
@@ -135,12 +141,30 @@ jobs:
             gh release create nightly --prerelease --verify-tag --title "Nightly (Debug)" --notes "$notes"
           fi
           gh release upload nightly dist/* --clobber
+          # Remove assets this run did not produce (an arm64 build that failed this time would otherwise leave last run's archive, which
+          # --clobber never touches, next to fresh x64 ones and a SHA256SUMS that does not list it). Only this workflow's own names.
+          gh release view nightly --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+            case "$asset" in arcanecore-* | SHA256SUMS) ;; *) continue ;; esac
+            if [ ! -e "dist/$asset" ]; then
+              echo "deleting stale asset $asset"
+              gh release delete-asset nightly "$asset" --yes
+            fi
+          done
 
       - name: Versioned release (v* tag)
         if: github.ref_type == 'tag'
         run: |
           if gh release view "$REF_NAME" > /dev/null 2>&1; then
             gh release upload "$REF_NAME" dist/* --clobber
+            # Remove assets this run did not produce (an arm64 build that failed this time would otherwise leave last run's archive, which
+            # --clobber never touches, next to fresh x64 ones and a SHA256SUMS that does not list it). Only this workflow's own names.
+            gh release view "$REF_NAME" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+              case "$asset" in arcanecore-* | SHA256SUMS) ;; *) continue ;; esac
+              if [ ! -e "dist/$asset" ]; then
+                echo "deleting stale asset $asset"
+                gh release delete-asset "$REF_NAME" "$asset" --yes
+              fi
+            done
           else
             gh release create "$REF_NAME" dist/* --verify-tag --title "$REF_NAME" --generate-notes
           fi

@@ -3,13 +3,32 @@ name: Docker publish
 # Builds the world, realm and tools images of apps/docker/Dockerfile for linux/amd64 and linux/arm64 and pushes them to the GitHub
 # Container Registry, so a Docker VPS pulls them (docker-compose.prod.yml, docs/guide/docker.md) instead of building from source.
 # It runs on a push to main (the rolling `edge` tag, Debug configuration like the live server and the nightly binaries), when a version
-# tag v* is pushed (Release), and by hand (workflow_dispatch).
-# Tags pushed per image: edge (push to main), the git tag (tag runs) and sha-<7 hex> (every run). A hand-run Debug build gets a
-# -debug suffix on its tags.
+# tag v* is pushed (Release), and by hand (workflow_dispatch). A push that changes only docs/** or Markdown files is skipped (path
+# filters are not evaluated for tag pushes, so a v* tag always builds).
+# A pull request that changes what the image build depends on runs the same multi-arch build with push: false, so a linux/arm64
+# failure shows before the merge.
+# Tags pushed per image: edge (push to main), sha-<7 hex> (push to main, Debug), the git tag (tag runs: only that tag, since the commit
+# usually has its sha tag from the push to main already and a second Release push would overwrite it) and, for a hand run,
+# sha-<7 hex>-debug or sha-<7 hex>-release. A hand-run Debug build also gets a -debug suffix on its other tags.
 on:
   push:
     branches: ["main"]
     tags: ["v*"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/docker/**"
+      - ".dockerignore"
+      - "global.json"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - ".editorconfig"
+      - "**/*.csproj"
+      - "**/packages.lock.json"
+      - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
     inputs:
       configuration:
@@ -27,6 +46,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -56,7 +76,9 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # A pull request only builds: nothing is pushed, so it needs no login (and a fork's token could not write anyway).
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -73,7 +95,8 @@ jobs:
           tags: |
             type=ref,event=tag
             type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=sha
+            type=sha,enable=${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+            type=sha,suffix=${{ inputs.configuration == 'Release' && '-release' || '' }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
 
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -85,6 +108,6 @@ jobs:
             CONFIGURATION=${{ env.CONFIGURATION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,scope={0}', matrix.target) || '' }}

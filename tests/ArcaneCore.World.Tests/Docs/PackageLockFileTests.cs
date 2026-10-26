@@ -37,6 +37,7 @@ public sealed class PackageLockFileTests
     [InlineData("tools/ops/ci/node-ci.ps1")]
     [InlineData("tools/ops/ci/full-suite-gate.ps1")]
     [InlineData("tools/ops/deploy/build-integrated.sh")]
+    [InlineData("tools/ops/deploy/publish-binaries.sh")]
     public void EveryScriptedRestore_RunsInLockedMode(string file)
     {
         string[] restores = [.. Regex.Matches(RepoRoot.ReadText(file), @"dotnet restore[^\r\n&]*").Select(m => m.Value.TrimEnd(' ', '\\'))];
@@ -52,6 +53,17 @@ public sealed class PackageLockFileTests
         string[] builds = [.. Regex.Matches(RepoRoot.ReadText("tools/ops/deploy/build-integrated.sh"), @"dotnet build \S+\.slnx[^\r\n]*").Select(m => m.Value)];
         Assert.NotEmpty(builds);
         Assert.All(builds, b => Assert.Contains("--no-restore", b, StringComparison.Ordinal));
+    }
+
+    /// <summary>The release publish script restores in locked mode, so its publish commands must not restore again (an implicit restore is unlocked) and must not switch the audit off.</summary>
+    [Fact]
+    public void ThePublishScript_PublishesFromItsLockedRestoreWithAuditOn()
+    {
+        string script = RepoRoot.ReadText("tools/ops/deploy/publish-binaries.sh");
+        string[] publishes = [.. Regex.Matches(script, @"dotnet publish [^\r\n]*").Select(m => m.Value)];
+        Assert.NotEmpty(publishes);
+        Assert.All(publishes, p => Assert.Contains("--no-restore", p, StringComparison.Ordinal));
+        Assert.DoesNotContain("NuGetAudit=false", script, StringComparison.Ordinal);
     }
 
     [Fact]
