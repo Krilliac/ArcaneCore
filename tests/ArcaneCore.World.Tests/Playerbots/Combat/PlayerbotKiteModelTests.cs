@@ -166,7 +166,7 @@ public sealed class PlayerbotKiteModelTests
     {
         foreach (Class playerClass in Enum.GetValues<Class>())
             foreach (string name in PlayerbotKiteModel.SlowsOf(playerClass))
-                Assert.Contains(name, PlayerbotEscapes.All);
+                Assert.Contains(name, PlayerbotEscapes.Resolvable);
     }
 
     private static SpellInfo Spell(string name, params SpellEffectInfo[] effects) => new()

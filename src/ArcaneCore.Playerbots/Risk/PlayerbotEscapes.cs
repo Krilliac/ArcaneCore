@@ -59,8 +59,17 @@ internal static class PlayerbotEscapes
     [
         FrostNova, Blink, Vanish, Sprint, Gouge, FeignDeath, ConcussiveShot, WingClip, AspectOfTheCheetah, PsychicScream,
         PowerWordShield, Fade, Fear, HowlOfTerror, DeathCoil, IntimidatingShout, Hamstring, EntanglingRoots, TravelForm, CatForm,
-        Dash, HammerOfJustice, DivineShield, FrostShock, Frostbolt, ConeOfCold, CurseOfExhaustion,
+        Dash, HammerOfJustice, DivineShield, FrostShock,
     ];
+
+    /// <summary>
+    /// The victim snares only the kite uses (<see cref="PlayerbotKiteModel"/>). Kept out of <see cref="All"/> so the risk model's
+    /// ready-escape count (<c>PlayerbotRisk.ReadyEscapes</c>) and the retreat's candidates are unchanged by the kite.
+    /// </summary>
+    internal static IReadOnlyList<string> KiteSlows { get; } = [Frostbolt, ConeOfCold, CurseOfExhaustion];
+
+    /// <summary>Every name a bot resolves from its spellbook into its escape book: <see cref="All"/> and <see cref="KiteSlows"/>.</summary>
+    internal static IReadOnlyList<string> Resolvable { get; } = [.. All, .. KiteSlows];
 
     /// <summary>The escapes of a class in the order they are tried.</summary>
     internal static IEnumerable<EscapeAction> Candidates(EscapeSituation s)

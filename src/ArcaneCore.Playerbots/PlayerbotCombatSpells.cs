@@ -407,7 +407,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private int _escapeBookCount = -1;
 
     /// <summary>
-    /// The class escapes the bot knows (<see cref="PlayerbotEscapes.All"/>), resolved from its book at the highest rank; rebuilt when
+    /// The class escapes and kite slows the bot knows (<see cref="PlayerbotEscapes.Resolvable"/>), resolved from its book at the highest rank; rebuilt when
     /// the book changes size.
     /// </summary>
     internal PlayerbotAbilities Escapes(Player player)
@@ -417,7 +417,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         IReadOnlyList<uint> book = feature.Spellbook.GetSpells(player);
         if (_escapes is not null && _escapeBookCount == book.Count) return _escapes;
         _escapeBookCount = book.Count;
-        return _escapes = PlayerbotAbilities.Resolve([.. book.Select(feature.System.Store.Get).OfType<SpellInfo>()], PlayerbotEscapes.All);
+        return _escapes = PlayerbotAbilities.Resolve([.. book.Select(feature.System.Store.Get).OfType<SpellInfo>()], PlayerbotEscapes.Resolvable);
     }
 
     /// <summary>Whether <paramref name="spell"/> can be cast at <paramref name="target"/> now (the rotation's castability check).</summary>

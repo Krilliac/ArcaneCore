@@ -45,7 +45,7 @@ public sealed class PlayerbotEscapeSpellDataTests
         var ranges = content.Ranges.ToDictionary(r => r.Id);
         var radii = content.Radii.ToDictionary(r => r.Id);
         int checkedWithEffect = 0;
-        foreach (string name in PlayerbotEscapes.All)
+        foreach (string name in PlayerbotEscapes.Resolvable)
         {
             SpellTemplateRow[] rows = [.. content.Spells.Where(r => string.Equals(r.SpellName, name, StringComparison.Ordinal))];
             Assert.True(rows.Length > 0, $"{name} is not in Spell.dbc");
@@ -135,7 +135,7 @@ public sealed class PlayerbotEscapeSpellDataTests
         Assert.Equal(PlayerbotEscapes.EscapeKind.None, PlayerbotEscapes.KindOf("Travel Form"));
         Assert.Equal(PlayerbotEscapes.EscapeEffect.None, PlayerbotEscapes.EffectOf("Travel Form", Resolve(783u, "Travel Form")));
         SpellDbcContent content = Content.Value;
-        foreach (string name in PlayerbotEscapes.All.Where(n => PlayerbotEscapes.KindOf(n) is PlayerbotEscapes.EscapeKind.SelfSpeed or PlayerbotEscapes.EscapeKind.VictimSnare))
+        foreach (string name in PlayerbotEscapes.Resolvable.Where(n => PlayerbotEscapes.KindOf(n) is PlayerbotEscapes.EscapeKind.SelfSpeed or PlayerbotEscapes.EscapeKind.VictimSnare))
         {
             bool any = content.Spells.Where(r => string.Equals(r.SpellName, name, StringComparison.Ordinal))
                 .Select(r => PlayerbotEscapes.EffectOf(name, ToInfo(r)))
