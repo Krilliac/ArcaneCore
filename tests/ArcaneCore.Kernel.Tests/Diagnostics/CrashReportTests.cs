@@ -67,6 +67,9 @@ public sealed class CrashReportTests
     public void Render_ListsTheInvariantCounters()
     {
         Invariant.Configure(new DiagnosticsOptions { InvariantLogLimit = 0 }, logger: null);
+        // The report shows the ten most frequent sites. Sites that earlier tests left in this process with a higher count
+        // would push this site (count 1) out of the list, so start from empty counters. The Diagnostics collection runs serially.
+        Invariant.ResetCounters();
         try
         {
             Invariant.Check(false, "counted for the report");
