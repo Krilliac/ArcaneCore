@@ -284,6 +284,69 @@ internal static class PlayerbotNavigation
             && watch.IsDeadEndPin(player.MapId, point.X, point.Y, world.NowMs);
 
     /// <summary>
+    /// The least polygons each of the two parts a cut region joins must hold for the region to be a corridor between two real places
+    /// (<see cref="NavRegionGraph.JoinsLargeParts"/>): the same size as <see cref="FragmentPolygons"/>, below which a piece of mesh is a
+    /// pocket or sliver and not a place a bot is kept out of by pinning its doorway. The Timbermaw Hold tunnel joins Felwood and
+    /// Winterspring, each of tens of thousands of polygons.
+    /// </summary>
+    internal const int CutRegionPartPolygons = FragmentPolygons;
+
+    /// <summary>
+    /// Whether the walking region graph puts <paramref name="point"/> in a region that joins two large parts of the mesh
+    /// (<see cref="NavRegionGraph.JoinsLargeParts"/>, <see cref="CutRegionPartPolygons"/> polygons each): a doorway or tunnel, where stalled
+    /// bots are in each other's way and the ground is not at fault. False when the graph is not built yet or the point is on no region. A
+    /// region lookup (tiles read without blocking) and two array reads; world thread.
+    /// </summary>
+    internal static bool IsCutRegionAt(Player player, Vector3 point, int maxRegionPolygons)
+    {
+        TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
+        return IsCutRegion(graph, region, maxRegionPolygons);
+    }
+
+    /// <summary>
+    /// The walking region graph of the player's map and the region of it under <paramref name="point"/> (-1: none). False, and a null graph,
+    /// when the graph is not built yet or the map has no navigation mesh. The lookup reads tiles without blocking; world thread.
+    /// </summary>
+    internal static bool TryRegionAt(Player player, Vector3 point, out NavRegionGraph? graph, out int region)
+    {
+        graph = null;
+        region = -1;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } built)
+            return false;
+        graph = built;
+        region = nav.RegionAt(built, point, WalkingLocate);
+        return true;
+    }
+
+    /// <summary>
+    /// <paramref name="region"/> (-1: none) of <paramref name="graph"/> (null: not built) joins two parts of at least <see cref="CutRegionPartPolygons"/>
+    /// polygons each and holds at most <paramref name="maxRegionPolygons"/> polygons itself (<see cref="PlayerbotOptions.CutRegionMaxPolygons"/>):
+    /// the exemption judges the whole region, so a large one is judged as any other region.
+    /// </summary>
+    internal static bool IsCutRegion(NavRegionGraph? graph, int region, int maxRegionPolygons)
+        => graph is not null && region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons) && graph.RegionPolygons(region) <= maxRegionPolygons;
+
+    /// <summary>
+    /// Whether a plan must refuse a destination or leg end at <paramref name="point"/> for a dead-end pin of this bot (<see cref="IsDeadEndPin"/>):
+    /// not when the pinned cell is a cut region (<see cref="IsCutRegionAt"/>). A bot's way through a tunnel ends in its cells; refusing them
+    /// refused the only route (Timbermaw Hold, issues #1478 and #1479).
+    /// </summary>
+    private static bool PinRefuses(Player player, Vector3 point, PlayerbotOptions options)
+    {
+        if (!IsDeadEndPin(player, point)) return false; // the region is looked up only for a pinned cell
+        TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
+        return PinRefuses(deadEndPin: true, graph, region, options.CutRegionMaxPolygons);
+    }
+
+    /// <summary>
+    /// The decision of <see cref="PinRefuses(Player, Vector3, PlayerbotOptions)"/> on its inputs: a pin of the bot (<paramref name="deadEndPin"/>) refuses
+    /// unless the point's <paramref name="region"/> of <paramref name="graph"/> is a cut region (<see cref="IsCutRegion"/>).
+    /// </summary>
+    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region, int maxRegionPolygons)
+        => deadEndPin && !IsCutRegion(graph, region, maxRegionPolygons);
+
+    /// <summary>
     /// Whether <paramref name="point"/> lies in a cell the bots of the world found a dead end (<see cref="PlayerbotSharedPins"/>). Asked by the
     /// explore filter only: unlike <see cref="IsDeadEndPin"/> it never makes a plan refuse a destination, so an NPC standing there stays reachable.
     /// </summary>
@@ -703,6 +766,22 @@ internal static class PlayerbotNavigation
             && IsOutdoorsOnSurface(map, here);
     }
 
+    /// <summary>
+    /// Whether the map's walking region graph (steep slopes excluded) puts the bot and <paramref name="goal"/> in different components,
+    /// without <see cref="IsUnreachableOnFoot"/>'s outdoors exemption (kept: its fragment and small-part exemptions). False when the graph is not built yet or either place is on no region.
+    /// </summary>
+    internal static bool InOtherWalkingComponent(Player player, Vector3 goal)
+    {
+        if (!goal.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        int from = nav.RegionAt(graph, PlayerbotMotion.CurrentPosition(player), WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        // The size exemptions of IsUnreachableOnFoot stay (a bot on a fragment, or on a part far smaller than the goal's, says nothing
+        // about the world: PlanToward's escapes run first); its outdoors exemption goes, since an indoor start is a live failure case.
+        return from >= 0 && to >= 0 && graph.ComponentOf(from) != graph.ComponentOf(to) && !IsFragment(graph, from)
+            && !(graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to));
+    }
+
     /// <summary>The shortest step <see cref="TryPlanToward"/> shortens its point to before it gives up.</summary>
     internal const float MinTowardChunkYards = 24f;
 
@@ -947,7 +1026,7 @@ internal static class PlayerbotNavigation
         }
 
         // A destination given up after a loop or remembered as a dead-end pin is refused, so the goal picks another one.
-        if (PlayerbotMotion.IsBlacklisted(player, destination) || IsDeadEndPin(player, destination))
+        if (PlayerbotMotion.IsBlacklisted(player, destination) || PinRefuses(player, destination, options))
         {
             t_nonPathRefusal = true;
             return false;
@@ -1070,7 +1149,7 @@ internal static class PlayerbotNavigation
         // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination))
         {
-            if (PlayerbotMotion.IsBlacklisted(player, path.End) || IsDeadEndPin(player, path.End))
+            if (PlayerbotMotion.IsBlacklisted(player, path.End) || PinRefuses(player, path.End, options))
             {
                 t_nonPathRefusal = true;
                 return false;
@@ -1746,4 +1825,84 @@ internal static class PlayerbotNavigation
     internal static bool InvalidHeight(float height)
         => !float.IsFinite(height) || height == TerrainTile.InvalidHeight
             || height == TerrainTile.InvalidHeightValue;
+
+    /// <summary>How far above the bot's own height the first floor probe of <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/> starts: inside a cave or tunnel that is still under the roof.</summary>
+    internal const float GroundProbeLowYards = 2f;
+
+    /// <summary>The second, higher probe: it finds a ledge or a slope the low probe starts below, but inside a cave it starts in the rock over the bot (the roof 40 yards up is its floor).</summary>
+    internal const float GroundProbeHighYards = 20f;
+
+    /// <summary>A floor farther than this from the bot's height is not the ground under a goal point (a roof or a canyon floor).</summary>
+    internal const float GroundMaxDeltaYards = 30f;
+
+    /// <summary>
+    /// <paramref name="point"/> put on the floor nearest the bot's height <paramref name="botZ"/>, or <paramref name="point"/> as it is
+    /// when no floor qualifies. The floor is looked for from <see cref="GroundProbeLowYards"/> above the bot first, then from
+    /// <see cref="GroundProbeHighYards"/> above it, and the nearer to the bot's height of the two is taken (the lower one on a tie). A
+    /// probe from 20 yards up alone starts in the rock above a bot in a cave or tunnel and finds the roof, or nothing within reach, so
+    /// the goal point stayed at the bot's height in rock and the region graph put it on no region (Timbermaw Hold, issues #1478 and
+    /// #1479). A floor is dropped when it is invalid, farther than <see cref="GroundMaxDeltaYards"/> from the bot's height, or
+    /// <paramref name="usable"/> (when given) says it is no ground the bot can walk to. <paramref name="height"/> is the floor under
+    /// x, y probed from z (<see cref="MapCollision.GetHeight(float, float, float, bool, float)"/>).
+    /// </summary>
+    internal static Vector3 GroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
+    {
+        float best = float.NaN, bestDelta = float.MaxValue;
+        for (int probe = 0; probe < 2; probe++)
+        {
+            float floor = height(point.X, point.Y, botZ + (probe == 0 ? GroundProbeLowYards : GroundProbeHighYards));
+            float delta = MathF.Abs(floor - botZ);
+            if (InvalidHeight(floor) || delta > GroundMaxDeltaYards || delta >= bestDelta) continue;
+            if (usable is not null && !usable(point with { Z = floor })) continue;
+            (best, bestDelta) = (floor, delta);
+        }
+
+        return float.IsNaN(best) ? point : point with { Z = best };
+    }
+
+    /// <summary>
+    /// <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/> on <paramref name="map"/>'s floor,
+    /// for a goal point of the bot standing at <paramref name="bot"/>: a floor is also dropped when the walking region graph puts it on no
+    /// region or in another component than the bot's own place (a ledge across a cliff the bot cannot walk to). Without a built graph, or
+    /// with the bot on no region, the floor is not filtered. World thread (the region lookups read tiles without blocking: a tile
+    /// still being read drops its floor, which leaves the point as it was).
+    /// </summary>
+    internal static Vector3 GroundNear(Map map, Vector3 bot, Vector3 point) => new FloorProbe(map, bot).Near(point);
+
+    /// <summary>
+    /// The floor lookups for the goal points of one bot standing at one place (<see cref="GroundNear(Map, Vector3, Vector3)"/>): the
+    /// bot's own region and component are looked up once, and the two delegates are made once, so each <see cref="Near"/> costs its
+    /// floor probes and region lookups only. Not thread-safe; a probe lives for the planning of one think.
+    /// </summary>
+    internal sealed class FloorProbe
+    {
+        private readonly Map _map;
+        private readonly Vector3 _bot;
+        private readonly NavMeshPathfinder? _nav;
+        private readonly NavRegionGraph? _graph;
+        private readonly int _component = -1;
+        private readonly Func<float, float, float, float> _height;
+        private readonly Func<Vector3, bool>? _usable;
+
+        internal FloorProbe(Map map, Vector3 bot)
+        {
+            _map = map;
+            _bot = bot;
+            _height = Height;
+            if (map.Collision.Pathfinder is NavMeshPathfinder nav
+                && nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph
+                && nav.RegionAt(graph, bot, WalkingLocate) is >= 0 and var own)
+            {
+                (_nav, _graph, _component) = (nav, graph, graph.ComponentOf(own));
+                _usable = Usable;
+            }
+        }
+
+        /// <summary><paramref name="point"/> on the floor nearest the bot's height, as <see cref="GroundNear(Map, Vector3, Vector3)"/>.</summary>
+        internal Vector3 Near(Vector3 point) => GroundNear(_height, _usable, _bot.Z, point);
+
+        private float Height(float x, float y, float z) => _map.Collision.GetHeight(x, y, z);
+
+        private bool Usable(Vector3 floor) => _graph!.ComponentOf(_nav!.RegionAt(_graph, floor, WalkingLocate)) == _component;
+    }
 }

@@ -15,7 +15,12 @@ public sealed class EventHub
     /// <summary>Topics the host and UI know. Others are allowed (they are forwarded as-is).</summary>
     public static class Topics
     {
-        /// <summary><c>{"version","origin","view"}</c> after every view change.</summary>
+        /// <summary>
+        /// <c>{"version","origin","view","cameraChanged","followOrigin"}</c> after every view change; <c>cameraChanged</c> is true when the
+        /// change altered the camera or the followed entity, so a UI that flies its own camera knows whether the event concerns it.
+        /// <c>followOrigin</c> is the origin that started the current follow (null when nothing is followed): the live feed's per-frame
+        /// camera moves carry origin <c>live</c> but belong to whoever asked to follow.
+        /// </summary>
         public const string View = "view";
 
         /// <summary><c>CommandResult.ToJson()</c> plus <c>"origin"</c> after every command.</summary>

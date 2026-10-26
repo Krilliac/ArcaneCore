@@ -162,7 +162,10 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         private readonly WorldTestHost _host;
         private readonly WorldSession _session;
         private readonly PlayerbotTownGoals _goals;
-        private readonly PlayerbotThinkProbe _probe = new();
+        // A frozen clock: the repair plans also stop at 20 ms of wall time into the think (PlayerbotTownGoals, RunningMs), which a loaded
+        // machine reaches after the first plan (CI: 13 queries, 1 plan). The count and the query-time budgets are what these tests pin;
+        // the query time then stays 0 ticks, which a limit of 0 (the time-budget test) still spends.
+        private readonly PlayerbotThinkProbe _probe = new(new PlayerbotThinkProbeTests.ManualClock());
 
         private RepairHazardWorld(WorldTestHost host, WorldSession session, HazardPathfinder path)
         {

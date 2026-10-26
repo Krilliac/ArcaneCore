@@ -599,11 +599,26 @@ public sealed class LiveFeed : IDisposable
     /// Sets (or, with null, clears) the view's follow and, when the entity is known, moves the camera to it in the same patch. While a
     /// follow is set, every frame that moves the entity moves the camera target again (and switches the view to the entity's map).
     /// </summary>
-    public JsonObject Follow(ulong? guid)
+    /// <param name="guid">The entity to follow, or null to stop.</param>
+    /// <param name="origin">The origin label of whoever asked (a <c>ui:&lt;connection&gt;</c>, <c>cli</c>, <c>mcp</c> ...), which the view records as the owner of the follow; default <c>live</c>.</param>
+    public JsonObject Follow(ulong? guid, string? origin = null)
     {
+        origin ??= ViewOrigin;
         if (guid is null)
         {
-            _view.Patch(new JsonObject { ["follow"] = null }, ViewOrigin);
+            ViewState after = _view.Patch(new JsonObject { ["follow"] = null }, origin);
+
+            // The view store ignores a clear from a UI while another UI owns the follow: report what the view really holds.
+            if (after.FollowGuid is { } kept)
+            {
+                return new JsonObject
+                {
+                    ["following"] = kept,
+                    ["found"] = LiveGuid.TryParse(kept, out ulong keptId) && Store.TryGetEntity(keptId, out _),
+                    ["note"] = "the follow is owned by another session; only its owner can stop it.",
+                };
+            }
+
             lock (_state)
             {
                 _followId = 0;
@@ -621,7 +636,7 @@ public sealed class LiveFeed : IDisposable
             AddCameraMove(patch, entity!);
         }
 
-        _view.Patch(patch, ViewOrigin);
+        _view.Patch(patch, origin);
         lock (_state)
         {
             _followId = id;
