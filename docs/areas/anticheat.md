@@ -40,7 +40,7 @@ A GM cheat is a grant of flags, not an exemption (vmangos reads `PLAYER_CHEAT_FL
 checks, MovementAnticheat.cpp:789-806, 1090): `.cheat fly` lets the levitating and swim-fly flags pass the flag test and the
 swimming-out-of-water test, `.cheat waterwalk` and `.cheat featherfall` grant the water walk and slow fall flags
 (`MovementCheats.GrantedFlags`). Speed, teleport, fall damage, the void kill and the time checks judge the player as always, and a
-jump ends fly mode. `UNIT_FLAG_SERVER_CONTROLLED` (`.cheat wallclimb`) switches the climbed-into-the-air test off for that
+jump ends fly mode and a far teleport ends fly and fixed Z (a near one keeps them, as the client keeps flying). `UNIT_FLAG_SERVER_CONTROLLED` (`.cheat wallclimb`) switches the climbed-into-the-air test off for that
 player (vmangos NO_WALL_CLIMB_CHECK_UNIT_FLAGS). A feather fall cheat also takes the fall damage away. The rejection points (an unknown spell, a far game object) are not movement
 and still apply. The cheats live on the `Player`, are never saved, and end with the session.
 

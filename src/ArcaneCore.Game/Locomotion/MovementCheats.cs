@@ -16,8 +16,10 @@ namespace ArcaneCore.Game.Locomotion;
 /// <c>SetCheatFixedZ</c> (:2744-2760): record the cheat, set the movement flags, <c>RejectMovementPacketsFor(100)</c>, then
 /// <c>SendHeartBeat(true)</c>, which is MSG_MOVE_HEARTBEAT with the player's packed GUID and movement block to everyone who sees the
 /// player and to the player itself (Unit.cpp:511-527). Status: emulator-sourced; not checked against a 1.12.1 client. vmangos does
-/// not clear the cheat on a teleport (nothing outside CharacterCommands.cpp and MovementAnticheat.cpp reads it), so neither does this; as
-/// the cheat only whitelists flags, a stale one grants no immunity. A jump ends fly mode (the command's own warning; <see cref="EndFlyOnJump"/>).
+/// not clear the cheat on a teleport (nothing outside CharacterCommands.cpp and MovementAnticheat.cpp reads it); this core clears Fly and
+/// Fixed Z on a far teleport (TeleportService.TeleportTo), where the client enters the world afresh, so the cheat cannot keep whitelisting
+/// the fly hack's flags for a player who walks again. A near teleport keeps the client's flight and the cheat. As the cheat only
+/// whitelists flags, a stale one grants no immunity. A jump ends fly mode (the command's own warning; <see cref="EndFlyOnJump"/>).
 /// Feather fall has no vmangos command; the order is the existing feather fall change (SMSG_MOVE_FEATHER_FALL 242 / SMSG_MOVE_NORMAL_FALL
 /// 243, vmangos MovementPacketSender::SendMovementFlagChangeToController, MovementPacketSender.cpp:346, via <see cref="MovementControl"/>).
 /// </para>

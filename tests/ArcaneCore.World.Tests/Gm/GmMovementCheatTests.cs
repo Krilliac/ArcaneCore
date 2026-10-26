@@ -2,14 +2,18 @@ using System.Collections.Concurrent;
 using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.AntiCheat;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -331,7 +335,15 @@ public sealed class GmMovementCheatTests
         // vmangos HandleCheatFlyCommand: getSelectedPlayer() is null for a creature, and the handler falls back to the invoker (CharacterCommands.cpp:105-107).
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await EnterGmAsync(host);
-        const ulong creatureGuid = 0xF130_0000_0000_0001UL;
+        const uint creatureEntry = 4201;
+        const uint creatureLow = 4201;
+        var template = new CreatureTemplate { Entry = creatureEntry, Name = "Selected Dummy", MinLevel = 5, MaxLevel = 5, MinLevelHealth = 60, MaxLevelHealth = 60, Faction = 35 };
+        (float gmX, float gmY, float gmZ) = await host.PlayerStateAsync("Movegm", p => (p.X, p.Y, p.Z));
+        var spawn = new CreatureSpawn { Guid = creatureLow, Entry = creatureEntry, MapId = 0, X = gmX + 1, Y = gmY, Z = gmZ };
+        var creature = new Creature(creatureLow, template, spawn, new CreatureContent([template], [spawn], [], [], []), new Random(1));
+        await host.OnWorldAsync(() => host.World.GetMap(0).AddObject(creature));
+
+        ulong creatureGuid = creature.Guid.Value;
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, BitConverter.GetBytes(creatureGuid));
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Movegm")!.Selection.Value == creatureGuid, "the creature selection");
 
@@ -342,6 +354,30 @@ public sealed class GmMovementCheatTests
 
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Movegm")!.Cheats == (PlayerCheats.Fly | PlayerCheats.FixedZ), "fly and fixed z on the invoker");
         Assert.True(await host.PlayerStateAsync("Movegm", p => (p.UnitFlags & UnitFlags.ServerControlled) != 0));
+    }
+
+    [Fact]
+    public async Task AFarTeleport_EndsFlyAndFixedZ_ButANearOneKeepsThem()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await EnterGmAsync(host);
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Movegm")!;
+            p.Cheats = PlayerCheats.Fly | PlayerCheats.FixedZ | PlayerCheats.NoCooldown;
+            TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(p, p.MapId, p.X + 3, p.Y, p.Z, p.Orientation));
+        });
+        Assert.Equal(PlayerCheats.Fly | PlayerCheats.FixedZ | PlayerCheats.NoCooldown, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Movegm")!;
+            TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(p, p.MapId, p.X, p.Y, p.Z, p.Orientation, TeleportOptions.ForceFar));
+        });
+        await gm.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        Assert.Equal(PlayerCheats.NoCooldown, await host.PlayerStateAsync("Movegm", p => p.Cheats));
     }
 
     [Fact]
@@ -520,8 +556,10 @@ public sealed class GmMovementCheatTests
             p.Cheats = cheat;
         });
 
-        await client.SendAsync(WorldOpcode.MsgMoveJump, FallBlock(MovementFlags.Jumping, 100));
+        // A heartbeat, not MSG_MOVE_JUMP: a jump ends fly mode (MovementCheats.EndFlyOnJump), and this row is about a fall while the cheat is still on.
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping, 100));
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping | MovementFlags.FallingFar, 80, 1500));
+        Assert.Equal(cheat, await host.PlayerStateAsync("Faller", p => p.Cheats));
         await client.SendAsync(WorldOpcode.MsgMoveFallLand, FallBlock(MovementFlags.None, 60, 3000));
         byte[] log = await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog);
         Assert.Equal(1432u, BitConverter.ToUInt32(log, 9));
