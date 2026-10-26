@@ -142,6 +142,7 @@ public sealed class PlayerbotWorldBossWorldTests
     // --- players first -------------------------------------------------------------------------------------------------------
 
     /// <summary>A real player standing at the passive boss, which the player tapped: the boss fights it for as long as the test wants and hits for nothing.</summary>
+    /// <remarks>The caller prepares <paramref name="account"/>'s character (PrepareCharacterAsync) before RaidersAsync, so its create does not overlap the bots' saves.</remarks>
     private static async Task<(WorldTestClient Client, Player Player, Creature Boss)> TakenByAPlayerAsync(GroupTestWorld world, Guid onMapOf, string account, string name)
     {
         Creature boss = await SpawnAsync(world, onMapOf, Passive(), BossAt);
@@ -161,6 +162,7 @@ public sealed class PlayerbotWorldBossWorldTests
     {
         using var counts = new OutcomeCounts();
         await using GroupTestWorld world = await StartAsync(boss => boss.HoldSeconds = 60, options => options.StallSeconds = 10);
+        await world.World.PrepareCharacterAsync("WBTAKER1", "Wbtakerone", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         (WorldTestClient client, Player player, Creature boss) = await TakenByAPlayerAsync(world, bots[0].Id, "WBTAKER1", "Wbtakerone");
         await using WorldTestClient taker = client;
@@ -196,6 +198,7 @@ public sealed class PlayerbotWorldBossWorldTests
     {
         // Item 3: StallSeconds 10 against a 60-second hold. Without the Waiting exemption the watch shuns the target at 10 s and ends the group at 20 s.
         await using GroupTestWorld world = await StartAsync(boss => boss.HoldSeconds = 60, options => options.StallSeconds = 10);
+        await world.World.PrepareCharacterAsync("WBTAKER2", "Wbtakertwo", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         (WorldTestClient client, Player player, Creature boss) = await TakenByAPlayerAsync(world, bots[0].Id, "WBTAKER2", "Wbtakertwo");
         await using WorldTestClient taker = client;
@@ -227,6 +230,9 @@ public sealed class PlayerbotWorldBossWorldTests
     {
         using var counts = new OutcomeCounts();
         await using GroupTestWorld world = await StartAsync(boss => { boss.PlayersNearCount = 3; boss.PlayersNearYards = 100f; boss.HoldSeconds = 900; });
+        // Create the players' characters before any bot exists, so the creates do not overlap the bots' character saves.
+        foreach (string name in new[] { "Wbnearone", "Wbneartwo", "Wbnearthree" })
+            await world.World.PrepareCharacterAsync(name.ToUpperInvariant(), name, AccountSecurity.Player);
         List<(Guid Id, string Name)> bots = await RaidersAsync(world);
         Creature boss = await SpawnAsync(world, bots[0].Id, Boss(), BossAt);
 
