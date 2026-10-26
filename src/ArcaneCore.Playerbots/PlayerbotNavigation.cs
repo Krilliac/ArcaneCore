@@ -297,10 +297,10 @@ internal static class PlayerbotNavigation
     /// bots are in each other's way and the ground is not at fault. False when the graph is not built yet or the point is on no region. A
     /// region lookup (tiles read without blocking) and two array reads; world thread.
     /// </summary>
-    internal static bool IsCutRegionAt(Player player, Vector3 point)
+    internal static bool IsCutRegionAt(Player player, Vector3 point, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
     {
         TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
-        return IsCutRegion(graph, region);
+        return IsCutRegion(graph, region, maxRegionPolygons);
     }
 
     /// <summary>
@@ -319,26 +319,32 @@ internal static class PlayerbotNavigation
         return true;
     }
 
-    /// <summary><paramref name="region"/> (-1: none) of <paramref name="graph"/> (null: not built) joins two parts of at least <see cref="CutRegionPartPolygons"/> polygons each.</summary>
-    internal static bool IsCutRegion(NavRegionGraph? graph, int region) => graph is not null && region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons);
+    /// <summary>
+    /// <paramref name="region"/> (-1: none) of <paramref name="graph"/> (null: not built) joins two parts of at least <see cref="CutRegionPartPolygons"/>
+    /// polygons each and holds at most <paramref name="maxRegionPolygons"/> polygons itself (<see cref="PlayerbotOptions.CutRegionMaxPolygons"/>):
+    /// the exemption judges the whole region, so a large one is judged as any other region.
+    /// </summary>
+    internal static bool IsCutRegion(NavRegionGraph? graph, int region, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+        => graph is not null && region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons) && graph.RegionPolygons(region) <= maxRegionPolygons;
 
     /// <summary>
     /// Whether a plan must refuse a destination or leg end at <paramref name="point"/> for a dead-end pin of this bot (<see cref="IsDeadEndPin"/>):
     /// not when the pinned cell is a cut region (<see cref="IsCutRegionAt"/>). A bot's way through a tunnel ends in its cells; refusing them
     /// refused the only route (Timbermaw Hold, issues #1478 and #1479).
     /// </summary>
-    private static bool PinRefuses(Player player, Vector3 point)
+    private static bool PinRefuses(Player player, Vector3 point, PlayerbotOptions options)
     {
         if (!IsDeadEndPin(player, point)) return false; // the region is looked up only for a pinned cell
         TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
-        return PinRefuses(deadEndPin: true, graph, region);
+        return PinRefuses(deadEndPin: true, graph, region, options.CutRegionMaxPolygons);
     }
 
     /// <summary>
-    /// The decision of <see cref="PinRefuses(Player, Vector3)"/> on its inputs: a pin of the bot (<paramref name="deadEndPin"/>) refuses
+    /// The decision of <see cref="PinRefuses(Player, Vector3, PlayerbotOptions)"/> on its inputs: a pin of the bot (<paramref name="deadEndPin"/>) refuses
     /// unless the point's <paramref name="region"/> of <paramref name="graph"/> is a cut region (<see cref="IsCutRegion"/>).
     /// </summary>
-    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region) => deadEndPin && !IsCutRegion(graph, region);
+    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+        => deadEndPin && !IsCutRegion(graph, region, maxRegionPolygons);
 
     /// <summary>
     /// Whether <paramref name="point"/> lies in a cell the bots of the world found a dead end (<see cref="PlayerbotSharedPins"/>). Asked by the
@@ -1004,7 +1010,7 @@ internal static class PlayerbotNavigation
         }
 
         // A destination given up after a loop or remembered as a dead-end pin is refused, so the goal picks another one.
-        if (PlayerbotMotion.IsBlacklisted(player, destination) || PinRefuses(player, destination))
+        if (PlayerbotMotion.IsBlacklisted(player, destination) || PinRefuses(player, destination, options))
         {
             t_nonPathRefusal = true;
             return false;
@@ -1127,7 +1133,7 @@ internal static class PlayerbotNavigation
         // place given up after a loop or remembered as a dead-end pin. An end projected from above or below the destination stays at its spot and is exact.
         if (partial && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination))
         {
-            if (PlayerbotMotion.IsBlacklisted(player, path.End) || PinRefuses(player, path.End))
+            if (PlayerbotMotion.IsBlacklisted(player, path.End) || PinRefuses(player, path.End, options))
             {
                 t_nonPathRefusal = true;
                 return false;

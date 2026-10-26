@@ -96,6 +96,9 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
 
     private const float ProbeTopZ = 500f, ProbeBottomZ = -100f, ProbeStepZ = 5f;
 
+    /// <summary>PlayerbotOptions.DefaultCutRegionMaxPolygons: the bound below which a cut region is exempt from world pins.</summary>
+    private const int TunnelCutRegionBound = 5000;
+
     private HashSet<int> ComponentsAt(NavRegionGraph graph, NavMeshPathfinder finder, PathOptions options, float x, float y, List<int> regions)
     {
         HashSet<int> components = [];
@@ -141,7 +144,7 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         bool cutRegion = false;
         foreach (int region in routeRegions.Where(r => walking.ComponentOf(r) == main).Distinct())
         {
-            output.WriteLine($"walking: route region {region}: articulation {walking.IsArticulation(region)}, joins large parts {walking.JoinsLargeParts(region, 500)}");
+            output.WriteLine($"walking: route region {region}: articulation {walking.IsArticulation(region)}, joins large parts {walking.JoinsLargeParts(region, 500)}, {walking.RegionPolygons(region)} polygons");
             cutRegion |= walking.IsArticulation(region) && walking.JoinsLargeParts(region, 500);
         }
 
@@ -155,11 +158,17 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
             List<int> here = [];
             ComponentsAt(walking, finder, Walking, x, y, here);
             bool cutHere = here.Any(r => walking.ComponentOf(r) == main && walking.JoinsLargeParts(r, 500));
+            output.WriteLine($"walking: route {x},{y}: regions [{string.Join(", ", here.Select(r => $"{r} ({walking.RegionPolygons(r)} polygons, cut {walking.JoinsLargeParts(r, 500)}, main {walking.ComponentOf(r) == main})"))}]");
             output.WriteLine($"walking: route {x},{y}: a region joins large parts {cutHere}");
             if (cutHere) routeCutPoints++;
         }
 
         Assert.True(routeCutPoints > 0, "no through-route sample point lies in a region that joins large parts");
+
+        // The size bound of the exemption (PlayerbotOptions.DefaultCutRegionMaxPolygons, 5000; this project does not reference the options):
+        // every cut region on the through route stays inside it, or the tunnel would pin again (largest: 4882 polygons in the 2026-10-26 run).
+        foreach (int region in routeRegions.Where(r => walking.ComponentOf(r) == main && walking.JoinsLargeParts(r, 500)).Distinct())
+            Assert.True(walking.RegionPolygons(region) <= TunnelCutRegionBound, $"route cut region {region} holds {walking.RegionPolygons(region)} polygons, above {TunnelCutRegionBound}");
         output.WriteLine($"map 1: {CountJoiningLargeParts(walking)} of {walking.RegionCount} regions join large parts");
         NavRegionGraph easternKingdoms = NavRegionGraph.Build(Mmaps, 0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
         output.WriteLine($"map 0: {CountJoiningLargeParts(easternKingdoms)} of {easternKingdoms.RegionCount} regions join large parts");
@@ -184,6 +193,31 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// How large the cut regions are (<see cref="NavRegionGraph.JoinsLargeParts"/> with 500-polygon parts, the rule of
+    /// <c>PlayerbotNavigation.IsCutRegion</c>) on the walking graphs of maps 0 and 1: the distribution of their own polygon counts
+    /// (<see cref="NavRegionGraph.RegionPolygons"/>; max, nearest-rank p50, p90 and p99, total) and the share of the map's polygons they hold.
+    /// The graph keeps no polygon geometry, so no area is printed. A probe: it asserts only that cut regions exist.
+    /// </summary>
+    [RealTerrainFact]
+    public void BothContinents_CutRegionSizes_ArePrinted()
+    {
+        foreach (uint map in (uint[])[0, 1])
+        {
+            NavRegionGraph graph = NavRegionGraph.Build(Mmaps, map, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+            List<int> sizes = [];
+            for (int region = 0; region < graph.RegionCount; region++)
+                if (graph.JoinsLargeParts(region, 500)) sizes.Add(graph.RegionPolygons(region));
+            sizes.Sort();
+            Assert.NotEmpty(sizes);
+            long total = sizes.Sum(size => (long)size);
+            output.WriteLine($"map {map}: {sizes.Count} cut regions of {graph.RegionCount}; polygons max {sizes[^1]}, p50 {Rank(sizes, 0.50)}, p90 {Rank(sizes, 0.90)}, p99 {Rank(sizes, 0.99)}, total {total} of {graph.PolygonCount} ({100.0 * total / graph.PolygonCount:F3}%)");
+            foreach (int bound in (int[])[512, 1024, 2048, 4096, 5000, 6000, 8192])
+                output.WriteLine($"map {map}: cut regions above {bound} polygons: {sizes.Count(size => size > bound)}, holding {sizes.Where(size => size > bound).Sum(size => (long)size)} polygons");
+        }
+
+        static int Rank(List<int> sorted, double q) => sorted[Math.Clamp((int)Math.Ceiling(q * sorted.Count) - 1, 0, sorted.Count - 1)];
+    }
 
     private static int CountJoiningLargeParts(NavRegionGraph graph)
     {

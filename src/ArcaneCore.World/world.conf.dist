@@ -13538,6 +13538,23 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.CutRegionMaxPolygons
+#        Description: The most polygons a cut region (a navigation region that is the only way
+#                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
+#                     hold and still be exempt from shared world pins and from refusing a bot's
+#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
+#                     whole region, so a larger bound lets more real snags go unshared. The default,
+#                     5000, keeps the tunnel's largest region (4882 polygons on the walking graph of
+#                     map 1) inside it. Bots only; no retail behaviour depends on it.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CutRegionMaxPolygons = 5000
+
+#
 #    World.Playerbots.Economy.BankDeposit
 #        Description: Deposit goods the bot does not need (trade goods and reagents no spell of its
 #                     own uses, gems, recipes, stackable curios) at a banker while it stays at its

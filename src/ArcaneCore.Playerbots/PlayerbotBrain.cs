@@ -1909,7 +1909,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private string? ReportWorldPin(Player player, uint now)
     {
         PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
-        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region);
+        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
     }
 
     /// <summary>

@@ -268,11 +268,12 @@ internal sealed partial class PlayerbotStallWatch
 
     /// <summary>
     /// <see cref="ReportDeadEndPin(ulong, uint, uint, float, float, uint, bool)"/> for a cell in <paramref name="region"/> of
-    /// <paramref name="graph"/> (null: not built; -1: none): a cut region (<see cref="PlayerbotNavigation.IsCutRegion"/>) tells nothing.
+    /// <paramref name="graph"/> (null: not built; -1: none): a cut region of at most <paramref name="maxCutRegionPolygons"/> polygons
+    /// (<see cref="PlayerbotNavigation.IsCutRegion"/>, <see cref="PlayerbotOptions.CutRegionMaxPolygons"/>) tells nothing.
     /// </summary>
     internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs,
-        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region)
-        => ReportDeadEndPin(bot, mapId, instanceId, x, y, nowMs, PlayerbotNavigation.IsCutRegion(graph, region));
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+        => ReportDeadEndPin(bot, mapId, instanceId, x, y, nowMs, PlayerbotNavigation.IsCutRegion(graph, region, maxCutRegionPolygons));
 
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and

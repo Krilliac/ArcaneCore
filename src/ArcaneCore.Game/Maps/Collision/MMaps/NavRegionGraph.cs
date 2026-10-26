@@ -61,7 +61,7 @@ public sealed class NavRegionGraph
         _links = links;
         PolygonCount = polygons;
         _components = new Lazy<(int[], int[], int[])>(LabelComponents, LazyThreadSafetyMode.ExecutionAndPublication);
-        _articulations = new Lazy<(int[], int[])>(FindArticulations, LazyThreadSafetyMode.ExecutionAndPublication);
+        _articulations = new Lazy<(int[], int[], int[])>(FindArticulations, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>
@@ -298,7 +298,7 @@ public sealed class NavRegionGraph
         return (id, [.. sizes], polygons);
     }
 
-    private readonly Lazy<(int[] Parts, int[] SecondPolygons)> _articulations;
+    private readonly Lazy<(int[] Parts, int[] SecondPolygons, int[] Polygons)> _articulations;
 
     /// <summary>
     /// Tarjan's articulation points over the portal links, O(regions + links), iterative (a continent's regions would overflow the
@@ -306,7 +306,7 @@ public sealed class NavRegionGraph
     /// how many polygons the second-largest of those parts holds (0 when there are fewer than two). A part is a piece of the mesh the
     /// region is the only way between and the rest of the component; with the region's own polygons left out of every part.
     /// </summary>
-    private (int[] Parts, int[] SecondPolygons) FindArticulations()
+    private (int[] Parts, int[] SecondPolygons, int[] Polygons) FindArticulations()
     {
         int count = RegionCount;
         int[] weight = new int[count];
@@ -377,7 +377,7 @@ public sealed class NavRegionGraph
             }
         }
 
-        return (parts, second);
+        return (parts, second, weight);
 
         void AddPart(int region, int polygons)
         {
@@ -407,6 +407,12 @@ public sealed class NavRegionGraph
     /// </summary>
     public bool JoinsLargeParts(int region, int minPolygons) => (uint)region < (uint)RegionCount
         && _articulations.Value.Parts[region] >= 2 && _articulations.Value.SecondPolygons[region] >= minPolygons;
+
+    /// <summary>
+    /// How many polygons <paramref name="region"/> itself holds (0 for no region): the size of a cut region (<see cref="JoinsLargeParts"/>),
+    /// which a caller bounds before it treats the whole region as a corridor. Computed with the cut regions; then an array read.
+    /// </summary>
+    public int RegionPolygons(int region) => (uint)region < (uint)RegionCount ? _articulations.Value.Polygons[region] : 0;
 
     /// <summary>
     /// Compute what the graph answers lazily (the components, <see cref="ComponentOf"/>, and the cut regions, <see cref="IsArticulation"/>)

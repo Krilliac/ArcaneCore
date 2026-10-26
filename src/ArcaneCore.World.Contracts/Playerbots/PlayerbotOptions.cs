@@ -180,6 +180,16 @@ public sealed class PlayerbotOptions
     /// </summary>
     public int StallSeconds { get; set; } = 120;
 
+    /// <summary>The default of <see cref="CutRegionMaxPolygons"/>.</summary>
+    public const int DefaultCutRegionMaxPolygons = 5000;
+
+    /// <summary>
+    /// The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw
+    /// Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is
+    /// exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the
+    /// tunnel's largest region (4882 polygons on the walking graph of map 1) inside it. Bots only; no retail behaviour depends on it.
+    /// </summary>
+    public int CutRegionMaxPolygons { get; set; } = DefaultCutRegionMaxPolygons;
     /// <summary>
     /// How a bot's movement reaches the world (on by default). On: the bot reports its motion with the MSG_MOVE_* packets a 1.12
     /// client sends, dispatched through the ordinary movement handlers like any client's. Off: the server relocates the bot itself
@@ -330,7 +340,7 @@ public sealed class PlayerbotOptions
         if (!float.IsFinite(MoveSpeed) || MoveSpeed <= 0 || MoveSpeed > 100)
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
         if (StallSeconds is < 10 or > 86_400) throw new InvalidOperationException($"{SectionName}: StallSeconds must be 10..86400.");
-        if (!Enum.IsDefined(ClientFidelity)) throw new InvalidOperationException($"{SectionName}: ClientFidelity must be Lean or Full.");
+        if (CutRegionMaxPolygons is < 0 or > 1_000_000) throw new InvalidOperationException($"{SectionName}: CutRegionMaxPolygons must be 0..1000000.");        if (!Enum.IsDefined(ClientFidelity)) throw new InvalidOperationException($"{SectionName}: ClientFidelity must be Lean or Full.");
         if (AllowedMaps is null || AllowedMaps.Length == 0 || AllowedMaps.Distinct().Count() != AllowedMaps.Length)
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
         if (FaultBackoffSeconds is < 1 or > 3600 || MaxFaults is < 1 or > 100 || FaultWindowSeconds is < 1 or > 604_800)

@@ -208,6 +208,32 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 1));
     }
 
+    /// <summary>
+    /// The size bound of the cut-region exemption (<c>PlayerbotOptions.CutRegionMaxPolygons</c>, default 5000): a cut region larger than it
+    /// is judged as any other region, so a stall there is shared as a world pin and the bot's own pin there refuses a plan end. A cut region
+    /// at the bound (the Timbermaw Hold tunnel's largest region holds 4882 polygons) is still exempt.
+    /// </summary>
+    [Fact]
+    public void ACutRegionAboveTheSizeBound_StillSharesTheWorldPin_AndStillRefuses()
+    {
+        NavRegionGraph large = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 5001, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        Assert.True(large.JoinsLargeParts(1, PlayerbotNavigation.CutRegionPartPolygons), "the middle region is a cut region by shape");
+        Assert.False(PlayerbotNavigation.IsCutRegion(large, 1), "a cut region of 5001 polygons is above the default bound");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, large, 1), "a pin in a large cut region refuses");
+
+        var pins = new PlayerbotSharedPins();
+        var botA = new PlayerbotStallWatch { SharedPins = pins };
+        var botB = new PlayerbotStallWatch { SharedPins = pins };
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7022f, -2092f, 1_000, large, 1));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 7023f, -2093f, 2_000, large, 1)); // one pin cell with the report above
+        Assert.True(pins.IsWorldPin(1, 0, 7022f, -2092f, 2_000));
+
+        NavRegionGraph atBound = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 5000, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        Assert.True(PlayerbotNavigation.IsCutRegion(atBound, 1), "a cut region at the bound is exempt");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, atBound, 1));
+    }
     // --- the brains ---------------------------------------------------------------------------------------------------------
 
     private static (int X, int Y, CellTile Tile)[] Pocket() =>
