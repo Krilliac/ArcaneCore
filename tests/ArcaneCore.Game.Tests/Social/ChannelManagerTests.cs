@@ -289,7 +289,27 @@ public sealed class ChannelManagerTests
         Assert.Empty(f.Sent(a, WorldOpcode.SmsgChannelNotify));
         Assert.Contains(ChatNotify.Left, Notifies(f, b));
         Assert.Empty(f.Context.Channels.JoinedBy(a));
-        Assert.NotNull(f.Context.Channels.Find(Team.Alliance, "General - Elwynn Forest")); // built-ins stay
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "General - Elwynn Forest")); // empty built-ins are recreated on demand
+    }
+
+    [Fact]
+    public void EmptyBuiltInChannels_AreDeleted_SoClientChosenNamesCannotAccumulate()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+
+        for (int i = 0; i < 5; i++)
+        {
+            string name = "Trade - " + i;
+            f.Context.Channels.Join(a, name, string.Empty);
+            Assert.True(f.Context.Channels.Find(Team.Alliance, name)!.IsConstant);
+            f.Context.Channels.Leave(a, name);
+            Assert.Null(f.Context.Channels.Find(Team.Alliance, name));
+        }
+
+        f.Context.Channels.Join(a, "General - Elwynn Forest", string.Empty);
+        f.Context.Channels.LeaveAll(a);
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "General - Elwynn Forest"));
     }
 
     [Fact]
