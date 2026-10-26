@@ -335,6 +335,20 @@ public sealed class TickWatchdogFeatureTests
     }
 
     [Fact]
+    public async Task AMemoryStarvedHang_IsStillReported_UnderItsOwnWorkToken()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        await using WorldTestHost host = StartQa(bus, new ManualClock());
+        var feature = host.WorldServices.GetRequiredService<TickWatchdogFeature>();
+
+        feature.ReportHang(HangAlert(inProgress: false, HostLoadVerdict.MemoryStarved), new TickWatchdogFeature.HangFacts("Maps", "map", false));
+
+        QaSignal signal = Assert.Single(DrainSignals(bus));
+        Assert.Equal("Maps", signal.Stage);
+        Assert.Equal("map|memory-starved", signal.Reason);
+    }
+
+    [Fact]
     public async Task AHangThatTheGcTook_IsNotReported()
     {
         var bus = new PlayerbotQaSignalBus(64);
