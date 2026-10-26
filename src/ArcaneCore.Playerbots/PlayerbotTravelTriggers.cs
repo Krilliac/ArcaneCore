@@ -24,6 +24,9 @@ internal sealed partial class PlayerbotTravel
     /// <summary>A trigger leg is done on its target's map within this of the target (the teleport lands near it).</summary>
     internal const float TriggerArriveYards = ArriveYards * 3f;
 
+    /// <summary>Standing at a trigger's centre this long without it firing (the bot was already inside its volume) fails the leg.</summary>
+    internal const uint TriggerCentreMs = 5_000;
+
     /// <summary>The triggers of <see cref="TravelTriggerIds"/> this bot may take now: on one map, no requirement beyond its level, not excluded.</summary>
     private static List<TravelTrigger> TriggersFor(WorldSession session, Player player, TravelExclusions? excluded)
     {
@@ -76,6 +79,17 @@ internal sealed partial class PlayerbotTravel
             journey.Excluded.Triggers.Add(leg.TriggerId);
             why = string.Create(CultureInfo.InvariantCulture, $"trigger {leg.TriggerId}: {refusal}");
             return StepResult.Failed;
+        }
+
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), leg.From.Position) <= 3f)
+        {
+            if (journey.AtTriggerCentreMs == 0) journey.AtTriggerCentreMs = now | 1u;
+            else if (unchecked(now - journey.AtTriggerCentreMs) > TriggerCentreMs)
+            {
+                journey.Excluded.Triggers.Add(leg.TriggerId);
+                why = string.Create(CultureInfo.InvariantCulture, $"trigger {leg.TriggerId}: stood at its centre for {TriggerCentreMs / 1000} s and it did not fire");
+                return StepResult.Failed;
+            }
         }
 
         switch (journey.Walk.Step(session, player, options, leg.From.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))

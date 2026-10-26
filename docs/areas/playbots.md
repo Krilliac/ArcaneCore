@@ -924,7 +924,7 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   `PlayerbotShipNetwork`: the classic `gameobject_template` entries 20808, 176231, 176310, 176244, 177233 are boats, 164871, 175080, 176495
   Horde zeppelins; Booty Bay - Ratchet takes both factions, the other boats the Alliance; each route's two ports are its TaxiPathNode stop
   frames), the hearthstone (`PlayerbotHearthstone`: item 6948, its on-use spell, to the bind point), a mage bot's own Teleport and a portal
-  a mage bot opens on request (`PlayerbotMageService`, `PlayerbotPortalBoard`).
+  a mage bot opens on request (`PlayerbotMageService`, `PlayerbotPortalBoard`), and a same-map area trigger whose teleport leads somewhere a walk\n  cannot (`TravelMeans.AreaTrigger`, appended to the enum: triggers 527 Teldrassil - Rut'theran and 542 Teldrassil - Darnassus, both\n  without level, item or quest requirement; the bot walks into the volume and the server's teleport carries it; the leg is done on the target\n  map within 30 yards of the target; a trigger that refuses the bot, a walk to it that fails, or standing 5 s at its centre without it\n  firing fails the leg and leaves the trigger out of the replan).
 - **The planner** (`PlayerbotTravelPlanner`, pure) searches a small graph (start, goal, every port, the bind point, each own-teleport
   destination, each portal's mage and destination) for the fewest seconds whose copper fits the spend cap: the lesser of the bot's money,
   `MaxTravelSpendCopper` and what the journey has not spent yet (a replan plans with what is left). The cap holds for the whole journey: the
@@ -932,20 +932,18 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   (`TravelJourney.SpentCopper`), and a portal leg begun again after a fight asks the mage it already paid, without a second trade. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
   the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
   the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
-  used at most once. Ties: fewer legs, then less copper.
+  used at most once; a ship is never taken straight back the way it came (the same entry with the ends reversed, right after); an area\n  trigger costs 5 s. Ties: fewer legs, then less copper.
 - **Facts** (`PlayerbotTravel.BuildFacts`, from the bot's real state): faction, level, money; the hearthstone when it is ready (switch on,
   carried, off cooldown); the bot's own Teleports (spell known, rune carried, off cooldown); the portals of listed mages of its faction within
   `MageServiceRadiusYards` on its map; the ship routes the bot may ride (faction, the Boats and Zeppelins switches, a route with a backed-off
-  dock left out). Two places are walkable when they are on one map and, where the map's walking region graph answers, in one walkable
-  component (the check `IsUnreachableOnFoot` makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a point
-  at sea such as a port, a small fragment) counts as joined, and the walk's own failure then replans. A flight needs a known departure node
+  dock left out); the same-map area triggers 527 and 542 (`TravelFacts.Triggers`). Two places are walkable when they are on one map, not\n  separated by the water of Teldrassil (`PopulationTownProgression.SeparatedByWater`, whatever the mesh has loaded: the mainland never\n  walks to Teldrassil) and, where the map's walking region graph answers, in one walkable component (the check `IsUnreachableOnFoot`\n  makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a small fragment) counts as joined, and the walk's\n  own failure then replans. A ship port (a keyframe of the ship, in the water or high above a tower) is placed by a scan of the floor within\n  48 yards of it (`PlayerbotTravel.PortComponents`): joined when it shares a large component with the other place. The scan reads no tile\n  on the world thread (tiles are read on the pool) and stops at the first tile still being read, so the port stays undecided (joined) until a\n  later plan finds it decided; at most 3 ports are scanned per plan, and a decided port is kept for the life of the navigation data. A flight needs a known departure node
   within `MaxWalkToMasterYards` of the stretch's start, a stretch of at least `MinRouteYards`, and a known landing node the fare to which fits
   the cap (the search `TryTravelByTaxi` makes).
 - **The journey** (`PlayerbotTravel.Drive`). The brain drives, every think and before the taxi, tram and lift drivers: `PlayerbotShip.Drive`,
   `PlayerbotHearthstone.Drive`, `PlayerbotMageService.Drive` (the bot's own mage leg), `PlayerbotMageService.DriveMage` (a mage serving the
   board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
   its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
-  of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
+  of that leg's start (the next driver walks the last yards to its dock or mage); if it fails it hands off only within 300 yards of that start\n  (`HandOffOnFailureYards`), farther out its own failure is the leg's (`walk: …`, replanned once). A bot that stands on the dock floor\n  (within 40 yards of the resolved floor and 8 of its height) within 48 yards of the port when the plans to the floor are refused counts as\n  docked (`DockReach`). After a plan that found no route, the same destination (map and 64-yard cell) is not planned again for 10 s\n  (`JourneyPlanCooldownMs`; the GM command plans at once). Within 10 yards of the goal the journey has arrived. A fight
   makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight before the bot is aboard (on the way to the
   dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
   teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%

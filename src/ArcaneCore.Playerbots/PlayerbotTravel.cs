@@ -86,6 +86,9 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
     internal object? LegHandle;
     internal uint LegBeganMs;
     internal readonly JourneyWalk Walk = new();
+
+    /// <summary>When the bot first stood at the centre of the trigger of an area-trigger leg without it firing (0: not yet; <see cref="PlayerbotTravel.TriggerCentreMs"/>).</summary>
+    internal uint AtTriggerCentreMs;
     internal bool Returned;
 
     /// <summary>The fee of the mage leg under way was charged (<see cref="ChargeLeg"/>; once per leg attempt).</summary>
@@ -147,6 +150,7 @@ internal sealed class TravelJourney(TravelPlace goal, TravelRoute route, uint no
         LegStarted = false;
         LegHandle = null;
         LegCharged = false;
+        AtTriggerCentreMs = 0;
         Attempt++;
         Walk.Reset();
     }
@@ -373,16 +377,26 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     private static readonly ConditionalWeakTable<Player, TravelJourney> Journeys = [];
 
-    /// <summary>After a plan that found no route a bot plans no journey for this long, whatever its goal (<see cref="TryBegin(WorldSession, Player, uint, Vector3, out string?, out TravelRoute?)"/>).</summary>
+    /// <summary>After a plan that found no route, the same destination is not planned again for this long (<see cref="TryBegin(WorldSession, Player, uint, Vector3, out string?, out TravelRoute?)"/>).</summary>
     internal const uint JourneyPlanCooldownMs = 10_000;
 
-    private sealed class PlanStamp
-    {
-        internal bool Set;
-        internal uint UntilMs;
-    }
+    /// <summary>The side (yards) of the square a goal counts as the same destination in for the cooldown.</summary>
+    private const float CooldownCellYards = 64f;
 
-    private static readonly ConditionalWeakTable<Player, PlanStamp> PlanStamps = [];
+    private const int MaxCooldowns = 16;
+
+    /// <summary>Per bot, the destinations (map and 64-yard cell) a plan found no route to, and until when they are not planned again.</summary>
+    private static readonly ConditionalWeakTable<Player, Dictionary<(uint Map, int X, int Y), uint>> PlanCooldowns = [];
+
+    private static (uint, int, int) CooldownKey(TravelPlace goal)
+        => (goal.MapId, (int)MathF.Floor(goal.Position.X / CooldownCellYards), (int)MathF.Floor(goal.Position.Y / CooldownCellYards));
+
+    /// <summary>Forget the bot's no-route cooldowns (the GM command plans at once, whatever happened before).</summary>
+    internal static void ClearPlanCooldown(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (PlanCooldowns.TryGetValue(player, out Dictionary<(uint Map, int X, int Y), uint>? cooldowns)) cooldowns.Clear();
+    }
 
     // The ship routes CanReachStatic answers from: the classic routes of the transport system a journey last saw, an array of immutable
     // records written once per system (Volatile.Write) and never changed after; readers take it with Volatile.Read.
@@ -441,23 +455,24 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             return Refuse(out why, "a travel leg is under way");
         }
 
-        // After a plan that found no route no goal is planned for JourneyPlanCooldownMs: a bot that cannot get anywhere (the water of Teldrassil, a
-        // dock that failed) would otherwise search the whole graph at every think, for every goal the brain tries.
+        // After a plan that found no route the same destination is not planned for JourneyPlanCooldownMs: a bot that cannot get there (the water of
+        // Teldrassil, a dock that failed) would otherwise search the whole graph at every think. Other destinations are planned as ever.
         uint now = session.World.NowMs;
-        PlanStamp stamp = PlanStamps.GetValue(player, static _ => new PlanStamp());
-        if (stamp.Set && unchecked((int)(stamp.UntilMs - now)) > 0)
-            return Refuse(out why, string.Create(CultureInfo.InvariantCulture, $"journey planning is cooling down ({unchecked(stamp.UntilMs - now)} ms left)"));
+        Dictionary<(uint Map, int X, int Y), uint> cooldowns = PlanCooldowns.GetValue(player, static _ => []);
+        (uint, int, int) cell = CooldownKey(goal);
+        if (cooldowns.TryGetValue(cell, out uint until) && unchecked((int)(until - now)) > 0)
+            return Refuse(out why, string.Create(CultureInfo.InvariantCulture, $"journey planning to this destination is cooling down ({unchecked(until - now)} ms left)"));
         TravelFacts facts = BuildFacts(session, player, _options, ShipRoutes(session.World), null);
         TravelPlace here = TravelPlace.Of(player);
         if (PlayerbotTravelPlanner.Plan(facts, here, goal) is not { } planned)
         {
-            stamp.Set = true;
-            stamp.UntilMs = unchecked(now + JourneyPlanCooldownMs);
+            if (cooldowns.Count >= MaxCooldowns) cooldowns.Clear();
+            cooldowns[cell] = unchecked(now + JourneyPlanCooldownMs);
             return Refuse(out why, $"no route from map {here.MapId} to map {toMap} by the bot's own means");
         }
 
         PublishStaticRoutes(session.World);
-        stamp.Set = false;
+        cooldowns.Remove(cell);
         if (planned.Legs.Count == 0) return true; // already there
         Journeys.AddOrUpdate(player, new TravelJourney(goal, planned, now, DeadlineOf(planned, now), ShipRoutes));
         route = planned;
@@ -533,10 +548,12 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// (<see cref="PlayerbotPortalBoard.Offers"/>); both empty with <see cref="PlayerbotTravelOptions.MageService"/> off.</item>
     /// <item>The ships of <paramref name="allShips"/> the bot may ride (<see cref="PlayerbotShipNetwork.Filter"/>: faction and the Boats and
     /// Zeppelins switches), less a route one of whose docks is backed off for the bot (<see cref="PlayerbotShip.IsBackedOff"/>).</item>
-    /// <item>Walkable: the same map, and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
-    /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
-    /// (no navmesh, the graph not built yet, a tile not read yet, a point at sea such as a ship's port, or a small fragment) counts as joined:
-    /// the walk's own failure then replans. Memoised per place for this one set of facts.</item>
+    /// <item>Walkable (<see cref="WalkableFor"/>): the same map, not separated by the water of Teldrassil (<c>SeparatedByWater</c>), and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
+    /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place (no navmesh,
+    /// the graph not built yet, a tile not read yet, or a small fragment) counts as joined: the walk's own failure then replans. A ship port is
+    /// placed by a scan of the floor around it that reads no tile on the world thread and stays undecided (joined) until its tiles are read.
+    /// Memoised per place for this one set of facts; decided ports are kept per navigation data.</item>
+    /// <item>Triggers: the same-map area triggers of <see cref="TravelTriggerIds"/> the bot may take (none excluded by a failed leg).</item>
     /// <item>Flight (with <see cref="PlayerbotTaxiOptions.Enabled"/> on): a known departure node within
     /// <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/> of the start of a stretch of at least <see cref="PlayerbotTaxiOptions.MinRouteYards"/>,
     /// not backed off, and a known landing node the fare to which fits the spend cap (<see cref="TaxiIndex.TryRoute"/>, the search
@@ -1119,6 +1136,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 // Near the next leg's start its own driver walks the last yards to its dock or mage, and its failure is the leg's; far from it
                 // the journey walk's failure is the honest one (the driver's weaker walk would only fail there and back off a healthy dock).
                 if (handOff && left <= HandOffOnFailureYards) return StepResult.Next;
+                if (journey.LegIndex + 1 < journey.Legs.Count && journey.Legs[journey.LegIndex + 1] is { Means: TravelMeans.AreaTrigger } afterWalk)
+                    journey.Excluded.Triggers.Add(afterWalk.TriggerId); // the walk to the trigger failed: the replan goes another way
                 why = "walk: " + walkWhy;
                 return StepResult.Failed;
             default:

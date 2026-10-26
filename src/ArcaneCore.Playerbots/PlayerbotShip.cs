@@ -482,7 +482,8 @@ internal static partial class PlayerbotShip
 
         if (map.MapId != trip.From.MapId || !AtPort(player, trip.From, trip.DockReach))
         {
-            // Pushed off the dock (a knock-back, a fear): walk back to it.
+            // Pushed off the dock (a knock-back, a fear): walk back to it, by the ordinary reach again.
+            trip.DockReach = BoardReachYards;
             Enter(trip, ShipStage.ToDock, now);
             return;
         }
@@ -1040,12 +1041,13 @@ internal static partial class PlayerbotShip
         Dictionary<(uint Map, Vector3 Port), Vector3[]> known = DockFloors.GetValue(map.Collision.PathfinderForMap, static _ => []);
         if (known.TryGetValue((map.MapId, portPos), out Vector3[]? kept)) return Nearest(kept, portPos, toward);
 
+        long pendingMark = PathSearchCounters.TilesPending;
         map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
         if (map.Collision.MeshPoints is null)
             return portPos;
         if (OnDryDockMesh(map, portPos))
         {
-            Remember(known, map.MapId, portPos, []);
+            if (PathSearchCounters.TilesPending == pendingMark) Remember(known, map.MapId, portPos, []);
             return portPos;
         }
 
@@ -1064,7 +1066,7 @@ internal static partial class PlayerbotShip
             if (candidates.Count > 0)
             {
                 Vector3[] found = [.. candidates];
-                Remember(known, map.MapId, portPos, found);
+                if (PathSearchCounters.TilesPending == pendingMark) Remember(known, map.MapId, portPos, found); // not while a tile around it is still being read: the list may be partial
                 return Nearest(found, portPos, toward);
             }
         }

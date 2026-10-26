@@ -55,6 +55,12 @@ public sealed class PlayerbotShipRealTerrainTests : RealTerrainNavigationTestBas
             output.WriteLine($"{name}: bot {from} flat-to-port {flat:F1}; dock target {target} (dz to bot {target.Z - from.Z:F1}, flat to port "
                 + $"{Vector2.Distance(new(target.X, target.Y), new(GromGolPort.X, GromGolPort.Y)):F1}); PlanToward {outcome}; route end {(route is null ? "none" : route.Points[^1].ToString())}");
             Assert.NotEqual(PlanOutcome.Pending, outcome);
+
+            // After the refused plans (MaxRefusedPlans) the stairs count as the dock, the ground under the tower does not.
+            var route0 = new ShipRoute(175080, TravelMeans.Zeppelin, TravelAccess.Horde, new TravelPlace(0, GromGolPort), new TravelPlace(1, new Vector3(1600f, -4400f, 20f)), 300f);
+            bool accepted = await terrain.Host.OnWorldAsync(() => PlayerbotShip.TryAcceptRelaxedDock(terrain.Player,
+                new ShipTrip(route0, true, 0, new PlayerbotOptions()) { Refusals = PlayerbotShip.MaxRefusedPlans }, target));
+            Assert.Equal(name == "stairs", accepted);
         }
     }
 
@@ -64,37 +70,56 @@ public sealed class PlayerbotShipRealTerrainTests : RealTerrainNavigationTestBas
 
     /// <summary>
     /// The top of Teldrassil does not "walk" to Auberdine's port: the port's tile was never read, it placed nowhere and counted as joined to
-    /// every place of the map (the planner then took the Rut'theran boat and back). Placed with blocking reads, the port lies on the
-    /// mainland near Auberdine, a different component. The Grom'gol tower stairs still walk to the tower's node (the route is not lost).
+    /// every place of the map (the planner then took the Rut'theran boat and back). The port is placed without a tile read on the world thread
+    /// (<see cref="PlayerbotTravel.DryPortLocate"/> is non-blocking): the first ask, with the tile cold, is undecided (joined, as ever); the tile is
+    /// read on the pool and a later ask finds the port on the mainland, a different component. The Grom'gol tower stairs still walk to the tower's node.
     /// </summary>
     [RealTerrainBotFact]
     public async Task TheTopOfTeldrassil_IsNotJoinedByFootToAuberdinesPort_AndTheGromGolStairsAreJoinedToTheirTower()
     {
+        Assert.True(PlayerbotTravel.DryPortLocate.NonBlockingTiles, "the port scan must not read tiles on the world thread");
         await using Terrain terrain = await Terrain.StartAsync();
         await terrain.PlaceAsync(TeldrassilTop, map: 1);
-        var nav = (ArcaneCore.Game.Maps.Collision.MMaps.NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
-        Task<ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?> build = nav.RegionGraphTask(1, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
-        await build.WaitAsync(TimeSpan.FromMinutes(5));
+        var nav = (NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
+        await nav.RegionGraphTask(1, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!.WaitAsync(TimeSpan.FromMinutes(5));
         var auberdine = new TravelPlace(1, AuberdinePort);
         var tower = new TravelPlace(0, GromGolPort);
         ShipRoute[] ships = [new(176310, TravelMeans.Boat, TravelAccess.Both, new TravelPlace(0, new Vector3(-3900f, -750f, 0f)), auberdine, 300f), new(175080, TravelMeans.Zeppelin, TravelAccess.Both, tower, new TravelPlace(0, new Vector3(1600f, 400f, 0f)), 300f)];
-        (bool top, int[] components) = await terrain.Host.OnWorldAsync(() =>
-        {
-            Func<TravelPlace, TravelPlace, bool> walkable = PlayerbotTravel.WalkableFor(terrain.Player, ships);
-            return (walkable(TravelPlace.Of(terrain.Player), auberdine),
-                PlayerbotTravel.PortComponents(nav, build.Result!, auberdine));
-        });
-        output.WriteLine($"top of Teldrassil walks to Auberdine's port: {top}; the port's components: [{string.Join(", ", components)}]");
-        Assert.False(top);
-        Assert.NotEmpty(components);
 
+        // A mainland place beside the port: not separated by the Teldrassil water rule, so the mesh decides.
+        var darkshore = new TravelPlace(1, new Vector3(6420f, 800f, 10f));
+        bool firstAnswer = await terrain.Host.OnWorldAsync(() => PlayerbotTravel.WalkableFor(terrain.Player, ships)(darkshore, auberdine));
+        bool decidedAtOnce = await terrain.Host.OnWorldAsync(() => PlayerbotTravel.DecidedPort(terrain.Player, auberdine) is not null);
+        int[]? components = null;
+        for (int i = 0; i < 600 && components is null; i++)
+        {
+            components = await terrain.Host.OnWorldAsync(() =>
+            {
+                PlayerbotTravel.WalkableFor(terrain.Player, ships)(darkshore, auberdine);
+                return PlayerbotTravel.DecidedPort(terrain.Player, auberdine);
+            });
+            if (components is null) await Task.Delay(50); // the tiles around the port are read on the pool
+        }
+
+        output.WriteLine($"first ask joined {firstAnswer}, decided at once {decidedAtOnce}; the port's components [{string.Join(", ", components ?? [])}]");
+        Assert.True(firstAnswer, "undecided counts as joined");
+        Assert.False(decidedAtOnce, "the port was decided with tiles cold: something read them on the world thread");
+        Assert.NotNull(components);
+        Assert.NotEmpty(components);
+        Assert.False(await terrain.Host.OnWorldAsync(() => PlayerbotTravel.WalkableFor(terrain.Player, ships)(TravelPlace.Of(terrain.Player), auberdine)), "the top of Teldrassil does not walk to Auberdine");
         await terrain.PlaceAsync(TowerStairs);
-        var nav0 = (ArcaneCore.Game.Maps.Collision.MMaps.NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
+        var nav0 = (NavMeshPathfinder)await terrain.Host.OnWorldAsync(() => terrain.Player.Map!.Collision.Pathfinder);
         await nav0.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!.WaitAsync(TimeSpan.FromMinutes(5));
-        (bool stairs, int[] towerComponents) = await terrain.Host.OnWorldAsync(() =>
-            (PlayerbotTravel.WalkableFor(terrain.Player, ships)(TravelPlace.Of(terrain.Player), tower),
-                PlayerbotTravel.PortComponents(nav0, nav0.RegionGraph(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!, tower)));
-        output.WriteLine($"Grom'gol stairs walk to the tower's node: {stairs}; the node's components: [{string.Join(", ", towerComponents)}]");
+        int[]? node = null;
+        for (int i = 0; i < 600 && node is null; i++)
+        {
+            node = await terrain.Host.OnWorldAsync(() => PlayerbotTravel.PortComponents(nav0, nav0.RegionGraph(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!, tower));
+            if (node is null) await Task.Delay(50);
+        }
+
+        Assert.NotNull(node); // decided: the tiles around the node were read
+        bool stairs = await terrain.Host.OnWorldAsync(() => PlayerbotTravel.WalkableFor(terrain.Player, ships)(TravelPlace.Of(terrain.Player), tower));
+        output.WriteLine($"Grom'gol stairs walk to the tower's node: {stairs}; the node's components [{string.Join(", ", node!)}]");
         Assert.True(stairs);
     }
 }
