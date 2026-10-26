@@ -54,9 +54,13 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    /// <summary>Validate current progress, NPC interaction, choice, money and the complete inventory batch without live mutations.</summary>
+    /// <summary>
+    /// Validate current progress, NPC interaction, choice, money and the complete inventory batch without live mutations.
+    /// <paramref name="offered"/>: items sitting in the player's open trade window; the turn-in neither counts nor takes them, because
+    /// shrinking an offered stack would change what a partner who already accepted receives.
+    /// </summary>
     public bool TryPrepareReward(Player player, ObjectGuid guid, uint questId, uint choice,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out QuestRewardPlan? plan)
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out QuestRewardPlan? plan, IReadOnlySet<ObjectGuid>? offered = null)
     {
         plan = null;
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest) || !RewardBase(state, quest))
@@ -92,7 +96,7 @@ public sealed partial class QuestNpcServices
         // vmangos RewardQuest stores the quest items first; items a reward spell creates follow them.
         grants.AddRange(spellGrant.CreatedItems.Select(item => new InventoryRewardGrant(item.Entry, item.Count, Created: true)));
         ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
-            out InventoryRewardStage? stage, out uint failedEntry);
+            out InventoryRewardStage? stage, out uint failedEntry, offered);
         if (result != ItemInventoryResult.Ok || stage is null)
         {
             SendRewardStageRefusal(player, questId, result, failedEntry);

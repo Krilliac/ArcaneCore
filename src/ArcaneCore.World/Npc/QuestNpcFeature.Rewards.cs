@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -90,7 +91,12 @@ public sealed partial class QuestNpcFeature
                 return;
             }
 
-            if (!Services.TryPrepareReward(player, guid, questId, choice, out QuestRewardPlan? plan))
+            // Items in the player's open trade window are not delivered: the turn-in would shrink the offered stack in place after
+            // the partner accepted (the same rule the vendor sale and spell reagents follow).
+            IReadOnlySet<ObjectGuid>? offered = _services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade
+                ? trade.SideOf(player).TradedItems.ToHashSet()
+                : null;
+            if (!Services.TryPrepareReward(player, guid, questId, choice, out QuestRewardPlan? plan, offered))
             {
                 return;
             }

@@ -87,6 +87,26 @@ public sealed class QuestTurnInTests
     }
 
     [Fact]
+    public void AutocompleteDeliver_IgnoresItemsOfferedInAnOpenTrade_AndLeavesTheOfferedStackAlone()
+    {
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
+            reqItem: ItemTestData.ToughJerky, reqItemCount: 2);
+        using QuestFlowTestKit kit = AutoKit(quest);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        uint before = kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky);
+        HashSet<ObjectGuid> offered = [.. kit.Player.Inventory.AllItems.Where(i => i.Entry == ItemTestData.ToughJerky).Select(i => i.Guid)];
+        kit.Session.Clear();
+
+        // Every jerky is in the trade window, so the delivery is short and nothing is taken.
+        Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _, offered));
+        Assert.Equal(before, kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky));
+
+        // Without a trade the same turn-in works.
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
+    }
+
+    [Fact]
     public void AutocompleteQuest_FailingTheClassCheck_IsNotRewardable()
     {
         // CanTakeQuest(skipStatusCheck) still applies the class gate (Player.cpp:12684-12698): packet editing cannot help.
