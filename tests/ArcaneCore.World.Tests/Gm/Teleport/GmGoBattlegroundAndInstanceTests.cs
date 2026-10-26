@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
