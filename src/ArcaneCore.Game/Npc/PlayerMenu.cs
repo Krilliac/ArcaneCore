@@ -68,6 +68,12 @@ public sealed class PlayerMenu
 
     public uint MenuId { get; set; }
 
+    /// <summary>
+    /// The creature or object this menu was built for. vmangos never compares the select packet's guid with it (HandleGossipSelectOptionOpcode,
+    /// NPCHandler.cpp:370-414), so a menu opened at one source could be replayed against any other; here the select must name this source.
+    /// </summary>
+    public ObjectGuid SourceGuid { get; set; }
+
     /// <summary>vmangos GossipMenu::IsJustDiscoveredNode (a flight node was learned while preparing).</summary>
     public bool DiscoveredNode { get; set; }
 
@@ -80,6 +86,7 @@ public sealed class PlayerMenu
         _gossip.Clear();
         _quests.Clear();
         MenuId = 0;
+        SourceGuid = ObjectGuid.Empty;
         DiscoveredNode = false;
     }
 

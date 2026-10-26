@@ -47,6 +47,32 @@ public sealed class GossipDbScriptTests
     }
 
     [Fact]
+    public void SelectingAnOption_OfAMenuBuiltForAnotherCreature_IsIgnored()
+    {
+        NpcContent content = NpcContent.Empty with
+        {
+            GossipMenuOptions =
+            [
+                new GossipMenuOption { MenuId = 0, Id = 0, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip,
+                    OptionText = "Scripted", ActionScriptId = 21 },
+            ],
+        };
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip, content);
+        var started = new List<ObjectGuid>();
+        kit.Services.GossipScriptStarted += (_, npc, _, _) => started.Add(npc);
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        ObjectGuid first = kit.Npc.Guid;
+        kit.Npc = kit.Npc with { Guid = ObjectGuid.WithEntry(HighGuid.Unit, NpcServiceTestKit.Entry, 78) };
+        kit.Services.GossipSelectOption(kit.Player, kit.Npc.Guid, 0, null);
+        Assert.Empty(started); // RED on main: the second creature runs the first one's script
+
+        kit.Npc = kit.Npc with { Guid = first };
+        kit.Services.GossipSelectOption(kit.Player, first, 0, null);
+        Assert.Equal([first], started);
+    }
+
+    [Fact]
     public void ShowingAMenuWhoseTextHasAScript_StartsIt_WithThePlayerAsTheSource()
     {
         NpcContent content = NpcContent.Empty with
