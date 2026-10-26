@@ -17,8 +17,8 @@ using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
-/// The trade window against vmangos (D:\refs\vmangos\src\game\Handlers\TradeHandler.cpp:240-520 accept,
-/// :675-746 set gold/item, D:\refs\vmangos\src\game\Objects\TradeData.cpp:57-140). The notification texts are the
+/// The trade window against vmangos (vmangos@0e3ff01 src/game/Handlers/TradeHandler.cpp:240-520 accept,
+/// :675-746 set gold/item, vmangos@0e3ff01 src/game/Objects/TradeData.cpp:57-140). The notification texts are the
 /// classic-db mangos_string rows 801-803. Only SQLite is exercised; no store changed.
 /// Two clients act through different sessions, so each step waits for the packet its predecessor causes before the
 /// other client acts (the world applies packets of different sessions in arrival order).

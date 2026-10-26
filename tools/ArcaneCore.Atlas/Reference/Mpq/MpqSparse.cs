@@ -14,7 +14,7 @@ public static class MpqSparse
     /// <exception cref="InvalidDataException">The stream is truncated, declares a length other than the output's, or its operations overrun it.</exception>
     public static int Decompress(ReadOnlySpan<byte> input, Span<byte> output)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\sparse\sparse.cpp:225-287 (DecompressSparse)
+        // ref: StormLib src/sparse/sparse.cpp:225-287 (DecompressSparse)
         if (input.Length < 5)
         {
             throw new InvalidDataException("Sparse stream is shorter than its 5-byte minimum.");

@@ -290,7 +290,7 @@ public sealed class RestAndExploredWriteQueueContractTests
         AnomalyNotice notice = Assert.Single(capture.Notices);
         Assert.Equal("persist/write-dropped-on-shutdown", notice.Key);
         Assert.Equal($"queue {spec.QueueName}", notice.Subject);
-        Assert.Equal($"queue={spec.QueueName} undrainedCharacters=1 firstCharacter=5107", notice.Detail);
+        Assert.StartsWith($"queue={spec.QueueName} undrainedCharacters=1 firstCharacter=5107 refusedByStopDrain=0 stalledMs=", notice.Detail, StringComparison.Ordinal); // nothing was refused: the one attempt really failed
     }
 
     [Theory]

@@ -11,6 +11,10 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// for the player's word (gossip) to enter the keep; in the throne room (26) Wrynn is taken away, Windsor reveals Prestor, who turns into
 /// Onyxia, turns the nearby royal guards into Onyxia's guards and kills him; once those are dead Bolvar kneels at his side and the
 /// quest is done. ScriptedMap's creature storage is the nearest creature of each entry on the map here.
+/// Difference (deliberate port choice): StartKeepEvent clears the keep-ready flag when the event starts, so a replayed gossip select
+/// cannot rewind the running scene. The reference clears m_isKeepReady only in Reset (stormwind_city.cpp:636 at 3e8597afe7), not in
+/// DoStartKeepEvent (:952-956); this port keeps the word across Reset (see Reset and JustRespawned) and consumes it when the keep event
+/// starts. An honest client cannot tell, because the Gossip flag is removed at the same moment.
 /// </summary>
 public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
@@ -80,8 +84,8 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
     protected override void JustSpawned() => Me.NpcFlags &= ~(uint)NpcFlags.QuestGiver;
 
     /// <summary>
-    /// npc_reginald_windsorAI::Reset rerolls only the combat timers. The keep word and the guard check are the scene's, set in the
-    /// constructor: an evade (he can be drawn into the turned guards' fight) must not take back the word or stop the check that sends
+    /// npc_reginald_windsorAI::Reset (stormwind_city.cpp:633-640) also zeroes the guard check timer and the keep word. Port choice: this
+    /// Reset rerolls only the combat timers; the keep word and the guard check are the scene's, set in the constructor: an evade (he can be drawn into the turned guards' fight) must not take back the word or stop the check that sends
     /// Bolvar to him once the guards are dead.
     /// </summary>
     protected override void Reset()
@@ -116,6 +120,13 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
     /// <summary>GossipSelect: DoStartKeepEvent.</summary>
     public void StartKeepEvent()
     {
+        // A cached gossip menu outlives the Gossip flag and the packet can be replayed: a second start would rewind the running scene.
+        if (!_keepReady)
+        {
+            return;
+        }
+
+        _keepReady = false;
         StartDialogue(Array.FindIndex(s_dialogue, d => d.Entry == -1000850));
         Me.NpcFlags &= ~(uint)NpcFlags.Gossip;
     }

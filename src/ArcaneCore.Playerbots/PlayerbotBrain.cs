@@ -149,6 +149,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotExploreAtlas? _exploreSearchAtlas;
     private FactionTemplateCatalog? _exploreSearchFactions;
     private FactionTemplateRecord? _exploreSearchSelf;
+    private ArcaneCore.Game.Reputation.INpcReactionSource? _exploreSearchReactions;
     private PlayerbotHomeArea? _exploreSearchHome;
     private IReadOnlyList<PlayerbotHazard> _exploreSearchHazards = [];
     private uint _exploreSearchMap;
@@ -553,17 +554,24 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 $"no think for {silent / 1000} s of world time (goal {_goal}, last phase {LastThinkPhase}, think interval {_options.ThinkIntervalMs} ms)"));
     }
 
-    /// <summary>One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time: report when it overran (<see cref="ThinkOverranMs"/>), once per <see cref="ThinkAnomalyQuietMs"/>.</summary>
-    internal void CheckThinkOverran(Player player, double elapsedMs, uint now)
+    /// <summary>
+    /// One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time, of which the collector held the process
+    /// <paramref name="gcPauseMs"/>: report when it overran (<see cref="ThinkOverranMs"/>) without those pauses (a collector pause is not
+    /// the bot's slowness: the think-slow log excludes it the same way, PlayerbotSlowThinkLog.Observe; bot QA #1483), once per
+    /// <see cref="ThinkAnomalyQuietMs"/>.
+    /// </summary>
+    internal void CheckThinkOverran(Player player, double elapsedMs, uint now, double gcPauseMs = 0)
     {
+        if (gcPauseMs > 0) elapsedMs = Math.Max(0, elapsedMs - gcPauseMs);
         if (!(elapsedMs >= ThinkOverranMs)) return;
         if (_overranReported && unchecked(now - _overranReportMs) < ThinkAnomalyQuietMs) return;
         _overranReported = true;
         _overranReportMs = now;
         string slowest = PlayerbotThinkProbe.Active is { } probe ? $", slowest phase {probe.SlowestPhaseNow}" : string.Empty;
+        string collector = gcPauseMs > 0 ? string.Create(CultureInfo.InvariantCulture, $", {gcPauseMs:F0} ms of collector pause not counted") : string.Empty;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest}{collector})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -603,7 +611,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         ThinkCount++;
         CheckAssistCredit(player);
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        _thinkStartedAt = startedAt;
+        TimeSpan gcPauseBefore = GC.GetTotalPauseDuration();
+        _thinkStartedAt = PlayerbotThinkProbe.Timestamp(); // on the running think's clock, as HasOptionalThinkBudget reads it
         try
         {
             UpdateCore(player, elapsedMs);
@@ -621,14 +630,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
-            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
+            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs,
+                (GC.GetTotalPauseDuration() - gcPauseBefore).TotalMilliseconds);
         }
     }
 
     internal bool HasOptionalThinkBudget(double maxElapsedMs = 15.0)
         => (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
             && !(PlayerbotThinkProbe.Active is { } running && running.RunningMs >= maxElapsedMs)
-            && (_thinkStartedAt == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(_thinkStartedAt).TotalMilliseconds < maxElapsedMs);
+            && (_thinkStartedAt == 0 || PlayerbotThinkProbe.MsSince(_thinkStartedAt) < maxElapsedMs);
 
     private void UpdateCore(Player player, uint elapsedMs)
     {
@@ -1765,8 +1775,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
-            if (CanShareDeadEndPin(player)
-                && _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now) is { } newPin)
+            if (CanShareDeadEndPin(player) && ReportWorldPin(player, now) is { } newPin)
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
         }
         else if (worldPin)
@@ -1894,6 +1903,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
         uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
         return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+    }
+
+    /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
+    private string? ReportWorldPin(Player player, uint now)
+    {
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
+        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
     }
 
     /// <summary>
@@ -3609,13 +3625,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             if (area.DistanceTo(from.X, from.Y) > area.ExploreRadius)
             {
-                destination = InwardLeg(area, from, _exploreRefusals);
+                destination = InwardLeg(area, from, _exploreRefusals, player.Map);
             }
             else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
                 destination = HasOptionalThinkBudget(15.0)
-                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals)
-                    : InwardLeg(area, from, _exploreRefusals);
+                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals, player.Map)
+                    : InwardLeg(area, from, _exploreRefusals, player.Map);
             }
         }
         return destination;
@@ -3627,7 +3643,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// continues across the zone rather than snapping its heading straight back toward the level-1 start spawn.
     /// </summary>
     internal static System.Numerics.Vector3 DeflectZoneBorderLeg(PlayerbotHomeArea area, System.Numerics.Vector3 from,
-        float baseAngle, bool preferPositive, int refusals)
+        float baseAngle, bool preferPositive, int refusals, Map? map = null)
     {
         for (int i = 0; i < BorderDeflectDegrees.Length; i++)
         {
@@ -3646,7 +3662,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
-        return InwardLeg(area, from, refusals);
+        return InwardLeg(area, from, refusals, map);
     }
 
     /// <summary>
@@ -3810,6 +3826,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreSearchAtlas = atlas;
             _exploreSearchFactions = factions;
             _exploreSearchSelf = self;
+            _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
+                as ArcaneCore.Game.Reputation.INpcReactionSource;
             _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
             _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
             _exploreSearchMap = mapId;
@@ -3888,11 +3906,35 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         FactionTemplateRecord? npc = _exploreSearchFactions?.Find(faction);
         FactionTemplateRecord? self = _exploreSearchSelf;
         if (npc is null || self is null) return false;
-        // FactionCombatHooks.ReactionTo: hostility wins over friendly bits in each direction. A player may attack a
-        // neutral creature, but CanAttack refuses when either direction's resulting reaction is Friendly.
+        return ExploreAttackable(_exploreSearchPlayer, npc, self, _exploreSearchReactions);
+    }
+
+    /// <summary>
+    /// Whether the bot may attack a creature of faction template <paramref name="npc"/>: its reputation reaction
+    /// (<see cref="ArcaneCore.Game.Reputation.INpcReactionSource"/>, as <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/> and
+    /// <see cref="PlayerbotQuestGoals.IsKillable"/> judge it) is below Friendly. The template alone says nothing of standing: Timbermaw
+    /// Hold's creatures read as a hostile faction to the bot's template, but a bot with Timbermaw reputation is not their enemy (issues
+    /// #1478 and #1479). Without a reaction source, or when it cannot resolve this pair, the templates decide: hostility wins over the
+    /// friendly bits in each direction (<c>FactionCombatHooks.ReactionTo</c>), and a player may attack a neutral creature, but CanAttack
+    /// refuses when either direction's resulting reaction is Friendly.
+    /// </summary>
+    internal static bool ExploreAttackable(Player? player, FactionTemplateRecord npc, FactionTemplateRecord self,
+        ArcaneCore.Game.Reputation.INpcReactionSource? reactions)
+    {
+        if (reactions is not null && player is not null
+            && reactions.TryGetNpcReaction(player, npc, self, out ArcaneCore.Game.Reputation.ReputationRank reaction))
+            return reaction < ArcaneCore.Game.Reputation.ReputationRank.Friendly;
         bool friendly = self.IsFriendlyTo(npc) || npc.IsFriendlyTo(self);
         return !friendly || self.IsHostileTo(npc) && npc.IsHostileTo(self);
     }
+
+    /// <summary>
+    /// Whether a creature with <paramref name="npcFlags"/> offers a service (gossip, quests or a vendor's wares): not a target for an
+    /// exploring bot, which walks to creatures to fight. The Timbermaw Hold vendors and quest givers drew bots into the tunnel
+    /// (issues #1478 and #1479).
+    /// </summary>
+    internal static bool IsExploreServiceNpc(uint npcFlags)
+        => (npcFlags & (uint)(ArcaneCore.Game.Npc.NpcFlags.Gossip | ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Vendor)) != 0;
 
     private bool ExploreHostileFaction(uint faction)
         => _exploreSearchFactions?.Find(faction) is { } npc && _exploreSearchSelf is { } self && npc.IsHostileTo(self);
@@ -3928,7 +3970,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
             return false;
         CreatureTemplate? template = content.FindTemplate(spawn.Entry);
-        if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
+        if (template is null || IsExploreServiceNpc(template.NpcFlags) || !PlayerbotWorldDestinations.IsPresent(player, spawn)
             || _exploreSearchHome is { } home && home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
@@ -3963,10 +4005,30 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// finish at 48 yards.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, Player player, int refusals)
-        => InwardLeg(home, new System.Numerics.Vector3(player.X, player.Y, player.Z), refusals);
+    {
+        var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        return InwardLeg(home, from, refusals, player.Map);
+    }
 
-    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained leg).</summary>
-    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained
+    /// leg), its end put on the floor nearest <paramref name="from"/>'s height on <paramref name="map"/>
+    /// (<see cref="PlayerbotNavigation.GroundNear(Map, System.Numerics.Vector3, System.Numerics.Vector3)"/>) when there is one.
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals, Map? map)
+    {
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground = null;
+        if (map is not null) ground = new PlayerbotNavigation.FloorProbe(map, from).Near;
+        return InwardLeg(home, from, refusals, ground);
+    }
+
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> with the grounding given: <paramref name="ground"/>
+    /// maps the chosen end (at <paramref name="from"/>'s height) to the point on the floor, or null to leave it at that height. The
+    /// legs ended at the bot's own height, which in a cave or tunnel is a point in rock on no region (issues #1478 and #1479).
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals,
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground)
     {
         float distance = home.DistanceTo(from.X, from.Y);
         float inward = MathF.Atan2(home.Centre.Y - from.Y, home.Centre.X - from.X);
@@ -3980,12 +4042,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             var end = new System.Numerics.Vector3(from.X + (MathF.Cos(angle) * length), from.Y + (MathF.Sin(angle) * length), from.Z);
             if (home.DistanceTo(end.X, end.Y) >= distance) continue;
             if (home.ZoneClipped && !home.InZone(end.X, end.Y, end.Z)) continue;
-            return end;
+            return ground is null ? end : ground(end);
         }
 
         float straight = MathF.Min(budget, distance);
-        return new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        var last = new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        return ground is null ? last : ground(last);
     }
+
+    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> without a map: the end stays at <paramref name="from"/>'s height.</summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+        => InwardLeg(home, from, refusals, (Func<System.Numerics.Vector3, System.Numerics.Vector3>?)null);
 
 }
 

@@ -28,7 +28,7 @@ public sealed class ArcaneInfoCommands : ICommandExtension
 
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
-        new ChatCommand("content", AccountSecurity.GameMaster, "Syntax: .arcane content\nShow how many rows of each content table are loaded.", Content),
+        new ChatCommand("content", AccountSecurity.GameMaster, "Syntax: .arcane content\nShow how many rows of each content table are loaded. From the console, the items line reads \"not loaded yet\" while item content loads in the background; run the command again shortly.", Content),
         new ChatCommand("maps", AccountSecurity.GameMaster, "Syntax: .arcane maps\nShow the players, objects and in-transit objects of every running map.", Maps),
         new ChatCommand("reloads", AccountSecurity.GameMaster, "Syntax: .arcane reloads\nShow how each reloadable content table last ended, and the creature definitions generation.", Reloads),
     ];
@@ -41,12 +41,18 @@ public sealed class ArcaneInfoCommands : ICommandExtension
         CultureInfo c = CultureInfo.InvariantCulture;
         WorldMaps maps = WorldMaps.Of(context.World);
         context.Reply(Line("maps", string.Create(c, $"{maps.Registry.Count} maps, {maps.Areas.Count} areas, {maps.GameTeles.Count} tele locations, {maps.AreaTriggers.Count} area triggers")));
-        int itemCount = context.IsConsole
-            ? (services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
-                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult()).Count
-                : 0)
-            : context.Player.Inventory.Templates.Count;
-        context.Reply(Line("items", string.Create(c, $"{itemCount} templates")));
+        ArcaneCore.World.Items.ItemsFeature? itemsFeature = context.IsConsole ? services.GetService<ArcaneCore.World.Items.ItemsFeature>() : null;
+        int itemCount = context.IsConsole ? itemsFeature?.Templates.Count ?? 0 : context.Player.Inventory.Templates.Count;
+        if (itemsFeature is { IsLoaded: false } unloaded)
+        {
+            // This runs on the world thread: start the load on the pool instead of waiting for it here.
+            unloaded.StartLoadInBackground();
+            context.Reply(Line("items", "not loaded yet (loading now; run the command again shortly)"));
+        }
+        else
+        {
+            context.Reply(Line("items", string.Create(c, $"{itemCount} templates")));
+        }
         if (services.GetService<CreatureWorldFeature>() is { } creatures)
         {
             context.Reply(Line("creatures", string.Create(c, $"{creatures.Content.TemplateCount} templates, {creatures.Content.SpawnCount} spawns, definitions generation {creatures.Content.DefinitionsVersion}")));

@@ -4,21 +4,21 @@ The world loads the developer's build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc` when their `NpcServices` paths are configured. Nodes and paths
 otherwise come from the imported world-content tables. Missing path-node rows
 now refuse a flight; a straight line between node positions is not a taxi path.
-The DBC widths and columns are from `D:\refs\vmangos\src\game\Database\DBCfmt.h:83-85`.
+The DBC widths and columns are from `<refs-root>\vmangos\src\game\Database\DBCfmt.h:83-85`.
 
 ## Behavior and references
 
 | Behavior | ArcaneCore owner | Read-only reference |
 | --- | --- | --- |
-| Race starting mask, eight-word known mask and first-visit discovery | `QuestNpcServices`, characters v5 taxi mask | `D:\refs\vmangos\src\game\Objects\PlayerTaxi.cpp:28-49`; `D:\refs\vmangos\src\game\Handlers\TaxiHandler.cpp:129-149` |
-| `SMSG_SHOWTAXINODES` (show flag, master GUID, current node, eight mask words) | `NpcPackets` | `D:\refs\vmangos\src\game\Server\Packets\Taxi.cpp:67-82`; `D:\refs\wow_messages\wow_message_parser\wowm\world\movement\smsg\smsg_showtaxinodes.wowm:1-10` |
-| Gossip flight-master option discovers a new node before opening the map | `QuestNpcServices.Gossip`, `.Travel` | `D:\refs\vmangos\src\game\Handlers\TaxiHandler.cpp:61-107` |
-| Direct and express client fields; client-supplied total is ignored | `NpcServiceHandlers` | `D:\refs\vmangos\src\game\Server\Packets\Taxi.cpp:13-33`; `D:\refs\wow_messages\wow_message_parser\wowm\world\movement\cmsg\cmsg_activatetaxiexpress.wowm:1-13` |
-| Route lookup, team mount, source distance, reputation discount | `QuestNpcServices.Travel`, `TaxiFlightSystem` | `D:\refs\vmangos\src\game\Objects\Player.cpp:17910-17944`, `:17960-17977`, `:18039-18060`; `D:\refs\vmangos\src\game\ObjectMgr.cpp:7391-7445` |
-| Per-leg fare: `uint(cost * discount + 0.5f)`, whole-route affordability, first charge at departure, subsequent charges at path changes | `QuestNpcServices.Travel`, `TaxiFlightSystem` | `D:\refs\vmangos\src\game\Objects\Player.cpp:17963-17997`, `:18052-18090`; `D:\refs\vmangos\src\game\Objects\PlayerTaxi.cpp:126-136`; `D:\refs\vmangos\src\game\Movement\WaypointMovementGenerator.cpp:411-424` |
-| Flying `SMSG_MONSTER_MOVE`, 32 yards/second, landing and dismount | `TaxiFlightSystem` | `D:\refs\vmangos\src\game\Movement\WaypointMovementGenerator.cpp:400-409`; `D:\refs\vmangos\src\game\Movement\spline\packet_builder.cpp:113-144` |
-| Logout route and current-position resume | Characters v22 `character_taxi_flight`, `NpcServicesFeature`, `TaxiFlightSystem` | `D:\refs\vmangos\src\game\Objects\PlayerTaxi.cpp:67-109`; `D:\refs\vmangos\src\game\Objects\Player.cpp:18110-18167` |
-| Reply-code values | `ActivateTaxiReply` | `D:\refs\wow_messages\wow_message_parser\wowm\world\movement\smsg\smsg_activatetaxireply.wowm:3-20` |
+| Race starting mask, eight-word known mask and first-visit discovery | `QuestNpcServices`, characters v5 taxi mask | `<refs-root>\vmangos\src\game\Objects\PlayerTaxi.cpp:28-49`; `<refs-root>\vmangos\src\game\Handlers\TaxiHandler.cpp:129-149` |
+| `SMSG_SHOWTAXINODES` (show flag, master GUID, current node, eight mask words) | `NpcPackets` | `<refs-root>\vmangos\src\game\Server\Packets\Taxi.cpp:67-82`; `<refs-root>\wow_messages\wow_message_parser\wowm\world\movement\smsg\smsg_showtaxinodes.wowm:1-10` |
+| Gossip flight-master option discovers a new node before opening the map | `QuestNpcServices.Gossip`, `.Travel` | `<refs-root>\vmangos\src\game\Handlers\TaxiHandler.cpp:61-107` |
+| Direct and express client fields; client-supplied total is ignored | `NpcServiceHandlers` | `<refs-root>\vmangos\src\game\Server\Packets\Taxi.cpp:13-33`; `<refs-root>\wow_messages\wow_message_parser\wowm\world\movement\cmsg\cmsg_activatetaxiexpress.wowm:1-13` |
+| Route lookup, team mount, source distance, reputation discount | `QuestNpcServices.Travel`, `TaxiFlightSystem` | `<refs-root>\vmangos\src\game\Objects\Player.cpp:17910-17944`, `:17960-17977`, `:18039-18060`; `<refs-root>\vmangos\src\game\ObjectMgr.cpp:7391-7445` |
+| Per-leg fare: `uint(cost * discount + 0.5f)`, whole-route affordability, first charge at departure, subsequent charges at path changes | `QuestNpcServices.Travel`, `TaxiFlightSystem` | `<refs-root>\vmangos\src\game\Objects\Player.cpp:17963-17997`, `:18052-18090`; `<refs-root>\vmangos\src\game\Objects\PlayerTaxi.cpp:126-136`; `<refs-root>\vmangos\src\game\Movement\WaypointMovementGenerator.cpp:411-424` |
+| Flying `SMSG_MONSTER_MOVE`, 32 yards/second, landing and dismount | `TaxiFlightSystem` | `<refs-root>\vmangos\src\game\Movement\WaypointMovementGenerator.cpp:400-409`; `<refs-root>\vmangos\src\game\Movement\spline\packet_builder.cpp:113-144` |
+| Logout route and current-position resume | Characters v22 `character_taxi_flight`, `NpcServicesFeature`, `TaxiFlightSystem` | `<refs-root>\vmangos\src\game\Objects\PlayerTaxi.cpp:67-109`; `<refs-root>\vmangos\src\game\Objects\Player.cpp:18110-18167` |
+| Reply-code values | `ActivateTaxiReply` | `<refs-root>\wow_messages\wow_message_parser\wowm\world\movement\smsg\smsg_activatetaxireply.wowm:3-20` |
 
 The flight owner checks the source and destination maps and requires at least two
 waypoints per leg. The client gets a flying spline; map updates keep the server
@@ -39,7 +39,7 @@ refresh --dbc-dir`) fills from the client's `TaxiNodes.dbc` and `TaxiPath.dbc`
 tables empty and no flight master offers a flight
 (docs/integration/transports-content-20261008.md). A missing `TaxiPathNode.dbc` makes paid flights
 fail closed. The taxi mount uses `TaxiNodes.MountCreatureID[0]` for Horde and
-`[1]` for Alliance (`D:\refs\vmangos\src\game\ObjectMgr.cpp:7415-7445`).
+`[1]` for Alliance (`<refs-root>\vmangos\src\game\ObjectMgr.cpp:7415-7445`).
 
 Characters schema v22 owns only `character_taxi_flight`; its module implements
 `ICharacterDataCleanup`. The store is tested on SQLite locally and uses the
@@ -49,19 +49,19 @@ is introduced. The earlier characters v5 known-node mask remains authoritative.
 ## Limits requiring client or data validation
 
 * `CMSG_TAXICLEARALLNODES` is an invalid/unhandled opcode in vmangos
-  (`D:\refs\vmangos\src\game\Server\Protocol\Opcodes.cpp:507`), so this lane does
+  (`<refs-root>\vmangos\src\game\Server\Protocol\Opcodes.cpp:507`), so this lane does
   not let a client erase its discovered nodes. The existing reply paths follow
   vmangos: invalid source yields `NO_SUCH_PATH`; missing edge, unknown visited node
   or an already-active flight returns without a reply (`Player.cpp:17848-17858`,
   `:17969-17975`). Insufficient money and source distance do send their codes.
   These silent cases need a real 5875 capture if a different reply is desired.
 * vmangos splices adjacent express paths with `taxi_path_transitions`
-  (`D:\refs\vmangos\src\game\Objects\Player.cpp:17999-18034`). ArcaneCore
+  (`<refs-root>\vmangos\src\game\Objects\Player.cpp:17999-18034`). ArcaneCore
   launches one spline per leg and does not import that optional transition table.
   A real-client check is needed at a multi-leg join. The server follows straight
   segments while the client renders Catmull-Rom, so mid-flight positions can differ.
 * vmangos selects and may gender-swap a creature display
-  (`D:\refs\vmangos\src\game\ObjectMgr.cpp:7438-7449`). ArcaneCore currently
+  (`<refs-root>\vmangos\src\game\ObjectMgr.cpp:7438-7449`). ArcaneCore currently
   uses the first nonzero creature-template display for the chosen team mount.
 * The route write at logout and the character-position save use separate stores.
   They are not one database transaction. The logout save and the landing delete

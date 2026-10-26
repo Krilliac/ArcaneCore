@@ -3576,7 +3576,9 @@ Diagnostics.PacketCapture.Enabled = false
 #
 #    Diagnostics.PacketCapture.MaxBytes
 #        Description: Maximum bytes in one trace, including its header; a full trace stops
-#                     automatically.
+#                     automatically. A trace also stops when the disk writer falls 8192 records
+#                     behind. Records are written by a background writer and the file is finished
+#                     asynchronously after a stop; the server drains open traces at shutdown.
 #        Type: long
 #        Default: 67108864
 #        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
@@ -3921,10 +3923,13 @@ Economy.ReturnExpiredMoneyOnlyMail = true
 #                     commit is answered with its ordinary failure reply (auction DATABASE error,
 #                     mail INTERNAL_ERROR, trade cancelled), one whose outcome cannot be read kicks
 #                     its actors. Operational, not a gameplay rule: 15 is the shipped value, three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the actors' own saves, the settlement transaction), so one
-#                     locked write ahead of it cannot use up the budget. Valid range 1-300.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the actors' own saves, the settlement transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4051,11 +4056,13 @@ Forms.ResetFistAttackTimeOnFormLoss = false
 #                     save, the instance write drain, the loot transaction) before it is abandoned:
 #                     a take that never started is refused to the client as usual, one whose outcome
 #                     cannot be read kicks the taker. Operational, not a gameplay rule: 15 is the
-#                     shipped value, three lock waits of the shipped 5 s
+#                     shipped value, three typical lock waits of the shipped 5 s
 #                     Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already
 #                     in flight on the character save queue's one consumer, the taker's own save,
 #                     the loot transaction), so one locked write ahead of it cannot use up the
-#                     budget. Valid range 1-300.
+#                     budget. A write-gate wait is not capped at one bound: it gives up after 5 s
+#                     without a hand-off or 20 s of active waiting, but the settlement's budget
+#                     token ends any wait it is passed to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -6669,12 +6676,14 @@ Quests.RewardMode = AllSupported
 #        Description: Seconds one reward settlement may take end to end (save, drains, the reward
 #                     transaction) before it is abandoned and reconciled from the stored rows.
 #                     Operational, not a gameplay rule: 15 is the shipped value. It covers three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the settlement's own save, the reward transaction), so one
-#                     locked write ahead of it cannot use up the budget. A test that deliberately
-#                     holds a settlement open raises it so its observation window is not a race
-#                     against this deadline.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the settlement's own save, the reward transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. A test that deliberately holds a settlement open raises it so its
+#                     observation window is not a race against this deadline.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -8339,6 +8348,9 @@ World.Maps.GridCleanUpDelayMs = 300000
 #                     objects, active ones included, look half this distance around themselves. 0
 #                     turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside
 #                     the update): it changes when the files are read, not what is loaded or when.
+#                     It also turns off the arrival prefetch (the tiles of a teleport's destination
+#                     are read when the teleport starts), which has a budget of its own so it never
+#                     evicts the approach prefetches.
 #        Type: float
 #        Default: 200
 #        Allowed: a number, '.' is the decimal point
@@ -8768,7 +8780,8 @@ World.Respawn.Dynamic.ScalePerPlayer = 0.1
 #        Description: The character save queue warns while its oldest waiting snapshot has waited
 #                     this many milliseconds. 0 disables the age check. Default 5000, the characters
 #                     database's write bound (Database:SqliteWriteTimeoutMs): a snapshot that old
-#                     has waited out at least one locked write (docs/areas/persistence.md).
+#                     has waited out at least one write-gate bound (5 s without a hand-off; a moving
+#                     queue may keep a waiter up to 20 s) (docs/areas/persistence.md).
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -10841,12 +10854,12 @@ World.GmCommands.RetailLevels = true
 
 #
 #    World.GmCommands.SecurityMap
-#        Description: The retail account level (vmangos AccountTypes,
-#                     D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1,
-#                     TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6,
-#                     CONSOLE 7) each stored AccountSecurity stands for. ArcaneCore stores four
-#                     levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored
-#                     level onto them (an operator may remap, e.g. GameMaster=4).
+#        Description: The retail account level (vmangos AccountTypes, vmangos@0e3ff01
+#                     src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER
+#                     3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored
+#                     AccountSecurity stands for. ArcaneCore stores four levels, so the retail
+#                     levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an
+#                     operator may remap, e.g. GameMaster=4).
 #        Type: Dictionary<AccountSecurity, byte>
 #        Default: Player = 0; Moderator = 1; GameMaster = 3; Administrator = 6
 #        Allowed: a map: one key per entry name; each value is a whole number, 0 to 255
@@ -13538,6 +13551,24 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.CutRegionMaxPolygons
+#        Description: The most polygons a cut region (a navigation region that is the only way
+#                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
+#                     hold and still be exempt from shared world pins and from refusing a bot's
+#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
+#                     whole region, so a larger bound lets more real snags go unshared. The default,
+#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
+#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
+#                     retail behaviour depends on it.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CutRegionMaxPolygons = 5000
+
+#
 #    World.Playerbots.Economy.BankDeposit
 #        Description: Deposit goods the bot does not need (trade goods and reagents no spell of its
 #                     own uses, gems, recipes, stackable curios) at a banker while it stays at its
@@ -16164,6 +16195,19 @@ World.Playerbots.Risk.PartyRetreatOnWipe = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Risk.RecoverHealthPct = 80
+
+#
+#    World.Playerbots.Risk.RestManaBelowPct
+#        Description: A bot that spends mana and has less than this percentage left (0..100; 0 turns
+#                     it off) recovers before its next pull when the fight would be fine at full
+#                     health and mana, instead of pulling with nothing to cast.
+#        Type: float
+#        Default: 35
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.RestManaBelowPct = 35
 
 #
 #    World.Playerbots.Risk.RetreatHealthPct
@@ -18891,7 +18935,7 @@ World.Social.MaxJoinedChannels = 0
 #
 #    World.Social.OfflineLeaderDelaySeconds
 #        Description: Seconds before an offline group leader yields to an online member. Zero
-#                     disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072
+#                     disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072
 #                     defaults to 300 seconds.
 #        Type: int
 #        Default: 300

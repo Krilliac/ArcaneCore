@@ -123,7 +123,7 @@ internal sealed record RealTerrainExport(string FileName, int Samples, int Trian
                 ["vmtile"] = vmapTiles.Length,
                 ["mmtile"] = navTiles.Length,
 
-                // go{displayId:D4}.mmtile  ref: D:/refs/vmangos@0e3ff01/contrib/mmap/src/MapBuilder.cpp:791
+                // go{displayId:D4}.mmtile  ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:791
                 ["transport"] = navTiles.Count(f => Path.GetFileName(f).StartsWith("go", StringComparison.Ordinal)),
             },
         };

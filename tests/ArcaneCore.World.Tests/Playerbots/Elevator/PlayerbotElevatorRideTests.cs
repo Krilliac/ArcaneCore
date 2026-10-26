@@ -44,6 +44,34 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.NotNull(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
     }
 
+    /// <summary>
+    /// A region the lift choice needs is still being read in the background: the lift is held off (<see cref="PlayerbotElevator.IsHeldOff"/>
+    /// is true, so the callers that defer on a lift backoff defer on it) and no trip begins; once the region is known the hold is gone.
+    /// </summary>
+    [Fact]
+    public async Task WhileTheGoalsRegionIsStillBeingRead_TheLiftIsHeldOff_AndNoTripBegins()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(creatures: RatchetEnder());
+        await world.PlaceAsync(ElevatorTestWorld.CanyonStart);
+        bool goalKnown = false;
+        await world.OnWorldAsync(() => PlayerbotElevator.UseSurvey(world.Host.World, _ => new ElevatorSurvey(
+            (Vector3 at, out (uint Zone, uint Area) region) =>
+            {
+                bool plateau = at.X >= ElevatorTestWorld.Cliff;
+                region = plateau ? (ElevatorTestWorld.TheBarrens, 0u) : (ElevatorTestWorld.ThousandNeedles, 0u);
+                return goalKnown || !plateau;
+            })));
+
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.Ratchet), "not held off while the region is unknown");
+            Assert.False(PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.Ratchet, Options()), "a ride began on an unknown region");
+            Assert.Null(PlayerbotElevator.TripOf(world.Player));
+            goalKnown = true;
+            Assert.False(PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.Ratchet), "still held off once the region is known");
+        });
+    }
+
     private static CreatureContent RatchetEnder() => new(
         [new CreatureTemplate { Entry = Dizzywig, Name = "Wharfmaster Dizzywig", DisplayIds = [49] }],
         [new CreatureSpawn { Guid = 14419, Entry = Dizzywig, MapId = ElevatorTestData.Kalimdor, X = ElevatorTestWorld.Ratchet.X,
@@ -224,6 +252,28 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
             Assert.False(PlayerbotElevator.IsHeldOff(world.Session, world.Player, ElevatorTestWorld.Ratchet), "still held off after the lift's backoff");
             Assert.True(PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.Ratchet, options), "the ride did not begin after the backoff");
         });
+    }
+
+    /// <summary>
+    /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>)
+    /// began the trip with a goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s no-progress bound, failing the trip. It begins
+    /// none until it is within reach; then it does.
+    /// </summary>
+    [Fact]
+    public async Task ABotBeyondOneRoutesReachOfTheLift_BeginsNoTrip_UntilItIsWithinReach()
+    {
+        await using ElevatorTestWorld world = await ElevatorTestWorld.StartAsync();
+        PlayerbotOptions options = Options();
+        ElevatorLift lift = await world.GreatLiftAsync();
+        float far = options.MaxRouteYards + 500f;
+        await world.PlaceAsync(new Vector3(lift.Centre.X + far, lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        Assert.False(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
+            $"a trip began {far:F0} yards from the lift");
+        Assert.Null(await world.OnWorldAsync(() => PlayerbotElevator.TripOf(world.Player)));
+
+        await world.PlaceAsync(new Vector3(lift.Centre.X + (options.MaxRouteYards - 500f), lift.Centre.Y, ElevatorTestWorld.TopFloor));
+        Assert.True(await world.OnWorldAsync(() => PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.CanyonStart, options)),
+            "no trip began within reach of the lift");
     }
 
     /// <summary>

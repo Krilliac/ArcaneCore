@@ -121,8 +121,8 @@ public static class GroupPackets
 
     /// <summary>
     /// SMSG_PARTY_MEMBER_STATS / _FULL body: packed guid, u32 mask, then masked fields in bit
-    /// order. Aura masks and pet fields follow D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:599-755;
-    /// D:\refs\wow_messages\wow_message_parser\wowm\world\social\smsg_party_member_stats.wowm:1-70
+    /// order. Aura masks and pet fields follow vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:599-755;
+    /// wow_messages wow_message_parser/wowm/world/social/smsg_party_member_stats.wowm:1-70
     /// has the 1.12 field order but omits the server's negative aura fields.
     /// </summary>
     public static byte[] BuildPartyMemberStats(Player player, GroupUpdateFlags mask)
@@ -249,7 +249,7 @@ public static class GroupPackets
     private static ushort Low16(uint value) => unchecked((ushort)value);
 
     /// <summary>
-    /// D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:636-657,719-754:
+    /// vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:636-657,719-754:
     /// u32 positive mask or u16 negative mask,
     /// followed by one u16 spell id per set bit. A delta includes a cleared slot with id zero. <paramref name="forcedBits"/> are the slots
     /// marked by Unit::UpdateAuraForGroup, sent with their current id even when the snapshot did not change.

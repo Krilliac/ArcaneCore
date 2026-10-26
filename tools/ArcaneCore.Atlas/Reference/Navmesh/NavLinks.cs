@@ -73,7 +73,7 @@ public static class NavLinkInventory
 
                 bool targetOffMesh = targetPoly is not null && targetPoly.GetPolyType() == DtPolyTypes.DT_POLYTYPE_OFFMESH_CONNECTION;
 
-                // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:551 (connectIntLinks: side = 0xff) and :424
+                // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:551 (connectIntLinks: side = 0xff) and :424
                 // (connectExtLinks: side = the border direction 0-7); tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:631 and :728.
                 NavLinkKind kind = sourceOffMesh || targetOffMesh ? NavLinkKind.OffMesh
                     : link.side == 0xff ? NavLinkKind.Internal : NavLinkKind.External;

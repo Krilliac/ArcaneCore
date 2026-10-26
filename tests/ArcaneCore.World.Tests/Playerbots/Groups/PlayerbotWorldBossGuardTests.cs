@@ -29,6 +29,7 @@ public sealed class PlayerbotWorldBossGuardTests
     private static string Key(string code) => PlayerbotGroupAnomalies.Key(code);
 
     /// <summary>A real player at the boss that taps it, as <c>PlayerbotWorldBossWorldTests</c> does: the passive boss fights it for as long as the tap is kept fresh.</summary>
+    /// <remarks>The caller prepares <paramref name="account"/>'s character (PrepareCharacterAsync) before RaidersAsync, so its create does not overlap the bots' saves.</remarks>
     private static async Task<(WorldTestClient Client, Player Player)> TapAsync(GroupTestWorld world, Creature boss, string account, string name)
     {
         WorldTestClient client = await world.World.EnterWorldAsync(account, name, AccountSecurity.Player);
@@ -119,6 +120,7 @@ public sealed class PlayerbotWorldBossGuardTests
     public async Task ATapThatLandsBetweenTwoCoordinatorChecks_StopsTheLeadersPull()
     {
         await using GroupTestWorld world = await StartAsync(boss => boss.HoldSeconds = 600, templates: [Passive()]);
+        await world.World.PrepareCharacterAsync("WBTAPPER1", "Wbtapperone", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wt");
         Creature boss = await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
         (WorldTestClient client, Player player) = await TapAsync(world, boss, "WBTAPPER1", "Wbtapperone");
@@ -165,6 +167,7 @@ public sealed class PlayerbotWorldBossGuardTests
     public async Task APullWithSomeRealPlayersNear_ButTooFewToHoldIt_RecordsThePullNearPlayersAnomaly()
     {
         await using GroupTestWorld world = await StartAsync(boss => { boss.PlayersNearCount = 3; boss.PlayersNearYards = 100f; });
+        await world.World.PrepareCharacterAsync("WBNEAR1", "Wbnearsolo", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wn");
         Creature boss = await SpawnAsync(world, bots[0].Id, Boss(), BossAt);
         await using WorldTestClient near = await world.World.EnterWorldAsync("WBNEAR1", "Wbnearsolo", AccountSecurity.Player);
@@ -311,6 +314,7 @@ public sealed class PlayerbotWorldBossGuardTests
     public async Task APlayersTap_MakesTheWatchSeeABossTakenByOthers()
     {
         await using GroupTestWorld world = await StartAsync(templates: [Passive()]);
+        await world.World.PrepareCharacterAsync("WBTAPPER2", "Wbtappertwo", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wo");
         Creature boss = await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
         (WorldTestClient client, Player player) = await TapAsync(world, boss, "WBTAPPER2", "Wbtappertwo");
@@ -327,6 +331,7 @@ public sealed class PlayerbotWorldBossGuardTests
     public async Task ALootTapHeldByAPlayer_MakesTheWatchSeeABossTakenByOthers_EvenWhenTheBossFightsNoOne()
     {
         await using GroupTestWorld world = await StartAsync(templates: [Passive()]);
+        await world.World.PrepareCharacterAsync("WBTAPPER4", "Wbtapperfor", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wq");
         Creature boss = await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
         await using WorldTestClient tapper = await world.World.EnterWorldAsync("WBTAPPER4", "Wbtapperfor", AccountSecurity.Player);
@@ -439,6 +444,7 @@ public sealed class PlayerbotWorldBossGuardTests
     {
         (GroupTestWorld world, CountingLedger ledger) = await StartSpawnedAsync(Passive(), boss => boss.HoldSeconds = 600);
         await using GroupTestWorld _ = world;
+        await world.World.PrepareCharacterAsync("WBTAPPER3", "Wbtappertre", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wl");
         await world.RunAsync(2_000);
         Creature boss = await FindSpawnedAsync(world, bots[0].Id);
@@ -471,6 +477,7 @@ public sealed class PlayerbotWorldBossGuardTests
         await using GroupTestWorld _ = world;
         long due = BaseUnix + 100_000;
         ledger.Due[BossEntry] = due;
+        await world.World.PrepareCharacterAsync("WBKILLER2", "Wbkillertwo", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wy");
         await world.RunAsync(500);
         Creature boss = await FindSpawnedAsync(world, bots[0].Id);
@@ -554,6 +561,7 @@ public sealed class PlayerbotWorldBossGuardTests
     {
         (GroupTestWorld world, CountingLedger _) = await StartSpawnedAsync(Boss());
         await using GroupTestWorld __ = world;
+        await world.World.PrepareCharacterAsync("WBKILLER3", "Wbkillerthr", AccountSecurity.Player); // before any bot: no overlap with their saves
         List<(Guid Id, string Name)> bots = await RaidersAsync(world, "Wf");
         await world.RunAsync(500);
         Creature boss = await FindSpawnedAsync(world, bots[0].Id);

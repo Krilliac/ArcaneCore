@@ -847,7 +847,31 @@ public sealed class PlayerbotWorldDestinationsTests
     /// resetting <c>attempted</c> to false on every skip.
     /// </summary>
     [Fact]
-    public async Task ManyUnreachableQuestEntries_AreCappedPerThink_AndArmBackoff()
+    public Task ManyUnreachableQuestEntries_AreCappedPerThink_AndArmBackoff() =>
+        RunManyUnreachableAsync(_ => 0.0, (destinations, suspensions, world, suspendedCount) =>
+        {
+            Assert.False(destinations.Update(world.Player, 0, 500));
+            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedCount());
+
+            // Immediate second Update at the same timestamp hits the backoff armed by the unreachable skips.
+            Assert.False(destinations.Update(world.Player, 0, 500));
+            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedCount());
+        });
+
+    /// <summary>
+    /// The loop clock is past <see cref="PlayerbotWorldDestinations.StepLoopMs"/> from the first candidate on: the first unreachable entry is
+    /// still judged (the loop clock counts only once a candidate was judged), the second defers the step, so one entry is set aside, not the cap.
+    /// </summary>
+    [Fact]
+    public Task ManyUnreachableQuestEntries_DeferAfterOneSkip_WhenTheLoopClockIsPastItsBudget() =>
+        RunManyUnreachableAsync(_ => PlayerbotWorldDestinations.StepLoopMs, (destinations, suspensions, world, suspendedCount) =>
+        {
+            Assert.False(destinations.Update(world.Player, 0, 500));
+            Assert.Equal(1, suspendedCount());
+        });
+
+    private static async Task RunManyUnreachableAsync(Func<long, double> loopClock,
+        Action<PlayerbotWorldDestinations, PlayerbotSuspensions, SyntheticNavWorld, Func<int>> body)
     {
         using var navFixture = new ArcaneCore.TestSupport.NavMeshFixture();
         (int X, int Y, ArcaneCore.TestSupport.CellTile Tile)[] unjoined =
@@ -894,17 +918,10 @@ public sealed class PlayerbotWorldDestinationsTests
             {
                 Suspensions = suspensions,
                 Untakeable = (_, _) => true,
+                LoopMsSince = loopClock,
             };
-            Assert.False(destinations.Update(world.Player, 0, 500));
-            int suspendedAfterFirstThink = Enumerable.Range(0, 40)
-                .Count(i => suspensions.IsEntrySuspended((uint)(500 + i), world.Host.World.NowMs));
-            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedAfterFirstThink);
-
-            // Immediate second Update at the same timestamp hits the backoff armed by the unreachable skips.
-            Assert.False(destinations.Update(world.Player, 0, 500));
-            int suspendedAfterSecondCall = Enumerable.Range(0, 40)
-                .Count(i => suspensions.IsEntrySuspended((uint)(500 + i), world.Host.World.NowMs));
-            Assert.Equal(PlayerbotWorldDestinations.MaxUnreachableSkipsPerThink, suspendedAfterSecondCall);
+            body(destinations, suspensions, world, () => Enumerable.Range(0, 40)
+                .Count(i => suspensions.IsEntrySuspended((uint)(500 + i), world.Host.World.NowMs)));
             return true;
         });
     }

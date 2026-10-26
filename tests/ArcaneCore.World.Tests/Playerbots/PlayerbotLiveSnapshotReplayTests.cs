@@ -52,7 +52,7 @@ internal sealed class LiveSnapshotReplayFactAttribute : FactAttribute
 /// watched bot is logged in where it stood, with its bags, quests and goals, and the world runs on the manual clock. A bot that is
 /// alive must not keep its position (within <see cref="SamePlaceYards"/>) for <see cref="LongestStillMs"/> on end.
 /// <para>
-/// On the snapshot of the 2026-10-08 rehearsal (D:/ArcaneCore-lanes/_logs/w5-talents-bots/rehearsal/orig-characters.db), before the
+/// On the snapshot of the 2026-10-08 rehearsal (w5-talents-bots/rehearsal/orig-characters.db), before the
 /// fixes: Ironwander stood at Adlin Pridedrift re-selling a refused item, Graveweaver in the Deathknell crypt, Dawnrover beside
 /// William Pestle, all for the whole run; Mirthblade's corpse run was judged stuck within 10 seconds.
 /// </para>

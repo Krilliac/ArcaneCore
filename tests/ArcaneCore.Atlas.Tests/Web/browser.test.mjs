@@ -244,7 +244,7 @@ test('the UI in a real browser', { skip }, async (t) => {
         host.broadcast('live.status', { connected: true, pid: 4242, sha: 'abcdef123456' });
         const entities = [];
         for (let i = 0; i < 30; i++) {
-            entities.push({ g: (0x4000 + i).toString(16), k: i === 0 ? 'player' : i < 4 ? 'bot' : 'creature', e: 100 + i, n: i === 0 ? 'Krill' : `Mob ${i}`, x: INN[0] - 30 + (i % 6) * 9, y: INN[1] - 20 + Math.floor(i / 6) * 9, z: 57, o: 0, hp: 90, mt: i % 2 ? 'Chase' : 'Idle' });
+            entities.push({ g: (0x4000 + i).toString(16), k: i === 0 ? 'player' : i < 4 ? 'bot' : 'creature', e: 100 + i, n: i === 0 ? 'Testplayer' : `Mob ${i}`, x: INN[0] - 30 + (i % 6) * 9, y: INN[1] - 20 + Math.floor(i / 6) * 9, z: 57, o: 0, hp: 90, mt: i % 2 ? 'Chase' : 'Idle' });
         }
         host.broadcast('live.frame', { seq: 1, clockMs: 1000, map: 0, instance: 0, grids: [[14, 32]], counters: {}, entities });
         await page.waitFor('window.__atlas.viewport.liveCounts.entities === 30', 'the live entities');

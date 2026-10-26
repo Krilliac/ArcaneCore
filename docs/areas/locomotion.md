@@ -1,7 +1,7 @@
 # Locomotion: movement handshake, flags, falls, environment (wave 3, lane movement-environment)
 
-Retail reference for every rule: vmangos (`D:\refs\vmangos`, primary), cross-checked with
-mangos-classic and the gtker packet layouts (`D:\refs\wow_messages`). Nothing was copied; each rule
+Retail reference for every rule: vmangos (`<refs-root>\vmangos`, primary), cross-checked with
+mangos-classic and the gtker packet layouts (`<refs-root>\wow_messages`). Nothing was copied; each rule
 below cites the file and lines it was verified against. Everything is retail by default; the
 `Locomotion` configuration section holds the (few) switches.
 
@@ -124,7 +124,7 @@ Only options whose rule is delivered exist; keys for undelivered rules would be 
   remains); `SAFE_FALL` 144 is only a value (vmangos `HandleAuraSafeFall`, `SpellAuras.cpp:209`, "implemented in
   WorldSession::HandleMovementOpcodes") that the fall rules read from the `AuraLedger`. Players only: creatures
   have no client to ask. The aura amounts (Safe Fall 1860 = 17 yards, Feline Grace 20719 = 17) are from the
-  design survey of `D:\refs\classic-db` and were not re-read by this slice.
+  design survey of `<refs-root>\classic-db` and were not re-read by this slice.
 * **Flag authority** (`Locomotion/Flags/FlagAuthorityObserver.cs`, a `Before` observer of order 10):
   `MovementInfo.CorrectData` (`Object.cpp:153-189`: Root with any moving flag drops Root; turn left+right,
   strafe left+right, pitch up+down, forward+backward drop both; the hover rule is commented out in vmangos and is
@@ -275,7 +275,7 @@ Creatures take the same auras (the speed aura module acts on any unit) and `Unit
 `DEFAULT_NPC_RUN_SPEED_RATE`) and `speed_walk` (default 1), and the run speed by 0.7, 0.6 or 0.5 while the creature is under
 16%, 11% or 6% health (`SPEED_REDUCTION_HP_*`, `CreatureDefines.h:225-230`; health thresholds `Creature.cpp:971-973`), except
 world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
-155 of the 10384 classic template rows carry it, 901 have a non-default run rate, per the design survey of `D:\refs\classic-db`).
+155 of the 10384 classic template rows carry it, 901 have a non-default run rate, per the design survey of `<refs-root>\classic-db`).
 A creature is server-moved, so a change is immediate and everyone nearby gets `SMSG_SPLINE_SET_*_SPEED` (packed GUID + f32), no
 handshake (`Unit::SetSpeedRate` third branch, `Unit.cpp:7176-7181`). `Creature.InitializeFields` now sets the template speeds
 (vmangos `UpdateEntry` ends with `UpdateSpeed(MOVE_WALK/RUN)`), and `Creature.StartSpline` uses the live speed, so a snared wolf

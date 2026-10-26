@@ -30,7 +30,7 @@ this change preserves movement semantics rather than rate-limiting legitimate ar
 
 ## Reference behavior
 
-Read-only vmangos checkout: `D:/refs/vmangos`, revision `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`. Behavior was independently
+Read-only vmangos checkout: `<refs-root>/vmangos`, revision `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`. Behavior was independently
 implemented; no reference code was copied.
 
 - `src/game/Maps/Map.cpp`, `Map::UpdateActiveCellsSynch` (815–838) and `UpdateCellsAroundObject` (711–740): visit cells around
@@ -88,8 +88,8 @@ sandbox, so the equivalent `GlobalMemoryStatusEx` physical-memory reading was us
 ```powershell
 dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false
 
-$env:ARCANECORE_TEST_TERRAIN_DIR='D:/ArcaneCore-data/terrain-5875'
-$env:ARCANECORE_TEST_DBC_DIR='D:/ArcaneCore-data/client-dbc-5875'
+$env:ARCANECORE_TEST_TERRAIN_DIR='<data-root>/terrain-5875'
+$env:ARCANECORE_TEST_DBC_DIR='<data-root>/client-dbc-5875'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter FullyQualifiedName~ActiveCellReactivationTests --logger 'console;verbosity=normal'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter 'FullyQualifiedName~GridTerrain|FullyQualifiedName~CreatureMovement|FullyQualifiedName~CreatureAi|FullyQualifiedName~SpawnGroups|FullyQualifiedName~RespawnPersistence' --logger 'console;verbosity=detailed'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter FullyQualifiedName~ActiveCellReactivationTests --logger 'console;verbosity=detailed'
@@ -107,7 +107,7 @@ git diff --check
   waypoint/movement tests, escort and data-driven script tests, formations, respawn persistence and the world-tick load test.
 - No full Game/World suite, real-client run, CI or live performance acceptance is claimed.
 
-Logs are in `D:/ArcaneCore-lanes/_codex/w6/runs/active-cells/`: `build-red.log`, `test-red.log`, `build-green.log`,
+Logs are in `<lanes-root>/_codex/w6/runs/active-cells/`: `build-red.log`, `test-red.log`, `build-green.log`,
 `build-final.log`, `test-green.log`, `test-affected.log`, `test-green-measured.log`.
 
 ## Files changed

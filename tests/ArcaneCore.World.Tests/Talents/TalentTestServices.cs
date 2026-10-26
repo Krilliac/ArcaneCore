@@ -271,8 +271,14 @@ internal sealed class MemoryTalentResetFlags : ITalentResetFlagStore
     public Task<bool> IsFlaggedAsync(int characterId, CancellationToken cancellationToken = default)
         => FailReads ? Task.FromException<bool>(new IOException("character database unavailable")) : Task.FromResult(_flagged.ContainsKey(characterId));
 
+    /// <summary>The managed thread of the latest <see cref="ClearAsync"/> (0 before the first).</summary>
+    public int ClearThread => Volatile.Read(ref _clearThread);
+
+    private int _clearThread;
+
     public Task ClearAsync(int characterId, CancellationToken cancellationToken = default)
     {
+        Volatile.Write(ref _clearThread, Environment.CurrentManagedThreadId);
         Write();
         _flagged.TryRemove(characterId, out _);
         return Task.CompletedTask;

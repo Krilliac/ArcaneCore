@@ -1,6 +1,6 @@
 # Classic five-player dungeon script coverage (2026-10-11)
 
-Base `ebdd4a37`, working tree `codex/w6-dungeon-coverage`. This is a source and registration audit against the **vmangos** tree at `D:/refs/vmangos/src/scripts/`. `EK/` below means `eastern_kingdoms/`; `K/` means `kalimdor/`. A listed C# instance means an `[InstanceScript]` registration; a listed AI means a `RegisterEntryAi` or `DungeonBossAis` selection. Ordinary template/EventAI spells are outside this script roster. Presence of a class is not proof of a full imported-world or original-client dungeon clear.
+Base `ebdd4a37`, working tree `codex/w6-dungeon-coverage`. This is a source and registration audit against the **vmangos** tree at `<refs-root>/vmangos/src/scripts/`. `EK/` below means `eastern_kingdoms/`; `K/` means `kalimdor/`. A listed C# instance means an `[InstanceScript]` registration; a listed AI means a `RegisterEntryAi` or `DungeonBossAis` selection. Ordinary template/EventAI spells are outside this script roster. Presence of a class is not proof of a full imported-world or original-client dungeon clear.
 
 | Classic 5-player dungeon (map) | ArcaneCore instance data and explicit AIs | vmangos script files and remaining gap |
 |---|---|---|
@@ -49,9 +49,9 @@ GREEN on the final Release DLLs: the four directly changed low-level test classe
 The final validation commands (PowerShell, in this worktree) were:
 
 ```powershell
-$env:ARCANECORE_TEST_TERRAIN_DIR='D:/ArcaneCore-data/terrain-5875'
-$env:ARCANECORE_TEST_DBC_DIR='D:/ArcaneCore-data/client-dbc-5875'
-$env:ARCANECORE_CLASSICDB_DUMP='D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz'
+$env:ARCANECORE_TEST_TERRAIN_DIR='<data-root>/terrain-5875'
+$env:ARCANECORE_TEST_DBC_DIR='<data-root>/client-dbc-5875'
+$env:ARCANECORE_CLASSICDB_DUMP='<refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter 'FullyQualifiedName~DeadminesScriptTests|FullyQualifiedName~BlackfathomDeepsScriptTests|FullyQualifiedName~WailingCavernsEctoplasmTests|FullyQualifiedName~ShadowfangKeepScriptTests' --logger 'console;verbosity=minimal'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --filter 'FullyQualifiedName~ArcaneCore.Game.Tests.Instances' --logger 'console;verbosity=minimal'
 dotnet test tests/ArcaneCore.Game.Tests -c Release --no-build --logger 'console;verbosity=minimal'

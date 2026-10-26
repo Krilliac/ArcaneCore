@@ -223,7 +223,7 @@ internal static class LiveCommands
     }
 
     private static JsonObject Follow(LiveFeed feed, CommandInvocation call)
-        => feed.Follow(OptionalGuid(call, "guid"));
+        => feed.Follow(OptionalGuid(call, "guid"), Host.HostOrigin.Label(call.Origin));
 
     private static JsonObject Find(LiveFeed feed, CommandInvocation call)
     {

@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Tests.Graveyards;
 
 /// <summary>
 /// The graveyard choice (vmangos ObjectMgr::GetClosestGraveYard and GetClosestGraveYardForArea, ObjectMgr.cpp:7512-7645) over
-/// synthetic catalogs; nothing here depends on a real database or on D:\refs.
+/// synthetic catalogs; nothing here depends on a real database or on the reference checkout.
 /// </summary>
 public sealed class GraveyardSelectorTests
 {

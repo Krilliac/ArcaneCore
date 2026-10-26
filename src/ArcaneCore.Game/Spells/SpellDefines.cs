@@ -112,6 +112,9 @@ public enum SpellAttributesEx : uint
     /// <summary>vmangos SPELL_ATTR_EX_NO_AUTOCAST_AI (SpellDefines.h:887).</summary>
     NoAutocastAi = 0x00020000,
 
+    /// <summary>vmangos SPELL_ATTR_EX_PREVENTS_ANIM (SpellDefines.h:888): stun, polymorph, daze, sleep; a daze is not a SPELL_SNARE.</summary>
+    PreventsAnim = 0x00040000,
+
     /// <summary>vmangos SPELL_ATTR_EX_CANT_TARGET_SELF (AoE and chain selection skip the caster).</summary>
     CantTargetSelf = 0x00080000,
 
@@ -140,6 +143,9 @@ public enum SpellAttributesEx2 : uint
 
     /// <summary>vmangos SPELL_ATTR_EX2_CANT_CRIT.</summary>
     CantCrit = 0x20000000,
+
+    /// <summary>vmangos SPELL_ATTR_EX2_RETAIN_ITEM_CAST (SpellDefines.h:937): a food or drink buff such as Well Fed.</summary>
+    RetainItemCast = 0x80000000,
 }
 
 /// <summary>Spell.dbc InterruptFlags (vmangos SpellDefines.h SpellInterruptFlags).</summary>

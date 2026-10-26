@@ -4,7 +4,7 @@ namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
 /// Unit-level shapeshift interlocks, read from the form byte (UNIT_FIELD_BYTES_1 byte 2,
-/// D:\refs\vmangos\src\game\Objects\UnitDefines.h:85-88).
+/// vmangos@0e3ff01 src/game/Objects/UnitDefines.h:85-88).
 /// <para>
 /// Not covered (documented limits): the item-use rule (SpellHandler.cpp:112-127) has no CMSG_USE_ITEM handler to
 /// sit in (the flag predicate it needs is <see cref="FormQueries.IsShapeShifted(byte, ArcaneCore.Kernel.WorldData.ShapeshiftFormCatalog?)"/>;

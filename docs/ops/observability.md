@@ -94,7 +94,7 @@ the collector was compacting paged-out heap, so free host memory; the line adds 
 beyond its check interval and beyond the GC pauses, covering 30% or more of the window: the whole process was stopped by paging on a
 machine short of memory, a native debugger holding a debug event or a suspension, not the code; the line adds `watchdog stalled N ms`;
 a starved machine makes the watchdog late too, so `host-starved` wins over it; the tick-hang fatal action and bot QA skip it like `gc-pauses`), `host-starved` (machine at 85% or more with other processes at
-40% or more), `process-busy` (this process uses 50% or more of the machine), `host-quiet` (neither: the code was slow by
+40% or more), `process-busy` (this process uses 50% or more of the machine), `memory-starved` (a window of 1 s or more where this process used half a core or less while the machine memory load was at or above the GC's high-memory threshold (90% when the runtime reports none): its threads waited on paging; the fatal hang action defers for it, but fires anyway once the hang lasts more than 3 times `ActionHangMs`, because an idle process on a memory-loaded host is also what a deadlock looks like; bot QA still gets the hang, with `|memory-starved` on its work token), `process-blocked` (the same idle process with no memory pressure: the thread was waiting on a lock, I/O or a call, so it is not called host-quiet; it is still reported), `host-quiet` (neither: the code was slow by
 itself), `unknown` (window under 100 ms or no machine reading). The printed window is the real span between the two readings
 (up to one check interval longer than the slow window).
 
@@ -116,6 +116,15 @@ helpers with no logger) say so.
 Swallowed catches that carry no logger (static helpers, stores, the ban cache, the planner and gear-score seams, the packet
 capture, the hot-code audit write, the word filter, the name catalog) now count the exception in `FaultLedger.Shared` under a
 site name (`bans.effective-read`, `realm.ipban-reload`, `net.packet-capture`, ...). Control flow is unchanged.
+
+## Terminating-crash journal
+
+A terminating crash is appended to a journal in the application base directory and replayed into `FaultLedger` at the next start, so bot QA
+sees it. Each daemon kind has its own file, `crash-faults.<process>.jsonl` (the entry assembly's name, for example
+`crash-faults.ArcaneCore.World.jsonl`), and each record names its writer; two processes of the same name in one bin directory still share a
+file. Older builds wrote one shared `crash-faults.jsonl`. At start each daemon migrates it once: its own records are replayed, records another
+daemon wrote stay for that daemon, and records with no writer are discarded (no process can show they are its own) with a Warning line saying
+those pre-upgrade crashes will not reach QA. The file is deleted when nothing is left.
 
 ## Diagnostics naming and the shared ledger core
 

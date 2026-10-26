@@ -10,7 +10,7 @@ public sealed class MpqCryptoTests
     [Fact]
     public void CryptTable_MatchesLibmpqLiteralTable()
     {
-        // The table in D:\refs\vmangos\dep\libmpq\libmpq\crypt_buf.h is a literal array written out by libmpq's generator, not
+        // The table in vmangos@0e3ff01 dep/libmpq/libmpq/crypt_buf.h is a literal array written out by libmpq's generator, not
         // the StormLib formula the reader uses (SBaseCommon.cpp:219-244), so agreement is an independent check. The digest is
         // SHA-256 over its 1280 entries as little-endian words, computed from that header when this test was written.
         ReadOnlySpan<uint> table = MpqCrypto.Table;
@@ -33,8 +33,8 @@ public sealed class MpqCryptoTests
     [Fact]
     public void HashString_OfTheTableNames_GivesStormLibsKeys()
     {
-        // D:\mangos-unified\dep\StormLib\src\StormLib.h:295-296 names these two values as the keys of the hash and block tables;
-        // D:\refs\vmangos\dep\libmpq\libmpq\mpq.c:223,242 derives the same keys with the same function.
+        // StormLib src/StormLib.h:295-296 names these two values as the keys of the hash and block tables;
+        // vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:223,242 derives the same keys with the same function.
         Assert.Equal(0xC3AF3770u, MpqCrypto.HashString("(hash table)", MpqCrypto.HashFileKey));
         Assert.Equal(0xEC83B3A3u, MpqCrypto.HashString("(block table)", MpqCrypto.HashFileKey));
         Assert.Equal(MpqCrypto.HashTableKey, MpqCrypto.HashString("(hash table)", MpqCrypto.HashFileKey));
@@ -107,7 +107,7 @@ public sealed class MpqCryptoTests
     public void FileKey_UsesThePlainNameAndTheFixKeyFormula()
     {
         // Plain key: hash of the name after the last slash. Fix key: (key + block offset) ^ file size.
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:685-704
+        // ref: StormLib src/SBaseCommon.cpp:685-704
         uint plain = MpqCrypto.HashString("FILE.TXT", MpqCrypto.HashFileKey);
         Assert.Equal(plain, MpqCrypto.FileKey("Some\\Dir\\file.txt", 0x1234, 77, fixKey: false));
         Assert.Equal(plain, MpqCrypto.FileKey("Some/Dir/file.txt", 0x1234, 77, fixKey: false));
