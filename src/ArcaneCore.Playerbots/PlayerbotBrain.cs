@@ -3609,13 +3609,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             if (area.DistanceTo(from.X, from.Y) > area.ExploreRadius)
             {
-                destination = InwardLeg(area, from, _exploreRefusals);
+                destination = InwardLeg(area, from, _exploreRefusals, player.Map);
             }
             else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
                 destination = HasOptionalThinkBudget(15.0)
-                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals)
-                    : InwardLeg(area, from, _exploreRefusals);
+                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals, player.Map)
+                    : InwardLeg(area, from, _exploreRefusals, player.Map);
             }
         }
         return destination;
@@ -3627,7 +3627,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// continues across the zone rather than snapping its heading straight back toward the level-1 start spawn.
     /// </summary>
     internal static System.Numerics.Vector3 DeflectZoneBorderLeg(PlayerbotHomeArea area, System.Numerics.Vector3 from,
-        float baseAngle, bool preferPositive, int refusals)
+        float baseAngle, bool preferPositive, int refusals, Map? map = null)
     {
         for (int i = 0; i < BorderDeflectDegrees.Length; i++)
         {
@@ -3646,7 +3646,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
-        return InwardLeg(area, from, refusals);
+        return InwardLeg(area, from, refusals, map);
     }
 
     /// <summary>
@@ -3963,10 +3963,26 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// finish at 48 yards.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, Player player, int refusals)
-        => InwardLeg(home, new System.Numerics.Vector3(player.X, player.Y, player.Z), refusals);
+    {
+        var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        return InwardLeg(home, from, refusals, player.Map);
+    }
 
-    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained leg).</summary>
-    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained
+    /// leg), its end put on the floor nearest <paramref name="from"/>'s height on <paramref name="map"/>
+    /// (<see cref="PlayerbotNavigation.GroundNear(Map, System.Numerics.Vector3, System.Numerics.Vector3)"/>) when there is one.
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals, Map? map)
+        => InwardLeg(home, from, refusals, map is null ? null : end => PlayerbotNavigation.GroundNear(map, from, end));
+
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> with the grounding given: <paramref name="ground"/>
+    /// maps the chosen end (at <paramref name="from"/>'s height) to the point on the floor, or null to leave it at that height. The
+    /// legs ended at the bot's own height, which in a cave or tunnel is a point in rock on no region (issues #1478 and #1479).
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals,
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground)
     {
         float distance = home.DistanceTo(from.X, from.Y);
         float inward = MathF.Atan2(home.Centre.Y - from.Y, home.Centre.X - from.X);
@@ -3980,12 +3996,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             var end = new System.Numerics.Vector3(from.X + (MathF.Cos(angle) * length), from.Y + (MathF.Sin(angle) * length), from.Z);
             if (home.DistanceTo(end.X, end.Y) >= distance) continue;
             if (home.ZoneClipped && !home.InZone(end.X, end.Y, end.Z)) continue;
-            return end;
+            return ground is null ? end : ground(end);
         }
 
         float straight = MathF.Min(budget, distance);
-        return new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        var last = new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        return ground is null ? last : ground(last);
     }
+
+    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> without a map: the end stays at <paramref name="from"/>'s height.</summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+        => InwardLeg(home, from, refusals, (Func<System.Numerics.Vector3, System.Numerics.Vector3>?)null);
 
 }
 

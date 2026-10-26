@@ -434,13 +434,14 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         return false;
     }
 
-    /// <summary><paramref name="point"/> on the ground below it (searched from 20 yards above), or as it is where there is none within 30 yards.</summary>
+    /// <summary>
+    /// <paramref name="point"/> on the floor nearest the bot's own height (<see cref="PlayerbotNavigation.GroundNear(ArcaneCore.Game.Maps.Map, Vector3, Vector3)"/>:
+    /// searched from 2 yards above the bot, then from 20), or as it is where there is none within 30 yards or the floor is no ground the
+    /// bot can walk to. The search once started 20 yards above the point only, which in a cave or tunnel is inside the rock: the goal
+    /// stayed at the bot's height, on no region of the region graph (Timbermaw Hold, issues #1478 and #1479).
+    /// </summary>
     private static Vector3 OnGround(Player player, Vector3 point)
-    {
-        if (player.Map is not { } map) return point;
-        float floor = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
-        return PlayerbotNavigation.InvalidHeight(floor) || MathF.Abs(floor - point.Z) > 30f ? point : point with { Z = floor };
-    }
+        => player.Map is { } map ? PlayerbotNavigation.GroundNear(map, new Vector3(player.X, player.Y, player.Z), point) : point;
 
     /// <summary>A route to <paramref name="goal"/>: the navigation's, else back along the trail itself.</summary>
     private PlayerbotRoute? Plan(Player player, Vector3 goal, IReadOnlyList<Vector3> crumbs)

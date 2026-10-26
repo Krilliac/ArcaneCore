@@ -1717,4 +1717,57 @@ internal static class PlayerbotNavigation
     internal static bool InvalidHeight(float height)
         => !float.IsFinite(height) || height == TerrainTile.InvalidHeight
             || height == TerrainTile.InvalidHeightValue;
+
+    /// <summary>How far above the bot's own height the first floor probe of <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/> starts: inside a cave or tunnel that is still under the roof.</summary>
+    internal const float GroundProbeLowYards = 2f;
+
+    /// <summary>The second, higher probe: it finds a ledge or a slope the low probe starts below, but inside a cave it starts in the rock over the bot (the roof 40 yards up is its floor).</summary>
+    internal const float GroundProbeHighYards = 20f;
+
+    /// <summary>A floor farther than this from the bot's height is not the ground under a goal point (a roof or a canyon floor).</summary>
+    internal const float GroundMaxDeltaYards = 30f;
+
+    /// <summary>
+    /// <paramref name="point"/> put on the floor nearest the bot's height <paramref name="botZ"/>, or <paramref name="point"/> as it is
+    /// when no floor qualifies. The floor is looked for from <see cref="GroundProbeLowYards"/> above the bot first, then from
+    /// <see cref="GroundProbeHighYards"/> above it, and the nearer to the bot's height of the two is taken (the lower one on a tie). A
+    /// probe from 20 yards up alone starts in the rock above a bot in a cave or tunnel and finds the roof, or nothing within reach, so
+    /// the goal point stayed at the bot's height in rock and the region graph put it on no region (Timbermaw Hold, issues #1478 and
+    /// #1479). A floor is dropped when it is invalid, farther than <see cref="GroundMaxDeltaYards"/> from the bot's height, or
+    /// <paramref name="usable"/> (when given) says it is no ground the bot can walk to. <paramref name="height"/> is the floor under
+    /// x, y probed from z (<see cref="MapCollision.GetHeight(float, float, float, bool, float)"/>).
+    /// </summary>
+    internal static Vector3 GroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
+    {
+        float best = float.NaN, bestDelta = float.MaxValue;
+        for (int probe = 0; probe < 2; probe++)
+        {
+            float floor = height(point.X, point.Y, botZ + (probe == 0 ? GroundProbeLowYards : GroundProbeHighYards));
+            float delta = MathF.Abs(floor - botZ);
+            if (InvalidHeight(floor) || delta > GroundMaxDeltaYards || delta >= bestDelta) continue;
+            if (usable is not null && !usable(point with { Z = floor })) continue;
+            (best, bestDelta) = (floor, delta);
+        }
+
+        return float.IsNaN(best) ? point : point with { Z = best };
+    }
+
+    /// <summary>
+    /// <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/> on <paramref name="map"/>'s floor,
+    /// for a goal point of the bot standing at <paramref name="bot"/>: a floor is also dropped when the walking region graph puts it on no
+    /// region or in another component than the bot's own place (a ledge across a cliff the bot cannot walk to). Without a built graph, or
+    /// with the bot on no region, the floor is not filtered. World thread (the region lookups read tiles without blocking: a tile
+    /// still being read drops its floor, which leaves the point as it was).
+    /// </summary>
+    internal static Vector3 GroundNear(Map map, Vector3 bot, Vector3 point)
+    {
+        Func<float, float, float, float> height = (x, y, z) => map.Collision.GetHeight(x, y, z);
+        if (map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return GroundNear(height, null, bot.Z, point);
+        int own = nav.RegionAt(graph, bot, WalkingLocate);
+        if (own < 0) return GroundNear(height, null, bot.Z, point);
+        int component = graph.ComponentOf(own);
+        return GroundNear(height, floor => graph.ComponentOf(nav.RegionAt(graph, floor, WalkingLocate)) == component, bot.Z, point);
+    }
 }
