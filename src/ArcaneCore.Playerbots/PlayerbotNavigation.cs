@@ -772,6 +772,7 @@ internal static class PlayerbotNavigation
     /// <see cref="TryClimbIndoors"/>, may reach it over steep stairs), but without its leniency toward a bot whose component is more than 16
     /// times smaller than the goal's (Teldrassil against the mainland: other callers have transport to try first, a battlemaster walk has none).
     /// Not asked of a bot on a fragment (it hops off first), and false when the graph is not built or either place is on no region. No path search.
+    /// Unlike <see cref="InOtherWalkingComponent"/> (the tram's: keeps the 16x leniency, drops the outdoors exemption), this keeps the outdoors exemption and drops the 16x leniency.
     /// </summary>
     internal static bool IsInOtherWalkingRegion(Player player, Vector3 goal)
     {
@@ -787,6 +788,7 @@ internal static class PlayerbotNavigation
     /// <summary>
     /// Whether the map's walking region graph (steep slopes excluded) puts the bot and <paramref name="goal"/> in different components,
     /// without <see cref="IsUnreachableOnFoot"/>'s outdoors exemption (kept: its fragment and small-part exemptions). False when the graph is not built yet or either place is on no region.
+    /// Unlike <see cref="IsInOtherWalkingRegion"/> (the battlemaster walk's), which drops the small-part leniency and keeps the outdoors exemption.
     /// </summary>
     internal static bool InOtherWalkingComponent(Player player, Vector3 goal)
     {

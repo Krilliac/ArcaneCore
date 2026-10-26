@@ -250,7 +250,9 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
     /// <summary>
     /// The progress watch driven through the facts: a walk that has made no progress for its stall time is set aside, and the stall is reported
     /// as an unreachable objective. A stall is about the bot (a rock, a mover bug), not the master: the master is NOT refused for the zone, so
-    /// another bot of the same zone still picks it (a route the navigation refuses, a different failure, refuses the zone: see the refused-route test).
+    /// another bot of the same zone still picks it. The stalled bot itself leaves that master alone for <see cref="PlayerbotBattlegroundCoordinator.RefusedMasterMs"/>
+    /// (longer than the ten-minute set-aside), so it does not walk to it again once the set-aside ends. A timed-out walk, a different failure, refuses the
+    /// zones (<c>ATimedOutWalk_RefusesTheMasterForTheStartZoneAndTheZoneItTimedOutIn</c>; a refused route does likewise, see the Gitrol test).
     /// The start zone is made to differ from the bot's zone before the stall fires, so neither zone can be refused through the other's key.
     /// </summary>
     [Fact]
@@ -289,9 +291,70 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
                 ScenarioContext.Expect(!coordinator.IsMasterRefused(master, zone), "the master is not refused from the zone by one bot's stall");
                 ScenarioContext.Expect(coordinator.FindMasterForTests(other.RequirePlayer(), BattlegroundType.WarsongGulch) is { SpawnGuid: var guid } && guid == Content.AllianceWsgMaster,
                     "another bot of the zone still picks the master");
+                ScenarioContext.Expect(coordinator.FindMasterForTests(ally.RequirePlayer(), BattlegroundType.WarsongGulch) is null,
+                    "the stalled bot itself does not pick the master again (it would once the set-aside ended)");
                 return true;
             });
         });
+    }
+
+    /// <summary>The per-bot refusal after a stall outlasts the set-aside, so a bot cannot walk to the same master again when the set-aside ends.</summary>
+    [Fact]
+    public void TheMasterAStalledBotLeavesAlone_OutlastsTheSetAside()
+        => Assert.True(PlayerbotBattlegroundCoordinator.RefusedMasterMs > PlayerbotBattlegroundCoordinator.SetAsideMs);
+
+    /// <summary>
+    /// A walk that outlasts its timeout is set aside and the master is refused for the zone the walk started in and, separately, for the zone it
+    /// timed out in (the zones are made to differ, so neither key can stand in for the other).
+    /// </summary>
+    [Fact]
+    public async Task ATimedOutWalk_RefusesTheMasterForTheStartZoneAndTheZoneItTimedOutIn()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-timeout", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bgmtimeout", 1, characterClass: 1);
+            Vector3 start = await ally.ReadAsync(p => new Vector3(p.X, p.Y, p.Z));
+            await context.PlaceAsync(ally, 0, start.X + 40f, start.Y, start.Z);
+            await context.AutonomousAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            await context.WaitUntilAsync("the bot walks to the battlemaster", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Travel, TimeSpan.FromSeconds(60));
+            (ObjectGuid master, uint startZone) = await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
+                t.StartZone = player.ZoneId + 1;
+                ScenarioContext.Expect(!coordinator.IsMasterRefused(t.Battlemaster, t.StartZone) && !coordinator.IsMasterRefused(t.Battlemaster, player.ZoneId), "control: not refused before");
+                t.PhaseSinceMs = unchecked(t.PhaseSinceMs - PlayerbotBattlegroundQueueMachine.TravelTimeoutFor(t.TravelYards) - 10_000);
+                return (t.Battlemaster, t.StartZone);
+            });
+            await context.WaitUntilAsync("the walk times out", () => coordinator.Events.Any(e => e.Contains("timed out walking to the WarsongGulch battlemaster", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(30));
+            await context.ReadAsync(() =>
+            {
+                uint zone = ally.RequirePlayer().ZoneId;
+                ScenarioContext.Expect(zone != startZone, "control: the zone the walk timed out in is not the start zone");
+                ScenarioContext.Expect(coordinator.IsMasterRefused(master, startZone), "the master is refused from the start zone");
+                ScenarioContext.Expect(coordinator.IsMasterRefused(master, zone), "the master is refused from the zone the walk timed out in");
+                return true;
+            });
+        });
+    }
+
+    /// <summary>
+    /// A bot at its goal takes an empty spot for a missing master at once when the master stands still, and for one that walks waypoints only
+    /// once it has been missing for the grace time (so a missing walker costs about a minute, not the walk's stall time).
+    /// </summary>
+    [Fact]
+    public void AnEmptySpot_IsARefusalAtOnceForAMasterThatStandsStill_AndAfterTheGraceTimeForAWalker()
+    {
+        var still = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Still") { MasterWalks = false };
+        Assert.True(PlayerbotBattlegroundCoordinator.RefusesEmptySpot(still, 1_000));
+        var walker = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Walker") { MasterWalks = true };
+        Assert.False(PlayerbotBattlegroundCoordinator.RefusesEmptySpot(walker, 1_000)); // found: no refusal
+        walker.MasterMissingSinceMs = 1_000;
+        Assert.False(PlayerbotBattlegroundCoordinator.RefusesEmptySpot(walker, 1_000 + PlayerbotBattlegroundCoordinator.WalkerMissingRefuseMs - 1));
+        Assert.True(PlayerbotBattlegroundCoordinator.RefusesEmptySpot(walker, 1_000 + PlayerbotBattlegroundCoordinator.WalkerMissingRefuseMs));
     }
 
     /// <summary>
