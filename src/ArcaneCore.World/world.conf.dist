@@ -13451,6 +13451,50 @@ World.Playerbots.Chat.Voice.TradeRepeatSeconds = 900
 World.Playerbots.ClientFidelity = Lean
 
 #
+#    World.Playerbots.Combat.Kite.Enabled
+#        Description: Kite at all (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.Enabled = true
+
+#
+#    World.Playerbots.Combat.Kite.HealthPct
+#        Description: A bot kites once its health falls to this percentage (10..95).
+#        Type: float
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.HealthPct = 50
+
+#
+#    World.Playerbots.Combat.Kite.MaxStepsPerFight
+#        Description: Steps one fight may use before the bot stops kiting and fights on (1..32).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.MaxStepsPerFight = 8
+
+#
+#    World.Playerbots.Combat.Kite.StepYards
+#        Description: The longest single step away from the pursuer, in yards (4..20).
+#        Type: float
+#        Default: 10
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.StepYards = 10
+
+#
 #    World.Playerbots.CombatLaneShare
 #        Description: The share (0.1..0.9) of the think time budget and of MaxActionsPerTick the
 #                     combat lane may use. The lane gets floor(share × MaxActionsPerTick) actions of

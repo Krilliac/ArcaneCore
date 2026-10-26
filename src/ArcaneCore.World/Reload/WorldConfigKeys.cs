@@ -203,6 +203,14 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
+        // Not vmangos keys: kiting (docs/areas/playbots-combat.md). PlayerbotKite reads the shared PlayerbotOptions.Combat at every
+        // decision; the rotations never read it, they see only RotationState.KiteHolding.
+        LivePlayerbots("Combat:Kite:Enabled", o => o.Combat.Kite.Enabled, (o, v) => o.Combat.Kite.Enabled = v),
+        LivePlayerbotsValue("Combat:Kite:HealthPct", o => o.Combat.Kite.HealthPct, (o, v) => o.Combat.Kite.HealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 95)),
+        LivePlayerbotsValue("Combat:Kite:StepYards", o => o.Combat.Kite.StepYards, (o, v) => o.Combat.Kite.StepYards = v, v => PlayerbotRiskOptions.Check(v, 4, 20)),
+        LivePlayerbotsValue("Combat:Kite:MaxStepsPerFight", o => o.Combat.Kite.MaxStepsPerFight, (o, v) => o.Combat.Kite.MaxStepsPerFight = v,
+            v => v is >= 1 and <= 32 ? null : "must be 1..32"),
+
         // Not vmangos keys: chests, nodes and rares weighed against their guards (docs/areas/playbots-opportunities.md).
         // PlayerbotOpportunities reads the shared PlayerbotOptions.Opportunities at every scan and decision.
         LivePlayerbots("Opportunities:Enabled", o => o.Opportunities.Enabled, (o, v) => o.Opportunities.Enabled = v),
