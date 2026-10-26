@@ -647,10 +647,13 @@ internal static partial class PlayerbotElevator
         if (NetworkOf(session) is not { } network) return false;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map)) is not { } choice) return false;
-        // A bot farther from the lift than one route reaches is not sent at it: the straight walk (ToStop) crosses ground the mesh may not
-        // join and fails after the 60 s no-progress bound (bot QA #1482: every Great Lift failure began 600+ yards out). The journey
-        // or the walk leg brings it within reach first, and the trip begins on a later think. Every lift shares this, Undercity's and
-        // Thunder Bluff's included (a mesa top is always within reach of its lifts).
+        // A bot farther from the lift than one route reaches is not sent at it: the approach (ToStop, Walk) plans each leg with
+        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift, and the walk ends after MaxRefusedPlans
+        // refusals in a row or the 60 s no-progress bound. This is a coarse guard, not the fix: of the "no way to the Great Lift"
+        // failures of bot QA #1482 (2026-10-25), the 18 beyond 2000 yards are covered; 8 inside it (889-1781 yards) are not, nor are
+        // the Undercity (~450 yards) and Thunder Bluff ones, nor the "in the shaft pit" trip failures at the lift itself. The journey or
+        // the walk leg brings the bot within reach first, and the trip begins on a later think. Every lift shares this (a mesa top is
+        // always within reach of its lifts).
         if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > options.MaxRouteYards) return false;
         // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
         // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
