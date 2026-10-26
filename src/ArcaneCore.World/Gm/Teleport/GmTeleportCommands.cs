@@ -82,7 +82,7 @@ public sealed class GmTeleportCommands : ICommandGroup
         }
 
         // vmangos HandleNamegoCommand: summoned from a battleground, the player is bound to the caller's match
-        // (a player already in another match is taken out of it, as any far teleport does).
+        // (a player in another match is taken out of it once the teleport was accepted, with no Deserter debuff).
         BattlegroundFeature? battlegrounds = context.Session.Services.GetService<BattlegroundFeature>();
         GmBattlegroundGo bound = battlegrounds?.BindToMatchOf(target, caller, leaveOtherMatch: true) ?? GmBattlegroundGo.NotBattleground;
 
@@ -98,6 +98,10 @@ public sealed class GmTeleportCommands : ICommandGroup
             }
 
             TeleportCommands.ReplyInvalid(context, caller.X, caller.Y, caller.MapId);
+        }
+        else if (bound == GmBattlegroundGo.Bound)
+        {
+            battlegrounds!.CommitGmBinding(target);
         }
 
         return true;
@@ -154,6 +158,10 @@ public sealed class GmTeleportCommands : ICommandGroup
             }
 
             TeleportCommands.ReplyInvalid(context, target.X, target.Y, target.MapId);
+        }
+        else if (bound == GmBattlegroundGo.Bound)
+        {
+            battlegrounds!.CommitGmBinding(caller);
         }
 
         return true;

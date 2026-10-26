@@ -183,6 +183,9 @@ public sealed partial class InstanceManager
         }
 
         InstanceSave save = state.Save;
+
+        // ArcaneCore safety deviation (not in vmangos): a map flagged to reset when it unloads is about to lose its save, so binding the GM to
+        // that save would leave a bind to a deleted instance. The GM enters through ResolveEntry as any unbound visitor does.
         if (state.ResetAfterUnload || GetBoundSaveForSelfOrGroup(gm.Guid, save.MapId) is not null)
         {
             return GmInstanceGo.Ready;

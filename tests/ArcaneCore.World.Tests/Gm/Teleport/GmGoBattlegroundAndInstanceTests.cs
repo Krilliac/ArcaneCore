@@ -2,11 +2,13 @@ using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.GridTerrain;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
@@ -166,6 +168,20 @@ public sealed class GmGoBattlegroundAndInstanceTests
 
     private static BattlegroundFeature Battlegrounds(ScenarioContext context) => context.Services.GetRequiredService<BattlegroundFeature>();
 
+    /// <summary>The invitation counts and free slots of both teams: what a queue over-invites from when a visitor skews them.</summary>
+    private static (uint AllianceInvited, uint HordeInvited, uint AllianceFree, uint HordeFree) Slots(Battleground match)
+        => (match.InvitedCount(Team.Alliance), match.InvitedCount(Team.Horde), match.FreeSlotsForTeam(Team.Alliance), match.FreeSlotsForTeam(Team.Horde));
+
+    /// <summary>A second running Warsong Gulch match (world thread). It lives only while somebody is in it or invited.</summary>
+    private static Battleground CreateSecondMatch(ScenarioContext context, Battleground like)
+    {
+        BattlegroundManager manager = Battlegrounds(context).Manager;
+        Battleground second = manager.CreateNewBattleground(BattlegroundType.WarsongGulch, like.Bracket)
+            ?? throw new ScenarioAssertionException("could not create a second match");
+        manager.StartBattleground(second);
+        return second;
+    }
+
     private static ObjectGuid GuidOf(ScenarioContext context, string name)
         => context.World.FindOnlinePlayer(name)?.Guid ?? throw new ScenarioAssertionException($"{name} is not online");
 
@@ -195,10 +211,12 @@ public sealed class GmGoBattlegroundAndInstanceTests
             (_, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
                 BattlegroundType.WarsongGulch, "Scngoally", "Scngohorde", TimeSpan.FromMinutes(3));
             await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOWSG", "Gmgowsg", AccountSecurity.Administrator);
+            var slotsBefore = await context.ReadAsync(() => Slots(match));
+            int countBefore = await context.ReadAsync(() => match.PlayerCount);
 
             await AppearAtAsync(context, gm, horde.Name, match);
 
-            // Landed on map 489 in the match's own instance, and bound to that match (so it is one of its players).
+            // Landed on map 489 in the match's own instance and bound to that match, but not one of its players (vmangos adds only an invited player).
             (uint mapId, uint instanceId, uint boundInstance, bool inMatch) = await context.ReadAsync(() =>
             {
                 var p = context.World.FindOnlinePlayer(gm.Name)!;
@@ -208,7 +226,9 @@ public sealed class GmGoBattlegroundAndInstanceTests
             ScenarioContext.ExpectEqual(Wsg, mapId, "GM map");
             ScenarioContext.ExpectEqual(match.InstanceId, instanceId, "GM map instance");
             ScenarioContext.ExpectEqual(match.InstanceId, boundInstance, "GM battleground binding");
-            ScenarioContext.Expect(inMatch, "the GM is not a player of the match");
+            ScenarioContext.Expect(!inMatch, "the GM became a player of the match");
+            ScenarioContext.ExpectEqual(countBefore, await context.ReadAsync(() => match.PlayerCount), "players in the match with the GM");
+            ScenarioContext.ExpectEqual(slotsBefore, await context.ReadAsync(() => Slots(match)), "invitations and free slots with the GM on the map");
         });
     }
 
@@ -222,18 +242,15 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 BattlegroundType.WarsongGulch, "Scngrally", "Scngrhorde", TimeSpan.FromMinutes(3));
             await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOREF", "Gmgoref", AccountSecurity.Administrator);
 
-            // The GM is bound to a second, running match: the vmangos refusal is "GetBattleGroundId() != the target's".
+            // The GM is a real participant of a second, running match (it stays alive while it holds a player): the vmangos refusal is
+            // "GetBattleGroundId() != the target's".
             uint other = await context.ReadAsync(() =>
             {
-                BattlegroundManager manager = Battlegrounds(context).Manager;
-                Battleground second = manager.CreateNewBattleground(BattlegroundType.WarsongGulch, match.Bracket)
-                    ?? throw new ScenarioAssertionException("could not create a second match");
-                manager.StartBattleground(second);
+                Battleground second = CreateSecondMatch(context, match);
                 var team = ally.RequirePlayer().Team;
-                manager.BindPlayer(GuidOf(context, gm.Name), second, team);
-                // An empty match nobody is invited to is deleted by its first update tick (Battleground.Update returns false), which
-                // would unbind nothing but leave BattlegroundOf null; the bound GM is the invited player that keeps the match alive.
-                second.IncreaseInvitedCount(team);
+                ObjectGuid gmGuid = GuidOf(context, gm.Name);
+                Battlegrounds(context).Manager.BindPlayer(gmGuid, second, team);
+                ScenarioContext.Expect(second.AddPlayer(gmGuid, team), "the GM could not be added to the second match");
                 return second.InstanceId;
             });
             ScenarioContext.Expect(other != match.InstanceId, "the second match reuses the first instance id");
@@ -267,8 +284,10 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 BattlegroundType.WarsongGulch, "Scnglally", "Scnglhorde", TimeSpan.FromMinutes(3));
             await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOLEAVE", "Gmgoleave", AccountSecurity.Administrator);
             int before = await context.ReadAsync(() => match.PlayerCount);
+            var slotsBefore = await context.ReadAsync(() => Slots(match));
             await AppearAtAsync(context, gm, horde.Name, match);
-            ScenarioContext.ExpectEqual(before + 1, await context.ReadAsync(() => match.PlayerCount), "players in the match with the GM");
+            ScenarioContext.ExpectEqual(before, await context.ReadAsync(() => match.PlayerCount), "players in the match with the GM");
+            ScenarioContext.ExpectEqual(slotsBefore, await context.ReadAsync(() => Slots(match)), "invitations and free slots with the GM on the map");
 
             // .recall is a far teleport off the battleground map: the ordinary leave path unbinds the GM.
             await gm.SayAsync(".recall");
@@ -277,6 +296,7 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 && Battlegrounds(context).BattlegroundOf(p.Guid) is null
                 && !Battlegrounds(context).Manager.StateOf(p.Guid).InBattleground);
             ScenarioContext.ExpectEqual(before, await context.ReadAsync(() => match.PlayerCount), "players in the match after the GM left");
+            ScenarioContext.ExpectEqual(slotsBefore, await context.ReadAsync(() => Slots(match)), "invitations and free slots after the GM left");
             ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(GuidOf(context, gm.Name)).InAnyQueue),
                 "the GM kept a queue slot");
         });
@@ -332,6 +352,131 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 "the summon was refused as invalid: " + string.Join(" | ", gm.ChatSince(mark)));
             ScenarioContext.ExpectEqual(match.InstanceId,
                 await context.ReadAsync(() => Battlegrounds(context).BattlegroundOf(GuidOf(context, victim.Name))?.InstanceId ?? 0u), "summoned player binding");
+        });
+    }
+
+    [Fact]
+    public async Task GmBinding_OfAMatchDeletedBeforeTheGmArrives_IsNoBinding_ForTheQueueAndForGoname()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-appear-bg-stale", async context =>
+        {
+            (ScenarioBot ally, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngtally", "Scngthorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOSTALE", "Gmgostale", AccountSecurity.Administrator);
+
+            // Bound to a match nobody is in: its first update tick deletes it, leaving the GM bound to a match that is gone.
+            async Task BindToAMatchThatIsDeletedAsync()
+            {
+                uint id = await context.ReadAsync(() =>
+                {
+                    Battleground ghost = CreateSecondMatch(context, match);
+                    Battlegrounds(context).Manager.BindPlayer(GuidOf(context, gm.Name), ghost, ally.RequirePlayer().Team);
+                    return ghost.InstanceId;
+                });
+                await context.WaitUntilAsync("the unused match is deleted", () => Battlegrounds(context).Manager.GetBattleground(id, BattlegroundType.WarsongGulch) is null);
+                ScenarioContext.Expect(await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(GuidOf(context, gm.Name)).InBattleground),
+                    "the stale binding is not there; the scenario needs it");
+            }
+
+            // 1. The queue: a stale binding must not turn the join into a no-op.
+            await BindToAMatchThatIsDeletedAsync();
+            BattlegroundJoinOutcome joined = await context.ReadAsync(() =>
+            {
+                var member = new BattlegroundMember(GuidOf(context, gm.Name), ally.RequirePlayer().Team, 60, true, false);
+                return Battlegrounds(context).Manager.JoinQueue(new BattlegroundJoinRequest(member, BattlegroundType.WarsongGulch, 0, AsGroup: false, QueuedAtPortal: false, [])).Outcome;
+            });
+            ScenarioContext.ExpectEqual(BattlegroundJoinOutcome.Queued, joined, "queue join with a stale binding");
+            ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(GuidOf(context, gm.Name)).InBattleground),
+                "the stale binding survived the queue join");
+
+            // 2. .goname: a stale binding is not "another battleground".
+            await BindToAMatchThatIsDeletedAsync();
+            await AppearAtAsync(context, gm, horde.Name, match);
+            ScenarioContext.ExpectEqual(match.InstanceId,
+                await context.ReadAsync(() => Battlegrounds(context).BattlegroundOf(GuidOf(context, gm.Name))?.InstanceId ?? 0u), "GM battleground binding");
+        });
+    }
+
+    [Fact]
+    public async Task Namego_RefusedTeleport_RevertsOnlyWhatTheBindChanged_AndAnAlreadyBoundPlayerIsLeftAlone()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-summon-bg-revert", async context =>
+        {
+            (_, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngvally", "Scngvhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOREV", "Gmgorev", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMGOREVV", "Gmgorevv", AccountSecurity.Player);
+            await AppearAtAsync(context, gm, horde.Name, match);
+
+            await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
+                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
+                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the victim already has an entry point");
+
+                // The teleport is refused: the bind and the entry point it took are gone again.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome");
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "the victim is not bound");
+                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is not null, "no entry point was taken");
+                feature.RevertGmBinding(vic);
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) is null, "the binding survived the refused teleport");
+                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the entry point survived the refused teleport");
+                ScenarioContext.Expect(match.PlayerTeam(vic.Guid) is null, "the victim joined the match");
+
+                // A player already bound to the match (loading in) is AlreadyBound; a revert after that changes nothing.
+                feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.AlreadyBound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome of a bound player");
+                feature.RevertGmBinding(vic);
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "a revert unbound a player that was bound before the call");
+                feature.Manager.UnbindPlayer(vic.Guid);
+                return true;
+            });
+        });
+    }
+
+    [Fact]
+    public async Task Namego_OfAPlayerInAnotherMatch_LeavesThatMatchOnlyAfterTheTeleport_WithoutDeserter()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-summon-bg-other", async context =>
+        {
+            (_, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngpally", "Scngphorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOOTH", "Gmgooth", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMGOOTHV", "Gmgoothv", AccountSecurity.Player);
+            await AppearAtAsync(context, gm, horde.Name, match);
+
+            await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                SpellFeature spells = context.Services.GetRequiredService<SpellFeature>();
+                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
+                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
+                Battleground old = CreateSecondMatch(context, match);
+                feature.Manager.BindPlayer(vic.Guid, old, vic.Team);
+                ScenarioContext.Expect(old.AddPlayer(vic.Guid, vic.Team), "the victim could not be added to its own match");
+
+                // The teleport is refused: the victim is still bound to, and a player of, its own match; no Deserter.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome");
+                ScenarioContext.ExpectEqual(1, old.PlayerCount, "players of the old match while the move is pending");
+                feature.RevertGmBinding(vic);
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == old, "the victim lost its own match when the teleport was refused");
+                ScenarioContext.ExpectEqual(1, old.PlayerCount, "players of the old match after the refused move");
+                ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "the victim got Deserter from a refused GM move");
+
+                // The teleport is accepted: it left the old match, no Deserter, and is bound (not a player) of the new one.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "second bind outcome");
+                feature.CommitGmBinding(vic);
+                ScenarioContext.ExpectEqual(0, old.PlayerCount, "players of the old match after the accepted move");
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "the victim is not bound to the new match");
+                ScenarioContext.Expect(match.PlayerTeam(vic.Guid) is null, "the victim became a player of the new match");
+                ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "the victim got Deserter from a GM move");
+                feature.Manager.UnbindPlayer(vic.Guid);
+                return true;
+            });
         });
     }
 

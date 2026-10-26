@@ -132,12 +132,20 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   (ENERGY) and 125/126 (rage), with invariant numeric formatting. A selected creature or offline/missing player returns
   `No character selected.` and security checks run before mutation.
 * `.goname` follows vmangos for the target's map (TeleportCommands.cpp:1242-1303). To a player in a battleground it binds the GM to
-  that match through the battleground manager (the teleport gate admits only bound players), refuses a GM already bound to a
-  different match with LANG_CANNOT_GO_TO_BG_FROM_BG, and records the GM's position as its entry point. To a player in a dungeon
-  instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an unbound GM to that instance. `.namego`
-  from inside a battleground binds the summoned player to the caller's match. The bind is cleared by the ordinary leave paths
-  (a far teleport off the map, the match removing the player, logout). Not ported: the smart-instance-binding mode. A refused
-  teleport answers the invalid-coordinates text (vmangos is silent).
+  that match through the battleground manager (the teleport gate admits only bound players), refuses a GM bound to a different
+  running match with LANG_CANNOT_GO_TO_BG_FROM_BG, and records the GM's position as its entry point. A binding to a match that no
+  longer exists counts as none (it is cleared when a command or a queue join meets it, and on arrival on any map), as vmangos cleans
+  up an outdated setting. A bound GM is on the match's map but is not a participant: only a queue invitation adds a player to a match
+  (vmangos `HandleMoveWorldportAckOpcode` adds only `IsInvitedForBattleGroundInstance`), so the GM is in no team count, raid or
+  scoreboard, the match's invitation count and free slots are the same before, during and after the visit, and the queue is not
+  over-invited. To a player in a dungeon instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an
+  unbound GM to that instance; this bind is made before the teleport, as vmangos does, so a teleport refused afterwards leaves it
+  (only the battleground bind is reverted). `.namego` from inside a battleground binds the summoned player to the caller's match the
+  same way; a player in another match leaves that match, without the Deserter debuff, only once the teleport was accepted (a refused
+  teleport restores the old binding). A battleground bind that the command made is undone when the teleport is refused; one the
+  player already had (a player loading in) is left alone. The bind is cleared by the ordinary leave paths (a far teleport off the
+  map, the match removing the player, logout). Not ported: the smart-instance-binding mode. A refused teleport answers the
+  invalid-coordinates text (vmangos is silent).
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

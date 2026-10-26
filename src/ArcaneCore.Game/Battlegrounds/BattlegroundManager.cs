@@ -550,7 +550,8 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         BattlegroundPlayerState selfState = StateOf(self.Guid);
 
         // Ignore if the player is already in a battleground.
-        if (selfState.InBattleground)
+        // A binding to a match that no longer exists (deleted while the player was loading in) is none, as vmangos's outdated cleanup.
+        if (selfState.InBattleground && !ClearStaleBinding(self.Guid))
         {
             return Ignored();
         }
@@ -694,7 +695,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
                 return BattlegroundJoinError.AllQueuesUsed;
             }
 
-            if (!Options.TagInBattlegrounds && state.InBattleground)
+            if (!Options.TagInBattlegrounds && state.InBattleground && !ClearStaleBinding(member.Guid))
             {
                 return BattlegroundJoinError.OfflineMember;
             }
@@ -941,7 +942,9 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
     /// <summary>
     /// The world-port acknowledgement arrived: the player is in the match's map, add it (vmangos <c>HandleMoveWorldportAckOpcode</c> →
-    /// <c>BattleGround::AddPlayer</c>). False when the player is bound to no running match.
+    /// <c>BattleGround::AddPlayer</c>). False when the player is bound to no running match, or was not invited to it: vmangos adds a player
+    /// only <c>if (_player->IsInvitedForBattleGroundInstance(...))</c>, so a player bound by a GM command (<see cref="BindPlayer"/>) is on the map
+    /// but not a participant (no team count, no scoreboard row, no invitation to give back when it leaves).
     /// </summary>
     public bool EnterBattleground(ObjectGuid player)
     {
@@ -952,6 +955,12 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
         BattlegroundPlayerState state = StateOf(player);
         if (!state.InBattleground || state.Team is not { } team || GetBattleground(state.InstanceId, state.Type) is not { } bg)
+        {
+            return false;
+        }
+
+        // The invitation of the queue slot outlives the acceptance (the slot stays until the player leaves), so a queue entrant passes.
+        if (state.InvitedInstance(bg.Template.QueueType) != bg.InstanceId)
         {
             return false;
         }
@@ -997,7 +1006,8 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
     /// <summary>
     /// A player left its match (vmangos <c>BattleGround::RemovePlayerAtLeave</c>, BattleGround.cpp:945-960 and 989-991): drop the queue slot of the
-    /// match's type and the binding. Called from the match host's <see cref="IBattlegroundHost.ClearPlayerBinding"/>.
+    /// match's type (only when it holds the invitation to this very match, so the queue slot of a player that a GM command bound to a match
+    /// it was never invited to is kept) and the binding. Called from the match host's <see cref="IBattlegroundHost.ClearPlayerBinding"/>.
     /// </summary>
     public void ClearBinding(ObjectGuid player)
     {
@@ -1009,12 +1019,38 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         BattlegroundPlayerState state = StateOf(player);
         if (state.InBattleground)
         {
-            state.RemoveSlot((BattlegroundQueueType)(byte)state.Type);
+            var queueType = (BattlegroundQueueType)(byte)state.Type;
+            if (state.InvitedInstance(queueType) == state.InstanceId)
+            {
+                state.RemoveSlot(queueType);
+            }
         }
 
         state.InstanceId = 0;
         state.Type = BattlegroundType.None;
         state.Team = null;
+    }
+
+    /// <summary>
+    /// A binding whose match is gone (the match was deleted while the player was loading in, or the player was bound by a GM command to a
+    /// match that then ended) is none (vmangos "cleanup setting if outdated"): clear it. True when a stale binding was cleared; false when
+    /// the player has no binding or its match is running.
+    /// </summary>
+    public bool ClearStaleBinding(ObjectGuid player)
+    {
+        if (!Invariant.Check(!player.IsEmpty, "ClearStaleBinding called for an empty player guid"))
+        {
+            return false;
+        }
+
+        BattlegroundPlayerState state = StateOf(player);
+        if (!state.InBattleground || GetBattleground(state.InstanceId, state.Type) is not null)
+        {
+            return false;
+        }
+
+        ClearBinding(player);
+        return true;
     }
 
     // ------------------------------------------------------------------ logout and login

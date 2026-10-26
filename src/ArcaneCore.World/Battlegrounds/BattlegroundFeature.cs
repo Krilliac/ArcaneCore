@@ -47,6 +47,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 {
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
+    private readonly Dictionary<ObjectGuid, GmBindChange> _gmBindChanges = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
     private BattlegroundEventIndexMap _events = BattlegroundEventIndexMap.Empty;
     private BattlegroundContent _content = BattlegroundContent.Empty;
@@ -571,10 +572,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// <paramref name="anchor"/> stands on a battleground map, bind <paramref name="subject"/> to that match through the manager's own binding
     /// (so the teleport gate <see cref="CanEnterMap"/> passes), as vmangos <c>SetBattleGroundId</c> does (TeleportCommands.cpp:1165-1168,
     /// 1242-1260), and remember where it stands as the entry point when that is not a battleground map (<c>SetBattleGroundEntryPoint</c>).
-    /// vmangos binds with the subject's own side (<c>GetBGTeam</c> falls back to <c>GetTeam</c>). A subject bound to another match is refused
-    /// (<see cref="GmBattlegroundGo.InOtherMatch"/>) unless <paramref name="leaveOtherMatch"/>, which leaves it first the way any far teleport
-    /// does. The binding is cleared on leaving by the ordinary paths: <see cref="OnPlayerEnteredMap"/> (a far teleport out),
-    /// <c>Battleground.RemovePlayerAtLeave</c> (the match ending), and a logout. World thread.
+    /// vmangos binds with the subject's own side (<c>GetBGTeam</c> falls back to <c>GetTeam</c>). The bound player is on the map with the match's
+    /// id but is not a participant: only a queue invitation makes one (<see cref="BattlegroundManager.EnterBattleground"/>). A binding whose
+    /// match is gone counts as none. A subject bound to another running match is refused (<see cref="GmBattlegroundGo.InOtherMatch"/>) unless
+    /// <paramref name="leaveOtherMatch"/>: then the binding is overwritten as vmangos does and the old match is left by
+    /// <see cref="CommitGmBinding"/> once the teleport was accepted (a refused teleport restores the old binding). A subject already bound to
+    /// this match changes nothing (<see cref="GmBattlegroundGo.AlreadyBound"/>). The binding is cleared on leaving by the ordinary paths:
+    /// <see cref="OnPlayerEnteredMap"/> (a far teleport out), <c>Battleground.RemovePlayerAtLeave</c> (the match ending), and a logout. World thread.
     /// </summary>
     public GmBattlegroundGo BindToMatchOf(Player subject, Player anchor, bool leaveOtherMatch)
     {
@@ -585,24 +589,24 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return GmBattlegroundGo.NotBattleground;
         }
 
+        manager.ClearStaleBinding(subject.Guid);
         BattlegroundPlayerState state = manager.StateOf(subject.Guid);
-        bool sameMatch = state.InBattleground && state.InstanceId == match.InstanceId && state.Type == match.Type;
-        if (state.InBattleground && !sameMatch)
+        if (state.InBattleground && state.InstanceId == match.InstanceId && state.Type == match.Type)
         {
-            if (!leaveOtherMatch)
-            {
-                return GmBattlegroundGo.InOtherMatch;
-            }
-
-            LeaveBattleground(subject, teleportToEntryPoint: false);
+            return GmBattlegroundGo.AlreadyBound;
         }
 
-        if (!sameMatch)
+        Battleground? previous = BattlegroundOf(subject.Guid);
+        if (previous is not null && !leaveOtherMatch)
         {
-            manager.BindPlayer(subject.Guid, match, subject.Team);
+            return GmBattlegroundGo.InOtherMatch;
         }
 
-        if (BattlegroundManager.TypeOfMap(subject.MapId) == BattlegroundType.None)
+        Team team = subject.Team;
+        bool storedEntry = BattlegroundManager.TypeOfMap(subject.MapId) == BattlegroundType.None;
+        _gmBindChanges[subject.Guid] = new GmBindChange(previous, state.Team, match, team, storedEntry ? EntryPointOf(subject.Guid) : null, storedEntry);
+        manager.BindPlayer(subject.Guid, match, team);
+        if (storedEntry)
         {
             StoreEntryPoint(subject.Guid, subject);
         }
@@ -611,29 +615,73 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     }
 
     /// <summary>
-    /// The teleport that followed <see cref="BindToMatchOf"/> was refused: a subject that has not entered its match is unbound again, with
-    /// the entry point that was taken for it, so no battleground id stays on a player that never went. A subject already in the match is untouched.
+    /// The teleport that followed a <see cref="GmBattlegroundGo.Bound"/> was accepted: a subject that was bound to another match leaves it now
+    /// (vmangos only overwrites the id; the match must not keep a participant that moved on). No Deserter debuff: a game master's move is not a
+    /// desertion. The new binding stays.
+    /// </summary>
+    public void CommitGmBinding(Player subject)
+    {
+        ArgumentNullException.ThrowIfNull(subject);
+        if (_manager is not { } manager || !_gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
+        {
+            return;
+        }
+
+        if (change.PreviousMatch is { } old)
+        {
+            old.RemovePlayerAtLeave(subject.Guid, teleportToEntryPoint: false, sendStatus: true);
+            manager.BindPlayer(subject.Guid, change.NewMatch, change.NewTeam);
+        }
+    }
+
+    /// <summary>
+    /// The teleport that followed a <see cref="GmBattlegroundGo.Bound"/> was refused: exactly what <see cref="BindToMatchOf"/> changed is
+    /// undone (the old binding comes back, or none; the entry point it stored is dropped or put back), so no battleground id stays on a player
+    /// that never went. A subject that was not Bound (<see cref="GmBattlegroundGo.AlreadyBound"/>) is not touched.
     /// </summary>
     public void RevertGmBinding(Player subject)
     {
         ArgumentNullException.ThrowIfNull(subject);
-        if (_manager is { } manager && BattlegroundOf(subject.Guid) is { } bg && bg.PlayerTeam(subject.Guid) is null)
+        if (_manager is not { } manager || !_gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
+        {
+            return;
+        }
+
+        if (change.PreviousMatch is { } old && manager.GetBattleground(old.InstanceId, old.Type) is not null)
+        {
+            manager.BindPlayer(subject.Guid, old, change.PreviousTeam ?? subject.Team);
+        }
+        else
         {
             manager.UnbindPlayer(subject.Guid);
-            if (BattlegroundManager.TypeOfMap(subject.MapId) == BattlegroundType.None)
+        }
+
+        if (change.StoredEntry)
+        {
+            if (change.PreviousEntry is { } entry)
+            {
+                _entryPoints[subject.Guid] = entry;
+            }
+            else
             {
                 ForgetEntryPoint(subject.Guid);
             }
         }
     }
 
+    /// <summary>What one <see cref="BindToMatchOf"/> changed, so it can be committed or reverted exactly.</summary>
+    private sealed record GmBindChange(Battleground? PreviousMatch, Team? PreviousTeam, Battleground NewMatch, Team NewTeam, BattlegroundEntryPoint? PreviousEntry, bool StoredEntry);
+
     /// <summary>
-    /// A player arrived on a map. A player bound to a match who arrived anywhere but its map left the battleground (vmangos TeleportTo far,
-    /// Player.cpp:2036-2043: <c>LeaveBattleground(false)</c>); one who arrived on its match's map enters the match (vmangos
-    /// HandleMoveWorldportAckOpcode → <c>BattleGround::AddPlayer</c>).
+    /// A player arrived on a map. A binding whose match is gone is cleared first (vmangos "cleanup setting if outdated"). A player bound to a
+    /// match who arrived anywhere but its map left the battleground (vmangos TeleportTo far, Player.cpp:2036-2043:
+    /// <c>LeaveBattleground(false)</c>); one who arrived on its match's map and holds an invitation to it enters the match (vmangos
+    /// HandleMoveWorldportAckOpcode → <c>if (IsInvitedForBattleGroundInstance)</c> → <c>BattleGround::AddPlayer</c>); one bound by a GM command
+    /// stays bound and outside the match.
     /// </summary>
     internal void OnPlayerEnteredMap(Player player, Map map)
     {
+        _manager?.ClearStaleBinding(player.Guid);
         if (BattlegroundOf(player.Guid) is not { } bg)
         {
             return;
@@ -666,7 +714,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         SpellSystem? spells = services.GetService<SpellFeature>()?.System;
         spells?.RemoveAuras(player, BattlegroundConstants.SpellWaitingToResurrect);
-        if (!player.IsGameMaster && Options.CastDeserter && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
+        // Only a participant deserts: a player that a GM command bound to the match is on its map but never joined it.
+        if (!player.IsGameMaster && Options.CastDeserter && bg.PlayerTeam(player.Guid) is not null && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
         {
             spells?.CastSpell(player, BattlegroundConstants.SpellDeserter, SpellCastTargets.ForSelf(), triggered: true);
         }
@@ -855,8 +904,11 @@ public enum GmBattlegroundGo
     /// <summary>The anchor is not on a battleground map: nothing was done.</summary>
     NotBattleground,
 
-    /// <summary>The subject is bound to the anchor's match (or already was): the teleport may go on.</summary>
+    /// <summary>The subject is bound to the anchor's match by this call: the teleport may go on, then <see cref="BattlegroundFeature.CommitGmBinding"/> or <see cref="BattlegroundFeature.RevertGmBinding"/>.</summary>
     Bound,
+
+    /// <summary>The subject was already bound to the anchor's match (a player loading in): nothing was changed, nothing to revert.</summary>
+    AlreadyBound,
 
     /// <summary>The subject is bound to a different match and the caller did not allow leaving it: nothing was changed (vmangos <c>LANG_CANNOT_GO_TO_BG_FROM_BG</c>).</summary>
     InOtherMatch,
