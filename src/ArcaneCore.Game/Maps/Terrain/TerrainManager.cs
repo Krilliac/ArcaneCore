@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -165,6 +166,13 @@ public sealed class TerrainManager
     /// <summary>Prefetches the loader took instead of reading the file itself (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
 
+    /// <summary>Whether a prefetch of the tile is waiting to be taken (<paramref name="finished"/>: its read is done) (diagnostics and tests).</summary>
+    internal bool IsPrefetched(uint mapId, int tileX, int tileY, out bool finished)
+    {
+        finished = !_prefetch.IsRunning(mapId, tileX, tileY);
+        return _prefetch.Contains(mapId, tileX, tileY);
+    }
+
     /// <summary>
     /// Read and parse a tile's <c>.map</c> file on the thread pool so a later load only installs it (<see cref="TilePrefetchCache{T}"/>);
     /// nothing happens without terrain data or when the tile is already in memory. World thread.
@@ -215,6 +223,152 @@ public sealed class TerrainManager
             _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
             return (0, 0);
         }
+    }
+
+    /// <summary>
+    /// The area flags of a tile for a lookup that must not read a file on the calling thread (<see cref="TerrainInfo.TryGetZoneAndAreaIdWithoutLoading"/>):
+    /// true with the flag of the cell under (<paramref name="x"/>, <paramref name="y"/>) once the tile's area section has been read in the
+    /// background; false while it is not, after asking for it (a read on the thread pool, once per tile). The flags are static content,
+    /// 512 bytes a tile, kept for the manager's life apart from the tile cache, so a far lookup neither pins a whole tile nor reads it again.
+    /// Without terrain data every tile reads as empty: true, flag 0. World thread (the per-map table is made here; the pool only fills slots).
+    /// </summary>
+    internal bool TryGetBackgroundAreaFlag(uint mapId, int tileX, int tileY, float x, float y, out ushort flag)
+    {
+        flag = 0;
+        if (_mapsDirectory is null)
+        {
+            return true;
+        }
+
+        AreaAtlas atlas = AtlasOf(mapId);
+        int index = (tileX * GridDefines.MaxNumberOfGrids) + tileY;
+        if (Volatile.Read(ref atlas.Tiles[index]) is { } flags)
+        {
+            flag = flags[TerrainTile.AreaCellIndex(x, y)];
+            return true;
+        }
+
+        if (Interlocked.CompareExchange(ref atlas.Claimed[index], 1, 0) == 0)
+        {
+            Interlocked.Increment(ref _areaReadsInFlight);
+            string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    Volatile.Write(ref atlas.Tiles[index], ReadAreaFlagsDetached(mapId, tileX, tileY, path));
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _areaReadsInFlight);
+                }
+            });
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Read the area flags of every tile file of a map in the background, one after another on one pool thread, so the lookups of
+    /// <see cref="TryGetBackgroundAreaFlag"/> rarely wait (about 560 bytes a file). Once per map; nothing without terrain data. World thread.
+    /// </summary>
+    internal void WarmBackgroundAreas(uint mapId)
+    {
+        if (_mapsDirectory is null)
+        {
+            return;
+        }
+
+        AreaAtlas atlas = AtlasOf(mapId);
+        if (atlas.Warmed)
+        {
+            return;
+        }
+
+        atlas.Warmed = true;
+        string directory = _mapsDirectory;
+        Interlocked.Increment(ref _areaReadsInFlight);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                for (int tileX = 0; tileX < GridDefines.MaxNumberOfGrids; tileX++)
+                {
+                    for (int tileY = 0; tileY < GridDefines.MaxNumberOfGrids; tileY++)
+                    {
+                        int index = (tileX * GridDefines.MaxNumberOfGrids) + tileY;
+                        string path = Path.Combine(directory, TerrainTile.FileName(mapId, tileX, tileY));
+                        if (Volatile.Read(ref atlas.Tiles[index]) is null && File.Exists(path)
+                            && Interlocked.CompareExchange(ref atlas.Claimed[index], 1, 0) == 0)
+                        {
+                            Volatile.Write(ref atlas.Tiles[index], ReadAreaFlagsDetached(mapId, tileX, tileY, path));
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _areaReadsInFlight);
+            }
+        });
+    }
+
+    /// <summary>Background area reads (<see cref="TryGetBackgroundAreaFlag"/>, <see cref="WarmBackgroundAreas"/>) not finished yet (tests).</summary>
+    internal int BackgroundAreaReadsInFlight => Volatile.Read(ref _areaReadsInFlight);
+
+    /// <summary>Test seam: how many tile area sections the calling thread has read (<see cref="TryGetBackgroundAreaFlag"/>' pool reads).</summary>
+    internal static int AreaReadsOnThisThread => _areaReadsOnThisThread;
+
+    [ThreadStatic]
+    private static int _areaReadsOnThisThread;
+
+    private int _areaReadsInFlight;
+    private readonly Dictionary<uint, AreaAtlas> _areaAtlas = [];
+
+    /// <summary>No area anywhere: a missing or unreadable file (the tile cache reads it as <see cref="TerrainTile.Empty"/>, flag 0).</summary>
+    private static readonly ushort[] NoAreas = new ushort[16 * 16];
+
+    private AreaAtlas AtlasOf(uint mapId)
+    {
+        if (!_areaAtlas.TryGetValue(mapId, out AreaAtlas? atlas))
+        {
+            atlas = new AreaAtlas();
+            _areaAtlas[mapId] = atlas;
+        }
+
+        return atlas;
+    }
+
+    private ushort[] ReadAreaFlagsDetached(uint mapId, int tileX, int tileY, string path)
+    {
+        _areaReadsOnThisThread++;
+        try
+        {
+            return File.Exists(path) ? TerrainTile.ReadAreaFlags(path) : NoAreas;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            FaultLedger.Shared.Record("terrain.area-read", ex);
+            if (ex is InvalidDataException)
+            {
+                AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
+            }
+
+            _logger.LogWarning(ex, "Terrain: could not read the areas of {Path}", path);
+            return NoAreas;
+        }
+    }
+
+    /// <summary>One map's background area flags: a slot per tile, filled once by the pool (<see cref="TryGetBackgroundAreaFlag"/>).</summary>
+    private sealed class AreaAtlas
+    {
+        public readonly ushort[]?[] Tiles = new ushort[]?[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
+
+        /// <summary>1 once a read of the slot was started (by a lookup or the warm-up): each tile is read once.</summary>
+        public readonly int[] Claimed = new int[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
+
+        /// <summary>Whether <see cref="WarmBackgroundAreas"/> ran for the map (world thread).</summary>
+        public bool Warmed;
     }
 
     // Test seam kept in release builds too (the tests run in either): one thread-local increment per tile read, next to a file read.
