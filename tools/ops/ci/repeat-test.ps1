@@ -51,7 +51,8 @@ $dotnet = if ($dotnetRoot -and (Test-Path (Join-Path $dotnetRoot 'dotnet.exe')))
 if (-not $LanesRoot) { $LanesRoot = $env:ARCANECORE_LANES_ROOT }
 $slotScript = if ($LanesRoot) { Join-Path $LanesRoot 'tools\run-in-slot.ps1' } else { '' }
 $useSlot = $Slot.IsPresent -and $slotScript -and (Test-Path -LiteralPath $slotScript)
-if ($Slot -and -not $useSlot) { Write-Warning "-Slot requested but $slotScript does not exist; running dotnet directly." }
+if ($Slot -and -not $LanesRoot) { Write-Warning "-Slot requested but no lanes root is set (give -LanesRoot or set ARCANECORE_LANES_ROOT); running dotnet directly." }
+elseif ($Slot -and -not $useSlot) { Write-Warning "-Slot requested but $slotScript does not exist; running dotnet directly." }
 $concurrency = if ($Parallel) { $Concurrency } else { 1 }
 $pwshPath = (Get-Process -Id $PID).Path
 

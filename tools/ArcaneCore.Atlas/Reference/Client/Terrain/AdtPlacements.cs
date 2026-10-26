@@ -80,7 +80,7 @@ internal static class AdtPlacements
         {
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/model.cpp:155 id, :156-157 position, :158-159 rotation,
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/model.cpp:162 scale (u16), :163 flags (u16), :166 scale / 1024
-            // ref: D:\WoW-RE-Research\formats\terrain-adt.md:160-170 (MDDF layout)
+            // ref: WoW-RE-Research formats/terrain-adt.md:160-170 (MDDF layout)
             uint index = ClientChunks.U32(mddf, offset);
             if (index >= (uint)paths.Count)
             {
@@ -120,7 +120,7 @@ internal static class AdtPlacements
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:544 unique id, :545-546 position, :547-548 rotation,
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:549-550 bounds.min, :551-552 bounds.max, :553 flags,
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wmo.cpp:554 doodad set, :556-557 name set and padding
-            // ref: D:\WoW-RE-Research\formats\terrain-adt.md:172-190 (MODF layout; extent order flagged as unconfirmed there)
+            // ref: WoW-RE-Research formats/terrain-adt.md:172-190 (MODF layout; extent order flagged as unconfirmed there)
             uint index = ClientChunks.U32(modf, offset);
             if (index >= (uint)paths.Count)
             {

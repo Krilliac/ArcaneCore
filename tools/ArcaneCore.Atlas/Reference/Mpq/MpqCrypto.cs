@@ -9,35 +9,35 @@ namespace ArcaneCore.Atlas.Reference.Mpq;
 public static class MpqCrypto
 {
     /// <summary>Hash type for the hash-table start index.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormCommon.h:215
+    // ref: StormLib src/StormCommon.h:215
     public const uint HashTableIndex = 0x000;
 
     /// <summary>Hash type for the first name hash (<c>dwName1</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormCommon.h:216
+    // ref: StormLib src/StormCommon.h:216
     public const uint HashNameA = 0x100;
 
     /// <summary>Hash type for the second name hash (<c>dwName2</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormCommon.h:217
+    // ref: StormLib src/StormCommon.h:217
     public const uint HashNameB = 0x200;
 
     /// <summary>Hash type for encrypted-file keys.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormCommon.h:218
+    // ref: StormLib src/StormCommon.h:218
     public const uint HashFileKey = 0x300;
 
     /// <summary>Offset of the key-mixing rows of the crypt table (used inside block decryption).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormCommon.h:219
+    // ref: StormLib src/StormCommon.h:219
     public const uint HashKeyMix = 0x400;
 
     /// <summary>Key of the hash table: <c>HashString("(hash table)", HashFileKey)</c>.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:295 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:223
+    // ref: StormLib src/StormLib.h:295 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:223
     public const uint HashTableKey = 0xC3AF3770;
 
     /// <summary>Key of the block table: <c>HashString("(block table)", HashFileKey)</c>.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:296 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:242
+    // ref: StormLib src/StormLib.h:296 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:242
     public const uint BlockTableKey = 0xEC83B3A3;
 
     /// <summary>Number of 32-bit entries of the crypt table (five 0x100-entry rows).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:213
+    // ref: StormLib src/SBaseCommon.cpp:213
     public const int CryptTableSize = 0x500;
 
     private static readonly uint[] CryptTable = BuildCryptTable();
@@ -85,7 +85,7 @@ public static class MpqCrypto
     /// </summary>
     public static void Decrypt(Span<byte> data, uint key)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:494-516 (DecryptMpqBlock)
+        // ref: StormLib src/SBaseCommon.cpp:494-516 (DecryptMpqBlock)
         uint key1 = key;
         uint key2 = 0xEEEEEEEE;
         int words = data.Length >> 2;
@@ -110,7 +110,7 @@ public static class MpqCrypto
     /// <param name="fixKey">True when the block carries <see cref="MpqFileFlags.FixKey"/>.</param>
     public static uint FileKey(string path, long blockOffset, uint fileSize, bool fixKey)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:685-704 (DecryptFileKey); plain name: StormCommon.h:369-381
+        // ref: StormLib src/SBaseCommon.cpp:685-704 (DecryptFileKey); plain name: StormCommon.h:369-381
         ArgumentNullException.ThrowIfNull(path);
         int cut = Math.Max(path.LastIndexOf('\\'), path.LastIndexOf('/'));
         string plain = cut >= 0 ? path[(cut + 1)..] : path;
@@ -120,7 +120,7 @@ public static class MpqCrypto
 
     private static byte Normalize(byte b)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:55-73 (AsciiToUpperTable: a-z to A-Z, '/' to '\\', all else unchanged)
+        // ref: StormLib src/SBaseCommon.cpp:55-73 (AsciiToUpperTable: a-z to A-Z, '/' to '\\', all else unchanged)
         return b switch
         {
             >= (byte)'a' and <= (byte)'z' => (byte)(b - 0x20),
@@ -131,7 +131,7 @@ public static class MpqCrypto
 
     private static uint[] BuildCryptTable()
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:219-244 (InitializeMpqCryptography); the same table is the
+        // ref: StormLib src/SBaseCommon.cpp:219-244 (InitializeMpqCryptography); the same table is the
         // literal array in vmangos@0e3ff01 dep/libmpq/libmpq/crypt_buf.h.
         var table = new uint[CryptTableSize];
         uint seed = 0x00100001;
@@ -156,43 +156,43 @@ public static class MpqCrypto
 public static class MpqFileFlags
 {
     /// <summary>Whole-file PKWARE DCL implode (<c>MPQ_FILE_IMPLODE</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:219 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:43
+    // ref: StormLib src/StormLib.h:219 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:43
     public const uint Implode = 0x00000100;
 
     /// <summary>Per-sector compression with a leading method-mask byte (<c>MPQ_FILE_COMPRESS</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:220 ; mpq-internal.h:44
+    // ref: StormLib src/StormLib.h:220 ; mpq-internal.h:44
     public const uint Compress = 0x00000200;
 
     /// <summary>Mask that says "this file has a sector offset table" (<c>MPQ_FILE_COMPRESS_MASK</c>).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:232 ; mpq-internal.h:42
+    // ref: StormLib src/StormLib.h:232 ; mpq-internal.h:42
     public const uint CompressMask = 0x0000FF00;
 
     /// <summary>The file is encrypted.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:221 ; mpq-internal.h:41
+    // ref: StormLib src/StormLib.h:221 ; mpq-internal.h:41
     public const uint Encrypted = 0x00010000;
 
     /// <summary>The file key is adjusted by the block offset and size (StormLib: <c>MPQ_FILE_KEY_V2</c>, "fix key").</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:222,236 ; SBaseCommon.cpp:699-700
+    // ref: StormLib src/StormLib.h:222,236 ; SBaseCommon.cpp:699-700
     public const uint FixKey = 0x00020000;
 
     /// <summary>The file is an incremental patch (Cataclysm and later; not used by the 1.12.1 client).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:223
+    // ref: StormLib src/StormLib.h:223
     public const uint PatchFile = 0x00100000;
 
     /// <summary>The file is one unit rather than a run of sectors.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:224 ; mpq-internal.h:46
+    // ref: StormLib src/StormLib.h:224 ; mpq-internal.h:46
     public const uint SingleUnit = 0x01000000;
 
     /// <summary>The entry is a deletion marker used by patch archives.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:225
+    // ref: StormLib src/StormLib.h:225
     public const uint DeleteMarker = 0x02000000;
 
     /// <summary>The file has a checksum table after its sectors.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:226 ; mpq-internal.h:47
+    // ref: StormLib src/StormLib.h:226 ; mpq-internal.h:47
     public const uint SectorCrc = 0x04000000;
 
     /// <summary>The entry is a file (cleared for a free or deleted block).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:229 ; mpq-internal.h:40
+    // ref: StormLib src/StormLib.h:229 ; mpq-internal.h:40
     public const uint Exists = 0x80000000;
 }
 
@@ -200,31 +200,31 @@ public static class MpqFileFlags
 public static class MpqCompressionMask
 {
     /// <summary>Huffman (used on WAVE files).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:275
+    // ref: StormLib src/StormLib.h:275
     public const byte Huffman = 0x01;
 
     /// <summary>zlib.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:276
+    // ref: StormLib src/StormLib.h:276
     public const byte Zlib = 0x02;
 
     /// <summary>PKWARE DCL.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:277
+    // ref: StormLib src/StormLib.h:277
     public const byte Pkware = 0x08;
 
     /// <summary>bzip2.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:278
+    // ref: StormLib src/StormLib.h:278
     public const byte Bzip2 = 0x10;
 
     /// <summary>Sparse (run-length of zero runs).</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:279
+    // ref: StormLib src/StormLib.h:279
     public const byte Sparse = 0x20;
 
     /// <summary>IMA ADPCM, mono.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:280
+    // ref: StormLib src/StormLib.h:280
     public const byte AdpcmMono = 0x40;
 
     /// <summary>IMA ADPCM, stereo.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:281
+    // ref: StormLib src/StormLib.h:281
     public const byte AdpcmStereo = 0x80;
 
     /// <summary>A readable name for each single bit (or the hex byte for unknown bits).</summary>

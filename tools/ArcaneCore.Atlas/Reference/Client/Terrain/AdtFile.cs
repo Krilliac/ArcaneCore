@@ -26,7 +26,7 @@ public enum AdtLiquidKind
 public sealed class AdtLiquidLayer
 {
     // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:60-66 (one layer per set MCNK liquid flag, in this bit order)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:487-497 (river, ocean, magma, slime order; 804 bytes per layer)
+    // ref: Worldforge src/terrain.cpp:487-497 (river, ocean, magma, slime order; 804 bytes per layer)
 
     /// <summary>MCNK flag selecting a river layer.</summary>
     public const uint McnkRiver = 0x04;
@@ -53,7 +53,7 @@ public sealed class AdtLiquidLayer
     public const byte DarkWaterSquare = 0x80;
 
     // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:72-74 and :99 (804 bytes per layer, static_assert)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:478-486 (8 + 81*8 + 64 + 4 + 2*40 = 804)
+    // ref: Worldforge src/terrain.cpp:478-486 (8 + 81*8 + 64 + 4 + 2*40 = 804)
     internal const int LayerBytes = 804;
 
     private readonly float[] _heights;
@@ -139,7 +139,7 @@ public sealed class AdtLiquidLayer
     internal static AdtLiquidLayer Read(ReadOnlySpan<byte> data, int start, AdtLiquidKind kind)
     {
         // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:79-97 (f32 height1, f32 height2, 9x9 {u32, f32 height}, u8 flags[8][8], u8 data[84])
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:506-519 (the height is always the last four bytes of the 8-byte vertex)
+        // ref: Worldforge src/terrain.cpp:506-519 (the height is always the last four bytes of the 8-byte vertex)
         float min = ClientChunks.F32(data, start);
         float max = ClientChunks.F32(data, start + 4);
         var heights = new float[81];
@@ -172,8 +172,8 @@ public sealed class AdtChunk
     public const int HeightCount = 145;
 
     // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:440 and :450 (outer sample [y][x] at y*17+x, inner sample [y][x] at y*17+9+x)
-    // ref: D:\WoW-RE-Research\formats\terrain-adt.md:269-276 (17 alternating rows of 9 and 8)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:827-828 (the same split: 81 outer samples, then 64 inner)
+    // ref: WoW-RE-Research formats/terrain-adt.md:269-276 (17 alternating rows of 9 and 8)
+    // ref: Worldforge src/terrain.cpp:827-828 (the same split: 81 outer samples, then 64 inner)
     private const int Stride = 17;
 
     private readonly float[] _mcvt;
@@ -276,7 +276,7 @@ public sealed class AdtChunk
             throw new ArgumentOutOfRangeException(nameof(y), $"squares are 0..7, got ({y}, {x}).");
         }
 
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:60-63 (bit (row / 2) * 4 + (col / 2))
+        // ref: Worldforge src/terrain.cpp:60-63 (bit (row / 2) * 4 + (col / 2))
         // ref: vmangos@0e3ff01 src/game/Maps/GridMap.cpp:41-42 and :274-283 (holetab_h x holetab_v select that same bit)
         return (Holes & (1 << (((y / 2) * 4) + (x / 2)))) != 0;
     }
@@ -565,7 +565,7 @@ public sealed class AdtFile
         }
 
         // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:130-162 (field order; offsets below are payload-relative)
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:23-45 (the same header offsets, checked against real tiles)
+        // ref: Worldforge src/terrain.cpp:23-45 (the same header offsets, checked against real tiles)
         int h = mcnk.DataStart;
         uint flags = ClientChunks.U32(data, h);
         uint indexX = ClientChunks.U32(data, h + 0x04);
@@ -582,7 +582,7 @@ public sealed class AdtFile
 
         // The MCIN slot is the position the extractor uses; the MCNK's own IndexX (column) and IndexY (row) must agree.
         // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:391 (cells->getMCNK(i, j): i is the row, j the column)
-        // ref: D:\WoW-RE-Research\formats\terrain-adt.md:203-208 (IndexX = column, IndexY = row)
+        // ref: WoW-RE-Research formats/terrain-adt.md:203-208 (IndexX = column, IndexY = row)
         if (indexX != (uint)(index % ChunksPerSide) || indexY != (uint)(index / ChunksPerSide))
         {
             throw new InvalidDataException($"{context}: header says column {indexX}, row {indexY} but its MCIN slot is column {index % ChunksPerSide}, row {index / ChunksPerSide}.");
@@ -629,7 +629,7 @@ public sealed class AdtFile
     {
         // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:171-190 (layers = (sizeMCLQ - 8) / 804; the size counts the 8-byte chunk header)
         // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.cpp:110-116 (an MCLQ chunk must be there when the offset is set)
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:478-486 (the MCLQ chunk's own size field is unreliable; the MCNK header drives the layout)
+        // ref: Worldforge src/terrain.cpp:478-486 (the MCLQ chunk's own size field is unreliable; the MCNK header drives the layout)
         int expected = BitOperations.PopCount(flags & AdtLiquidLayer.McnkMask);
         int stored = 0;
         long layersStart = 0;

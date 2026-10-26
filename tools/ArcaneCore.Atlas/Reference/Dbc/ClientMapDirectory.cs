@@ -7,7 +7,7 @@ namespace ArcaneCore.Atlas.Reference.Dbc;
 /// </summary>
 /// <remarks>
 /// Column positions are the 1.12.1.5875 layouts of WoWDBDefs (WoWDBDefs definitions/Map.dbd:151-168,
-/// AreaTable.dbd:99-112), confirmed by the field counts the loader insists on and by D:\WoW-RE-Research\formats\dbc.md:238-262.
+/// AreaTable.dbd:99-112), confirmed by the field counts the loader insists on and by WoW-RE-Research formats/dbc.md:238-262.
 /// A table with another field count is refused rather than read with guessed columns.
 /// </remarks>
 public sealed class ClientMapDirectory : IMapDirectory

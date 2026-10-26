@@ -24,7 +24,7 @@ public static class ClientMapPaths
     // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:845 (World\Maps\<name>\<name>.wdt)
     // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:853-861 (loop y then x; file _<x>_<y>.adt; output (map id, y, x))
     // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wdtfile.cpp:132 (the same World\Maps\<name>\<name>_<x>_<z>.adt pattern)
-    // ref: D:\WoW-RE-Research\formats\terrain-adt.md:372-386 (first index = west, second index = north)
+    // ref: WoW-RE-Research formats/terrain-adt.md:372-386 (first index = west, second index = north)
     // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:215 (server .map name: map, tile X, tile Y)
     private const string MapsRoot = "World\\Maps";
 

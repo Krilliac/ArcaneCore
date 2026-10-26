@@ -54,6 +54,7 @@ function Assert-FreeMemory {
 }
 
 if ($Steps -contains 'Tools') {
+    if (-not $VmangosSource) { throw 'give -VmangosSource, or set ARCANECORE_VMANGOS_REF or ARCANECORE_REFS_ROOT' }
     if (-not (Test-Path (Join-Path $VmangosSource 'contrib\mmap'))) { throw "$VmangosSource is not a vmangos source tree" }
     New-Item -ItemType Directory -Force $src, $build | Out-Null
     robocopy $VmangosSource $src /MIR /XD .git sql bin .serena /XF CMakeUserPresets.json /NFL /NDL /NJH /NJS /NP | Out-Null

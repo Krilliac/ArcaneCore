@@ -80,7 +80,7 @@ public sealed class MpqArchiveTests : IDisposable
     [Fact]
     public void Lookup_FollowsStormLibsLocaleRule_ForPreferredEnUS()
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:811-850 (GetHashEntryLocale): an exact enUS entry wins at once,
+        // ref: StormLib src/SBaseFileTable.cpp:811-850 (GetHashEntryLocale): an exact enUS entry wins at once,
         // otherwise the last neutral-or-enUS entry; any other locale or platform is never returned.
         byte[] neutral = Text(50, "neutral ");
         byte[] english = Text(50, "english ");

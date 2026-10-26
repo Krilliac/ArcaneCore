@@ -13,7 +13,7 @@ public sealed class WdtFile
     public const uint FormatVersion = 18;
 
     /// <summary>MPHD flag: the map has no terrain and is one global WMO.</summary>
-    // ref: D:\WoW-RE-Research\formats\terrain-adt.md:68-71 (MPHD flag 0x0001 = global WMO)
+    // ref: WoW-RE-Research formats/terrain-adt.md:68-71 (MPHD flag 0x0001 = global WMO)
     public const uint GlobalWmoFlag = 0x1;
 
     // ref: vmangos@0e3ff01 contrib/extractor/loadlib/wdt.h:40-59 (MPHD: eight u32; the first is the flag word)
@@ -66,7 +66,7 @@ public sealed class WdtFile
         }
 
         // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:857-861 (adt_list[y][x] names file _x_y and the server tile (y, x))
-        // ref: D:\WoW-RE-Research\formats\terrain-adt.md:87-90 (row-major, y outer then x inner)
+        // ref: WoW-RE-Research formats/terrain-adt.md:87-90 (row-major, y outer then x inner)
         return (_main[(tileX * WorldGrid.TilesPerSide) + tileY] & 1) != 0;
     }
 
@@ -145,7 +145,7 @@ public sealed class WdtFile
         if (chunks.Any(c => c.Id == "MODF"))
         {
             // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/wdtfile.cpp:92-108 (a WDT MODF entry's id is the ordinal of its name in MWMO)
-            // ref: D:\WoW-RE-Research\formats\terrain-adt.md:61 (the WDT MODF has the same 64-byte layout as the ADT one)
+            // ref: WoW-RE-Research formats/terrain-adt.md:61 (the WDT MODF has the same 64-byte layout as the ADT one)
             ClientChunks.Chunk modf = Single(chunks, "MODF", context);
             objects = [.. AdtPlacements.ReadWmoObjects(data.Slice(modf.DataStart, modf.Size), names, context)];
         }
