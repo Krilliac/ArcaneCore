@@ -697,7 +697,7 @@ internal static class PlayerbotNavigation
         // A bot on steep ground is not told apart: the lookup snaps it to a walking region within a few yards (horizontally, or just above
         // or below), and it is judged from that region; one with none in reach has from < 0 and gets false above. The lookup is the
         // graph's, so the answer costs no path search.
-        return fromComponent != toComponent
+        return fromComponent != toComponent && !IsFragment(graph, from)
             && !(graph.ComponentPolygons(to) > FragmentPolygons && (long)graph.ComponentPolygons(from) * 16 < graph.ComponentPolygons(to))
             && IsOutdoorsOnSurface(map, goal)
             && IsOutdoorsOnSurface(map, here);

@@ -265,15 +265,51 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
             return world.Host.World.NowMs;
         });
 
-        (uint rechosenMs, bool walkPending) = await world.OnWorldAsync(() =>
+        (uint rechosenMs, bool hasCar, bool hasRoute, TramStage stage) = await world.OnWorldAsync(() =>
         {
             TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
-            return (trip.DockChosenMs, trip.Car is not null && trip.Route is not null);
+            return (trip.DockChosenMs, trip.Car is not null, trip.Route is not null, trip.Stage);
         });
+        output.WriteLine($"hasCar={hasCar} hasRoute={hasRoute} stage={stage}");
+        Assert.False(hasCar, "the bot is not beside the new spot (it was still walking): the choice is dropped for the next think");
+        Assert.False(hasRoute, "the pump keeps a car only if no walk is needed (it cannot start one)");
+        Assert.Equal(1, capture.Count(Key("board-missed")));
+    }
+
+    /// <summary>
+    /// #1499: a bot waiting beside its car's spot when the car leaves keeps the choice of the next stop made by the pump (no walk is
+    /// needed, so nothing is planned and thrown away), and boards it without a think.
+    /// </summary>
+    [Fact]
+    public async Task MissedCar_IsKeptByThePump_WhenTheBotIsAlreadyBesideTheNewSpot()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram && Stage(world) is TramStage.Waiting);
+        (uint departMs, uint chosenMs) = await world.OnWorldAsync(() =>
+        {
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            return (trip.Dock.DepartMs, trip.DockChosenMs);
+        });
+
+        await world.AdvanceAsync(departMs + 5_000);
+        uint now = await world.OnWorldAsync(() =>
+        {
+            PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs);
+            return world.Host.World.NowMs;
+        });
+
+        (uint rechosenMs, bool hasCar, bool hasRoute, TramStage stage) = await world.OnWorldAsync(() =>
+        {
+            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
+            return (trip.DockChosenMs, trip.Car is not null, trip.Route is not null, trip.Stage);
+        });
+        output.WriteLine($"hasCar={hasCar} hasRoute={hasRoute} stage={stage}");
         Assert.NotEqual(chosenMs, rechosenMs);
         Assert.Equal(now, rechosenMs);
-        Assert.False(walkPending, "the pump keeps a car only if no walk is needed (it cannot start one)");
-        Assert.Equal(1, capture.Count(Key("board-missed")));
+        Assert.True(hasCar, "the bot stands beside the spot: the choice is kept");
+        Assert.False(hasRoute);
+        Assert.Equal(TramStage.Waiting, stage);
     }
 
     /// <summary>

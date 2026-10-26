@@ -522,11 +522,11 @@ internal static partial class PlayerbotTram
             TramPlatform platform = trip.Network.Other(trip.To);
             ReportBoardMissed(player, trip, missedCar, platform, new Vector3(player.X, player.Y, player.Z), now, CanReport(session, player));
             PlayerbotThinkProbe.Phase("tram choose car");
-            bool chosen = ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _);
-            // The pump cannot walk (no TryAdvance without the think's elapsed time), and the choice assumed the walk starts now: a car
-            // whose spot needs a walk is dropped, and the next think chooses and walks in one step. Only a bot already beside its
-            // new spot keeps the choice (the pump boards it while the stop window is open).
-            if (!chosen || trip.Route is not null)
+            bool chosen = ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _, standingOnly: true);
+            // The pump cannot walk (no TryAdvance without the think's elapsed time): it keeps a car only when the bot already stands
+            // beside the spot (no route is planned, so none is thrown away), the pump then boards it while the stop window is open.
+            // Otherwise Car stays null and the next think chooses and walks in one step.
+            if (!chosen)
             {
                 trip.Car = null;
                 trip.Route = null;
@@ -942,7 +942,7 @@ internal static partial class PlayerbotTram
     private const uint InsideMarginMs = 1_000;
 
     private static bool ChooseCar(Player player, Map map, GameObjectMapSystem system, TramTrip trip, TramPlatform here, PlayerbotOptions options,
-        uint now, out string? failure, out string? category, out bool waitingForTiles)
+        uint now, out string? failure, out string? category, out bool waitingForTiles, bool standingOnly = false)
     {
         failure = null;
         category = null;
@@ -975,7 +975,7 @@ internal static partial class PlayerbotTram
 
         foreach ((GameObject car, TramDock dock, _) in candidates.OrderBy(c => c.Ready).ThenBy(c => c.Car.Guid.Value))
         {
-            if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending) is not { } spot)
+            if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending, standingOnly) is not { } spot)
             {
                 waitingForTiles |= pending;
                 continue;
@@ -1000,9 +1000,10 @@ internal static partial class PlayerbotTram
     /// <summary>
     /// The spot on the platform beside a car standing at <paramref name="dock"/> (either side of the track, <see cref="BesideYards"/> from
     /// its centre line, where a floor level with the landing is), with the route to it (null when the bot stands there already).
+    /// <paramref name="standingOnly"/> plans no route: only a spot the bot already stands at is returned.
     /// </summary>
     private static Vector3? Beside(Player player, Map map, GameObject car, Vector3 dock, TramPlatform here, PlayerbotOptions options,
-        ref TileWait tiles, uint now, out PlayerbotRoute? route, out bool pending)
+        ref TileWait tiles, uint now, out PlayerbotRoute? route, out bool pending, bool standingOnly = false)
     {
         route = null;
         pending = false;
@@ -1010,6 +1011,7 @@ internal static partial class PlayerbotTram
         foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(Flat(s), Flat(bot))))
         {
             if (Vector2.Distance(Flat(spot), Flat(bot)) <= 1.5f) return spot;
+            if (standingOnly) continue;
             PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, spot, options, ref tiles, now, out PlayerbotRoute? planned);
             pending |= outcome == PlanOutcome.Pending;
             if (outcome == PlanOutcome.Route && planned is not null

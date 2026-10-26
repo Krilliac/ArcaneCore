@@ -49,6 +49,54 @@ public sealed class PlayerbotTramFarComponentTests : IDisposable
         Assert.True(await world.Host.OnWorldAsync(() => PlayerbotTram.CanReachEntranceApproach(world.Player, JoinedApproach)));
     }
 
+    /// <summary>
+    /// An indoor start (Coldridge Valley, in Ironforge) is another walking component all the same: <c>IsUnreachableOnFoot</c> says no for
+    /// it (its outdoors exemption), <c>InOtherWalkingComponent</c> (the tram's check) does not.
+    /// </summary>
+    [Fact]
+    public async Task AnIndoorFarStart_WhoseApproachIsInAnotherComponent_IsInAnotherComponent_ThoughNotCalledUnreachable()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Tiles, new IndoorsFarNorth());
+        await world.PlaceAsync(FarStart);
+        bool otherComponent = false;
+        for (int think = 0; think < 80 && !otherComponent; think++)
+        {
+            otherComponent = await world.Host.OnWorldAsync(() => PlayerbotNavigation.InOtherWalkingComponent(world.Player, UnjoinedApproach));
+            if (!otherComponent) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(otherComponent, "the graph never put the approach in another component");
+        (bool unreachable, int from, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnjoinedApproach, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent);
+        });
+        Assert.NotEqual(from, to);
+        Assert.False(unreachable, "an indoor start is exempt from IsUnreachableOnFoot");
+        Assert.False(await world.Host.OnWorldAsync(() => PlayerbotTram.CanReachEntranceApproach(world.Player, UnjoinedApproach)));
+    }
+
+    /// <summary>The floor line of sight, with every place north of Y 100 inside a building (no MOGP exterior flag).</summary>
+    private sealed class IndoorsFarNorth : ILineOfSight
+    {
+        private readonly FloorLineOfSight _floor = new();
+
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => _floor.IsInLineOfSight(mapId, from, to, ignoreM2);
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+            => _floor.TryGetObjectHit(mapId, from, to, modifyDistance, out hit);
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => _floor.GetModelHeight(mapId, x, y, z, maxSearchDistance);
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = y > 100f ? new ModelAreaInfo(0, 0, 0, 0, 0f) : default;
+            return y > 100f;
+        }
+    }
+
     /// <summary>The fragment exemption of IsUnreachableOnFoot is kept: a start in a pocket no walk leaves says nothing about the world.</summary>
     [Fact]
     public async Task AStartOnAFragment_IsNotCalledInAnotherComponent()
