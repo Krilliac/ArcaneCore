@@ -71,7 +71,7 @@ public sealed class GameObjectLootEmptyAnomalyTests
         AnomalyNotice notice = Assert.Single(cap.Notices);
         Assert.Equal(AnomalySeverity.Error, notice.Severity);
         Assert.Equal(NoDataKey, notice.Key);
-        Assert.Equal(LootService.GameObjectLootNoDataCode, "gameobject-loot-no-data");
+        Assert.Equal("gameobject-loot-no-data", LootService.GameObjectLootNoDataCode);
         Assert.Contains("loot 9001", notice.Subject);
         Assert.Contains("reason no-rows", notice.Detail);
         Assert.Contains($"opener guid {player.Guid.Low}", notice.Detail);

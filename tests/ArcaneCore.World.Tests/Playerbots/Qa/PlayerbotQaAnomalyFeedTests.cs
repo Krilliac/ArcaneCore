@@ -58,6 +58,13 @@ public sealed class PlayerbotQaAnomalyFeedTests
     }
 
     [Fact]
+    public void ContentDefectKeys_AreASubsetOfTheWorldKeys()
+    {
+        Assert.NotEmpty(PlayerbotQaAnomalyFeed.ContentDefectKeys);
+        Assert.All(PlayerbotQaAnomalyFeed.ContentDefectKeys, key => Assert.True(PlayerbotQaAnomalyFeed.WorldKeys.Contains(key), key));
+    }
+
+    [Fact]
     public void TheSixWorldKeys_AreExactlyTheOnesTheServerReports()
     {
         // Built from the constants the reporting code passes to the ledger, so a renamed code breaks this test instead of silently leaving the feed.

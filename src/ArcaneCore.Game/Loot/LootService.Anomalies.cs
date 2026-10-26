@@ -32,7 +32,7 @@ public sealed partial class LootService
     /// <summary>A roll was still running well past its timeout.</summary>
     public const string RollUnresolvedCode = "roll-unresolved";
 
-    /// <summary>A chest-like object was opened and its loot is empty although its loot id promises something (or names no usable rows).</summary>
+    /// <summary>A chest-like object was opened and its loot is empty although its loot id promises something.</summary>
     public const string GameObjectLootEmptyCode = "gameobject-loot-empty";
 
     /// <summary>

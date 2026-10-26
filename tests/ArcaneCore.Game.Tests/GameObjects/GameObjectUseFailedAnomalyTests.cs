@@ -145,7 +145,7 @@ public sealed class GameObjectUseFailedAnomalyTests
             system.RecordUseAttemptOutcome(player, go.Guid, go, GameObjectUseResult.Locked);
             AnomalyNotice notice = Assert.Single(cap.Notices);
             Assert.Equal(UnknownLockKey, notice.Key);
-            Assert.Equal(GameObjectMapSystem.UseFailedUnknownLockCode, "use-failed-unknown-lock");
+            Assert.Equal("use-failed-unknown-lock", GameObjectMapSystem.UseFailedUnknownLockCode);
             Assert.Contains("lock 9999 has no lock_template row", notice.Detail);
         }
     }

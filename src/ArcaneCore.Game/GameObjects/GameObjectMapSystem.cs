@@ -935,7 +935,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// Report a refusal that is a defect rather than a player mistake: an object type the server cannot use at all (Unsupported), a
     /// chest/door/button/goober refused although it is not flagged non-interactive or in use (NotUsable), or a lock id with no
     /// lock_template row (Locked, reported under <see cref="UseFailedUnknownLockCode"/>). TooFar, Dead, NeedsQuest, MissingKey, SkillTooLow, InUse, LevelTooLow, Immune, NotFound and OnCooldown are the
-    /// player's doing and never reach here. Strings are built only when a report is due; ids and guid low only, no names.
+    /// player's doing and never reach here. A QuestGiver refusal (Unsupported) is reported only when the quest giver seam is null: a wired seam may refuse transiently (a settlement pending). Strings are built only when a report is due; ids and guid low only, no names.
     /// </summary>
     private void ReportUseDefect(Player player, ObjectGuid guid, GameObject? go, GameObjectUseResult result)
     {

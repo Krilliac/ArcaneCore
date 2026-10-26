@@ -1,5 +1,4 @@
 using System.Globalization;
-using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots.Population;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -107,7 +106,7 @@ internal static class PlayerbotQaClassifier
     /// a use refused because the object's lock id has no lock_template row), so the cause follows the key and never the last occurrence's detail.
     /// </summary>
     private static bool IsContentDefect(QaSignal s)
-        => PlayerbotQaAnomalyFeed.ContentDefectKeys.Contains(AnomalyLedger.KeyOf(s.Goal, s.Reason));
+        => PlayerbotQaAnomalyFeed.ContentDefectKeys.Contains(s.FaultCode);
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";
