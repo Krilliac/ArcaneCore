@@ -672,9 +672,19 @@ public sealed class FaultLedger
     }
 
     private static List<string> CollectFrames(Exception exception)
+        => CollectFrames(new StackTrace(exception, fNeedFileInfo: false).GetFrames(), TopFrames, skipCrashHooks: false);
+
+    /// <summary>
+    /// The innermost <c>ArcaneCore.*</c> frames of the calling thread's stack (the same names as a ledger signature: <c>Type.Method</c>, compiler artefacts
+    /// removed), up to <paramref name="max"/>, innermost first. Called from a crash hook it skips the hook's own frames, so the first entry is the code that
+    /// threw. Walks the whole stack once (tens of microseconds): for the failure path only.
+    /// </summary>
+    public static IReadOnlyList<string> CurrentStackFrames(int max = TopFrames)
+        => max <= 0 ? [] : CollectFrames(new StackTrace(skipFrames: 1, fNeedFileInfo: false).GetFrames(), max, skipCrashHooks: true);
+
+    private static List<string> CollectFrames(StackFrame[] all, int max, bool skipCrashHooks)
     {
-        var frames = new List<string>(TopFrames);
-        StackFrame[] all = new StackTrace(exception, fNeedFileInfo: false).GetFrames();
+        var frames = new List<string>(Math.Min(max, TopFrames));
         foreach (StackFrame frame in all)
         {
             MethodBase? method = frame.GetMethod();
@@ -686,6 +696,11 @@ public sealed class FaultLedger
                 continue;
             }
 
+            if (skipCrashHooks && (declaring == typeof(CrashHandler) || declaring == typeof(FaultObservers)))
+            {
+                continue;
+            }
+
             string name = NormalisedName(declaring, method);
             if (name.Length == 0 || frames.Count > 0 && frames[^1] == name)
             {
@@ -693,7 +708,7 @@ public sealed class FaultLedger
             }
 
             frames.Add(name);
-            if (frames.Count == TopFrames)
+            if (frames.Count == max)
             {
                 break;
             }

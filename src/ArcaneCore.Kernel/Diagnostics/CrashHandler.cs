@@ -35,6 +35,7 @@ public sealed class CrashHandler : IDisposable
     private volatile ICrashSink _sink;
     private volatile IReadOnlyList<ICrashContextProvider> _providers;
     private volatile bool _firstChanceHooked;
+    private volatile bool _logFirstChance;
     private bool _disposed;
 
     private CrashHandler(DiagnosticsOptions options, ICrashSink sink, IReadOnlyList<ICrashContextProvider> providers)
@@ -133,27 +134,49 @@ public sealed class CrashHandler : IDisposable
         }
     }
 
+    /// <summary>Re-evaluate whether the first-chance hook is needed (an <see cref="IFaultObserver"/> was added or removed).</summary>
+    internal void RefreshFirstChanceHook()
+    {
+        lock (InstallGate)
+        {
+            if (!_disposed)
+            {
+                HookFirstChance();
+            }
+        }
+    }
+
     private void HookFirstChance()
     {
+        // The log of every throw is a Debug build feature; the observers (bot QA) need the hook in every build while one is registered.
+        bool log = false;
 #if DEBUG
-        if (_options.FirstChanceExceptions && !_firstChanceHooked)
+        log = _options.FirstChanceExceptions;
+#endif
+        _logFirstChance = log;
+        bool wanted = log || FaultObservers.Any;
+        if (wanted && !_firstChanceHooked)
         {
             AppDomain.CurrentDomain.FirstChanceException += _onFirstChance;
             _firstChanceHooked = true;
         }
-        else if (!_options.FirstChanceExceptions && _firstChanceHooked)
+        else if (!wanted && _firstChanceHooked)
         {
             AppDomain.CurrentDomain.FirstChanceException -= _onFirstChance;
             _firstChanceHooked = false;
         }
-#endif
     }
 
     private void OnUnhandled(object? sender, UnhandledExceptionEventArgs e)
     {
         var exception = e.ExceptionObject as Exception;
         Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
-        RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
+        bool recorded = RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
+        if (exception is not null)
+        {
+            FaultObservers.Notify(FaultObservation.Unhandled, exception, recorded);
+        }
+
         Terminate(_options.OnUnhandled == UnhandledExceptionPolicy.FailFast, exception);
     }
 
@@ -164,7 +187,8 @@ public sealed class CrashHandler : IDisposable
         // Critical either way in the log: an unobserved fault is an exception nobody handled, whether or not the policy
         // ends the process. The fault ledger carries whether it terminates, so the staff announcement is Critical only then.
         Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating);
-        RecordFault("unobserved-task", e.Exception, terminating);
+        bool recorded = RecordFault("unobserved-task", e.Exception, terminating);
+        FaultObservers.Notify(FaultObservation.UnobservedTask, e.Exception, recorded);
         if (!terminating)
         {
             e.SetObserved();
@@ -174,26 +198,42 @@ public sealed class CrashHandler : IDisposable
         Terminate(policy == UnobservedTaskPolicy.FailFast, e.Exception);
     }
 
-    /// <summary>Count the fault in the ledger after the report is written and before the policy runs. Any failure here, out-of-memory included, is swallowed: the crash report and the termination policy must not be skipped (and the unobserved-task hook runs on the finalizer thread).</summary>
-    private static void RecordFault(string site, Exception? exception, bool terminating)
+    /// <summary>
+    /// Count the fault in the ledger after the report is written and before the policy runs; true when it got a signature of its own (not the overflow bucket, not a failure).
+    /// Any failure here, out-of-memory included, is swallowed: the crash report and the termination policy must not be skipped (and the unobserved-task hook runs on the finalizer thread).
+    /// </summary>
+    private static bool RecordFault(string site, Exception? exception, bool terminating)
     {
         if (exception is null)
         {
-            return;
+            return false;
         }
 
         try
         {
-            FaultLedger.Shared.Record(site, exception, terminating);
+            FaultRecording recording = FaultLedger.Shared.Record(site, exception, terminating);
+            return recording.Count > 0 && !string.Equals(recording.Id, FaultLedger.OverflowId, StringComparison.Ordinal);
         }
         catch
         {
             // Deliberately a catch-all; see the summary.
+            return false;
         }
     }
 
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
+        // The observers (bot QA) see the raw stream; they decide what is benign (their own re-entrancy guard covers throws inside them).
+        if (FaultObservers.Any)
+        {
+            FaultObservers.Notify(FaultObservation.FirstChance, e.Exception, ledgerRecorded: false);
+        }
+
+        if (!_logFirstChance)
+        {
+            return;
+        }
+
         // Every throw in the process lands here, including throws inside the sink: the thread-static
         // guard in Report makes a nested one a no-op. Expected cancellation signals, controlled
         // malformed-packet layout rejections, and internal BCL expression-interpreter probes are skipped
@@ -211,6 +251,13 @@ public sealed class CrashHandler : IDisposable
     /// and world-thread fuzzing/startup probes do not pay for full stack/process crash-report rendering.
     /// </summary>
     public static bool ShouldIgnoreFirstChance(Exception? exception)
+        => exception is null || IsCancellationOrSocket(exception) || IsControlledProbe(exception);
+
+    /// <summary>
+    /// A cancellation, a socket failure or an I/O failure that wraps one: the normal way a shutdown, a timeout or a client that went away ends an
+    /// operation. Part of <see cref="ShouldIgnoreFirstChance"/>.
+    /// </summary>
+    public static bool IsCancellationOrSocket(Exception? exception)
     {
         if (exception is null or OperationCanceledException or System.Net.Sockets.SocketException)
         {
@@ -220,9 +267,18 @@ public sealed class CrashHandler : IDisposable
         // A cancelled or timed-out HTTP request surfaces as IOException -> SocketException (e.g. 995), which is
         // the same expected cancellation signal as the bare exceptions above. Like the bare-SocketException rule this also hides genuine
         // connection resets (10054) from the first-chance log; unhandled and fatal reports are unaffected.
-        if (exception is IOException && InnerChainContainsCancellationOrSocket(exception))
+        return exception is IOException && InnerChainContainsCancellationOrSocket(exception);
+    }
+
+    /// <summary>
+    /// An exception the code throws on purpose and catches at once (a malformed-packet layout rejection, a BCL delegate-binding probe, the
+    /// managed-revision conflict, a log writer's own I/O): never a defect. Part of <see cref="ShouldIgnoreFirstChance"/>.
+    /// </summary>
+    public static bool IsControlledProbe(Exception? exception)
+    {
+        if (exception is null)
         {
-            return true;
+            return false;
         }
 
         if (exception is ArgumentOutOfRangeException { ParamName: "packet" or "payload" })
@@ -252,13 +308,8 @@ public sealed class CrashHandler : IDisposable
             return true;
         }
 
-        if (exception is IOException or UnauthorizedAccessException
-            && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true)
-        {
-            return true;
-        }
-
-        return false;
+        return exception is IOException or UnauthorizedAccessException
+            && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true;
     }
 
     private static bool InnerChainContainsCancellationOrSocket(Exception exception)
