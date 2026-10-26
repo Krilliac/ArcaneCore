@@ -495,22 +495,19 @@ export class App {
         if (result.ok) {
             const body = result.data?.view ?? result.data;
             const version = Number(result.data?.version);
-            const isStale = Number.isFinite(version) && version < this.viewVersion;
-            if (Number.isFinite(version)) {
-                this.viewVersion = Math.max(this.viewVersion, version);
+            if (Number.isFinite(version) && version < this.viewVersion) {
+                return;
             }
             // The host says who owns the follow it holds (`followOrigin`, present when something is followed), so a command result that
             // beats the view event cannot leave a stale peer-ownership flag that would drop this UI's own follow. A host that sends
             // no owner for a held follow (an older one) leaves the flag as the last event set it. A result older than the last view
-            // event applied is ignored for ownership so it cannot undo a peer follow that arrived in the meantime.
-            if (!isStale) {
-                const held = typeof body?.follow === 'string' && body.follow.length > 0;
-                const owner = result.data?.followOrigin;
-                if (!held) {
-                    this._peerFollow = false;
-                } else if (typeof owner === 'string' || owner === null) {
-                    this._peerFollow = typeof owner === 'string' && owner.startsWith('ui:') && owner !== this.socket.origin;
-                }
+            // event applied is skipped above, so it cannot undo a newer follow or view state that arrived in the meantime.
+            const held = typeof body?.follow === 'string' && body.follow.length > 0;
+            const owner = result.data?.followOrigin;
+            if (!held) {
+                this._peerFollow = false;
+            } else if (typeof owner === 'string' || owner === null) {
+                this._peerFollow = typeof owner === 'string' && owner.startsWith('ui:') && owner !== this.socket.origin;
             }
             this.#replaceView(this.#mergeRemote(normalizeView(body, this.view), takeCamera), 'refresh');
         }

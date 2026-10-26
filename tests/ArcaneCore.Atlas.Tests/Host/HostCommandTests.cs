@@ -121,7 +121,7 @@ public sealed class HostCommandTests
 
         // When nothing is followed, followOrigin is omitted and version is emitted.
         JsonNode initial = await rig.DataAsync("view.get");
-        Assert.Null(initial.At("followOrigin"));
+        Assert.False(((JsonObject)initial).ContainsKey("followOrigin"));
         Assert.Equal(0, initial.Num("version"));
 
         // While something is followed, followOrigin reflects the owner.
@@ -135,7 +135,7 @@ public sealed class HostCommandTests
         await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = null }, CommandOrigin.Cli);
         JsonNode cleared = await rig.DataAsync("view.get");
         Assert.Null(cleared.At("follow"));
-        Assert.Null(cleared.At("followOrigin"));
+        Assert.False(((JsonObject)cleared).ContainsKey("followOrigin"));
         Assert.Equal(2, cleared.Num("version"));
     }
 

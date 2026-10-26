@@ -621,6 +621,46 @@ test('app: a stale view.get, older than an applied event, does not change _peerF
     assert.equal(app.view.follow, null, 'local follow is not restored by stale snapshot');
 });
 
+test('app: a view.get result arriving before the matching view event does not block the event', async () => {
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, camera: camera(111) };
+    app.viewVersion = 5;
+
+    // A view.get result with version 6 arrives first (e.g. from refreshView({ takeCamera: false })), keeping the local camera.
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: { ...hostView(app, { camera: camera(999) }), version: 6 }, elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+
+    await app.refreshView({ takeCamera: false });
+    assert.equal(app.view.camera.target[0], 111, 'refreshView kept local camera');
+    assert.equal(app.viewVersion, 5, 'view.get must never raise viewVersion');
+
+    // The matching view event at version 6 from the CLI arrives afterwards and must still be applied.
+    socket.emit('event', 'view', { version: 6, origin: 'cli', cameraChanged: true, view: hostView(app, { camera: camera(999) }) });
+    assert.equal(app.viewVersion, 6);
+    assert.equal(app.view.camera.target[0], 999, 'the CLI view event moves the camera');
+});
+
+test('app: when an event clears the follow, a stale view.get cannot restore it', async () => {
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, follow: '0xAA', camera: camera(111) };
+
+    // At version 6, the CLI clears the follow.
+    socket.emit('event', 'view', { version: 6, origin: 'cli', cameraChanged: true, followOrigin: null, view: hostView(app, { follow: null }) });
+    assert.equal(app.viewVersion, 6);
+    assert.equal(app.view.follow, null);
+    assert.equal(app._peerFollow, false);
+
+    // A stale view.get response from version 5 (when 0xAA was still followed) arrives with takeCamera: true.
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: { ...hostView(app, { follow: '0xAA' }), version: 5, followOrigin: socket.origin }, elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+
+    await app.refreshView({ takeCamera: true });
+    assert.equal(app.view.follow, null, 'follow stays cleared after stale view.get');
+    assert.equal(app._peerFollow, false);
+});
+
 test('app: a first hello whose follow belongs to another UI starts at the shared camera but adopts no follow, and ignores its live frames', () => {
     const other = 'ui:other0000000';
     const { app, socket } = makeApp();

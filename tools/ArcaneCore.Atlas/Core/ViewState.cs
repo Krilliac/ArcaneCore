@@ -78,8 +78,9 @@ public sealed record LayerStyle(bool Visible, string Color, double Opacity, Rend
 }
 
 /// <summary>
-/// Everything the viewport shows, as one immutable value. Its JSON form is the <c>view.get</c> result and the
-/// <c>view.set</c> argument (a JSON merge patch, RFC 7396), and is what saved views and headless captures replay.
+/// Everything the viewport shows, as one immutable value. Its JSON form is the basis of the <c>view.get</c> result
+/// (which adds <c>version</c> and optional <c>followOrigin</c>) and the <c>view.set</c> argument (a JSON merge patch,
+/// RFC 7396), and is what saved views and headless captures replay.
 /// </summary>
 public sealed record ViewState(
     uint MapId,

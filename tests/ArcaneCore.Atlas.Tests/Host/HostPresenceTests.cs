@@ -572,6 +572,12 @@ public sealed class HostPresenceTests
     }
 
     [Fact]
+    public void OriginPrefix_PinsTheLiteralWirePrefix()
+    {
+        Assert.Equal("ui:", UiHub.OriginPrefix);
+    }
+
+    [Fact]
     public async Task TheViewEvent_NamesTheOriginThatOwnsTheFollow_UntilSomeoneElseChangesIt()
     {
         await using HostRig rig = await StartAsync();
