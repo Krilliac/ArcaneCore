@@ -205,13 +205,14 @@ public sealed class PlayerbotWarsongPlayWorldTests
             await context.AutonomousAsync(ally);
             PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
             int Walks() => coordinator.Events.Count(e => e.Contains("goes to the WarsongGulch battlemaster", StringComparison.Ordinal));
-            await context.StepAsync("the first walk is refused", () => context.WaitUntilAsync("set aside",
-                () => coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)), TimeSpan.FromSeconds(60)));
-            ScenarioContext.ExpectEqual(1, Walks(), string.Join(" | ", coordinator.Events));
+            // The battlemaster is picked only when an exact route to it is planned (FindMaster, issue #1486): with every route refused the
+            // bot never starts the walk that the refusal would have ended, so there is no first walk to wait for.
+            await context.IdleAsync(TimeSpan.FromSeconds(60));
+            ScenarioContext.ExpectEqual(0, Walks(), string.Join(" | ", coordinator.Events));
 
-            // Past the ten-minute set-aside the same battlemaster is still out of reach from here.
+            // Past what was the ten-minute set-aside the same battlemaster is still out of reach from here.
             await context.IdleAsync(TimeSpan.FromMilliseconds(PlayerbotBattlegroundCoordinator.SetAsideMs + 60_000));
-            ScenarioContext.ExpectEqual(1, Walks(), string.Join(" | ", coordinator.Events));
+            ScenarioContext.ExpectEqual(0, Walks(), string.Join(" | ", coordinator.Events));
             ScenarioContext.Expect(capture.Count(ObjectiveUnreachable) <= 2, capture.Describe());
         });
     }

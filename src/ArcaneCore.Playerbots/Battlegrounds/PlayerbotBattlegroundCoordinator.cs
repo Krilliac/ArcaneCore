@@ -932,7 +932,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         if (map.Collision.MeshPoints is null)
         {
-            settled = true;
+            // No mesh to ask (yet): the snapped point is all there is. It costs no query and is asked again each tick, as before.
+            settled = false;
             return middle;
         }
 
