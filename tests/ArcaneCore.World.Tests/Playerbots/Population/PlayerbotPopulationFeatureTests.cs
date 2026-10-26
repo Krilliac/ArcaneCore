@@ -724,6 +724,32 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Equal(PopulationTestHost.Westfall, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Fact]
+    public async Task ABotThatBecomesPartyDrivenAfterThePassCapturedIt_IsNotRelocated()
+    {
+        var veto = new TestPlacementVeto();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true,
+            configureServices: services => services.AddSingleton<IPopulationPlacementVeto>(veto));
+        Guid bot = await StartOneBotInElwynnAsync(world);
+        await using WorldTestClient master = await world.Host.EnterWorldAsync("POPMASTER", "Popmaster");
+
+        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        // The capture asks the veto after it has read the bot as autonomous: leashing the bot there is the player's invitation
+        // arriving between the capture and the teleport (the pass awaits the store in between).
+        veto.OnCheck = id =>
+        {
+            veto.OnCheck = null;
+            Assert.True(world.Bots.Leash(id, world.Host.World.OnlinePlayers.Single(p => p.Name == "Popmaster"), stay: true).Success);
+        };
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.True(world.Bots.IsPartyDriven(bot), "the bot was leashed during the capture");
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
     [Theory]
     [InlineData(10)]  // under the resume line: the ordinary pass would relocate
     [InlineData(50)]  // between the resume line (48) and the budget: hysteresis
@@ -1471,7 +1497,14 @@ public sealed class PlayerbotPopulationFeatureTests
     {
         public HashSet<Guid> Owned { get; } = [];
 
-        public bool OwnsPlacement(Guid botId) => Owned.Contains(botId);
+        /// <summary>Run once, on the world thread, the next time the population asks about a bot (after it has read the bot's autonomy).</summary>
+        public Action<Guid>? OnCheck { get; set; }
+
+        public bool OwnsPlacement(Guid botId)
+        {
+            OnCheck?.Invoke(botId);
+            return Owned.Contains(botId);
+        }
     }
 
     private static async Task PollAsync(Func<bool> condition, string what)

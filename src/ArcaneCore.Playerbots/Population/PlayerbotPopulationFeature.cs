@@ -2303,7 +2303,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
             PopulationPlacement placement = selected.Placement;
             string? refusal = await world.InvokeAsync(() => _provisioner.Relocate(bot.BotId, placement.Location, ctx.Input.Facts!), ct).ConfigureAwait(false);
-            if (refusal is "bot-in-transit" or PopulationProvisioner.StaleCode) continue; // stale: the next pass plans again on new data
+            if (refusal is "bot-in-transit" or PopulationProvisioner.HeldCode or PopulationProvisioner.StaleCode) continue; // stale: the next pass plans again on new data
             if (refusal is not null) { Fail($"move of {bot.BotId} refused: {refusal}"); continue; }
             moved++;
             member = member with { ZoneId = placement.Zone.ZoneId, UpdatedUnix = NowUnix() };
