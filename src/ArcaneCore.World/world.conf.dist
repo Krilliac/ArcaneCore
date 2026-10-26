@@ -16210,6 +16210,19 @@ World.Playerbots.Risk.PartyRetreatOnWipe = true
 World.Playerbots.Risk.RecoverHealthPct = 80
 
 #
+#    World.Playerbots.Risk.RestManaBelowPct
+#        Description: A bot that spends mana and has less than this percentage left (0..100; 0 turns
+#                     it off) recovers before its next pull when the fight would be fine at full
+#                     health and mana, instead of pulling with nothing to cast.
+#        Type: float
+#        Default: 35
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.RestManaBelowPct = 35
+
+#
 #    World.Playerbots.Risk.RetreatHealthPct
 #        Description: A losing bot retreats once its health falls to this percentage (5..95); one
 #                     about to die retreats at any health.

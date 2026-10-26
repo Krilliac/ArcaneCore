@@ -2,7 +2,7 @@
 
 Exact path comparison of `D:/refs/vmangos/src/game/Chat/Chat.cpp`'s `ChatHandler::getCommandTable` against `docs/reference/gm-commands.md` on this worktree. Parent groups are included; an equivalent operation under another path is still listed. vmangos bot, debug, console and later-era extensions are included because they are in its table. This is a name inventory, not a claim that all commands suit a 1.12.1 public realm.
 
-vmangos named paths: 816; current ArcaneCore paths: 200; exact paths absent: 654.
+vmangos named paths: 816; current ArcaneCore paths: 205; exact paths absent: 649. (Revised after `.cheat fly`, `.cheat fixedz`, `.cheat wallclimb`, `.gm fly` and `.knockback` were added; the table below no longer lists them.)
 
 | Missing path | vmangos table line |
 |---|---:|
@@ -52,8 +52,6 @@ vmangos named paths: 816; current ArcaneCore paths: 200; exact paths absent: 654
 | `.character citytitle` | 252 |
 | `.charge` | 1191 |
 | `.cheat` | 1192 |
-| `.cheat fly` | 258 |
-| `.cheat fixedz` | 259 |
 | `.cheat beastmaster` | 260 |
 | `.cheat god` | 261 |
 | `.cheat cooldown` | 262 |
@@ -69,7 +67,6 @@ vmangos named paths: 816; current ArcaneCore paths: 200; exact paths absent: 654
 | `.cheat immunenpc` | 272 |
 | `.cheat untargetable` | 273 |
 | `.cheat waterwalk` | 274 |
-| `.cheat wallclimb` | 275 |
 | `.cheat debugtargetinfo` | 276 |
 | `.cheat status` | 277 |
 | `.debug` | 1193 |
@@ -137,7 +134,6 @@ vmangos named paths: 816; current ArcaneCore paths: 200; exact paths absent: 654
 | `.debug loottable` | 367 |
 | `.debug utf8overflow` | 368 |
 | `.debug chatfreeze` | 369 |
-| `.gm fly` | 387 |
 | `.gm visible` | 390 |
 | `.gm setview` | 391 |
 | `.go graveyard` | 399 |
@@ -553,7 +549,6 @@ vmangos named paths: 816; current ArcaneCore paths: 200; exact paths absent: 654
 | `.demorph` | 1242 |
 | `.namedie` | 1243 |
 | `.fear` | 1245 |
-| `.knockback` | 1246 |
 | `.mount` | 1248 |
 | `.dismount` | 1249 |
 | `.itemmove` | 1253 |

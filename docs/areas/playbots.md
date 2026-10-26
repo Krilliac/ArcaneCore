@@ -350,7 +350,9 @@ within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
 across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
 set-aside), the brain asks
-`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards) and, out of combat in the
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards; the queries share
+`IslandTotalSearchNodes` (16384 nodes, at most `IslandSearchNodes` (2048) each) and one that spends the budget or is cut short proves no island,
+bot QA #1483: it had run 12 synchronous searches of 8192 nodes, a 504 ms think) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
 The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
@@ -504,7 +506,12 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
-  reach (a route that stops short, at the foot of the cliff, is no way). A failed ride is not tried again for 10 minutes.
+  reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
+  (2000): the approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, and the walk
+  ends after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). This is a coarse guard, not the fix: of the
+  "no way to the Great Lift" failures that day those that began more than 2000 yards out (most of them in the 2026-10-25 live log) are covered and those inside it (among them the issue's own
+  -3557,-2240) are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, and the "in the shaft pit" failures at the lift itself are not. The journey or the walk leg
+  brings the bot within reach and the trip begins on a later think (all lifts share the rule). A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a
@@ -1149,7 +1156,8 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
 A think is measured per phase (`PlayerbotThinkProbe`); `World:Playerbots:SlowThinkLogMs` logs the slow ones with their phases, and the
 destination planner's work is split into "destinations entries", "destinations transit", "destinations journey" and "destinations advance"
 (the plan queries stay in "grind destinations"). A think over the threshold only because the garbage collector paused the process (think
-time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA.
+time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA. The
+`bot-brain/think-overran` check (a whole `Update` over 500 ms) subtracts the collector's pause during that `Update` the same way (bot QA #1483).
 
 `PlayerbotWorldDestinations.Update` checks a step budget before each costly step (the tram, lift and taxi block, the unreachable skip, the
 path plan, a water journey): the think is past 25 ms, the destination loop past 20 ms (once a candidate was judged), or the think has made

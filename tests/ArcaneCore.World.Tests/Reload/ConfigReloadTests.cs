@@ -429,7 +429,7 @@ public sealed class ConfigReloadTests : IDisposable
     public async Task PlayerbotRisk_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // The brains and party AIs read World:Playerbots:Risk from this options object at every decision.
-        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "RestManaBelowPct": 50, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
         var playerbots = new PlayerbotOptions { Enabled = true };
         PlayerbotRiskOptions risk = playerbots.Risk;
         ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
@@ -439,6 +439,7 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.False(risk.Enabled);
         Assert.Equal(2f, risk.Tolerance);
         Assert.Equal(20f, risk.RetreatHealthPct);
+        Assert.Equal(50f, risk.RestManaBelowPct);
         Assert.Equal(30, risk.DangerMemorySeconds);
         Assert.False(risk.PartyRetreatOnWipe);
 
@@ -450,6 +451,7 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
         Assert.True(risk.Enabled);
         Assert.Equal(1f, risk.Tolerance);
+        Assert.Equal(35f, risk.RestManaBelowPct);
         Assert.Equal(300, risk.DangerMemorySeconds);
     }
 

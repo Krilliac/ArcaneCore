@@ -196,6 +196,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Risk:RetreatHealthPct", o => o.Risk.RetreatHealthPct, (o, v) => o.Risk.RetreatHealthPct = v, v => PlayerbotRiskOptions.Check(v, 5, 95)),
         LivePlayerbotsValue("Risk:NearlyWonHealthPct", o => o.Risk.NearlyWonHealthPct, (o, v) => o.Risk.NearlyWonHealthPct = v, v => PlayerbotRiskOptions.Check(v, 0, 60)),
         LivePlayerbotsValue("Risk:RecoverHealthPct", o => o.Risk.RecoverHealthPct, (o, v) => o.Risk.RecoverHealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 100)),
+        LivePlayerbotsValue("Risk:RestManaBelowPct", o => o.Risk.RestManaBelowPct, (o, v) => o.Risk.RestManaBelowPct = v, v => PlayerbotRiskOptions.Check(v, 0, 100)),
         LivePlayerbotsValue("Risk:DangerMemorySeconds", o => o.Risk.DangerMemorySeconds, (o, v) => o.Risk.DangerMemorySeconds = v,
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbotsValue("Risk:DeathLoopMemorySeconds", o => o.Risk.DeathLoopMemorySeconds, (o, v) => o.Risk.DeathLoopMemorySeconds = v,

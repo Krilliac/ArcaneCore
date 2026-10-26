@@ -29,15 +29,10 @@ public sealed class ManagedPlayerbotSlowThinkAnomalyTests
     private static AnomalyCapture CaptureOf(string name)
         => AnomalyLedger.Shared.Capture(n => n.Key == ThinkSlow && n.Subject.Contains($"bot {name} ", StringComparison.Ordinal));
 
-    private static PlayerbotThinkProbe ThinkOf(double ms)
-    {
-        var probe = new PlayerbotThinkProbe();
-        probe.Begin();
-        long until = Stopwatch.GetTimestamp() + (long)(ms * Stopwatch.Frequency / 1000);
-        while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
-        probe.End();
-        return probe;
-    }
+    // A finished think of exactly ms with no GC pause. A wall-clock spin here also counted any process-wide GC pause during the spin
+    // (GC.GetTotalPauseDuration), which turned a think-slow case into think-gc-stall (PlayerbotSlowThinkLog: elapsed - gc < threshold).
+    // The real Begin/End accounting is exercised by GcStallThink below and by the feature test.
+    private static PlayerbotThinkProbe ThinkOf(double ms) => PlayerbotThinkProbe.SpentForTest(ms);
 
     [Fact]
     public void ASlowThink_Fires_WithTheDriverGoalAndThreshold_AndAThinkUnderTheThresholdIsSilent()
