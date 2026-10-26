@@ -661,7 +661,14 @@ public sealed partial class SummonService
                 ? Math.Clamp(snapshot.Health, 1u, creature.MaxHealth)
                 : Math.Min(snapshot.Health, creature.MaxHealth);
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(snapshot.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
+            // Pet::LoadPetFromDB / CreateBaseAtCreature (Pet.cpp:380-384, 1245-1258, 1297-1300): a hunter pet has a happiness bar (max power 5), the
+            // focus power type, the warrior class byte with no gender and the melee sheath. The client needs the max happiness for GetPetHappiness().
+            creature.SetUInt32(UpdateFields.UnitFieldMaxpower5, HappinessMax);
             creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
+            creature.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
+            creature.SetByte(UpdateFields.UnitFieldBytes0, 2, 2); // GENDER_NONE
+            creature.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Focus);
+            creature.SetByte(UpdateFields.UnitFieldBytes2, 0, 1); // SHEATH_STATE_MELEE
             if (creature.Summon.Charm is { } reactCharm)
             {
                 reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);

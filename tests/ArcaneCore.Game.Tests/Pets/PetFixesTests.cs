@@ -65,6 +65,7 @@ public sealed class PetFixesTests
             if (opcode == WorldOpcode.SmsgPetSpells)
             {
                 events.Add("petspells");
+                events.Add(BitConverter.ToUInt64(payload, 0) == pet.Guid.Value ? "petspells-guid-ok" : "petspells-guid-WRONG");
             }
             else if (opcode == WorldOpcode.SmsgUpdateObject)
             {
@@ -73,6 +74,7 @@ public sealed class PetFixesTests
                     if (block.Type is ObjectUpdateType.CreateObject or ObjectUpdateType.CreateObject2 && block.Guids.Contains(pet.Guid.Value))
                     {
                         events.Add("create-pet");
+                        events.Add($"create-pet-number={(block.Values.TryGetValue(UpdateFields.UnitFieldPetnumber, out uint number) ? number : 0)}");
                     }
                     else if (block.Type == ObjectUpdateType.Values && block.Guids.Contains(owner.Guid.Value)
                         && block.Values.TryGetValue(UpdateFields.UnitFieldSummon, out uint low) && low == (uint)(pet.Guid.Value & 0xFFFFFFFFu))
@@ -103,6 +105,9 @@ public sealed class PetFixesTests
         int bar = events.IndexOf("petspells");
         Assert.True(bar > events.IndexOf("create-pet"), $"pet bar before the pet create block: {string.Join(", ", events)}");
         Assert.True(bar > events.IndexOf("owner-summon"), $"pet bar before UNIT_FIELD_SUMMON: {string.Join(", ", events)}");
+        Assert.Contains("petspells-guid-ok", events);
+        Assert.Contains($"create-pet-number={imp.Summon!.Charm!.PetNumber}", events); // the create block already carries the pet number
+        Assert.NotEqual(0u, imp.Summon.Charm.PetNumber);
     }
 
     [Fact]
@@ -124,6 +129,8 @@ public sealed class PetFixesTests
         Assert.True(bar >= 0, "no pet bar sent");
         Assert.True(events.IndexOf("create-pet") is >= 0 and var create && create < bar, $"pet bar before the pet create block: {string.Join(", ", events)}");
         Assert.True(events.IndexOf("owner-summon") is >= 0 and var summon && summon < bar, $"pet bar before UNIT_FIELD_SUMMON: {string.Join(", ", events)}");
+        Assert.Contains("petspells-guid-ok", events);
+        Assert.Contains("create-pet-number=801", events);
     }
 
     [Fact]
@@ -168,5 +175,24 @@ public sealed class PetFixesTests
 
         Creature guardian = Assert.Single(kit.Creatures.Creatures);
         Assert.Equal(0u, guardian.GetUInt32(UpdateFields.UnitFieldPetnumber));
+    }
+
+    [Fact]
+    public async Task HunterPet_CarriesTheHappinessBarFocusPowerTypeAndWarriorClassOfVmangosPets()
+    {
+        using PetTestKit kit = new([Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))]);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 803, PetEntry, 5, 0, 50, 0, 600_000, 1, [], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+
+        kit.Cast(owner, CallPetSpell);
+
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        Assert.Equal((SummonService.HappinessMax, 600_000u), (pet.GetUInt32(UpdateFields.UnitFieldMaxpower5), pet.GetUInt32(UpdateFields.UnitFieldPower5)));
+        Assert.Equal(PowerType.Focus, pet.PowerType);
+        Assert.Equal((byte)Class.Warrior, pet.GetByte(UpdateFields.UnitFieldBytes0, 1));
+        Assert.Equal((byte)2, pet.GetByte(UpdateFields.UnitFieldBytes0, 2));
     }
 }
