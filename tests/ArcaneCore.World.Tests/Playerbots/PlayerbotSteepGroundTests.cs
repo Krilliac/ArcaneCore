@@ -53,6 +53,33 @@ public sealed class PlayerbotSteepGroundTests
         });
     }
 
+    /// <summary>
+    /// Live (#1501, bot-motion/start-blocked NoGroundSupport, 78 483 times over 256 bots): the steep-allowed path from a ledge at
+    /// -8165.9, -1449.7, 195.6 ran to -8154.9, -1446.9, 135.9, 11 yards flat and 60 down. That is a fall, not a slide; the motion
+    /// check refused the walk through the air and the next think planned it again. The strip here drops 30 yards over its first
+    /// five flat yards and 60 over 12 (<c>climb: -30</c>), against the gentle slide of
+    /// <see cref="OnSteepGround_TheRouteLeadsDownToTheFirstWalkableCorner"/> (6 and 12 yards).
+    /// </summary>
+    [Fact]
+    public async Task OnSteepGround_ACliffDrop_IsNotPlannedAsAWalkingRoute()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var cliff = new SteepStrip(origin, climb: -30f);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: cliff);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+            var goal = origin + new Vector3(80, 0, 0);
+
+            Assert.False(PlayerbotNavigation.TryPlan(player, goal, options, out _), "a cliff face was planned as a walking route");
+            Assert.False(PlayerbotNavigation.TryPlanToward(player, goal, options, out _), "exploration walked a cliff face");
+            Assert.True(cliff.SteepQueries > 0, "the steep-allowed path was never asked for, so nothing was refused");
+            return true;
+        });
+    }
+
     [Fact]
     public async Task OnWalkableGround_ADestinationOffTheMesh_StillHasNoRoute()
     {

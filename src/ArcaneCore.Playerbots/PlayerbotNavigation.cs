@@ -1384,6 +1384,33 @@ internal static class PlayerbotNavigation
         return npc.IsFriendlyTo(self) || self.IsFriendlyTo(npc);
     }
 
+    /// <summary>
+    /// The most one leg of a way off steep ground may drop. It is <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>, the
+    /// height from which the motion check still brings a step down onto the floor under it: a deeper drop is a void or a cliff
+    /// there ("rejecting 30 yd voids/cliffs"), so a leg that drops more can never be walked.
+    /// </summary>
+    internal const float SteepEscapeLegDropYards = PlayerbotMoveCheck.DirectStepMaxDrapeYards;
+
+    /// <summary>
+    /// The most a way off steep ground may have dropped, per flat yard from where the bot stands, at any corner (1.5, about 56
+    /// degrees): a slide the bot's steps can follow, not a cliff face. Drops of no more than
+    /// <see cref="PlayerbotMoveCheck.DirectStepMaxStepUpYards"/> (one step) are exempt, so a corner almost above the bot is not a fall.
+    /// </summary>
+    internal const float SteepEscapeDropPerYard = 1.5f;
+
+    /// <summary>
+    /// Whether the steep-allowed path's corner <paramref name="point"/> (reached from <paramref name="previous"/>) is reached by a fall
+    /// from <paramref name="start"/> rather than a slide: its leg drops more than <see cref="SteepEscapeLegDropYards"/>, or the drop
+    /// from the start exceeds <see cref="SteepEscapeDropPerYard"/> per flat yard.
+    /// </summary>
+    internal static bool IsSteepEscapeFall(Vector3 start, Vector3 previous, Vector3 point)
+    {
+        if (previous.Z - point.Z > SteepEscapeLegDropYards) return true;
+        float drop = start.Z - point.Z;
+        return drop > PlayerbotMoveCheck.DirectStepMaxStepUpYards
+            && drop > Vector2.Distance(Flat(start), Flat(point)) * SteepEscapeDropPerYard;
+    }
+
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
     private const int SteepEscapeCorners = 16;
 
@@ -1393,7 +1420,8 @@ internal static class PlayerbotNavigation
     /// three yards of it (no path), or only the patch's own edge (a partial path that never closes). The way off is the mesh's own
     /// path with the steep polygons allowed, cut at its first corner on walkable ground from which the ordinary query is a route,
     /// and only while no corner leads more than <see cref="SteepEscapeClimbYards"/> above the bot: a player slides down a slope it
-    /// cannot walk up. A destination off the walkable mesh from walkable ground gets no route, as before.
+    /// cannot walk up, but not one it falls down (<see cref="IsSteepEscapeFall"/>; a refused escape falls through to
+    /// <see cref="FromBeside"/> as any other). A destination off the walkable mesh from walkable ground gets no route, as before.
     /// <para>
     /// Live 2026-10-09: Ironwander (a warrior, level 7) stood on the mountainside north of Coldridge Valley at -5605.6, 155.8, 453.3,
     /// seven yards above the slope's floor, for over two hours. Every route from there answered no path, so every goal failed before
@@ -1414,7 +1442,10 @@ internal static class PlayerbotNavigation
         {
             Vector3 point = steep.Points[index];
             if (!point.IsFinite() || point.Z > start.Z + SteepEscapeClimbYards) return false;
-            distance += Vector3.Distance(steep.Points[index - 1], point);
+            // A fall is not a slide (#1501): the motion check refuses a walk through the air, so a route down a cliff face was planned,
+            // refused at its first step and planned again, 78 483 times.
+            if (IsSteepEscapeFall(start, steep.Points[index - 1], point)) return false;
+            distance +=Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
             if (Vector3.Distance(point, destination) > 1f)
