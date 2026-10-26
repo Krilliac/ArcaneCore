@@ -601,6 +601,34 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task ABotTheBattlegroundCoordinatorDrives_IsNotParked_EvenOverTheBudget()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        await world.WaitForSettledAsync(1);
+        Guid bot = Assert.Single(world.Members.Snapshot).BotId;
+
+        // The bot walks to a battlemaster (Travel is a phase the coordinator drives). The coordinator has no public way to start that
+        // without a battlemaster and a roll, so the followed bot is put in its table directly, as its own scan would.
+        var coordinator = world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator>();
+        var tracked = (Dictionary<Guid, ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator.Tracked>)typeof(ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator)
+            .GetField("_tracked", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(coordinator)!;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            tracked[bot] = new(bot, "Popbot") { Phase = ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundPhase.Travel, PhaseSinceMs = world.Host.World.NowMs };
+            return true;
+        });
+        Assert.True(await world.Host.World.InvokeAsync(() => coordinator.Drives(bot)));
+
+        world.Ticks.Set(200, 80);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 0", status.Reason);
+        Assert.Equal(1, world.RunningCount);
+    }
+
+    [Fact]
     public async Task ADisabledPopulation_DoesNothing_AndEnablingItLetsTheTimerRunPasses()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>

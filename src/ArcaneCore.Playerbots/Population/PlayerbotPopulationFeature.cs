@@ -21,7 +21,6 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
-using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.WorldState;
@@ -568,7 +567,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         foreach (Player online in world.OnlinePlayers)
             if (online.Session is not WorldSession { IsManaged: true }) realZones.Add(online.ZoneId);
 
-        PlayerbotGroupCoordinator? coordinator = services.GetService<PlayerbotGroupCoordinator>();
         TeleportService? teleports = services.GetService<TeleportFeature>()?.Teleports;
         IPopulationPlacementVeto[] vetoes = [.. services.GetServices<IPopulationPlacementVeto>()];
         SpellSystem? spells = services.GetService<SpellFeature>()?.System;
@@ -581,7 +579,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             if (status.State != ManagedPlayerbotState.Running) continue;
             runningAll++;
             if (managed.FindSession(status.BotId)?.Player is not { } player) continue;
-            bool autonomous = !managed.IsPartyDriven(status.BotId) && !managed.IsScripted(status.BotId) && coordinator?.Drives(status.BotId) != true;
+            // Autonomous: nothing else drives the bot (a controller, its party, a bot-led group, the battleground coordinator: HeldFromBrain).
+            bool autonomous = managed.HeldFromBrain(status.BotId) is null;
             // Busy: cannot be stopped now. A dead bot or a ghost is not busy: it can log out, and it earns nothing until it is back.
             bool busy = !player.IsInWorld || player.Combat.IsInCombat || teleports?.IsBeingTeleported(player) == true;
             bool sick = spells?.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == SpiritHealerResurrection.ResurrectionSicknessSpell) == true;
@@ -2247,7 +2246,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     private bool IsParkableNow(ManagedPlayerbotFeature managed, Guid botId)
     {
         if (managed.FindSession(botId)?.Player is not { IsInWorld: true } player) return false;
-        if (managed.IsPartyDriven(botId) || managed.IsScripted(botId) || services.GetService<PlayerbotGroupCoordinator>()?.Drives(botId) == true) return false;
+        if (managed.HeldFromBrain(botId) is not null) return false; // a controller, its party, a bot-led group or the battleground coordinator drives it
         // Dead or a ghost may be parked (it logs out like any bot and comes back as it was); in combat or teleporting may not.
         return !player.Combat.IsInCombat && services.GetService<TeleportFeature>()?.Teleports.IsBeingTeleported(player) != true;
     }
