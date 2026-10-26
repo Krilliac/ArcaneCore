@@ -17,11 +17,20 @@ public enum PlayerCheats : uint
 
     /// <summary>Water walking given by <c>.cheat waterwalk</c> (only <c>.cheat status</c> reads it; vmangos tests the movement flag without a water walk aura).</summary>
     WaterWalk = 0x08,
+
+    /// <summary>PLAYER_CHEAT_FLY (<c>.cheat fly</c>): the client swims in the air; the movement checks that would flag that stand down while it is on.</summary>
+    Fly = 0x10,
+
+    /// <summary>PLAYER_CHEAT_FIXED_Z (<c>.cheat fixedz</c>): MOVEFLAG_FIXED_Z on the player; a jump glides at a fixed height.</summary>
+    FixedZ = 0x20,
+
+    /// <summary>Feather fall given by <c>.cheat featherfall</c> (not a vmangos cheat option): falls never hurt, and the SafeFall flag is expected.</summary>
+    FeatherFall = 0x40,
 }
 
 public sealed partial class Player
 {
-    /// <summary>The GM cheats on this player (<c>.cheat cooldown/casttime/powercost</c>); god mode is <c>InvincibilityHpThreshold</c> 1.</summary>
+    /// <summary>The GM cheats on this player (<c>.cheat cooldown/casttime/powercost/waterwalk/fly/fixedz/featherfall</c>), never saved; god mode is <c>InvincibilityHpThreshold</c> 1.</summary>
     public PlayerCheats Cheats { get; set; }
 
     /// <summary>Whether every flag of <paramref name="cheat"/> is on.</summary>
