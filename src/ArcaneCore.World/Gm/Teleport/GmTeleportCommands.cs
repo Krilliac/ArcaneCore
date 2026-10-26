@@ -98,7 +98,9 @@ public sealed class GmTeleportCommands : ICommandGroup
         target.SendSystemMessage(GmStrings.SummonedBy(GmStrings.PlayerLink(caller.Name)));
 
         GmTeleports.BeginCommandTeleport(context, target);
-        if (!MoveBound(feature.Teleports, battlegrounds, bound, target, caller, caller.X, caller.Y, caller.Z, caller.Orientation))
+        // vmangos HandleNamegoCommand (TeleportCommands.cpp:1187) passes TELE_TO_NOT_LEAVE_COMBAT: a summon inside the target's map keeps
+        // its combat (a far teleport ends it, Player.cpp:2021).
+        if (!MoveBound(feature.Teleports, battlegrounds, bound, target, caller, caller.X, caller.Y, caller.Z, caller.Orientation, TeleportOptions.NotLeaveCombat))
         {
             TeleportCommands.ReplyInvalid(context, caller.X, caller.Y, caller.MapId);
         }
@@ -115,11 +117,11 @@ public sealed class GmTeleportCommands : ICommandGroup
     /// it would otherwise be a near teleport, which has no arrival); one inside the subject's own map object has no arrival either, so it is
     /// committed at once.
     /// </summary>
-    private static bool MoveBound(TeleportService teleports, BattlegroundFeature? battlegrounds, GmBattlegroundGo bound, Player subject, Player anchor, float x, float y, float z, float o)
+    private static bool MoveBound(TeleportService teleports, BattlegroundFeature? battlegrounds, GmBattlegroundGo bound, Player subject, Player anchor, float x, float y, float z, float o, TeleportOptions baseOptions = TeleportOptions.None)
     {
         bool binds = bound == GmBattlegroundGo.Bound && battlegrounds is not null;
         bool sameMap = ReferenceEquals(subject.Map, anchor.Map);
-        TeleportOptions options = binds && !sameMap ? TeleportOptions.ForceFar : TeleportOptions.None; // vmangos TELE_TO_FORCE_MAP_CHANGE
+        TeleportOptions options = baseOptions | (binds && !sameMap ? TeleportOptions.ForceFar : TeleportOptions.None); // vmangos TELE_TO_FORCE_MAP_CHANGE
         bool moved = false;
         try
         {

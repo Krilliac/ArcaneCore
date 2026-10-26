@@ -676,20 +676,27 @@ public sealed partial class TeleportService
             TeleportDestination origin = pending.Origin;
             if (!TryEnterMap(player, origin))
             {
-                // Neither the destination nor the origin takes the player (the origin match ended while it loaded): the bind point
-                // before the kick (vmangos HandleReturnOnTeleportFail; its body is not verified against the reference, this is the
-                // documented ArcaneCore deviation in docs/integration/gm-commands.md).
+                // vmangos HandleReturnOnTeleportFail (Player.cpp:2122-2135): "if (!TeleportTo(oldLoc)) TeleportToHomebind();". Neither the
+                // destination nor the origin takes the player (the origin match ended while it loaded), so it goes to its bind point.
+                // ArcaneCore deviations (docs/integration/gm-commands.md, deviation 7): it kicks when the bind point refuses too (vmangos
+                // ignores the result), and the origin above is entered without a new loading screen. A bind point on a map id the client
+                // did not load gets a fresh far teleport, as in vmangos; one on the loaded map id is entered directly. A teleport that is
+                // itself this fallback is not retried (no loop).
                 var home = new TeleportDestination(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
-                if (maps.Registry.Contains(home.MapId) && GridDefines.IsValidMapCoord(home.X, home.Y, home.Z, home.Orientation) && TryEnterMap(player, home))
+                if (!pending.IsHomebindFallback && maps.Registry.Contains(home.MapId) && GridDefines.IsValidMapCoord(home.X, home.Y, home.Z, home.Orientation))
                 {
-                    _logger.LogWarning("{Player} could not enter map {MapId} nor return to map {Origin}; sent to the bind point on map {HomeMapId}", player.Name, dest.MapId, origin.MapId, home.MapId);
-                    ServerAnomalies.Report(
-                        player,
-                        ServerAnomalies.Teleport,
-                        "return-failed",
-                        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; sent to the bind point on map {home.MapId}"),
-                        AnomalySeverity.Warning);
-                    return;
+                    bool reissue = home.MapId != dest.MapId;
+                    if (reissue ? ReissueFar(player, pending.SourceMap, home) : TryEnterMap(player, home))
+                    {
+                        _logger.LogWarning("{Player} could not enter map {MapId} nor return to map {Origin}; sent to the bind point on map {HomeMapId}", player.Name, dest.MapId, origin.MapId, home.MapId);
+                        ServerAnomalies.Report(
+                            player,
+                            ServerAnomalies.Teleport,
+                            "return-failed",
+                            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; sent to the bind point on map {home.MapId}"),
+                            AnomalySeverity.Warning);
+                        return;
+                    }
                 }
 
                 _logger.LogError("{Player} could not enter map {MapId} nor return to map {Origin} nor reach the bind point; disconnecting", player.Name, dest.MapId, origin.MapId);
@@ -702,6 +709,34 @@ public sealed partial class TeleportService
                 player.Session.Kick();
             }
         }
+    }
+
+    /// <summary>
+    /// A new far teleport for a player that is in no map (the failed-teleport fallback to the bind point, vmangos <c>TeleportToHomebind</c>): the
+    /// client gets SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD for the map it must load and the entry waits for its MSG_MOVE_WORLDPORT_ACK, as
+    /// the tail of <see cref="ExecuteTeleportFar"/>. World thread.
+    /// </summary>
+    private bool ReissueFar(Player player, Map sourceMap, TeleportDestination target)
+    {
+        if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null)
+        {
+            return false;
+        }
+
+        var fallback = new Pending(this, player, target, TeleportStage.Far, sourceMap, target)
+        {
+            IsHomebindFallback = true,
+            StartedMs = _world.NowMs,
+            StageSinceMs = _world.NowMs,
+        };
+        _pending[player.Guid] = fallback;
+        sourceMap.BeginTransit(player);
+        player.MapId = target.MapId;
+        player.Relocate(target.X, target.Y, target.Z, target.Orientation, _world.NowMs);
+        player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(target.MapId));
+        player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(target.MapId, target.X, target.Y, target.Z, target.Orientation));
+        FarStageReached?.Invoke(player, TeleportStage.Far);
+        return true;
     }
 
     private bool TryEnterMap(Player player, TeleportDestination dest)
@@ -924,6 +959,9 @@ public sealed partial class TeleportService
         public Map SourceMap { get; } = sourceMap;
 
         public TeleportDestination Origin { get; } = origin;
+
+        /// <summary>Whether this teleport is the bind-point fallback of a failed far teleport (it is not retried when it fails too).</summary>
+        public bool IsHomebindFallback { get; init; }
 
         /// <summary>vmangos DELAYED_CAST_HONORLESS_TARGET scheduled by a same-map teleport.</summary>
         public bool HonorlessTarget { get; init; }

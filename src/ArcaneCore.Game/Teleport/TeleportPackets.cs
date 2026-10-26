@@ -40,10 +40,12 @@ public enum TeleportOptions
 
     /// <summary>
     /// Take the far path (SMSG_TRANSFER_PENDING, SMSG_NEW_WORLD, MSG_MOVE_WORLDPORT_ACK) even when the destination is the player's current
-    /// map id. The vmangos counterpart is <c>TELE_TO_FORCE_MAP_CHANGE</c> (0x20, UnitDefines.h), which HandleGonameCommand sets when the
-    /// battleground id changes (TeleportCommands.cpp); the value here is ArcaneCore's own, 0x0100. Set by <c>.goname</c>/<c>.namego</c> for a
-    /// move onto another instance of the same map id (two matches of one battleground), and by the Tier 3 same-map world-port spike
-    /// (<c>.worldport far</c>, docs/design/hot-reload-tiers.md section 5.5).
+    /// map id. The vmangos counterpart is <c>TELE_TO_FORCE_MAP_CHANGE</c> (0x20, UnitDefines.h:776), which HandleGonameCommand sets when the
+    /// battleground id changes (TeleportCommands.cpp:1252-1256) or the dungeon instance changes (:1299) and TeleportToHomebind always sets
+    /// (Player.cpp:21077); the near/far test is Player.cpp:1896. The value here is ArcaneCore's own, 0x0100. Set by <c>.goname</c>/<c>.namego</c>
+    /// for a move onto another instance of the same map id (two matches of one battleground; vmangos <c>.namego</c>, :1163-1168, does not set
+    /// it, which is a documented deviation), and by the Tier 3 same-map world-port spike (<c>.worldport far</c>,
+    /// docs/design/hot-reload-tiers.md section 5.5).
     /// </summary>
     ForceFar = 0x0100,
 }

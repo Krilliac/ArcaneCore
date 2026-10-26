@@ -827,7 +827,12 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             return;
         }
 
-        teleport.Teleports.TeleportToHomebind(p);
+        // The leave went to the bind point: the entry point it could not use is stale. A refused bind-point teleport too (the player is
+        // mid-teleport) keeps it for the leave that follows.
+        if (teleport.Teleports.TeleportToHomebind(p))
+        {
+            _feature.ForgetEntryPoint(player);
+        }
     }
 
     public void UnhandledAreaTrigger(ObjectGuid player, uint areaTriggerId)

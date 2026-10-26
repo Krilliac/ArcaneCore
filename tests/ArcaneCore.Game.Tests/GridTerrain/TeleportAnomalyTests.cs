@@ -23,6 +23,7 @@ public sealed class TeleportAnomalyTests
         [
             new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
             new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
+            new MapTemplate(2, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Test continent", ""),
         ],
         [], [], [], []);
 
@@ -227,14 +228,15 @@ public sealed class TeleportAnomalyTests
         f.World.RunTick(50);
 
         Assert.Equal(1, cap.Count(EntryFailed));
-        Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
+        Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed"))); // the way back failed: the bind point is the fallback
     }
 
     [Fact]
-    public void FarTeleport_ThatCannotEnterTheDestinationNorTheOrigin_GoesToTheBindPoint_AndIsNotKicked()
+    public void FarTeleport_ThatCannotEnterTheDestinationNorTheOrigin_GoesToTheBindPointOnAnotherMap_WithANewLoadingScreen()
     {
         using var f = new Fixture();
-        Player a = f.Add(9111);
+        Player a = f.Add(9111); // map 0 at the origin
+        a.Home = new HomeBind(2, 0, 321f, 654f, 40f); // a map that is neither the origin (0) nor the destination (1)
         using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
 
         Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
@@ -243,10 +245,45 @@ public sealed class TeleportAnomalyTests
         Assert.True(f.Teleports.HandleWorldportAck(a));
         f.World.RunTick(50);
 
+        // vmangos TeleportToHomebind: a new far teleport. The client loaded map 1 and is told to load the bind point's map.
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a));
+        Assert.Equal(2u, f.Teleports.DestinationOf(a)?.MapId);
+        Assert.Null(a.Map);
+
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
         Assert.False(((FakeSession)a.Session).Kicked);
         Assert.NotNull(a.Map);
-        Assert.Equal(a.Home.MapId, a.Map!.MapId);
+        Assert.Equal(2u, a.Map!.MapId);
+        Assert.InRange(a.X, 320f, 322f);
+        Assert.InRange(a.Y, 653f, 655f);
         Assert.Equal(1, cap.Count(EntryFailed));
         Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
+    }
+
+    [Fact]
+    public void FarTeleport_ThatCannotEnterTheBindPointEither_KicksTheSession_AndDoesNotLoop()
+    {
+        using var f = new Fixture();
+        Player a = f.Add(9112);
+        a.Home = new HomeBind(2, 0, 321f, 654f, 40f);
+        using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
+
+        Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
+        f.World.RunTick(50);
+        f.World.MapResolver = new Refusing(); // nothing can be entered
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a)); // the bind point's loading screen
+        Assert.False(((FakeSession)a.Session).Kicked);
+
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        Assert.True(((FakeSession)a.Session).Kicked);
+        Assert.Null(f.Teleports.StageOf(a));
+        Assert.Equal(2, cap.Count(ServerAnomalies.Key("teleport", "return-failed"))); // the fallback, then the kick
     }
 }

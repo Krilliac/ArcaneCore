@@ -23,7 +23,7 @@ namespace ArcaneCore.World.Tests.Gm.Teleport;
 
 /// <summary>
 /// <c>.goname</c> and <c>.namego</c> into a battleground or a dungeon instance (vmangos HandleGonameCommand
-/// TeleportCommands.cpp:1242-1303, HandleNamegoCommand :1163-1168). The live bug: <c>.appear Rokun</c> with Rokun in Warsong Gulch
+/// TeleportCommands.cpp:1242-1303, HandleNamegoCommand :1163-1168). The reported bug: <c>.appear &lt;player&gt;</c> with that player in Warsong Gulch
 /// answered "Target map or coordinates is invalid" because the teleport gate admits a battleground map only to a player bound to
 /// its match, and the GM was bound to none. The battleground tests run a real Warsong Gulch match between two scenario bots
 /// (<see cref="WarsongGulchTestContent"/>) and drive the GM through a socket client; the dungeon tests use Deadmines.
@@ -367,7 +367,7 @@ public sealed class GmGoBattlegroundAndInstanceTests
     }
 
     /// <summary>
-    /// The GM types <c>.goname</c> and waits until it stands in the match's map instance, or until the server answered the live bug's
+    /// The GM types <c>.goname</c> and waits until it stands in the match's map instance, or until the server answered the reported bug's
     /// "Target map or coordinates is invalid", which fails the scenario at once with that text.
     /// </summary>
     private static async Task AppearAtAsync(ScenarioContext context, ClientTap gm, string targetName, Battleground match)
@@ -694,6 +694,38 @@ public sealed class GmGoBattlegroundAndInstanceTests
         });
     }
 
+    [Fact]
+    public async Task LeavingAMatch_ForgetsTheEntryPoint_WhenTheBindPointWasUsed_AndKeepsItWhenNothingWasAccepted()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "bg-entry-point-stale", async context =>
+        {
+            (ScenarioBot ally, _, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scnepally", "Scnephorde", TimeSpan.FromMinutes(3));
+            await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                Player p = ally.RequirePlayer();
+                MatchRuntime runtime = feature.FindMatch(match.InstanceId)!;
+
+                // An entry point the player may not use (a battleground map it is no longer bound to): the return to it is refused and the
+                // bind point is the fallback, so the entry point it could not use must not stay behind.
+                feature.StoreEntryPoint(p.Guid, p);
+                feature.Manager.UnbindPlayer(p.Guid);
+                ScenarioContext.Expect(feature.EntryPointOf(p.Guid) is not null, "the scenario needs an entry point");
+                runtime.TeleportToEntryPoint(p.Guid);
+                ScenarioContext.Expect(context.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleportedFar(p), "the bind point teleport was not started");
+                ScenarioContext.Expect(feature.EntryPointOf(p.Guid) is null, "the entry point survived a leave that went to the bind point");
+
+                // Nothing is accepted (the player is mid-teleport): the entry point is kept for the leave that follows.
+                feature.StoreEntryPoint(p.Guid, p);
+                runtime.TeleportToEntryPoint(p.Guid);
+                ScenarioContext.Expect(feature.EntryPointOf(p.Guid) is not null, "a refused return forgot the entry point");
+                return true;
+            });
+        });
+    }
+
     // ------------------------------------------------------------------ A to B: the pending GM move
 
     [Fact]
@@ -787,7 +819,7 @@ public sealed class GmGoBattlegroundAndInstanceTests
             ScenarioContext.Expect(v.HasRecord, "the GM move record was dropped while the teleport is still in flight");
 
             await victim.ReleaseWorldportAckAsync();
-            await ExpectMovedToBAsync(context, victim, a, b, 0 + 1, v.EntryPoint, "after A removed the victim");
+            await ExpectMovedToBAsync(context, victim, a, b, playersOfABefore: 1 /* the victim, before it left; A is empty after */, v.EntryPoint, "after A removed the victim");
             ScenarioContext.Expect(!anomalies.Any("teleport/map-entry-failed") && !anomalies.Any("teleport/return-failed"), "the arrival failed: " + anomalies.Describe());
         });
     }
@@ -805,6 +837,17 @@ public sealed class GmGoBattlegroundAndInstanceTests
             try
             {
                 Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+
+                // Stand the victim away from the team start (where the GM, standing next to the anchor, will be) so that the origin can
+                // be told from B's coordinates.
+                (float originX, float originY) = await context.ReadAsync(() =>
+                {
+                    Player p = context.World.FindOnlinePlayer(victim.Name)!;
+                    ScenarioContext.Expect(context.Services.GetRequiredService<TeleportFeature>().Teleports.TeleportTo(p, Wsg, p.X + 60f, p.Y, p.Z, p.Orientation), "the victim could not be moved inside A");
+                    return (p.X + 60f, p.Y);
+                });
+                await context.WaitUntilAsync("the victim stands at its origin in A", () => context.World.FindOnlinePlayer(victim.Name) is { IsInWorld: true } p
+                    && !context.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(p) && Math.Abs(p.X - originX) < 1f);
                 MoveView before = await ViewAsync(context, victim.Name, a, b);
                 using AnomalyCapture anomalies = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(victim.Name, StringComparison.Ordinal));
 
@@ -827,6 +870,9 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 ScenarioContext.Expect(!v.Deserter, "the victim got Deserter");
                 ScenarioContext.Expect(!v.HasRecord, "the GM move record is still there");
                 ScenarioContext.Expect(!anomalies.Any("teleport/return-failed"), "the victim could not return: " + anomalies.Describe());
+                (float x, float y) = await context.ReadAsync(() => (context.World.FindOnlinePlayer(victim.Name)!.X, context.World.FindOnlinePlayer(victim.Name)!.Y));
+                ScenarioContext.Expect(Math.Abs(x - originX) < 1f && Math.Abs(y - originY) < 1f,
+                    $"the victim is at ({x}, {y}), not back at its origin ({originX}, {originY}): it landed at the coordinates of the match that is gone");
             }
             finally
             {
@@ -966,6 +1012,26 @@ public sealed class GmGoBattlegroundAndInstanceTests
             ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).CanEnterMap(context.World.FindOnlinePlayer(victim.Name)!, Wsg)), "the swept record still admits the teleport");
             ScenarioContext.Expect(await context.ReadAsync(() => Battlegrounds(context).BattlegroundOf(guid) is null), "the sweep changed the binding");
         });
+    }
+
+    [Fact]
+    public async Task Namego_InsideTheTargetsMap_KeepsTheTargetsCombat()
+    {
+        // vmangos HandleNamegoCommand passes TELE_TO_NOT_LEAVE_COMBAT (TeleportCommands.cpp:1187); a near teleport otherwise calls CombatStop.
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMNCGM", "Gmncgm", AccountSecurity.Administrator);
+        await using WorldTestClient victim = await host.EnterWorldAsync("GMNCVIC", "Gmncvic");
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Gmncvic")!;
+            p.Map!.Combat.SetInCombatState(p, 60_000);
+        });
+        Assert.True(await host.PlayerStateAsync("Gmncvic", p => p.Combat.IsInCombat), "the scenario needs the target in combat");
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".namego Gmncvic");
+        await victim.ReadUntilAsync(WorldOpcode.MsgMoveTeleportAck);
+
+        Assert.True(await host.PlayerStateAsync("Gmncvic", p => p.Combat.IsInCombat), ".namego ended the target's combat");
     }
 
     // ------------------------------------------------------------------ dungeon instances

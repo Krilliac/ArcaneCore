@@ -712,10 +712,31 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     internal bool GmMoveAdmits(ObjectGuid guid, uint mapId)
         => _gmMoves.TryGetValue(guid, out GmMove? m) && m.Target.MapId == mapId && Manager.GetBattleground(m.Target.InstanceId, m.Target.Type) is not null;
 
-    /// <summary>The map of the match a GM move of <paramref name="guid"/> targets, when that match still runs on <paramref name="mapId"/>; else null.</summary>
-    internal Map? GmMoveTargetMap(ObjectGuid guid, uint mapId)
-        => _gmMoves.TryGetValue(guid, out GmMove? m) && m.Target.MapId == mapId
-           && FindMatch(m.Target.InstanceId) is { Map: { } map } match && ReferenceEquals(match.Battleground, m.Target) ? map : null;
+    /// <summary>
+    /// The map entry of a player with a GM move to a match on <paramref name="mapId"/> (the map resolver's <c>ResolveEntry</c>). Returns false
+    /// when the player has no such record: the ordinary rules apply. Otherwise true, with the target match's map when that match still runs;
+    /// when it is gone (deleted while the player was in the loading screen) the entry is refused (<paramref name="map"/> null) and the record is
+    /// consumed, so the failed-teleport path takes the player back to where it started (vmangos MovementHandler.cpp:78-91 →
+    /// <c>HandleReturnOnTeleportFail</c> → <c>TeleportTo(oldLoc)</c>) and the way back is not blocked by the record. It must not fall back to the
+    /// player's own match: that is another instance of the same map id, and the destination coordinates belong to the match that is gone.
+    /// </summary>
+    internal bool TryResolveGmMoveEntry(ObjectGuid guid, uint mapId, out Map? map)
+    {
+        map = null;
+        if (!_gmMoves.TryGetValue(guid, out GmMove? move) || move.Target.MapId != mapId)
+        {
+            return false;
+        }
+
+        if (FindMatch(move.Target.InstanceId) is { Map: { } targetMap } match && ReferenceEquals(match.Battleground, move.Target))
+        {
+            map = targetMap;
+            return true;
+        }
+
+        _gmMoves.Remove(guid);
+        return true;
+    }
 
     /// <summary>Whether <paramref name="guid"/> has a GM move waiting for its arrival.</summary>
     internal bool HasGmMove(ObjectGuid guid) => _gmMoves.ContainsKey(guid);
