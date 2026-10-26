@@ -10,7 +10,7 @@ namespace ArcaneCore.Atlas.Tests.Server;
 /// </summary>
 internal sealed class SyntheticMapFile
 {
-    // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:38 "MAPS" / :39 "z1.4" (vmangos D:\refs\vmangos\src\game\Maps\GridMap.cpp:35-36)
+    // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:38 "MAPS" / :39 "z1.4" (vmangos vmangos@0e3ff01 src/game/Maps/GridMap.cpp:35-36)
     private const uint MapMagic = 0x5350414D;
     private const uint VersionMagic = 0x342E317A;
 

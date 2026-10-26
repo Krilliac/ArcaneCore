@@ -175,8 +175,8 @@ internal sealed class ClientTerrainOracle
         (float[] v9, float[] v8) = ExtractorEmulation.RawHeights(adt);
         (float min, float max) = ExtractorEmulation.Range(v9, v8);
         bool clamped = ExtractorEmulation.ClampLow(v9, v8, ref min, ref max);
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:505-506 (max == min: MAP_HEIGHT_NO_HEIGHT, one height for the tile)
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:95 (CONF_allow_float_to_int is off by default, so heights stay float)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:505-506 (max == min: MAP_HEIGHT_NO_HEIGHT, one height for the tile)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:95 (CONF_allow_float_to_int is off by default, so heights stay float)
         bool flat = max == min;
         string expected = flat ? "Flat" : "Float";
         FlatTiles += flat ? 1 : 0;
@@ -214,7 +214,7 @@ internal sealed class ClientTerrainOracle
                     }
                 }
 
-                // ref: D:\refs\vmangos\contrib\extractor\System.cpp:755-763 (holes[i][j] = the MCNK hole word, unchanged)
+                // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:755-763 (holes[i][j] = the MCNK hole word, unchanged)
                 ChunksWithHoles += chunk.Holes != 0 ? 1 : 0;
                 HoleSquares += chunk.HoleSquares;
                 if (server.Holes(i, j) != chunk.Holes)

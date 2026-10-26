@@ -493,6 +493,29 @@ public sealed class PerfLogAggregatorTests
     }
 
     [Fact]
+    public void MemoryStarvedAndProcessBlocked_AreCountedOnTheirOwn_NotAsUnknown()
+    {
+        var log = new CapturingLog();
+        var clock = new ManualClock();
+        HostLoadVerdict next = HostLoadVerdict.MemoryStarved;
+        var aggregator = new PerfLogAggregator(Options(), log, clock.Now, _ => next);
+
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(2);
+        next = HostLoadVerdict.ProcessBlocked;
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(4);
+        aggregator.RecordMapUpdate(1, 0, 200_000, null, default);
+        clock.Seconds(60);
+        aggregator.FlushIfDue();
+
+        string line = Assert.Single(log.Messages);
+        Assert.Contains("process-blocked 2", line);
+        Assert.Contains("memory-starved 1", line);
+        Assert.DoesNotContain("unknown (no host sampler", line);
+    }
+
+    [Fact]
     public void GcPaging_IsCountedAsGc()
     {
         var log = new CapturingLog();

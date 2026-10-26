@@ -11,7 +11,7 @@ shows up in the running server a few seconds after you save it, without restarti
 Local test machine only: Debug build, Development environment, loopback addresses, a disposable database.
 
 1. **Check the tools.** `dotnet --list-sdks` must list an 11.x SDK (this was measured with 10.0.401). The client's
-   `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `D:\World of Warcraft Classic 1.12.1`).
+   `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `<wow-client-dir>`).
 2. **Start everything with one command**, from the repo root (never needs `-ExecutionPolicy Bypass`):
 
    ```powershell
@@ -211,8 +211,18 @@ client that sits in the loading screen forever beyond the `ack-timeout`; the hum
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Opt in. Accepted only when the host environment is Development or Staging. |
-| `AuditLogPath` | empty | Append-only file, one tab-separated line per decision (`start-allowed`, `start-refused`). Not tamper-proof: it is written by the same account the server runs as. |
+| `AuditLogPath` | empty | Append-only file, one tab-separated line per decision (`start-allowed`, `start-refused`). Not tamper-proof: it is written by the same account the server runs as. Lines are queued and written by a background writer in order; the queue is flushed at process exit. |
 | `MaxConsecutiveFaults` | `50` | Fault breaker, effective only while `Enabled`: a map updater that throws in this many consecutive ticks is skipped (and logged once at error level) until the next applied code edit, or a restart, instead of failing every tick. `0` disables it. An explicit `World:MaxConsecutiveUpdaterFaults` wins. The vanilla default of that setting is `0`: unchanged behavior. |
+
+The audit file never blocks the world thread: a line is only queued, and one background writer per file appends the lines in order. The
+queue is flushed (for at most 10 s) when the process exits. Failures are counted in the fault ledger (`.server faults`) and logged:
+
+| Ledger site | Meaning |
+|---|---|
+| `hotcode.audit-write` | A disk append failed; the lines of that batch are lost. |
+| `hotcode.audit-flush` | A flush gave up after 10 s (a wedged disk); queued lines may be lost. |
+| `hotcode.audit-report` | Reporting one of the faults above failed (a throwing logger); the writer keeps running. |
+| `hotcode.audit-dropped` | The 4096-line queue was full (a wedged disk), so the line was dropped instead of blocking the world thread. |
 
 When enabled, startup logs a warning: `Code hot reload is ENABLED (World:HotCode:Enabled, environment ...)`.
 
@@ -426,7 +436,7 @@ can write to the allowlist file or to the server's process can run code as the s
 5. **Failure keeps the old version.** A bad `reload` (unreadable file, not a managed assembly, clash,
    timeout) leaves the running version in force and unchanged; the rejected candidate's context is
    released. Every decision is audited (`module-load`, `module-reload`, `module-unload`,
-   `module-rejected`) with the dll's SHA-256, and logged (a rejection at error level).
+   `module-rejected`; lines dropped on a full queue are counted as `hotcode.audit-dropped`) with the dll's SHA-256, and logged (a rejection at error level).
 
 ### Creature AI and script hooks in a module
 

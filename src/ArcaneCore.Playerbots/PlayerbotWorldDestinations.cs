@@ -206,6 +206,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     /// </summary>
     internal Func<Player, Creature, bool>? Untakeable { get; set; }
 
+    /// <summary>
+    /// Test seam for the destination loop's own clock (<see cref="StepLoopMs"/>): milliseconds since the given
+    /// <see cref="PlayerbotThinkProbe.Timestamp"/>. Null (production): <see cref="PlayerbotThinkProbe.MsSince"/>, the wall clock of the think.
+    /// A test sets it so the loop budget does not depend on how fast the machine runs.
+    /// </summary>
+    internal Func<long, double>? LoopMsSince { get; set; }
+
     private bool Suspended(uint entry) => Suspensions?.IsEntrySuspended(entry, _session.World.NowMs) == true;
 
     /// <summary>
@@ -825,7 +832,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     {
         if (_forcedStep) return false;
         bool spent = PlayerbotThinkProbe.Active is { } probe && (probe.RunningMs >= StepProbeMs || !probe.HasOptionalPlanBudget)
-            || loopJudged && PlayerbotThinkProbe.MsSince(loopStarted) >= StepLoopMs;
+            || loopJudged && (LoopMsSince?.Invoke(loopStarted) ?? PlayerbotThinkProbe.MsSince(loopStarted)) >= StepLoopMs;
         if (!spent) return false;
         // Progress: after MaxConsecutiveDeferrals thinks in a row that deferred, this Update's steps run whatever the budget.
         if (_deferrals >= MaxConsecutiveDeferrals) _forcedStep = true;

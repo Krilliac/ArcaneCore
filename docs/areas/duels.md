@@ -1,6 +1,6 @@
 # Duels
 
-Player-versus-player duels after vmangos (primary reference, `D:\refs\vmangos`), with mangos-classic (`D:\refs\mangos-classic`)
+Player-versus-player duels after vmangos (primary reference, `<refs-root>\vmangos`), with mangos-classic (`<refs-root>\mangos-classic`)
 used to record differences. Code: `src/ArcaneCore.Game/Combat/Duel/` (state, rules, service, spell effect, map tick),
 `src/ArcaneCore.Game/Entities/Player.Duel.cs`, `src/ArcaneCore.World/Combat/Duel/` (feature and opcode handlers). Integration
 points in shared files: [integration/duels.md](../integration/duels.md).

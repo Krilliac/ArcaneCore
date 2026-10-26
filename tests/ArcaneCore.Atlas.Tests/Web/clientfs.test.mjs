@@ -1,5 +1,5 @@
 // Lane D4 (devui-assets): the browser-side reader of the visitor's own WoW 1.12.1 folder, Web/js/clientfs/*.
-// Design: D:/ArcaneCore-lanes/_land/atlas-devui-design.md, sections 0.5, 0.5.1 and lane D4 (r1-r3).
+// Design: atlas-devui-design.md, sections 0.5, 0.5.1 and lane D4 (r1-r3).
 //
 // Run through ClientFsFixtureTests.cs, which first writes the synthetic client folder (MPQs built by MpqTestWriter, ADTs by
 // SyntheticTerrain, PE files with a version resource, malformed archives, and the ATG1 bytes ClientTerrainGeometry produces)

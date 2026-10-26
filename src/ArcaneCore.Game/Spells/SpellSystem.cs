@@ -158,6 +158,14 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (HandleCastSpellOpcode,
+        // vmangos@0e3ff01 SpellHandler.cpp:301-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
+        // the caster's own stale window.
+        if ((player.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            ReleaseLoot?.Invoke(player);
+        }
+
         spell = AutoSelectRankForTarget(player, spell, targets);
         if ((targets.Mask & SpellCastTargetFlags.TradeItem) != 0 && TradeEnchantmentRequest is { } deferred)
         {
@@ -794,6 +802,11 @@ public sealed partial class SpellSystem
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
+            if (entry.Miss is SpellMissInfo.Immune or SpellMissInfo.Immune2)
+            {
+                ReportObjectEffectSkipped(cast, target, "the carrier missed as immune");
+            }
+
             if (entry.Miss == SpellMissInfo.None)
             {
                 if (!objectOnly) hits.Add(target.Guid); // a carrier for GO effects is not itself a hit

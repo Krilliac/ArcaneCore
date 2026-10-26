@@ -132,7 +132,7 @@ You can send the same thing as one line: `.botctl run Alice take ; move npc:197 
   (`{"command":..., "ok":..., "reason":..., "lines":[...], "json":...}`). The exit code is 1 when a command failed.
 
   ```
-  python tools/botctl/ra.py --token-file D:\ArcaneCore-live\bin\ra-token.txt ".botctl take Alice" ".botctl state Alice --json"
+  python tools/botctl/ra.py --token-file <live-home>\bin\ra-token.txt ".botctl take Alice" ".botctl state Alice --json"
   python tools/botctl/ra.py --token-file ... --script test.botctl --stop-on-error
   python tools/botctl/ra.py --token-file ... --stream Alice --seconds 60     # print #event lines
   ```

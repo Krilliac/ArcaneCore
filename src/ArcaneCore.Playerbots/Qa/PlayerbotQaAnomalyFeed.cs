@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -16,6 +17,31 @@ internal sealed class PlayerbotQaAnomalyFeed(
     AnomalySeverity minSeverity = AnomalySeverity.Warning)
 {
     internal const string BotSubsystemPrefix = "bot-";
+
+    // Declared before WorldKeys: static initialisers run in textual order.
+    /// <summary>Ledger key of a chest whose loot template holds no usable data (a content defect).</summary>
+    internal static readonly string NoDataKey = AnomalyLedger.KeyOf(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootNoDataCode);
+
+    /// <summary>Ledger key of a use refused because the object's lock has no lock_template row (a content defect).</summary>
+    internal static readonly string UnknownLockKey = AnomalyLedger.KeyOf("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedUnknownLockCode);
+
+    /// <summary>
+    /// Ledger keys of world (non-bot) anomalies a bot can trigger by using the world: a chest that opens empty (or whose loot template holds no usable data), a game object use refused as a
+    /// defect (or because its lock has no lock_template row), an open-lock cast that did nothing, and a game object effect dropped before it ran. They are admitted like <c>bot-*</c> keys.
+    /// </summary>
+    internal static readonly FrozenSet<string> WorldKeys = new[]
+    {
+        "loot/gameobject-loot-empty",
+        NoDataKey,
+        "gameobject/use-failed",
+        UnknownLockKey,
+        "gameobject/open-no-effect",
+        "spell/gameobject-effect-skipped",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// <summary>World keys whose cause is the imported content; the classifier files them as missing data. Every other world key is a behaviour bug.</summary>
+    internal static readonly FrozenSet<string> ContentDefectKeys = new[] { NoDataKey, UnknownLockKey }.ToFrozenSet(StringComparer.Ordinal);
+
     internal const int DefaultMinCount = 5;
     internal const int DefaultMinDistinctSubjects = 3;
 
@@ -51,7 +77,7 @@ internal sealed class PlayerbotQaAnomalyFeed(
 
     internal bool Qualifies(AnomalySnapshot anomaly)
         => !string.Equals(anomaly.Key, AnomalyLedger.OverflowKey, StringComparison.Ordinal)
-            && anomaly.Subsystem.StartsWith(BotSubsystemPrefix, StringComparison.Ordinal)
+            && (anomaly.Subsystem.StartsWith(BotSubsystemPrefix, StringComparison.Ordinal) || WorldKeys.Contains(anomaly.Key))
             && anomaly.Severity >= minSeverity
             && (anomaly.Severity >= AnomalySeverity.Error || anomaly.Count >= minCount || anomaly.DistinctSubjects >= minDistinctSubjects);
 

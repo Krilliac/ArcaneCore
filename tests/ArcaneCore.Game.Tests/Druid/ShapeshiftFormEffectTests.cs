@@ -26,6 +26,10 @@ public sealed class ShapeshiftFormEffectTests : IDisposable
     private const uint OtherSnareWithDispel = 900610;
     private const uint FormEffect = ShapeshiftFormEffectRules.SpellId;
 
+    // SpellSpecific.Snare (vmangos SpellEntry.cpp:169-172: a lone ModDecreaseSpeed aura without SPELL_ATTR_EX_PREVENTS_ANIM) is one per target, so
+    // the slows other than the plain Snare carry the dazes' attribute: they stay out of the snare exclusivity and can sit on the target together.
+    private const SpellAttributesEx NoSnareSpecific = SpellAttributesEx.PreventsAnim;
+
     private readonly SpellTestKit _kit;
     private readonly Player _player;
 
@@ -35,16 +39,16 @@ public sealed class ShapeshiftFormEffectTests : IDisposable
             Debuff(Root, AuraType.ModRoot, mechanic: 7),
             Debuff(RootNoMechanic, AuraType.ModRoot, mechanic: 0),
             Debuff(Snare, AuraType.ModDecreaseSpeed, mechanic: 11, value: -50),
-            Debuff(SnareNoMechanic, AuraType.ModDecreaseSpeed, mechanic: 0, value: -50),
+            Debuff(SnareNoMechanic, AuraType.ModDecreaseSpeed, mechanic: 0, value: -50) with { AttributesEx = NoSnareSpecific },
             Debuff(SnareAndStun, AuraType.ModDecreaseSpeed, mechanic: 11, value: -50) with
             {
                 Effects = [Effect(SpellEffectName.ApplyAura, -50, aura: AuraType.ModDecreaseSpeed) with { Mechanic = 11 }, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModStun) with { Mechanic = 12 }],
             },
-            Debuff(DazeLike, AuraType.ModDecreaseSpeed, mechanic: 3, value: -50) with { SpellIconId = 15, Dispel = 0 },
-            Debuff(DazeLikeWithSnare, AuraType.ModDecreaseSpeed, mechanic: 11, value: -50) with { SpellIconId = 15, Dispel = 0 },
+            Debuff(DazeLike, AuraType.ModDecreaseSpeed, mechanic: 3, value: -50) with { SpellIconId = 15, Dispel = 0, AttributesEx = NoSnareSpecific },
+            Debuff(DazeLikeWithSnare, AuraType.ModDecreaseSpeed, mechanic: 11, value: -50) with { SpellIconId = 15, Dispel = 0, AttributesEx = NoSnareSpecific },
             Debuff(Stun, AuraType.ModStun, mechanic: 12),
             Debuff(Fear, AuraType.ModFear, mechanic: 5),
-            Debuff(OtherSnareWithDispel, AuraType.ModDecreaseSpeed, mechanic: 3, value: -50) with { SpellIconId = 15, Dispel = 1 },
+            Debuff(OtherSnareWithDispel, AuraType.ModDecreaseSpeed, mechanic: 3, value: -50) with { SpellIconId = 15, Dispel = 1, AttributesEx = NoSnareSpecific },
             Spell(FormEffect, Effect(SpellEffectName.ScriptEffect, 0)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (_player, _) = _kit.AddPlayer(1);
     }

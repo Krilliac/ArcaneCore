@@ -717,7 +717,7 @@ public sealed class ScriptLinkEventAiTests
     [Fact]
     public void EveryTypeTheLiveWorldReported_HasAHandlerNow()
     {
-        // The world log of 2026-10-08 (D:/ArcaneCore-lanes/_deploy/live-w2-r1/world.log) and the classic-db z2815 rows.
+        // The world log of 2026-10-08 (live-w2-r1/world.log) and the classic-db z2815 rows.
         byte[] actions = [2, 3, 4, 5, 9, 10, 15, 17, 18, 19, 28, 29, 30, 31, 32, 33, 36, 38, 40, 41, 42, 43, 45, 47, 50, 51, 55, 56, 58, 59, 61, 64];
         byte[] events = [10, 14, 15, 16, 17, 25, 26, 30, 32, 34];
 

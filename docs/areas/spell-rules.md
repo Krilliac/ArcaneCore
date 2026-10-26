@@ -6,7 +6,7 @@ seams), `SpellSystem.Rules.cs`, `SpellSystem.Dispel.cs`, `SpellSystem.Pushback.c
 Standing directive: everything as close to vanilla 1.12.1 as possible, mechanics and data. Every formula cites the
 reference it was re-implemented from; no code or data was copied (the references are GPL, read-only).
 
-References (`D:\refs`): **vmangos** is primary; **mangos-classic** and **classic-db** are used where vmangos has no answer;
+References (`<refs-root>`): **vmangos** is primary; **mangos-classic** and **classic-db** are used where vmangos has no answer;
 **wow_messages** for packet layouts. Citations below are `file:line` of those checkouts.
 
 ## Delivered

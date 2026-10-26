@@ -38,24 +38,24 @@ public sealed class ParsedNavTile
 public static class MmapTileReader
 {
     /// <summary>Size of <c>dtMeshHeader</c> in bytes.</summary>
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:261-289 (5 ints, uint userId, 9 ints, 3 floats,
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:261-289 (5 ints, uint userId, 9 ints, 3 floats,
     // 2 x float[3], float bvQuantFactor: 25 four-byte fields, no padding).
     public const int DetourHeaderSize = 100;
 
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:167-200 (dtPoly: uint firstLink, ushort verts[6],
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:167-200 (dtPoly: uint firstLink, ushort verts[6],
     // ushort neis[6], ushort flags, uchar vertCount, uchar areaAndtype = 32 bytes).
     private const int PolyBytes = 32;
 
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:203-209 (dtPolyDetail: uint vertBase, uint triBase, uchar vertCount, uchar triCount, 2 bytes padding = 12).
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:203-209 (dtPolyDetail: uint vertBase, uint triBase, uchar vertCount, uchar triCount, 2 bytes padding = 12).
     private const int PolyDetailBytes = 12;
 
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:227-232 (dtBVNode: ushort bmin[3], ushort bmax[3], int i = 16).
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:227-232 (dtBVNode: ushort bmin[3], ushort bmax[3], int i = 16).
     private const int BvNodeBytes = 16;
 
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:236-257 (dtOffMeshConnection: float pos[6], float rad, ushort poly, uchar flags, uchar side, uint userId = 36).
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:236-257 (dtOffMeshConnection: float pos[6], float rad, ushort poly, uchar flags, uchar side, uint userId = 36).
     private const int OffMeshBytes = 36;
 
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:28 (#define DT_POLYREF64 1) and :214-222 (dtLink: dtPolyRef ref, uint next, 4 uchars): 8 + 4 + 4 = 16 bytes
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:28 (#define DT_POLYREF64 1) and :214-222 (dtLink: dtPolyRef ref, uint next, 4 uchars): 8 + 4 + 4 = 16 bytes
     // with a 64-bit reference, 4 + 4 + 4 = 12 with a 32-bit one.
     private const int LinkBytes64 = 16;
     private const int LinkBytes32 = 12;
@@ -72,7 +72,7 @@ public static class MmapTileReader
             throw new InvalidDataException($"navmesh tile is {file.Length} bytes, shorter than its {MmapTileHeader.ByteSize + DetourHeaderSize}-byte headers");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\src\game\Maps\MoveMapSharedDefines.h:28-38 (MmapTileHeader: five uint32) and
+        // ref: vmangos@0e3ff01 src/game/Maps/MoveMapSharedDefines.h:28-38 (MmapTileHeader: five uint32) and
         // src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshFormat.cs:92-98.
         var prefix = new MmapTileHeader(
             BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(0)),
@@ -81,7 +81,7 @@ public static class MmapTileReader
             BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(12)),
             (BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(16)) & 1) != 0);
 
-        // ref: D:\refs\vmangos@0e3ff01\src\game\Maps\MoveMap.cpp:163 (mmapMagic != MMAP_MAGIC) and :170 (mmapVersion != MMAP_VERSION).
+        // ref: vmangos@0e3ff01 src/game/Maps/MoveMap.cpp:163 (mmapMagic != MMAP_MAGIC) and :170 (mmapVersion != MMAP_VERSION).
         if (prefix.Magic != NavMeshFormat.MmapMagic)
         {
             throw new InvalidDataException($"bad mmap magic 0x{prefix.Magic:x8}, expected 0x{NavMeshFormat.MmapMagic:x8}");
@@ -92,7 +92,7 @@ public static class MmapTileReader
             throw new InvalidDataException($"mmap tile version {prefix.MmapVersion}, expected {NavMeshFormat.MmapVersion} (version 8 is cMaNGOS' generator)");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:913-916 (addTile refuses another magic or version).
+        // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:913-916 (addTile refuses another magic or version).
         if (prefix.DetourVersion != NavMeshFormat.DetourVersion)
         {
             throw new InvalidDataException($"Detour version {prefix.DetourVersion} in the prefix, expected {NavMeshFormat.DetourVersion}");
@@ -145,7 +145,7 @@ public static class MmapTileReader
             throw new InvalidDataException($"Detour tile is {data.Length} bytes, shorter than its {DetourHeaderSize}-byte header");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Include\DetourNavMesh.h:261-289 field order; byte offsets: magic 0, version 4, x 8, y 12, layer 16, userId 20, polyCount 24,
+        // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:261-289 field order; byte offsets: magic 0, version 4, x 8, y 12, layer 16, userId 20, polyCount 24,
         // vertCount 28, maxLinkCount 32, detailMeshCount 36, detailVertCount 40, detailTriCount 44, bvNodeCount 48, offMeshConCount 52.
         int magic = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(0));
         if (magic != NavMeshFormat.DetourMagic)
@@ -173,7 +173,7 @@ public static class MmapTileReader
             throw new InvalidDataException("Detour tile counts are out of range");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:997 (tile->links[header->maxLinkCount-1].next = DT_NULL_LINK)
+        // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:997 (tile->links[header->maxLinkCount-1].next = DT_NULL_LINK)
         // and tests/ThirdParty/DotRecast/DotRecast.Detour/DtNavMesh.cs:457: addTile writes the last link of the table, so a tile with no
         // links (a tile without polygons) is not one either engine can take.
         if (maxLinkCount == 0)
@@ -181,8 +181,8 @@ public static class MmapTileReader
             throw new InvalidDataException($"Detour tile has a link table of 0 links ({polyCount} polygons); addTile indexes links[maxLinkCount - 1], so the tile cannot be added");
         }
 
-        // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMeshBuilder.cpp:427-459 (the writer's section sizes)
-        // and D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:970-989 (the reader's): header, verts, polys,
+        // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMeshBuilder.cpp:427-459 (the writer's section sizes)
+        // and vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:970-989 (the reader's): header, verts, polys,
         // links, detail meshes, detail verts, detail tris, BV tree, off-mesh connections, each dtAlign4'ed. The writer stores
         // bvNodeCount = 2 * polyCount (DetourNavMeshBuilder.cpp:483), so the tree's tail is allocated and zero.
         long fixedSize = DetourHeaderSize + Align4(12L * vertCount) + Align4(PolyBytes * polyCount) + Align4(PolyDetailBytes * detailMeshCount)
@@ -232,7 +232,7 @@ public static class MmapTileReader
                     throw new InvalidDataException($"polygon {i} names vertex {p.verts[j]} of {h.vertCount}");
                 }
 
-                // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:543-549 (connectIntLinks skips a neis of 0 or
+                // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:543-549 (connectIntLinks skips a neis of 0 or
                 // with DT_EXT_LINK, otherwise links to polygon neis - 1) and DetourNavMesh.h:97 (DT_EXT_LINK = 0x8000).
                 int nei = p.neis[j];
                 if ((nei & NavMeshFormat.ExternalLink) == 0 && nei > h.polyCount)

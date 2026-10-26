@@ -50,6 +50,8 @@ internal sealed class PerfLogAggregator
     private long _other;
     private long _busy;
     private long _stalled;
+    private long _memoryStarved;
+    private long _blocked;
 
     /// <param name="options">The thresholds and the interval; read once (restart to change).</param>
     /// <param name="logger">Receives the summary line.</param>
@@ -287,6 +289,12 @@ internal sealed class PerfLogAggregator
             case HostLoadVerdict.ProcessStalled:
                 _stalled++;
                 break;
+            case HostLoadVerdict.MemoryStarved:
+                _memoryStarved++;
+                break;
+            case HostLoadVerdict.ProcessBlocked:
+                _blocked++;
+                break;
             default:
                 _other++;
                 break;
@@ -403,6 +411,16 @@ internal sealed class PerfLogAggregator
             sb.Append(", process-stalled ").Append(_stalled);
         }
 
+        if (_memoryStarved > 0)
+        {
+            sb.Append(", memory-starved ").Append(_memoryStarved);
+        }
+
+        if (_blocked > 0)
+        {
+            sb.Append(", process-blocked ").Append(_blocked);
+        }
+
         if (_other > 0)
         {
             sb.Append(", unknown (no host sampler or no verdict) ").Append(_other);
@@ -428,7 +446,7 @@ internal sealed class PerfLogAggregator
         _world.Reset();
         _frames = 0;
         _worldSuppressed = 0;
-        _starved = _quiet = _gc = _other = _busy = _stalled = 0;
+        _starved = _quiet = _gc = _other = _busy = _stalled = _memoryStarved = _blocked = 0;
         for (int i = 0; i < _worldDetail.Length; i++)
         {
             _worldDetail[i].Reset(); // the cap is per interval, not per rolling window

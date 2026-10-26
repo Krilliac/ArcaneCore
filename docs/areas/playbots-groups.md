@@ -766,8 +766,8 @@ World-boss raids (`PlayerbotWorldBoss*Tests`, `WorldBossTestKit`, `WorldBossReal
 
 ## Live replay (2026-10-08)
 
-`PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`D:/ArcaneCore-lanes/_logs/w6-integrate/rehearsal/orig-characters.db`
-and `orig-world.db`, the live settings without their `Database`, `Auth` and `Realms` sections, terrain `D:/ArcaneCore-data/terrain-5875`;
+`PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`<lanes-root>/_logs/w6-integrate/rehearsal/orig-characters.db`
+and `orig-world.db`, the live settings without their `Database`, `Auth` and `Realms` sections, terrain `<data-root>/terrain-5875`;
 the five desired bots: Dawnrover, paladin 6, Elwynn; Ironwander, warrior 5, and Mirthblade, rogue 8, Dun Morogh; Duststalker, hunter 8,
 Durotar; Graveweaver, warlock 1, Tirisfal), six runs of 10 game minutes each with this branch and six with its base (`claude/bot-risk`
 d3b26dcb):
