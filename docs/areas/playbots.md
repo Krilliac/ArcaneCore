@@ -504,7 +504,10 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
-  reach (a route that stops short, at the foot of the cliff, is no way). A failed ride is not tried again for 10 minutes.
+  reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
+  (2000): the straight walk to a lift that far crosses ground the mesh may not join and failed after the 60 s no-progress bound (live 2026-10-25,
+  issue #1482, every Great Lift failure began 600+ yards out), so the journey or the walk leg brings the bot within reach and the trip begins on a later
+  think (all lifts share the rule). A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a
