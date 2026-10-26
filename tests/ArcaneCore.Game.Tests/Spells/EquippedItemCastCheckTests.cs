@@ -26,6 +26,7 @@ public sealed class EquippedItemCastCheckTests
     private const uint RangedSpell = 9503;
     private const uint OffhandSpell = 9504;
     private const uint FreeSpell = 9505;
+    private const uint DaggerSpell = 9506;
 
     private static SpellInfo Requiring(uint id, int itemClass, int subClassMask, SpellDamageClass damage = SpellDamageClass.None, uint ex3 = 0) =>
         SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.Dummy, 0)) with
@@ -71,7 +72,8 @@ public sealed class EquippedItemCastCheckTests
                 Requiring(ArmorSpell, 4, 1 << 6),
                 Requiring(RangedSpell, 2, 0, SpellDamageClass.Ranged),
                 Requiring(OffhandSpell, 2, 0, SpellDamageClass.Melee, 0x01000000),
-                Requiring(FreeSpell, -1, 0));
+                Requiring(FreeSpell, -1, 0),
+                Requiring(DaggerSpell, 2, 1 << 15));
             EquippedItemCastCheck.Install(Kit.System);
             (Player, Session) = Kit.AddPlayer(1);
             Player.Inventory.Templates = Store;
@@ -104,6 +106,21 @@ public sealed class EquippedItemCastCheckTests
         }
 
         public void Dispose() => Kit.Dispose();
+    }
+
+    [Fact]
+    public void ABagItemNamedAsTheTarget_OfASpellThatTakesNoItem_DoesNotSatisfyTheEquippedItemRequirement()
+    {
+        // vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6685-6711): an ITEM flag outside the spell's allowed target mask is BAD_TARGETS.
+        using var rig = new Rig();
+        rig.Equip(Sword, InventorySlots.MainHand);
+        Assert.Equal(InventoryResult.Ok, rig.Player.Inventory.AddItem(Dagger, 1, out Item? bagDagger));
+        rig.Kit.Spellbook.Teach(rig.Player, DaggerSpell);
+
+        // RED on main: CastOk (EquippedItemCastCheck skips a cast that names an item, so the bag dagger stood in for the wielded one).
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.HandleCastRequest(
+            rig.Player, DaggerSpell, new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = bagDagger!.Guid }));
+        Assert.Equal(SpellCastResult.EquippedItemClass, rig.Cast(DaggerSpell));
     }
 
     [Fact]

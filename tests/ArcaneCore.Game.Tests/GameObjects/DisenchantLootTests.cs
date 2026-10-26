@@ -51,6 +51,7 @@ public sealed class DisenchantLootTests
         {
             Kit = new SpellTestKit(SpellTestKit.Spell(DisenchantSpell, SpellTestKit.Effect(SpellEffectName.Disenchant, 0)) with
             {
+                Targets = (uint)SpellCastTargetFlags.Item, // Spell.dbc: Disenchant is aimed at an item
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
             });
