@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
@@ -16,6 +17,15 @@ public sealed partial class SummonService
     public const int HappinessPeriodMs = 7_500;
     public const int LoyaltyPeriodMs = 12_000;
     public const uint HappinessMax = 1_050_000;
+
+    /// <summary>vmangos Pet::RegenerateAll: m_focusTimer is reset to 4000 ms after each focus tick (Pet.cpp:743-749).</summary>
+    public const int FocusPeriodMs = 4_000;
+
+    /// <summary>GetCreatePowers(POWER_FOCUS): the maximum and starting focus of a hunter pet (Unit::SetPowerType, Unit.cpp:4414-4416).</summary>
+    public const uint FocusMax = 100;
+
+    /// <summary>The focus a tick gives before Rate.Focus and the regen auras: Pet::RegenerateFocus "25 * CONFIG_FLOAT_RATE_POWER_FOCUS" (Pet.cpp:774). Rate.Focus is 1 (mangosd.conf.dist.in:2797); ArcaneCore has no option for it.</summary>
+    public const float FocusPerTick = 25.0f;
 
     /// <summary>vmangos HAPPINESS_LEVEL_SIZE (Pet.h:130): the happiness bar is split at 333000 and 666000, not at a third of the maximum.</summary>
     public const uint HappinessLevelSize = 333_000;
@@ -60,6 +70,8 @@ public sealed partial class SummonService
             return true;
         }
 
+        TickFocus(pet, charm, diffMs);
+
         charm.HappinessTimerMs -= (int)diffMs;
         if (charm.HappinessTimerMs <= 0)
         {
@@ -83,6 +95,32 @@ public sealed partial class SummonService
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// vmangos Pet::RegenerateAll + Pet::RegenerateFocus (Pet.cpp:743-749, 766-781): every 4 s a hunter pet below its maximum gains
+    /// 25 × Rate.Focus focus, times (amount + 100) / 100 of each SPELL_AURA_MOD_POWER_REGEN_PERCENT aura on focus, truncated to an integer.
+    /// World thread; no allocation.
+    /// </summary>
+    private static void TickFocus(Creature pet, CharmInfo charm, uint diffMs)
+    {
+        if (charm.FocusTimerMs > (int)diffMs)
+        {
+            charm.FocusTimerMs -= (int)diffMs;
+            return;
+        }
+
+        charm.FocusTimerMs = FocusPeriodMs;
+        uint current = pet.GetUInt32(UpdateFields.UnitFieldPower3);
+        uint max = pet.GetUInt32(UpdateFields.UnitFieldMaxpower3);
+        if (current >= max)
+        {
+            return;
+        }
+
+        float factor = pet.Map is { } map ? CombatEnvironment.For(map.World).GetPowerRegenFactor(pet, PowerType.Focus) : 1.0f;
+        int add = (int)(FocusPerTick * factor);
+        pet.SetUInt32(UpdateFields.UnitFieldPower3, (uint)Math.Clamp((long)current + add, 0L, max));
     }
 
     /// <summary>Pet::KillLoyaltyBonus for the owner's live hunter pet after a kill worth experience.</summary>

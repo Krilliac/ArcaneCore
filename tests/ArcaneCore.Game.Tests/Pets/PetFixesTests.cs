@@ -194,6 +194,7 @@ public sealed class PetFixesTests
         Creature pet = Assert.Single(kit.Creatures.Creatures);
         Assert.Equal((SummonService.HappinessMax, 600_000u), (pet.GetUInt32(UpdateFields.UnitFieldMaxpower5), pet.GetUInt32(UpdateFields.UnitFieldPower5)));
         Assert.Equal(PowerType.Focus, pet.PowerType);
+        Assert.Equal((SummonService.FocusMax, SummonService.FocusMax), (pet.GetUInt32(UpdateFields.UnitFieldMaxpower3), pet.GetUInt32(UpdateFields.UnitFieldPower3)));
         Assert.Equal((byte)Class.Warrior, pet.GetByte(UpdateFields.UnitFieldBytes0, 1));
         Assert.Equal((byte)2, pet.GetByte(UpdateFields.UnitFieldBytes0, 2));
     }

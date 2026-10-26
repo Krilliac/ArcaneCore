@@ -74,6 +74,27 @@ public sealed class PetHappinessTests
     }
 
     [Fact]
+    public void PetUpdate_RegeneratesFocus25EveryFourSeconds_UpToTheMaximum()
+    {
+        using PetTestKit kit = Kit();
+        (_, _, Creature pet) = Tame(kit);
+        Assert.Equal(100u, pet.GetUInt32(UpdateFields.UnitFieldMaxpower3));
+        pet.SetUInt32(UpdateFields.UnitFieldPower3, 10);
+
+        kit.Run(3_900);
+        Assert.Equal(10u, pet.GetUInt32(UpdateFields.UnitFieldPower3));
+
+        kit.Run(100); // vmangos Pet::RegenerateAll: m_focusTimer 4000 ms, RegenerateFocus +25 x Rate.Focus
+        Assert.Equal(35u, pet.GetUInt32(UpdateFields.UnitFieldPower3));
+
+        kit.Run(8_000);
+        Assert.Equal(85u, pet.GetUInt32(UpdateFields.UnitFieldPower3));
+
+        kit.Run(8_000); // capped at the maximum
+        Assert.Equal(100u, pet.GetUInt32(UpdateFields.UnitFieldPower3));
+    }
+
+    [Fact]
     public void UnhappyRebelliousPet_RunsAway_WhenItsLoyaltyRunsOut()
     {
         using PetTestKit kit = Kit();

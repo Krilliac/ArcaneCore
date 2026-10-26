@@ -668,6 +668,10 @@ public sealed partial class SummonService
             creature.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
             creature.SetByte(UpdateFields.UnitFieldBytes0, 2, 2); // GENDER_NONE
             creature.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Focus);
+            // Unit::SetPowerType(POWER_FOCUS): max and current focus are GetCreatePowers(POWER_FOCUS) = 100 (Unit.cpp:4414-4416, 4254-4255). Without them every
+            // focus-cost pet ability fails with NoPower. Regeneration is SummonService.TickFocus (Pet::RegenerateFocus).
+            creature.SetUInt32(UpdateFields.UnitFieldMaxpower3, FocusMax);
+            creature.SetUInt32(UpdateFields.UnitFieldPower3, FocusMax);
             creature.SetByte(UpdateFields.UnitFieldBytes2, 0, 1); // SHEATH_STATE_MELEE
             if (creature.Summon.Charm is { } reactCharm)
             {

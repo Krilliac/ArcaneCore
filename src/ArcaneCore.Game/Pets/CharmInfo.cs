@@ -111,6 +111,9 @@ public sealed partial class CharmInfo
     /// <summary>vmangos Pet::m_happinessTimer: milliseconds to the next happiness loss (7.5 s period).</summary>
     internal int HappinessTimerMs { get; set; } = SummonService.HappinessPeriodMs;
 
+    /// <summary>vmangos Pet::m_focusTimer: milliseconds to the next focus regeneration (4 s period, hunter pets).</summary>
+    internal int FocusTimerMs { get; set; } = SummonService.FocusPeriodMs;
+
     /// <summary>vmangos Pet::m_loyaltyTimer: milliseconds to the next loyalty tick (12 s period).</summary>
     internal int LoyaltyTimerMs { get; set; } = SummonService.LoyaltyPeriodMs;
 
