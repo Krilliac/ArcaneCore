@@ -553,9 +553,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 $"no think for {silent / 1000} s of world time (goal {_goal}, last phase {LastThinkPhase}, think interval {_options.ThinkIntervalMs} ms)"));
     }
 
-    /// <summary>One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time: report when it overran (<see cref="ThinkOverranMs"/>), once per <see cref="ThinkAnomalyQuietMs"/>.</summary>
-    internal void CheckThinkOverran(Player player, double elapsedMs, uint now)
+    /// <summary>
+    /// One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time, of which the collector held the process
+    /// <paramref name="gcPauseMs"/>: report when it overran (<see cref="ThinkOverranMs"/>) without those pauses (a collector pause is not
+    /// the bot's slowness: the think-slow log excludes it the same way, PlayerbotSlowThinkLog.Observe; bot QA #1483), once per
+    /// <see cref="ThinkAnomalyQuietMs"/>.
+    /// </summary>
+    internal void CheckThinkOverran(Player player, double elapsedMs, uint now, double gcPauseMs = 0)
     {
+        if (gcPauseMs > 0) elapsedMs = Math.Max(0, elapsedMs - gcPauseMs);
         if (!(elapsedMs >= ThinkOverranMs)) return;
         if (_overranReported && unchecked(now - _overranReportMs) < ThinkAnomalyQuietMs) return;
         _overranReported = true;
@@ -603,6 +609,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         ThinkCount++;
         CheckAssistCredit(player);
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        TimeSpan gcPauseBefore = GC.GetTotalPauseDuration();
         _thinkStartedAt = startedAt;
         try
         {
@@ -621,7 +628,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
-            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
+            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs,
+                (GC.GetTotalPauseDuration() - gcPauseBefore).TotalMilliseconds);
         }
     }
 

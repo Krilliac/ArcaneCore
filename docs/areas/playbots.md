@@ -350,7 +350,9 @@ within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
 across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
 set-aside), the brain asks
-`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards) and, out of combat in the
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards; the queries share
+`IslandTotalSearchNodes` (16384 nodes, at most `IslandSearchNodes` (2048) each) and one that spends the budget or is cut short proves no island,
+bot QA #1483: it had run 12 synchronous searches of 8192 nodes, a 504 ms think) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
 The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
@@ -1152,7 +1154,8 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
 A think is measured per phase (`PlayerbotThinkProbe`); `World:Playerbots:SlowThinkLogMs` logs the slow ones with their phases, and the
 destination planner's work is split into "destinations entries", "destinations transit", "destinations journey" and "destinations advance"
 (the plan queries stay in "grind destinations"). A think over the threshold only because the garbage collector paused the process (think
-time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA.
+time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA. The
+`bot-brain/think-overran` check (a whole `Update` over 500 ms) subtracts the collector's pause during that `Update` the same way (bot QA #1483).
 
 `PlayerbotWorldDestinations.Update` checks a step budget before each costly step (the tram, lift and taxi block, the unreachable skip, the
 path plan, a water journey): the think is past 25 ms, the destination loop past 20 ms (once a candidate was judged), or the think has made
