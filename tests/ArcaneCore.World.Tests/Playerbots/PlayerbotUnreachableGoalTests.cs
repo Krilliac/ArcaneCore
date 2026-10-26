@@ -247,15 +247,48 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         await world.PlaceAsync(Start);
         await WaitUntilUnreachableAsync(world);
         Vector3 besideTheHole = new(69.5f, 5, 0);
-        (bool unreachable, int from, int to, int spawnComponent) = await world.Host.OnWorldAsync(() =>
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        (bool unreachable, int from, int to, int spawnComponent, int located, bool far) = await world.Host.OnWorldAsync(() =>
         {
             Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out int spawn), "the control");
             bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, besideTheHole, out int fromComponent, out int toComponent);
-            return (answer, fromComponent, toComponent, spawn);
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int region = nav.RegionAt(graph, besideTheHole, locate, out bool isFar);
+            return (answer, fromComponent, toComponent, spawn, region, isFar);
         });
+        Assert.True(located >= 0, "the near box finds the tile's floor");
+        Assert.False(far, "0.5 yd off a walkable cell horizontally is not a vertical miss: far is vertical only");
         Assert.True(unreachable, "a goal 0.5 yd past the walkable cells is still on the unjoined tile");
         Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
         Assert.Equal(spawnComponent, to);
+    }
+
+    /// <summary>
+    /// A tolerance query (EndTolerance above 0: the single {5, 10, 5} box) 7.5 yd above the floor finds it and is never far, where the same
+    /// query without a tolerance is far.
+    /// </summary>
+    [Fact]
+    public async Task ATolerantQueryAboveTheFloor_IsNeverFar_WhereAPlainOneIs()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 high = new(20, 20, 7.5f);
+        var plain = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        var tolerant = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true, EndTolerance = 1f };
+        (int plainRegion, bool plainFar, int tolerantRegion, bool tolerantFar) = await world.Host.OnWorldAsync(() =>
+        {
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int a = nav.RegionAt(graph, high, plain, out bool aFar);
+            int b = nav.RegionAt(graph, high, tolerant, out bool bFar);
+            return (a, aFar, b, bFar);
+        });
+        Assert.True(plainRegion >= 0, "the plain query snaps to the floor");
+        Assert.True(plainFar, "the control: 7.5 yd over the floor is a vertical miss");
+        Assert.Equal(plainRegion, tolerantRegion);
+        Assert.False(tolerantFar, "the tolerance box has no far box");
     }
 
     /// <summary>

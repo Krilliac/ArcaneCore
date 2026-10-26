@@ -681,10 +681,10 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>
     /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the located point is <paramref name="far"/> from <paramref name="at"/>
-    /// (more than <c>NearExtents.Y</c> (5) vertically: the near box found nothing and the far box snapped to the floor under or over it; with
-    /// <c>EndTolerance</c> above 0 the single-box branch is taken and there is no far box, so it is never far). A point merely outside a polygon's
-    /// footprint but within the near box is not far, whatever its horizontal distance. A far point is the floor beside a point in the air or on
-    /// excluded ground, not the place itself. Meaningful only when the result is not -1.
+    /// (a vertical miss: it lies more than <c>NearExtents.Y</c> (5) above or below <paramref name="at"/>, whether the far box snapped to the floor
+    /// under or over it or a near-box hit on a slope was that far off). With <c>EndTolerance</c> above 0 the single {5, 10, 5} box is taken and
+    /// <paramref name="far"/> is never set. A point merely outside a polygon's footprint but within the near box is not far, whatever its
+    /// horizontal distance. A far point is the floor beside a point in the air or on excluded ground, not the place itself. Meaningful only when the result is not -1.
     /// </summary>
     public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options, out bool far)
     {
@@ -711,7 +711,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         }
 
         // Not TryLocate's own flag, which also counts a near-box hit past a tenth of a yard horizontally (a spawn beside an eroded edge).
-        far = MathF.Abs(onMesh.Y - recast.Y) > NearExtents.Y;
+        far = options.EndTolerance <= 0 && MathF.Abs(onMesh.Y - recast.Y) > NearExtents.Y;
         return graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly);
     }
 
