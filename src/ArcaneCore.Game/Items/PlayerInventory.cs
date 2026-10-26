@@ -204,7 +204,8 @@ public sealed partial class PlayerInventory
     {
         if (bag == InventorySlots.Bag0)
         {
-            return slot < InventorySlots.KeyringEnd ? _items[slot] : null;
+            // vmangos GetItemByPos (Player.cpp:8475): the buyback slots are not reachable by position.
+            return slot < InventorySlots.BankBagEnd || (slot >= InventorySlots.KeyringStart && slot < InventorySlots.KeyringEnd) ? _items[slot] : null;
         }
 
         if ((bag >= InventorySlots.BagStart && bag < InventorySlots.BagEnd) || (bag >= InventorySlots.BankBagStart && bag < InventorySlots.BankBagEnd))
