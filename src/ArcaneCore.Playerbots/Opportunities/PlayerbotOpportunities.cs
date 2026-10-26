@@ -949,7 +949,7 @@ internal sealed partial class PlayerbotOpportunities
         using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
         PlayerbotPathJobs? jobs = PlayerbotPathJobs.Bound;
-        long wallMs = jobs?.WallMs() ?? System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
+        long wallMs = jobs?.WallMs() ?? (System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency);
         if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus routeStatus, out List<Vector3> portals,
             jobs?.Logger, wallMs, _options.PathJobWaitMaxMs, jobs?.RegionSyncBudget))
         {

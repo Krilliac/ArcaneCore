@@ -174,7 +174,7 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
         PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
-        int to2 = to + 1000, to3 = to + 1001; // no such region: answered Unreachable at once
+        int to2 = to + 1000, to3 = to + 1001; // no such region: FindRoute range-checks only the from region, so the search settles the start's component, then answers Unreachable
         cache.MarkAsked(from, to2, 0);
         cache.MarkAsked(from, to3, 0);
         var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
@@ -203,12 +203,11 @@ public sealed class PlayerbotRegionLegTests : IDisposable
 
         for (int i = 0; i < 300; i++)
             PlayerbotRegionRoutes.TryRoute(graph, from, Start, 1000 + i, Goal, mayDefer: true, out _, out _, wallMs: 0, budget: budget);
-        for (int tries = 0; tries < 400 && (cache.AskedCount > 0 || PlayerbotRegionRoutes.QueuedCount > 0 || PlayerbotRegionRoutes.Workers > 0); tries++)
+        // Only this graph's own counts: the queue and the worker count are process-wide and other tests' bots use them at the same time.
+        for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++)
             await Task.Delay(25);
 
         Assert.Equal(0, cache.AskedCount);
-        Assert.Equal(0, PlayerbotRegionRoutes.QueuedCount);
-        Assert.Equal(0, PlayerbotRegionRoutes.Workers);
         Assert.Equal(300, cache.Count);
         Assert.Equal(300, cache.Searches);
 

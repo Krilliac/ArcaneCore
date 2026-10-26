@@ -761,7 +761,7 @@ internal static class PlayerbotNavigation
         // once and keeps the answer. A queued pair whose work is lost is searched here after the wait bound, within the jobs' sync budget.
         bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
         PlayerbotPathJobs? jobs = PlayerbotPathJobs.Bound;
-        long wallMs = jobs?.WallMs() ?? System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
+        long wallMs = jobs?.WallMs() ?? (System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency);
         if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals,
             jobs?.Logger, wallMs, options.PathJobWaitMaxMs, jobs?.RegionSyncBudget))
         {

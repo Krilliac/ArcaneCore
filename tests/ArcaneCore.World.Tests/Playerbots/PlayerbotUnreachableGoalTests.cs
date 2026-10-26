@@ -374,11 +374,15 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             return PlayerbotNavigation.PlanToward(world.Player, pinPos, farOptions, ref wait, world.Host.World.NowMs, out _);
         });
         Assert.Equal(PlanOutcome.Refused, farOutcome);
-        if (world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } building && await building is { } graph)
-        {
-            Assert.Equal(0, PlayerbotRegionRoutes.Of(graph).Searches);
-            Assert.Equal(0, PlayerbotRegionRoutes.Of(graph).Count);
-        }
+        Task<ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?>? building = world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotNull(building);
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? farGraph = await building;
+        Assert.NotNull(farGraph);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).Searches);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).Count);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).AskedCount); // nothing queued for the pool either
+        // (No path-job service is bound on this test's thread, so a path job cannot be counted here; the early refusal precedes the
+        // path query, which the zero region searches and the Refused outcome on the first think show.)
 
         // The pin is remembered for ten minutes, not for good: real thinks over the world clock, and the cell is open again.
         for (int minute = 1; minute <= 9; minute++)
@@ -459,6 +463,9 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.Empty(edgePortals);
         Assert.NotEmpty(far);
         Assert.Equal(1, cache.Searches);
+        // Whichever start asked first, the far chain ends at the one portal of the component nearest the goal (NavRegionGraphTests: (20, 40 + inset, 0)).
+        Assert.True(Vector2.Distance(new(far[^1].X, far[^1].Y), new(20f, 40f + ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph.PortalInsetYards)) < 0.5f,
+            $"the far chain ends at {far[^1]}");
 
         // A start a few yards off the edge is answered from the same entry.
         Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge + new Vector3(-3, 0, 0), to, UnreachableSpawn, mayDefer: true, out _, out List<Vector3> again));

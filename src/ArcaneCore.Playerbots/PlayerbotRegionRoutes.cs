@@ -110,27 +110,36 @@ internal static class PlayerbotRegionRoutes
                 return true;
             }
 
-            lock (QueueGate) EnsureWorker(logger);
+            Exception? waiting;
+            lock (QueueGate) waiting = EnsureWorker();
+            if (waiting is not null) ReportWorkerFault(waiting, logger);
             return Pending(out status, out portals);
         }
 
+        bool queueFull, answered = false;
+        Exception? fault = null;
+        status = NavRegionRouteStatus.Exhausted;
+        portals = [];
         lock (QueueGate)
         {
-            if (Queued.Count < MaxQueued)
+            queueFull = Queued.Count >= MaxQueued;
+            if (!queueFull)
             {
-                switch (cache.Claim(fromRegion, toRegion, wallMs))
+                ClaimResult claim = cache.Claim(fromRegion, toRegion, wallMs);
+                if (claim == ClaimResult.Cached)
                 {
-                    case ClaimResult.Cached:
-                        return cache.TryGet(fromRegion, toRegion, from, out status, out portals) || Pending(out status, out portals);
-                    case ClaimResult.Claimed:
-                        Queued.Enqueue(new Work(cache, fromRegion, from, toRegion, to, logger));
-                        break;
+                    answered = cache.TryGet(fromRegion, toRegion, from, out status, out portals);
                 }
-
-                EnsureWorker(logger);
-                return Pending(out status, out portals);
+                else
+                {
+                    if (claim == ClaimResult.Claimed) Queued.Enqueue(new Work(cache, fromRegion, from, toRegion, to, logger));
+                    fault = EnsureWorker();
+                }
             }
         }
+
+        if (fault is not null) ReportWorkerFault(fault, logger);
+        if (!queueFull) return answered;
 
         // The queue is full: nothing is recorded (the bot asks again on its next think); a search here only within the budget.
         if (budget.TryTake(wallMs))
@@ -150,38 +159,72 @@ internal static class PlayerbotRegionRoutes
         return false;
     }
 
-    /// <summary>Start a worker when work is queued and fewer than <see cref="MaxInFlight"/> run. The caller holds the queue's gate.</summary>
-    private static void EnsureWorker(ILogger? logger)
+    /// <summary>
+    /// Start a worker when work is queued and fewer than <see cref="MaxInFlight"/> run. The caller holds the queue's gate. Returns the
+    /// exception when the pool refused the worker (the caller reports it with <see cref="ReportWorkerFault"/> after it released the gate).
+    /// </summary>
+    private static Exception? EnsureWorker()
     {
-        if (Queued.Count == 0 || s_workers >= MaxInFlight) return;
+        if (Queued.Count == 0 || s_workers >= MaxInFlight) return null;
         s_workers++;
         try
         {
             Task.Run(Worker);
+            return null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             s_workers--;
-            FaultLedger.Shared.Record("playerbot.region-route", ex);
-            (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route worker could not be started");
+            return ex;
         }
+    }
+
+    private static void ReportWorkerFault(Exception ex, ILogger? logger)
+    {
+        FaultLedger.Shared.Record("playerbot.region-route", ex);
+        (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route worker could not be started");
     }
 
     private static void Worker()
     {
-        while (true)
+        bool drained = false;
+        Work? running = null;
+        try
         {
-            Work work;
-            lock (QueueGate)
+            while (true)
             {
-                if (!Queued.TryDequeue(out work))
+                Work work;
+                lock (QueueGate)
+                {
+                    if (!Queued.TryDequeue(out work))
+                    {
+                        s_workers--;
+                        drained = true;
+                        return;
+                    }
+                }
+
+                running = work;
+                work.Cache.SearchQueued(work.From, work.Start, work.To, work.Goal, work.Logger);
+                running = null;
+            }
+        }
+        finally
+        {
+            if (!drained)
+            {
+                // An exception that SearchQueued does not catch (OutOfMemoryException) ended this worker with its count still held and its
+                // pair still marked asked: give both back so the queue keeps draining (the count changes only under the gate).
+                if (running is { } lost) lost.Cache.ClearAsked(lost.From, lost.To);
+                Exception? fault;
+                lock (QueueGate)
                 {
                     s_workers--;
-                    return;
+                    fault = EnsureWorker();
                 }
-            }
 
-            work.Cache.SearchQueued(work.From, work.Start, work.To, work.Goal, work.Logger);
+                if (fault is not null) ReportWorkerFault(fault, running?.Logger);
+            }
         }
     }
 
@@ -277,6 +320,12 @@ internal static class PlayerbotRegionRoutes
         internal void MarkAsked(int from, int to, long wallMs)
         {
             lock (_gate) _asked[(from, to)] = wallMs;
+        }
+
+        /// <summary>Forget that the pair was asked (its work was lost).</summary>
+        internal void ClearAsked(int from, int to)
+        {
+            lock (_gate) _asked.Remove((from, to));
         }
 
         internal bool TryAskedSince(int from, int to, out long since)

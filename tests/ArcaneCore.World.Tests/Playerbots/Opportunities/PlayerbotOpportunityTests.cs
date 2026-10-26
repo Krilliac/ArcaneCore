@@ -1265,6 +1265,7 @@ public sealed class PlayerbotOpportunityTests
 
         Assert.Equal(0, cache.Searches);
         Assert.Equal(1, cache.AskedCount);
+        Assert.NotEqual(KeyOf(chest), rig.Bot.Controller.ActiveKey); // Pending is no verdict: the chest is not taken (a direct FindRoute would take it at once)
         Assert.Equal(0, capture.Count(Key("unreachable")));
         Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
 
