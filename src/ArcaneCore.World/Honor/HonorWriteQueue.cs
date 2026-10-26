@@ -673,16 +673,16 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
             {
                 throw refused; // retained by the caller; never a verdict (see StopDrainBudget)
             }
 
             made.Made = attempt;
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (scope.ServiceProvider.GetService<IHonorStore>() is not { } store)
                 {
                     progress.Succeeded(); // no store: nothing to land, and not a stall
@@ -722,6 +722,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
             {
                 FaultLedger.Shared.Record("writequeue.honor-attempt", ex);
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    throw; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
         }

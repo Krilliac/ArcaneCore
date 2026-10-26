@@ -934,7 +934,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
         for (int attempt = 1; ; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
             {
                 return refused; // shutdown drain only: nothing is attempted, the write stays retained
             }
@@ -944,10 +944,10 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 made.Made = attempt;
             }
 
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (scope.ServiceProvider.GetService<IInstanceStore>() is not { } store)
                 {
                     progress.Succeeded();
@@ -1001,6 +1001,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             {
                 FaultLedger.Shared.Record("writequeue.instance-attempt", ex);
                 logger.LogWarning(ex, "instance write for {Target} failed (attempt {Attempt}); retrying", DescribeKey(key), attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 int delayMs = Math.Max(0, (int)RetryDelay.TotalMilliseconds) * attempt;
                 if (delayMs > 0)
                 {

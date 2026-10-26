@@ -19,22 +19,23 @@ internal sealed class WriteAttemptCount
 }
 
 /// <summary>
-/// The shutdown bound of a group of write queues, counted in <b>stall</b>, not in work: the in-flight time of store attempts that ended without a write landing,
-/// accumulated since the last write that did land (or since <see cref="Begin"/>). Idle time between queues, non-database stop work and every successful write cost
-/// nothing, and a success resets the accumulator. When <see cref="StalledMs"/> reaches <see cref="StallBudget"/> the lane is <see cref="Exhausted"/>: every later attempt on
-/// it is refused before it starts (<see cref="Refuse"/>), the write stays retained with a <see cref="StopDrainExhaustedException"/> and the queue names it. A stuck drain
-/// therefore costs at most the budget plus the one attempt that crossed it. Thread-safe; one lane may be shared by many queues (see <see cref="ShutdownDrain"/>).
+/// The shutdown bound of a group of write queues, counted in <b>stall</b>, not in work: the wall time covered by store attempts that <b>ended</b> without a write landing,
+/// measured from the later of <see cref="Begin"/> and the last write that did land. An attempt still running counts nothing until its verdict (it may be a slow write that
+/// lands), overlapping failed attempts count their wall time once, and retry backoff (outside the attempt), idle time between queues, non-database stop work and every
+/// successful write cost nothing; a success resets the accumulator. When <see cref="StalledMs"/> reaches <see cref="StallBudget"/> the lane is <see cref="Exhausted"/>: every
+/// later attempt on it is refused before it starts (<see cref="Refuse"/>), the write stays retained with a <see cref="StopDrainExhaustedException"/> and the queue names it.
+/// A stuck drain therefore costs at most the budget plus the one attempt that crossed it. Thread-safe; one lane may be shared by many queues (see <see cref="ShutdownDrain"/>).
 /// </summary>
 public sealed class StopDrainBudget
 {
-    /// <summary>The default stall budget: the characters database's <c>busy_timeout</c>, so a single locked attempt is enough to exhaust a lane.</summary>
-    public static readonly TimeSpan DefaultStallBudget = TimeSpan.FromSeconds(5);
+    /// <summary>The default stall budget: two of the characters database's <c>busy_timeout</c>s (5 s each), so a lane is exhausted after two locked attempts that landed nothing.</summary>
+    public static readonly TimeSpan DefaultStallBudget = TimeSpan.FromSeconds(10);
 
     private readonly Lock _gate = new();
     private long _beginTimestamp; // 0: not started
-    private long _stalledTicks; // in-flight ticks of attempts that ended without success, since the last success (or Begin)
-    private int _inFlight; // attempts running now
-    private long _inFlightSince; // Stopwatch timestamp from which the running attempts' time is not yet in _stalledTicks
+    private long _stalledTicks; // wall ticks covered by attempts that ended without success, since the last success (or Begin); a union, not a sum
+    private long _coveredUntil; // Stopwatch timestamp up to which failed coverage is already in _stalledTicks
+    private int _inFlight; // attempts running now (diagnostics only: never consulted by Refuse or Exhausted)
     private int _succeeded;
     private int _failed;
     private int _refused;
@@ -74,11 +75,11 @@ public sealed class StopDrainBudget
             _failed = 0;
             _refused = 0;
             _lastRefusal = null;
-            _inFlightSince = _beginTimestamp;
+            _coveredUntil = _beginTimestamp;
         }
     }
 
-    /// <summary>The stalled time so far in milliseconds, including attempts still running; 0 when not started.</summary>
+    /// <summary>The stalled time so far in milliseconds, counting completed failed attempts only; 0 when not started.</summary>
     public double StalledMs
     {
         get
@@ -122,6 +123,18 @@ public sealed class StopDrainBudget
             lock (_gate)
             {
                 return _failed;
+            }
+        }
+    }
+
+    /// <summary>Attempts running right now. Diagnostics only: it never decides a refusal.</summary>
+    public int InFlight
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _inFlight;
             }
         }
     }
@@ -176,38 +189,18 @@ public sealed class StopDrainBudget
     {
         lock (_gate)
         {
-            long now = Stopwatch.GetTimestamp();
-            if (_inFlight == 0)
-            {
-                _inFlightSince = now;
-            }
-
             _inFlight++;
-            return new Attempt(this, now);
+            return new Attempt(this, Stopwatch.GetTimestamp());
         }
     }
 
     /// <summary>One-line summary for logs.</summary>
     public string Describe()
-        => $"{Name}: {Succeeded} landed, {Failed} failed, {Refused} refused, stalled {StalledMs:0} ms of {StallBudget.TotalMilliseconds:0} ms";
+        => $"{Name}: {Succeeded} landed, {Failed} failed, {Refused} refused, {InFlight} in flight, stalled {StalledMs:0} ms of {StallBudget.TotalMilliseconds:0} ms";
 
     private bool ExhaustedLocked() => _beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds;
 
-    private double StalledMsLocked()
-    {
-        if (_beginTimestamp == 0)
-        {
-            return 0;
-        }
-
-        long ticks = _stalledTicks;
-        if (_inFlight > 0)
-        {
-            ticks += Math.Max(0, Stopwatch.GetTimestamp() - Math.Max(_inFlightSince, _beginTimestamp));
-        }
-
-        return ticks * 1000.0 / Stopwatch.Frequency;
-    }
+    private double StalledMsLocked() => _beginTimestamp == 0 ? 0 : _stalledTicks * 1000.0 / Stopwatch.Frequency; // completed failures only: a running attempt is unknown until its verdict
 
     private void Finish(long start, bool landed)
     {
@@ -218,20 +211,28 @@ public sealed class StopDrainBudget
             if (landed)
             {
                 _stalledTicks = 0;
+                _coveredUntil = now;
                 _succeeded++;
             }
             else
             {
                 if (_beginTimestamp != 0)
                 {
-                    _stalledTicks += Math.Max(0, now - Math.Max(start, _beginTimestamp));
+                    // Only the part of this attempt after Begin, after the last landing and not yet covered by another failed attempt counts: overlapping failures cover the same wall time once.
+                    long from = Math.Max(start, Math.Max(_beginTimestamp, _coveredUntil));
+                    if (now > from)
+                    {
+                        _stalledTicks += now - from;
+                    }
+
+                    if (now > _coveredUntil)
+                    {
+                        _coveredUntil = now;
+                    }
                 }
 
                 _failed++;
             }
-
-            // Whatever is still running is accounted from here on; its earlier time is either reset (success) or already counted (failure overlap).
-            _inFlightSince = now;
         }
     }
 
@@ -257,7 +258,7 @@ public sealed class StopDrainBudget
             }
         }
 
-        /// <summary>The attempt ended without landing: its in-flight time becomes stalled time.</summary>
+        /// <summary>The attempt ended without landing: the wall time it covered becomes stalled time.</summary>
         public void Failed()
         {
             if (Interlocked.Exchange(ref _done, 1) == 0)

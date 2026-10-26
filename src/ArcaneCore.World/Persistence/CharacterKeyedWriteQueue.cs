@@ -539,7 +539,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
         Exception? failure = null;
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } exhausted)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } exhausted)
             {
                 failure = exhausted; // shutdown drain only: nothing is attempted, the write stays retained
                 refused = true;
@@ -547,10 +547,10 @@ public abstract class CharacterKeyedWriteQueue<TValue>
             }
 
             attemptsMade = attempt;
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             using IServiceScope scope = _scopes.CreateScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await SaveToStoreAsync(scope.ServiceProvider, characterId, value).ConfigureAwait(false);
                 progress.Succeeded();
                 failure = null;
@@ -578,6 +578,11 @@ public abstract class CharacterKeyedWriteQueue<TValue>
 
                 if (attempt < attempts)
                 {
+                    if (_stopped && _drain.Exhausted)
+                    {
+                        break; // the lane has stalled: no retry, the write stays retained with its real failure
+                    }
+
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
             }

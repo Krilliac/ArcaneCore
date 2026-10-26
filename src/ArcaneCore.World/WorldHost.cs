@@ -408,7 +408,7 @@ public sealed class WorldHost(
             failures.Add(ex);
         }
 
-        ReportStopDrain(drain?.Features, "world-host.stop-drain", "world-host-stop-drain");
+        ReportStopDrain(drain?.Features);
         drain?.Saves.Begin();
         bool queueStopped = false;
         try
@@ -422,7 +422,7 @@ public sealed class WorldHost(
             failures.Add(ex);
         }
 
-        ReportStopDrain(drain?.Saves, "world-host.stop-drain-saves", "world-host-stop-drain-saves");
+        ReportStopDrain(drain?.Saves);
 
         if (failures.Count == 0 && queueStopped)
         {
@@ -436,19 +436,12 @@ public sealed class WorldHost(
         if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
     }
 
-    /// <summary>Logs how a shutdown stall lane ended and, when it refused any attempt, records the refusal in the fault ledger and the log.</summary>
-    private void ReportStopDrain(StopDrainBudget? lane, string site, string tag)
+    /// <summary>Logs how a shutdown stall lane ended. A refusal is recorded once per refusing queue (its stop report); the host adds no second ledger entry.</summary>
+    private void ReportStopDrain(StopDrainBudget? lane)
     {
-        if (lane is null)
+        if (lane is not null)
         {
-            return;
-        }
-
-        logger.LogInformation("{Drain}", lane.Describe());
-        if (lane.LastRefusal is { } refusal)
-        {
-            FaultLedger.Shared.Record(site, refusal);
-            logger.LogFault(tag, refusal, "the shutdown drain stalled: {Summary}", lane.Describe());
+            logger.LogInformation("{Drain}", lane.Describe());
         }
     }
 

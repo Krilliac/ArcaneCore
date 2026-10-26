@@ -972,7 +972,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
         for (int attempt = 1; ; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
             {
                 return refused; // shutdown drain only: nothing is attempted, the write stays retained
             }
@@ -982,10 +982,10 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 made.Made = attempt;
             }
 
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (key.Kind is KeyKind.Petition or KeyKind.PetitionPurge)
                 {
                     if (scope.ServiceProvider.GetService<IPetitionStore>() is not { } petitions)
@@ -1044,6 +1044,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             {
                 FaultLedger.Shared.Record("writequeue.social-attempt", ex);
                 _logger.LogWarning(ex, "social write for {Kind} {Id} failed (attempt {Attempt}); retrying", key.Kind, key.A, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(Math.Max(0, _options.RetryDelayMs) * attempt).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

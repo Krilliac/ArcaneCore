@@ -76,17 +76,74 @@ public sealed class StopDrainBudgetTests
     }
 
     [Fact]
-    public void InFlightAttemptCountsBeforeItsVerdict()
+    public void InFlightAttemptDoesNotCountUntilItFails()
     {
         var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(80) };
         lane.Begin();
         using StopDrainBudget.Attempt attempt = lane.BeginAttempt();
-        Assert.False(lane.Exhausted);
         Thread.Sleep(160);
-        Assert.True(lane.Exhausted); // the attempt has not ended, yet it already ran past the budget
+        Assert.False(lane.Exhausted); // a running attempt is unknown until its verdict: it may be a slow write that lands
+        Assert.Null(lane.Refuse());
+        attempt.Failed();
+        Assert.True(lane.Exhausted); // the verdict charges the wall time it covered
         Assert.NotNull(lane.Refuse());
+    }
+
+    [Fact]
+    public void InFlightAttemptThatLands_NeverCounted()
+    {
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(80) };
+        lane.Begin();
+        using StopDrainBudget.Attempt attempt = lane.BeginAttempt();
+        Thread.Sleep(160);
+        Assert.Null(lane.Refuse()); // asked after the budget has passed, before the verdict
         attempt.Succeeded();
+        Assert.Equal(0, lane.StalledMs);
+        Assert.Null(lane.Refuse());
+        Assert.Equal(0, lane.Refused);
+    }
+
+    [Fact]
+    public void OverlappingFailedAttempts_CountTheirWallTimeOnce()
+    {
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(250) };
+        lane.Begin();
+        StopDrainBudget.Attempt a = lane.BeginAttempt();
+        StopDrainBudget.Attempt b = lane.BeginAttempt();
+        Thread.Sleep(150);
+        a.Failed();
+        b.Failed();
+
+        Assert.InRange(lane.StalledMs, 140, 240); // 150 ms of wall time, not 2 x 150
         Assert.False(lane.Exhausted);
+        Assert.Equal(2, lane.Failed);
+    }
+
+    [Fact]
+    public void AFailureAfterALandingCountsOnlyTheTimeAfterIt()
+    {
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(150) };
+        lane.Begin();
+        StopDrainBudget.Attempt a = lane.BeginAttempt();
+        Thread.Sleep(100);
+        StopDrainBudget.Attempt b = lane.BeginAttempt();
+        b.Succeeded();
+        Thread.Sleep(100);
+        a.Failed();
+
+        Assert.InRange(lane.StalledMs, 90, 140); // the 100 ms before the landing are reset by it
+        Assert.False(lane.Exhausted);
+    }
+
+    [Fact]
+    public void Describe_ReportsInFlight()
+    {
+        var lane = new StopDrainBudget();
+        lane.Begin();
+        using StopDrainBudget.Attempt attempt = lane.BeginAttempt();
+        Assert.Contains("1 in flight", lane.Describe(), StringComparison.Ordinal);
+        attempt.Succeeded();
+        Assert.Contains("0 in flight", lane.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]

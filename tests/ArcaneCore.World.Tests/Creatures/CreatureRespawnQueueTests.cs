@@ -53,6 +53,9 @@ public sealed class CreatureRespawnQueueTests
 
         public int Attempts;
 
+        /// <summary>Saves inside <see cref="SaveAsync"/> right now (a slow write that has not reached its verdict).</summary>
+        public int InFlight;
+
         /// <summary>When set, a save waits for it before it lands (a write still in flight).</summary>
         public TaskCompletionSource? HoldSaves { get; set; }
 
@@ -63,6 +66,19 @@ public sealed class CreatureRespawnQueueTests
         public Dictionary<(uint Instance, uint Guid), long> Rows { get; } = [];
 
         public async Task SaveAsync(IReadOnlyCollection<CreatureRespawnRecord> upserts, IReadOnlyCollection<CreatureRespawnKey> deletes, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref InFlight);
+            try
+            {
+                await SaveCoreAsync(upserts, deletes).ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref InFlight);
+            }
+        }
+
+        private async Task SaveCoreAsync(IReadOnlyCollection<CreatureRespawnRecord> upserts, IReadOnlyCollection<CreatureRespawnKey> deletes)
         {
             if (HoldSaves is { } hold)
             {
@@ -601,5 +617,71 @@ public sealed class CreatureRespawnQueueTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
 
         Assert.Equal(4, store.Attempts);
+    }
+
+    [Fact]
+    public async Task Stop_ANotYetStoppedQueueHoldingASlowSuccess_DoesNotRefuseTheStoppingQueue()
+    {
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) };
+        var slowStore = new FakeStore { DelayMs = 1500 };
+        var stoppingStore = new FakeStore { Down = true };
+        await using ServiceProvider slowServices = Build(slowStore);
+        await using ServiceProvider stoppingServices = Build(stoppingStore);
+        CreatureRespawnQueue slow = NewLaneQueue(slowServices, lane); // never stopped before the asserts: its healthy write is merely slow
+        CreatureRespawnQueue stopping = NewLaneQueue(stoppingServices, lane);
+        slow.Start();
+        stopping.Start();
+        for (uint guid = 1; guid <= 5; guid++)
+        {
+            stopping.Save(0, 0, guid, Now + 100);
+        }
+
+        await stopping.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal(5, stopping.RetainedCount);
+        int before = stoppingStore.Attempts;
+        stoppingStore.Down = false;
+
+        slow.Save(0, 0, 100, Now + 100);
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (Volatile.Read(ref slowStore.InFlight) != 1)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the slow write never started");
+            await Task.Delay(5);
+        }
+
+        lane.Begin();
+        await Task.Delay(450); // past the 300 ms budget, with the slow write still running and going to succeed
+
+        await stopping.StopAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(5, stoppingStore.Attempts - before);
+        Assert.Equal(0, lane.Refused);
+        Assert.Equal(0, stopping.RetainedCount);
+        await slow.FlushAsync().WaitAsync(HangGuard);
+        Assert.True(lane.Succeeded >= 6, lane.Describe());
+        await slow.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task Stop_RetryBackoffDoesNotCountAsStall()
+    {
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) };
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewLaneQueue(sp, lane);
+        queue.Start();
+        lane.Begin();
+        queue.Save(0, 0, 1, Now + 100);
+
+        await queue.FlushAsync().WaitAsync(HangGuard); // three instantly failing attempts with 200 + 400 ms of backoff between them
+
+        Assert.Equal(3, store.Attempts);
+        Assert.True(lane.StalledMs < 300, lane.Describe());
+        Assert.False(lane.Exhausted);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Equal(4, store.Attempts);
+        Assert.Equal(0, lane.Refused);
     }
 }

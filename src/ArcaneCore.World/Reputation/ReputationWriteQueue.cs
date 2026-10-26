@@ -650,15 +650,15 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
             {
                 throw refused; // retained by the caller; never a verdict (see StopDrainBudget)
             }
 
             made.Made = attempt;
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICharacterReputationStore>() is not { } store)
                 {
@@ -689,6 +689,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 FaultLedger.Shared.Record("writequeue.reputation-attempt", ex);
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    throw; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
         }

@@ -400,14 +400,14 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         int attempts = sweep || _stopping ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; ; attempt++)
         {
-            if (_stopping && _drain.Refuse() is { } refused)
+            if (attempt == 1 && _stopping && _drain.Refuse() is { } refused)
             {
                 return refused; // shutdown drain only: nothing is attempted, the write stays retained
             }
 
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICreatureRespawnStore>() is { } store)
                 {
@@ -421,6 +421,11 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             {
                 ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-attempt", ex);
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
+                if (_stopping && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the write stays retained with its real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

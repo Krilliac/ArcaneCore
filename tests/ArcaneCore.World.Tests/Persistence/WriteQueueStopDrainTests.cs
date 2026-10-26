@@ -183,4 +183,115 @@ public sealed class WriteQueueStopDrainTests
 
         Assert.DoesNotContain(capture.Notices, n => n.Code == "write-retry-exhausted" && n.Detail.Contains("StopDrainExhaustedException", StringComparison.Ordinal));
     }
+
+    private static async Task UntilAsync(Func<bool> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, what);
+            await Task.Delay(5);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task Stop_ANotYetStoppedQueueHoldingASlowSuccess_DoesNotRefuseTheStoppingQueue(string queue)
+    {
+        StopDrainBudget lane = Lane();
+        await using QueueRig slow = QueueRig.Create(nameof(HonorWriteQueue), lane); // never stopped before the asserts: its healthy write is merely slow
+        await using QueueRig stopping = QueueRig.Create(queue, lane);
+        stopping.Store.Fail = true;
+        for (int id = 1; id <= 5; id++)
+        {
+            stopping.Write(id);
+        }
+
+        await stopping.FlushAsync().WaitAsync(Wait); // five retained writes, their failed attempts before the lane began
+        int before = stopping.Store.Attempts;
+        stopping.Store.Fail = false;
+
+        slow.Store.DelayMs = 1500;
+        slow.Write(1);
+        await UntilAsync(() => slow.Store.InFlight == 1, "the slow write never started");
+        lane.Begin(); // the host begins the lane before the features stop one by one
+        await Task.Delay(450); // past the 300 ms budget, with the slow write still running and going to succeed
+
+        await stopping.StopAsync().WaitAsync(Wait); // must not throw: nothing on the lane has failed
+
+        Assert.Equal(5, stopping.Store.Attempts - before);
+        Assert.Equal(0, lane.Refused);
+        for (int id = 1; id <= 5; id++)
+        {
+            Assert.False(stopping.HasRetained(id), $"character {id} is still retained");
+        }
+
+        await slow.FlushAsync().WaitAsync(Wait);
+        Assert.True(lane.Succeeded >= 6, lane.Describe());
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task Stop_RetryBackoffDoesNotCountAsStall(string queue)
+    {
+        StopDrainBudget lane = Lane();
+        await using QueueRig rig = QueueRig.Create(queue, lane, retryDelay: TimeSpan.FromMilliseconds(300));
+        lane.Begin();
+        rig.Store.Fail = true;
+        rig.Write(1);
+
+        await rig.FlushAsync().WaitAsync(Wait); // three instantly failing attempts with at least 600 ms of backoff between them
+
+        Assert.Equal(3, rig.Store.Attempts);
+        Assert.True(lane.StalledMs < 300, lane.Describe()); // the backoff is outside the attempts
+        Assert.False(lane.Exhausted);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.StopAsync().WaitAsync(Wait));
+
+        Assert.Equal(4, rig.Store.Attempts); // the stop attempt was made, not refused
+        Assert.Equal(0, lane.Refused);
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task Stop_AFreshWriteFailingAtStop_ReportsTheAttemptsItMade(string queue)
+    {
+        await using QueueRig rig = QueueRig.Create(queue, new StopDrainBudget());
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+        rig.Store.Fail = true;
+        rig.Store.DelayMs = 100;
+        rig.Write(1); // consumed now: three attempts
+        await UntilAsync(() => rig.Store.Attempts >= 1, "the first write never started");
+        rig.Write(2); // queued behind it, so it first runs once the queue is stopping
+
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => rig.StopAsync().WaitAsync(Wait));
+
+        Assert.Contains("1", stopped.Message, StringComparison.Ordinal);
+        Assert.Contains("2", stopped.Message, StringComparison.Ordinal);
+        Assert.Equal(6, rig.Store.Attempts); // 3 + 1 for the first write, 1 + 1 for the second
+        AnomalyNotice[] exhausted = capture.Of("write-retry-exhausted", queue);
+        Assert.Equal(2, exhausted.Length);
+        Assert.Contains("attempts=3 error=IOException", exhausted[0].Detail, StringComparison.Ordinal);
+        Assert.Contains("attempts=1 error=IOException", exhausted[1].Detail, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(Queues))]
+    public async Task Stop_ExhaustionDuringANormalWrite_KeepsTheRealFailure(string queue)
+    {
+        StopDrainBudget lane = new() { StallBudget = TimeSpan.FromMilliseconds(100) };
+        await using QueueRig rig = QueueRig.Create(queue, lane);
+        using AnomalyCapture capture = PersistAnomalies.Capture();
+        rig.Store.Fail = true;
+        rig.Store.DelayMs = 150;
+        rig.Write(1);
+        await UntilAsync(() => rig.Store.InFlight == 1, "the write never started");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.StopAsync().WaitAsync(Wait)); // the flag flips during attempt 1
+
+        Assert.Equal(1, rig.Store.Attempts); // attempt 1 exhausts the lane at its failure: the retry is skipped
+        Assert.Equal(1, lane.Refused); // and the stop pass is refused
+        AnomalyNotice exhausted = Assert.Single(capture.Of("write-retry-exhausted", queue));
+        Assert.Contains("attempts=1 error=IOException", exhausted.Detail, StringComparison.Ordinal);
+    }
 }

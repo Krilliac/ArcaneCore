@@ -520,7 +520,7 @@ public sealed class CharacterSaveQueueTests
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
         Assert.IsType<IOException>(error.InnerException);
         Assert.Contains("1", error.Message);
-        Assert.Equal(2, kit.Store.Attempts.Count); // at stop: one attempt when the consumer reaches the snapshot, one more in the final pass; no inline retries
+        Assert.Equal(6, kit.Store.Attempts.Count); // as before the stop drain: three inline attempts when the consumer reaches the snapshot, three more in the final pass
         Assert.Equal(0, kit.Queue.Pending);
     }
 
@@ -1545,7 +1545,7 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
-    public async Task Stop_WithALockedDatabase_MakesOneAttemptPerSnapshot_ThenRefuses_AndNamesAll()
+    public async Task Stop_WithALockedDatabase_RetriesUntilTheLaneStalls_ThenRefuses_AndNamesAll()
     {
         const int snapshots = 10;
         var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) } };
@@ -1569,10 +1569,73 @@ public sealed class CharacterSaveQueueTests
             Assert.Contains(id.ToString(), refused.Message, StringComparison.Ordinal); // every character is named
         }
 
-        Assert.InRange(kit.Store.Attempts.Count, 1, 3); // ten snapshots, three inline attempts each and 200 ms per attempt would be thirty
-        Assert.True(drain.Saves.Refused >= snapshots - 3, drain.Saves.Describe());
+        Assert.InRange(kit.Store.Attempts.Count, 2, 3); // ten snapshots, three inline attempts each and 200 ms per attempt would be thirty
+        Assert.All(kit.Store.Attempts, s => Assert.Equal(1, s.Id)); // snapshot 1 made its attempts until the lane stalled; 2..10 were refused untried
+        Assert.True(drain.Saves.Refused >= 9, drain.Saves.Describe());
         Assert.Empty(kit.Store.Saved);
         Assert.Equal(snapshots, kit.Queue.RetainedCharacters.Count);
+    }
+
+    [Fact]
+    public async Task Stop_ATransientFailureOfOneSnapshot_IsRetriedInlineAndLands()
+    {
+        var drain = new ShutdownDrain();
+        await using var kit = new Kit(drain: drain);
+        var failures = 0;
+        kit.Store.OnSave = (state, _) => state.Id == 1 && Interlocked.Increment(ref failures) <= 2
+            ? Task.FromException(new IOException("transient blip"))
+            : Task.CompletedTask;
+        for (int id = 1; id <= 3; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)); // the consumer starts inside the stop: every snapshot is written while stopping
+
+        Assert.Equal([1, 2, 3], kit.Store.Saved.Select(s => s.Id).Order());
+        Assert.Equal(3, kit.Store.Attempts.Count(a => a.Id == 1));
+        Assert.Equal(0, drain.Saves.Refused);
+    }
+
+    [Fact]
+    public async Task Stop_ABusyLockThatClearsAfterOneBusyTimeout_LandsEverySnapshot()
+    {
+        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(500) } };
+        await using var kit = new Kit(drain: drain);
+        var calls = 0;
+        kit.Store.OnSave = async (state, _) =>
+        {
+            if (state.Id == 1 && Interlocked.Increment(ref calls) <= 2)
+            {
+                await Task.Delay(200); // the store's bounded wait on a foreign lock
+                throw Busy();
+            }
+        };
+        for (int id = 1; id <= 3; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal([1, 2, 3], kit.Store.Saved.Select(s => s.Id).Order());
+        Assert.Equal(0, drain.Saves.Refused);
+        Assert.Equal(0, drain.Saves.StalledMs); // the landing reset the stall
+    }
+
+    [Fact]
+    public void SavesLaneDefault_IsThreeBusyTimeouts()
+    {
+        var drain = new ShutdownDrain();
+        Assert.Equal(TimeSpan.FromSeconds(15), drain.Saves.StallBudget);
+        Assert.Equal(TimeSpan.FromSeconds(10), drain.Features.StallBudget);
+
+        // A queue stopped outside a host (no drain) gets its own lane with the saves budget, not the feature one. The lane is private: read it through the field.
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
+        var lane = (StopDrainBudget)typeof(CharacterSaveQueue).GetField("_drain", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(queue)!;
+        Assert.Equal(TimeSpan.FromSeconds(15), lane.StallBudget);
+        Assert.Contains("of 15000 ms", lane.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]

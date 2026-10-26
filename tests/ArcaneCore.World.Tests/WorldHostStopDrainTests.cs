@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Persistence;
@@ -67,6 +68,7 @@ public sealed class WorldHostStopDrainTests
         Assert.False(featureSawLanes.SavesLaneStartedWhenStopped, "the save queue's lane is begun only after the features stopped");
         Assert.True(drain.Saves.Refused >= 1, drain.Saves.Describe());
         Assert.Equal(0, drain.Features.Refused);
+        Assert.DoesNotContain(FaultLedger.Shared.Snapshot(), f => f.Site.StartsWith("world-host.stop-drain", StringComparison.Ordinal)); // the refusing queue records itself; the host only logs the lane
     }
 
     private sealed class FeatureProbe(ShutdownDrain drain) : IWorldFeature

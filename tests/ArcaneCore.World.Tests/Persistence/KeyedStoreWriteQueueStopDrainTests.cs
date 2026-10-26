@@ -21,12 +21,12 @@ public sealed class KeyedStoreWriteQueueStopDrainTests
     {
         private readonly ServiceProvider _provider;
 
-        public Rig(StopDrainBudget lane)
+        public Rig(StopDrainBudget lane, TimeSpan? retryDelay = null)
         {
             _provider = new ServiceCollection().AddSingleton(new Store()).BuildServiceProvider();
             Queue = new KeyedStoreWriteQueue<Store>(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, Name, lane)
             {
-                RetryDelay = TimeSpan.FromMilliseconds(1),
+                RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1),
                 RetainedRetryInterval = Timeout.InfiniteTimeSpan,
             };
             Queue.Start();
@@ -35,6 +35,7 @@ public sealed class KeyedStoreWriteQueueStopDrainTests
         public KeyedStoreWriteQueue<Store> Queue { get; }
 
         public int Attempts;
+        public int InFlight;
         public volatile bool Busy;
         public volatile bool Fail;
         public volatile int DelayMs;
@@ -43,22 +44,30 @@ public sealed class KeyedStoreWriteQueueStopDrainTests
             => Queue.Save(key, _ =>
             {
                 Interlocked.Increment(ref Attempts);
-                if (DelayMs > 0)
+                Interlocked.Increment(ref InFlight);
+                try
                 {
-                    Thread.Sleep(DelayMs);
-                }
+                    if (DelayMs > 0)
+                    {
+                        Thread.Sleep(DelayMs);
+                    }
 
-                if (Busy)
+                    if (Busy)
+                    {
+                        throw new SqliteException("SQLite Error 5: 'database is locked'.", 5);
+                    }
+
+                    if (Fail)
+                    {
+                        throw new IOException("store down");
+                    }
+
+                    return Task.CompletedTask;
+                }
+                finally
                 {
-                    throw new SqliteException("SQLite Error 5: 'database is locked'.", 5);
+                    Interlocked.Decrement(ref InFlight);
                 }
-
-                if (Fail)
-                {
-                    throw new IOException("store down");
-                }
-
-                return Task.CompletedTask;
             });
 
         public async ValueTask DisposeAsync()
@@ -147,6 +156,64 @@ public sealed class KeyedStoreWriteQueueStopDrainTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync().WaitAsync(Wait));
 
         Assert.Equal(4, Volatile.Read(ref rig.Attempts));
+    }
+
+    [Fact]
+    public async Task Stop_ANotYetStoppedQueueHoldingASlowSuccess_DoesNotRefuseTheStoppingQueue()
+    {
+        StopDrainBudget lane = Lane();
+        await using Rig slow = new(lane); // never stopped before the asserts: its healthy write is merely slow
+        await using Rig stopping = new(lane);
+        stopping.Fail = true;
+        for (int id = 1; id <= 5; id++)
+        {
+            stopping.Save(Key(id));
+        }
+
+        await stopping.Queue.FlushAsync().WaitAsync(Wait);
+        int before = Volatile.Read(ref stopping.Attempts);
+        stopping.Fail = false;
+
+        slow.DelayMs = 1500;
+        slow.Save(Key(100));
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (Volatile.Read(ref slow.InFlight) != 1)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the slow write never started");
+            await Task.Delay(5);
+        }
+
+        lane.Begin();
+        await Task.Delay(450); // past the 300 ms budget, with the slow write still running and going to succeed
+
+        await stopping.Queue.StopAsync().WaitAsync(Wait);
+
+        Assert.Equal(5, Volatile.Read(ref stopping.Attempts) - before);
+        Assert.Equal(0, lane.Refused);
+        Assert.Empty(stopping.Queue.RetainedKeys);
+        await slow.Queue.FlushAsync().WaitAsync(Wait);
+        Assert.True(lane.Succeeded >= 6, lane.Describe());
+    }
+
+    [Fact]
+    public async Task Stop_RetryBackoffDoesNotCountAsStall()
+    {
+        StopDrainBudget lane = Lane();
+        await using Rig rig = new(lane, TimeSpan.FromMilliseconds(300));
+        lane.Begin();
+        rig.Fail = true;
+        rig.Save(Key(1));
+
+        await rig.Queue.FlushAsync().WaitAsync(Wait); // three instantly failing attempts with 600 ms of backoff between them
+
+        Assert.Equal(3, Volatile.Read(ref rig.Attempts));
+        Assert.True(lane.StalledMs < 300, lane.Describe());
+        Assert.False(lane.Exhausted);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync().WaitAsync(Wait));
+
+        Assert.Equal(4, Volatile.Read(ref rig.Attempts));
+        Assert.Equal(0, lane.Refused);
     }
 
     [Fact]

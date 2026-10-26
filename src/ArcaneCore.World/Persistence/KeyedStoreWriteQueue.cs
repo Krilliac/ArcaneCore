@@ -370,7 +370,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         int attempts = _stopped ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
-            if (_stopped && _drain.Refuse() is { } exhausted)
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } exhausted)
             {
                 failure = exhausted; // shutdown drain only: nothing is attempted, the write stays retained
                 refused = true;
@@ -378,9 +378,9 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             }
 
             attemptsMade = attempt;
-            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 using IServiceScope scope = scopes.CreateScope();
                 if (scope.ServiceProvider.GetService<TStore>() is { } store)
                 {
@@ -403,6 +403,11 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
                 if (attempt < attempts)
                 {
+                    if (_stopped && _drain.Exhausted)
+                    {
+                        break; // the lane has stalled: no retry, the write stays retained with its real failure
+                    }
+
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
             }

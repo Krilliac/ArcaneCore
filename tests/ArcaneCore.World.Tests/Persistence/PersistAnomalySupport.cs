@@ -94,13 +94,30 @@ internal sealed class StoreSwitch
     public volatile int DelayMs;
     private int _failNext;
     private int _attempts;
+    private int _inFlight;
 
     public int Attempts => Volatile.Read(ref _attempts);
+
+    /// <summary>Calls inside <see cref="Step"/> right now (the delay included): a slow write that has not reached its verdict.</summary>
+    public int InFlight => Volatile.Read(ref _inFlight);
 
     /// <summary>The next <paramref name="count"/> calls throw (a transient outage), then the store works again.</summary>
     public void FailNext(int count) => Volatile.Write(ref _failNext, count);
 
     public Task Step()
+    {
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            return StepCore();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
+
+    private Task StepCore()
     {
         Interlocked.Increment(ref _attempts);
         if (DelayMs > 0)
@@ -186,15 +203,15 @@ internal abstract class QueueRig : IAsyncDisposable
     /// <summary>The login barrier (<c>FlushCharacterAsync</c>): retries a retained write and faults while it is still not durable; the fault is swallowed here.</summary>
     public abstract Task RetryAsync(int characterId);
 
-    public static QueueRig Create(string name, StopDrainBudget? drain = null) => name switch
+    public static QueueRig Create(string name, StopDrainBudget? drain = null, TimeSpan? retryDelay = null) => name switch
     {
-        nameof(HonorWriteQueue) => new HonorRig(drain),
-        nameof(ReputationWriteQueue) => new ReputationRig(drain),
-        nameof(RestWriteQueue) => new RestRig(drain),
-        nameof(ExploredZonesWriteQueue) => new ExploredRig(drain),
-        nameof(TaxiFlightWriteQueue) => new TaxiRig(drain),
-        nameof(InstanceWriteQueue) => new InstanceRig(drain),
-        nameof(SocialWriteQueue) => new SocialRig(drain),
+        nameof(HonorWriteQueue) => new HonorRig(drain, retryDelay),
+        nameof(ReputationWriteQueue) => new ReputationRig(drain, retryDelay),
+        nameof(RestWriteQueue) => new RestRig(drain, retryDelay),
+        nameof(ExploredZonesWriteQueue) => new ExploredRig(drain, retryDelay),
+        nameof(TaxiFlightWriteQueue) => new TaxiRig(drain, retryDelay),
+        nameof(InstanceWriteQueue) => new InstanceRig(drain, retryDelay),
+        nameof(SocialWriteQueue) => new SocialRig(drain, retryDelay),
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
     };
 
@@ -230,7 +247,7 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly HonorWriteQueue _queue;
 
-        public HonorRig(StopDrainBudget? drain)
+        public HonorRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IHonorStore>(new FakeHonorStore(Store)));
             _queue = new HonorWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
@@ -264,7 +281,7 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly ReputationWriteQueue _queue;
 
-        public ReputationRig(StopDrainBudget? drain)
+        public ReputationRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterReputationStore>(new FakeReputationStore(Store)));
             _queue = new ReputationWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
@@ -298,10 +315,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly RestWriteQueue _queue;
 
-        public RestRig(StopDrainBudget? drain)
+        public RestRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterRestStore>(new FakeRestStore(Store)));
-            _queue = new RestWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new RestWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -332,10 +349,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly ExploredZonesWriteQueue _queue;
 
-        public ExploredRig(StopDrainBudget? drain)
+        public ExploredRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IExploredZonesStore>(new FakeExploredStore(Store)));
-            _queue = new ExploredZonesWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new ExploredZonesWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -366,7 +383,7 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly TaxiFlightWriteQueue _queue;
 
-        public TaxiRig(StopDrainBudget? drain)
+        public TaxiRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterTaxiFlightStore>(new FakeTaxiStore(Store)));
             _queue = new TaxiFlightWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
@@ -400,10 +417,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly InstanceWriteQueue _queue;
 
-        public InstanceRig(StopDrainBudget? drain)
+        public InstanceRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IInstanceStore>(new FakeInstanceStore(Store)));
-            _queue = new InstanceWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new InstanceWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -434,10 +451,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly SocialWriteQueue _queue;
 
-        public SocialRig(StopDrainBudget? drain)
+        public SocialRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ISocialStore>(new FakeSocialStore(Store)));
-            _queue = new SocialWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = 1 }, drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new SocialWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = (int)(retryDelay?.TotalMilliseconds ?? 1) }, drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }

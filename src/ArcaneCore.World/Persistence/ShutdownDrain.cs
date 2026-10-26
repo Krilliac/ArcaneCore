@@ -8,9 +8,12 @@ namespace ArcaneCore.World.Persistence;
 /// </summary>
 public sealed class ShutdownDrain
 {
+    /// <summary>The save lane's stall budget: three of the characters database's <c>busy_timeout</c>s (5 s each), so a locked database still gets the three inline attempts per snapshot.</summary>
+    public static readonly TimeSpan SavesStallBudget = TimeSpan.FromSeconds(15);
+
     /// <summary>The lane shared by all feature write queues (settable at construction, so a host or test can choose the stall budget).</summary>
     public StopDrainBudget Features { get; init; } = new() { Name = "feature write queues' stop drain" };
 
     /// <summary>The character save queue's reserved lane (settable at construction).</summary>
-    public StopDrainBudget Saves { get; init; } = new() { Name = "character save queue's stop drain" };
+    public StopDrainBudget Saves { get; init; } = new() { Name = "character save queue's stop drain", StallBudget = SavesStallBudget };
 }
