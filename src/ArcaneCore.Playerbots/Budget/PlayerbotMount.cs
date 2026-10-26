@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,6 +80,14 @@ internal sealed class PlayerbotMount
         uint now = session.World.NowMs;
         if ((player.UnitFlags & UnitFlags.Looting) != 0)
         {
+            // Close the window for real (the CMSG_LOOT_RELEASE path), not just the flag: the movement and cast release triggers gate on the
+            // flag, so a bare clear would leave the bag listing the bot and its node in use. The flag clear stays for a flag with no window.
+            if (player.Map is { } lootMap && session.Services.GetService<GameObjectLootFeature>()?.FindSystem(lootMap)?.Loot is { } loot
+                && loot.OpenLootOf(player) is { } openWindow)
+            {
+                loot.Release(player, openWindow.Source);
+            }
+
             player.UnitFlags &= ~UnitFlags.Looting;
         }
 
