@@ -1406,6 +1406,17 @@ public sealed partial class SpellSystem
 
             checkedTarget = target;
 
+            // vmangos Spell::CheckCast (Spell.cpp:5604-5610): an explicit negative selector (TARGET_UNIT_ENEMY) needs
+            // IsValidAttackTarget, else SPELL_FAILED_BAD_TARGETS. Server-initiated (triggered) casts stay unchecked.
+            if (!triggered)
+            {
+                SpellCastResult hostile = CheckExplicitHostileTargetRules(caster, spell, target);
+                if (hostile != SpellCastResult.CastOk)
+                {
+                    return hostile;
+                }
+            }
+
             // Registered target-state checks (target aura state): vmangos Spell.cpp:5636.
             SpellCastResult targetState = RunCastChecks(SpellCheckPhase.Target, caster, spell, targets, target, triggered, strict, castItem);
             if (targetState != SpellCastResult.CastOk)
