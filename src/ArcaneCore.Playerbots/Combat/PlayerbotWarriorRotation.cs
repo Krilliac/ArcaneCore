@@ -48,7 +48,7 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
         BattleStance, DefensiveStance, BerserkerStance, BattleShout, Bloodrage, Charge, Intercept, Pummel, ShieldBash, Execute,
         Overpower, LastStand, ConcussionBlow, ShieldBlock, ShieldWall, ShieldSlam, ThunderClap, SunderArmor, Hamstring, Rend,
         IntimidatingShout, Retaliation, SweepingStrikes, Recklessness, DeathWish, MortalStrike, Bloodthirst, Whirlwind,
-        DemoralizingShout, Cleave, HeroicStrike, Taunt, MockingBlow, Revenge,
+        DemoralizingShout, Cleave, HeroicStrike, Taunt, MockingBlow, Revenge, ShootBow, ShootGun, ShootCrossbow, Throw,
     ];
 
     protected override RotationAction? Upkeep(RotationState s)
@@ -101,7 +101,8 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
             ?? Do(s, Whirlwind, s.Self, v.InMeleeRange)
             ?? Do(s, DemoralizingShout, s.Self, tank && !v.HasAura(DemoralizingShout))
             // Rage dump on the next swing above 30 rage (vmangos :2645-2663).
-            ?? (s.Power > 300 ? Do(s, Cleave, v, close > 1) ?? Do(s, HeroicStrike, v) : null);
+            ?? (s.Power > 300 ? Do(s, Cleave, v, close > 1) ?? Do(s, HeroicStrike, v) : null)
+            ?? RangedShot(s, v);
     }
 
     /// <summary>Defensive Stance when low or tanking an equal-level enemy, Berserker Stance otherwise (vmangos :2583-2600).</summary>
