@@ -108,6 +108,7 @@ public sealed class WorldHandoffTests
             await first.DisposeAsync();
             await using WorldClient again = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
             Assert.Equal((byte)AuthResponseCode.Ok, await again.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
+            await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 1), cts.Token); // tracked at Start, after the accept reply
             Assert.Single(bEndpoint.Acceptor!.Sessions);
             await again.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
             WorldFrame list = await again.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);

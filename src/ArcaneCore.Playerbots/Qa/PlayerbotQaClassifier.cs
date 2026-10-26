@@ -89,8 +89,9 @@ internal static class PlayerbotQaClassifier
                     + ": an effect that silently does nothing, or a rule that drops it", title);
 
             case QaSignalKind.Anomaly:
-                return new QaClassification(QaCause.BehaviourBug,
-                    "recurring bot outcome anomaly " + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
+                return new QaClassification(IsContentDefect(s) ? QaCause.MissingData : QaCause.BehaviourBug,
+                    (s.Goal.Length != 0 && !s.Goal.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal) ? "recurring world anomaly " : "recurring bot outcome anomaly ")
+                    + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                     + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
 
             default:
@@ -98,6 +99,14 @@ internal static class PlayerbotQaClassifier
                 throw new ArgumentOutOfRangeException(nameof(s), s.Kind, "no classification for this bot QA kind");
         }
     }
+
+    /// <summary>
+    /// A world anomaly whose cause is the imported content, not server behaviour. The reporters give those defects their own ledger keys
+    /// (<c>loot/gameobject-loot-no-data</c>: a chest whose loot template names no rows or only unknown items; <c>gameobject/use-failed-unknown-lock</c>:
+    /// a use refused because the object's lock id has no lock_template row), so the cause follows the key and never the last occurrence's detail.
+    /// </summary>
+    private static bool IsContentDefect(QaSignal s)
+        => PlayerbotQaAnomalyFeed.ContentDefectKeys.Contains(s.FaultCode);
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";

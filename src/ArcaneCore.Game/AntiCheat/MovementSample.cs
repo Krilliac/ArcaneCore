@@ -64,6 +64,9 @@ public readonly record struct MovementSample
     /// <summary>The movement flags the server granted: acknowledged or enforced orders, pending orders to set them, auras, GM grants.</summary>
     public MovementFlags GrantedFlags { get; init; }
 
+    /// <summary>UNIT_FLAG_SERVER_CONTROLLED is set (<c>.cheat wallclimb</c>): the wall-climb checks stand down (vmangos NO_WALL_CLIMB_CHECK_UNIT_FLAGS, MovementAnticheat.cpp:1170).</summary>
+    public bool ServerControlled { get; init; }
+
     /// <summary>The verdict on the transport the block names.</summary>
     public TransportClaim Transport { get; init; }
 

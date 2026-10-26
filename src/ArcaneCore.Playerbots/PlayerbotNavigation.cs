@@ -1204,7 +1204,15 @@ internal static class PlayerbotNavigation
     internal const int IslandPathPoints = 256;
 
     /// <summary>The search budget of each of <see cref="IsOnMeshIsland"/>'s queries: an island's few polygons run out long before it.</summary>
-    internal const int IslandSearchNodes = 8192;
+    internal const int IslandSearchNodes = 2048;
+
+    /// <summary>
+    /// The nodes all of one <see cref="IsOnMeshIsland"/> call's queries may create together (each is given what is left, at most
+    /// <see cref="IslandSearchNodes"/>). Before, twelve queries of 8192 nodes each could run synchronously on the world thread in one
+    /// think (98 304 nodes; bot QA #1483, think-overran 504 ms in "explore" and "stall decision"); a probe that spends the budget, or
+    /// whose search the budget cuts short, proves no island and answers no, as a cut search always did.
+    /// </summary>
+    internal const int IslandTotalSearchNodes = 16384;
 
     /// <summary>
     /// Whether the bot stands on a navigation-mesh island: walkable polygons the mesh joins to nothing round them, so that no route from
@@ -1240,16 +1248,37 @@ internal static class PlayerbotNavigation
         if (player.Map is not { } map) return false;
         if (!start.IsFinite()) return false;
         using PlayerbotThinkProbe.FallbackScope fallback = PlayerbotThinkProbe.Fallback();
+        return IsOnMeshIsland(start, (probe, pathOptions) =>
+        {
+            int cutBefore = PlayerbotThinkProbe.Active?.Clamped ?? 0;
+            long nodesBefore = PathSearchCounters.NodesCreated, cappedBefore = PathSearchCounters.CappedSearches;
+            PathResult path = PlayerbotThinkProbe.Find(map.Collision, start, probe, pathOptions);
+            // A search the think's node budget or its own node cap cut short ends early on ground that may go on: no proof of an island.
+            bool cut = (PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore || PathSearchCounters.CappedSearches != cappedBefore;
+            return (path, PathSearchCounters.NodesCreated - nodesBefore, cut);
+        });
+    }
+
+    /// <summary>
+    /// The island judgement over <paramref name="query"/> (the path from <paramref name="start"/> to a probe point under the given options,
+    /// the nodes it created, whether a node bound cut it short): every query is held to what is left of
+    /// <see cref="IslandTotalSearchNodes"/> (at most <see cref="IslandSearchNodes"/> each), and the first that ends far, is cut, or finds the
+    /// budget spent (fewer than <see cref="PlayerbotThinkProbe.MinQueryNodes"/> left) answers no. The queries run on the world thread.
+    /// </summary>
+    internal static bool IsOnMeshIsland(Vector3 start, Func<Vector3, PathOptions, (PathResult Path, long Nodes, bool Cut)> query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        long remaining = IslandTotalSearchNodes;
         for (int direction = 0; direction < IslandDirections; direction++)
         {
+            if (remaining < PlayerbotThinkProbe.MinQueryNodes) return false;
             float angle = direction * 2f * MathF.PI / IslandDirections;
             Vector3 probe = start + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0) * IslandProbeYards);
-            int cutBefore = PlayerbotThinkProbe.Active?.Clamped ?? 0;
-            PathResult path = PlayerbotThinkProbe.Find(map.Collision, start, probe, new PathOptions { MaxPoints = IslandPathPoints,
-                Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = IslandSearchNodes,
+            (PathResult path, long nodes, bool cut) = query(probe, new PathOptions { MaxPoints = IslandPathPoints,
+                Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = true, MaxSearchNodes = (int)Math.Min(IslandSearchNodes, remaining),
                 LoadTiles = true, NonBlockingTiles = true });
-            // A search the think's node budget cut short ends early on ground that may go on: no proof of an island.
-            if ((PlayerbotThinkProbe.Active?.Clamped ?? 0) != cutBefore) return false;
+            remaining -= Math.Max(0L, nodes);
+            if (cut) return false;
             // A path cut at the point bound (Short) ends early on ground that goes on: winding connected ground, never an island.
             if (!path.HasPath || (path.Type & (PathType.NotUsingPath | PathType.NoPath | PathType.Short)) != 0 || !path.End.IsFinite()
                 || Vector2.Distance(Flat(path.End), Flat(start)) > IslandYards)
