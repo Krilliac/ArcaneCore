@@ -515,13 +515,19 @@ public sealed class PlayerbotCombatSpellsTests
                 Assert.Equal(1, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast));
                 Assert.Equal(ArcaneCore.Game.Pets.ActionType.Enabled, await host.World.InvokeAsync(() => pet.Summon!.Charm!.SpellStates[SpellTestServices.Bolt]));
 
+                // Stop the pet's fight so the companion step sends the idle pet at the target again: that second CMSG_PET_ACTION proves the
+                // pet step ran in this think, so the unchanged autocast count below is the "already handled" check and not a skipped step.
+                int petActionsBefore = sent.Count(o => o == WorldOpcode.CmsgPetAction);
                 await host.World.InvokeAsync(() =>
                 {
+                    pet.Map!.Combat.CombatStop(pet);
+                    Assert.Null(pet.Combat.Victim);
                     session.ManagedBudget = new ManagedActionBudget(8);
                     ClearCast(session);
                     helper.Update(session.Player!, target, 0);
                     return true;
                 });
+                Assert.Equal(petActionsBefore + 1, sent.Count(o => o == WorldOpcode.CmsgPetAction));
                 Assert.Equal(1, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast)); // not repeated
 
                 // A rank that replaces a known spell keeps the spell count, but it is a new spell: autocast is sent for it too.
