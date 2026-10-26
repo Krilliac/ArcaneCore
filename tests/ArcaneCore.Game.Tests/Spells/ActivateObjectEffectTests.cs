@@ -67,6 +67,26 @@ public sealed class ActivateObjectEffectTests
     }
 
     [Fact]
+    public void AClientNamedObject_OutOfRange_IsRefused_AndNotActivated()
+    {
+        // vmangos Spell::CheckRange (Spell.cpp:6922-6927): a player's cast on a game object target needs interact distance of the spell range.
+        using var rig = new Rig();
+        GameObject near = rig.Objects.Summon(Door, 3, 0, rig.Caster.Z, 0)!;
+        GameObject far = rig.Objects.Summon(Door, 200, 0, rig.Caster.Z, 0)!;
+        near.Flags |= GameObjectFlags.Locked;
+        far.Flags |= GameObjectFlags.Locked;
+
+        var farTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = far.Guid };
+        // RED on main: CastOk, and the object 200 yards away is unlocked.
+        Assert.Equal(SpellCastResult.OutOfRange, rig.Kit.System.CastSpell(rig.Caster, 990106, farTargets, triggered: false));
+        Assert.True(far.Flags.HasFlag(GameObjectFlags.Locked));
+
+        var nearTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = near.Guid };
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, 990106, nearTargets, triggered: false));
+        Assert.False(near.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Fact]
     public void ScriptNearCaster_UsesTheNearestListedObject_OrTheExplicitListedObject()
     {
         const uint spell = 990201;

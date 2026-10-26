@@ -1458,6 +1458,12 @@ public sealed partial class SpellSystem
             return items;
         }
 
+        SpellCastResult objectRange = CheckGameObjectTargetRange(caster, spell, targets, triggered, strict);
+        if (objectRange != SpellCastResult.CastOk)
+        {
+            return objectRange;
+        }
+
         if (needsUnit)
         {
             if (checkedTarget is not { } target)
