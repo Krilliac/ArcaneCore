@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
