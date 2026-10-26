@@ -444,7 +444,13 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _repairServiceSpawns = [];
     private readonly List<(uint Entry, CreatureSpawn Spawn)> _vendorServiceSpawns = [];
     private readonly HashSet<uint> _blockedRepairSpawns = [];
-    private (uint MapId, CreatureContent? Content, int Version, int Events, uint Faction) _repairIndex;
+    private (uint MapId, CreatureContent? Content, int Version, int Events, uint Faction, int Ranks) _repairIndex;
+
+    /// <summary>The reputation factions of the service NPCs the index was built from: the bot's ranks with them are part of its cache key (<see cref="RankStamp"/>).</summary>
+    private uint[] _repairRankFactions = [];
+
+    /// <summary>The vendor spawns the last <see cref="RefreshRepairSpawns"/> found usable (a test's view of the index).</summary>
+    internal IReadOnlyList<(uint Entry, CreatureSpawn Spawn)> VendorServiceSpawns => _vendorServiceSpawns;
     private PlayerbotRoute? _repairRoute;
     private uint _repairSpawn;
     private uint _repairMissReported;
@@ -596,6 +602,9 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                 _repairMissReported = _repairSpawn;
                 PlayerbotAnomalies.Report(player, "town", "service-npc-missing",
                     $"stands {left:F1} yd from the spawn of {(service == NpcFlags.Repair ? "repair NPC" : "vendor")} {current.Entry} (spawn {_repairSpawn}) and finds no usable service NPC in sight");
+                // Set the entry aside, longer each time (SuspendEntryEscalating): a bot that found nobody here walks to the next spawn,
+                // not back to this one when the trip rests and the blocked spawns are forgotten (Timbermaw Hold, issues #1478 and #1479).
+                Suspensions?.SuspendEntryEscalating(current.Entry, now);
             }
             if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
             else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
@@ -761,7 +770,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// holds back is not in the world (<see cref="SpawnPresent"/>): Javnir Nashak (15012, Harvest Festival) and Professor Thaddeus Paleo
     /// (14847, Darkmoon Faire) stay in <c>creature</c> all year, and walking to the empty point reports <c>town/service-npc-missing</c>.
     /// </summary>
-    private void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services, NpcFlags service)
+    internal void RefreshRepairSpawns(Player player, uint mapId, QuestNpcServices services, NpcFlags service)
     {
         CreatureContent? content = session.Services.GetService<CreatureWorldFeature>()?.Content;
         if (content is null)
@@ -772,22 +781,26 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             return;
         }
         int events = ActiveEventStamp(session.Services);
-        var key = (mapId, content, content.DefinitionsVersion, events, player.FactionTemplate);
+        var key = (mapId, content, content.DefinitionsVersion, events, player.FactionTemplate, RankStamp(player, services));
         if (_repairIndex != key)
         {
-            _repairIndex = key;
             _repairServiceSpawns.Clear();
             _vendorServiceSpawns.Clear();
             _blockedRepairSpawns.Clear();
             ClearRepairTrip();
             FactionTemplateCatalog? factions = session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
             Vector3 here = new(player.X, player.Y, player.Z);
+            var rankFactions = new SortedSet<uint>();
             foreach (CreatureTemplate template in content.Templates)
             {
                 NpcFlags flags = (NpcFlags)template.NpcFlags;
                 bool isRepair = (flags & NpcFlags.Repair) != 0;
                 bool isVendor = (flags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(template.Entry).Count > 0;
-                if ((!isRepair && !isVendor) || !PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction))
+                if (!isRepair && !isVendor) continue;
+                if (factions?.Find(template.Faction) is { Faction: not 0 } templateFaction) rankFactions.Add(templateFaction.Faction);
+                // The NPC must be one the bot can use, not only one that does not attack it: an Unfriendly one refuses the interaction
+                // (CanApproachTrainer, above Unfriendly).
+                if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction, ArcaneCore.Game.Reputation.ReputationRank.Unfriendly))
                     continue;
                 foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
                 {
@@ -800,11 +813,27 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
 
             TrimServiceSpawns(_repairServiceSpawns, here);
             TrimServiceSpawns(_vendorServiceSpawns, here);
+            _repairRankFactions = [.. rankFactions];
+            _repairIndex = (mapId, content, content.DefinitionsVersion, events, player.FactionTemplate, RankStamp(player, services));
         }
 
         List<(uint Entry, CreatureSpawn Spawn)> source = service == NpcFlags.Repair ? _repairServiceSpawns : _vendorServiceSpawns;
         _repairSpawns.Clear();
         _repairSpawns.AddRange(source);
+    }
+
+    /// <summary>
+    /// A stamp of the bot's reputation ranks with the factions of the service NPCs the index holds (<see cref="_repairRankFactions"/>): the
+    /// index leaves out NPCs the bot's rank refuses, so it is rebuilt when a rank changes (a bot that turned Unfriendly with Timbermaw
+    /// Hold, or earned its way back to Neutral). 0 while no index is built or without a reputation owner. A dictionary lookup per faction.
+    /// </summary>
+    private int RankStamp(Player player, QuestNpcServices services)
+    {
+        if (_repairRankFactions.Length == 0 || services.Deps.Reputation is not { } reputation) return 0;
+        int stamp = 17;
+        foreach (uint faction in _repairRankFactions)
+            stamp = unchecked((stamp * 31) + reputation.GetReputationRank(player, faction));
+        return stamp;
     }
 
     private static void TrimServiceSpawns(List<(uint Entry, CreatureSpawn Spawn)> list, Vector3 here)
