@@ -2,7 +2,7 @@
 
 Source audited: origin/main 7313b9e (read-only Codex static pass, `cx/out/protocol-audit`: report.md, findings.json, 463 of 497 usage-based opcode entries explicitly *unverified*). The audit is real and specific (opcode, our file:line, reference file:line for every finding), not an empty summary, but it is a narrow pass: 2 mismatches, 5 reference conflicts, 27 structural spot checks. Absence of a finding is not evidence of correctness for the 463 unverified entries.
 
-Validation method: each claim re-read against our code at 7313b9e and against D:\refs\wow_messages (primary for 1.12), D:\refs\vmangos and D:\refs\mangos-classic. Fixes were proven RED first with exact-byte tests.
+Validation method: each claim re-read against our code at 7313b9e and against `<refs-root>`\wow_messages (primary for 1.12), `<refs-root>`\vmangos and `<refs-root>`\mangos-classic. Fixes were proven RED first with exact-byte tests.
 
 | ID | Opcode | Claim | Validation | Disposition |
 | --- | --- | --- | --- | --- |

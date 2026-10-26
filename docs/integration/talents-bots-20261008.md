@@ -1,8 +1,8 @@
 # Talents and bots integration (2026-10-08)
 
-Branch `claude/integrate-20261007`, base `92966fdd` (main, live since the wave-4 deploy from `D:/ArcaneCore-lanes/_deploy/integrated-w4b`).
+Branch `claude/integrate-20261007`, base `92966fdd` (main, live since the wave-4 deploy from `<deploy-root>/integrated-w4b`).
 Seven reviewed lanes and four fix branches were merged with `--no-ff` in the order below, then the `World:Playerbots:MovementPackets`
-option and one merge fix. Logs: `D:/ArcaneCore-lanes/_logs/w5-talents-bots/`. Nothing was pushed or deployed. The live servers, the
+option and one merge fix. Logs: `<lanes-root>/_logs/w5-talents-bots/`. Nothing was pushed or deployed. The live servers, the
 live profile and its databases were only read, to copy them.
 
 ## Merges (first-parent order)
@@ -95,20 +95,20 @@ Logs: `tests/run1` (all suites), `tests/run2-world` and `tests/run3-world`. Afte
 
 ## Deploy candidate
 
-`D:/ArcaneCore-lanes/_deploy/integrated-w5`, built with
-`dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false --artifacts-path D:/ArcaneCore-lanes/_deploy/integrated-w5` at
+`<deploy-root>/integrated-w5`, built with
+`dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false --artifacts-path <deploy-root>/integrated-w5` at
 6b9e80f5 (0 warnings, 0 errors), with `tools/content` copied in and a `SOURCE.txt`. This document is the only later commit.
 
 ## Rehearsal (on copies)
 
-The method is wave 4's, with scripts in `D:/ArcaneCore-lanes/_logs/w5-talents-bots/rehearsal/`.
+The method is wave 4's, with scripts in `<lanes-root>/_logs/w5-talents-bots/rehearsal/`.
 
 1. `snapshot.py` copied the live auth and characters databases through the SQLite backup API from mode=ro connections. The live world
    database had no -wal or -shm (nobody held it open), so it was copied as a file (the source's mtime, size and sidecars were unchanged,
    the SHA matched and the integrity check was ok), as `deploy_w4.py`'s own snapshot does in that case.
 2. `make_profile.py` built a profile on ports 18085/13724.
 3. `start_old.py` started the live build, `integrated-w4b`, on the copies, and all 4 enabled bots started.
-4. `deploy_w4.py --artifacts D:\ArcaneCore-lanes\_deploy\integrated-w5 --world-port 18085 --auth-port 13724` ran against that profile
+4. `deploy_w4.py --artifacts <deploy-root>\integrated-w5 --world-port 18085 --auth-port 13724` ran against that profile
    (`deploy-run1`). It shut the old World down gracefully through the operator, stopped the Realm, ran the arcane-db
    status/upgrade/check, refreshed the content, then started Realm and World from integrated-w5.
    * Result: healthy, every expected log line present, `unknown target map` 0, `not existing zone id` 0, ERROR 0, FATAL 0, WARN 10

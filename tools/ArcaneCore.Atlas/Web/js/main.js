@@ -1,6 +1,6 @@
 // Entry point: moves the access token from the URL fragment into session storage, builds the layout and starts the app.
 
-import { adoptToken, forgetToken, rememberToken } from './api.js';
+import { adoptToken, forgetToken, fragmentName, rememberToken } from './api.js';
 import { createApp } from './app.js';
 import { installHotkeys, showShortcuts } from './hotkeys.js';
 import { installDevUi } from './ui/devui.js';
@@ -80,8 +80,11 @@ const TABS = [
     { id: 'insight', label: 'Insight' },
 ];
 
-function start(token) {
+function start(token, joinName) {
     const app = createApp(token, window.location);
+    if (joinName) {
+        app.setSessionName(joinName, { remember: false });
+    }
     const stage = h('main', { class: 'stage', tabindex: 0, aria: { label: 'Map viewport. Drag to orbit, right-drag to pan, wheel to zoom.' } });
     const toasts = new Toasts(document.body);
     app.events.on('toast', (t) => toasts.show(t));
@@ -186,13 +189,14 @@ function start(token) {
 }
 
 try {
+    const joinName = fragmentName(window.location.hash);
     const token = adoptToken({
         hash: window.location.hash,
         storage: window.sessionStorage,
         clearFragment: () => window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`),
     });
     if (token) {
-        start(token);
+        start(token, joinName);
     } else {
         showGate('');
     }

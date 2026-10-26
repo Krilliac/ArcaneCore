@@ -59,7 +59,7 @@ For the build-5875 bags, bank and move-error audit, see [inventory-bags.md](inve
 
 ## Item mechanics lane (vw2/item-mechanics)
 
-Branch `claude/vw2-item-mechanics`, five commits on top of main 49448fd (load/trade/durability fixes, small handlers, timed items and area limits, spell CreateItem, ammo). Standing directive: vanilla/retail 1.12.1 as in vmangos; every rule below cites `D:\refs\vmangos` (read-only, nothing copied). Deliberate deviations are listed; every config option defaults to retail.
+Branch `claude/vw2-item-mechanics`, five commits on top of main 49448fd (load/trade/durability fixes, small handlers, timed items and area limits, spell CreateItem, ammo). Standing directive: vanilla/retail 1.12.1 as in vmangos; every rule below cites `<refs-root>\vmangos` (read-only, nothing copied). Deliberate deviations are listed; every config option defaults to retail.
 
 ### Delivered
 
@@ -149,7 +149,7 @@ The item-use request and spell start/go layouts have not been captured against a
 
 ## Economy-items lane (wave 2, 2026-10-07)
 
-Branch `claude/w2-economy-items`. vmangos is the reference (`D:\refs\vmangos`, read only); where vmangos has nothing, the cmangos trees are cited.
+Branch `claude/w2-economy-items`. vmangos is the reference (`<refs-root>\vmangos`, read only); where vmangos has nothing, the cmangos trees are cited.
 
 ### Delivered
 
@@ -176,11 +176,11 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 
 ### Optional client data (one command)
 
-`tools/content/set-optional-data.ps1 -AppSettings <appsettings.json> -DbcDirectory D:\refs\client-dbc-5875-effective [-Dump <dump>]` (or
+`tools/content/set-optional-data.ps1 -AppSettings <appsettings.json> -DbcDirectory <refs-root>\client-dbc-5875-effective [-Dump <dump>]` (or
 `refresh-world-content.ps1 ... -AppSettings <appsettings.json>`, which runs it after the content refresh) checks every file (WDBC header and
 build-5875 field count, the directory's `SHA256SUMS`, both tables present in the dump), keeps the old `appsettings.json` as a `.bak` and sets:
 
-| Key | File (D:\refs\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
+| Key | File (`<refs-root>`\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
 |---|---|---|---|
 | `ItemSets:DbcPath` | ItemSet.dbc (patch-2) | 172 sets | item set bonuses |
 | `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc (patch) | 2012 suffixes | random suffixes |

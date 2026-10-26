@@ -549,8 +549,8 @@ The creature importer now maps ClassicDB `script_texts` into the existing creatu
 
 ## References
 
-- vmangos (`D:\refs\vmangos`): `src/game/ObjectMgr.cpp` (`LoadCreatureTemplates` :1190, `LoadCreatures` :2319, game objects
+- vmangos (`<refs-root>\vmangos`): `src/game/ObjectMgr.cpp` (`LoadCreatureTemplates` :1190, `LoadCreatures` :2319, game objects
   :2527, `LoadGameObjectTemplates` :8140), `src/game/LootMgr.cpp:105`.
-- mangos-classic (`D:\refs\mangos-classic`): `sql/base/mangos.sql` (`creature.spawnMask` :722, `gameobject.spawnMask` :1935), `sql/updates/mangos/z2823_01_mangos_displayid_probability.sql`.
-- classic-db (`D:\refs\classic-db`): `Full_DB/ClassicDB_1_12_1_z2815.sql.gz` (column names of every table above, `db_version`),
+- mangos-classic (`<refs-root>\mangos-classic`): `sql/base/mangos.sql` (`creature.spawnMask` :722, `gameobject.spawnMask` :1935), `sql/updates/mangos/z2823_01_mangos_displayid_probability.sql`.
+- classic-db (`<refs-root>\classic-db`): `Full_DB/ClassicDB_1_12_1_z2815.sql.gz` (column names of every table above, `db_version`),
   `README.md`/`COPYRIGHT.md` (licensing), `LICENSE.md` (GPL v3). Read-only; nothing copied.

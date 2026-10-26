@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -25,10 +26,77 @@ public sealed class WorldMaps
 
     private readonly ILogger _logger;
 
+    private readonly WorldRuntime _world;
+
     private WorldMaps(WorldRuntime world, ILogger? logger)
     {
         _logger = logger ?? NullLogger.Instance;
+        _world = world;
         Terrain = new TerrainManager(world.Options.Maps.DataDirectory, logger) { Collision = WorldCollision.Of(world) };
+    }
+
+    /// <summary>
+    /// Start reading, on the thread pool, the terrain, vmap and navmesh tiles of the grids a player arriving at (<paramref name="x"/>,
+    /// <paramref name="y"/>) on <paramref name="mapId"/> will load (<see cref="Grid.GridContainer.LoadGridsAround"/> with
+    /// <see cref="Grid.MapOptions.GridActivationDistance"/>), so that creating them installs parsed tiles instead of reading the files inside
+    /// the tick. Asked when a teleport starts (<see cref="Teleport.TeleportService"/>):
+    /// the transfer screen or the teleport ack gives the reads their time. Only the timing moves, as with the approach prefetch
+    /// (<see cref="Grid.MapOptions.GridPrefetchDistance"/>, whose 0 turns this off too): a tile already in memory or on its way is not asked
+    /// again, an unfinished read is not waited for, and the loader then reads the file as it always did. The reads count against the
+    /// arrival budget of each tile cache (<see cref="TilePrefetchCache{T}.MaxArrivalEntries"/>), apart from the approach prefetches' budget. World thread.
+    /// </summary>
+    public void PrefetchArrival(uint mapId, float x, float y)
+    {
+        Grid.MapOptions options = _world.Options.Maps;
+        if (!(options.GridPrefetchDistance > 0) || !float.IsFinite(x) || !float.IsFinite(y))
+        {
+            return;
+        }
+
+        WorldCollision collision = WorldCollision.Of(_world);
+        ICollisionTilePrefetch? los = collision.LineOfSight as ICollisionTilePrefetch;
+        ICollisionTilePrefetch? path = ReferenceEquals(collision.Pathfinder, collision.LineOfSight) ? null : collision.Pathfinder as ICollisionTilePrefetch;
+        Grid.CellArea area = Grid.GridDefines.CalculateCellArea(x, y, options.GridActivationDistance);
+        for (int gx = area.Low.Grid.X; gx <= area.High.Grid.X; gx++)
+        {
+            for (int gy = area.Low.Grid.Y; gy <= area.High.Grid.Y; gy++)
+            {
+                (int tx, int ty) = TerrainTile.TileOf(new Grid.GridCoord(gx, gy));
+                Terrain.PrefetchArrival(mapId, tx, ty);
+                PrefetchCollisionTile(los, "LOS", mapId, tx, ty);
+                PrefetchCollisionTile(path, "pathfinder", mapId, tx, ty);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One collision service's arrival prefetch of one tile. A failed prefetch is only a lost head start (the grid's own load reports the
+    /// tile), so each service has its own guard: one failing does not skip the other. As <c>MapCollision.OnGridApproaching</c>.
+    /// </summary>
+    private void PrefetchCollisionTile(ICollisionTilePrefetch? service, string kind, uint mapId, int tileX, int tileY)
+    {
+        if (service is null)
+        {
+            return;
+        }
+
+        try
+        {
+            service.PrefetchArrival(mapId, tileX, tileY);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("collision.tile-prefetch", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
+            _logger.LogFault(
+                "world-maps",
+                ex,
+                "WorldMaps fault prefetching {Kind} tile ({TileX}, {TileY}) of map {MapId} for an arrival",
+                kind,
+                tileX,
+                tileY,
+                mapId);
+        }
     }
 
     public MapRegistry Registry { get; private set; } = MapRegistry.Default;

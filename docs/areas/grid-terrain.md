@@ -263,7 +263,7 @@ way, and it refuses an existing world unless `--replace` is given, which rewrite
 | `GridActivationDistance` | `100` | Radius around a player whose grids are loaded (`m_gridActivationDistance` = `Visibility.Distance.Continents`); an active non-player object loads only its own grid. A grid stays active while something active is within the visibility range of it (`ActiveObjectsNearGrid`). |
 | `VisibilityRelocationLowerLimit` | `10` | How far (3D) a unit must move from where its last movement-triggered visibility pass was scheduled before the next one is (`Visibility.RelocationLowerLimit`); 0 = a pass on every move. |
 | `UpdateActiveCellsOnly` | `true` | On continents, update creatures only in the cells within `GridActivationDistance` of a player or active object (`Map::UpdateCells` → `UpdateActiveCellsSynch`); false updates every creature of the loaded grids. |
-| `GridPrefetchDistance` | `200` | How far beyond `GridActivationDistance` a player looks for grids that do not exist yet, to read their terrain, vmap and navmesh tiles on the thread pool first; other objects look half this distance around themselves. 0 = off. ArcaneCore only. |
+| `GridPrefetchDistance` | `200` | How far beyond `GridActivationDistance` a player looks for grids that do not exist yet, to read their terrain, vmap and navmesh tiles on the thread pool first; other objects look half this distance around themselves. 0 = off, which also turns off the arrival prefetch (a teleport reads its destination's tiles when it starts, in a budget of its own). ArcaneCore only. |
 
 ## Reference discrepancies
 

@@ -1,7 +1,7 @@
 <Project>
 
   <!-- Central package management: every package version is pinned here, once. A PackageReference in a project carries no Version
-       (a Version attribute there is error NU1008). EF Core and the Extensions packages stay on 9.0.0 because the Pomelo
+       (a Version attribute there is error NU1008). EF Core and the Extensions packages stay on 9.0.x because the Pomelo
        MySQL/MariaDB provider (primary engine) has no .NET 11 release yet (see Directory.Build.props). Updating a package:
        docs/guide/contributing.md. Projects that must resolve versions on their own (tools/hotcode-spike, tests/hotmodule-fixtures,
        tests/ThirdParty, tools/ops/diag probes) set ManagePackageVersionsCentrally=false in their own csproj. -->
@@ -16,23 +16,23 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.FileProviders.Physical" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.FileProviders.Physical" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.21" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
-    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
     <PackageVersion Include="System.Numerics.Tensors" Version="10.0.13" />
-    <PackageVersion Include="xunit" Version="2.9.2" />
-    <PackageVersion Include="xunit.assert" Version="2.9.2" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.assert" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 
 </Project>

@@ -680,6 +680,69 @@ public sealed class DataDrivenEscortTests
     }
 
     [Fact]
+    public void Hendel_GetsHisTemplateFactionBack_WhenHeSurrendersAndEvades()
+    {
+        // mangos-classic dustwallow_marsh.cpp:602 (at 3e8597afe7) uses SetFactionTemporary(RESTORE_COMBAT_STOP | RESTORE_RESPAWN); a direct field write was never given back.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        const uint friendly = 35;
+        CreatureContent content = new([Template(entry, b => b.Faction = friendly), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI);
+            Creature sentry = Assert.Single(system.Creatures, c => c.Entry == 5184);
+            uint sentryFriendly = sentry.FactionTemplate;
+            Assert.NotEqual(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentryFriendly);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, hendel.FactionTemplate);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentry.FactionTemplate);
+            hendel.Health = hendel.MaxHealth / 10;
+            world.RunTick(100);
+            Assert.True(ai.Surrendered);
+
+            Assert.Equal(friendly, hendel.FactionTemplate); // RED on main: stays 168
+            Assert.Equal(sentryFriendly, sentry.FactionTemplate); // RED on main: stays 168 (it runs off, despawns after 4 s)
+        }
+    }
+
+    [Fact]
+    public void Hendel_AndTheSentries_AreFriendlyAgainAfterTheyDieAndRespawn()
+    {
+        // RESTORE_COMBAT_STOP fires at death and RESTORE_RESPAWN in UpdateEntry at the respawn: neither may leave faction 168 behind.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        const uint friendly = 35;
+        CreatureContent content = new([Template(entry, b => b.Faction = friendly), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            Creature sentry = Assert.Single(system.Creatures, c => c.Entry == 5184);
+            uint sentryFriendly = sentry.FactionTemplate;
+            Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI)
+                .OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentry.FactionTemplate);
+
+            foreach (Creature dead in new[] { hendel, sentry })
+            {
+                map.Combat.Kill(null, dead);
+                world.RunTick(100);
+                system.ForceRespawn(dead);
+                Assert.True(dead.IsAlive);
+            }
+
+            Assert.Equal(friendly, hendel.FactionTemplate);
+            Assert.Equal(sentryFriendly, sentry.FactionTemplate);
+        }
+    }
+
+    [Fact]
     public void Stinky_WalksToTheBogbeanAndBack_AndCreditsTheTeamQuestAt40()
     {
         // npc_stinky_ignatzAI (dustwallow_marsh.cpp at 3e8597afe7).
@@ -1053,7 +1116,31 @@ public sealed class DataDrivenEscortTests
     [Fact]
     public void Windsor_AnEvadeMidScene_KeepsTheKeepWord_AndTheGuardCheckThatCompletesTheQuest() => RunWindsorMasquerade(evadeMidScene: true);
 
-    private static void RunWindsorMasquerade(bool evadeMidScene)
+    [Fact]
+    public void Windsor_StartKeepEvent_IsIgnoredUnlessHeWaitsForTheWord()
+    {
+        // A replayed gossip select (the cached menu outlives the flag) must not start or rewind the keep scene.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
+        CreatureWaypoint first = RealPath(entry)[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            _ = AddPlayer(world, 1, first.X, first.Y);
+            Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
+            Assert.False(ai.KeepEventReady);
+
+            ai.StartKeepEvent();
+
+            Assert.Equal(-1, ai.DialogueStep); // RED on main: the dialogue starts at once
+        }
+    }
+
+    [Fact]
+    public void Windsor_AReplayedKeepStart_AndAReplayedGossipSelect_DoNotRewindTheRunningScene() => RunWindsorMasquerade(evadeMidScene: false, replayStart: true);
+
+    private static void RunWindsorMasquerade(bool evadeMidScene, bool replayStart = false)
     {
         // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
         const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
@@ -1113,6 +1200,8 @@ public sealed class DataDrivenEscortTests
             system.NearTeleport(throneGuards[0], throne.X + 8, throne.Y + 4, throne.Z, 0f);
             system.NearTeleport(throneGuards[1], throne.X + 8, throne.Y, throne.Z, 0f);
             ai.StartKeepEvent();
+            int sceneStart = ai.DialogueStep; // an absolute index into the dialogue table: where the keep scene begins
+            Assert.True(sceneStart >= 0);
             for (int elapsed = 0; elapsed < 30_000 && ai.HasEscortState(EscortAI.EscortState.Paused); elapsed += 100)
             {
                 world.RunTick(100);
@@ -1120,6 +1209,29 @@ public sealed class DataDrivenEscortTests
 
             Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
             Assert.Equal(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+            if (replayStart)
+            {
+                // The cached menu outlives the Gossip flag: replay the start by the method and by the gossip select packet's script.
+                for (int elapsed = 0; elapsed < 30_000 && ai.DialogueStep <= sceneStart; elapsed += 100)
+                {
+                    world.RunTick(100);
+                }
+
+                int step = ai.DialogueStep;
+                Assert.True(step > sceneStart, $"the keep scene never advanced past its first step (start {sceneStart}, step {step})");
+                ai.StartKeepEvent();
+                Assert.Equal(step, ai.DialogueStep);
+                NpcInfo info = new(windsor.Guid, entry, 1, NpcFlags.Gossip, windsor.MapId, windsor.X, windsor.Y, windsor.Z, 0f, true, false, false, false, 0);
+                // An eligible player (6402 rewarded, 6403 incomplete): only the spent keep word can reject the select.
+                var eligible = new ArcaneCore.Game.Quests.PlayerQuestLog(player);
+                eligible.GetOrAdd(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestStormwindRendezvous).Rewarded = true;
+                eligible.GetOrAdd(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade).Status = ArcaneCore.Game.Quests.QuestStatus.Incomplete;
+                ScriptedGossipReply reply = new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(_ => eligible)
+                    .SelectReply(player, info, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.SenderMain, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.ActionStart);
+                Assert.Equal(default, reply);
+                Assert.Equal(step, ai.DialogueStep);
+                Assert.False(ai.KeepEventReady);
+            }
 
             // The throne room: Prestor shows herself, the guards turn and fall, Bolvar kneels and the quest is done.
             Creature bolvar = Assert.Single(system.Creatures, c => c.Entry == 1748);
