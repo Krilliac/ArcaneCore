@@ -46,7 +46,7 @@ public sealed partial class SummonService
             QueueCurrentPetSave(owner);
         }
 
-        Unsummon(pet, "put away temporarily");
+        Unsummon(pet, "put away temporarily", routine: true);
         return true;
     }
 

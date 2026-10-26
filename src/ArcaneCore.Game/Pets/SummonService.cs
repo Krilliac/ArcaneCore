@@ -80,7 +80,7 @@ public sealed partial class SummonService : ISpellSummonSink
                 && (!DetachedPersistenceConfigured || DetachedPersistenceSupported))
             {
                 QueueDetachedPetSave(player);
-                Unsummon(pet, "owner logging out");
+                Unsummon(pet, "pet dismissed by the dismiss spell", routine: true);
             }
         });
     }
@@ -122,9 +122,10 @@ public sealed partial class SummonService : ISpellSummonSink
 
     /// <summary>
     /// Remove a summon from the world: the owner's pet link for a pet (vmangos Pet::Unsummon),
-    /// then the creature itself.
+    /// then the creature itself. <paramref name="routine"/> marks a put-away that comes and goes all the time (a temporary unsummon, a
+    /// dismissal): it is logged at Debug rather than Information.
     /// </summary>
-    public void Unsummon(Creature creature, string reason = "unspecified")
+    public void Unsummon(Creature creature, string reason = "unspecified", bool routine = false)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (creature.Summon is not { } links)
@@ -132,7 +133,7 @@ public sealed partial class SummonService : ISpellSummonSink
             return;
         }
 
-        LogUnsummon(creature, links, reason);
+        LogUnsummon(creature, links, reason, routine);
 
         Unit? owner = creature.GetOwner();
         Map? map = creature.Map;
@@ -153,15 +154,14 @@ public sealed partial class SummonService : ISpellSummonSink
 
     /// <summary>
     /// Every pet that goes away says why: a pet vanishing without a trace (the loyalty runaway, a leash, a dismiss) cannot otherwise be told
-    /// apart from a bug. A pet is logged at Information; a guardian, mini pet or wild summon, a temporary put-away or a logout (reason
-    /// "temporary" / "logout") and any pet of a bot owner at Debug (they come and go all the time).
+    /// apart from a bug. A pet is logged at Information; a guardian, mini pet or wild summon, a routine put-away (the caller says so, see
+    /// <see cref="Unsummon"/>) and any pet of a bot owner at Debug (they come and go all the time).
     /// </summary>
-    private void LogUnsummon(Creature creature, SummonLinks links, string reason)
+    private void LogUnsummon(Creature creature, SummonLinks links, string reason, bool routine)
     {
         uint owner = creature.OwnerGuid.Low;
         uint number = links.Charm?.PetNumber ?? 0;
-        bool routine = reason.Contains("temporar", StringComparison.OrdinalIgnoreCase) || reason.Contains("logout", StringComparison.OrdinalIgnoreCase)
-            || creature.GetOwner() is Player { Session.IsPlayerbot: true };
+        routine |= creature.GetOwner() is Player { Session.IsPlayerbot: true };
         if (links.Kind == SummonKind.Pet && !routine)
         {
             _logger.LogInformation("pet unsummoned: entry {Entry} number {PetNumber} owner {OwnerGuid} reason {Reason}", creature.Entry, number, owner, reason);

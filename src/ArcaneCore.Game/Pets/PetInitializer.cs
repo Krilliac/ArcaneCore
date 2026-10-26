@@ -27,12 +27,24 @@ internal static class PetInitializer
     /// </summary>
     public static void InitStatsForLevel(Creature pet, Unit owner, int level, PetContent content)
     {
-        pet.UnitFlags = UnitFlags.None;
+        bool hunterPet = IsHunterPet(pet, owner);
+        if (hunterPet)
+        {
+            // HUNTER_PET (Pet.cpp:1301-1304): the flags are not cleared, the abandon flag is set again, so a level-up keeps rename and abandon.
+            pet.UnitFlags |= UnitFlags.PetAbandon;
+        }
+        else
+        {
+            pet.UnitFlags = UnitFlags.None;
+        }
+
         pet.Level = (byte)Math.Clamp(level, 1, byte.MaxValue);
 
         if (FindStats(pet, owner, content, level) is { } row)
         {
-            if (row.MinDamage != 0 && row.MaxDamage != 0)
+            // A hunter pet takes only health, armor and the stats from the shared row (Pet.cpp:1409-1431): its melee damage comes from a
+            // level formula and its power type stays focus, so neither the row's damage nor its mana (1 in the imported data) is used.
+            if (!hunterPet && row.MinDamage != 0 && row.MaxDamage != 0)
             {
                 pet.SetFloat(UpdateFields.UnitFieldMindamage, row.MinDamage);
                 pet.SetFloat(UpdateFields.UnitFieldMaxdamage, row.MaxDamage);
@@ -45,8 +57,12 @@ internal static class PetInitializer
 
             pet.MaxHealth = row.Health;
             pet.SetUInt32(UpdateFields.UnitFieldBaseHealth, row.Health);
-            pet.SetUInt32(UpdateFields.UnitFieldBaseMana, row.Mana);
-            if (row.Mana > 0)
+            if (!hunterPet)
+            {
+                pet.SetUInt32(UpdateFields.UnitFieldBaseMana, row.Mana);
+            }
+
+            if (!hunterPet && row.Mana > 0)
             {
                 pet.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
                 pet.SetUInt32(UpdateFields.UnitFieldMaxpower1, row.Mana);
@@ -77,13 +93,16 @@ internal static class PetInitializer
     /// </summary>
     private static PetLevelStats? FindStats(Creature pet, Unit owner, PetContent content, int level)
     {
-        if (owner is Player { Class: Class.Hunter } && pet.Summon is { Kind: SummonKind.Pet } && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
+        if (IsHunterPet(pet, owner) && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
         {
             return shared;
         }
 
         return content.FindLevelStats(pet.Template.Entry, level);
     }
+
+    /// <summary>A hunter's permanent pet (vmangos HUNTER_PET).</summary>
+    private static bool IsHunterPet(Creature pet, Unit owner) => owner is Player { Class: Class.Hunter } && pet.Summon is { Kind: SummonKind.Pet };
 
     /// <summary>
     /// The tail of vmangos <c>Pet::InitStatsForLevel</c> (Pet.cpp:1472-1479) for every pet but a mini pet, guardians included

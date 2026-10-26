@@ -280,12 +280,18 @@ public sealed class PetFixesTests
     {
         public List<string> Lines { get; } = [];
 
+        public List<(LogLevel Level, string Line)> Entries { get; } = [];
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
+        {
+            string line = formatter(state, exception);
+            Lines.Add(line);
+            Entries.Add((logLevel, line));
+        }
     }
 
     private static PetTestKit BeastKit(CapturingLogger logger) => new(
@@ -370,5 +376,64 @@ public sealed class PetFixesTests
         Assert.Equal((byte)PetTameFailureReason.NoPetAvailable,
             Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetTameFailure).Payload[0]);
         Assert.DoesNotContain(kit.Creatures.Creatures, c => c.IsPet);
+    }
+
+    private static PetLevelStats HunterRow(uint health, uint mana)
+        => new(1, 1, health, mana, 0, 9, 11, 1, 1, 1, 1, 1);
+
+    private static async Task<(PetTestKit Kit, Player Owner, Creature Pet)> CallHunterPet(PetContent content)
+    {
+        PetTestKit kit = new([Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))], content);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 804, PetEntry, 1, 0, 50, 0, 0, 1, [], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+        kit.Cast(owner, CallPetSpell);
+        return (kit, owner, Assert.Single(kit.Creatures.Creatures));
+    }
+
+    [Fact]
+    public async Task HunterPetLevelUp_WithAManaOneStatsRow_KeepsFocusAndTheFlagsOfAHunterPet()
+    {
+        // The imported creature id 1 rows all carry mana 1; vmangos HUNTER_PET never reads it (Pet.cpp:1409-1431).
+        var (kit, owner, pet) = await CallHunterPet(new PetContent([HunterRow(700, 1)], []));
+        using (kit)
+        {
+            UnitFlags flagsBefore = pet.UnitFlags & (UnitFlags.PetRename | UnitFlags.PetAbandon);
+            Assert.True((flagsBefore & UnitFlags.PetAbandon) != 0);
+
+            kit.Service.GivePetLevel(pet, owner, 2);
+
+            Assert.Equal(PowerType.Focus, pet.PowerType);
+            Assert.Equal(0u, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+            Assert.Equal(SummonService.FocusMax, pet.GetUInt32(UpdateFields.UnitFieldMaxpower3));
+            Assert.Equal(SummonService.FocusMax, pet.GetUInt32(UpdateFields.UnitFieldPower3));
+            Assert.Equal(0u, pet.GetUInt32(UpdateFields.UnitFieldBaseMana));
+            Assert.Equal(2, pet.Level);
+            Assert.Equal(700u, pet.MaxHealth);
+            Assert.Equal(flagsBefore, pet.UnitFlags & (UnitFlags.PetRename | UnitFlags.PetAbandon));
+        }
+    }
+
+    [Fact]
+    public void DismissSpellAndTemporaryUnsummon_LogAtDebug_ButARunawayLogsAtInformation()
+    {
+        var logger = new CapturingLogger();
+        using PetTestKit kit = BeastKit(logger);
+        (Player hunter, _, Creature pet) = TameBeast(kit);
+
+        kit.Cast(hunter, DismissSpell);
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Information && e.Line.StartsWith("pet unsummoned", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Debug && e.Line.Contains("dismiss spell", StringComparison.Ordinal));
+
+        kit.Cast(hunter, CallPetSpell);
+        Assert.True(kit.Service.UnsummonPetTemporarily(hunter));
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Information && e.Line.StartsWith("pet unsummoned", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Debug && e.Line.Contains("put away temporarily", StringComparison.Ordinal));
+
+        Creature back = Assert.IsType<Creature>(kit.Service.ResummonTemporarilyUnsummonedPet(hunter));
+        kit.Service.Unsummon(back, "some other reason");
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Information && e.Line.Contains("some other reason", StringComparison.Ordinal));
     }
 }
