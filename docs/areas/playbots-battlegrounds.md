@@ -72,7 +72,7 @@ client opcode through its world handler and never waits for the shared action bu
 
 | Phase | Driven by | What happens |
 |---|---|---|
-| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most the walk's timeout (10 minutes, longer by the walk's estimated length up to 60), and given up (the master refused for the zones the walk started and failed in) when the bot gets no 10 yards closer in 3 minutes (longer for a long way; the clock stands still while the bot is attacked by a unit it may hit back; the goal follows the live master, and the best distance the watch holds moves with the goal's change of distance while its clock runs on, so a master pacing away and back from a bot that stands still is still a stall) |
+| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most the walk's timeout (10 minutes, longer by the walk's estimated length up to 60), and given up (the master refused for the zones the walk started and failed in) when the bot gets no 10 yards closer in 3 minutes (longer for a long way; the clock restarts on every tick the bot is attacked by a unit it may hit back; the goal follows the live master, and the best distance the watch holds moves with the goal's change of distance while its clock runs on, so a master pacing away and back from a bot that stands still is still a stall) |
 | `join` | the coordinator | CMSG_BATTLEMASTER_HELLO (the server answers SMSG_BATTLEFIELD_LIST), then CMSG_BATTLEMASTER_JOIN (map, instance 0, not as a group); no queue slot within 15 seconds sets the type aside for this bot for 10 minutes |
 | `queued` | the brain | the bot carries on with what it was doing; after `MaxQueueWaitMinutes` it leaves the queue (CMSG_BATTLEFIELD_PORT action 0) and sets the type aside for 10 minutes |
 | `invited` | the brain | an invitation the bot cannot answer yet (dead, between maps); answered when it can |
@@ -248,9 +248,9 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   battlemasters are reached by its elevators, which the navigation mesh does not join: the route is refused, and that battlemaster is
   left alone from the bot's zone for an hour (live: Gitrol in Silverpine Forest, 62 refusals before).
 * **Waypoint-walking battlemasters.** The walk's goal follows a living master that moved, and a master that stands still is preferred to one that
-  walks. In the imported content (classic-db z2815, world DB of 2026-10-25) only 2 of the 34 spawns of the Warsong emissary 14991 (game event 20) carry
-  spawn movement type 2 (waypoint): spawn 190500 (map 1, 9952 / 2089) and spawn 190516 (map 0, -5007 / -1180); the other 32 do not walk. 15 of the 228
-  battlemaster spawns walk waypoints. The preference and the follow cover those spawns and any other that walks.
+  walks. In classic-db z2815 (ClassicDB_1_12_1_z2815.sql.gz, table creature joined with battlemaster_entry), 2 of the 34 spawns of the Warsong
+  emissary 14991 (game event 20) have MovementType 2 (waypoint): spawn 190500 (map 1, 9952 / 2089) and spawn 190516 (map 0, -5007 / -1178); the
+  other 32 have MovementType 0. 15 of the 228 battlemaster spawns have MovementType 2. The preference and the follow cover those spawns and any other that walks.
 * **The walk's progress watch is approximate in two corners.** (1) The watch moves its best distance by the change in the goal's distance from
   the bot's current position, not from the position where the best was recorded. A bot stuck and bouncing between two points while a
   waypoint-walking master moves in step can in theory gain up to about twice the bounce width per cycle, enough over many cycles to count as
