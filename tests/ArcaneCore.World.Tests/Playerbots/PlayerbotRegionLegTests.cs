@@ -111,7 +111,7 @@ public sealed class PlayerbotRegionLegTests : IDisposable
     {
         await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
         await world.PlaceAsync(Start);
-        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes))!;
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
         PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
         Assert.Equal(0, cache.Searches);
 
@@ -144,7 +144,7 @@ public sealed class PlayerbotRegionLegTests : IDisposable
     public async Task ARebuiltGraph_DoesNotSeeTheOldGraphsRoutes_AndTheCacheIsBounded()
     {
         await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
-        NavRegionGraph first = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes))!;
+        NavRegionGraph first = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
         NavRegionGraph rebuilt = NavRegionGraph.Build(_fixture.Directory, 0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
         Assert.NotSame(first, rebuilt);
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
