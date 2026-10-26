@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
@@ -12,6 +13,30 @@ public sealed class PetStableTests
 {
     private const uint BeastEntry = 5221;
     private static readonly ObjectGuid StableMaster = ObjectGuid.WithEntry(HighGuid.Unit, 9984, 77);
+    private static readonly TimeSpan HangBound = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Stands in for the world thread: the controller's store work runs on the thread pool and posts its continuation here, and the test
+    /// runs it on its own thread while it waits (so the assertions only ever see settled state; the wait is a hang bound, not a timing).
+    /// </summary>
+    private sealed class WorldPump
+    {
+        private readonly ConcurrentQueue<Action> _posts = new();
+
+        public void Post(Action action) => _posts.Enqueue(action);
+
+        public async Task UntilAsync(Func<bool> done)
+        {
+            using CancellationTokenSource timeout = new(HangBound);
+            while (true)
+            {
+                while (_posts.TryDequeue(out Action? action)) action();
+                if (done()) return;
+                if (timeout.IsCancellationRequested) throw new TimeoutException("the stable never reached the awaited state");
+                await Task.Delay(1).ConfigureAwait(false);
+            }
+        }
+    }
 
     private sealed class MemoryStableStore : IPetStableStore
     {
@@ -19,6 +44,7 @@ public sealed class PetStableTests
         public Dictionary<byte, PersistentPetSnapshot> Stabled { get; } = [];
         public PersistentPetSnapshot? Current { get; set; }
         public bool Fail { get; set; }
+        public List<string>? Log { get; set; }
 
         public Task<PetStableState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.FromResult(new PetStableState(Slots, Stabled.Select(p => new StabledPet(p.Key, p.Value)).ToArray()));
@@ -33,6 +59,7 @@ public sealed class PetStableTests
         public Task StableAsync(int characterId, byte slot, PersistentPetSnapshot active, CancellationToken cancellationToken = default)
         {
             if (Fail) return Task.FromException(new InvalidOperationException("down"));
+            if (Log is { } log) lock (log) log.Add("stable");
             Stabled.Add(slot, active with { IsCurrent = false });
             Current = null;
             return Task.CompletedTask;
@@ -61,10 +88,11 @@ public sealed class PetStableTests
         }) with { CreatureType = SummonService.CreatureTypeBeast, TypeFlags = SummonService.TypeFlagTameable, Family = 1 },
     ]);
 
-    private static (PetStableController Stable, MemoryStableStore Store) Stable(PetTestKit kit, byte slots = 0)
+    private static (PetStableController Stable, MemoryStableStore Store, WorldPump Pump) Stable(PetTestKit kit, byte slots = 0)
     {
         var store = new MemoryStableStore { Slots = slots };
-        return (new PetStableController(kit.Service) { Store = store, IsStableMaster = (_, npc) => npc == StableMaster }, store);
+        var pump = new WorldPump();
+        return (new PetStableController(kit.Service) { Store = store, IsStableMaster = (_, npc) => npc == StableMaster, Post = pump.Post }, store, pump);
     }
 
     private static (Player Hunter, FakeSession Session) Hunter(PetTestKit kit)
@@ -84,15 +112,23 @@ public sealed class PetStableTests
     private static StableResult LastResult(FakeSession session)
         => (StableResult)session.Sent.Last(p => p.Opcode == WorldOpcode.SmsgStableResult).Payload.Single();
 
+    /// <summary>Waits for the stable's answer to the request just made (the caller cleared the session before it) and returns it.</summary>
+    private static async Task<StableResult> ResultAsync(WorldPump pump, FakeSession session)
+    {
+        await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgStableResult));
+        return LastResult(session);
+    }
+
     [Fact]
-    public void Prefetch_ReservesStabledPetNumbers_SoANewTameDoesNotReuseThem()
+    public async Task Prefetch_ReservesStabledPetNumbers_SoANewTameDoesNotReuseThem()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, MemoryStableStore store) = Stable(kit, slots: 1);
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 1);
         (Player hunter, _) = Hunter(kit);
         store.Stabled[1] = new PersistentPetSnapshot(1, 500, BeastEntry, 20, 0, 100, 0, 0, 1, [], []);
 
         stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null);
         Creature pet = Tame(kit, hunter);
 
         Assert.True(pet.Summon!.Charm!.PetNumber > 500);
@@ -100,58 +136,67 @@ public sealed class PetStableTests
     }
 
     [Fact]
-    public void BuySlot_ChargesTheDbcPrice_UpToTwoSlots()
+    public async Task BuySlot_ChargesTheDbcPrice_UpToTwoSlots()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, MemoryStableStore store) = Stable(kit);
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, FakeSession session) = Hunter(kit);
         int saves = 0;
         stable.MoneyChanged += _ => saves++;
         hunter.Money = 50_400;
 
+        session.Clear();
         stable.HandleBuySlot(hunter, StableMaster);
-        Assert.Equal(StableResult.SuccessBuySlot, LastResult(session));
+        Assert.Equal(StableResult.SuccessBuySlot, await ResultAsync(pump, session));
         Assert.Equal((49_900u, (byte)1, 1), (hunter.Money, store.Slots, saves));
 
+        session.Clear();
         stable.HandleBuySlot(hunter, StableMaster);
-        Assert.Equal(StableResult.ErrMoney, LastResult(session)); // the second slot is 5 gold
+        Assert.Equal(StableResult.ErrMoney, await ResultAsync(pump, session)); // the second slot is 5 gold
         Assert.Equal(49_900u, hunter.Money);
 
         hunter.Money = 50_000;
+        session.Clear();
         stable.HandleBuySlot(hunter, StableMaster);
-        Assert.Equal((StableResult.SuccessBuySlot, 0u, (byte)2), (LastResult(session), hunter.Money, store.Slots));
+        Assert.Equal(StableResult.SuccessBuySlot, await ResultAsync(pump, session));
+        Assert.Equal((0u, (byte)2), (hunter.Money, store.Slots));
 
         hunter.Money = 1_000_000;
+        session.Clear();
         stable.HandleBuySlot(hunter, StableMaster);
-        Assert.Equal((StableResult.ErrStable, 1_000_000u), (LastResult(session), hunter.Money));
+        Assert.Equal(StableResult.ErrStable, await ResultAsync(pump, session));
+        Assert.Equal(1_000_000u, hunter.Money);
     }
 
     [Fact]
-    public void BuySlot_GivesTheMoneyBack_WhenTheSlotIsNotSaved()
+    public async Task BuySlot_GivesTheMoneyBack_WhenTheSlotIsNotSaved()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, MemoryStableStore store) = Stable(kit);
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, FakeSession session) = Hunter(kit);
         hunter.Money = 500;
         store.Fail = true;
 
+        session.Clear();
         stable.HandleBuySlot(hunter, StableMaster);
 
-        Assert.Equal((StableResult.ErrStable, 500u, (byte)0), (LastResult(session), hunter.Money, store.Slots));
+        Assert.Equal(StableResult.ErrStable, await ResultAsync(pump, session));
+        Assert.Equal((500u, (byte)0), (hunter.Money, store.Slots));
     }
 
     [Fact]
-    public void StableThenUnstable_RoundTripsTheSummonedPet()
+    public async Task StableThenUnstable_RoundTripsTheSummonedPet()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, MemoryStableStore store) = Stable(kit, slots: 1);
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 1);
         (Player hunter, FakeSession session) = Hunter(kit);
         Creature pet = Tame(kit, hunter);
         uint number = pet.Summon!.Charm!.PetNumber;
 
+        session.Clear();
         stable.HandleStable(hunter, StableMaster);
 
-        Assert.Equal(StableResult.SuccessStable, LastResult(session));
+        Assert.Equal(StableResult.SuccessStable, await ResultAsync(pump, session));
         Assert.True(hunter.PetGuid.IsEmpty);
         Assert.Equal(number, store.Stabled[1].PetNumber);
         Assert.False(kit.Service.TryGetCachedCurrentPet(hunter, out _));
@@ -167,45 +212,51 @@ public sealed class PetStableTests
         Assert.Equal(BeastEntry, BitConverter.ToUInt32(list, 14));
         Assert.Equal((byte)2, list[^1]);
 
+        session.Clear();
         stable.HandleUnstable(hunter, StableMaster, number);
 
-        Assert.Equal(StableResult.SuccessUnstable, LastResult(session));
+        Assert.Equal(StableResult.SuccessUnstable, await ResultAsync(pump, session));
         Assert.False(hunter.PetGuid.IsEmpty);
         Assert.Empty(store.Stabled);
         Assert.Equal(number, kit.Service.CaptureCurrentPet(hunter)!.PetNumber);
     }
 
     [Fact]
-    public void Unstable_IsRefusedWhileAPetIsOut_ButSwapTradesPlaces()
+    public async Task Unstable_IsRefusedWhileAPetIsOut_ButSwapTradesPlaces()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, MemoryStableStore store) = Stable(kit, slots: 2);
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 2);
         (Player hunter, FakeSession session) = Hunter(kit);
         uint first = Tame(kit, hunter).Summon!.Charm!.PetNumber;
+        session.Clear();
         stable.HandleStable(hunter, StableMaster);
+        Assert.Equal(StableResult.SuccessStable, await ResultAsync(pump, session));
         uint second = Tame(kit, hunter).Summon!.Charm!.PetNumber;
 
+        session.Clear();
         stable.HandleUnstable(hunter, StableMaster, first);
-        Assert.Equal(StableResult.ErrStable, LastResult(session));
+        Assert.Equal(StableResult.ErrStable, await ResultAsync(pump, session));
         Assert.Equal(second, kit.Service.CaptureCurrentPet(hunter)!.PetNumber);
 
+        session.Clear();
         stable.HandleSwap(hunter, StableMaster, first);
 
-        Assert.Equal(StableResult.SuccessUnstable, LastResult(session));
+        Assert.Equal(StableResult.SuccessUnstable, await ResultAsync(pump, session));
         Assert.Equal(first, kit.Service.CaptureCurrentPet(hunter)!.PetNumber);
         Assert.Equal(second, store.Stabled[1].PetNumber);
     }
 
     [Fact]
-    public void Stable_IsRefused_WithoutAFreeSlotOrAStableMaster()
+    public async Task Stable_IsRefused_WithoutAFreeSlotOrAStableMaster()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, _) = Stable(kit, slots: 0);
+        (PetStableController stable, _, WorldPump pump) = Stable(kit, slots: 0);
         (Player hunter, FakeSession session) = Hunter(kit);
         Tame(kit, hunter);
 
+        session.Clear();
         stable.HandleStable(hunter, StableMaster);
-        Assert.Equal(StableResult.ErrStable, LastResult(session));
+        Assert.Equal(StableResult.ErrStable, await ResultAsync(pump, session));
         Assert.False(hunter.PetGuid.IsEmpty);
 
         session.Clear();
@@ -214,25 +265,114 @@ public sealed class PetStableTests
     }
 
     [Fact]
-    public void TheOwnGuid_IsAStableMaster_OnlyAfterTheGmCommand()
+    public async Task TheOwnGuid_IsAStableMaster_OnlyAfterTheGmCommand()
     {
         using PetTestKit kit = Kit();
-        (PetStableController stable, _) = Stable(kit, slots: 1);
+        (PetStableController stable, _, WorldPump pump) = Stable(kit, slots: 1);
         (Player hunter, FakeSession session) = Hunter(kit);
         Tame(kit, hunter);
 
+        session.Clear();
         stable.HandleStable(hunter, hunter.Guid);
-        Assert.Equal(StableResult.ErrStable, LastResult(session));
+        Assert.Equal(StableResult.ErrStable, LastResult(session)); // refused before any store work
         Assert.False(hunter.PetGuid.IsEmpty);
 
+        session.Clear();
         stable.OpenAsGm(hunter);
-        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.MsgListStabledPets);
+        await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.MsgListStabledPets));
+        session.Clear();
         stable.HandleStable(hunter, hunter.Guid);
-        Assert.Equal(StableResult.SuccessStable, LastResult(session));
+        Assert.Equal(StableResult.SuccessStable, await ResultAsync(pump, session));
 
         stable.Forget(1);
         session.Clear();
         stable.HandleBuySlot(hunter, hunter.Guid);
         Assert.Equal(StableResult.ErrStable, LastResult(session));
     }
+
+    [Fact]
+    public async Task Stable_BehindAGatedSave_SettlesInOrder_AndTheNextTameIsCached()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 1);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        List<string> log = [];
+        store.Log = log;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Service.SavePersistence = async (_, _) =>
+        {
+            lock (log) log.Add("save-begin");
+            entered.TrySetResult();
+            await gate.Task.ConfigureAwait(false);
+            lock (log) log.Add("save-end");
+        };
+
+        uint first = Tame(kit, hunter).Summon!.Charm!.PetNumber; // queues the gated save
+        await entered.Task.WaitAsync(HangBound);
+        session.Clear();
+        stable.HandleStable(hunter, StableMaster); // its stable load queues behind the gated save
+        stable.HandleStable(hunter, StableMaster); // refused at once: the first request is still in flight
+        Assert.Equal([StableResult.ErrStable], Results(session));
+        Assert.False(hunter.PetGuid.IsEmpty);
+        Assert.Empty(store.Stabled);
+
+        gate.SetResult();
+        await pump.UntilAsync(() => Results(session).Count == 2);
+
+        Assert.Equal([StableResult.ErrStable, StableResult.SuccessStable], Results(session));
+        Assert.Equal(["save-begin", "save-end", "stable"], log);
+        Assert.True(hunter.PetGuid.IsEmpty);
+        Assert.Equal(first, store.Stabled[1].PetNumber);
+        Assert.False(kit.Service.TryGetCachedCurrentPet(hunter, out _));
+
+        uint second = Tame(kit, hunter).Summon!.Charm!.PetNumber;
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(HangBound);
+        Assert.NotEqual(first, second);
+        Assert.True(kit.Service.TryGetCachedCurrentPet(hunter, out PersistentPetSnapshot cached));
+        Assert.Equal(second, cached.PetNumber);
+        Assert.Equal(first, Assert.Single(stable.CachedState(1)!.Pets).Pet.PetNumber);
+    }
+
+    [Fact]
+    public async Task FailedAbandonDelete_IsNotRetriedOverAPetUnstabledAfterIt()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit, slots: 1);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        PersistentPetSnapshot dead = new(1, 500, BeastEntry, 20, 0, 0, 0, 0, 1, [], []); // health 0: comes out dismissed, not summoned
+        store.Stabled[1] = dead with { IsCurrent = false };
+
+        int deletesAfterRecovery = 0;
+        bool storageDown = true;
+        kit.Service.DeletePersistence = (_, _) =>
+        {
+            if (Volatile.Read(ref storageDown)) return Task.FromException(new IOException("database is locked"));
+            Interlocked.Increment(ref deletesAfterRecovery);
+            store.Current = null; // what the store does: DeleteAsync removes every row of the character
+            return Task.CompletedTask;
+        };
+
+        Creature abandoned = Tame(kit, hunter);
+        kit.Service.QueueDeletePet(hunter);
+        kit.Service.Unsummon(abandoned);
+        await Assert.ThrowsAsync<IOException>(() => kit.Service.FlushCharacterAsync(1)).WaitAsync(HangBound); // the delete stays owed
+
+        session.Clear();
+        stable.HandleUnstable(hunter, StableMaster, 500);
+        Assert.Equal(StableResult.SuccessUnstable, await ResultAsync(pump, session));
+        Assert.NotNull(store.Current);
+
+        Volatile.Write(ref storageDown, false);
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(HangBound); // the barrier that used to delete the unstabled pet
+        await kit.Service.StopAsync().WaitAsync(HangBound);
+
+        Assert.Equal(0, Volatile.Read(ref deletesAfterRecovery));
+        Assert.NotNull(store.Current);
+        Assert.True(kit.Service.TryGetCachedCurrentPet(hunter, out PersistentPetSnapshot cached));
+        Assert.Equal(500u, cached.PetNumber);
+    }
+
+    private static List<StableResult> Results(FakeSession session)
+        => [.. session.Sent.Where(p => p.Opcode == WorldOpcode.SmsgStableResult).Select(p => (StableResult)p.Payload.Single())];
 }

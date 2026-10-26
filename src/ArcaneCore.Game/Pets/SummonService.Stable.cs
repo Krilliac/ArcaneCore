@@ -18,8 +18,13 @@ public sealed partial class SummonService
         }
     }
 
-    /// <summary>Run <paramref name="write"/> after every earlier pet write of the character and before any later one.</summary>
-    public async Task<T> QueueSerializedWriteAsync<T>(int characterId, Func<CancellationToken, Task<T>> write)
+    /// <summary>
+    /// Run <paramref name="write"/> after every earlier pet write of the character and before any later one. When
+    /// <paramref name="replacedCurrentRow"/> says the finished write replaced or removed the character's character_pet row (a stable or
+    /// unstable), a failed abandon delete still owed for that row is cancelled: the store deletes by character, so running it later would
+    /// destroy the pet the stable just wrote.
+    /// </summary>
+    public async Task<T> QueueSerializedWriteAsync<T>(int characterId, Func<CancellationToken, Task<T>> write, Func<T, bool>? replacedCurrentRow = null)
     {
         ArgumentNullException.ThrowIfNull(write);
         Task prior;
@@ -44,6 +49,10 @@ public sealed partial class SummonService
             }
 
             T result = await write(CancellationToken.None).ConfigureAwait(false);
+            if (replacedCurrentRow?.Invoke(result) == true)
+            {
+                lock (_cacheGate) _failedDeletes.Remove(characterId);
+            }
             done.SetResult();
             return result;
         }
