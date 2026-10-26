@@ -10844,12 +10844,12 @@ World.GmCommands.RetailLevels = true
 
 #
 #    World.GmCommands.SecurityMap
-#        Description: The retail account level (vmangos AccountTypes,
-#                     D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1,
-#                     TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6,
-#                     CONSOLE 7) each stored AccountSecurity stands for. ArcaneCore stores four
-#                     levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored
-#                     level onto them (an operator may remap, e.g. GameMaster=4).
+#        Description: The retail account level (vmangos AccountTypes, vmangos@0e3ff01
+#                     src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER
+#                     3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored
+#                     AccountSecurity stands for. ArcaneCore stores four levels, so the retail
+#                     levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an
+#                     operator may remap, e.g. GameMaster=4).
 #        Type: Dictionary<AccountSecurity, byte>
 #        Default: Player = 0; Moderator = 1; GameMaster = 3; Administrator = 6
 #        Allowed: a map: one key per entry name; each value is a whole number, 0 to 255
@@ -18925,7 +18925,7 @@ World.Social.MaxJoinedChannels = 0
 #
 #    World.Social.OfflineLeaderDelaySeconds
 #        Description: Seconds before an offline group leader yields to an online member. Zero
-#                     disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072
+#                     disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072
 #                     defaults to 300 seconds.
 #        Type: int
 #        Default: 300

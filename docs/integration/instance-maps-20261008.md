@@ -1,6 +1,6 @@
 # Instance maps: every map and area in the world database (wave 4, 2026-10-08)
 
-Lane `claude/w4-instance-maps`, from `08ea5ff6` (main, live). Logs: `D:/ArcaneCore-lanes/_logs/w4-instance-maps/`. No schema change (the
+Lane `claude/w4-instance-maps`, from `08ea5ff6` (main, live). Logs: `<lanes-root>/_logs/w4-instance-maps/`. No schema change (the
 reserved world 42 is unused); nothing was pushed or deployed; the live databases and servers were only read.
 
 ## The problem
@@ -120,10 +120,10 @@ World test suites but have not been tried on the live data. Watch for them after
 ## Data
 
 Map.dbc (44 maps, sha256 `4bb6b538...73654245`) and AreaTable.dbc (1081 areas, `ac4c33c2...0418a3528`) are not in
-`D:/refs/client-dbc-5875-effective`. They are copied (not re-extracted) from the 2026-10-05 effective set
+`<refs-root>/client-dbc-5875-effective`. They are copied (not re-extracted) from the 2026-10-05 effective set
 (`playable-content-20261005/DBFilesClient-5875`, whose `effective-dbc-candidate.json` records both from patch-2.MPQ with these hashes)
-into `D:/ArcaneCore-lanes/w4-instance-maps-data/client-dbc-5875-effective/` together with the three DBCs of the refs directory and a
-`SHA256SUMS` for all five. Adding the two files to `D:/refs/client-dbc-5875-effective` was not done from this lane (a shared reference
+into `<lanes-root>/w4-instance-maps-data/client-dbc-5875-effective/` together with the three DBCs of the refs directory and a
+`SHA256SUMS` for all five. Adding the two files to `<refs-root>/client-dbc-5875-effective` was not done from this lane (a shared reference
 directory); see the deploy steps.
 
 ## Deploy
@@ -132,9 +132,9 @@ The world schema does not change. The refresh-world-content script now needs Map
 
 1. Put Map.dbc and AreaTable.dbc where the refresh reads them. Until then the wave-3 refresh command fails before it writes anything
    (fail-closed). Recommended, and durable: copy `Map.dbc` and `AreaTable.dbc` from
-   `D:\ArcaneCore-lanes\w4-instance-maps-data\client-dbc-5875-effective` into `D:\refs\client-dbc-5875-effective` and append their two
-   lines from that directory's `SHA256SUMS` (needs Nathan's approval: a shared reference directory). The alternative, passing
-   `-DbcDirectory D:\ArcaneCore-lanes\w4-instance-maps-data\client-dbc-5875-effective` (`deploy_w3.py --dbc-dir` the same; it also sets
+   `<lanes-root>\w4-instance-maps-data\client-dbc-5875-effective` into `<refs-root>\client-dbc-5875-effective` and append their two
+   lines from that directory's `SHA256SUMS` (needs the maintainer's approval: a shared reference directory). The alternative, passing
+   `-DbcDirectory <lanes-root>\w4-instance-maps-data\client-dbc-5875-effective` (`deploy_w3.py --dbc-dir` the same; it also sets
    `GameObjects:TransportAnimationDbcPath` from that directory, an identical file), works but points production at a lane folder that
    may be cleaned up.
 2. Run the refresh as before (World stopped). Expected: four "matches SHA256SUMS" lines, "Map.dbc: 44 map(s), AreaTable.dbc: 1081

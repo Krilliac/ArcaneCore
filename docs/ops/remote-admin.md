@@ -69,7 +69,7 @@ higher security, and it cannot run Console-only commands. Scripts that need thos
 ## Example
 
 ```text
-$ python tools/botctl/ra.py --token-file D:\ArcaneCore-live\bin\ra-token.txt ".server info" ".botctl list"
+$ python tools/botctl/ra.py --token-file <live-home>\bin\ra-token.txt ".server info" ".botctl list"
 ```
 
 Raw session (`>` is what you send):

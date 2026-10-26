@@ -1,6 +1,6 @@
 # Area: ranged combat and haste (wave 4, lane "ranged-combat")
 
-Branch `claude/vw5-ranged-combat`, based on the verified integration branch `claude/vw4-integration` at 7313b9e (waves 1-3). Standing directive: retail 1.12.1 as in vmangos, mechanics and data; every deviation sits behind a config option that defaults to retail. References are read-only (`D:\refs\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`); nothing was copied. No Characters, World or Auth schema was touched: **stores exercised: none**, no schema constant, no provider-aware (SQLite/MariaDB/PostgreSQL) theory was needed.
+Branch `claude/vw5-ranged-combat`, based on the verified integration branch `claude/vw4-integration` at 7313b9e (waves 1-3). Standing directive: retail 1.12.1 as in vmangos, mechanics and data; every deviation sits behind a config option that defaults to retail. References are read-only (`<refs-root>\vmangos`, `mangos-classic`, `wow_messages`, `classic-db`); nothing was copied. No Characters, World or Auth schema was touched: **stores exercised: none**, no schema constant, no provider-aware (SQLite/MariaDB/PostgreSQL) theory was needed.
 
 The hunter lane (wave 2) stays documented in `docs/areas/hunter.md` (corrected by this lane: classic-db `spell_template` is a full Spell.dbc dump and Throw is not an auto-repeat spell).
 

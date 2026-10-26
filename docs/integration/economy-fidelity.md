@@ -1,6 +1,6 @@
 # Economy fidelity (wave 3)
 
-Brings the economy feature ([economy](economy.md)) closer to vanilla 1.12.1 as implemented by vmangos, the primary reference for this lane (`D:\refs\vmangos`, GPL, read for verification only; nothing copied). Every behavior below is re-implemented from the cited lines. Where a deviation is deliberate it sits behind an `Economy` option whose default is the vmangos value. No store method, query, index or schema version changed: the settlement contract of [economy](economy.md) is untouched.
+Brings the economy feature ([economy](economy.md)) closer to vanilla 1.12.1 as implemented by vmangos, the primary reference for this lane (`<refs-root>\vmangos`, GPL, read for verification only; nothing copied). Every behavior below is re-implemented from the cited lines. Where a deviation is deliberate it sits behind an `Economy` option whose default is the vmangos value. No store method, query, index or schema version changed: the settlement contract of [economy](economy.md) is untouched.
 
 Note on the reference: vmangos and mangos-classic are emulators, not the retail client. Two defaults (expired money-only letters are deleted, a letter with attachments can be deleted) follow the emulators and are listed as decisions for the developer.
 
@@ -28,7 +28,7 @@ Note on the reference: vmangos and mangos-classic are emulators, not the retail 
 
 | Item | Why |
 | --- | --- |
-| Auction house identity (houses 1-7 from the auctioneer's faction template, team pools, `AuctionHouse.dbc` reader, `AllowCrossTeamAuction`) | Large cross-cutting change: every house comparison, the NPC contract (`NpcInfo.FactionTemplateId`, shared file) and a DBC the references do not contain. No 1.12.1 `AuctionHouse.dbc` exists under `D:\refs`, so the percentages (15/5, 75/15) remain unverified and were not changed. Needs a developer-supplied DBC. |
+| Auction house identity (houses 1-7 from the auctioneer's faction template, team pools, `AuctionHouse.dbc` reader, `AllowCrossTeamAuction`) | Large cross-cutting change: every house comparison, the NPC contract (`NpcInfo.FactionTemplateId`, shared file) and a DBC the references do not contain. No 1.12.1 `AuctionHouse.dbc` exists under `<refs-root>`, so the percentages (15/5, 75/15) remain unverified and were not changed. Needs a developer-supplied DBC. |
 | Unsold-expiry owner notification parity | The outbid and cancelled-to-bidder notices are delivered (above). The expiry path still sends SMSG_AUCTION_REMOVED_NOTIFICATION to the seller, whose first field vmangos writes as the auction id and wow_messages as the item entry (the writer follows wow_messages); not verified against a client. |
 | Usable filter with `CanUseItem` and known-recipe hiding | The usable callback exists; the item-requirements primitive is not wired into this feature. (The bidder-list outbid ids are delivered, above.) |
 | Suffix name search | The random property id is generated and persisted (docs/areas/items.md, "Economy-items lane") and every economy packet writes it; build 5875 has no random suffixes, so the suffix factor (property seed) is always 0. Searching listings by the "of the …" suffix text needs the client's localized ItemRandomProperties names. |

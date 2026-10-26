@@ -6,7 +6,7 @@ Logs in (token or account), runs commands in automation mode and prints one JSON
 Exit code: 0 when every command succeeded, 1 when one failed, 2 on a connection or login problem.
 
 Examples:
-  ra.py --token-file D:/ArcaneCore-live/bin/ra-token.txt ".botctl list" ".botctl take Alice"
+  ra.py --token-file ra-token.txt ".botctl list" ".botctl take Alice"
   ra.py --token-file ... --script steps.botctl --stop-on-error     # one command per line, '#' comments
   ra.py --token-file ... --stream Alice --seconds 60                # print the bot's #event lines
   ra.py --user ADMIN --password secret ".server info"

@@ -125,7 +125,7 @@ Risks:
 
 ## 6. Decisions
 
-Decided by Nate on 2026-10-10:
+Decided by the maintainer on 2026-10-10:
 1. **One build per realm.** Mixed-build realms aren't planned (a realm carries `allowed_builds` with exactly one build).
 2. **Builds:** 5875, 8606 and 12340 only.
 3. **Aura model:** one combined logical aura enum, a superset of all three versions, with a per-build wire mapping.
@@ -135,7 +135,7 @@ Decided by Nate on 2026-10-10:
 7. **Priority:** S0 through S2 now. S3 and later are on hold.
 8. **Default `realm.max_expansion`:** 0 (classic).
 
-Decisions 4 and 6 were written on 2026-10-10, from the survey below and Nate's go-ahead.
+Decisions 4 and 6 were written on 2026-10-10, from the survey below and the maintainer's go-ahead.
 
 ### 6.1 Content source per expansion (decision 4)
 

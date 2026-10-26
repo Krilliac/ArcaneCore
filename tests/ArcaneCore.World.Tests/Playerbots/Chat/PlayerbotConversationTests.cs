@@ -125,7 +125,7 @@ public sealed class PlayerbotConversationTests
         var topic = (ConversationTopic)topicValue;
         BotChatFacts facts = ChatSamples.FullFacts() with { Drink = 12, Instance = null };
         ConversationSide a = Side("Chatbot", facts: facts, quest: "Wolves Across the Border", ding: "21", loot: "Cruel Barb", boss: "Edwin VanCleef", died: true);
-        ConversationSide b = Side("Nathan", facts: facts, quest: "Wolves Across the Border", loot: "Smelting Pants");
+        ConversationSide b = Side("Testplayer", facts: facts, quest: "Wolves Across the Border", loot: "Smelting Pants");
         ConversationScript script = PlayerbotConversationScripts.Script(topic, a, b, sameGroup: true, maxLines: 6)!;
         Assert.NotNull(script);
         var botChatTopic = new BotChatTopic("convo", string.Empty, script.Values, string.Empty);

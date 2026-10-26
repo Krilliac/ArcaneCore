@@ -13,7 +13,7 @@ public sealed class BackupException(string message) : Exception(message);
 /// How to back a database up before an upgrade. No external process is ever started and no
 /// password is ever put into text: a MariaDB/MySQL or PostgreSQL backup is a command line for the
 /// operator to run, with the password named as an environment variable to set (the way
-/// classic-db's InstallFullDB.sh passes MYSQL_PWD, D:\refs\classic-db\InstallFullDB.sh:2196-2248,
+/// classic-db's InstallFullDB.sh passes MYSQL_PWD, classic-db InstallFullDB.sh:2196-2248,
 /// and runs <c>mysqldump --quick --single-transaction --order-by-primary</c>). A SQLite database
 /// is copied with <c>VACUUM INTO</c>, which writes a consistent snapshot even while the file is in use.
 /// </summary>
