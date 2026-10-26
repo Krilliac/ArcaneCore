@@ -96,7 +96,7 @@ Dump the three schemas on the old host, then restore them into the container **b
 ```sh
 mariadb-dump -u USER -p --single-transaction --routines --events --databases arcanecore_auth arcanecore_characters arcanecore_world > arcanecore.sql
 docker compose -f docker-compose.prod.yml up -d arcane-database
-docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -uroot' < arcanecore.sql
+docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'export MYSQL_PWD="$MARIADB_ROOT_PASSWORD"; exec mariadb -uroot' < arcanecore.sql
 docker compose -f docker-compose.prod.yml up -d
 ```
 
