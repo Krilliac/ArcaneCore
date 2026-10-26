@@ -318,7 +318,7 @@ public sealed class GmMovementCheatTests
             await SayAsync(gm, on);
         }
 
-        await gm.CollectAsync();
+        await gm.CollectRepliesAsync();
         await SayAsync(gm, ".cheat status");
         string[] expected = ["Cheats active on Movegm:", "- Fly", "- God", "- Fixed Z", "- Feather fall"];
         foreach (string line in expected)
@@ -357,7 +357,7 @@ public sealed class GmMovementCheatTests
     }
 
     [Fact]
-    public async Task AFarTeleport_EndsFlyAndFixedZ_ButANearOneKeepsThem()
+    public async Task AFarTeleport_EndsFlyAndFixedZ_OnlyAfterArrival_ButANearOneKeepsThem()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await EnterGmAsync(host);
@@ -377,7 +377,38 @@ public sealed class GmMovementCheatTests
             Assert.True(teleports.TeleportTo(p, p.MapId, p.X, p.Y, p.Z, p.Orientation, TeleportOptions.ForceFar));
         });
         await gm.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        Assert.Equal(PlayerCheats.Fly | PlayerCheats.FixedZ | PlayerCheats.NoCooldown, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+
+        await gm.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Movegm")?.Map is not null, "the player to arrive in the world");
         Assert.Equal(PlayerCheats.NoCooldown, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+    }
+
+    [Fact]
+    public async Task AFarTeleport_ThatBailsOutBeforeTheTransfer_KeepsFlyAndFixedZCheats()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await EnterGmAsync(host);
+        await gm.CollectAsync();
+        Guid op = Guid.NewGuid();
+        bool deferredWorkRan = false;
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Movegm")!;
+            p.Cheats = PlayerCheats.Fly | PlayerCheats.FixedZ | PlayerCheats.NoCooldown;
+            TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(p, p.MapId, p.X, p.Y, p.Z, p.Orientation, TeleportOptions.ForceFar));
+            Assert.True(p.BeginQuestSettlement(op));
+            // The far teleport's ExecuteTeleportFar sits in the map's after-update list. This marker is queued behind it on the same list, so
+            // once it has run the map update has passed and ExecuteTeleportFar has run (and, with the settlement pending, bailed out).
+            p.Map!.RunAfterUpdate(() => deferredWorkRan = true);
+        });
+
+        await host.WaitForWorldAsync(() => Volatile.Read(ref deferredWorkRan), "a map update to run the deferred far teleport");
+        Assert.Equal(TeleportStage.FarScheduled, await host.PlayerStateAsync("Movegm", p => host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.StageOf(p)));
+        Assert.NotNull(await host.PlayerStateAsync("Movegm", p => p.Map));
+        Assert.Equal(PlayerCheats.Fly | PlayerCheats.FixedZ | PlayerCheats.NoCooldown, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+        Assert.DoesNotContain(await gm.CollectAsync(), packet => packet.Opcode is WorldOpcode.SmsgTransferPending or WorldOpcode.SmsgNewWorld);
     }
 
     [Fact]
@@ -559,6 +590,7 @@ public sealed class GmMovementCheatTests
         // A heartbeat, not MSG_MOVE_JUMP: a jump ends fly mode (MovementCheats.EndFlyOnJump), and this row is about a fall while the cheat is still on.
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping, 100));
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping | MovementFlags.FallingFar, 80, 1500));
+        await client.CollectThroughBarrierAsync();
         Assert.Equal(cheat, await host.PlayerStateAsync("Faller", p => p.Cheats));
         await client.SendAsync(WorldOpcode.MsgMoveFallLand, FallBlock(MovementFlags.None, 60, 3000));
         byte[] log = await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog);
