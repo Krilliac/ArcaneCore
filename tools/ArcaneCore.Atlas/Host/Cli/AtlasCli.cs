@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Console;
 namespace ArcaneCore.Atlas.Host.Cli;
 
 /// <summary>
-/// The verbs of <c>arcane-atlas</c>: <c>serve</c>, <c>ctl</c>, <c>run</c>, <c>script</c>, <c>mcp</c>, <c>layers</c> and <c>help</c>.
+/// The verbs of <c>arcane-atlas</c>: <c>serve</c>, <c>ctl</c>, <c>url</c>, <c>run</c>, <c>script</c>, <c>mcp</c>, <c>layers</c> and <c>help</c>.
 /// Exit codes: 0 success, 1 a command (or the environment it needs) failed, 2 usage error. Command output is one JSON document
 /// per command on standard output; diagnostics go to standard error.
 /// Stateless: every input comes from the <see cref="CliEnvironment"/>, so verbs can run side by side in one process.
@@ -39,6 +39,10 @@ public static class AtlasCli
                   Operator commands (public.status, public.sessions, public.kick, public.revoke) are read from standard input.
           ctl     [--pid N] [--compact] <command> [key=value ...] [--json OBJECT|-]
                   Send one command to a running serve instance (found through its discovery file).
+          url     [--pid N] [--name NAME]
+                  Print {"pid":N,"url":"http://127.0.0.1:PORT/#t=TOKEN[&name=NAME]"}: the address that opens the UI of a running serve instance
+                  (found through its discovery file; no network call). With --name the browser session joins under that display name.
+                  The URL contains the instance's token: treat it as a secret, anyone who has it can drive the instance.
           run     [--data DIR] [--client DIR] [--compact] [--log-level LEVEL] [--log-file PATH] <command> [key=value ...] [--json OBJECT|-]
                   Run one command headless: no UI and no server; captures use the CPU renderer.
           script  [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH] <file.jsonl|->
@@ -91,6 +95,7 @@ public static class AtlasCli
             {
                 "serve" => await ServeAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "ctl" => await CtlAsync(rest, environment, cancellationToken).ConfigureAwait(false),
+                "url" => Url(rest, environment),
                 "run" => await RunVerbAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "script" => await ScriptAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "mcp" => await McpAsync(rest, environment, cancellationToken).ConfigureAwait(false),
@@ -295,6 +300,26 @@ public static class AtlasCli
         DiscoveryRecord record = ResolveInstance(parsed, environment, required: true)!;
         using var client = new RemoteCommandClient(record, CommandOrigin.Cli);
         return await ExecuteOneAsync(client, command, commandArgs, parsed.Has("--compact"), environment, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>url</c>: the browser address of the running instance, from its discovery file (the same lookup as <c>ctl</c>), as one JSON line.
+    /// Makes no request. The address holds the token the discovery file already holds for this user.
+    /// </summary>
+    private static int Url(IReadOnlyList<string> args, CliEnvironment environment)
+    {
+        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--pid"] = true, ["--name"] = true });
+        RejectPositionals(parsed, "url");
+        string? name = parsed.Value("--name");
+        if (parsed.Has("--name") && string.IsNullOrWhiteSpace(name))
+        {
+            throw new UsageException("--name needs a display name");
+        }
+
+        DiscoveryRecord record = ResolveInstance(parsed, environment, required: true)!;
+        var json = new JsonObject { ["pid"] = record.Pid, ["url"] = AtlasServer.BrowserUrl(record.Port, record.Token, name?.Trim()) };
+        environment.Out.WriteLine(json.ToJsonString());
+        return ExitOk;
     }
 
     private static async Task<int> RunVerbAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)

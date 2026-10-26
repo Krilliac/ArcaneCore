@@ -20,6 +20,23 @@ export function adoptToken({ hash, storage, clearFragment }) {
     return storage.getItem(SESSION_SLOT);
 }
 
+/**
+ * The display name a join link carries (`#t=<token>&name=Grok%20Bot`), decoded, or null when the fragment has none (or it is
+ * empty or malformed). Pure; read it before `adoptToken` clears the fragment. The app cleans it like any typed name.
+ */
+export function fragmentName(hash) {
+    const match = /(?:^#|&)name=([^&]*)/.exec(hash ?? '');
+    if (!match) {
+        return null;
+    }
+    try {
+        const name = decodeURIComponent(match[1]);
+        return name.trim().length > 0 ? name : null;
+    } catch {
+        return null;
+    }
+}
+
 export function forgetToken(storage) {
     storage.removeItem(SESSION_SLOT);
 }

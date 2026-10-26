@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-    Api, ApiError, CommandError, Socket, adoptToken, forgetToken, rememberToken, unwrap,
+    Api, ApiError, CommandError, Socket, adoptToken, forgetToken, fragmentName, rememberToken, unwrap,
 } from '../../../tools/ArcaneCore.Atlas/Web/js/api.js';
 
 const memoryStorage = (initial = {}) => {
@@ -37,6 +37,31 @@ test('the token moves from the URL fragment into session storage', () => {
     assert.equal(adoptToken({ hash: '', storage, clearFragment }), null);
     rememberToken(storage, 'manual');
     assert.equal(storage.data.get('atlas.session'), 'manual');
+});
+
+test('fragmentName reads and decodes the join name beside the token', () => {
+    assert.equal(fragmentName('#t=abc&name=Grok%20Bot'), 'Grok Bot');
+    assert.equal(fragmentName('#name=Solo&t=abc'), 'Solo');
+    assert.equal(fragmentName('#x=1&t=abc&name=A%26B%3Dc'), 'A&B=c', 'reserved characters survive percent-encoding');
+    assert.equal(fragmentName('#t=abc&name=%E2%9C%93%20ok'), '✓ ok', 'UTF-8 is decoded');
+    assert.equal(fragmentName('#t=abc'), null);
+    assert.equal(fragmentName('#t=abc&name='), null, 'an empty name is no name');
+    assert.equal(fragmentName('#t=abc&name=%20%20'), null, 'a blank name is no name');
+    assert.equal(fragmentName('#t=abc&name=%E0%A4%A'), null, 'a malformed escape is ignored, not thrown');
+    assert.equal(fragmentName('#t=abc&rename=x'), null, 'only a field called name counts');
+    assert.equal(fragmentName(''), null);
+    assert.equal(fragmentName(undefined), null);
+});
+
+test('a join link keeps adoptToken working: the token is adopted whatever follows it', () => {
+    const storage = memoryStorage();
+    let cleared = 0;
+    const clearFragment = () => {
+        cleared++;
+    };
+    assert.equal(adoptToken({ hash: '#t=abc_DEF-123&name=Grok%20Bot', storage, clearFragment }), 'abc_DEF-123');
+    assert.equal(cleared, 1);
+    assert.equal(fragmentName('#t=abc_DEF-123&name=Grok%20Bot'), 'Grok Bot');
 });
 
 test('unwrap returns a command result\'s data or raises its error', () => {
