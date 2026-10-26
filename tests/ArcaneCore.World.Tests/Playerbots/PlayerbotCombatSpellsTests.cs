@@ -457,6 +457,72 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>
+    /// A pet's spells start with autocast off and nothing ever turned it on for a bot, so a bot warlock's Imp never fired its bolt. The
+    /// bot sends CMSG_PET_SPELL_AUTOCAST for each harmful spell its pet knows, once.
+    /// </summary>
+    [Fact]
+    public async Task ABotWithAPet_EnablesAutocastOnTheHarmfulPetSpells_Once()
+    {
+        var template = new CreatureTemplate { Entry = Pets.PetTestServices.Entry, Name = "Test Imp", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], MinLevelHealth = Pets.PetTestServices.Health, MaxLevelHealth = Pets.PetTestServices.Health, Faction = 35 };
+        Creatures.CreatureTestStore.Current.Value = new Creatures.CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        WorldTestHost host;
+        try { host = WorldTestHost.Start(); }
+        finally { Creatures.CreatureTestStore.Current.Value = null; }
+
+        await using (host)
+        {
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                Creature target = await AddTargetAsync(host, session, 7, 41);
+                Creature pet = await host.World.InvokeAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter); // only a hunter restores a cached pet; it turns warlock below
+                    SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                    SpellInfo bolt = feature.System.Store.Get(SpellTestServices.Bolt)!;
+                    feature.System.Store = new SpellStore(feature.System.Store.All.Append(bolt with { Id = 9101, Name = "Shadow Bolt", Rank = "Rank 1" }), [], []);
+                    Assert.True(feature.Spellbook.LearnSpell(player, 9101));
+                    var snapshot = new ArcaneCore.Kernel.Characters.Pets.PersistentPetSnapshot((int)player.Guid.Low, 9103, Pets.PetTestServices.Entry, 1, 0,
+                        50, 30, 0, 1, [], [new ArcaneCore.Kernel.Characters.Pets.PersistentPetSpell(SpellTestServices.Bolt, Autocast: false, Passive: false)],
+                        Name: "Imp", NameTimestamp: 1, RenameAllowed: false);
+                    Creature restored = session.Services.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>().Service.RestoreCurrentPet(player, snapshot)!;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+                    return restored;
+                });
+                Assert.Equal(ArcaneCore.Game.Pets.ActionType.Disabled, await host.World.InvokeAsync(() => pet.Summon!.Charm!.SpellStates[SpellTestServices.Bolt]));
+
+                var helper = new PlayerbotCombatSpells(session);
+                var sent = new List<WorldOpcode>();
+                await host.World.InvokeAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(8);
+                    session.ManagedDispatchObserver = sent.Add;
+                    helper.Update(session.Player!, target, 0);
+                    return true;
+                });
+
+                Assert.Equal(1, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast));
+                Assert.Equal(ArcaneCore.Game.Pets.ActionType.Enabled, await host.World.InvokeAsync(() => pet.Summon!.Charm!.SpellStates[SpellTestServices.Bolt]));
+
+                await host.World.InvokeAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(8);
+                    helper.Update(session.Player!, target, 0);
+                    return true;
+                });
+                Assert.Equal(1, sent.Count(o => o == WorldOpcode.CmsgPetSpellAutocast)); // not repeated
+            }
+            finally
+            {
+                session.Kick();
+                await session.ManagedClosed;
+            }
+        }
+    }
+
     [Fact]
     public async Task PetAvoidsCrowdControl_AndRedirectsOrFollowsWhenTargetIsPolymorphed()
     {

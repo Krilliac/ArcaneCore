@@ -39,6 +39,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private readonly PlayerbotCombatWatch _watch = new();
     private uint _combatLowManaSinceMs;
     private bool _wasInCombat;
+    private ObjectGuid _autocastPet;
+    private readonly HashSet<uint> _autocastSent = [];
 
     /// <summary>
     /// The outcome check of the bot's item uses (<see cref="PlayerbotConsumableWatch"/>). A caller that sends CMSG_USE_ITEM itself takes
@@ -71,6 +73,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         _watch.Reset();
         _combatLowManaSinceMs = 0;
         _wasInCombat = false;
+        _autocastPet = default;
+        _autocastSent.Clear();
         Consumables.Reset();
     }
 
@@ -375,7 +379,57 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     /// <summary>The pet command a class sends beside its chosen action (<see cref="PlayerbotClassRotation.PetCompanion"/>).</summary>
     private void CommandCompanionPet(Player player, SpellFeature feature, PlayerbotClassRotation rotation, RotationState view, RotationAction? chosen)
     {
+        EnablePetAutocast(player, feature);
         if (rotation.PetCompanion(view, chosen) is { } pet) Execute(player, feature, pet);
+    }
+
+    /// <summary>
+    /// A pet's spells start with autocast off (vmangos Pet::AddSpell, Pet.cpp:1934-1941) and a player turns them on from the pet bar, which a
+    /// bot never does, so an Imp stood by with Firebolt and a Voidwalker never cast Torment. Once the pet's bar has reached the bot, send
+    /// CMSG_PET_SPELL_AUTOCAST (u64 pet, u32 spell, u8 enable) for each harmful, non-passive spell it knows (damage and taunt spells; the pet AI
+    /// only autocasts harmful ones). Each spell is sent once per pet, so a refusal is not repeated every think. World thread.
+    /// </summary>
+    private void EnablePetAutocast(Player player, SpellFeature feature)
+    {
+        if (player.GetPet() is not { IsAlive: true, Summon.Charm: { } charm } pet)
+        {
+            return;
+        }
+
+        if (_autocastPet != pet.Guid)
+        {
+            _autocastPet = pet.Guid;
+            _autocastSent.Clear();
+        }
+
+        if (_autocastSent.Count >= charm.SpellStates.Count)
+        {
+            return; // every spell was handled for this pet: no allocation on the common think
+        }
+
+        // a snapshot: the handler may change the state while the loop runs
+        foreach ((uint spellId, ActionType state) in charm.SpellStates.ToArray())
+        {
+            if (_autocastSent.Contains(spellId))
+            {
+                continue;
+            }
+
+            if (state != ActionType.Disabled || feature.System.Store.Get(spellId) is not { IsPassive: false, IsPositive: false })
+            {
+                _autocastSent.Add(spellId); // passive, positive or already on: nothing to send
+                continue;
+            }
+
+            var writer = new PacketWriter(13);
+            writer.WriteUInt64(pet.Guid.Value);
+            writer.WriteUInt32(spellId);
+            writer.WriteByte(1);
+            if (session.TryManagedAction(WorldOpcode.CmsgPetSpellAutocast, writer.ToArray()))
+            {
+                _autocastSent.Add(spellId);
+            }
+        }
     }
 
     /// <summary>Where the bot fights from: melee distance, or a caster's or hunter's range (yards).</summary>
