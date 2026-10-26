@@ -47,6 +47,9 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     private AuctionBotPlanner? _planner;
     private AuctionBotLootSources? _loot;
     private Dictionary<uint, AuctionBotItemOverride> _overrides = [];
+    // Bumped by every Reload and every SetItemData (world thread). A reload applies the rows it read only if no later reload or in-memory
+    // change happened since it started: a stale read must not replace a newer override, and reloads must not apply out of order.
+    private int _overrideGeneration;
     private bool _persistent;
     private bool _flushing;
     private int _houseAction = -1;
@@ -271,12 +274,13 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         Options.Enabled = enabled;
         Options.UpdateIntervalSeconds = interval;
         WorldRuntime? world = _world;
+        int generation = Interlocked.Increment(ref _overrideGeneration);
         _ = Task.Run(async () =>
         {
             Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
             void Apply()
             {
-                if (loaded is not null)
+                if (loaded is not null && generation == Volatile.Read(ref _overrideGeneration))
                 {
                     _overrides = loaded;
                 }
@@ -306,6 +310,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     {
         ArgumentNullException.ThrowIfNull(template);
         AuctionBotItemOverride? kept = null;
+        Interlocked.Increment(ref _overrideGeneration); // a reload that read the rows before this change must not apply them
         if (value is null)
         {
             _overrides.Remove(template.Entry);
