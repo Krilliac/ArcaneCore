@@ -314,8 +314,7 @@ public sealed class RemoteAdminServerTests
         // Not proven: the effective access of a particular other account (needs a second OS user); this checks the descriptor and mode that grant it.
         await using WorldTestHost host = PartyTestHost.Start();
         string path = Path.Combine(Path.GetTempPath(), "ra-token-acl-" + Guid.NewGuid().ToString("N") + ".txt");
-        File.WriteAllText(path, "stale
-"); // a file from an earlier run, with whatever permissions the directory gave it
+        File.WriteAllText(path, "stale\n"); // a file from an earlier run, with whatever permissions the directory gave it
         RemoteAdminServer server = NewServer(host, Options0(path));
         await server.StartAsync(CancellationToken.None);
         try
