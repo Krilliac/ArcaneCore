@@ -756,19 +756,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>),
     /// and at once when the chest's script takes the open over (vmangos Spell::EffectOpenLock rolls the
     /// gathering skill after SendLoot whatever the object did with it, SpellEffects.cpp:2163-2207).
+    /// <paramref name="onScriptTookOpen"/> runs (after <paramref name="onChestOpened"/>) only in that script case, so a caller can tell an
+    /// <see cref="GameObjectUseResult.Ok"/> that left no loot window on purpose from one that did not.
     /// </summary>
     public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
-        Action<GameObject>? onChestOpened = null)
+        Action<GameObject>? onChestOpened = null, Action<GameObject>? onScriptTookOpen = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
-        GameObjectUseResult result = OpenLockCore(player, go, lockType, keyItemId, skillBonus, onChestOpened);
+        GameObjectUseResult result = OpenLockCore(player, go, lockType, keyItemId, skillBonus, onChestOpened, onScriptTookOpen);
         RecordUseAttemptOutcome(player, guid, go, result);
         return result;
     }
 
     private GameObjectUseResult OpenLockCore(Player player, GameObject? go, LockType lockType, uint keyItemId, uint skillBonus,
-        Action<GameObject>? onChestOpened)
+        Action<GameObject>? onChestOpened, Action<GameObject>? onScriptTookOpen)
     {
         GameObjectUseResult result = CheckUsable(player, go);
         if (result != GameObjectUseResult.Ok || go is null)
@@ -808,14 +810,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
         if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
         {
-            return ScriptTookOpen(go, onChestOpened);
+            return ScriptTookOpen(go, onChestOpened, onScriptTookOpen);
         }
 
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
         {
-            return ScriptTookOpen(go, onChestOpened);
+            return ScriptTookOpen(go, onChestOpened, onScriptTookOpen);
         }
 
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
@@ -887,6 +889,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
+        if (result is GameObjectUseResult.Unsupported or GameObjectUseResult.NotUsable or GameObjectUseResult.Locked)
+        {
+            ReportUseDefect(player, guid, go, result);
+        }
+
         long nowMs = _clockMs;
         if (_refusedUseAttempts.Count >= MaxTrackedRefusedUseAttempts)
         {
@@ -916,6 +923,62 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _refusedUseAttempts[key] = state;
+    }
+
+    /// <summary>Anomaly code of a use refused for a reason the content or the server is at fault for, not the player.</summary>
+    public const string UseFailedCode = "use-failed";
+
+    /// <summary>Anomaly code of a use refused because the object's lock id has no lock_template row (a content defect).</summary>
+    public const string UseFailedUnknownLockCode = "use-failed-unknown-lock";
+
+    /// <summary>
+    /// Report a refusal that is a defect rather than a player mistake: an object type the server cannot use at all (Unsupported), a
+    /// chest/door/button/goober refused although it is not flagged non-interactive or in use (NotUsable), or a lock id with no
+    /// lock_template row (Locked, reported under <see cref="UseFailedUnknownLockCode"/>). TooFar, Dead, NeedsQuest, MissingKey, SkillTooLow, InUse, LevelTooLow, Immune, NotFound and OnCooldown are the
+    /// player's doing and never reach here. A QuestGiver refusal (Unsupported) is reported only when the quest giver seam is null: a wired seam may refuse transiently (a settlement pending). Strings are built only when a report is due; ids and guid low only, no names.
+    /// </summary>
+    private void ReportUseDefect(Player player, ObjectGuid guid, GameObject? go, GameObjectUseResult result)
+    {
+        if (go is null)
+        {
+            return;
+        }
+
+        string why;
+        string code = UseFailedCode;
+        switch (result)
+        {
+            case GameObjectUseResult.Unsupported when go.Type == GameObjectType.QuestGiver:
+                if (QuestGiver is not null)
+                {
+                    return; // the seam is wired: a refusal may be transient (a settlement pending) or the player's, not a defect
+                }
+
+                why = "no quest giver service is wired";
+                break;
+            case GameObjectUseResult.Unsupported:
+                why = "no handler for the object's type or its loot is unavailable";
+                break;
+            case GameObjectUseResult.NotUsable
+                when go.Type is GameObjectType.Chest or GameObjectType.Door or GameObjectType.Button or GameObjectType.Goober
+                    && ((uint)go.Flags & 0x11u) == 0 && go.LootState != GameObjectLootState.NotReady:
+                why = "an interactable object is not flagged unusable yet refuses the use";
+                break;
+            case GameObjectUseResult.Locked when GameObjectLocks.LockIdOf(go.Template) is var lockId and not 0 && _content.FindLock(lockId) is null:
+                why = $"lock {lockId} has no lock_template row";
+                code = UseFailedUnknownLockCode;
+                break;
+            default:
+                return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "gameobject",
+            code,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"gameobject entry {go.Entry} type {go.Template.Type}"),
+            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"use refused ({result}): {why}; spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} guid {guid.Low} map {Map.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}; player guid {player.Guid.Low}"),
+            AnomalySeverity.Warning);
     }
 
     /// <summary>
@@ -1145,11 +1208,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     /// <summary>A script took the open over: a chest never reaches its loot window, so its open callback runs now.</summary>
-    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened)
+    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened, Action<GameObject>? onScriptTookOpen)
     {
         if (go.Type == GameObjectType.Chest)
         {
             onChestOpened?.Invoke(go);
+            onScriptTookOpen?.Invoke(go);
         }
 
         return GameObjectUseResult.Ok;

@@ -6,6 +6,8 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -199,9 +201,27 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             // immune caster, SpellEffects.cpp:2117-2118). A chest rolls from its open: a dungeon chest accepts the open now
             // and opens its window only once the generation committed, so a generation refused later raises nothing. A door
             // or button rolls once it activated.
+            bool scriptTookOpen = false; // set only when the object's script took the open over: such an Ok leaves no loot window on purpose
             GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0,
-                (uint)Math.Max(0, SimpleValue(effect)), rollsSkill ? RollFor : null)
+                (uint)Math.Max(0, SimpleValue(effect)), target =>
+                {
+                    if (rollsSkill)
+                    {
+                        RollFor(target);
+                    }
+                }, _ => scriptTookOpen = true)
                 ?? GameObjectUseResult.Unsupported;
+            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && !scriptTookOpen && player.Map is { } openMap
+                && Objects?.FindSystem(openMap)?.Loot is { } openLoot && openLoot.OpenLootOf(player)?.Source != go.Guid
+                && !(openMap.InstanceId != 0 && go.Spawn is { } openSpawn
+                    && openLoot.Durable?.IsPending(new LootStateKey(openMap.InstanceId, openSpawn.Guid)) == true))
+            {
+                // A script that took the open is legitimate and leaves no window, so it is exempt (scriptTookOpen). A dungeon chest whose fresh
+                // generation was accepted (any settlement pending on its durable key) says Ok now and opens the window once the generation committed, so only
+                // that is exempt; a live bag opens synchronously and is checked like any other chest.
+                ReportOpenNoEffect(context, player, go, "the open returned Ok for a chest but the player has no loot window on it");
+            }
+
             if (opened != GameObjectUseResult.Ok)
             {
                 Logger.LogInformation(
@@ -230,6 +250,23 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         {
             playerSkills.UpdateGather(check.SkillId, pure, (uint)check.RequiredSkill);
         }
+    }
+
+    /// <summary>Anomaly code of an open-lock effect on a game object that left the player without any visible result.</summary>
+    internal const string OpenNoEffectCode = "open-no-effect";
+
+    /// <summary>
+    /// Report (Error, subsystem <c>gameobject</c>) an open-lock cast on a game object that ended with neither a loot window nor a client-visible
+    /// refusal. Called from failure branches only, so the strings are built only then. Ids and guid low only, no names.
+    /// </summary>
+    private static void ReportOpenNoEffect(SpellEffectContext context, Player player, GameObject go, string why)
+    {
+        AnomalyLedger.Shared.Report(
+            "gameobject",
+            OpenNoEffectCode,
+            $"gameobject entry {go.Entry} spell {context.Spell.Id}",
+            $"{why}; type {go.Type}, spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}, guid {go.Guid.Low}, lock {GameObjectLocks.LockIdOf(go.Template)}, map {go.MapId}, caster guid {player.Guid.Low}",
+            AnomalySeverity.Error);
     }
 
     /// <summary>
