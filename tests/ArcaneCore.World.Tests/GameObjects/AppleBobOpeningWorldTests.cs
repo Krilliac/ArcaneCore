@@ -142,32 +142,32 @@ public sealed class AppleBobOpeningWorldTests
         {
         }
 
-        public bool OnUnlockedUse(GameObjectMapSystem objects, GameObject go, ArcaneCore.Game.Entities.Player user) => true;
+        public bool OnUnlockedUse(GameObjectMapSystem objects, GameObject go, ArcaneCore.Game.Entities.Player user) => ++Calls > 0;
+
+        public int Calls { get; private set; }
     }
 
     /// <summary>
-    /// The silent-failure signal: the cast goes through, a script takes the open, and no loot window appears. <c>gameobject/open-no-effect</c>
-    /// must say so (an Error naming the entry and spell, no player name). Reasoning for the RED proof: without the signal in
-    /// GatheringSpells.EffectOpenLock nothing is reported on this path, so the capture stays empty and the assertion fails.
+    /// A script that takes the open is legitimate: <c>gameobject/open-no-effect</c> must stay quiet. The script counter proves the cast really reached
+    /// the script, so an empty capture cannot come from a cast that never got that far.
     /// </summary>
     [Fact]
-    public async Task OpeningAppleBobWhileAScriptSwallowsTheOpen_ReportsOpenNoEffect()
+    public async Task OpeningAppleBobWhileAScriptTakesTheOpen_DoesNotReportOpenNoEffect()
     {
         await using WorldTestHost host = Start(out GameObjectTestContext context);
         await using WorldTestClient client = await host.EnterWorldAsync("BOBSWAL", "Bobswal");
         ulong bob = BobGuid();
         await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, bob);
-        await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.RegisterAi(BobEntry, new OpenSwallowingAi()));
+        var script = new OpenSwallowingAi();
+        await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.RegisterAi(BobEntry, script));
         using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Key == "gameobject/open-no-effect" && n.Subject == $"gameobject entry {BobEntry} spell {Opening}");
 
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAt(Opening, bob));
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
         await host.OnWorldAsync(() => 0); // the cast's effects run on the world thread; this call is queued behind them
 
-        AnomalyNotice notice = Assert.Single(cap.Notices);
-        Assert.Equal(AnomalySeverity.Error, notice.Severity);
-        Assert.Contains("no loot window", notice.Detail);
-        Assert.DoesNotContain("Bobswal", notice.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, script.Calls);
+        Assert.Empty(cap.Notices);
     }
 
     /// <summary>The control: the same chest through CMSG_GAMEOBJ_USE (what the client sends for objects it does not open by a spell).</summary>

@@ -205,13 +205,21 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             // immune caster, SpellEffects.cpp:2117-2118). A chest rolls from its open: a dungeon chest accepts the open now
             // and opens its window only once the generation committed, so a generation refused later raises nothing. A door
             // or button rolls once it activated.
+            bool chestOpened = false; // set by the open callback: a real open and a script that took the open both invoke it
             GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0,
-                (uint)Math.Max(0, SimpleValue(effect)), rollsSkill ? RollFor : null)
+                (uint)Math.Max(0, SimpleValue(effect)), target =>
+                {
+                    chestOpened = true;
+                    if (rollsSkill)
+                    {
+                        RollFor(target);
+                    }
+                })
                 ?? GameObjectUseResult.Unsupported;
-            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && player.Map is { InstanceId: 0 } openMap
+            if (opened == GameObjectUseResult.Ok && go.Type == GameObjectType.Chest && !chestOpened && player.Map is { InstanceId: 0 } openMap
                 && Objects?.FindSystem(openMap)?.Loot?.OpenLootOf(player)?.Source != go.Guid)
             {
-                // A dungeon chest (instance map) says Ok when its generation is accepted and opens the window later, so it is exempt.
+                // A script that took the open is legitimate and invoked the callback, so it is exempt too. A dungeon chest (instance map) says Ok when its generation is accepted and opens the window later, so it is exempt.
                 ReportOpenNoEffect(context, player, go, "the open returned Ok for a chest but the player has no loot window on it");
             }
 
