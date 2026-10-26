@@ -71,8 +71,7 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
                 {
                     _logger.LogWarning(
                         "Pet data is incomplete ({Stats} level stat sets, {Spells} spell lists): summoned pets keep template stats and start without spells. "
-                        + "Run 'arcane-content-importer import --replace' on a classic-db dump to fill pet_levelstats and petcreateinfo_spell ('refresh' does not cover the pet tables, and without --replace the import fails when a pet row already exists). "
-                        + "Apply sql/content/world/<provider>/0002_pet_create_spells.sql only when you cannot run the importer, and run the importer after it, never before it, because the importer's --replace empties both tables",
+                        + "Run 'arcane-content-importer import --replace' on a classic-db dump to fill pet_levelstats and petcreateinfo_spell ('refresh' does not cover the pet tables, and without --replace the import fails when a pet row already exists)",
                         Service.Content.LevelStatsEntryCount, Service.Content.CreateSpellEntryCount);
                 }
             }

@@ -339,18 +339,16 @@ lane; see `docs/areas/class-shaman-paladin.md` for the totem limits. The lane's 
 the same behaviours (placement, slots, duration, ownership) are covered by `tests/ArcaneCore.Game.Tests/ClassSpells/Totems`.
 `pet_levelstats` / `petcreateinfo_spell` is World schema 16.
 
-## Pet data import and shipped create spells
+## Pet data import
 
-`arcane-content-importer import` fills `pet_levelstats` and `petcreateinfo_spell` from a classic-db dump (`PetDumpImporter`; the
-sibling `pet_levelstats_copy` table is ignored, levels outside 1..60 and creatures without a level 1 row are dropped with a warning).
-`sql/content/world/<provider>/0002_pet_create_spells.sql` seeds the seven `petcreateinfo_spell` rows on a database that never ran the
-importer (Imp 416 learns Firebolt 3110, and so on); it deletes and re-inserts only those seven entries. `pet_levelstats` is not shipped
-as SQL (about 1,560 rows of GPL classic-db data): run the importer for it. `refresh` does not cover the pet tables, so only `import`
-fills them, and it needs `--replace` on a database that already holds pet rows (including the seven the SQL file seeds): without
-`--replace` an existing key fails the import and rolls it back. Order: apply `0002_pet_create_spells.sql` first, if at all, then run
-`import --replace`; the importer's `--replace` empties both pet tables and writes the dump's rows, so the SQL file is redundant once the
-importer has run and a later run of it would overwrite the dump's seven create-spell rows. With either table empty `PetsFeature` logs a warning at
-start-up. Hunter Growl is not in `petcreateinfo_spell`: a freshly tamed pet learns it through Beast Training.
+`arcane-content-importer import` is the only source of pet data: it fills `pet_levelstats` and `petcreateinfo_spell` from a classic-db dump
+(`PetDumpImporter`; the sibling `pet_levelstats_copy` table is ignored, levels outside 1..60 and creatures without a level 1 row are dropped
+with a warning). No pet rows ship as SQL: the content file that once seeded seven `petcreateinfo_spell` rows was removed, because upstream
+content is re-expressed, not copied, and the 1.12.1 client data (`CreatureSpellData.dbc`) holds none of those spell lists. `refresh` does not
+cover the pet tables, so only `import` fills them, and it needs `--replace` on a database that already holds pet rows (including the seven
+rows a database that applied the removed file keeps): without `--replace` an existing key fails the import and rolls it back, and `--replace`
+empties both pet tables first. With either table empty `PetsFeature` logs a warning at start-up. Hunter Growl is not in
+`petcreateinfo_spell`: a freshly tamed pet learns it through Beast Training.
 
 Loyalty and runaway: the happiness states split at vmangos `HAPPINESS_LEVEL_SIZE` 333000 and 666000 (`Pet.h:130`, `Pet.cpp:870-877`). A Rebellious pet
 whose loyalty runs out is deleted (`SMSG_PET_BROKEN`, `Unsummon(PET_SAVE_AS_DELETED)`) and the server now logs "hunter pet ran away" (character, pet

@@ -14,7 +14,6 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 | File | Needs world schema | Installs |
 |---|---|---|
 | `world/<provider>/0001_undercity_siege.sql` | 54 | game event 900 "Bot scenario: Undercity siege" and its `game_event_playerbot_*` rows ([bot event scenarios](../../docs/areas/playbots-scenarios-events.md)) |
-| `world/<provider>/0002_pet_create_spells.sql` | 16 | the seven `petcreateinfo_spell` rows of the cmangos classic-db dump (Imp 416 to Firebolt 3110, Felhunter 417, Water Elemental 510, Voidwalker 1860, Succubus 1863, 5807, 15429); `pet_levelstats` (about 1,560 rows) is imported with `arcane-content-importer` ([pets](../../docs/integration/pets.md)) |
 
 ## Rules every content file follows
 

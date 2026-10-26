@@ -11,8 +11,7 @@ namespace ArcaneCore.Data.Tests;
 
 /// <summary>
 /// The pet data import: <see cref="PetDumpImporter"/> reads the classic-db layout of <c>pet_levelstats</c>
-/// (<c>creature_entry, level, hp, mana, armor, str, agi, sta, inte, spi</c>) and <c>petcreateinfo_spell</c>, and the shipped content
-/// file <c>sql/content/world/&lt;provider&gt;/0002_pet_create_spells.sql</c> seeds the create spells of a clean database. The dump rows are
+/// (<c>creature_entry, level, hp, mana, armor, str, agi, sta, inte, spi</c>) and <c>petcreateinfo_spell</c>. The dump rows are
 /// invented numbers in the real layout.
 /// </summary>
 public sealed class PetDumpImporterTests : IAsyncLifetime
@@ -139,51 +138,5 @@ public sealed class PetDumpImporterTests : IAsyncLifetime
         TableSpec spells = ContentTableSpecs.Find("petcreateinfo_spell")!;
         Assert.Equal(["entry"], spells.Keys.Select(k => k.Canonical));
         Assert.True(spells.IsMapped("Spell4"));
-    }
-
-    [Fact]
-    public async Task ShippedContent_SeedsTheCreateSpellsOnACleanDatabase_AndInstallsAgainToTheSameRows()
-    {
-        string root = RepositorySource.FindRoot() ?? throw new Xunit.Sdk.XunitException("the ArcaneCore checkout was not found");
-        string script = await File.ReadAllTextAsync(Path.Combine(root, "sql", "content", "world", "sqlite", "0002_pet_create_spells.sql"));
-        DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
-        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
-        {
-            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
-        }
-
-        await Run(cs, script);
-        await Run(cs, script);
-
-        await using WorldDbContext read = TestContexts.Create<WorldDbContext>(cs);
-        PetContent content = await new EfPetDataStore(read).LoadAsync();
-        Assert.Equal(7, content.CreateSpellEntryCount);
-        Assert.Equal([3110u], content.GetCreateSpells(416));
-        Assert.Equal([6873u, 9672u], content.GetCreateSpells(510));
-        Assert.Equal([25163u], content.GetCreateSpells(15429));
-    }
-
-    [Theory]
-    [InlineData("sqlite", "\"")]
-    [InlineData("mariadb", "`")]
-    [InlineData("postgresql", "\"")]
-    public async Task EveryProviderShipsTheContent_ThatDeletesBeforeInserting(string provider, string quote)
-    {
-        string root = RepositorySource.FindRoot() ?? throw new Xunit.Sdk.XunitException("the ArcaneCore checkout was not found");
-        string script = await File.ReadAllTextAsync(Path.Combine(root, "sql", "content", "world", provider, "0002_pet_create_spells.sql"));
-        int delete = script.IndexOf($"DELETE FROM {quote}petcreateinfo_spell{quote}", StringComparison.Ordinal);
-        int insert = script.IndexOf($"INSERT INTO {quote}petcreateinfo_spell{quote}", StringComparison.Ordinal);
-        Assert.True(delete >= 0, $"{provider}: no DELETE");
-        Assert.True(insert > delete, $"{provider}: INSERT must follow the DELETE");
-        Assert.Contains("(416, 3110, 0, 0, 0)", script, StringComparison.Ordinal);
-    }
-
-    private static async Task Run(DatabaseConnectionOptions cs, string script)
-    {
-        await using var connection = new SqliteConnection(cs.ConnectionString);
-        await connection.OpenAsync();
-        await using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = script;
-        await command.ExecuteNonQueryAsync();
     }
 }
