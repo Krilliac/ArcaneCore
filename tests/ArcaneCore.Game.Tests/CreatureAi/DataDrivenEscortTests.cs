@@ -793,10 +793,12 @@ public sealed class DataDrivenEscortTests
     public void Plucky_TurnsHumanOnChicken_ForTwoMinutes()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry;
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        CreatureWaypoint first = RealPath(entry)[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
+            _ = AddPlayer(world, 1, first.X, first.Y);
             (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
             Creature plucky = Assert.Single(system.Creatures);
             world.RunTick(100);
@@ -816,10 +818,12 @@ public sealed class DataDrivenEscortTests
     public void MagramiSpectre_TurnsHostileWhenItsWalkEnds()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.MagramiSpectreAI.Entry;
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        CreatureWaypoint first = RealPath(entry)[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
+            _ = AddPlayer(world, 1, first.X, first.Y);
             AddPlayer(world, 1, 30, 0);
             Creature spectre = Assert.Single(system.Creatures);
             spectre.AI!.OnMovementInform(MovementGeneratorType.Point, 1);
@@ -1083,10 +1087,12 @@ public sealed class DataDrivenEscortTests
     {
         // A replayed gossip select (the cached menu outlives the flag) must not start or rewind the keep scene.
         const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        CreatureWaypoint first = RealPath(entry)[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
+            _ = AddPlayer(world, 1, first.X, first.Y);
             Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
             var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
             Assert.False(ai.KeepEventReady);
