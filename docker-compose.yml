@@ -122,7 +122,7 @@ services:
 
   # Optional monitoring (docs/ops/metrics.md): docker compose --profile monitoring up -d, with ARCANE_METRICS_ENABLED=true.
   prometheus:
-    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     profiles: [monitoring]
     networks: [arcane-network]
     volumes:
@@ -131,7 +131,7 @@ services:
       - ${DOCKER_PROMETHEUS_EXTERNAL_BIND:-127.0.0.1}:${DOCKER_PROMETHEUS_EXTERNAL_PORT:-9090}:9090
 
   grafana:
-    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
+    image: grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
     profiles: [monitoring]
     networks: [arcane-network]
     environment:
