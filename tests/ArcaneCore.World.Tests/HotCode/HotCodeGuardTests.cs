@@ -145,6 +145,46 @@ public sealed class HotCodeGuardTests : IDisposable
     }
 
     [Fact]
+    public void BackgroundAppender_WritesEveryLineInTheOrderItWasRecorded_AcrossInstancesOnOnePath()
+    {
+        string log = Path.Combine(_dir, "ordered", "audit.log");
+        var first = new HotCodeAudit(log);
+        var second = new HotCodeAudit(log);
+
+        for (int i = 0; i < 500; i++)
+        {
+            (i % 2 == 0 ? first : second).Record("probe", $"line {i}");
+        }
+
+        second.Flush();
+
+        string[] lines = File.ReadAllLines(log);
+        Assert.Equal(500, lines.Length);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Assert.EndsWith($"	probe	line {i}", lines[i], StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Flush_WaitsForLinesRecordedOnAnotherThread()
+    {
+        string log = Path.Combine(_dir, "threads", "audit.log");
+        var audit = new HotCodeAudit(log);
+        Task.Run(() =>
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                audit.Record("probe", $"line {i}");
+            }
+        }).Wait();
+
+        audit.Flush();
+
+        Assert.Equal(100, File.ReadAllLines(log).Length);
+    }
+
+    [Fact]
     public void UnwritableAuditFile_DoesNotMaskTheRefusal()
     {
         // The audit path is an existing directory, so appending fails with an I/O error.

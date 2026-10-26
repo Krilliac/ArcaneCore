@@ -111,6 +111,7 @@ public static class HotCodeGuard
             try
             {
                 audit.Record("start-refused", message);
+                audit.Flush(); // startup, not the world thread: the process ends right after the throw, so the refusal is on disk first
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -126,6 +127,7 @@ public static class HotCodeGuard
             audit.Record(
                 "start-allowed",
                 $"environment={probe.EnvironmentName}; hotReloadActive={verdict.HotReloadActive}; modules={(options.Modules.Enabled ? "enabled" : "off")}");
+            audit.Flush(); // startup, not the world thread
         }
 
         return verdict;

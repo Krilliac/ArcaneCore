@@ -273,8 +273,11 @@ public sealed class ModuleRollbackTests : IDisposable
         => _instances.HasScript(MapId) ? _instances.Create(_runtime.GetMap(MapId, 1)) : null;
 
     private async Task<string[]> AuditVerbs()
-        => [.. (await File.ReadAllLinesAsync(Path.Combine(_dir, "audit.log")))
+    {
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
+        return [.. (await File.ReadAllLinesAsync(Path.Combine(_dir, "audit.log")))
             .Select(line => line.Split('\t')[1])];
+    }
 
     [Theory]
     [MemberData(nameof(FixtureAndSlot))]
