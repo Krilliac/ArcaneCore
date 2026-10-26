@@ -25,10 +25,55 @@ public sealed class WorldMaps
 
     private readonly ILogger _logger;
 
+    private readonly WorldRuntime _world;
+
     private WorldMaps(WorldRuntime world, ILogger? logger)
     {
         _logger = logger ?? NullLogger.Instance;
+        _world = world;
         Terrain = new TerrainManager(world.Options.Maps.DataDirectory, logger) { Collision = WorldCollision.Of(world) };
+    }
+
+    /// <summary>
+    /// Start reading, on the thread pool, the terrain, vmap and navmesh tiles of the grids a player arriving at (<paramref name="x"/>,
+    /// <paramref name="y"/>) on <paramref name="mapId"/> will load (<see cref="Grid.GridContainer.LoadGridsAround"/> with
+    /// <see cref="Grid.MapOptions.GridActivationDistance"/>), so that creating them installs parsed tiles instead of reading the files inside
+    /// the tick. Asked when a teleport starts (<see cref="Teleport.TeleportService"/>):
+    /// the transfer screen or the teleport ack gives the reads their time. Only the timing moves, as with the approach prefetch
+    /// (<see cref="Grid.MapOptions.GridPrefetchDistance"/>, whose 0 turns this off too): a tile already in memory or on its way is not asked
+    /// again, an unfinished read is not waited for, and the loader then reads the file as it always did. World thread.
+    /// </summary>
+    public void PrefetchArrival(uint mapId, float x, float y)
+    {
+        Grid.MapOptions options = _world.Options.Maps;
+        if (!(options.GridPrefetchDistance > 0) || !float.IsFinite(x) || !float.IsFinite(y))
+        {
+            return;
+        }
+
+        WorldCollision collision = WorldCollision.Of(_world);
+        ICollisionTilePrefetch? los = collision.LineOfSight as ICollisionTilePrefetch;
+        ICollisionTilePrefetch? path = ReferenceEquals(collision.Pathfinder, collision.LineOfSight) ? null : collision.Pathfinder as ICollisionTilePrefetch;
+        Grid.CellArea area = Grid.GridDefines.CalculateCellArea(x, y, options.GridActivationDistance);
+        for (int gx = area.Low.Grid.X; gx <= area.High.Grid.X; gx++)
+        {
+            for (int gy = area.Low.Grid.Y; gy <= area.High.Grid.Y; gy++)
+            {
+                (int tx, int ty) = TerrainTile.TileOf(new Grid.GridCoord(gx, gy));
+                Terrain.Prefetch(mapId, tx, ty);
+                try
+                {
+                    los?.Prefetch(mapId, tx, ty);
+                    path?.Prefetch(mapId, tx, ty);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // As MapCollision.OnGridApproaching: a failed prefetch is only a lost head start; the grid's own load reports the tile.
+                    ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("collision.tile-prefetch", ex);
+                    _logger.LogWarning(ex, "Prefetching the collision tile ({TileX}, {TileY}) of map {MapId} for an arrival failed", tx, ty, mapId);
+                }
+            }
+        }
     }
 
     public MapRegistry Registry { get; private set; } = MapRegistry.Default;
