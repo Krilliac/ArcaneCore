@@ -124,13 +124,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (row.Value is { Status: QuestStatus.Complete, Rewarded: false })
             {
-                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest, Offered(player)))
+                IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest, offered))
                 {
                     _awaitingBagSpace.Remove(row.Key);
                     continue;
                 }
 
-                if (!RewardItemsFit(player, quest, services, Offered(player)))
+                if (!RewardItemsFit(player, quest, services, offered))
                 {
                     NeedsBagSpaceForTurnIn = true;
                     _awaitingBagSpace.Add(row.Key);

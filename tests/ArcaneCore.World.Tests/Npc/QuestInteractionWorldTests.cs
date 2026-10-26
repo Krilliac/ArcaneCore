@@ -310,6 +310,9 @@ public sealed class QuestInteractionWorldTests
         {
             RepeatableItem = cloth,
             RepeatableItemCount = 2,
+            // A delivery quest: the turn-in itself checks the items (RewardRequirements, with the offered set) before staging, so the
+            // refusal while the trade is open comes from that check and not only from the staging's keep-for-removals rule.
+            DeliverItems = true,
         };
 
         WorldTestHost host;
@@ -349,13 +352,23 @@ public sealed class QuestInteractionWorldTests
 
             Assert.Equal(QuestStatus.Complete, status);
             Assert.Equal(!tradeOpen, settlementStarted);
-            Assert.Equal(2u, countAfter);
-            if (!tradeOpen)
+            int id = await host.PlayerStateAsync("Crafter", p => checked((int)p.Guid.Low));
+            if (tradeOpen)
             {
-                int id = await host.PlayerStateAsync("Crafter", p => checked((int)p.Guid.Low));
-
-                // Let the started settlement finish so the host does not shut down under it; only that it started is asserted here.
+                // The refusal tells the client why (ITEM_NOT_FOUND for the delivery item) and re-sends the offer window; nothing is taken.
+                byte[] failure = await crafter.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+                Assert.Equal((byte)ArcaneCore.Game.Items.InventoryResult.ItemNotFound, failure[0]);
+                await crafter.ReadUntilAsync(WorldOpcode.SmsgQuestgiverOfferReward);
+                Assert.Equal(2u, countAfter);
+                Assert.Equal(2u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
+                Assert.Null(feature.PendingOperationId(id));
+            }
+            else
+            {
                 await feature.WaitForSettlementAsync(id).WaitAsync(TimeSpan.FromSeconds(30));
+                // The settlement outcome, not just its start: the delivery stack is consumed and the quest is rewarded.
+                Assert.Equal(0u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
+                Assert.True(fixture.Characters.Stored(id, QuestInteractionFixture.QuestId).Rewarded);
             }
         }
     }

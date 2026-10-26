@@ -52,6 +52,10 @@ public sealed partial class QuestNpcServices
             return true;
         }
 
+        // The removals are capped by the injected service's count (services.InventoryCount, which excludes the offered stacks), so this fits
+        // check TRUSTS that count. The result is only compared with InventoryFull: a service that over-reports makes the staging fail with a
+        // different code, which reads here as "fits". The production service is the same PlayerInventory.GetItemCount with the same exclude;
+        // a test fake must honour `exclude` too.
         ArcaneCore.Game.Items.InventoryRewardGrant[] removals = RequiredItemRemovals(quest)
             .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, services is not null ? services.InventoryCount(player, r.Entry, offered: offered) : InventoryCountOf(player, r.Entry, false, offered))))
             .Where(r => r.Count > 0)
