@@ -208,6 +208,13 @@ internal static class PlayerbotRiskModel
         int eliteMargin = EliteLevelMargin + (facts.GroupSize > 1 ? GroupEliteLevelMargin : 0);
         if (target.Elite && target.Level >= facts.BotLevel + eliteMargin && !facts.QuestObjective)
             return Verdict(PlayerbotEngageDecision.Avoid, "elite-above");
+        // A mana user below RestManaBelowPct recovers before the next pull when the fight is fine at full health and mana, even when
+        // it would also be fine at the mana left: a hybrid at 1% mana weighs an easy mob as fine (ManaDependence 0.4) and would pull it
+        // with nothing to cast (bot QA #1480). Without food or drink the brain sits and regenerates (the fruitless-wait guard bounds it).
+        if (options.RestManaBelowPct > 0 && facts.ManaDependence > 0 && facts.BotManaPct is { } lowMana && lowMana < options.RestManaBelowPct
+            && !facts.Enemies.Any(enemy => enemy.Remembered && enemy.Join == RiskJoin.Path)
+            && Risk(facts, facts.BotMaxHealth, 100f, facts.Enemies) <= accept)
+            return Verdict(PlayerbotEngageDecision.Rest, "low-mana");
         if (risk <= accept)
         {
             // A remembered creature only along the way: the fight may be taken, never by walking through its reach (the fight without

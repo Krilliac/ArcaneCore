@@ -102,6 +102,26 @@ public sealed class PlayerbotRiskModelTests
     }
 
     [Fact]
+    public void AHybridBelowRestManaBelowPct_RestsBeforeAnEasyPull_BotQa1480()
+    {
+        // A hybrid (ManaDependence 0.4) at 1% mana still weighs an easy mob as fine, so it was pulled with nothing to cast.
+        PlayerbotEngagementFacts hybrid = Bot(Mob()) with { BotManaPct = 1f, ManaDependence = 0.4f };
+        PlayerbotEngagement dry = PlayerbotRiskModel.Assess(hybrid, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Rest, dry.Decision);
+        Assert.Equal("low-mana", dry.Reason);
+
+        // At or above the line, with no mana use, or with the key at 0 the pull is taken as before.
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid with { BotManaPct = 35f }, Defaults).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid with { ManaDependence = 0f }, Defaults).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid, new PlayerbotRiskOptions { RestManaBelowPct = 0f }).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(Bot(Mob()), Defaults).Decision); // no mana bar (a warrior)
+
+        // A fight too strong even at full mana is still avoided, not rested for.
+        PlayerbotEngagement pack = PlayerbotRiskModel.Assess(Bot(Mob(), Mob(RiskJoin.Assist), Mob(RiskJoin.FightSpot)) with { BotManaPct = 1f, ManaDependence = 0.4f }, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Avoid, pack.Decision);
+    }
+
+    [Fact]
     public void RememberedDanger_RaisesTheRisk_AndARememberedCreatureIsNotPulled()
     {
         PlayerbotEngagement plain = PlayerbotRiskModel.Assess(Bot(Mob()), Defaults);
