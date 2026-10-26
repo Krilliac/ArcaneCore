@@ -119,8 +119,9 @@ retreat and once a death). The replay trace (`ARCANECORE_TEST_BOT_REPLAY_TRACE`)
 
 A hurt bot that can attack from range slows the creature on it and walks back out to its casting range, then goes on casting
 (`World:Playerbots:Combat:Kite`, live; the choice is the pure `PlayerbotKiteModel`, the walk is `Combat/PlayerbotKite.cs`, one instance
-in each brain, party AI and group AI; the battleground AI does not kite). It runs after `PlayerbotRisk.ObserveFight` and before the
-class rotation, so a retreat always wins and kiting is the fight-on branch.
+in each brain, party AI and group AI; the battleground AI does not kite). It runs after the retreat check (the brain's
+`PlayerbotRisk.ObserveFight`, the party and group AI's own retreat update) and before the class rotation, so a retreat always wins and
+kiting is the fight-on branch.
 
 | Key (`World:Playerbots:Combat:Kite:`) | Default | Range |
 |---|---|---|

@@ -20,8 +20,8 @@ namespace ArcaneCore.World.Playerbots.Combat;
 /// Kiting for one bot (<c>World:Playerbots:Combat:Kite</c>; the choice is <see cref="PlayerbotKiteModel"/>): a hurt bot that can attack
 /// from range slows the creature on it, then walks a short leg back out to its casting range, so the rotation keeps casting in the
 /// same think it arrives. One instance per brain, party AI and group AI (the battleground AI does not kite). It is the fight-on branch
-/// of the risk model: the caller runs <c>PlayerbotRisk.ObserveFight</c> first and a retreat always wins (a running retreat drops a
-/// step under way).
+/// of the risk model: a retreat always wins, because the caller checks it first (the brain runs <c>PlayerbotRisk.ObserveFight</c>, the
+/// party and group AI run their own retreat update), and a running retreat drops a step under way.
 /// <para>
 /// State: this object owns its route and the per-fight counters; everything runs on the world thread. A fight is a stretch of
 /// continuous combat: the counters reset when the bot leaves combat, dies, or the option is turned off.
@@ -442,8 +442,8 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
     /// <summary>
     /// The first of up to seven directions (away from the pursuers' centroid, then 35, 70 and 105 degrees either side) whose end
-    /// satisfies the spot rules: ground within 3 yards of the bot's height (probed from 20 yards above, and from 2 for a cave, the
-    /// nearer to the bot's height), a clipped walk of at least 75% of the leg, not under water, outside the aggro of every creature
+    /// satisfies the spot rules: ground within 3 yards of the bot's height (floor reads at z + 20 and at z, each probing 2 yards
+    /// higher, the nearer to the bot's height), a clipped walk of at least 75% of the leg, not under water, outside the aggro of every creature
     /// that is not in the fight, no hazard on the leg, inside every pursuer's leash zone less 8 yards (or no farther from its anchor
     /// than the bot is now), spell line of sight to the victim with the victim within casting range, and within the leash of the
     /// party or group centre. No path search.
