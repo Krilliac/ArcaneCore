@@ -19,10 +19,17 @@ internal sealed class TilePrefetchCache<T>
     /// <summary>How long an untaken prefetch is kept.</summary>
     internal const long ExpiryMs = 120_000;
 
-    /// <summary>At most this many prefetches are kept (the oldest go first).</summary>
+    /// <summary>At most this many approach prefetches are kept (the oldest go first).</summary>
     internal const int MaxEntries = 64;
 
-    private readonly Dictionary<(uint Map, int X, int Y), (Task<T?> Load, long RequestedMs)> _entries = [];
+    /// <summary>
+    /// At most this many arrival prefetches (a teleport's destination, <see cref="Request"/> with <c>arrival</c>) are kept, a budget of their own
+    /// so a burst of teleports (bots travel by teleport from many places) never evicts the approach prefetches of players walking toward
+    /// ungenerated grids, and walking players never evict an arrival's tiles. The oldest arrival goes first.
+    /// </summary>
+    internal const int MaxArrivalEntries = 32;
+
+    private readonly Dictionary<(uint Map, int X, int Y), (Task<T?> Load, long RequestedMs, bool Arrival)> _entries = [];
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     /// <summary>Prefetched tiles the loader took (diagnostics and tests).</summary>
@@ -34,15 +41,18 @@ internal sealed class TilePrefetchCache<T>
     /// <summary>Prefetches waiting to be taken.</summary>
     internal int Pending => _entries.Count;
 
-    /// <summary>Start loading a tile in the background unless it is already on its way.</summary>
-    internal void Request(uint mapId, int tileX, int tileY, Func<T?> load)
+    /// <summary>
+    /// Start loading a tile in the background unless it is already on its way. <paramref name="arrival"/>: asked for a teleport's destination,
+    /// which counts against <see cref="MaxArrivalEntries"/> instead of <see cref="MaxEntries"/>.
+    /// </summary>
+    internal void Request(uint mapId, int tileX, int tileY, Func<T?> load, bool arrival = false)
     {
         if (_entries.ContainsKey((mapId, tileX, tileY)))
         {
             return;
         }
 
-        Sweep();
+        Sweep(arrival);
         Requests++;
         _entries[(mapId, tileX, tileY)] = (Task.Run(() =>
         {
@@ -54,13 +64,13 @@ internal sealed class TilePrefetchCache<T>
             {
                 return null; // the loader reads it again itself and reports the problem as it always did
             }
-        }), _clock.ElapsedMilliseconds);
+        }), _clock.ElapsedMilliseconds, arrival);
     }
 
     /// <summary>The prefetched tile if it finished; the entry is dropped either way (an unfinished one is not waited for).</summary>
     internal bool TryTake(uint mapId, int tileX, int tileY, out T value)
     {
-        if (_entries.Remove((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs) entry)
+        if (_entries.Remove((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival) entry)
             && entry.Load.IsCompletedSuccessfully && entry.Load.Result is { } loaded)
         {
             Hits++;
@@ -74,7 +84,7 @@ internal sealed class TilePrefetchCache<T>
 
     /// <summary>Whether a prefetch of the tile is still being read (not finished, not taken).</summary>
     internal bool IsRunning(uint mapId, int tileX, int tileY)
-        => _entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs) entry) && !entry.Load.IsCompleted;
+        => _entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival) entry) && !entry.Load.IsCompleted;
 
     /// <summary>Whether a prefetch of the tile was asked for and not taken yet, finished or not (diagnostics and tests).</summary>
     internal bool Contains(uint mapId, int tileX, int tileY) => _entries.ContainsKey((mapId, tileX, tileY));
@@ -82,7 +92,7 @@ internal sealed class TilePrefetchCache<T>
     /// <summary>Forget a tile's prefetch (it was loaded some other way).</summary>
     internal void Forget(uint mapId, int tileX, int tileY) => _entries.Remove((mapId, tileX, tileY));
 
-    private void Sweep()
+    private void Sweep(bool arrival)
     {
         long now = _clock.ElapsedMilliseconds;
         if (_entries.Count == 0)
@@ -93,16 +103,21 @@ internal sealed class TilePrefetchCache<T>
         List<(uint, int, int)>? expired = null;
         (uint, int, int)? oldest = null;
         long oldestMs = long.MaxValue;
-        foreach (((uint, int, int) key, (Task<T?> _, long requested)) in _entries)
+        int sameClass = 0;
+        foreach (((uint, int, int) key, (Task<T?> _, long requested, bool entryArrival)) in _entries)
         {
             if (now - requested > ExpiryMs)
             {
                 (expired ??= []).Add(key);
             }
-            else if (requested < oldestMs)
+            else if (entryArrival == arrival)
             {
-                oldestMs = requested;
-                oldest = key;
+                sameClass++;
+                if (requested < oldestMs)
+                {
+                    oldestMs = requested;
+                    oldest = key;
+                }
             }
         }
 
@@ -114,7 +129,7 @@ internal sealed class TilePrefetchCache<T>
             }
         }
 
-        if (_entries.Count >= MaxEntries && oldest is { } drop)
+        if (sameClass >= (arrival ? MaxArrivalEntries : MaxEntries) && oldest is { } drop)
         {
             _entries.Remove(drop);
         }

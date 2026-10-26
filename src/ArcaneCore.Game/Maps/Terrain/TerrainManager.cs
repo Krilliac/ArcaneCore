@@ -177,7 +177,12 @@ public sealed class TerrainManager
     /// Read and parse a tile's <c>.map</c> file on the thread pool so a later load only installs it (<see cref="TilePrefetchCache{T}"/>);
     /// nothing happens without terrain data or when the tile is already in memory. World thread.
     /// </summary>
-    public void Prefetch(uint mapId, int tileX, int tileY)
+    public void Prefetch(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: false);
+
+    /// <summary><see cref="Prefetch(uint, int, int)"/> for a teleport's destination, against the arrival budget (<see cref="TilePrefetchCache{T}.MaxArrivalEntries"/>). World thread.</summary>
+    public void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: true);
+
+    private void Prefetch(uint mapId, int tileX, int tileY, bool arrival)
     {
         if (_mapsDirectory is null || (_maps.TryGetValue(mapId, out TerrainInfo? terrain) && terrain.IsTileLoaded(tileX, tileY)))
         {
@@ -185,7 +190,7 @@ public sealed class TerrainManager
         }
 
         string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
-        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : null);
+        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : null, arrival);
     }
 
     /// <summary>
@@ -220,7 +225,7 @@ public sealed class TerrainManager
             {
                 AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId}", ex.Message);
             }
-            _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
+            _logger.LogFault("terrain-area-lookup", ex, "Terrain: could not read {Path}", path);
             return (0, 0);
         }
     }
@@ -230,7 +235,10 @@ public sealed class TerrainManager
     /// true with the flag of the cell under (<paramref name="x"/>, <paramref name="y"/>) once the tile's area section has been read in the
     /// background; false while it is not, after asking for it (a read on the thread pool, once per tile). The flags are static content,
     /// 512 bytes a tile, kept for the manager's life apart from the tile cache, so a far lookup neither pins a whole tile nor reads it again.
-    /// Without terrain data every tile reads as empty: true, flag 0. World thread (the per-map table is made here; the pool only fills slots).
+    /// Without terrain data every tile reads as empty: true, flag 0. A lookup never waits for ever: a read still running after
+    /// <see cref="BackgroundAreaPendingLimitMs"/> reads as empty (flag 0; the real flags are used once the read lands), and a read that failed
+    /// for want of the file (sharing violation, permissions) reads as empty for <see cref="BackgroundAreaRetryMs"/>, then is read again. World thread
+    /// (the per-map table is made here; the pool only fills slots).
     /// </summary>
     internal bool TryGetBackgroundAreaFlag(uint mapId, int tileX, int tileY, float x, float y, out ushort flag)
     {
@@ -248,29 +256,54 @@ public sealed class TerrainManager
             return true;
         }
 
-        if (Interlocked.CompareExchange(ref atlas.Claimed[index], 1, 0) == 0)
+        long now = Environment.TickCount64;
+        switch (Volatile.Read(ref atlas.State[index]))
         {
-            Interlocked.Increment(ref _areaReadsInFlight);
-            string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
-            _ = Task.Run(() =>
-            {
-                try
+            case SlotIdle:
+                StartAreaRead(atlas, mapId, tileX, tileY, index, SlotIdle);
+                return false;
+            case SlotFailed:
+                if (now - Volatile.Read(ref atlas.ChangedMs[index]) < BackgroundAreaRetryMs)
                 {
-                    Volatile.Write(ref atlas.Tiles[index], ReadAreaFlagsDetached(mapId, tileX, tileY, path));
+                    return true; // the tile reads as empty for now, as the tile cache reads an unreadable file
                 }
-                finally
-                {
-                    Interlocked.Decrement(ref _areaReadsInFlight);
-                }
-            });
+
+                StartAreaRead(atlas, mapId, tileX, tileY, index, SlotFailed);
+                return false;
+            default: // SlotReading
+                long started = Volatile.Read(ref atlas.ChangedMs[index]);
+                return started != 0 && now - started > BackgroundAreaPendingLimitMs; // given up on: no area, nothing published
+        }
+    }
+
+    /// <summary>Claim an area slot (<paramref name="from"/> to reading) and read it on the pool; nothing when another caller claimed it first.</summary>
+    private void StartAreaRead(AreaAtlas atlas, uint mapId, int tileX, int tileY, int index, int from)
+    {
+        if (Interlocked.CompareExchange(ref atlas.State[index], SlotReading, from) != from)
+        {
+            return;
         }
 
-        return false;
+        Volatile.Write(ref atlas.ChangedMs[index], Environment.TickCount64);
+        Interlocked.Increment(ref _areaReadsInFlight);
+        string path = Path.Combine(_mapsDirectory!, TerrainTile.FileName(mapId, tileX, tileY));
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                FillAreaSlot(atlas, mapId, tileX, tileY, index, path);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _areaReadsInFlight);
+            }
+        });
     }
 
     /// <summary>
     /// Read the area flags of every tile file of a map in the background, one after another on one pool thread, so the lookups of
-    /// <see cref="TryGetBackgroundAreaFlag"/> rarely wait (about 560 bytes a file). Once per map; nothing without terrain data. World thread.
+    /// <see cref="TryGetBackgroundAreaFlag"/> rarely wait (about 560 bytes a file). Once per map; nothing without terrain data. A tile that
+    /// fails does not end the pass: the next one is read. World thread.
     /// </summary>
     internal void WarmBackgroundAreas(uint mapId)
     {
@@ -299,9 +332,10 @@ public sealed class TerrainManager
                         int index = (tileX * GridDefines.MaxNumberOfGrids) + tileY;
                         string path = Path.Combine(directory, TerrainTile.FileName(mapId, tileX, tileY));
                         if (Volatile.Read(ref atlas.Tiles[index]) is null && File.Exists(path)
-                            && Interlocked.CompareExchange(ref atlas.Claimed[index], 1, 0) == 0)
+                            && Interlocked.CompareExchange(ref atlas.State[index], SlotReading, SlotIdle) == SlotIdle)
                         {
-                            Volatile.Write(ref atlas.Tiles[index], ReadAreaFlagsDetached(mapId, tileX, tileY, path));
+                            Volatile.Write(ref atlas.ChangedMs[index], Environment.TickCount64);
+                            FillAreaSlot(atlas, mapId, tileX, tileY, index, path);
                         }
                     }
                 }
@@ -316,11 +350,24 @@ public sealed class TerrainManager
     /// <summary>Background area reads (<see cref="TryGetBackgroundAreaFlag"/>, <see cref="WarmBackgroundAreas"/>) not finished yet (tests).</summary>
     internal int BackgroundAreaReadsInFlight => Volatile.Read(ref _areaReadsInFlight);
 
+    /// <summary>How long a lookup may find its tile's area read still running before it reads the tile as empty (test seam; the playerbots' <c>TileWait.MaxMs</c> is the same 15 s).</summary>
+    internal long BackgroundAreaPendingLimitMs { get; set; } = 15_000;
+
+    /// <summary>How long an area read that failed for want of the file reads as empty before it is tried again (the tile cache's clean-up interval; test seam).</summary>
+    internal long BackgroundAreaRetryMs { get; set; } = TerrainInfo.CleanUpIntervalMs;
+
+    /// <summary>Test seam: reads a tile file's area section (<see cref="TerrainTile.ReadAreaFlags"/>); a test installs one that fails or blocks.</summary>
+    internal Func<string, ushort[]> AreaFileReader { get; set; } = TerrainTile.ReadAreaFlags;
+
     /// <summary>Test seam: how many tile area sections the calling thread has read (<see cref="TryGetBackgroundAreaFlag"/>' pool reads).</summary>
-    internal static int AreaReadsOnThisThread => _areaReadsOnThisThread;
+    internal static int AreaReadsOnThisThread => t_areaReadsOnThisThread;
 
     [ThreadStatic]
-    private static int _areaReadsOnThisThread;
+    private static int t_areaReadsOnThisThread;
+
+    private const int SlotIdle = 0;
+    private const int SlotReading = 1;
+    private const int SlotFailed = 2;
 
     private int _areaReadsInFlight;
     private readonly Dictionary<uint, AreaAtlas> _areaAtlas = [];
@@ -339,23 +386,53 @@ public sealed class TerrainManager
         return atlas;
     }
 
-    private ushort[] ReadAreaFlagsDetached(uint mapId, int tileX, int tileY, string path)
+    /// <summary>
+    /// Read one claimed slot and publish the result: the flags, <see cref="NoAreas"/> for a file that will not read any better later (missing,
+    /// corrupt, any other failure), or the failed state for a transient failure (retried after <see cref="BackgroundAreaRetryMs"/>). Never
+    /// throws except for out of memory, so a pass over many tiles goes on and a slot is never left reading. Pool thread.
+    /// </summary>
+    private void FillAreaSlot(AreaAtlas atlas, uint mapId, int tileX, int tileY, int index, string path)
     {
-        _areaReadsOnThisThread++;
         try
         {
-            return File.Exists(path) ? TerrainTile.ReadAreaFlags(path) : NoAreas;
+            if (ReadAreaFlagsDetached(mapId, tileX, tileY, path) is { } flags)
+            {
+                Volatile.Write(ref atlas.Tiles[index], flags);
+            }
+            else
+            {
+                Volatile.Write(ref atlas.ChangedMs[index], Environment.TickCount64);
+                Volatile.Write(ref atlas.State[index], SlotFailed);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("terrain.area-task", ex);
+            _logger.LogFault("terrain-area-task", ex, "Terrain: reading the areas of {Path} failed; the tile reads as empty", path);
+            Volatile.Write(ref atlas.Tiles[index], NoAreas);
+        }
+    }
+
+    /// <summary>The tile's area flags; <see cref="NoAreas"/> for a missing or corrupt file; null for a failure that may pass (IO, access).</summary>
+    private ushort[]? ReadAreaFlagsDetached(uint mapId, int tileX, int tileY, string path)
+    {
+        t_areaReadsOnThisThread++;
+        try
+        {
+            return File.Exists(path) ? AreaFileReader(path) : NoAreas;
+        }
+        catch (InvalidDataException ex)
         {
             FaultLedger.Shared.Record("terrain.area-read", ex);
-            if (ex is InvalidDataException)
-            {
-                AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
-            }
-
-            _logger.LogWarning(ex, "Terrain: could not read the areas of {Path}", path);
+            AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
+            _logger.LogFault("terrain-area-read", ex, "Terrain: {Path} has no usable area section; the tile reads as empty", path);
             return NoAreas;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            FaultLedger.Shared.Record("terrain.area-read", ex);
+            _logger.LogFault("terrain-area-read", ex, "Terrain: could not read the areas of {Path}; trying again later", path);
+            return null;
         }
     }
 
@@ -364,8 +441,11 @@ public sealed class TerrainManager
     {
         public readonly ushort[]?[] Tiles = new ushort[]?[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
 
-        /// <summary>1 once a read of the slot was started (by a lookup or the warm-up): each tile is read once.</summary>
-        public readonly int[] Claimed = new int[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
+        /// <summary>Idle, reading (started by a lookup or the warm-up; one caller at a time) or failed (waiting to be retried).</summary>
+        public readonly int[] State = new int[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
+
+        /// <summary>When the slot last changed to reading or failed (<see cref="Environment.TickCount64"/>; 0 until set).</summary>
+        public readonly long[] ChangedMs = new long[GridDefines.MaxNumberOfGrids * GridDefines.MaxNumberOfGrids];
 
         /// <summary>Whether <see cref="WarmBackgroundAreas"/> ran for the map (world thread).</summary>
         public bool Warmed;
@@ -373,10 +453,10 @@ public sealed class TerrainManager
 
     // Test seam kept in release builds too (the tests run in either): one thread-local increment per tile read, next to a file read.
     [ThreadStatic]
-    private static int _detachedReadsOnThisThread;
+    private static int t_detachedReadsOnThisThread;
 
     /// <summary>Test seam: how many <see cref="ReadTileDetached"/> calls the calling thread has made. A test reads it on the world thread to prove none ran there.</summary>
-    internal static int DetachedReadsOnThisThread => _detachedReadsOnThisThread;
+    internal static int DetachedReadsOnThisThread => t_detachedReadsOnThisThread;
 
     /// <summary>
     /// One tile read straight from its <c>.map</c> file, without the tile cache or the prefetch (so no counter and no shared state is
@@ -385,7 +465,7 @@ public sealed class TerrainManager
     /// </summary>
     public TerrainTile ReadTileDetached(uint mapId, int tileX, int tileY)
     {
-        _detachedReadsOnThisThread++;
+        t_detachedReadsOnThisThread++;
         if (_mapsDirectory is null)
         {
             return TerrainTile.Empty;
@@ -403,7 +483,7 @@ public sealed class TerrainManager
             {
                 AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId} tile ({tileX}, {tileY})", ex.Message);
             }
-            _logger.LogWarning(ex, "Terrain: could not read {Path}", path);
+            _logger.LogFault("terrain-tile-read", ex, "Terrain: could not read {Path}", path);
             return TerrainTile.Empty;
         }
     }

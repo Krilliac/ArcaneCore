@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
+using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
@@ -119,6 +122,71 @@ public sealed class TeleportArrivalPrefetchTests : IDisposable
             world.RunTick(50);
             Assert.True(teleports.TeleportTo(a, 0, -1500, 10, 30, 0f));
             Assert.False(WorldMaps.Of(world).Terrain.IsPrefetched(0, tx, ty, out _));
+        }
+    }
+
+    /// <summary>
+    /// A teleport asks the model service and the navigation service for the destination's tiles as an arrival (their own prefetch budget, not
+    /// the approach prefetch's), and a service whose prefetch fails neither stops the other nor the teleport.
+    /// </summary>
+    [Fact]
+    public void ATeleport_AsksTheModelAndNavigationServicesForItsDestinationAsAnArrival_EvenWhenOneFails()
+    {
+        using WorldRuntime world = CreateWorld();
+        var models = new RecordingService(fails: true);
+        var mesh = new RecordingService(fails: false);
+        WorldCollision.Of(world).Install(lineOfSight: models, pathfinder: mesh);
+        var teleports = new TeleportService(world, _ => { }, _ => { });
+        Player a = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1));
+        world.AddPlayer(a);
+        world.RunTick(50);
+        (int tx, int ty) = TerrainTile.TileOf(1000f, 2000f)!.Value;
+
+        Assert.True(teleports.TeleportTo(a, 1, 1000, 2000, 30, 2f));
+
+        Assert.Contains((1u, tx, ty), mesh.Arrivals);
+        Assert.Contains((1u, tx, ty), models.Arrivals); // asked, then threw
+        Assert.Equal(models.Arrivals.OrderBy(t => t), mesh.Arrivals.OrderBy(t => t)); // the failing one did not skip tiles of the other
+        Assert.Empty(mesh.Approaches);
+        Assert.Empty(models.Approaches);
+        Assert.True(teleports.IsBeingTeleportedFar(a) || teleports.IsBeingTeleportedNear(a));
+    }
+
+    private sealed class RecordingService(bool fails) : ILineOfSight, IPathfinder, ICollisionTilePrefetch
+    {
+        public ConcurrentQueue<(uint, int, int)> Arrivals { get; } = new();
+
+        public ConcurrentQueue<(uint, int, int)> Approaches { get; } = new();
+
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = default;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => PathResult.None(start);
+
+        public void Prefetch(uint mapId, int tileX, int tileY) => Approaches.Enqueue((mapId, tileX, tileY));
+
+        public void PrefetchArrival(uint mapId, int tileX, int tileY)
+        {
+            Arrivals.Enqueue((mapId, tileX, tileY));
+            if (fails)
+            {
+                throw new InvalidOperationException("injected");
+            }
         }
     }
 }

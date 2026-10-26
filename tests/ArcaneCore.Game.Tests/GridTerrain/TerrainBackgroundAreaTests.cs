@@ -173,4 +173,129 @@ public sealed class TerrainBackgroundAreaTests : IDisposable
 
         Assert.Throws<InvalidDataException>(() => TerrainTile.ReadAreaFlags(Path.Combine(maps, TerrainTile.FileName(0, 31, 32))));
     }
+
+    /// <summary>A reader that fails on the file of tile (32, 32) with <paramref name="failure"/> and reads the others as usual.</summary>
+    private static Func<string, ushort[]> FailingOnTile32(Func<Exception> failure)
+        => path => path.EndsWith(TerrainTile.FileName(0, 32, 32), StringComparison.Ordinal) ? throw failure() : TerrainTile.ReadAreaFlags(path);
+
+    /// <summary>
+    /// A read that fails with something the reader does not expect (not IO, access or data) must not leave the lookup pending for ever: the
+    /// slot is published as empty and the lookup completes. With the warm-up the failure ends no pass: the tiles after the failing one are read.
+    /// </summary>
+    [Fact]
+    public void AnUnexpectedFailureOfTheRead_StillCompletesTheLookup_AndTheWarmUpGoesOn()
+    {
+        (_, AreaTable areas) = WriteTiles();
+        var manager = new TerrainManager(_dataDir) { Areas = areas, AreaFileReader = FailingOnTile32(() => new InvalidOperationException("injected")) };
+        var reference = new TerrainManager(_dataDir) { Areas = areas };
+        TerrainInfo terrain = manager.For(0);
+        (float x32, float y32) = CellCentres(32, 32).Skip(5).First();
+        (float x33, float y33) = CellCentres(33, 32).First();
+
+        Assert.False(terrain.TryGetZoneAndAreaIdWithoutLoading(x32, y32, 0f, out _)); // asks for the failing read
+        WaitForBackgroundReads(manager);
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x32, y32, 0f, out (uint ZoneId, uint AreaId) failed));
+        Assert.Equal((12u, 12u), failed); // no area anywhere: the map's linked zone, as for an unreadable file
+
+        terrain.WarmAreasInBackground(); // tile (31, 32) is read before the failing tile in the pass's order, (33, 32) after it
+        WaitForBackgroundReads(manager);
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x33, y33, 0f, out (uint, uint) after));
+        Assert.Equal(reference.For(0).GetZoneAndAreaId(x33, y33, 0f), after);
+        Assert.Equal(0, manager.FilesLoaded);
+    }
+
+    /// <summary>The warm-up pass over a map whose first tile fails (not an IO failure) still reads the tiles that follow it.</summary>
+    [Fact]
+    public void TheWarmUp_SurvivesATileWhoseReadThrows()
+    {
+        (_, AreaTable areas) = WriteTiles();
+        var manager = new TerrainManager(_dataDir) { Areas = areas, AreaFileReader = FailingOnTile32(() => new NotSupportedException("injected")) };
+        var reference = new TerrainManager(_dataDir) { Areas = areas };
+        TerrainInfo terrain = manager.For(0);
+        terrain.WarmAreasInBackground();
+        WaitForBackgroundReads(manager);
+
+        (float x, float y) = CellCentres(33, 32).Last();
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out (uint, uint) found));
+        Assert.Equal(reference.For(0).GetZoneAndAreaId(x, y, 0f), found);
+        (float failedX, float failedY) = CellCentres(32, 32).Last();
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(failedX, failedY, 0f, out (uint, uint) empty));
+        Assert.Equal((12u, 12u), empty);
+    }
+
+    /// <summary>
+    /// A failure that may pass (a sharing violation) is not kept for the manager's life: the tile reads as empty for the retry interval, then
+    /// is read again and its real flags are used.
+    /// </summary>
+    [Fact]
+    public void ATransientIoFailure_ReadsAsEmptyForTheRetryInterval_ThenIsReadAgain()
+    {
+        (_, AreaTable areas) = WriteTiles();
+        int failures = 1;
+        var manager = new TerrainManager(_dataDir)
+        {
+            Areas = areas,
+            BackgroundAreaRetryMs = 60_000,
+            AreaFileReader = path => Interlocked.Decrement(ref failures) >= 0 ? throw new IOException("injected sharing violation") : TerrainTile.ReadAreaFlags(path),
+        };
+        var reference = new TerrainManager(_dataDir) { Areas = areas };
+        TerrainInfo terrain = manager.For(0);
+        (float x, float y) = CellCentres(32, 32).Skip(9).First();
+
+        Assert.False(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out _));
+        WaitForBackgroundReads(manager);
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out (uint, uint) empty)); // completes, as an unreadable tile does
+        Assert.Equal((12u, 12u), empty);
+        Assert.Equal(0, manager.BackgroundAreaReadsInFlight); // inside the interval nothing is read again
+
+        manager.BackgroundAreaRetryMs = 0;
+        Assert.False(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out _)); // the retry was started
+        WaitForBackgroundReads(manager);
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out (uint, uint) found));
+        Assert.Equal(reference.For(0).GetZoneAndAreaId(x, y, 0f), found);
+        Assert.NotEqual((12u, 12u), found);
+    }
+
+    /// <summary>
+    /// A read that has not finished within <see cref="TerrainManager.BackgroundAreaPendingLimitMs"/> stops holding the lookup pending: it reads
+    /// as empty meanwhile, and the real flags are used as soon as the read lands.
+    /// </summary>
+    [Fact]
+    public void AReadStillRunningPastTheLimit_ReadsAsEmpty_ThenTheRealFlagsOnceItLands()
+    {
+        (_, AreaTable areas) = WriteTiles();
+        using var release = new ManualResetEventSlim(false);
+        var manager = new TerrainManager(_dataDir)
+        {
+            Areas = areas,
+            BackgroundAreaPendingLimitMs = 50,
+            AreaFileReader = path =>
+            {
+                Assert.True(release.Wait(ReadTimeout));
+                return TerrainTile.ReadAreaFlags(path);
+            },
+        };
+        var reference = new TerrainManager(_dataDir) { Areas = areas };
+        TerrainInfo terrain = manager.For(0);
+        (float x, float y) = CellCentres(32, 32).Skip(40).First();
+
+        Assert.False(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out _));
+        var clock = Stopwatch.StartNew();
+        bool known = false;
+        (uint ZoneId, uint AreaId) given = default;
+        while (!known && clock.Elapsed < ReadTimeout)
+        {
+            Thread.Sleep(10);
+            known = terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out given);
+        }
+
+        Assert.True(known, "the lookup stayed pending past the limit");
+        Assert.Equal((12u, 12u), given);
+        Assert.Equal(1, manager.BackgroundAreaReadsInFlight); // given up on, not finished
+
+        release.Set();
+        WaitForBackgroundReads(manager);
+        Assert.True(terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, 0f, out (uint, uint) found));
+        Assert.Equal(reference.For(0).GetZoneAndAreaId(x, y, 0f), found);
+    }
 }

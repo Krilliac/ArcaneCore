@@ -48,7 +48,9 @@ public sealed class MapOptions
     /// How far beyond <see cref="GridActivationDistance"/> a player looks for grids that do not exist yet, so
     /// their terrain, vmap and navmesh tiles are read and parsed on the thread pool before the grid is created
     /// (<see cref="GridContainer.GridApproaching"/>); other objects, active ones included, look half this distance around themselves. 0 turns the prefetch off. An ArcaneCore
-    /// addition (vmangos reads the tiles inside the update): it changes when the files are read, not what is loaded or when.
+    /// addition (vmangos reads the tiles inside the update): it changes when the files are read, not what is loaded or when. It also
+    /// turns off the arrival prefetch (the tiles of a teleport's destination are read when the teleport starts), which has a budget of
+    /// its own so it never evicts the approach prefetches.
     /// </summary>
     public float GridPrefetchDistance { get; set; } = 200f;
 
