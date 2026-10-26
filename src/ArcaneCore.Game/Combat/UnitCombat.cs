@@ -93,8 +93,9 @@ public sealed partial class UnitCombat
     internal uint CombatCheckTimer { get; set; }
 
     /// <summary>
-    /// Diagnostics for combat/combat-never-left: the member that last put this unit in combat (<see cref="MapCombat.SetInCombatState"/>'s
-    /// caller name, a constant string) and how many times it was put in combat since its flag was last cleared.
+    /// Diagnostics for combat/combat-never-left and playerbot phantom-combat: the member that last put this unit in combat
+    /// (<see cref="MapCombat.SetInCombatState"/>'s caller name, a constant string) and how many times it was put in combat since its flag
+    /// was last cleared.
     /// </summary>
     public string? LastCombatSetBy { get; internal set; }
 

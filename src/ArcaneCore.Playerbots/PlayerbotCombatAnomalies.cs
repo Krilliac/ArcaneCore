@@ -141,8 +141,8 @@ internal sealed class PlayerbotCombatWatch
 
 /// <summary>
 /// The combat flag nothing holds up (<c>combat/phantom-combat</c>): the bot is in combat, no living creature attacks it or has it on a
-/// threat list, and it has no victim, for <see cref="PhantomMs"/> of world time without a single look that disagrees. One look per think
-/// (<see cref="PlayerbotRisk.Track"/>); a few set lookups and no allocation on success.
+/// threat list, and it has no victim. The watch covers only a flag nobody has set again for 45 s; a flag kept up by repeated sets is reported
+/// as <c>combat/combat-never-left</c>. One look per think (<see cref="PlayerbotRisk.Track"/>); a few set lookups and no allocation on success.
 /// </summary>
 internal sealed class PlayerbotPhantomCombatWatch
 {
@@ -159,7 +159,6 @@ internal sealed class PlayerbotPhantomCombatWatch
         {
             _sinceMs = 0;
             _reported = false;
-            _combatSetSerial = 0;
             return;
         }
 

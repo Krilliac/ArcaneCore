@@ -546,6 +546,38 @@ public sealed class PlayerbotCombatAnomalyTests
         });
     }
 
+    [Fact]
+    public async Task ACombatFlagRepeatedlySetWithNoOpponent_ReportsCombatNeverLeftAtTwoMinutes_AndNoPhantomCombat()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            string botSubject = PlayerbotAnomalies.SubjectOf(player);
+            string mapSubject = MapCombat.SubjectOf(player);
+            using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subject == botSubject || n.Subject == mapSubject);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            // Loops for at least 125 s (126 s: 42 * 3000 ms) refreshing combat with no opponent.
+            // Bot watch ignores repeated sets, while Game-side MapCombat catches it at 120 s as combat/combat-never-left.
+            MapCombat combat = player.Map!.Combat;
+            for (uint nowMs = 3000; nowMs <= 126_000; nowMs += 3000)
+            {
+                combat.SetInCombatState(player, 3_600_000, caller: "HandOffCaller", via: "HandOffVia");
+                combat.Update(3000);
+                watch.Look(player, nowMs);
+            }
+
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), cap.Describe());
+            Assert.False(cap.Any("combat/phantom-combat"), cap.Describe());
+            Assert.Equal(1, cap.Count("combat/combat-never-left"));
+
+            AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == "combat/combat-never-left");
+            Assert.Contains("set by HandOffCaller", notice.Detail);
+            return true;
+        });
+    }
+
     // --- risk/retreat-loop ---------------------------------------------------------------------------------------------------
 
     [Fact]
