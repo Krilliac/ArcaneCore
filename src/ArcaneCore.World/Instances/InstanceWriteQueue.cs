@@ -56,6 +56,9 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = new();
+    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
+    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
     private Exception? _terminalFailure;
     private int _pending;
     private long _enqueued;
@@ -387,6 +390,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             _stopped = true;
         }
 
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -914,6 +918,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
         for (int attempt = 1; ; attempt++)
         {
+            if (_drain.ExhaustedFailure() is { } exhausted)
+            {
+                return exhausted; // shutdown drain only: past its budget no further attempt starts, the write stays retained
+            }
+
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
@@ -964,7 +973,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 FailTerminal(ex, scope.ServiceProvider);
                 return ex;
             }
-            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
+            catch (Exception ex) when (attempt < attempts && !_drain.Started && ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("writequeue.instance-attempt", ex);
                 logger.LogWarning(ex, "instance write for {Target} failed (attempt {Attempt}); retrying", DescribeKey(key), attempt);

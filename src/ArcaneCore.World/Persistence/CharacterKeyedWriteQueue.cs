@@ -32,6 +32,9 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = new();
+    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
+    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
     private int _pending;
 
     private protected CharacterKeyedWriteQueue(IServiceScopeFactory scopes, ILogger logger)
@@ -253,6 +256,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -521,6 +525,12 @@ public abstract class CharacterKeyedWriteQueue<TValue>
         Exception? failure = null;
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
+            if (_drain.ExhaustedFailure() is { } exhausted)
+            {
+                failure = exhausted; // shutdown drain only: past its budget no further attempt starts, the write stays retained
+                break;
+            }
+
             using IServiceScope scope = _scopes.CreateScope();
             try
             {
@@ -548,7 +558,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                     LogAttemptFailed(Logger, ex, characterId, attempt, attempts);
                 }
 
-                if (attempt < attempts)
+                if (attempt < attempts && !_drain.Started)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }

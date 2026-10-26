@@ -45,7 +45,9 @@ public sealed class SqliteWriteGateProgressTests
 
         /// <summary>
         /// The next <see cref="PausedMs"/> read by a watched flow (<paramref name="watchedFlow"/> true: the waiter) or by the calling thread (false: the releasing thread, which
-        /// must be the one that goes on to release the gate; queued links poll on their own threads) first suspends the process for <paramref name="ms"/>: a pause landing between that flow's reads of the clock and of the suspension total.
+        /// must be the one that goes on to release the gate; queued links poll on their own threads) first suspends the process for <paramref name="ms"/>. The pause fires inside the flow's read of the suspension total,
+        /// so in the gate's usual order (clock, then total, in <c>Advance</c>) it lands between the two reads; in the baseline and hand-off order (total, then clock) it lands before both,
+        /// so the baseline and the hand-off time both include it.
         /// </summary>
         public void SuspendBetweenNextReads(double ms, bool watchedFlow = true)
         {
@@ -335,6 +337,7 @@ public sealed class SqliteWriteGateProgressTests
         SqliteWriteGate gate = NewGate(clock);
         (SqliteWriteGate.Hold first, Link[] chain, Task<SqliteWriteGate.GateEntry> writer) = QueueBehind(gate, links: 1, parkWriter: true);
         using ReleaseAtEnd releaseFirst = new(first);
+        WaitUntil(() => clock.Reads >= 2, "the writer to be polling");
 
         clock.Armed = true; // the writer's next look at the clock parks it
         Assert.True(clock.Parked.Wait(TimeSpan.FromSeconds(10)), "the writer never reached the clock");

@@ -43,7 +43,10 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private Task? _consumer;
     private Task? _stop;
     private RetainedRetryTimer? _retry;
+    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
+    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = new();
     private int _pending;
 
     private enum Kind
@@ -246,6 +249,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -645,6 +649,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     {
         for (int attempt = 1; ; attempt++)
         {
+            _drain.ThrowIfExhausted(); // shutdown drain only: past its budget no further attempt starts, the write stays retained
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
@@ -681,7 +686,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
-            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
+            catch (Exception ex) when (attempt < attempts && !_drain.Started && ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("writequeue.honor-attempt", ex);
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);

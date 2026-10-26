@@ -224,10 +224,10 @@ public sealed class SqliteWriteGate
     /// </summary>
     private WaitProgress NewProgress()
     {
+        long handoffs;
+        lock (_queueLock) handoffs = _handoffs; // first: a hand-off between this read and the clock reads is then applied by the next Advance, not counted as idle time
         double paused = _clock.PausedMs;
         double now = _clock.NowMs;
-        long handoffs;
-        lock (_queueLock) handoffs = _handoffs;
         return new WaitProgress { StartNow = now, StartPaused = paused, ResetNow = now, ResetPaused = paused, SeenHandoffs = handoffs };
     }
 

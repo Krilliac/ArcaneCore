@@ -43,6 +43,9 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
     private Task? _timer;
     private Task? _stop;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = new();
+    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
+    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
     private int _pending;
 
     private enum Kind
@@ -180,6 +183,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         await _timerStop.CancelAsync().ConfigureAwait(false);
         if (_timer is not null)
         {
@@ -352,6 +356,12 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         int attemptsMade = 0;
         for (int attempt = 1; attempt <= MaxAttempts; attempt++)
         {
+            if (_drain.ExhaustedFailure() is { } exhausted)
+            {
+                failure = exhausted; // shutdown drain only: past its budget no further attempt starts, the write stays retained
+                break;
+            }
+
             attemptsMade = attempt;
             try
             {
@@ -374,7 +384,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                     break; // another connection holds the database: keep the write retained, never wait out the lock again inline
                 }
 
-                if (attempt < MaxAttempts)
+                if (attempt < MaxAttempts && !_drain.Started)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }

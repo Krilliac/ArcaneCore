@@ -47,6 +47,9 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = new();
+    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
+    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
     private int _pending;
 
     private enum Kind
@@ -232,6 +235,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -630,6 +634,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     {
         for (int attempt = 1; ; attempt++)
         {
+            _drain.ThrowIfExhausted(); // shutdown drain only: past its budget no further attempt starts, the write stays retained
             try
             {
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -656,7 +661,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 return;
             }
-            catch (Exception ex) when (attempt < attempts && !IsOwnershipRejection(ex) && ex is not OutOfMemoryException)
+            catch (Exception ex) when (attempt < attempts && !_drain.Started && !IsOwnershipRejection(ex) && ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("writequeue.reputation-attempt", ex);
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);

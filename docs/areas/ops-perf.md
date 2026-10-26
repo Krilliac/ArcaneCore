@@ -89,7 +89,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
   called; the existing `WorldHost.StopAsync` order (world stop and final save, features, save
   queue) runs, so no second shutdown path exists. `Program.cs` returns `ExitCodes.Current`.
 - `HostOptions` is now bound from configuration; the shipped `HostOptions:ShutdownTimeout` is one
-  minute so a large save drain is not cut short by the host default.
+  minute so a large save drain is not cut short by the host default. The write queues' own shutdown drain is bounded inside it (no inline retry once `StopAsync` starts, no new attempt after a 5 s budget per queue); see docs/areas/persistence.md, "Other queues".
 - Timer lifetime: the one second timer runs only while a countdown is pending. Start and end
   are decided on the world thread alone (`AfterChange`; `Cancel` also ends the timer), each run
   has an id and a tick from an ended or replaced run is ignored, so cancel followed at once by a
