@@ -91,8 +91,8 @@ public sealed class DisenchantLoot(LootService loot) : ILootReleaseHandler
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(bag);
         _active.Remove(bag.Source);
-        // The window only pays out while the source item is still held: vmangos refuses to sell the item being looted (ItemHandler.cpp:485-490)
-        // and destroys it on release (LootHandler.cpp:543-553), so a sold, traded or destroyed item never leaves reagents behind.
+        // The window only pays out while the source item is still held (LootHandler.cpp:543-553). The vendor refuses to sell the item being
+        // looted (ItemHandler.cpp:485-490, PlayerInventory.SellItem); a traded or destroyed one is caught here.
         if (player.Inventory.GetItemByGuid(bag.Source) is not { } owned)
         {
             loot.RemoveSpecial(bag.Source);

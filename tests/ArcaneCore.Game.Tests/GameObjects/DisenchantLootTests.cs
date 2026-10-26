@@ -237,18 +237,33 @@ public sealed class DisenchantLootTests
     }
 
     [Fact]
-    public void ReleasingTheWindow_AfterTheItemWasSoldToAVendor_PaysOutNothing()
+    public void ReleasingTheWindow_AfterTheItemLeftTheBags_PaysOutNothing()
     {
         using var rig = new Rig();
         Item item = rig.Give(SellableSword);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(item));
 
-        Assert.Equal(VendorSellError.None, rig.Player.Inventory.SellItem(item.Guid, 0, 1, RepairCostTable.Empty, uint.MaxValue, out _));
+        rig.Player.Inventory.DestroyItemCount(item, 1);
         rig.Loot.Release(rig.Player, item.Guid);
 
-        Assert.Equal(0u, rig.Player.Inventory.GetItemCount(LargeShard));   // the sold item must not leave reagents behind
+        Assert.Equal(0u, rig.Player.Inventory.GetItemCount(LargeShard));   // the departed item must not leave reagents behind
         Assert.Equal(0, rig.Disenchant.ActiveItems);
         Assert.Null(rig.Loot.FindLoot(item.Guid));
+    }
+
+    [Fact]
+    public void SellingTheItemWhoseWindowIsOpen_IsRefused_UntilTheWindowCloses()
+    {
+        using var rig = new Rig();
+        Item item = rig.Give(SellableSword);
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(item));
+
+        Assert.Equal(VendorSellError.CantSellItem, rig.Player.Inventory.SellItem(item.Guid, 0, 1, RepairCostTable.Empty, uint.MaxValue, out _));
+        Assert.NotNull(rig.Player.Inventory.GetItemByGuid(item.Guid));
+
+        rig.Loot.Release(rig.Player, item.Guid);
+        Assert.Equal(1u, rig.Player.Inventory.GetItemCount(LargeShard));
+        Assert.Null(rig.Player.Inventory.GetItemByGuid(item.Guid));
     }
 
     [Fact]
