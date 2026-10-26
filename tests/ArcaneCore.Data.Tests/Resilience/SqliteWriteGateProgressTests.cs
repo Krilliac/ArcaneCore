@@ -195,7 +195,8 @@ public sealed class SqliteWriteGateProgressTests
     {
         var clock = new FakeClock();
         SqliteWriteGate gate = NewGate(clock);
-        using SqliteWriteGate.Hold holder = gate.Enter(0, "never-releases", 0)!;
+        SqliteWriteGate.Hold holder = gate.Enter(0, "never-releases", 0)!;
+        using ReleaseAtEnd releaseHolder = new(holder);
         Task<SqliteWriteGate.GateEntry> writer = Task.Run(async () => await gate.TryEnterAsync(BoundMs, "writer", 0, CancellationToken.None));
         WaitUntilWaiting(gate, 1);
 
@@ -238,7 +239,8 @@ public sealed class SqliteWriteGateProgressTests
     {
         var clock = new FakeClock();
         SqliteWriteGate gate = NewGate(clock);
-        using SqliteWriteGate.Hold holder = gate.Enter(0, "H", 0)!;
+        SqliteWriteGate.Hold holder = gate.Enter(0, "H", 0)!;
+        using ReleaseAtEnd releaseHolder = new(holder);
         Task<SqliteWriteGate.GateEntry> writer = Task.Run(async () => await gate.TryEnterAsync(BoundMs, "writer", 0, CancellationToken.None));
         WaitUntilWaiting(gate, 1);
 
@@ -255,7 +257,8 @@ public sealed class SqliteWriteGateProgressTests
     {
         var clock = new FakeClock();
         SqliteWriteGate gate = NewGate(clock);
-        using SqliteWriteGate.Hold holder = gate.Enter(0, "CharacterDbContext.SaveRest", 0)!;
+        SqliteWriteGate.Hold holder = gate.Enter(0, "CharacterDbContext.SaveRest", 0)!;
+        using ReleaseAtEnd releaseHolder = new(holder);
         Task<SqliteWriteGate.GateEntry> writer = Task.Run(async () => await gate.TryEnterAsync(BoundMs, "writer", 0, CancellationToken.None));
         WaitUntilWaiting(gate, 1);
 
@@ -310,7 +313,8 @@ public sealed class SqliteWriteGateProgressTests
     {
         // Real clock, public API. The old loop awaited WaitAsync(timeout), which throws and catches a TimeoutException at the end of every slice.
         SqliteWriteGate gate = NewRealGate();
-        using SqliteWriteGate.Hold holder = gate.Enter(0, "H", 0)!;
+        SqliteWriteGate.Hold holder = gate.Enter(0, "H", 0)!;
+        using ReleaseAtEnd releaseHolder = new(holder);
         int timeoutExceptions = 0;
         void OnFirstChance(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
         {
@@ -358,5 +362,11 @@ public sealed class SqliteWriteGateProgressTests
         await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(Enumerable.Range(0, 8), order);
         Assert.Equal(0, gate.TimeoutsTotal);
+    }
+
+    /// <summary>Releases a hold when the test scope ends (<see cref="SqliteWriteGate.Hold"/> is not disposable; its release is idempotent).</summary>
+    private sealed class ReleaseAtEnd(SqliteWriteGate.Hold hold) : IDisposable
+    {
+        public void Dispose() => hold.Release();
     }
 }
