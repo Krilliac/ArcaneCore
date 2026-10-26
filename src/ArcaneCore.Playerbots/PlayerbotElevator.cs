@@ -746,6 +746,14 @@ internal static partial class PlayerbotElevator
         // A region the choice needs is still being read in the background (ElevatorSurvey.TryRegionAt): no verdict on the lift yet, which
         // IsHeldOff reports to the callers that defer on it. No tile is read on the world thread for it.
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map), out _) is not { } choice) return false;
+        // A bot farther from the lift than one route reaches is not sent at it: the approach (ToStop, Walk) plans each leg with
+        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift, and the walk ends after MaxRefusedPlans
+        // refusals in a row or the 60 s no-progress bound. This is a coarse guard, not the fix: of the "no way to the Great Lift"
+        // failures of bot QA #1482 (2026-10-25), those that began more than 2000 yards out are covered, most of that day's; those that
+        // began inside it are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, nor the "in the shaft pit" trip failures at the lift itself. The journey or
+        // the walk leg brings the bot within reach first, and the trip begins on a later think. Every lift shares this (a mesa top is
+        // always within reach of its lifts).
+        if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > options.MaxRouteYards) return false;
         // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
         // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
         PlanOutcome directPlan = PlanOutcome.Refused;
