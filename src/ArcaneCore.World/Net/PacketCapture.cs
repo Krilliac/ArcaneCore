@@ -17,7 +17,10 @@ public sealed class PacketCaptureOptions
     /// <summary>Directory for new traces; generated filenames do not include player input.</summary>
     public string Directory { get; set; } = "packet-captures";
 
-    /// <summary>Maximum bytes in one trace, including its header; a full trace stops automatically.</summary>
+    /// <summary>
+    /// Maximum bytes in one trace, including its header; a full trace stops automatically. A trace also stops when the disk writer falls
+    /// 8192 records behind. Records are written by a background writer and the file is finished asynchronously after a stop; the server drains open traces at shutdown.
+    /// </summary>
     public long MaxBytes { get; set; } = 64 * 1024 * 1024;
 }
 
@@ -27,12 +30,17 @@ public sealed class PacketCaptureOptions
 /// records in the order they were queued. A trace whose queue is full (the disk cannot keep up) stops like one that reached its size limit.
 /// <see cref="Stop"/> ends the trace without waiting (the writer drains the queue and closes the file in the background); <see cref="Dispose"/>
 /// waits until everything queued is on disk and is for process shutdown and tests only. A disk error in the writer is recorded in the
-/// <see cref="FaultLedger"/> (and logged when a logger was given), ends the trace and sets <see cref="Faulted"/>.
+/// <see cref="FaultLedger"/> (and logged when a logger was given), ends the trace and sets <see cref="Faulted"/>. A trace stopped because its
+/// queue was full is counted as <c>net.packet-capture-full</c>. Every open trace is tracked: <see cref="DrainAll"/> stops them all and waits (with
+/// a time limit) until their files are complete; the world host calls it at stop and it also runs at process exit, so a clean exit loses no
+/// queued records. A drain that times out is counted as <c>net.packet-capture-drain</c>.
 /// </summary>
 public sealed class PacketCapture : IDisposable
 {
     private const int HeaderLength = 66;
     private const int QueueCapacity = 8192;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<PacketCapture, byte> Live = new();
+    private static readonly TimeSpan DefaultDrainBudget = TimeSpan.FromSeconds(10);
     private readonly object _gate = new();
     private readonly Stream _stream;
     private readonly Channel<byte[]> _queue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(QueueCapacity)
@@ -42,11 +50,14 @@ public sealed class PacketCapture : IDisposable
         FullMode = BoundedChannelFullMode.Wait,
     });
     private readonly Task _writer;
+    private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly long _maxBytes;
     private readonly ILogger? _logger;
     private volatile bool _faulted;
     private long _position = HeaderLength;
     private bool _closed;
+
+    static PacketCapture() => AppDomain.CurrentDomain.ProcessExit += (_, _) => DrainAll(DefaultDrainBudget);
 
     public string Path { get; }
 
@@ -78,7 +89,46 @@ public sealed class PacketCapture : IDisposable
 
         _stream.Write(header.GetBuffer(), 0, (int)header.Length);
         _stream.Flush();
+        Live[this] = 0;
         _writer = Task.Run(WriteLoopAsync);
+    }
+
+    /// <summary>
+    /// Stop every open trace and wait until each file is complete, for at most <paramref name="budget"/> (host stop, process exit, tests). Returns true when all
+    /// finished in time. A trace still draining when the budget ends is counted as <c>net.packet-capture-drain</c>; its remaining records may be lost.
+    /// </summary>
+    public static bool DrainAll(TimeSpan budget, ILogger? logger = null)
+    {
+        PacketCapture[] captures = [.. Live.Keys];
+        foreach (PacketCapture capture in captures)
+        {
+            capture.Stop();
+        }
+
+        if (captures.Length == 0 || Task.WaitAll([.. captures.Select(c => c._finished.Task)], budget))
+        {
+            return true;
+        }
+
+        var ex = new TimeoutException($"packet capture drain did not finish within {budget.TotalSeconds:0.###} s; queued records may be lost");
+        FaultLedger.Shared.Record("net.packet-capture-drain", ex);
+        try
+        {
+            if (logger is not null)
+            {
+                logger.LogFault("net-packet-capture-drain", ex, "packet capture drain timed out; queued records may be lost");
+            }
+            else
+            {
+                Console.Error.WriteLine("packet capture drain timed out; queued records may be lost: " + ex.Message);
+            }
+        }
+        catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("net.packet-capture-drain", reportEx);
+        }
+
+        return false;
     }
 
     private static FileStream OpenFile(string directory, long maxBytes, out string path)
@@ -129,8 +179,24 @@ public sealed class PacketCapture : IDisposable
                 else
                 {
                     Complete(); // the writer is far behind: stop the trace rather than block the session
+                    ReportQueueFull();
                 }
             }
+        }
+    }
+
+    /// <summary>Under <see cref="_gate"/>, once per trace (the trace is closed right after): the stop is counted and logged, not silent.</summary>
+    private void ReportQueueFull()
+    {
+        var ex = new InvalidOperationException($"packet capture {Path} stopped: the writer is {QueueCapacity} records behind");
+        FaultLedger.Shared.Record("net.packet-capture-full", ex);
+        try
+        {
+            _logger?.LogFault("net-packet-capture-full", ex, "packet capture {Path} stopped: the writer is {Capacity} records behind", Path, QueueCapacity);
+        }
+        catch (Exception logEx) when (logEx is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("net.packet-capture-full", logEx);
         }
     }
 
@@ -176,6 +242,11 @@ public sealed class PacketCapture : IDisposable
                 _faulted = true;
                 FaultLedger.Shared.Record("net.packet-capture", ex);
                 _logger?.LogFault("net-packet-capture", ex, "packet capture {Path} could not be closed", Path);
+            }
+            finally
+            {
+                Live.TryRemove(this, out _);
+                _finished.TrySetResult();
             }
         }
     }

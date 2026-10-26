@@ -30,8 +30,12 @@ public sealed class ItemsFeatureBackgroundLoadTests
         Assert.Equal(1, Faults() - faultsBefore);
         Assert.False(feature.IsLoaded);
 
+        Task? failedLoad = feature.BackgroundLoad;
+        Assert.NotNull(failedLoad);
+        await failedLoad.WaitAsync(Budget); // the failed load has ended and set its retry time
+
         feature.StartLoadInBackground(); // inside BackgroundRetryDelay: nothing starts
-        await Task.Delay(250);
+        Assert.Same(failedLoad, feature.BackgroundLoad); // no new load task was created
         Assert.Equal(1, source.Calls);
         Assert.Equal(1, Faults() - faultsBefore);
     }

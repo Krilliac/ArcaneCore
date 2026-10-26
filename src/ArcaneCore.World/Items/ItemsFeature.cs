@@ -145,6 +145,18 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// <summary>How long after a failed background load <see cref="StartLoadInBackground"/> waits before it tries again.</summary>
     internal static readonly TimeSpan BackgroundRetryDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>The latest background load task (tests: tells whether a call started a new load).</summary>
+    internal Task? BackgroundLoad
+    {
+        get
+        {
+            lock (_backgroundLoadGate)
+            {
+                return _backgroundLoad;
+            }
+        }
+    }
+
     /// <summary>
     /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: every caller shares the one running
     /// load, and a failed load is not started again until <see cref="BackgroundRetryDelay"/> has passed). The SQLite provider runs its

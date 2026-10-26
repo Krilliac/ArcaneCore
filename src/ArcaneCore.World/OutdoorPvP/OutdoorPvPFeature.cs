@@ -57,7 +57,8 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         _host = new OutdoorPvPWorldHost(this);
-        // Attach runs before the world thread starts: read the saved Silithyst limit here, so that map creation on the world thread
+        // Attach runs before the world thread starts (WorldHost attaches every feature through FeatureHost.AttachAll before world.Start; the
+        // console "feature attach" only re-attaches an IDetachableWorldFeature, which this is not): read the saved Silithyst limit here, so that map creation on the world thread
         // never waits on the database.
         _silithystMax = LoadSilithystMax();
         WorldStateHooks.For(world).WorldStates.Add(this);

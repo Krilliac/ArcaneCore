@@ -1,9 +1,22 @@
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Sniff;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Net;
 
+/// <summary>
+/// Every test that opens a <see cref="PacketCapture"/> runs in this collection, alone: <see cref="PacketCapture.DrainAll"/> (also run by the world host's stop)
+/// stops every open trace in the process, so a parallel test's trace would be ended under it.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class PacketCaptureCollection
+{
+    public const string Name = "PacketCapture";
+}
+
+[Collection(PacketCaptureCollection.Name)]
 public sealed class PacketCaptureTests
 {
     [Fact]
@@ -126,6 +139,84 @@ public sealed class PacketCaptureTests
         Assert.Null(thrown);
         Assert.True(capture.Faulted);
         Assert.Equal(1, CaptureFaults() - faultsBefore); // only the failed close
+    }
+
+    [Fact]
+    public async Task QueueFull_StopsTheTrace_LeavesALedgerEntryAndALogLine()
+    {
+        long fullBefore = SiteFaults("net.packet-capture-full");
+        var logger = new CapturingLogger();
+        var stream = new GatedStream();
+        var capture = new PacketCapture(stream, "full.pkt", 512L * 1024 * 1024, logger);
+        capture.Write(false, 0x01EC, new byte[8]);
+        await stream.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10)); // the writer holds record 1 inside the disk write
+
+        for (int i = 0; i < 8192; i++)
+        {
+            capture.Write(false, 0x01EC, new byte[8]); // fills the queue
+        }
+
+        Assert.True(capture.IsOpen);
+        Assert.Equal(0, SiteFaults("net.packet-capture-full") - fullBefore);
+        capture.Write(false, 0x01EC, new byte[8]); // one more than the queue holds: the trace stops, the caller does not block
+
+        Assert.False(capture.IsOpen);
+        Assert.Equal(1, SiteFaults("net.packet-capture-full") - fullBefore);
+        Assert.Contains(logger.Messages, m => m.Contains("full.pkt", StringComparison.Ordinal) && m.Contains("8192", StringComparison.Ordinal));
+
+        stream.Release.SetResult();
+        await stream.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(capture.Faulted);
+        Assert.Equal(66 + (8193 * (24 + 8)), stream.ToArray().Length); // header, record 1 and the 8192 queued ones; the rejected record is not written
+    }
+
+    [Fact]
+    public async Task DrainAll_StopsOpenTraces_WaitsForTheirFiles_AndCountsATimeout()
+    {
+        long drainBefore = SiteFaults("net.packet-capture-drain");
+        var stream = new GatedStream();
+        var capture = new PacketCapture(stream, "drain.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        await stream.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The disk is stuck: the drain stops the trace, gives up at its budget, and says so.
+        Assert.False(PacketCapture.DrainAll(TimeSpan.FromMilliseconds(200)));
+        Assert.False(capture.IsOpen);
+        Assert.Equal(1, SiteFaults("net.packet-capture-drain") - drainBefore);
+
+        // The disk recovers: the drain returns once the file is complete, with the queued record on disk.
+        Task<bool> drained = Task.Run(() => PacketCapture.DrainAll(TimeSpan.FromSeconds(10)));
+        stream.Release.SetResult();
+        Assert.True(await drained.WaitAsync(TimeSpan.FromSeconds(20)));
+        Assert.Equal(66 + 24 + 16, stream.ToArray().Length);
+        Assert.Equal(1, SiteFaults("net.packet-capture-drain") - drainBefore);
+        Assert.True(PacketCapture.DrainAll(TimeSpan.FromSeconds(1))); // nothing left open
+    }
+
+    private static long SiteFaults(string site)
+        => FaultLedger.Shared.Snapshot().Where(s => s.Site == site).Sum(s => s.Count);
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _messages = [];
+
+        public IReadOnlyList<string> Messages
+        {
+            get
+            {
+                lock (_gate) return [.. _messages];
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate) _messages.Add(formatter(state, exception));
+        }
     }
 
     private static long CaptureFaults()

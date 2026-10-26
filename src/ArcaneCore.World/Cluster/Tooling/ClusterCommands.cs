@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Cluster.Tooling;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Cluster.Transfer;
@@ -579,8 +580,9 @@ public sealed class ClusterCommands : ICommandGroup
             {
                 pendingTransfers = await transfers.CountUnresolvedAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("cluster.diag-count", ex);
                 world.Post(() =>
                 {
                     services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
@@ -590,7 +592,11 @@ public sealed class ClusterCommands : ICommandGroup
             }
 
             world.Post(() => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
-        });
+        }).ContinueWith(
+            static t => FaultLedger.Shared.Record("cluster.diag-post", t.Exception!.GetBaseException()),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         return true;
     }
 

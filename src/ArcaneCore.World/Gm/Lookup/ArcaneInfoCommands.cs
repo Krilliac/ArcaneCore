@@ -28,7 +28,7 @@ public sealed class ArcaneInfoCommands : ICommandExtension
 
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
-        new ChatCommand("content", AccountSecurity.GameMaster, "Syntax: .arcane content\nShow how many rows of each content table are loaded.", Content),
+        new ChatCommand("content", AccountSecurity.GameMaster, "Syntax: .arcane content\nShow how many rows of each content table are loaded. From the console, the items line reads \"not loaded yet\" while item content loads in the background; run the command again shortly.", Content),
         new ChatCommand("maps", AccountSecurity.GameMaster, "Syntax: .arcane maps\nShow the players, objects and in-transit objects of every running map.", Maps),
         new ChatCommand("reloads", AccountSecurity.GameMaster, "Syntax: .arcane reloads\nShow how each reloadable content table last ended, and the creature definitions generation.", Reloads),
     ];

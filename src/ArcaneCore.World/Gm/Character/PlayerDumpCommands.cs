@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Dump;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Commands;
@@ -262,6 +263,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                FaultLedger.Shared.Record("gm.pdump", ex);
                 logger.LogError(ex, "the .pdump command failed");
                 ReplyLater(context, failure);
             }

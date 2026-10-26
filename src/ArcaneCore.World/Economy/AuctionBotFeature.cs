@@ -438,7 +438,10 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         return fixes;
     }
 
-    /// <summary>Attach time only (before the world thread runs): the blocking read of the <c>ahbot_items</c> rows.</summary>
+    /// <summary>
+    /// Attach time only: WorldHost attaches every feature through FeatureHost.AttachAll before world.Start, and the console "feature attach" only
+    /// re-attaches an IDetachableWorldFeature (this one is not), so the world thread is not running. The blocking read of the <c>ahbot_items</c> rows.
+    /// </summary>
     private void LoadOverrides()
     {
         if (ReadOverridesAsync().GetAwaiter().GetResult() is { } loaded)

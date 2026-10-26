@@ -277,8 +277,9 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
             case WardenAction.Ban:
                 Announce(session, action, reason, "Warden banned an account", AnnounceSeverity.Error);
                 int accountId = session.AccountId;
-                _ = Task.Run(() => BanAsync(accountId, reason)); // not inline: SQLite runs the async ban write synchronously, and this runs on the world tick
-                session.Kick();
+                // Not inline: SQLite runs the async ban write synchronously, and this runs on the world tick. The kick follows the ban
+                // (it is posted back to the world thread once the write has committed or failed), so a reconnect cannot slip in before the ban exists.
+                _ = BanThenKickAsync(session, accountId, reason);
                 break;
         }
     }
@@ -359,6 +360,19 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 _items = null;
                 return items;
             }
+        }
+    }
+
+    private async Task BanThenKickAsync(WorldSession session, int accountId, string reason)
+    {
+        await Task.Run(() => BanAsync(accountId, reason)).ConfigureAwait(false); // BanAsync records its own failures and never throws
+        if (_world is { } world)
+        {
+            world.Post(session.Kick);
+        }
+        else
+        {
+            session.Kick();
         }
     }
 

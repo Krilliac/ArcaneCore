@@ -405,6 +405,8 @@ public sealed class WorldHost(
             FaultLedger.Shared.Record("world-host.stop-features", ex);
             failures.Add(ex);
         }
+        // Sessions may still hold open packet traces: stop them and wait (bounded) so their records reach the disk before the process ends.
+        await Task.Run(() => Net.PacketCapture.DrainAll(TimeSpan.FromSeconds(10), logger)).ConfigureAwait(false);
         bool queueStopped = false;
         try
         {
