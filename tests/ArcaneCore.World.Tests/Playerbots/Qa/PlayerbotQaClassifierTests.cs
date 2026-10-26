@@ -7,6 +7,25 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 /// <summary>The likely cause of a finding, guessed from the loaded content (scripted here with <see cref="FakeFacts"/>).</summary>
 public sealed class PlayerbotQaClassifierTests
 {
+    private static QaSignal WorldAnomaly(string subsystem, string code, string detail) => new()
+    {
+        Kind = QaSignalKind.Anomaly, Goal = subsystem, Reason = code, FaultCode = subsystem + "/" + code, Detail = detail,
+    };
+
+    /// <summary>Content defects of the world anomaly keys are missing data; a behaviour defect of the same keys stays a behaviour bug.</summary>
+    [Theory]
+    [InlineData("loot", "gameobject-loot-no-data", "gameobject entry 1 loot 2: reason no-rows, row -", QaCause.MissingData)]
+    [InlineData("loot", "gameobject-loot-no-data", "gameobject entry 1 loot 2: reason all-unknown, row -", QaCause.MissingData)]
+    [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason no-rows, row -", QaCause.BehaviourBug)]
+    [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason guaranteed-missing, row item 5", QaCause.BehaviourBug)]
+    [InlineData("gameobject", "use-failed-unknown-lock", "use refused (Locked): lock 93 has no lock_template row; spawn 1", QaCause.MissingData)]
+    [InlineData("gameobject", "use-failed", "use refused (Locked): lock 93 has no lock_template row; spawn 1", QaCause.BehaviourBug)]
+    [InlineData("gameobject", "use-failed", "use refused (Unsupported): no handler for the object's type or its loot is unavailable", QaCause.BehaviourBug)]
+    [InlineData("gameobject", "open-no-effect", "the open returned Ok for a chest but the player has no loot window on it", QaCause.BehaviourBug)]
+    [InlineData("bot-quest", "giver-missing", "reason no-rows", QaCause.BehaviourBug)]
+    public void WorldAnomalies_AreMissingDataOnlyForContentDefects(string subsystem, string code, string detail, QaCause expected)
+        => Assert.Equal(expected, PlayerbotQaClassifier.Classify(WorldAnomaly(subsystem, code, detail), new FakeFacts()).Cause);
+
     /// <summary>
     /// A shared set-aside carries the position of the first stall behind it (for the report), but the bots that set it aside may have been
     /// anywhere: its spawn check stays on every map. Stalls on map 0 and the objective creatures only on map 1 are not missing data (review

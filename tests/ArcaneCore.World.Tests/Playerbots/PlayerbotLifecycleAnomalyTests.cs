@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Net;
@@ -62,14 +61,7 @@ public sealed class PlayerbotLifecycleAnomalyTests
     // --- think-slow ------------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotThinkProbe SpentProbe(double minimumMs)
-    {
-        var probe = new PlayerbotThinkProbe();
-        probe.Begin();
-        long until = Stopwatch.GetTimestamp() + (long)(minimumMs * Stopwatch.Frequency / 1000);
-        while (Stopwatch.GetTimestamp() < until) Thread.SpinWait(50);
-        probe.End();
-        return probe;
-    }
+        => PlayerbotThinkProbe.SpentForTest(minimumMs);
 
     [Fact]
     public void ThinkSlow_Fires_ForASlowThink_NamingTheBotWhenNoPlayerIsKnown()
