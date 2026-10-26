@@ -132,7 +132,7 @@ public sealed class GroupBattlegroundRaidTests
         Group raid = groups.AddToBattlegroundRaid(c, null)!;
         groups.SetLootMethod(c, (uint)LootMethod.MasterLoot, c.Guid, 2);
         Assert.Equal(LootMethod.GroupLoot, raid.LootMethod); // RED on main: MasterLoot
-        Assert.True(raid.LooterGuid.IsEmpty);
+        Assert.Equal(c.Guid, raid.LooterGuid);
 
         // a leads a parked party: the change lands on the party, not on the raid
         groups.Invite(a, b.Name);
