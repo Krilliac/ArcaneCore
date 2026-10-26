@@ -326,18 +326,61 @@ public sealed class TerrainTile
         => (GridDefines.MaxNumberOfGrids - 1 - grid.X, GridDefines.MaxNumberOfGrids - 1 - grid.Y);
 
     /// <summary>The AreaTable explore flag at a position (vmangos <c>GridMap::getArea</c>).</summary>
-    public ushort GetAreaFlag(float x, float y)
-    {
-        if (_areaMap is null)
-        {
-            return _gridArea;
-        }
+    public ushort GetAreaFlag(float x, float y) => _areaMap is null ? _gridArea : _areaMap[AreaCellIndex(x, y)];
 
+    /// <summary>The index of a position's cell in a tile's 16 x 16 area flags (vmangos <c>GridMap::getArea</c>).</summary>
+    internal static int AreaCellIndex(float x, float y)
+    {
         x = 16 * (32 - (x / GridSize));
         y = 16 * (32 - (y / GridSize));
         int lx = (int)x & 15;
         int ly = (int)y & 15;
-        return _areaMap[(lx * 16) + ly];
+        return (lx * 16) + ly;
+    }
+
+    /// <summary>
+    /// The 16 x 16 area flags of a <c>.map</c> file, indexed by <see cref="AreaCellIndex"/>, read from its header and area section only
+    /// (about 560 bytes instead of the whole file): what <see cref="GetAreaFlag"/> answers on the parsed tile, the grid area in every cell
+    /// for a tile without per-cell areas, 0 everywhere without an area section. Throws <see cref="InvalidDataException"/> for a wrong
+    /// magic or version or a truncated header or area section (a file whose other sections are damaged still gives its areas here, where
+    /// a full parse fails), and the file system's exceptions. Any thread: it touches nothing but the file.
+    /// </summary>
+    internal static ushort[] ReadAreaFlags(string path)
+    {
+        using Microsoft.Win32.SafeHandles.SafeFileHandle file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> header = stackalloc byte[40];
+        int headerRead = RandomAccess.Read(file, header, 0);
+        ReadHeader(header[..headerRead], out uint areaOffset, out _, out _, out _);
+        var flags = new ushort[16 * 16];
+        if (areaOffset == 0)
+        {
+            return flags;
+        }
+
+        Span<byte> section = stackalloc byte[8 + (16 * 16 * 2)];
+        int sectionRead = RandomAccess.Read(file, section, areaOffset);
+        try
+        {
+            var area = new Reader(section[..sectionRead], 0);
+            if (area.U32() != AreaMagic)
+            {
+                throw new InvalidDataException("bad area section magic");
+            }
+
+            ushort areaFlags = area.U16();
+            ushort gridArea = area.U16();
+            if ((areaFlags & MapAreaNoArea) != 0)
+            {
+                Array.Fill(flags, gridArea);
+                return flags;
+            }
+
+            return area.U16Array(16 * 16);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new InvalidDataException("truncated .map area section", ex);
+        }
     }
 
     /// <summary>The ground height at a position (vmangos <c>GridMap::getHeight</c>).</summary>

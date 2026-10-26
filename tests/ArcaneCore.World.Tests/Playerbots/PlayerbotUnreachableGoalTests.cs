@@ -305,6 +305,28 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.True(x > 30f, $"the bot is at x {x}, not at the bind point beside x 37");
     }
 
+    /// <summary>
+    /// #1499 review: a bot on a mesh fragment never calls a goal unreachable (PlanToward's escapes must run first), even when the goal's
+    /// component is mid-size so the 16x size exemption does not apply: the fragment clause alone decides.
+    /// </summary>
+    [Fact]
+    public async Task ABotOnAFragment_NeverCallsAGoalInAnotherMidSizeComponentUnreachable()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Pocket(7), new FloorLineOfSight());
+        await world.PlaceAsync(new Vector3(5, 5, 0));
+        for (int think = 0; think < 80 && !await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsOnMeshFragment(world.Player)); think++)
+            await world.Host.World.AdvanceClockAsync(50);
+        Assert.True(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsOnMeshFragment(world.Player)), "the pocket is a fragment");
+        Vector3 goal = new(37, 5, 0);
+        (bool unreachable, int from, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, goal, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent);
+        });
+        Assert.True(from >= 0 && to >= 0 && from != to, $"the control: the goal is in another walking component (bot {from}, goal {to})");
+        Assert.False(unreachable, "a fragment bot is never told its goal is unreachable");
+    }
+
     [Fact]
     public async Task AStalledBotOnTheLargePart_IsNotMoved()
     {

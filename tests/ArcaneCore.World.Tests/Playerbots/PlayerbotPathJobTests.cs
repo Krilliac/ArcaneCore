@@ -572,6 +572,57 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    /// <summary>
+    /// Live 2026-10-25 (issues #1478 and #1479, Timbermaw Hold): a bot that cannot reach its goal fails three jobs, escalates to a search
+    /// on the world thread that finds no path, and does it all again on the next think ("searching once on the world thread" 27 to 37
+    /// times per bot). The "no path" of an escalated search holds for the pair for <see cref="PlayerbotPathJobs.NoPathMs"/>: a second
+    /// episode of failures for the same pair costs no second world-thread search.
+    /// </summary>
+    [Fact]
+    public async Task AnEscalatedSearchThatFindsNoPath_IsNotRepeatedForTheSamePair_ForHalfAMinute()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options(syncMs: 100));
+            h.Nav.Type = PathType.NoPath;
+            Vector3 goal = h.Far();
+
+            // Episode one: three canceled jobs, then the escalated search.
+            Assert.True(IsPending(h.Ask(goal)));
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.True(h.Runner.CancelNext());
+                if (i < 2) Assert.True(IsPending(h.Ask(goal)));
+            }
+
+            Assert.Equal(PathType.NoPath, h.Ask(goal).Type);
+            Assert.Equal(1, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            int submitted = h.Runner.Submitted.Count;
+
+            // Episode two, a moment later: the pair is known. No job, no search, no escalation.
+            h.Wall += 5_000;
+            h.Clock += 5_000;
+            for (int i = 0; i < 5; i++)
+            {
+                PathResult again = h.Ask(goal);
+                Assert.Equal(PathType.NoPath, again.Type);
+            }
+
+            Assert.Equal(1, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Escalations);
+            Assert.Equal(submitted, h.Runner.Submitted.Count);
+            Assert.Equal(5, h.Jobs.Totals.NoPathCached);
+
+            // Once the half minute is over the pair is asked of the mesh again.
+            h.Wall += PlayerbotPathJobs.NoPathMs;
+            h.Clock += (uint)PlayerbotPathJobs.NoPathMs;
+            Assert.True(IsPending(h.Ask(goal)));
+            return true;
+        });
+    }
+
     [Fact]
     public async Task AFaultedJob_EscalatesAtOnce()
     {

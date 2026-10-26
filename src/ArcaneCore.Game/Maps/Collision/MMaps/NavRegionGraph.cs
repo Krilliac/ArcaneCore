@@ -61,6 +61,40 @@ public sealed class NavRegionGraph
         _links = links;
         PolygonCount = polygons;
         _components = new Lazy<(int[], int[], int[])>(LabelComponents, LazyThreadSafetyMode.ExecutionAndPublication);
+        _articulations = new Lazy<(int[], int[], int[])>(FindArticulations, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    /// <summary>
+    /// A graph of <paramref name="polygonsPerRegion"/>.Count regions (region <c>i</c> holds that many polygons) joined by
+    /// <paramref name="joints"/> (each an undirected portal, linked both ways at a point of no meaning), on no tile files: for tests of what
+    /// the graph answers about its shape (components, articulation regions) on a graph made by hand.
+    /// </summary>
+    internal static NavRegionGraph FromJoints(uint mapId, IReadOnlyList<int> polygonsPerRegion, IReadOnlyList<(int A, int B)> joints)
+    {
+        ArgumentNullException.ThrowIfNull(polygonsPerRegion);
+        ArgumentNullException.ThrowIfNull(joints);
+        int count = polygonsPerRegion.Count;
+        int[] first = new int[count + 1];
+        foreach ((int a, int b) in joints)
+        {
+            if ((uint)a >= (uint)count || (uint)b >= (uint)count) throw new ArgumentOutOfRangeException(nameof(joints), $"joint ({a}, {b}) names a region outside 0..{count - 1}");
+            first[a + 1]++;
+            first[b + 1]++;
+        }
+
+        for (int i = 0; i < count; i++) first[i + 1] += first[i];
+        var links = new Link[first[count]];
+        int[] fill = first[..count];
+        foreach ((int a, int b) in joints)
+        {
+            links[fill[a]++] = new Link(b, new Vector3(a, b, 0f));
+            links[fill[b]++] = new Link(a, new Vector3(a, b, 0f));
+        }
+
+        var polygons = new List<int>();
+        for (int region = 0; region < count; region++)
+            for (int p = 0; p < polygonsPerRegion[region]; p++) polygons.Add(region);
+        return new NavRegionGraph(mapId, new Dictionary<(int X, int Y), int[]> { [(0, 0)] = [.. polygons] }, first, links, polygons.Count, []);
     }
 
     /// <summary>One way out of a region: into region <c>To</c> across the portal <c>At</c> (world position).</summary>
@@ -271,6 +305,133 @@ public sealed class NavRegionGraph
         }
 
         return (id, [.. sizes], polygons);
+    }
+
+    private readonly Lazy<(int[] Parts, int[] SecondPolygons, int[] Polygons)> _articulations;
+
+    /// <summary>
+    /// Tarjan's articulation points over the portal links, O(regions + links), iterative (a continent's regions would overflow the
+    /// recursion). For each region: into how many parts its component falls when it is taken out (0 or 1: not an articulation region), and
+    /// how many polygons the second-largest of those parts holds (0 when there are fewer than two). A part is a piece of the mesh the
+    /// region is the only way between and the rest of the component; with the region's own polygons left out of every part.
+    /// </summary>
+    private (int[] Parts, int[] SecondPolygons, int[] Polygons) FindArticulations()
+    {
+        int count = RegionCount;
+        int[] weight = new int[count];
+        foreach (int[] regions in _polyRegions.Values)
+        {
+            foreach (int region in regions)
+            {
+                if ((uint)region < (uint)count) weight[region]++;
+            }
+        }
+
+        int[] disc = new int[count], low = new int[count], parent = new int[count], next = new int[count], sub = new int[count];
+        int[] separated = new int[count], largest = new int[count], second = new int[count], parts = new int[count];
+        int[] stack = new int[count], order = new int[count];
+        int clock = 0, visited = 0;
+        for (int root = 0; root < count; root++)
+        {
+            if (disc[root] != 0) continue;
+            int begin = visited, depth = 0;
+            parent[root] = -1;
+            disc[root] = low[root] = ++clock;
+            sub[root] = weight[root];
+            next[root] = _firstLink[root];
+            order[visited++] = root;
+            stack[depth++] = root;
+            while (depth > 0)
+            {
+                int region = stack[depth - 1];
+                if (next[region] < _firstLink[region + 1])
+                {
+                    int to = _links[next[region]++].To;
+                    if (disc[to] == 0)
+                    {
+                        parent[to] = region;
+                        disc[to] = low[to] = ++clock;
+                        sub[to] = weight[to];
+                        next[to] = _firstLink[to];
+                        order[visited++] = to;
+                        stack[depth++] = to;
+                    }
+                    else if (disc[to] < low[region])
+                    {
+                        low[region] = disc[to];
+                    }
+
+                    continue;
+                }
+
+                depth--;
+                int above = parent[region];
+                if (above < 0) continue;
+                if (low[region] < low[above]) low[above] = low[region];
+                sub[above] += sub[region];
+                if (low[region] >= disc[above])
+                {
+                    // Everything below this child reaches the rest of the component only through the region above it.
+                    separated[above] += sub[region];
+                    AddPart(above, sub[region]);
+                }
+            }
+
+            // The part holding the DFS root is whatever is left once the region and its separated parts are taken out.
+            int total = sub[root];
+            for (int i = begin; i < visited; i++)
+            {
+                int region = order[i];
+                if (region != root && parts[region] > 0) AddPart(region, total - weight[region] - separated[region]);
+            }
+        }
+
+        return (parts, second, weight);
+
+        void AddPart(int region, int polygons)
+        {
+            parts[region]++;
+            if (polygons > largest[region])
+            {
+                second[region] = largest[region];
+                largest[region] = polygons;
+            }
+            else if (polygons > second[region])
+            {
+                second[region] = polygons;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether taking <paramref name="region"/> out of the graph would split its component in two or more parts (a cut region, an
+    /// articulation point of the portal links): the only way between them is through it, as a tunnel is between its two ends. False for no
+    /// region. Computed once for the whole graph on first use (<see cref="Prepare"/> does it off the world thread); then an array read.
+    /// </summary>
+    public bool IsArticulation(int region) => (uint)region < (uint)RegionCount && _articulations.Value.Parts[region] >= 2;
+
+    /// <summary>
+    /// Whether <paramref name="region"/> is a cut region (<see cref="IsArticulation"/>) whose removal leaves at least two parts of
+    /// <paramref name="minPolygons"/> polygons or more: it joins two large pieces of the mesh, not a large piece and a pocket.
+    /// </summary>
+    public bool JoinsLargeParts(int region, int minPolygons) => (uint)region < (uint)RegionCount
+        && _articulations.Value.Parts[region] >= 2 && _articulations.Value.SecondPolygons[region] >= minPolygons;
+
+    /// <summary>
+    /// How many polygons <paramref name="region"/> itself holds (0 for -1 or out of range): the size of a cut region (<see cref="JoinsLargeParts"/>),
+    /// which a caller bounds before it treats the whole region as a corridor. Computed with the cut regions; then an array read.
+    /// </summary>
+    public int RegionPolygons(int region) => (uint)region < (uint)RegionCount ? _articulations.Value.Polygons[region] : 0;
+
+    /// <summary>
+    /// Compute what the graph answers lazily (the components, <see cref="ComponentOf"/>, and the cut regions, <see cref="IsArticulation"/>)
+    /// now, on the calling thread: the builder calls it on its pool thread so that the first question of a bot, on the world thread, is
+    /// an array read.
+    /// </summary>
+    public void Prepare()
+    {
+        _ = _components.Value;
+        _ = _articulations.Value;
     }
 
     /// <summary>

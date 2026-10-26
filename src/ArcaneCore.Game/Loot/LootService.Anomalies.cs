@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Loot;
 /// <summary>
 /// Outcome checks for loot (H1), reported through <see cref="AnomalyLedger"/> as subsystem <c>loot</c>:
 /// a template that guarantees a drop yielding an empty bag, an item or money paid out twice, a loot window left open
-/// after its source is gone, and (in <see cref="LootRollManager"/>) a roll that outlived its timeout. World thread only.
+/// after its source is gone (a window whose looter died or is out of reach is closed without a report), and (in <see cref="LootRollManager"/>) a roll that outlived its timeout. World thread only.
 /// </summary>
 public sealed partial class LootService
 {
@@ -32,6 +32,9 @@ public sealed partial class LootService
     /// <summary>A roll was still running well past its timeout.</summary>
     public const string RollUnresolvedCode = "roll-unresolved";
 
+    /// <summary>Yards beyond the loot distance a looter may be before the audit treats the window as stale.</summary>
+    internal const float WindowAuditDistanceMargin = 5f;
+
     /// <summary>A chest-like object was opened and its loot is empty although its loot id promises something.</summary>
     public const string GameObjectLootEmptyCode = "gameobject-loot-empty";
 
@@ -51,7 +54,7 @@ public sealed partial class LootService
     internal const int WindowAuditStrikes = 2;
 
     private Dictionary<Player, (LootBag Bag, int Strikes)>? _windowStrikes;
-    private List<(Player Player, LootBag Bag)>? _windowScratch;
+    private List<(Player Player, LootBag Bag, WindowFault Fault)>? _windowScratch;
 
     /// <summary>
     /// After a roll produced no item: report when the template holds a row that must always drop. Reads the rows only for an empty bag.
@@ -232,10 +235,11 @@ public sealed partial class LootService
             return;
         }
 
-        List<(Player Player, LootBag Bag)>? stale = null;
+        List<(Player Player, LootBag Bag, WindowFault Fault)>? stale = null;
         foreach ((Player player, LootBag bag) in _open)
         {
-            if (!player.IsInWorld || !IsWindowStale(player, bag))
+            WindowFault fault = player.IsInWorld ? ClassifyWindow(player, bag) : WindowFault.None;
+            if (fault == WindowFault.None)
             {
                 if (_windowStrikes is { Count: > 0 })
                 {
@@ -252,7 +256,7 @@ public sealed partial class LootService
             _windowStrikes[player] = (bag, strikes);
             if (strikes >= WindowAuditStrikes)
             {
-                (stale ??= _windowScratch ??= []).Add((player, bag));
+                (stale ??= _windowScratch ??= []).Add((player, bag, fault));
             }
         }
 
@@ -261,30 +265,76 @@ public sealed partial class LootService
             return;
         }
 
-        foreach ((Player player, LootBag bag) in stale)
+        foreach ((Player player, LootBag bag, WindowFault fault) in stale)
         {
             _windowStrikes?.Remove(player);
-            AnomalyLedger.Shared.Report(AnomalySubsystem, WindowLeftOpenCode, SubjectOf(bag),
-                string.Create(CultureInfo.InvariantCulture, $"{player.Name} (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
+            if (fault == WindowFault.SourceGone)
+            {
+                AnomalyLedger.Shared.Report(AnomalySubsystem, WindowLeftOpenCode, SubjectOf(bag),
+                    string.Create(CultureInfo.InvariantCulture, $"{player.Name} (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
+            }
+
+            // A looter who died or is out of reach (it died with the window open, a same-map teleport, a pickpocket target that walked off)
+            // is an ordinary event, not an anomaly: the window is only closed so the source is not left "in use".
             Release(player, bag.Source);
         }
 
         stale.Clear();
     }
 
-    private bool IsWindowStale(Player player, LootBag bag)
+    private enum WindowFault
+    {
+        None,
+
+        /// <summary>The source is gone: reported as <see cref="WindowLeftOpenCode"/>.</summary>
+        SourceGone,
+
+        /// <summary>The source is there but the looter is dead or out of reach: closed without a report.</summary>
+        LooterAway,
+    }
+
+    private WindowFault ClassifyWindow(Player player, LootBag bag)
     {
         if (!_bags.TryGetValue(bag.Source, out var entry) || !ReferenceEquals(entry.Bag, bag))
+        {
+            return WindowFault.SourceGone;
+        }
+
+        switch (entry.Source)
+        {
+            case Creature creature:
+                if (!creature.IsInWorld || !ReferenceEquals(player.Map, creature.Map)
+                    || (bag.ReleaseHandler is null && creature.DeathState != CreatureDeathState.Corpse))
+                {
+                    return WindowFault.SourceGone;
+                }
+
+                return LooterCannotReach(player, creature, bag) ? WindowFault.LooterAway : WindowFault.None;
+            case GameObject go:
+                if (!go.IsSpawned || !ReferenceEquals(player.Map, go.Map))
+                {
+                    return WindowFault.SourceGone;
+                }
+
+                return LooterCannotReach(player, go, bag) ? WindowFault.LooterAway : WindowFault.None;
+            default:
+                return WindowFault.None; // an item's loot lives with its owner's inventory
+        }
+    }
+
+    /// <summary>
+    /// Cleanup, not parity (vmangos releases a dying player's window in Player::SetDeathState, vmangos@0e3ff01 Player.cpp:1534, but has no
+    /// distance rule). The looter is dead, or further from the source than <see cref="Options"/>.LootDistance plus <see cref="WindowAuditDistanceMargin"/>.
+    /// A live looter holding a window open past that is one whose client lost it (vmangos releases it on movement, on a cast and on a
+    /// stun); left open it keeps a node "in use" for everyone else. Sources that ignore distance (a bobber's window) skip the distance test.
+    /// </summary>
+    private bool LooterCannotReach(Player player, WorldObject source, LootBag bag)
+    {
+        if (!player.IsAlive)
         {
             return true;
         }
 
-        return entry.Source switch
-        {
-            Creature creature => !creature.IsInWorld || !ReferenceEquals(player.Map, creature.Map)
-                || (bag.ReleaseHandler is null && creature.DeathState != CreatureDeathState.Corpse),
-            GameObject go => !go.IsSpawned || !ReferenceEquals(player.Map, go.Map),
-            _ => false, // an item's loot lives with its owner's inventory
-        };
+        return !bag.IgnoreDistance && bag.SourceCheck is null && Distance3D(player, source) > Options.LootDistance + WindowAuditDistanceMargin;
     }
 }
