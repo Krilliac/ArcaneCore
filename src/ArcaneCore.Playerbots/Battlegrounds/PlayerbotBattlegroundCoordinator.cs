@@ -297,10 +297,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         switch (t.Phase)
         {
             case PlayerbotBattlegroundPhase.Travel:
-                // The master is met where it stands now: a waypoint walker (the Darnassus emissary 14991 of game event 20) leaves its spawn point.
+                // The master is met where it stands now: a waypoint walker (spawns 190500 and 190516 of the emissary 14991, game event 20) leaves its spawn point.
                 // The goal follows the live creature once it moved more than a few yards, so the walk is not replanned at every step.
                 if (player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } live)
-                    FollowMaster(t, new Vector3(player.X, player.Y, player.Z), new Vector3(live.X, live.Y, live.Z), Now);
+                    FollowMaster(t, new Vector3(player.X, player.Y, player.Z), new Vector3(live.X, live.Y, live.Z));
                 ai.Travel(player, t.MasterAt, elapsedMs);
                 break;
             case PlayerbotBattlegroundPhase.InMatch when Feature()?.BattlegroundOf(player.Guid) is { } match && match.PlayerTeam(player.Guid) is { } team:
@@ -404,7 +404,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             && player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } master && Distance(player, master) <= PlayerbotBattlegroundAI.InteractYards;
         // A walk that does not close on the master for minutes is refused like one the navigation refused (the existing refusal path).
         bool stalled = t.Phase == PlayerbotBattlegroundPhase.Travel && player.IsInWorld
-            && WatchTravel(t, new Vector3(player.X, player.Y, player.Z), PlayerbotBattlegroundAI.IsFighting(player), Now);
+            && WatchTravel(t, new Vector3(player.X, player.Y, player.Z), PlayerbotBattlegroundAI.IsAttacked(player), Now);
 
         return new PlayerbotBattlegroundFacts
         {
@@ -650,18 +650,17 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>
     /// The walk's goal follows the live battlemaster at <paramref name="live"/>: once it is more than <see cref="MasterMovedYards"/> from the goal
     /// (a bot within <see cref="NearMasterYards"/> of it follows every half yard, so that its stop within the interaction distance is a stop
-    /// within reach of the creature, not of where it was). A goal moved farther from the bot at <paramref name="at"/> than it was resets the
-    /// progress watch: the distance to cover grew, it is no stall.
+    /// within reach of the creature, not of where it was). The progress watch's mark moves with the goal: its best distance is shifted by the
+    /// change of the bot's distance to the goal (clamped at zero) and its clock is left alone, so a goal pacing away and back from a bot that
+    /// stands still is still a stall, while a goal that walks the road away from a bot that closes on it is no stall.
     /// </summary>
-    internal static void FollowMaster(Tracked t, Vector3 at, Vector3 live, uint now)
+    internal static void FollowMaster(Tracked t, Vector3 at, Vector3 live)
     {
         float threshold = Vector3.Distance(at, live) <= NearMasterYards ? NearMasterMovedYards : MasterMovedYards;
         if (Vector3.Distance(live, t.MasterAt) <= threshold) return;
-        bool farther = Vector3.Distance(at, live) > Vector3.Distance(at, t.MasterAt);
+        float change = Vector3.Distance(at, live) - Vector3.Distance(at, t.MasterAt);
         t.MasterAt = live;
-        if (!farther) return;
-        t.BestYardsToMaster = -1f;
-        t.BestYardsAtMs = now;
+        if (t.BestYardsToMaster >= 0f && float.IsFinite(change)) t.BestYardsToMaster = MathF.Max(0f, t.BestYardsToMaster + change);
     }
 
     /// <summary>Whether the walk from <paramref name="zone"/> to <paramref name="master"/> failed lately.</summary>
@@ -1124,8 +1123,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// and can walk to. The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
     /// <para>
     /// Nearest is by straight line (ties by spawn guid, so the answer does not depend on the spawn order), but a master that stands still
-    /// (spawn movement type not waypoint) is taken over a nearer one that walks its waypoints (the Darnassus emissary 14991 under game event
-    /// 20 walks away from its spawn, and the bot has to be within reach of the creature itself). A master is only taken when the walk is
+    /// (spawn movement type not waypoint) is taken over a nearer one that walks its waypoints (the emissary 14991 spawns 190500 and 190516 under game
+    /// event 20 walk away from their spawn points, and the bot has to be within reach of the creature itself). A master is only taken when the walk is
     /// possible by the region graph alone (<see cref="PlayerbotNavigation.IsInOtherWalkingRegion"/>: Teldrassil's island against the mainland;
     /// a master or a bot indoors is let through, the indoor climb has its escapes). No path search: the walk itself is planned in legs
     /// (<see cref="PlayerbotNavigation.PlanToward"/>) and a route that fails there refuses the master for the zone (<see cref="RefuseMaster"/>).

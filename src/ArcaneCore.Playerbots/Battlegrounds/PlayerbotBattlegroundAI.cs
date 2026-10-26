@@ -710,13 +710,17 @@ internal sealed partial class PlayerbotBattlegroundAI
             // A civilian (a villager, a vendor) is not picked from a scan; one that attacks the bot (requireHostile false) is fought back.
             && (deliberate || !requireHostile || !PlayerbotTargetFilter.IsCivilian(creature));
 
-    /// <summary>Whether the bot is in combat or attacked by a unit it may hit back: the walk to a battlemaster answers it first (<see cref="Travel"/>).</summary>
-    internal static bool IsFighting(Player player) => player.Combat.IsInCombat || FirstAttacker(player) is not null;
+    /// <summary>Whether a unit attacks the bot that it may hit back: exactly when the walk to a battlemaster answers it first (<see cref="Travel"/>), and so when the walk's progress watch stands still.</summary>
+    internal static bool IsAttacked(Player player) => FirstAttacker(player) is not null;
 
-    /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
+    /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked). A plain loop: no closure is allocated per call.</summary>
     private static Unit? FirstAttacker(Player player)
-        => player.Combat.Attackers.FirstOrDefault(u => u.IsAlive && u.IsInWorld && ReferenceEquals(u.Map, player.Map)
-            && player.Map is { } map && map.Combat.Hooks.CanAttack(player, u));
+    {
+        if (player.Map is not { } map) return null;
+        foreach (Unit u in player.Combat.Attackers)
+            if (u.IsAlive && u.IsInWorld && ReferenceEquals(u.Map, map) && map.Combat.Hooks.CanAttack(player, u)) return u;
+        return null;
+    }
 
     /// <summary>A carrier does not stop to fight; it only keeps hitting a target it already fights in melee reach.</summary>
     private Unit? FirstAttackerIfStill(Player player)

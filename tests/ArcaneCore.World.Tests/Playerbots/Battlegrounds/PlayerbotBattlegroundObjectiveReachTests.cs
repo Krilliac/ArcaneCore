@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -216,10 +217,12 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
 
     /// <summary>
     /// The progress watch driven through the facts: a walk that has made no progress for its stall time is set aside, the master is refused
-    /// for the zone the walk started in and the zone it stalled in, and the stall is reported as an unreachable objective.
+    /// for the zone the walk started in and, separately, for the zone it stalled in, and the stall is reported as an unreachable objective.
+    /// The start zone is made to differ from the bot's zone before the stall fires, so the start-zone refusal cannot come from the
+    /// current-zone one.
     /// </summary>
     [Fact]
-    public async Task AStalledWalk_IsSetAside_AndTheMasterIsRefusedFromTheStartZone()
+    public async Task AStalledWalk_IsSetAside_AndTheMasterIsRefusedFromTheStartZoneAndTheZoneItStalledIn()
     {
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
         await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-stalled", async context =>
@@ -230,10 +233,15 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
             await context.AutonomousAsync(ally);
             PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
             await context.WaitUntilAsync("the bot walks to the battlemaster", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Travel, TimeSpan.FromSeconds(60));
-            (ObjectGuid master, uint zone) = await context.ReadAsync(() =>
+            (ObjectGuid master, uint startZone) = await context.ReadAsync(() =>
             {
+                Player player = ally.RequirePlayer();
                 PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
-                ScenarioContext.Expect(!coordinator.IsMasterRefused(t.Battlemaster, t.StartZone), "control: not refused before");
+                // The walk started in a zone other than the one the bot stalls in.
+                t.StartZone = player.ZoneId + 1;
+                ScenarioContext.Expect(t.StartZone != player.ZoneId, "control: the start zone differs from the bot's zone");
+                ScenarioContext.Expect(!coordinator.IsMasterRefused(t.Battlemaster, t.StartZone) && !coordinator.IsMasterRefused(t.Battlemaster, player.ZoneId),
+                    "control: not refused before");
                 // The watch's mark: a best distance no step can beat by ten yards, reached longer ago than the stall time.
                 t.BestYardsToMaster = 0.1f;
                 t.BestYardsAtMs = unchecked(t.PhaseSinceMs - PlayerbotBattlegroundQueueMachine.TravelStallFor(t.TravelYards) - 10_000);
@@ -241,7 +249,109 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
             });
             await context.WaitUntilAsync("the walk is set aside", () => coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)),
                 TimeSpan.FromSeconds(30));
-            ScenarioContext.Expect(await context.ReadAsync(() => coordinator.IsMasterRefused(master, zone)), "the master is refused from the start zone");
+            await context.ReadAsync(() =>
+            {
+                uint zone = ally.RequirePlayer().ZoneId;
+                ScenarioContext.Expect(zone != startZone, "control: the zone the walk stalled in is not the start zone");
+                ScenarioContext.Expect(coordinator.IsMasterRefused(master, startZone), "the master is refused from the start zone");
+                ScenarioContext.Expect(coordinator.IsMasterRefused(master, zone), "the master is refused from the zone the walk stalled in");
+                return true;
+            });
+        });
+    }
+
+    /// <summary>
+    /// The fight wiring of the progress watch: a bot in the travel phase that is attacked, with a mark older than the stall time, stays in the
+    /// travel phase and is not set aside (the fighting ticks restart the watch's clock). The control is the stalled walk above: the same mark,
+    /// no attacker, set aside.
+    /// </summary>
+    [Fact]
+    public async Task ABotAttackedOnTheWalk_WithAnOldMark_StaysInTravel_AndIsNotSetAside()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-attacked", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bgmattacked", 1, characterClass: 1);
+            ScenarioBot foe = await context.LoginAsync("Bgmfoe", 2, characterClass: 1);
+            Vector3 start = await ally.ReadAsync(p => new Vector3(p.X, p.Y, p.Z));
+            await context.PlaceAsync(ally, 0, start.X + 40f, start.Y, start.Z);
+            await context.PlaceAsync(foe, 0, start.X + 42f, start.Y, start.Z);
+            await PlayerbotBattlegroundWorldTests.FlagForPvpAsync(ally);
+            await PlayerbotBattlegroundWorldTests.FlagForPvpAsync(foe);
+            await context.AutonomousAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            await context.WaitUntilAsync("the bot walks to the battlemaster", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Travel, TimeSpan.FromSeconds(60));
+            uint oldMark = await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                Player enemy = foe.RequirePlayer();
+                PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
+                t.BestYardsToMaster = 0.1f;
+                t.BestYardsAtMs = unchecked(t.PhaseSinceMs - PlayerbotBattlegroundQueueMachine.TravelStallFor(t.TravelYards) - 10_000);
+                Map map = player.Map!;
+                // Combat without an attacker is no fight on the walk: the bot answers attackers only.
+                map.Combat.SetInCombatState(player, 60_000);
+                ScenarioContext.Expect(player.Combat.IsInCombat && !PlayerbotBattlegroundAI.IsAttacked(player), "control: in combat with nobody attacking is not attacked");
+                ScenarioContext.Expect(map.Combat.Attack(enemy, player), "control: the foe attacks the bot");
+                map.Combat.DealDamage(enemy, player, 1);
+                ScenarioContext.Expect(player.Combat.IsInCombat && PlayerbotBattlegroundAI.IsAttacked(player), "control: the bot is in combat and attacked");
+                return t.BestYardsAtMs;
+            });
+            await context.IdleAsync(TimeSpan.FromSeconds(10));
+            await context.ReadAsync(() =>
+            {
+                PlayerbotBattlegroundCoordinator.Tracked? t = coordinator.Find(ally.BotId);
+                ScenarioContext.Expect(t is { Phase: PlayerbotBattlegroundPhase.Travel }, $"the bot is still on the walk (phase {t?.Phase})");
+                ScenarioContext.Expect(unchecked((int)(t!.BestYardsAtMs - oldMark)) > 0, "the watch saw a fighting tick and restarted its clock");
+                ScenarioContext.Expect(!coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)), "the walk was not set aside");
+                ScenarioContext.Expect(!coordinator.IsMasterRefused(t.Battlemaster, t.StartZone), "the master is not refused");
+                return true;
+            });
+        });
+    }
+
+    /// <summary>
+    /// The settled midfield of a Warsong Gulch match is kept, an unsettled one is asked again (<c>_wsgMidfields</c>): through the coordinator's own
+    /// picture, with three meshes in turn on the world thread (no tick between them) - an unwalkable disc over the middle (a fallback, unsettled),
+    /// open ground (the middle itself, settled and kept), the disc again (the kept middle is still the answer).
+    /// </summary>
+    [Fact]
+    public async Task TheWarsongMidfield_IsAskedAgainAfterAnUnsettledAnswer_AndKeptOnceSettled()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-midfield-kept", async context =>
+        {
+            ScenarioBot ally = await PlayerbotBattlegroundWorldTests.AutonomousAsync(context, "Bgmidally", race: 1);
+            ScenarioBot horde = await PlayerbotBattlegroundWorldTests.ScriptedHordeQueuesAsync(context, "Bgmidhord", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            await PlayerbotBattlegroundWorldTests.PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
+            await context.WaitUntilAsync("the Alliance bot is in the match", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60));
+            var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(ally))!;
+            await context.WaitUntilAsync("the gates open", () => wsg.Status == BattlegroundStatus.InProgress, PlayerbotBattlegroundWorldTests.StartWait);
+
+            await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                Vector3 middle = (Content.AllianceFlag + Content.HordeFlag) / 2f;
+                var picture = typeof(PlayerbotBattlegroundCoordinator).GetMethod("BuildWarsongPicture", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                Vector2 Midfield(float discRadius)
+                {
+                    var mesh = new MidfieldMesh(middle, discRadius, Content.WsgFloor, tilesPending: false);
+                    WorldCollision.Of(context.World).Install(lineOfSight: mesh, pathfinder: mesh);
+                    object built = picture.Invoke(coordinator, [wsg, Team.Alliance, player])!;
+                    var at = (Vector3)built.GetType().GetProperty("Midfield")!.GetValue(built)!;
+                    return new Vector2(at.X, at.Y);
+                }
+
+                Vector2 center = new(middle.X, middle.Y);
+                Vector2 first = Midfield(discRadius: 60f);
+                ScenarioContext.Expect(Vector2.Distance(first, center) > 5f, $"control: under the disc the midfield {first} is a fallback away from the middle");
+                Vector2 second = Midfield(discRadius: 0f);
+                ScenarioContext.Expect(Vector2.Distance(second, center) < 1f, $"the midfield is asked again after the unsettled answer and is the middle, got {second}");
+                Vector2 third = Midfield(discRadius: 60f);
+                ScenarioContext.Expect(Vector2.Distance(third, second) < 0.01f, $"the settled midfield is kept, got {third} after {second}");
+                return true;
+            });
         });
     }
 
@@ -406,24 +516,54 @@ public sealed class PlayerbotBattlegroundTravelProgressTests
     }
 
     [Fact]
-    public void AGoalThatMovesAwayFromTheBot_ResetsTheWatch_OneThatMovesCloserDoesNot()
+    public void AMovingGoal_ShiftsTheWatchsMark_ByTheChangeOfDistance_AndLeavesItsClockAlone()
     {
         var t = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Follower") { MasterAt = new Vector3(100, 0, 0), TravelYards = 150f };
         Vector3 at = Vector3.Zero;
         Assert.False(PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, 1_000));
         Assert.Equal((100f, 1_000u), (t.BestYardsToMaster, t.BestYardsAtMs));
 
-        // Closer by 20 yards: the goal follows, the mark stays (the bot's progress so far still counts).
-        PlayerbotBattlegroundCoordinator.FollowMaster(t, at, new Vector3(80, 0, 0), 50_000);
+        // Closer by 20 yards: the goal follows and the mark with it (the bot's progress so far still counts); the clock runs on.
+        PlayerbotBattlegroundCoordinator.FollowMaster(t, at, new Vector3(80, 0, 0));
         Assert.Equal(new Vector3(80, 0, 0), t.MasterAt);
-        Assert.Equal((100f, 1_000u), (t.BestYardsToMaster, t.BestYardsAtMs));
+        Assert.Equal((80f, 1_000u), (t.BestYardsToMaster, t.BestYardsAtMs));
 
-        // Farther by 60 yards: the distance to cover grew, so the best distance could never be beaten; the watch starts over.
-        PlayerbotBattlegroundCoordinator.FollowMaster(t, at, new Vector3(140, 0, 0), 60_000);
+        // Farther by 60 yards: the mark moves out with the goal and the clock still runs on, so the bot that stands still is stalled
+        // when the stall time since its first look is over.
+        PlayerbotBattlegroundCoordinator.FollowMaster(t, at, new Vector3(140, 0, 0));
         Assert.Equal(new Vector3(140, 0, 0), t.MasterAt);
-        Assert.Equal((-1f, 60_000u), (t.BestYardsToMaster, t.BestYardsAtMs));
-        Assert.False(PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, 60_500));
-        Assert.Equal((140f, 60_500u), (t.BestYardsToMaster, t.BestYardsAtMs));
+        Assert.Equal((140f, 1_000u), (t.BestYardsToMaster, t.BestYardsAtMs));
+        uint stall = PlayerbotBattlegroundQueueMachine.TravelStallFor(150f);
+        Assert.False(PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, 1_000 + stall));
+        Assert.True(PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, 1_001 + stall));
+
+        // A mark of none seen yet stays so, and the mark never goes below zero.
+        var fresh = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Fresh") { MasterAt = new Vector3(100, 0, 0) };
+        PlayerbotBattlegroundCoordinator.FollowMaster(fresh, at, new Vector3(140, 0, 0));
+        Assert.Equal(-1f, fresh.BestYardsToMaster);
+        var close = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Close") { MasterAt = new Vector3(100, 0, 0), BestYardsToMaster = 10f };
+        PlayerbotBattlegroundCoordinator.FollowMaster(close, at, new Vector3(1, 0, 0));
+        Assert.Equal(0f, close.BestYardsToMaster);
+    }
+
+    [Fact]
+    public void AMasterPacingAwayAndBack_FromABotThatStandsStill_IsStillAStall()
+    {
+        var t = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Pacer") { MasterAt = new Vector3(100, 0, 0), TravelYards = 150f };
+        Vector3 at = Vector3.Zero;
+        uint stall = PlayerbotBattlegroundQueueMachine.TravelStallFor(150f);
+        Assert.False(PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, 1_000));
+        bool stalled = false;
+        uint now = 1_000;
+        for (int step = 1; !stalled && now <= 1_000 + stall + 30_000; step++)
+        {
+            now += 15_000;
+            PlayerbotBattlegroundCoordinator.FollowMaster(t, at, new Vector3(step % 2 == 1 ? 160f : 100f, 0, 0));
+            stalled = PlayerbotBattlegroundCoordinator.WatchTravel(t, at, false, now);
+            if (now - 1_000 <= stall) Assert.False(stalled, $"stalled early at {now}");
+        }
+
+        Assert.True(stalled, "the watch never reported the stall of a bot that stands still");
     }
 
     [Fact]
@@ -431,16 +571,16 @@ public sealed class PlayerbotBattlegroundTravelProgressTests
     {
         var t = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Near") { MasterAt = new Vector3(8, 0, 0) };
         // Near: a 1-yard step is followed, so a stop within the interaction distance is a stop within reach of the creature.
-        PlayerbotBattlegroundCoordinator.FollowMaster(t, Vector3.Zero, new Vector3(9, 0, 0), 0);
+        PlayerbotBattlegroundCoordinator.FollowMaster(t, Vector3.Zero, new Vector3(9, 0, 0));
         Assert.Equal(new Vector3(9, 0, 0), t.MasterAt);
-        PlayerbotBattlegroundCoordinator.FollowMaster(t, Vector3.Zero, new Vector3(9.3f, 0, 0), 0);
+        PlayerbotBattlegroundCoordinator.FollowMaster(t, Vector3.Zero, new Vector3(9.3f, 0, 0));
         Assert.Equal(new Vector3(9, 0, 0), t.MasterAt);
 
         // Far: a 1-yard step is not (the walk is not replanned at every step).
         var far = new PlayerbotBattlegroundCoordinator.Tracked(Guid.NewGuid(), "Far") { MasterAt = new Vector3(100, 0, 0) };
-        PlayerbotBattlegroundCoordinator.FollowMaster(far, Vector3.Zero, new Vector3(101, 0, 0), 0);
+        PlayerbotBattlegroundCoordinator.FollowMaster(far, Vector3.Zero, new Vector3(101, 0, 0));
         Assert.Equal(new Vector3(100, 0, 0), far.MasterAt);
-        PlayerbotBattlegroundCoordinator.FollowMaster(far, Vector3.Zero, new Vector3(104, 0, 0), 0);
+        PlayerbotBattlegroundCoordinator.FollowMaster(far, Vector3.Zero, new Vector3(104, 0, 0));
         Assert.Equal(new Vector3(104, 0, 0), far.MasterAt);
     }
 
