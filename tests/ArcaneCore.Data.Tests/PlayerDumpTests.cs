@@ -165,6 +165,53 @@ public sealed class PlayerDumpTests : IAsyncLifetime
         Assert.Equal((DumpReturn.Success, 500), (free.Result, free.CharacterId));
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Load_KeepsAnEscrowedMailItemOwnerless_SoTheLetterKeepsItAcrossAnInventorySave(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice) = await SeedAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            // Mail escrows its item with owner 0 (EfEconomyStore.GetEscrowItemsAsync).
+            db.Add(new ItemInstanceRow { Guid = 104, OwnerGuid = 0, ItemId = 2589, Count = 3 });
+            db.Add(new MailRow { Id = 51, ReceiverId = alice, SenderId = 0, Subject = "escrow", ItemGuid = 104, ItemEntry = 2589 });
+            await db.SaveChangesAsync();
+        }
+
+        string dump;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            dump = (await new PlayerDumpWriter(db).GetDumpAsync(alice))!;
+        }
+
+        PlayerDumpLoad load;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            load = await new PlayerDumpReader(db).LoadDumpAsync(dump, accountId: 3, "Clone", 0, await StoredPlayerDumpIds.CreateAsync(db));
+        }
+
+        Assert.Equal(DumpReturn.Success, load.Result);
+        int clone = load.CharacterId;
+        uint escrowGuid;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            escrowGuid = (await db.Set<MailRow>().SingleAsync(m => m.ReceiverId == clone && m.Subject == "escrow")).ItemGuid;
+            Assert.NotEqual(104u, escrowGuid);
+            Assert.Equal(2589u, (await new EfEconomyStore(db).GetEscrowItemsAsync([escrowGuid]))[escrowGuid].Entry);
+        }
+
+        // The clone's first inventory save must not delete the mailed item.
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            await new EfItemStore(db).SaveInventoryAsync(clone, new InventorySnapshot([]));
+        }
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            Assert.True(await db.Set<ItemInstanceRow>().AnyAsync(i => i.Guid == escrowGuid && i.OwnerGuid == 0));
+        }
+    }
+
     private static List<string> Tables(string dump)
         => [.. dump.Split('\n').Where(l => l.Contains('\t', StringComparison.Ordinal)).Select(l => l[..l.IndexOf('\t', StringComparison.Ordinal)])];
 

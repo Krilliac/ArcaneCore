@@ -360,6 +360,12 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
         var texts = new Dictionary<long, uint>();
         var pets = new Dictionary<long, uint>();
 
+        // Mail escrows its item with owner 0 (EfEconomyStore.GetEscrowItemsAsync); handing such an item to the new character would hide it
+        // from the letter and let the next inventory save delete it. vmangos keeps the receiver as owner_guid (PlayerDump.cpp changeGuid),
+        // which is harmless there because its mail items are not escrowed by owner.
+        HashSet<long> mailed = [.. rows.Where(r => r.Type == DumpTableType.Mail)
+            .Select(r => Convert.ToInt64(PlayerDumpTables.Get(db, r.Table, r.Row, "ItemGuid"))).Where(g => g != 0)];
+
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         db.Characters.Add(character);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -416,8 +422,13 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
                     Remap("ItemGuid", items, ids.NextItemGuid, allowZero: true);
                     break;
                 case DumpTableType.Item:
+                    bool escrowed = mailed.Contains(Convert.ToInt64(PlayerDumpTables.Get(db, table, row, "Guid")))
+                        && Convert.ToInt64(PlayerDumpTables.Get(db, table, row, "OwnerGuid")) == 0;
                     Remap("Guid", items, ids.NextItemGuid, allowZero: false);
-                    PlayerDumpTables.Set(db, table, row, "OwnerGuid", newId);
+                    if (!escrowed)
+                    {
+                        PlayerDumpTables.Set(db, table, row, "OwnerGuid", newId);
+                    }
                     Remap("Text", texts, ids.NextItemTextId, allowZero: true);
                     break;
                 case DumpTableType.ItemLoot:
