@@ -182,8 +182,7 @@ public sealed class RemoteAdminServer : IHostedService
     internal static void WriteTokenFile(string path, byte[] token)
     {
         File.Delete(path);
-        byte[] content = [.. token, (byte)'
-'];
+        byte[] content = [.. token, (byte)'\n'];
         FileStream stream;
         if (OperatingSystem.IsWindows())
         {
