@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Tests.Playerbots.Population;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -39,7 +41,9 @@ public sealed class PlayerbotCommandSettleTests
         return (settledAtReturn, [.. output]);
     }
 
-    private static Task<PopulationTestHost> StartAsync() => PopulationTestHost.StartAsync(o => { o.Population.Enabled = false; o.MaxBots = 4; });
+    private static Task<PopulationTestHost> StartAsync() => PopulationTestHost.StartAsync(o => { o.Population.Enabled = false; o.MaxBots = 4; },
+        // The daemon registers the commands' service (AddWorldDaemon); the test host registers only the feature.
+        configureServices: services => services.AddSingleton<IPlayerbotService>(sp => sp.GetRequiredService<ManagedPlayerbotFeature>()));
 
     [Fact]
     public async Task Inspect_IsNotSettled_UntilTheBackgroundReplyIsOut()

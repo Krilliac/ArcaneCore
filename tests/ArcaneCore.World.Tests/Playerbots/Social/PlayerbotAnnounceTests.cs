@@ -245,8 +245,8 @@ public sealed class PlayerbotAnnounceTests
         await using var rig = new Rig(chat => ChatSamples.NoScreeningDeadline(chat), model: false);
         PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
         System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
-        // The topic's sentence does not name the member, so only the filled template ("... Zed ...") is out of time.
-        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("Zed", StringComparison.Ordinal);
+        // The topic's sentence does not name the member, so only the filled template ("... Zed ...") is out of time. The filter matches the lower-cased form of the line, hence the case-insensitive test.
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("Zed", StringComparison.OrdinalIgnoreCase);
 
         Assert.Null(await rig.AnswerAsync(Announcement(who: "Zed", sentence: "A new member joined the guild.")));
         Assert.Empty(rig.Chat.Safety.Flags());
