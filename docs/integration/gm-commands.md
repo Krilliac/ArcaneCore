@@ -131,25 +131,32 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   is runtime state only because this branch has no persisted power-cap schema. Responses use mangos LANG ids 122/123
   (ENERGY) and 125/126 (rage), with invariant numeric formatting. A selected creature or offline/missing player returns
   `No character selected.` and security checks run before mutation.
-* `.goname` follows vmangos for the target's map (TeleportCommands.cpp:1242-1303). To a player in a battleground it binds the GM to
-  that match through the battleground manager (the teleport gate admits only bound players), refuses a GM bound to a different
-  running match with LANG_CANNOT_GO_TO_BG_FROM_BG, and records the GM's position as its entry point. A binding to a match that no
-  longer exists counts as none (it is cleared when a command or a queue join meets it, and on arrival on any map), as vmangos cleans
-  up an outdated setting. A bound GM is on the match's map but is not a participant: only a queue invitation adds a player to a match
-  (vmangos `HandleMoveWorldportAckOpcode` adds only `IsInvitedForBattleGroundInstance`), so the GM is in no team count, raid or
-  scoreboard, the match's invitation count and free slots are the same before, during and after the visit, and the queue is not
-  over-invited. To a player in a dungeon instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an
-  unbound GM to that instance; this bind is made before the teleport, as vmangos does, so a teleport refused afterwards leaves it
-  (only the battleground bind is reverted). `.namego` from inside a battleground binds the summoned player to the caller's match the
-  same way; a player in another match leaves that match, without the Deserter debuff, once it arrived in the new match's map (a refused
-  teleport, a refused map entry, or a logout before the arrival restores the old binding and its queue slot). A battleground bind that the command made is undone when the teleport is refused; one the
-  player already had (a player loading in) is left alone. The bind is cleared by the ordinary leave paths (a far teleport off the
-  map, the match removing the player, logout). Not ported: the smart-instance-binding mode. A refused teleport answers the
-  invalid-coordinates text (vmangos is silent).
-  Deviations from vmangos: (1) Deserter on leaving a running battleground is cast only for a player that holds the queue invitation to
-  that match (accepted, or accepted and not yet arrived); vmangos casts it for any non-GM bound to the match, so a player that `.namego`
-  summoned in without an invitation gets none here. (2) `.goname` to a dungeon whose map is flagged to reset when it unloads does not bind
-  the GM to that instance (it would bind to a save about to be deleted); the GM enters like any unbound visitor.
+* `.goname` follows vmangos for the target's map (TeleportCommands.cpp:1242-1303). To a player in a battleground it refuses a GM
+  bound to a different running match with LANG_CANNOT_GO_TO_BG_FROM_BG and otherwise sends the GM to that match; to a player in a
+  dungeon instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an unbound GM to that instance (this bind
+  is made before the teleport, as vmangos does). `.namego` from inside a battleground sends the summoned player to the caller's match.
+  A battleground move binds nothing when the command runs. The command records an intent (the target match, the player's side and the
+  open-world entry point) that alone admits the one far teleport; the arrival in the match's map commits it. A binding to a match that no
+  longer exists counts as none (cleared when a command, a queue join or an arrival meets it), as vmangos cleans up an outdated setting.
+  A bound GM is on the match's map but is not a participant: only a queue invitation adds a player to a match (vmangos
+  `HandleMoveWorldportAckOpcode` adds only `IsInvitedForBattleGroundInstance`), so the GM is in no team count, raid or scoreboard, the
+  match's invitation count and free slots are the same before, during and after the visit, and the queue is not over-invited. The bind
+  is cleared by the ordinary leave paths (a far teleport off the map, the match removing the player, logout). Not ported: the
+  smart-instance-binding mode. A refused teleport answers the invalid-coordinates text (vmangos is silent).
+  Deviations from vmangos:
+  1. `.namego` of a player in another running match: vmangos overwrites the battleground id and sends a near teleport (a bug, and the
+     old match keeps the player). ArcaneCore forces a far teleport (`TELE_TO_FORCE_MAP_CHANGE`, as vmangos `.goname` does when the
+     battleground id changes) and removes the player from the old match on its arrival in the new match's map: team count, raid,
+     scoreboard, queue slot and invitation are all released, with no Deserter. Until the player arrives it is still a member of the
+     old match; a refused, abandoned or failed teleport leaves it exactly where it was.
+  2. No binding changes before the arrival. vmangos sets `bgInstanceID` and `joinPos` at the command and a failed teleport leaves them
+     stale. The open-world entry point is recorded at the command and stored on arrival.
+  3. `.goname` refuses while the GM itself is being teleported (vmangos has that check only in `.namego`).
+  4. Deserter on leaving a running battleground is cast only for a player that holds the queue invitation to that match (accepted, or
+     accepted and not yet arrived); vmangos casts it for any non-GM bound to the match. A leave caused by a GM move never casts it.
+  5. A GM-bound player is not a participant of the match.
+  6. `.goname` to a dungeon whose map is flagged to reset when it unloads does not bind the GM to that instance (it would bind to a
+     save about to be deleted); the GM enters like any unbound visitor.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

@@ -3,12 +3,17 @@ using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Battlegrounds;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.GridTerrain;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
@@ -60,6 +65,8 @@ public sealed class GmGoBattlegroundAndInstanceTests
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _reader;
         private long _sequence;
+        private int _heldNewWorld;
+        private int _disposed;
 
         private ClientTap(WorldTestClient client, string name)
         {
@@ -69,6 +76,34 @@ public sealed class GmGoBattlegroundAndInstanceTests
         }
 
         public string Name { get; }
+
+        /// <summary>
+        /// While true the client records SMSG_NEW_WORLD but does not send MSG_MOVE_WORLDPORT_ACK: the far teleport stays in its loading screen
+        /// until <see cref="ReleaseWorldportAckAsync"/>.
+        /// </summary>
+        public volatile bool HoldWorldportAcks;
+
+        /// <summary>Whether an SMSG_NEW_WORLD is waiting for <see cref="ReleaseWorldportAckAsync"/>.</summary>
+        public bool HoldingNewWorld => Volatile.Read(ref _heldNewWorld) != 0;
+
+        /// <summary>Stop holding and acknowledge the held SMSG_NEW_WORLD (the loading screen ends).</summary>
+        public async Task ReleaseWorldportAckAsync()
+        {
+            HoldWorldportAcks = false;
+            if (Interlocked.Exchange(ref _heldNewWorld, 0) != 0)
+            {
+                await SendRawAsync(WorldOpcode.MsgMoveWorldportAck, []);
+            }
+        }
+
+        /// <summary>Whether <paramref name="opcode"/> was received since <paramref name="since"/>.</summary>
+        public bool Saw(long since, WorldOpcode opcode)
+        {
+            lock (_received)
+            {
+                return _received.Any(p => p.Sequence >= since && p.Opcode == opcode);
+            }
+        }
 
         public static async Task<ClientTap> EnterAsync(ScenarioTestWorld world, string account, string character, AccountSecurity security)
             => new(await world.EnterWorldAsync(account, character, security), character);
@@ -130,7 +165,14 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 }
                 else if (packet.opcode == WorldOpcode.SmsgNewWorld)
                 {
-                    await SendRawAsync(WorldOpcode.MsgMoveWorldportAck, []);
+                    if (HoldWorldportAcks)
+                    {
+                        Volatile.Write(ref _heldNewWorld, 1);
+                    }
+                    else
+                    {
+                        await SendRawAsync(WorldOpcode.MsgMoveWorldportAck, []);
+                    }
                 }
             }
         }
@@ -150,6 +192,11 @@ public sealed class GmGoBattlegroundAndInstanceTests
 
         public async ValueTask DisposeAsync()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
             await _stop.CancelAsync();
             await _client.DisposeAsync();
             try
@@ -184,6 +231,140 @@ public sealed class GmGoBattlegroundAndInstanceTests
 
     private static ObjectGuid GuidOf(ScenarioContext context, string name)
         => context.World.FindOnlinePlayer(name)?.Guid ?? throw new ScenarioAssertionException($"{name} is not online");
+
+    /// <summary>
+    /// World thread: binds the tap's player to <paramref name="match"/> the way a queue leaves it (a participant when
+    /// <paramref name="participant"/>, holding a queue slot and the invitation to the match when <paramref name="invited"/>) and teleports it
+    /// to the match's start.
+    /// </summary>
+    private static void BindAndTeleport(ScenarioContext context, ClientTap tap, Battleground match, bool participant, bool invited)
+    {
+        BattlegroundFeature feature = Battlegrounds(context);
+        Player p = context.World.FindOnlinePlayer(tap.Name)!;
+        feature.Manager.BindPlayer(p.Guid, match, p.Team);
+        if (participant)
+        {
+            ScenarioContext.Expect(match.AddPlayer(p.Guid, p.Team), tap.Name + " could not be added to the match");
+        }
+
+        if (invited)
+        {
+            BattlegroundPlayerState state = feature.Manager.StateOf(p.Guid);
+            state.AddSlot(match.Template.QueueType);
+            state.SetInvite(match.Template.QueueType, match.InstanceId);
+        }
+
+        BattlegroundStartLocation start = p.Team == Team.Alliance ? match.Template.AllianceStart : match.Template.HordeStart;
+        TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
+        if (!teleports.TeleportTo(p, Wsg, start.X, start.Y, start.Z, start.Orientation))
+        {
+            throw new ScenarioAssertionException(
+                $"{tap.Name} could not be teleported into the match: stage={teleports.StageOf(p)} map={p.Map?.MapId} bound={feature.BattlegroundOf(p.Guid)?.InstanceId} "
+                + $"matchAlive={feature.Manager.GetBattleground(match.InstanceId, match.Type) is not null} allowed={feature.CanEnterMap(p, Wsg)} start=({start.X},{start.Y},{start.Z},{start.Orientation})");
+        }
+    }
+
+    private static Task WaitInMatchAsync(ScenarioContext context, ClientTap tap, Battleground match)
+        => context.WaitUntilAsync(tap.Name + " is in the match's map instance", () =>
+            context.World.FindOnlinePlayer(tap.Name) is { IsInWorld: true, Map: { } map } && map.MapId == Wsg && map.InstanceId == match.InstanceId);
+
+    /// <summary>Puts the tap's player into <paramref name="match"/> (<see cref="BindAndTeleport"/>) and waits until it stands in the match's map instance.</summary>
+    private static async Task PutInMatchAsync(ScenarioContext context, ClientTap tap, Battleground match, bool participant, bool invited)
+    {
+        await context.ReadAsync(() =>
+        {
+            BindAndTeleport(context, tap, match, participant, invited);
+            return true;
+        });
+        await WaitInMatchAsync(context, tap, match);
+    }
+
+    /// <summary>
+    /// Creates the second match and puts <paramref name="anchor"/> into it as a participant in the same world-thread step (an empty match is deleted
+    /// by its first update tick), and waits until the anchor stands in the match's map instance.
+    /// </summary>
+    private static async Task<Battleground> CreateMatchWithAnchorAsync(ScenarioContext context, ClientTap anchor, Battleground like)
+    {
+        Battleground b = await context.ReadAsync(() =>
+        {
+            Battleground created = CreateSecondMatch(context, like);
+            BindAndTeleport(context, anchor, created, participant: true, invited: false);
+            return created;
+        });
+        await WaitInMatchAsync(context, anchor, b);
+        return b;
+    }
+
+    /// <summary>Everything about a GM move that the tests compare, read on the world thread.</summary>
+    private sealed record MoveView(
+        bool InMapOfB, bool BoundToA, bool BoundToB, bool ParticipantOfA, bool ParticipantOfB, int PlayersOfA,
+        int SlotOfA, uint InviteOfA, bool Deserter, bool HasRecord, bool Online, BattlegroundEntryPoint? EntryPoint);
+
+    private static Task<MoveView> ViewAsync(ScenarioContext context, string name, Battleground a, Battleground b)
+        => context.ReadAsync(() =>
+        {
+            BattlegroundFeature feature = Battlegrounds(context);
+            Player? p = context.World.FindOnlinePlayer(name);
+            if (p is null)
+            {
+                return new MoveView(false, false, false, false, false, a.PlayerCount, -1, 0, false, false, false, null);
+            }
+
+            BattlegroundPlayerState state = feature.Manager.StateOf(p.Guid);
+            Battleground? bound = feature.BattlegroundOf(p.Guid);
+            return new MoveView(
+                p.Map is { } map && map.MapId == Wsg && map.InstanceId == b.InstanceId,
+                bound == a,
+                bound == b,
+                a.PlayerTeam(p.Guid) is not null,
+                b.PlayerTeam(p.Guid) is not null,
+                a.PlayerCount,
+                state.SlotOf(a.Template.QueueType),
+                state.InvitedInstance(a.Template.QueueType),
+                context.Services.GetRequiredService<SpellFeature>().System.HasAura(p, BattlegroundConstants.SpellDeserter),
+                feature.HasGmMove(p.Guid),
+                true,
+                feature.EntryPointOf(p.Guid));
+        });
+
+    /// <summary>
+    /// Creates the second match B (kept alive by <paramref name="anchor"/> as a participant), sends the GM into B with <c>.goname</c>, and puts
+    /// the victim into A as a participant holding A's queue slot and invitation. Returns B.
+    /// </summary>
+    private static async Task<Battleground> PrepareMoveAsync(ScenarioContext context, ClientTap gm, ClientTap victim, ClientTap anchor, Battleground a)
+    {
+        Battleground b = await CreateMatchWithAnchorAsync(context, anchor, a);
+        await AppearAtAsync(context, gm, anchor.Name, b);
+        await PutInMatchAsync(context, victim, a, participant: true, invited: true);
+        return b;
+    }
+
+    /// <summary>The GM types <c>.namego</c> for the victim, whose client holds its loading screen; returns once the client holds the SMSG_NEW_WORLD.</summary>
+    private static async Task NamegoHeldAsync(ScenarioContext context, ClientTap gm, ClientTap victim)
+    {
+        victim.HoldWorldportAcks = true;
+        long mark = gm.Mark();
+        await gm.SayAsync(".namego " + victim.Name);
+        await context.WaitUntilAsync("the victim's client holds the loading screen and the GM is told it is summoning",
+            () => victim.HoldingNewWorld && gm.ChatSince(mark).Any(t => t.StartsWith("You are summoning ", StringComparison.Ordinal)));
+    }
+
+    /// <summary>What a finished A to B move looks like: in B's instance, bound to B only, out of A with slot and invitation released, no Deserter.</summary>
+    private static async Task ExpectMovedToBAsync(ScenarioContext context, ClientTap victim, Battleground a, Battleground b, int playersOfABefore, BattlegroundEntryPoint? entryBefore, string when)
+    {
+        await context.WaitUntilAsync("the victim arrives in B and is bound to it", () => context.World.FindOnlinePlayer(victim.Name) is { IsInWorld: true, Map: { } map } p
+            && map.MapId == Wsg && map.InstanceId == b.InstanceId && Battlegrounds(context).BattlegroundOf(p.Guid) == b);
+        MoveView v = await ViewAsync(context, victim.Name, a, b);
+        ScenarioContext.Expect(v.InMapOfB && v.BoundToB && !v.BoundToA, when + ": the victim is not in B and bound to B");
+        ScenarioContext.Expect(!v.ParticipantOfB, when + ": the victim became a participant of B");
+        ScenarioContext.Expect(!v.ParticipantOfA, when + ": the victim is still a participant of A");
+        ScenarioContext.ExpectEqual(playersOfABefore - 1, v.PlayersOfA, when + ": players of A");
+        ScenarioContext.ExpectEqual(-1, v.SlotOfA, when + ": A's queue slot of the victim");
+        ScenarioContext.ExpectEqual(0u, v.InviteOfA, when + ": A's invitation of the victim");
+        ScenarioContext.Expect(!v.Deserter, when + ": the victim got Deserter from a GM move");
+        ScenarioContext.Expect(!v.HasRecord, when + ": the GM move record is still there");
+        ScenarioContext.ExpectEqual(entryBefore, v.EntryPoint, when + ": entry point");
+    }
 
     /// <summary>
     /// The GM types <c>.goname</c> and waits until it stands in the match's map instance, or until the server answered the live bug's
@@ -399,7 +580,7 @@ public sealed class GmGoBattlegroundAndInstanceTests
     }
 
     [Fact]
-    public async Task Namego_RefusedTeleport_RevertsOnlyWhatTheBindChanged_AndAnAlreadyBoundPlayerIsLeftAlone()
+    public async Task Namego_RefusedTeleport_ChangesNothing_AndAnAlreadyBoundPlayerIsLeftAlone()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
         await RunAsync(world, "gm-summon-bg-revert", async context =>
@@ -417,20 +598,28 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 Player vic = context.World.FindOnlinePlayer(victim.Name)!;
                 ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the victim already has an entry point");
 
-                // The teleport is refused: the bind and the entry point it took are gone again.
-                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome");
-                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "the victim is not bound");
-                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is not null, "no entry point was taken");
-                feature.RevertGmBinding(vic);
-                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) is null, "the binding survived the refused teleport");
-                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the entry point survived the refused teleport");
+                // The move is recorded and nothing else changes: no binding, no entry point, no participation.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "begin outcome");
+                ScenarioContext.Expect(feature.HasGmMove(vic.Guid), "no move record");
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) is null, "the move bound the victim before its arrival");
+                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the move stored an entry point before the arrival");
                 ScenarioContext.Expect(match.PlayerTeam(vic.Guid) is null, "the victim joined the match");
+                ScenarioContext.Expect(feature.CanEnterMap(vic, Wsg), "the record does not admit the teleport");
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.MoveInProgress, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "second begin outcome");
 
-                // A player already bound to the match (loading in) is AlreadyBound; a revert after that changes nothing.
+                // The teleport is refused: the record goes and nothing else changes.
+                feature.CancelGmMove(vic);
+                ScenarioContext.Expect(!feature.HasGmMove(vic.Guid), "the record survived the refused teleport");
+                ScenarioContext.Expect(!feature.CanEnterMap(vic, Wsg), "the cancelled record still admits the teleport");
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) is null, "the cancel bound the victim");
+                ScenarioContext.Expect(feature.EntryPointOf(vic.Guid) is null, "the cancel stored an entry point");
+
+                // A player already bound to the match (loading in) is AlreadyBound and no record is made.
                 feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
-                ScenarioContext.ExpectEqual(GmBattlegroundGo.AlreadyBound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome of a bound player");
-                feature.RevertGmBinding(vic);
-                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "a revert unbound a player that was bound before the call");
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.AlreadyBound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "begin outcome of a bound player");
+                ScenarioContext.Expect(!feature.HasGmMove(vic.Guid), "a record was made for an already bound player");
+                feature.CancelGmMove(vic);
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "a cancel unbound a player that was bound before the call");
                 feature.Manager.UnbindPlayer(vic.Guid);
                 return true;
             });
@@ -438,7 +627,7 @@ public sealed class GmGoBattlegroundAndInstanceTests
     }
 
     [Fact]
-    public async Task Namego_OfAPlayerInAnotherMatch_LeavesThatMatchOnlyAfterTheTeleport_WithoutDeserter()
+    public async Task Namego_OfAPlayerInAnotherMatch_LeavesThatMatchOnlyAtTheCommit_WithoutDeserter()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
         await RunAsync(world, "gm-summon-bg-other", async context =>
@@ -463,19 +652,21 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 queueState.AddSlot(BattlegroundQueueType.WarsongGulch);
                 queueState.SetInvite(BattlegroundQueueType.WarsongGulch, old.InstanceId);
 
-                // The teleport is refused: the victim is still bound to, and a player of, its own match; no Deserter.
-                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome");
+                // The move is recorded, then the teleport is refused: the victim is still bound to, and a player of, its own match; no Deserter.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "begin outcome");
+                ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == old, "the move changed the victim's binding");
                 ScenarioContext.ExpectEqual(1, old.PlayerCount, "players of the old match while the move is pending");
-                feature.RevertGmBinding(vic);
+                feature.CancelGmMove(vic);
                 ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == old, "the victim lost its own match when the teleport was refused");
                 ScenarioContext.ExpectEqual(1, old.PlayerCount, "players of the old match after the refused move");
                 ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "the victim got Deserter from a refused GM move");
                 ScenarioContext.ExpectEqual(old.InstanceId, queueState.InvitedInstance(BattlegroundQueueType.WarsongGulch), "the invitation after the refused move");
 
-                // The teleport is accepted: it left the old match, no Deserter, and is bound (not a player) of the new one.
-                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "second bind outcome");
-                feature.CommitGmBinding(vic);
-                ScenarioContext.ExpectEqual(0, old.PlayerCount, "players of the old match after the accepted move");
+                // The move is committed: it left the old match, no Deserter, and is bound (not a player) of the new one.
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "second begin outcome");
+                feature.CommitGmMove(vic);
+                ScenarioContext.Expect(!feature.HasGmMove(vic.Guid), "the record survived the commit");
+                ScenarioContext.ExpectEqual(0, old.PlayerCount, "players of the old match after the commit");
                 ScenarioContext.ExpectEqual(-1, queueState.SlotOf(BattlegroundQueueType.WarsongGulch), "the queue slot of the match the victim was taken out of");
                 ScenarioContext.ExpectEqual(0u, queueState.InvitedInstance(BattlegroundQueueType.WarsongGulch), "the invitation to the match the victim was taken out of");
                 ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "the victim is not bound to the new match");
@@ -486,6 +677,13 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
                 feature.LeaveBattleground(vic, teleportToEntryPoint: false);
                 ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "a non-invitee got Deserter");
+
+                // An invitee whose leave is GM-induced gets none either; one who leaves on its own does.
+                feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
+                feature.Manager.StateOf(vic.Guid).AddSlot(BattlegroundQueueType.WarsongGulch);
+                feature.Manager.StateOf(vic.Guid).SetInvite(BattlegroundQueueType.WarsongGulch, match.InstanceId);
+                feature.LeaveBattleground(vic, teleportToEntryPoint: false, castDeserter: false);
+                ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "an invitee got Deserter from a GM-induced leave");
                 feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
                 feature.Manager.StateOf(vic.Guid).AddSlot(BattlegroundQueueType.WarsongGulch);
                 feature.Manager.StateOf(vic.Guid).SetInvite(BattlegroundQueueType.WarsongGulch, match.InstanceId);
@@ -493,6 +691,280 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 ScenarioContext.Expect(spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "an invitee who left a running match got no Deserter");
                 return true;
             });
+        });
+    }
+
+    // ------------------------------------------------------------------ A to B: the pending GM move
+
+    [Fact]
+    public async Task Namego_AtoB_EndToEnd()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-namego-atob", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnabally", "Scnabhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMABGM", "Gmabgm", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMABVIC", "Gmabvic", AccountSecurity.Player);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMABANC", "Gmabanc", AccountSecurity.Player);
+            Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+            MoveView before = await ViewAsync(context, victim.Name, a, b);
+            var slotsOfB = await context.ReadAsync(() => Slots(b));
+            ScenarioContext.Expect(before.BoundToA && before.ParticipantOfA && before.InviteOfA == a.InstanceId && before.SlotOfA >= 0, "the scenario needs the victim to be an invitee-participant of A");
+
+            long mark = victim.Mark();
+            await gm.SayAsync(".namego " + victim.Name);
+            await ExpectMovedToBAsync(context, victim, a, b, before.PlayersOfA, before.EntryPoint, "after the move");
+            ScenarioContext.ExpectEqual(slotsOfB, await context.ReadAsync(() => Slots(b)), "B's invitations and free slots");
+            ScenarioContext.Expect(victim.Saw(mark, WorldOpcode.SmsgTransferPending) && victim.Saw(mark, WorldOpcode.SmsgNewWorld), "the victim's client was not sent through a loading screen");
+        });
+    }
+
+    [Fact]
+    public async Task Namego_AtoB_LoadingScreenKeepsA()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-namego-atob-loading", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnlaally", "Scnlahorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMLAGM", "Gmlagm", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMLAVIC", "Gmlavic", AccountSecurity.Player);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMLAANC", "Gmlaanc", AccountSecurity.Player);
+            Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+            MoveView before = await ViewAsync(context, victim.Name, a, b);
+
+            await NamegoHeldAsync(context, gm, victim);
+
+            async Task ExpectStillInAAsync(string when)
+            {
+                MoveView v = await ViewAsync(context, victim.Name, a, b);
+                ScenarioContext.Expect(v.Online, when + ": the victim was kicked");
+                ScenarioContext.Expect(v.BoundToA && !v.BoundToB, when + ": the victim is not bound to A only");
+                ScenarioContext.Expect(v.ParticipantOfA, when + ": the victim left A during the loading screen");
+                ScenarioContext.ExpectEqual(before.PlayersOfA, v.PlayersOfA, when + ": players of A");
+                ScenarioContext.ExpectEqual(before.SlotOfA, v.SlotOfA, when + ": A's queue slot");
+                ScenarioContext.ExpectEqual(a.InstanceId, v.InviteOfA, when + ": A's invitation");
+                ScenarioContext.Expect(v.HasRecord, when + ": the GM move record is gone while the teleport is in flight");
+            }
+
+            await ExpectStillInAAsync("loading");
+            await context.IdleAsync(TimeSpan.FromSeconds(5));
+            await ExpectStillInAAsync("loading, 5 s later");
+
+            await victim.ReleaseWorldportAckAsync();
+            await ExpectMovedToBAsync(context, victim, a, b, before.PlayersOfA, before.EntryPoint, "after the loading screen");
+        });
+    }
+
+    [Fact]
+    public async Task Namego_AtoB_ARemovesTheVictimWhileLoading()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-namego-atob-aends", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnaeally", "Scnaehorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMAEGM", "Gmaegm", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMAEVIC", "Gmaevic", AccountSecurity.Player);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMAEANC", "Gmaeanc", AccountSecurity.Player);
+            Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+            using AnomalyCapture anomalies = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(victim.Name, StringComparison.Ordinal));
+
+            await NamegoHeldAsync(context, gm, victim);
+
+            // A ends while the victim is in its loading screen and removes every player after the auto-remove time: the victim too.
+            await context.ReadAsync(() =>
+            {
+                a.EndBattleground(null);
+                return true;
+            });
+            await context.IdleAsync(TimeSpan.FromMilliseconds(BattlegroundConstants.TimeToAutoRemoveMs + 2000));
+
+            MoveView v = await ViewAsync(context, victim.Name, a, b);
+            ScenarioContext.ExpectEqual(0, v.PlayersOfA, "players of A after it removed everybody");
+            ScenarioContext.Expect(!v.ParticipantOfA, "the victim is still a participant of A");
+            ScenarioContext.ExpectEqual(-1, v.SlotOfA, "A's queue slot of the victim");
+            ScenarioContext.Expect(v.Online, "the victim was kicked while loading");
+            ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(GuidOf(context, victim.Name)).InBattleground), "the victim is still bound after A removed it");
+            ScenarioContext.Expect(v.HasRecord, "the GM move record was dropped while the teleport is still in flight");
+
+            await victim.ReleaseWorldportAckAsync();
+            await ExpectMovedToBAsync(context, victim, a, b, 0 + 1, v.EntryPoint, "after A removed the victim");
+            ScenarioContext.Expect(!anomalies.Any("teleport/map-entry-failed") && !anomalies.Any("teleport/return-failed"), "the arrival failed: " + anomalies.Describe());
+        });
+    }
+
+    [Fact]
+    public async Task Namego_AtoB_BGoneWhileLoading()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-namego-atob-bgone", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnbgally", "Scnbghorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMBGGM", "Gmbggm", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMBGVIC", "Gmbgvic", AccountSecurity.Player);
+            ClientTap anchor = await ClientTap.EnterAsync(world, "GMBGANC", "Gmbganc", AccountSecurity.Player);
+            try
+            {
+                Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+                MoveView before = await ViewAsync(context, victim.Name, a, b);
+                using AnomalyCapture anomalies = AnomalyLedger.Shared.Capture(n => n.Subject.Contains(victim.Name, StringComparison.Ordinal));
+
+                await NamegoHeldAsync(context, gm, victim);
+
+                // B dies: its last participant goes, the GM leaves its map, the empty match is deleted.
+                await anchor.DisposeAsync();
+                await gm.SayAsync(".recall");
+                await context.WaitUntilAsync("B is deleted", () => Battlegrounds(context).Manager.GetBattleground(b.InstanceId, BattlegroundType.WarsongGulch) is null, TimeSpan.FromMinutes(2));
+
+                await victim.ReleaseWorldportAckAsync();
+                await context.WaitUntilAsync("the victim is back in A's map instance", () => context.World.FindOnlinePlayer(victim.Name) is { IsInWorld: true, Map: { } map } p
+                    && map.MapId == Wsg && map.InstanceId == a.InstanceId);
+                MoveView v = await ViewAsync(context, victim.Name, a, b);
+                ScenarioContext.Expect(v.Online, "the victim was kicked");
+                ScenarioContext.Expect(v.BoundToA && v.ParticipantOfA, "the victim is not bound to A as a participant");
+                ScenarioContext.ExpectEqual(before.PlayersOfA, v.PlayersOfA, "players of A");
+                ScenarioContext.ExpectEqual(before.SlotOfA, v.SlotOfA, "A's queue slot");
+                ScenarioContext.ExpectEqual(a.InstanceId, v.InviteOfA, "A's invitation");
+                ScenarioContext.Expect(!v.Deserter, "the victim got Deserter");
+                ScenarioContext.Expect(!v.HasRecord, "the GM move record is still there");
+                ScenarioContext.Expect(!anomalies.Any("teleport/return-failed"), "the victim could not return: " + anomalies.Describe());
+            }
+            finally
+            {
+                await anchor.DisposeAsync();
+            }
+        });
+    }
+
+    [Fact]
+    public async Task Goname_FromTheWorld_BindsAndStoresTheEntryPointOnlyAtArrival()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-goname-arrival", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnarally", "Scnarhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMARGM", "Gmargm", AccountSecurity.Administrator);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMARANC", "Gmaranc", AccountSecurity.Player);
+            Battleground b = await CreateMatchWithAnchorAsync(context, anchor, a);
+            var slotsOfB = await context.ReadAsync(() => Slots(b));
+            (uint mapId, float x, float y) = await context.ReadAsync(() =>
+            {
+                Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                return (p.MapId, p.X, p.Y);
+            });
+
+            gm.HoldWorldportAcks = true;
+            await gm.SayAsync(".goname " + anchor.Name);
+            await context.WaitUntilAsync("the GM's client holds the loading screen", () => gm.HoldingNewWorld);
+            MoveView held = await ViewAsync(context, gm.Name, a, b);
+            ScenarioContext.Expect(!held.BoundToB && !held.BoundToA, "the GM is bound before it arrived");
+            ScenarioContext.Expect(held.EntryPoint is null, "the entry point was stored before the arrival");
+            ScenarioContext.Expect(held.HasRecord, "no move record while the teleport is in flight");
+
+            await gm.ReleaseWorldportAckAsync();
+            await context.WaitUntilAsync("the GM arrives in B and is bound to it", () => context.World.FindOnlinePlayer(gm.Name) is { IsInWorld: true, Map: { } map } p
+                && map.MapId == Wsg && map.InstanceId == b.InstanceId && Battlegrounds(context).BattlegroundOf(p.Guid) == b);
+            MoveView after = await ViewAsync(context, gm.Name, a, b);
+            ScenarioContext.Expect(!after.ParticipantOfB, "the GM became a participant of B");
+            ScenarioContext.Expect(!after.HasRecord, "the record survived the arrival");
+            BattlegroundEntryPoint entry = after.EntryPoint ?? throw new ScenarioAssertionException("no entry point after the arrival");
+            ScenarioContext.ExpectEqual(mapId, entry.MapId, "entry point map");
+            ScenarioContext.Expect(Math.Abs(entry.X - x) < 0.01f && Math.Abs(entry.Y - y) < 0.01f, $"entry point ({entry.X}, {entry.Y}) is not the position before the command ({x}, {y})");
+            ScenarioContext.ExpectEqual(slotsOfB, await context.ReadAsync(() => Slots(b)), "B's invitations and free slots");
+        });
+    }
+
+    [Fact]
+    public async Task Goname_WhileBeingTeleported_IsRefusedAndMakesNoRecord()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-goname-twice", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnrfally", "Scnrfhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMRFGM", "Gmrfgm", AccountSecurity.Administrator);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMRFANC", "Gmrfanc", AccountSecurity.Player);
+            Battleground b = await CreateMatchWithAnchorAsync(context, anchor, a);
+
+            gm.HoldWorldportAcks = true;
+            await gm.SayAsync(".goname " + anchor.Name);
+            await context.WaitUntilAsync("the GM's client holds the loading screen", () => gm.HoldingNewWorld);
+
+            long mark = gm.Mark();
+            // A client in its loading screen cannot chat, so the second command is run on the world thread as the chat handler would.
+            await context.ReadAsync(() =>
+            {
+                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
+                var session = (WorldSession)gmPlayer.Session;
+                CommandTable commands = session.Services.GetRequiredService<CommandTableSource>().Current;
+                commands.Execute(new CommandContext(session, gmPlayer, commands), "goname " + anchor.Name);
+                return true;
+            });
+            await context.WaitUntilAsync("the second command is answered", () => gm.ChatSince(mark).Length > 0);
+            ScenarioContext.Expect(gm.ChatSince(mark).Any(t => t.EndsWith(" is already being teleported.", StringComparison.Ordinal)), "no 'already being teleported' reply: " + string.Join(" | ", gm.ChatSince(mark)));
+            MoveView v = await ViewAsync(context, gm.Name, a, b);
+            ScenarioContext.Expect(v.HasRecord, "the first move's record is gone");
+            ScenarioContext.Expect(!v.BoundToA && !v.BoundToB, "the refused command changed the binding");
+
+            await gm.ReleaseWorldportAckAsync();
+            await context.WaitUntilAsync("the GM arrives in B and is bound to it", () => context.World.FindOnlinePlayer(gm.Name) is { IsInWorld: true, Map: { } map } p
+                && map.MapId == Wsg && map.InstanceId == b.InstanceId && Battlegrounds(context).BattlegroundOf(p.Guid) == b);
+            ScenarioContext.Expect(!(await ViewAsync(context, gm.Name, a, b)).HasRecord, "the record survived the arrival");
+        });
+    }
+
+    [Fact]
+    public async Task Namego_AtoB_VictimDisconnectsWhileLoading()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-namego-atob-quit", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnqtally", "Scnqthorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMQTGM", "Gmqtgm", AccountSecurity.Administrator);
+            ClientTap victim = await ClientTap.EnterAsync(world, "GMQTVIC", "Gmqtvic", AccountSecurity.Player);
+            await using ClientTap anchor = await ClientTap.EnterAsync(world, "GMQTANC", "Gmqtanc", AccountSecurity.Player);
+            try
+            {
+                Battleground b = await PrepareMoveAsync(context, gm, victim, anchor, a);
+                ObjectGuid guid = await context.ReadAsync(() => GuidOf(context, victim.Name));
+                int playersBefore = await context.ReadAsync(() => a.PlayerCount);
+
+                await NamegoHeldAsync(context, gm, victim);
+                await victim.DisposeAsync();
+
+                await context.WaitUntilAsync("the victim is gone and its move record with it", () => context.World.FindOnlinePlayer(victim.Name) is null
+                    && !Battlegrounds(context).HasGmMove(guid));
+                ScenarioContext.ExpectEqual(playersBefore - 1, await context.ReadAsync(() => a.PlayerCount), "players of A after the victim quit");
+                ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(guid).InBattleground), "the victim is still bound after it quit");
+            }
+            finally
+            {
+                await victim.DisposeAsync();
+            }
+        });
+    }
+
+    [Fact]
+    public async Task GmMove_WithoutATeleport_IsSweptNextTick()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-move-swept", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnswally", "Scnswhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMSWVIC", "Gmswvic", AccountSecurity.Player);
+            ObjectGuid guid = await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
+                Player anchor = context.World.FindOnlinePlayer("Scnswally")!;
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, anchor, leaveOtherMatch: true), "begin outcome");
+                ScenarioContext.Expect(feature.CanEnterMap(vic, Wsg), "the record does not admit the teleport");
+                return vic.Guid;
+            });
+
+            await context.IdleAsync(TimeSpan.FromSeconds(2));
+
+            ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).HasGmMove(guid)), "the record outlived its (missing) teleport");
+            ScenarioContext.Expect(!await context.ReadAsync(() => Battlegrounds(context).CanEnterMap(context.World.FindOnlinePlayer(victim.Name)!, Wsg)), "the swept record still admits the teleport");
+            ScenarioContext.Expect(await context.ReadAsync(() => Battlegrounds(context).BattlegroundOf(guid) is null), "the sweep changed the binding");
         });
     }
 

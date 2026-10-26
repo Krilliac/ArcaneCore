@@ -79,10 +79,11 @@ internal sealed class BattlegroundMapResolver(BattlegroundFeature feature) : IMa
             : feature.World.GetMap(player.MapId);
     }
 
-    public bool CanEnter(Player player, uint mapId) => feature.BattlegroundOf(player.Guid) is { } bg && bg.MapId == mapId;
+    public bool CanEnter(Player player, uint mapId) => feature.CanEnterMap(player, mapId);
 
     public Map? ResolveEntry(Player player, uint mapId)
-        => feature.MatchOf(player.Guid) is { Map: { } map } && map.MapId == mapId ? map : null;
+        => feature.GmMoveTargetMap(player.Guid, mapId)
+           ?? (feature.MatchOf(player.Guid) is { Map: { } map } && map.MapId == mapId ? map : null);
 
     public void OnEntered(Player player, Map map) => feature.OnPlayerEnteredMap(player, map);
 

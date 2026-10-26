@@ -11,6 +11,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Kernel.Characters;
@@ -47,7 +48,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 {
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
-    private readonly Dictionary<ObjectGuid, GmBindChange> _gmBindChanges = [];
+    private readonly Dictionary<ObjectGuid, GmMove> _gmMoves = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
     private BattlegroundEventIndexMap _events = BattlegroundEventIndexMap.Empty;
     private BattlegroundContent _content = BattlegroundContent.Empty;
@@ -284,7 +285,42 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             }
         }
 
+        if (_gmMoves.Count > 0)
+        {
+            SweepGmMoves();
+        }
+
         WireSpiritGuideTimer();
+    }
+
+    /// <summary>
+    /// Enforces invariant I2 of the GM move records: a record lives only while its subject's far teleport to the record's target map is in
+    /// flight (scheduled, sent or arriving). Every abort path of the teleport ends with no pending entry, so the next tick drops the record.
+    /// The record and its <c>TeleportTo</c> are made in one synchronous command on the world thread, so a live record is never swept early.
+    /// </summary>
+    private void SweepGmMoves()
+    {
+        TeleportService? teleports = services.GetService<TeleportFeature>()?.TeleportsIfAttached;
+        foreach ((ObjectGuid guid, GmMove move) in _gmMoves.ToArray())
+        {
+            try
+            {
+                Player? player = World.FindOnlinePlayer(guid);
+                if (player is not null && teleports is not null && teleports.IsBeingTeleportedFar(player) && teleports.DestinationOf(player)?.MapId == move.Target.MapId)
+                {
+                    continue;
+                }
+
+                _gmMoves.Remove(guid);
+                _logger.LogDebug("dropped the GM move of {Guid} to battleground instance {InstanceId}: no far teleport to its map is in flight", guid, move.Target.InstanceId);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("battleground.feature", ex);
+                _logger.LogFault("battleground.gm-move-sweep", ex, "sweeping the GM move of {Guid} failed", guid);
+                _gmMoves.Remove(guid);
+            }
+        }
     }
 
     /// <summary>
@@ -563,24 +599,36 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     // ------------------------------------------------------------------ the teleport gate and the far-teleport leave
 
-    /// <summary>The teleport gate: a battleground map is open only to the players of its match (vmangos Player::TeleportTo, Player.cpp:1861-1864).</summary>
-    private bool CanEnterMap(Player player, uint mapId) => BattlegroundOf(player.Guid) is { } bg && bg.MapId == mapId;
+    /// <summary>
+    /// The teleport gate: a battleground map is open only to the players of its match (vmangos Player::TeleportTo, Player.cpp:1861-1864), and
+    /// to a player with a GM move to a match on that map (<see cref="GmMoveAdmits"/>).
+    /// </summary>
+    internal bool CanEnterMap(Player player, uint mapId)
+        => (BattlegroundOf(player.Guid) is { } bg && bg.MapId == mapId) || GmMoveAdmits(player.Guid, mapId);
+
+    /// <summary>A GM move waiting for its arrival: the target match, the side to bind with, and the entry point to store at the commit (null when the subject stood on a battleground map).</summary>
+    private sealed record GmMove(Battleground Target, Team Team, BattlegroundEntryPoint? EntryPoint);
 
     /// <summary>
     /// The battleground half of the GM commands <c>.goname</c> (<paramref name="subject"/> is the GM, <paramref name="anchor"/> the player it
     /// goes to) and <c>.namego</c> (<paramref name="subject"/> is the summoned player, <paramref name="anchor"/> the GM): when
-    /// <paramref name="anchor"/> stands on a battleground map, bind <paramref name="subject"/> to that match through the manager's own binding
-    /// (so the teleport gate <see cref="CanEnterMap"/> passes), as vmangos <c>SetBattleGroundId</c> does (TeleportCommands.cpp:1165-1168,
-    /// 1242-1260), and remember where it stands as the entry point when that is not a battleground map (<c>SetBattleGroundEntryPoint</c>).
-    /// vmangos binds with the subject's own side (<c>GetBGTeam</c> falls back to <c>GetTeam</c>). The bound player is on the map with the match's
-    /// id but is not a participant: only a queue invitation makes one (<see cref="BattlegroundManager.EnterBattleground"/>). A binding whose
-    /// match is gone counts as none. A subject bound to another running match is refused (<see cref="GmBattlegroundGo.InOtherMatch"/>) unless
-    /// <paramref name="leaveOtherMatch"/>: then the binding is overwritten as vmangos does and the old match is left by
-    /// <see cref="CommitGmBinding"/> once the teleport was accepted (a refused teleport restores the old binding). A subject already bound to
-    /// this match changes nothing (<see cref="GmBattlegroundGo.AlreadyBound"/>). The binding is cleared on leaving by the ordinary paths:
-    /// <see cref="OnPlayerEnteredMap"/> (a far teleport out), <c>Battleground.RemovePlayerAtLeave</c> (the match ending), and a logout. World thread.
+    /// <paramref name="anchor"/> stands on a battleground map, record the subject's intent to go to that match (vmangos <c>SetBattleGroundId</c>,
+    /// TeleportCommands.cpp:1165-1168, 1242-1260, binds at the command instead; a failed teleport leaves it stale there).
+    /// <para>
+    /// Invariants. I1: while a record exists the subject's binding, participation and entry point are exactly what they were before the
+    /// command. I2: a record exists only while the subject's far teleport to the target map is in flight (or inside the synchronous command
+    /// call that made it); <see cref="SweepGmMoves"/> enforces it every tick. I3: a record is consumed exactly once, by
+    /// <see cref="OnPlayerEnteredMap"/> (committed in the target's map, dropped elsewhere), <see cref="CancelGmMove"/> (the teleport was
+    /// refused), <see cref="CommitGmMove"/> (a near teleport inside the same map object), a logout, or the sweep. I4: the commit removes the
+    /// subject from its old match without Deserter (freeing that match's slot and invitation while the binding is still the old one), then binds
+    /// the target with the recorded side and stores the recorded entry point. Any leave caused by consuming a record is GM-induced: no Deserter.
+    /// </para>
+    /// While the record exists it alone admits the one teleport (<see cref="CanEnterMap"/>, the map resolver's <c>ResolveEntry</c>). A subject
+    /// bound to another running match is refused (<see cref="GmBattlegroundGo.InOtherMatch"/>) unless <paramref name="leaveOtherMatch"/>. A
+    /// subject already bound to this match changes nothing (<see cref="GmBattlegroundGo.AlreadyBound"/>); one with a record already is refused
+    /// (<see cref="GmBattlegroundGo.MoveInProgress"/>, a record is never overwritten). A binding whose match is gone counts as none. World thread.
     /// </summary>
-    public GmBattlegroundGo BindToMatchOf(Player subject, Player anchor, bool leaveOtherMatch)
+    public GmBattlegroundGo BeginGmMove(Player subject, Player anchor, bool leaveOtherMatch)
     {
         ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(anchor);
@@ -590,124 +638,113 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         }
 
         manager.ClearStaleBinding(subject.Guid);
+        if (_gmMoves.ContainsKey(subject.Guid))
+        {
+            return GmBattlegroundGo.MoveInProgress;
+        }
+
         BattlegroundPlayerState state = manager.StateOf(subject.Guid);
         if (state.InBattleground && state.InstanceId == match.InstanceId && state.Type == match.Type)
         {
             return GmBattlegroundGo.AlreadyBound;
         }
 
-        Battleground? previous = BattlegroundOf(subject.Guid);
-        if (previous is not null && !leaveOtherMatch)
+        if (BattlegroundOf(subject.Guid) is not null && !leaveOtherMatch)
         {
             return GmBattlegroundGo.InOtherMatch;
         }
 
-        Team team = subject.Team;
-        bool storedEntry = BattlegroundManager.TypeOfMap(subject.MapId) == BattlegroundType.None;
-        _gmBindChanges[subject.Guid] = new GmBindChange(previous, state.Team, match, team, storedEntry ? EntryPointOf(subject.Guid) : null, storedEntry);
-        manager.BindPlayer(subject.Guid, match, team);
-        if (storedEntry)
+        BattlegroundEntryPoint? entry = null;
+        if (BattlegroundManager.TypeOfMap(subject.MapId) == BattlegroundType.None
+            && Invariant.Check(
+                float.IsFinite(subject.X) && float.IsFinite(subject.Y) && float.IsFinite(subject.Z) && float.IsFinite(subject.Orientation),
+                $"cannot record battleground entry point for {subject.Guid} from ({subject.X}, {subject.Y}, {subject.Z}, {subject.Orientation})"))
         {
-            StoreEntryPoint(subject.Guid, subject);
+            entry = new BattlegroundEntryPoint(subject.MapId, subject.X, subject.Y, subject.Z, subject.Orientation, subject.ZoneId);
         }
 
+        _gmMoves[subject.Guid] = new GmMove(match, subject.Team, entry);
         return GmBattlegroundGo.Bound;
     }
 
-    /// <summary>
-    /// The subject of a <see cref="GmBattlegroundGo.Bound"/> arrived in the match (called from <see cref="OnPlayerEnteredMap"/>; the commands
-    /// no longer commit at <c>TeleportTo</c>, because a far teleport can still be refused at map entry): a subject that was bound to another
-    /// match leaves it now (vmangos only overwrites the id; the match must not keep a participant that moved on). No Deserter debuff: a game
-    /// master's move is not a desertion. The new binding stays.
-    /// </summary>
-    public void CommitGmBinding(Player subject)
+    /// <summary>The teleport that followed <see cref="BeginGmMove"/> was refused or threw: the record goes, nothing else was changed.</summary>
+    public void CancelGmMove(Player subject)
     {
         ArgumentNullException.ThrowIfNull(subject);
-        if (_manager is not null && _gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
-        {
-            CommitChange(subject.Guid, change);
-        }
-    }
-
-    private void CommitChange(ObjectGuid guid, GmBindChange change)
-    {
-        BattlegroundManager manager = Manager;
-        if (change.PreviousMatch is { } old && manager.GetBattleground(old.InstanceId, old.Type) is not null)
-        {
-            // The leave frees the queue slot and invitation of the LEAVING match (ClearBinding reads the current binding), so the old
-            // binding is put back for it and the new one set again after.
-            manager.BindPlayer(guid, old, change.PreviousTeam ?? change.NewTeam);
-            old.RemovePlayerAtLeave(guid, teleportToEntryPoint: false, sendStatus: true);
-        }
-
-        manager.BindPlayer(guid, change.NewMatch, change.NewTeam);
+        _gmMoves.Remove(subject.Guid);
     }
 
     /// <summary>
-    /// The teleport that followed <see cref="BindToMatchOf"/> was refused (or the subject logged out, or arrived somewhere else): exactly what
-    /// <see cref="BindToMatchOf"/> changed is undone (the old binding comes back, or none; the entry point it stored is dropped or put back), so
-    /// no battleground id stays on a player that never went. A subject that was not Bound (<see cref="GmBattlegroundGo.AlreadyBound"/>) is not touched.
+    /// The teleport that followed <see cref="BeginGmMove"/> was a near teleport inside the same map object (it has no arrival): the move is
+    /// committed now. World thread.
     /// </summary>
-    public void RevertGmBinding(Player subject)
+    public void CommitGmMove(Player subject)
     {
         ArgumentNullException.ThrowIfNull(subject);
-        if (_manager is not null && _gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
+        if (_manager is not null && _gmMoves.Remove(subject.Guid, out GmMove? move))
         {
-            RevertChange(subject, change);
+            CommitMove(subject, move);
         }
     }
 
-    private void RevertChange(Player subject, GmBindChange change)
+    private void CommitMove(Player subject, GmMove move)
     {
-        BattlegroundManager manager = Manager;
-        if (change.PreviousMatch is { } old && manager.GetBattleground(old.InstanceId, old.Type) is not null)
+        Battleground target = move.Target;
+        if (Manager.GetBattleground(target.InstanceId, target.Type) is null)
         {
-            manager.BindPlayer(subject.Guid, old, change.PreviousTeam ?? subject.Team);
-        }
-        else
-        {
-            manager.UnbindPlayer(subject.Guid);
+            return;
         }
 
-        if (change.StoredEntry)
+        if (BattlegroundOf(subject.Guid) is { } old && !ReferenceEquals(old, target))
         {
-            if (change.PreviousEntry is { } entry)
-            {
-                _entryPoints[subject.Guid] = entry;
-            }
-            else
-            {
-                ForgetEntryPoint(subject.Guid);
-            }
+            // The binding is still the old match's: its leave frees the old slot and invitation. No Deserter (a GM move is no desertion).
+            old.RemovePlayerAtLeave(subject.Guid, teleportToEntryPoint: false, sendStatus: true);
+        }
+
+        Manager.BindPlayer(subject.Guid, target, move.Team);
+        if (move.EntryPoint is { } entry)
+        {
+            _entryPoints[subject.Guid] = entry;
         }
     }
 
-    /// <summary>What one <see cref="BindToMatchOf"/> changed, so it can be committed or reverted exactly.</summary>
-    private sealed record GmBindChange(Battleground? PreviousMatch, Team? PreviousTeam, Battleground NewMatch, Team NewTeam, BattlegroundEntryPoint? PreviousEntry, bool StoredEntry);
+    /// <summary>Whether a GM move of <paramref name="guid"/> targets a running match on <paramref name="mapId"/>.</summary>
+    internal bool GmMoveAdmits(ObjectGuid guid, uint mapId)
+        => _gmMoves.TryGetValue(guid, out GmMove? m) && m.Target.MapId == mapId && Manager.GetBattleground(m.Target.InstanceId, m.Target.Type) is not null;
+
+    /// <summary>The map of the match a GM move of <paramref name="guid"/> targets, when that match still runs on <paramref name="mapId"/>; else null.</summary>
+    internal Map? GmMoveTargetMap(ObjectGuid guid, uint mapId)
+        => _gmMoves.TryGetValue(guid, out GmMove? m) && m.Target.MapId == mapId
+           && FindMatch(m.Target.InstanceId) is { Map: { } map } match && ReferenceEquals(match.Battleground, m.Target) ? map : null;
+
+    /// <summary>Whether <paramref name="guid"/> has a GM move waiting for its arrival.</summary>
+    internal bool HasGmMove(ObjectGuid guid) => _gmMoves.ContainsKey(guid);
 
     /// <summary>
-    /// A player arrived on a map. A binding whose match is gone is cleared first (vmangos "cleanup setting if outdated"). A player bound to a
-    /// match who arrived anywhere but its map left the battleground (vmangos TeleportTo far, Player.cpp:2036-2043:
+    /// A player arrived on a map. A GM move record is consumed first: in the target match's map it is committed (the old match is left, the
+    /// target bound; an invitee to the target becomes a participant below as before); landing back in the old match changes nothing; landing in
+    /// neither leaves the bound match without Deserter. A binding whose match is gone is cleared (vmangos "cleanup setting if outdated"). A player
+    /// bound to a match who arrived anywhere but its map left the battleground (vmangos TeleportTo far, Player.cpp:2036-2043:
     /// <c>LeaveBattleground(false)</c>); one who arrived on its match's map and holds an invitation to it enters the match (vmangos
     /// HandleMoveWorldportAckOpcode → <c>if (IsInvitedForBattleGroundInstance)</c> → <c>BattleGround::AddPlayer</c>); one bound by a GM command
     /// stays bound and outside the match.
     /// </summary>
     internal void OnPlayerEnteredMap(Player player, Map map)
     {
-        // A GM move waiting for its arrival: in the new match's map it is committed (the old match is left), anywhere else it is undone.
-        if (_gmBindChanges.Remove(player.Guid, out GmBindChange? pending))
+        _manager?.ClearStaleBinding(player.Guid);
+        if (_gmMoves.Remove(player.Guid, out GmMove? move))
         {
-            if (map.MapId == pending.NewMatch.MapId && map.InstanceId == pending.NewMatch.InstanceId)
+            if (map.MapId == move.Target.MapId && map.InstanceId == move.Target.InstanceId)
             {
-                CommitChange(player.Guid, pending);
+                CommitMove(player, move);
             }
-            else
+            else if (BattlegroundOf(player.Guid) is { } bound && (bound.MapId != map.MapId || bound.InstanceId != map.InstanceId))
             {
-                RevertChange(player, pending);
+                LeaveBattleground(player, teleportToEntryPoint: false, castDeserter: false); // landed neither in the target nor in the old match
+                return;
             }
         }
 
-        _manager?.ClearStaleBinding(player.Guid);
         if (BattlegroundOf(player.Guid) is not { } bg)
         {
             return;
@@ -729,9 +766,9 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     /// <summary>
     /// vmangos <c>Player::LeaveBattleground</c> (Player.cpp:18675-18702): Waiting to Resurrect goes, a deserter of a match that has not ended gets
-    /// the Deserter debuff (unless a game master, or <see cref="BattlegroundOptions.CastDeserter"/> is off), then the match removes the player.
+    /// the Deserter debuff (unless a game master, a GM-induced leave (<paramref name="castDeserter"/> false), or <see cref="BattlegroundOptions.CastDeserter"/> is off), then the match removes the player.
     /// </summary>
-    internal void LeaveBattleground(Player player, bool teleportToEntryPoint)
+    internal void LeaveBattleground(Player player, bool teleportToEntryPoint, bool castDeserter = true)
     {
         if (BattlegroundOf(player.Guid) is not { } bg)
         {
@@ -742,7 +779,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         spells?.RemoveAuras(player, BattlegroundConstants.SpellWaitingToResurrect);
         // vmangos casts Deserter for any non-GM bound to a running match. ArcaneCore deviation: only an invitee does (it holds the queue
         // invitation to this instance, accepted or not yet arrived); a player a GM command bound to the match was never invited and is no deserter.
-        if (!player.IsGameMaster && Options.CastDeserter && Manager.StateOf(player.Guid).InvitedInstance(bg.Template.QueueType) == bg.InstanceId && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
+        if (!player.IsGameMaster && castDeserter && Options.CastDeserter && Manager.StateOf(player.Guid).InvitedInstance(bg.Template.QueueType) == bg.InstanceId && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
         {
             spells?.CastSpell(player, BattlegroundConstants.SpellDeserter, SpellCastTargets.ForSelf(), triggered: true);
         }
@@ -789,11 +826,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return;
         }
 
-        // A GM move still waiting for its arrival is undone first, so the logout leaves the match the player was really in.
-        if (_gmBindChanges.Remove(player.Guid, out GmBindChange? pendingMove))
-        {
-            RevertChange(player, pendingMove);
-        }
+        // A GM move still waiting for its arrival is dropped; the logout leaves the match the player was really in.
+        _gmMoves.Remove(player.Guid);
 
         // vmangos keeps an offline participant for MAX_OFFLINE_TIME; this removes it at once (offline: nothing of it is touched).
         if (BattlegroundOf(player.Guid) is { } bg)
@@ -931,13 +965,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 /// <summary>Where a participant came from and returns to (vmangos <c>BGData.joinPos</c>).</summary>
 public readonly record struct BattlegroundEntryPoint(uint MapId, float X, float Y, float Z, float Orientation, uint ZoneId = 0);
 
-/// <summary>The outcome of <see cref="BattlegroundFeature.BindToMatchOf"/>.</summary>
+/// <summary>The outcome of <see cref="BattlegroundFeature.BeginGmMove"/>.</summary>
 public enum GmBattlegroundGo
 {
     /// <summary>The anchor is not on a battleground map: nothing was done.</summary>
     NotBattleground,
 
-    /// <summary>The subject is bound to the anchor's match by this call: the teleport may go on, then <see cref="BattlegroundFeature.CommitGmBinding"/> or <see cref="BattlegroundFeature.RevertGmBinding"/>.</summary>
+    /// <summary>A move to the anchor's match is recorded (nothing is bound yet): the teleport may go on, then the arrival commits it, or <see cref="BattlegroundFeature.CancelGmMove"/> drops it when the teleport is refused (<see cref="BattlegroundFeature.CommitGmMove"/> for a near teleport).</summary>
     Bound,
 
     /// <summary>The subject was already bound to the anchor's match (a player loading in): nothing was changed, nothing to revert.</summary>
@@ -945,4 +979,7 @@ public enum GmBattlegroundGo
 
     /// <summary>The subject is bound to a different match and the caller did not allow leaving it: nothing was changed (vmangos <c>LANG_CANNOT_GO_TO_BG_FROM_BG</c>).</summary>
     InOtherMatch,
+
+    /// <summary>The subject already has a GM move waiting for its arrival: nothing was changed (a record is never overwritten).</summary>
+    MoveInProgress,
 }
