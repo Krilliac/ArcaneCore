@@ -18,7 +18,7 @@ public sealed class InstanceAnomalyTests
     {
         using var f = new InstanceFixture();
         Player a = f.AddPlayer(8001);
-        string subject = $"player {a.Name} (guid {a.Guid.Low})";
+        string subject = $"player (guid {a.Guid.Low})";
         using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subsystem == "instance" && n.Subject == subject);
         using AnomalyCapture saves = AnomalyLedger.Shared.Capture(n => n.Subsystem == "instance" && n.Subject.StartsWith("instance "));
         Assert.True(f.EnterDungeon(a));
@@ -27,7 +27,7 @@ public sealed class InstanceAnomalyTests
         Assert.DoesNotContain(saves.Notices, n => n.Subject == $"instance {id} of map {Dungeon}");
 
         Player b = f.AddPlayer(8002);
-        string raidSubject = $"player {b.Name} (guid {b.Guid.Low})";
+        string raidSubject = $"player (guid {b.Guid.Low})";
         using AnomalyCapture refused = AnomalyLedger.Shared.Capture(n => n.Subject == raidSubject);
         Assert.False(f.EnterRaid(b)); // no raid group
         Assert.True(refused.Any("instance/enter-refused"), refused.Describe());

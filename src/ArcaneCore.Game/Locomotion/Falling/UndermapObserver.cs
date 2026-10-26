@@ -54,7 +54,7 @@ public sealed class UndermapObserver : IClientMovementObserver
                 AnomalyLedger.Shared.Report(
                     "move",
                     "non-finite",
-                    $"player {player.Name} (guid {player.Guid.Low})",
+                    $"player (guid {player.Guid.Low})",
                     $"opcode={context.Opcode} map={player.MapId} pos=({incoming.X},{incoming.Y},{incoming.Z}) o={incoming.Orientation}",
                     AnomalySeverity.Error);
             }
@@ -95,7 +95,7 @@ public sealed class UndermapObserver : IClientMovementObserver
                                 AnomalyLedger.Shared.Report(
                                     "move",
                                     "under-map",
-                                    $"player {player.Name} (guid {player.Guid.Low})",
+                                    $"player (guid {player.Guid.Low})",
                                     $"reason=below-terrain map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) floor={floorZ:F2}",
                                     AnomalySeverity.Error,
                                     map.WorldIdentity);
@@ -133,7 +133,7 @@ public sealed class UndermapObserver : IClientMovementObserver
             AnomalyLedger.Shared.Report(
                 "move",
                 "under-map",
-                $"player {player.Name} (guid {player.Guid.Low})",
+                $"player (guid {player.Guid.Low})",
                 $"reason=below-void-height map={map.MapId} pos=({player.X:F2},{player.Y:F2},{player.Movement.Z:F2}) voidHeight={VoidHeight}",
                 AnomalySeverity.Error,
                 map.WorldIdentity);

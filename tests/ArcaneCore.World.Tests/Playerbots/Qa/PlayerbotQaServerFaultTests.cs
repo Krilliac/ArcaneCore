@@ -233,6 +233,73 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     }
 
     [Fact]
+    public void TwoSubjectsOfAPerSubjectKey_FileTwoFindings()
+    {
+        var anomalyLedger = new AnomalyLedger();
+        var feed = new PlayerbotQaFaultFeed(new FaultLedger(), null, anomalyLedger);
+        Assert.Contains("spell/effect-unhandled", PlayerbotQaFaultFeed.PerSubjectKeys);
+        for (int i = 0; i < 3; i++)
+        {
+            anomalyLedger.Report("spell", "effect-unhandled", "spell 100", "kind=effect value=7", AnomalySeverity.Warning);
+            anomalyLedger.Report("spell", "effect-unhandled", "spell 200", "kind=aura value=9", AnomalySeverity.Warning);
+        }
+
+        IReadOnlyList<QaSignal> signals = feed.Pull();
+
+        Assert.Equal(2, signals.Select(s => s.FaultId).Distinct().Count());
+        Assert.Equal(6, signals.Sum(s => s.Occurrences));
+        Assert.Contains(signals, s => s.Diag.Contains("[spell 100]", StringComparison.Ordinal));
+        Assert.Contains(signals, s => s.Diag.Contains("[spell 200]", StringComparison.Ordinal));
+        Assert.All(signals, s => Assert.Equal("Anomaly:spell/effect-unhandled", s.ExceptionType));
+        Assert.Empty(feed.Pull());
+
+        anomalyLedger.Report("spell", "effect-unhandled", "spell 100", "kind=effect value=7", AnomalySeverity.Warning);
+        QaSignal again = Assert.Single(feed.Pull());
+        Assert.Equal(1, again.Occurrences);
+        Assert.Equal(signals.First(s => s.Diag.Contains("[spell 100]", StringComparison.Ordinal)).FaultId, again.FaultId);
+    }
+
+    [Fact]
+    public void AKeyThatIsNotPerSubject_ListsItsTopSubjectsAndTheDistinctCount_InTheDiag()
+    {
+        var anomalyLedger = new AnomalyLedger();
+        var feed = new PlayerbotQaFaultFeed(new FaultLedger(), null, anomalyLedger);
+        anomalyLedger.Report("combat", "stale-threat-entry", "creature 1", "a", AnomalySeverity.Warning);
+        anomalyLedger.Report("combat", "stale-threat-entry", "creature 2", "b", AnomalySeverity.Warning);
+        anomalyLedger.Report("combat", "stale-threat-entry", "creature 2", "c", AnomalySeverity.Warning);
+
+        QaSignal signal = Assert.Single(feed.Pull());
+
+        Assert.EndsWith("| subjects=2: creature 2 x2; creature 1 x1", signal.Diag, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlayerNameInAnomalyDetail_IsRedacted()
+    {
+        var redactor = new PlayerbotQaRedactor();
+        string[] details =
+        [
+            "player Zorblax (guid 77) still had the loot window open",
+            "award to Zorblax (guid 77) refused",
+            "player Zorblax failed",
+        ];
+
+        foreach (string detail in details)
+        {
+            Assert.DoesNotContain("Zorblax", redactor.Redact(detail), StringComparison.Ordinal);
+            Assert.DoesNotContain("Zorblax", redactor.RedactFault(detail), StringComparison.Ordinal);
+        }
+
+        Assert.Equal("player alive 5yd, creature (guid 5)", redactor.RedactFault("player alive 5yd, creature (guid 5)")); // kinds and ordinary words stay
+
+        var anomalyLedger = new AnomalyLedger();
+        var feed = new PlayerbotQaFaultFeed(new FaultLedger(), null, anomalyLedger);
+        anomalyLedger.Report("loot", "window-left-open", "gameobject 5 spawn 9", "player Zorblax (guid 77) left it open", AnomalySeverity.Error);
+        QaSignal signal = Assert.Single(feed.Pull());
+        Assert.DoesNotContain("Zorblax", redactor.RedactFault(signal.Diag), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SingleOccurrence_ServerFault_ActionFault_Quarantine_AndDisabled_PublishImmediately_UnderDefaultThresholds()
     {
         var ledger = new FaultLedger();
@@ -298,7 +365,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         IReadOnlyList<QaSignal> signals = feed.Pull();
         Assert.Equal(2, signals.Count);
         Assert.Contains(signals, s => s.Goal == "invariant" && s.Occurrences == 2 && s.Diag == "Step(MoveSpline.cs:88)");
-        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1 && s.Diag == "persist/write-retry-exhausted: busy after 6 attempts");
+        Assert.Contains(signals, s => s.Goal == "persist" && s.ExceptionType == "Anomaly:persist/write-retry-exhausted" && s.Occurrences == 1 && s.Diag.StartsWith("persist/write-retry-exhausted: busy after 6 attempts", StringComparison.Ordinal));
         Assert.Empty(feed.Pull());
     }
 
@@ -334,7 +401,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
             Assert.Equal("combat", s.Goal);
             Assert.Equal("Anomaly:combat/stale-threat-entry", s.ExceptionType);
             Assert.Equal("combat/stale-threat-entry", s.Detail);
-            Assert.Equal("combat/stale-threat-entry: victim offline for 12s", s.Diag);
+            Assert.StartsWith("combat/stale-threat-entry: victim offline for 12s | subjects=1: creature 400 x5", s.Diag);
             Assert.Equal(string.Empty, s.Message);
         });
 
@@ -350,7 +417,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         {
             Assert.Equal("creature", s.Goal);
             Assert.Equal("Anomaly:creature/evade-loop", s.ExceptionType);
-            Assert.Equal("creature/evade-loop", s.Diag);
+            Assert.StartsWith("creature/evade-loop | subjects=3: ", s.Diag);
         });
     }
 

@@ -40,6 +40,15 @@ internal sealed class PlayerbotQaFaultFeed(
         "creature/under-map", "player/under-map",
     };
 
+    /// <summary>
+    /// Anomaly keys whose subjects are independent defects (one spell, one waypoint path, one script): each of the top subjects of such a key is its
+    /// own finding (fault id from key and subject), instead of one finding per key that shows only the last detail.
+    /// </summary>
+    internal static readonly HashSet<string> PerSubjectKeys = new(StringComparer.Ordinal)
+    {
+        "spell/effect-unhandled", "creature/waypoint-path-missing", "creature-ai/script-action-unsupported", "loot/guaranteed-drop-missing",
+    };
+
     internal const int DefaultMinServerWarningCount = 5;
     internal const int DefaultMinServerWarningSubjects = 3;
 
@@ -101,6 +110,17 @@ internal sealed class PlayerbotQaFaultFeed(
                 {
                     if (!QualifiesServerAnomaly(anomaly))
                     {
+                        continue;
+                    }
+
+                    if (PerSubjectKeys.Contains(anomaly.Key) && anomaly.TopSubjects.Count > 0)
+                    {
+                        foreach (SubjectCount subject in anomaly.TopSubjects)
+                        {
+                            AddDelta(signals, _serverAnomalies.Added(anomaly.Key + "|" + subject.Subject, subject.Count, out bool subjectFromStart), subjectFromStart,
+                                (at, n) => SubjectAnomalySignalOf(anomaly, subject.Subject, at, n), anomaly.FirstSeen, anomaly.LastSeen);
+                        }
+
                         continue;
                     }
 
@@ -188,17 +208,61 @@ internal sealed class PlayerbotQaFaultFeed(
         };
     }
 
-    private static QaSignal ServerAnomalySignalOf(AnomalySnapshot anomaly, DateTimeOffset at, long occurrences) => new()
+    private static QaSignal ServerAnomalySignalOf(AnomalySnapshot anomaly, DateTimeOffset at, long occurrences)
     {
-        Kind = QaSignalKind.ServerFault,
-        AtUtc = at.UtcDateTime,
-        FaultId = FaultLedger.HashSignature("anomaly|" + anomaly.Key),
-        Goal = anomaly.Subsystem,
-        ExceptionType = "Anomaly:" + anomaly.Key,
-        Reason = "Anomaly:" + anomaly.Key,
-        Detail = anomaly.Key,
-        Diag = anomaly.LastDetail.Length > 0 ? $"{anomaly.Key}: {anomaly.LastDetail}" : anomaly.Key,
-        Message = string.Empty,
-        Occurrences = occurrences,
-    };
+        string head = anomaly.LastDetail.Length > 0 ? $"{anomaly.Key}: {anomaly.LastDetail}" : anomaly.Key;
+        return new QaSignal
+        {
+            Kind = QaSignalKind.ServerFault,
+            AtUtc = at.UtcDateTime,
+            FaultId = FaultLedger.HashSignature("anomaly|" + anomaly.Key),
+            Goal = anomaly.Subsystem,
+            ExceptionType = "Anomaly:" + anomaly.Key,
+            Reason = "Anomaly:" + anomaly.Key,
+            Detail = anomaly.Key,
+            Diag = head + SubjectsSuffix(anomaly),
+            Message = string.Empty,
+            Occurrences = occurrences,
+        };
+    }
+
+    /// <summary>One finding for one subject of a <see cref="PerSubjectKeys"/> key; the last detail is shown only for the subject that reported it.</summary>
+    private static QaSignal SubjectAnomalySignalOf(AnomalySnapshot anomaly, string subject, DateTimeOffset at, long occurrences)
+    {
+        bool hasDetail = anomaly.LastDetail.Length > 0 && string.Equals(anomaly.LastSubject, subject, StringComparison.Ordinal);
+        return new QaSignal
+        {
+            Kind = QaSignalKind.ServerFault,
+            AtUtc = at.UtcDateTime,
+            FaultId = FaultLedger.HashSignature("anomaly|" + anomaly.Key + "|" + subject),
+            Goal = anomaly.Subsystem,
+            ExceptionType = "Anomaly:" + anomaly.Key,
+            Reason = "Anomaly:" + anomaly.Key,
+            Detail = anomaly.Key,
+            Diag = $"{anomaly.Key} [{subject}]" + (hasDetail ? ": " + anomaly.LastDetail : string.Empty),
+            Message = string.Empty,
+            Occurrences = occurrences,
+        };
+    }
+
+    /// <summary>
+    /// <c> | subjects=N: a xC; b xC</c> (the top subjects and the distinct count, <c>&gt;=</c> when saturated). The subjects are ids and guid low,
+    /// never names (the composer redacts the whole Diag as well).
+    /// </summary>
+    private static string SubjectsSuffix(AnomalySnapshot anomaly)
+    {
+        if (anomaly.TopSubjects.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder(" | ").Append(anomaly.SubjectsText).Append(": ");
+        for (int i = 0; i < anomaly.TopSubjects.Count; i++)
+        {
+            SubjectCount top = anomaly.TopSubjects[i];
+            sb.Append(i == 0 ? string.Empty : "; ").Append(top.Subject).Append(" x").Append(top.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
 }

@@ -298,7 +298,7 @@ public sealed partial class MapCombat
     /// <summary>Stable identity of a unit for the ledger (no positions or counters).</summary>
     internal static string SubjectOf(Unit unit)
         => unit is Player player
-            ? string.Create(CultureInfo.InvariantCulture, $"player {player.Name} (guid {player.Guid.Low})")
+            ? string.Create(CultureInfo.InvariantCulture, $"player (guid {player.Guid.Low})")
             : string.Create(CultureInfo.InvariantCulture, $"creature {unit.Guid.Entry} spawn {unit.Guid.Counter}");
 
     private string Where(Unit unit)

@@ -19,8 +19,11 @@ public sealed class MovementHandlerAnomalyTests
     private const float StartY = -132.493f;
     private const float StartZ = 83.5312f;
 
-    private static AnomalyCapture CaptureFor(string name)
-        => AnomalyLedger.Shared.Capture(n => n.Key == NonFinite && n.Subject.StartsWith($"player {name} ", StringComparison.Ordinal));
+    private static AnomalyCapture CaptureFor(WorldTestHost host, string name)
+    {
+        string subject = $"player (guid {host.World.FindOnlinePlayer(name)!.Guid.Low})"; // the subject carries the guid, never the name
+        return AnomalyLedger.Shared.Capture(n => n.Key == NonFinite && n.Subject == subject);
+    }
 
     private static MovementInfo Block(float x, float y = StartY, float z = StartZ) => new()
     {
@@ -47,7 +50,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("NFACCOUNTA", "Nfplayera");
         await client.CollectAsync();
-        using AnomalyCapture capture = CaptureFor("Nfplayera");
+        using AnomalyCapture capture = CaptureFor(host, "Nfplayera");
 
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Block(float.NaN)));
         await WorldTestHost.WaitForAsync(() => capture.Any(NonFinite), "the non-finite report");
@@ -64,7 +67,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("NFACCOUNTB", "Nfplayerb");
         await client.CollectAsync();
-        using AnomalyCapture capture = CaptureFor("Nfplayerb");
+        using AnomalyCapture capture = CaptureFor(host, "Nfplayerb");
 
         MovementInfo badFacing = Block(StartX + 1);
         badFacing.Orientation = float.PositiveInfinity;
@@ -87,7 +90,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var strict = WorldTestHost.Start(sessionOptions: new WorldSessionOptions { StrictMovementFiniteness = true });
         await using WorldTestClient strictClient = await strict.EnterWorldAsync("NFACCOUNTC", "Nfplayerc");
         await strictClient.CollectAsync();
-        using AnomalyCapture strictCapture = CaptureFor("Nfplayerc");
+        using AnomalyCapture strictCapture = CaptureFor(strict, "Nfplayerc");
         MovementInfo odd = Block(StartX + 1);
         odd.Flags = MovementFlags.Jumping;
         odd.JumpZSpeed = float.NaN;
@@ -100,7 +103,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var relaxed = WorldTestHost.Start();
         await using WorldTestClient relaxedClient = await relaxed.EnterWorldAsync("NFACCOUNTD", "Nfplayerd");
         await relaxedClient.CollectAsync();
-        using AnomalyCapture relaxedCapture = CaptureFor("Nfplayerd");
+        using AnomalyCapture relaxedCapture = CaptureFor(relaxed, "Nfplayerd");
         await relaxedClient.SendAsync(WorldOpcode.MsgMoveJump, Encode(odd));
         await SyncAsync(relaxed, relaxedClient, "Nfplayerd", StartX + 2);
         Assert.False(relaxedCapture.Any(NonFinite), relaxedCapture.Describe());
@@ -108,8 +111,11 @@ public sealed class MovementHandlerAnomalyTests
 
     // --- move/speed-violation through the handler, with client clocks that have nothing to do with server uptime ---------------
 
-    private static AnomalyCapture SpeedFor(string name)
-        => AnomalyLedger.Shared.Capture(n => n.Key == "move/speed-violation" && n.Subject.StartsWith($"player {name} ", StringComparison.Ordinal));
+    private static AnomalyCapture SpeedFor(WorldTestHost host, string name)
+    {
+        string subject = $"player (guid {host.World.FindOnlinePlayer(name)!.Guid.Low})";
+        return AnomalyLedger.Shared.Capture(n => n.Key == "move/speed-violation" && n.Subject == subject);
+    }
 
     private static byte[] Timed(float x, uint clientTime)
     {
@@ -126,7 +132,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync(account, name);
         await client.CollectAsync();
-        using AnomalyCapture capture = SpeedFor(name);
+        using AnomalyCapture capture = SpeedFor(host, name);
 
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Timed(StartX + 1, clientTime));
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)!.Movement.X == StartX + 1, "the first heartbeat");
@@ -145,7 +151,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("SPDACCOUNTC", "Spdplayerc");
         await client.CollectAsync();
-        using AnomalyCapture capture = SpeedFor("Spdplayerc");
+        using AnomalyCapture capture = SpeedFor(host, "Spdplayerc");
 
         for (int i = 1; i <= 5; i++)
         {
@@ -162,7 +168,7 @@ public sealed class MovementHandlerAnomalyTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("NFACCOUNTE", "Nfplayere");
         await client.CollectAsync();
-        using AnomalyCapture capture = CaptureFor("Nfplayere");
+        using AnomalyCapture capture = CaptureFor(host, "Nfplayere");
 
         await SyncAsync(host, client, "Nfplayere", StartX + 1);
         await SyncAsync(host, client, "Nfplayere", StartX + 2);

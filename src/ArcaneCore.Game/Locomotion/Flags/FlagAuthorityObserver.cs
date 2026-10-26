@@ -127,7 +127,7 @@ public sealed class FlagAuthorityObserver : IClientMovementObserver
         AnomalyLedger.Shared.Report(
             "move",
             "speed-violation",
-            $"player {player.Name} (guid {player.Guid.Low})",
+            $"player (guid {player.Guid.Low})",
             $"Horizontal displacement {horizDist:F2}yd over {dtMs}ms ({observedSpeed:F2}yd/s) exceeded max allowed {maxAllowedDist:F2}yd (base speed {allowedSpeed:F2}yd/s) on map {player.MapId} from ({previous.X:F2}, {previous.Y:F2}, {previous.Z:F2}) to ({incoming.X:F2}, {incoming.Y:F2}, {incoming.Z:F2}).",
             severity);
     }

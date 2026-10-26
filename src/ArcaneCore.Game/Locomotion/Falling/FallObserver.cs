@@ -160,7 +160,7 @@ public sealed class FallObserver : IClientMovementObserver
             AnomalyLedger.Shared.Report(
                 "move",
                 "fall-without-landing",
-                $"player {player.Name} (guid {player.Guid.Low})",
+                $"player (guid {player.Guid.Low})",
                 $"map={player.MapId} durationMs={elapsedMs} fallTime={clientFallTime} pos=({x:F2},{y:F2},{z:F2})",
                 AnomalySeverity.Warning);
         }

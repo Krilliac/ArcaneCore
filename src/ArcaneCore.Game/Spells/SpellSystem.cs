@@ -343,7 +343,7 @@ public sealed partial class SpellSystem
 
     internal static string FormatUnitSubject(Unit unit) => unit switch
     {
-        Player player => $"player {player.Name} (guid {player.Guid.Counter})",
+        Player player => $"player (guid {player.Guid.Counter})",
         Creature creature => $"creature {creature.Entry} (guid {creature.Guid.Counter})",
         _ when unit.Guid.HasEntry => $"creature {unit.Guid.Entry} (guid {unit.Guid.Counter})",
         _ => $"unit {unit.Guid}",

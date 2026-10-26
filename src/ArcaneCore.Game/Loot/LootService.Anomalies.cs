@@ -118,7 +118,7 @@ public sealed partial class LootService
         {
             _windowStrikes?.Remove(player);
             AnomalyLedger.Shared.Report(AnomalySubsystem, WindowLeftOpenCode, SubjectOf(bag),
-                string.Create(CultureInfo.InvariantCulture, $"{player.Name} (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
+                string.Create(CultureInfo.InvariantCulture, $"player (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
             Release(player, bag.Source);
         }
 
