@@ -530,7 +530,8 @@ public sealed class MovementAntiCheat
         const MovementFlags NotGrounded = Airborne | MovementFlags.Swimming | MovementFlags.Hover | MovementFlags.Levitating | MovementFlags.Flying;
 
         // Swimming where the terrain and the models hold no liquid, several packets in a row (a shore cell can disagree once).
-        if (m.HasFlag(MovementFlags.Swimming) && terrain.IsInLiquid(m.X, m.Y, m.Z) == false)
+        // Not while the server granted flight (.cheat fly): that client swims in the air on purpose.
+        if (m.HasFlag(MovementFlags.Swimming) && (sample.GrantedFlags & MovementFlags.Flying) == 0 && terrain.IsInLiquid(m.X, m.Y, m.Z) == false)
         {
             if (++_swimOutOfWater == SwimOutOfWaterPackets)
             {
@@ -545,7 +546,8 @@ public sealed class MovementAntiCheat
         bool grounded = (m.Flags & NotGrounded) == 0 && !_lastAirborne && !airborne;
 
         // Climbing steeply into the air while claiming to stand: the floor under the new position is far below it.
-        if (grounded && dz > 1f && dz > 2f * horizontal && terrain.FloorHeight(m.X, m.Y, m.Z) is { } floor && m.Z - floor > 3f)
+        // A server-controlled unit (.cheat wallclimb) climbs walls on purpose (vmangos CheckWallClimb, MovementAnticheat.cpp:1178).
+        if (grounded && !sample.ServerControlled && dz > 1f && dz > 2f * horizontal && terrain.FloorHeight(m.X, m.Y, m.Z) is { } floor && m.Z - floor > 3f)
         {
             findings.Add(new AntiCheatFinding(AntiCheatViolation.Vertical, 15f, "climbed into the air"));
         }
