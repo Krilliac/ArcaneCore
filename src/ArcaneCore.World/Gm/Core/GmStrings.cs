@@ -227,4 +227,41 @@ public static class GmStrings
 
     /// <summary>LANG_COMMAND_KICKMESSAGE (282; mangos.sql:3650): "Player %s kicked.".</summary>
     public static string CommandKickMessage(string link) => $"Player {link} kicked.";
+
+    // The movement cheats. The base mangos_string rows are not in the reference tree: 351-352 are vmangos
+    // sql/old_migrations/20190711162650_world.sql:15-16, 611-614 sql/migrations/20240611051049_world.sql:13-16 and
+    // 615-618 sql/migrations/20240215110536_world.sql:38-41.
+
+    /// <summary>LANG_YOU_SET_WALLCLIMB (351): "You set wallclimb mode to %s for %s.".</summary>
+    public static string YouSetWallClimb(string state, string link) => $"You set wallclimb mode to {state} for {link}.";
+
+    /// <summary>LANG_YOUR_WALLCLIMB_SET (352): "Your wallclimb mode has been turned %s by %s.".</summary>
+    public static string YourWallClimbSet(string state, string link) => $"Your wallclimb mode has been turned {state} by {link}.";
+
+    /// <summary>LANG_YOU_SET_FIXED_Z (611): "You set fixed z mode to %s for %s.".</summary>
+    public static string YouSetFixedZ(string state, string link) => $"You set fixed z mode to {state} for {link}.";
+
+    /// <summary>LANG_YOUR_FIXED_Z_SET (612): "Your fixed z mode has been turned %s by %s.".</summary>
+    public static string YourFixedZSet(string state, string link) => $"Your fixed z mode has been turned {state} by {link}.";
+
+    /// <summary>LANG_CHEAT_FIXED_Z_ON (613).</summary>
+    public const string CheatFixedZOn = "FIXED Z cheat is ON";
+
+    /// <summary>LANG_CHEAT_FIXED_Z_OFF (614).</summary>
+    public const string CheatFixedZOff = "FIXED Z cheat is OFF";
+
+    /// <summary>LANG_YOU_SET_FLY (615): "You set fly mode to %s for %s.".</summary>
+    public static string YouSetFly(string state, string link) => $"You set fly mode to {state} for {link}.";
+
+    /// <summary>LANG_YOUR_FLY_SET (616): "Your fly mode has been turned %s by %s.".</summary>
+    public static string YourFlySet(string state, string link) => $"Your fly mode has been turned {state} by {link}.";
+
+    /// <summary>LANG_CHEAT_FLY_ON (617).</summary>
+    public const string CheatFlyOn = "FLY MODE cheat is ON";
+
+    /// <summary>LANG_CHEAT_FLY_OFF (618).</summary>
+    public const string CheatFlyOff = "FLY MODE cheat is OFF";
+
+    /// <summary>The literal vmangos sends the target after <c>.cheat fly on</c> (CharacterCommands.cpp:116); no LANG id.</summary>
+    public const string FlyWarning = "WARNING: Do not jump or flying mode will be removed.";
 }

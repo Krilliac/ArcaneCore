@@ -37,18 +37,35 @@ public sealed class HostModule : IAtlasModule
         AtlasState state = _state ?? AtlasState.FromEnvironment();
         context.Services.Add(state);
         context.Services.Add(new BookmarkStore(state.BookmarksFile, context.Loggers));
-        context.Services.Add(new UiHub());
+        var hub = new UiHub();
+        context.Services.Add(hub);
+
+        // A command of a UI whose socket has closed must not set a follow that nobody can release (see ViewStore.OriginConnected).
+        context.View.OriginConnected = origin => hub.IsConnected(origin[UiHub.OriginPrefix.Length..]);
 
         StatusCommands.Register(context.Commands);
         ViewCommands.Register(context.Commands);
+        SessionCommands.Register(context.Commands);
         PickCommand.Register(context.Commands);
         CaptureCommand.Register(context.Commands);
 
-        context.View.Changed += (view, version, origin) => context.Events.Publish(
+        context.View.Applied += (previous, view, version, origin, followOrigin) => context.Events.Publish(
             EventHub.Topics.View,
-            new JsonObject { ["version"] = version, ["origin"] = origin, ["view"] = view.ToJson() });
+            new JsonObject
+            {
+                ["version"] = version,
+                ["origin"] = origin,
+                ["view"] = view.ToJson(),
+                ["cameraChanged"] = previous.Camera != view.Camera || previous.FollowGuid != view.FollowGuid,
+                ["followOrigin"] = followOrigin,
+            });
         context.Commands.Invoked += (result, origin) =>
         {
+            if (QuietCommands.Contains(result.Command))
+            {
+                return;
+            }
+
             JsonObject json = result.ToJson();
             json["origin"] = HostOrigin.Label(origin);
             if (json["data"] is { } data && !FitsInEvent(data))
@@ -59,6 +76,9 @@ public sealed class HostModule : IAtlasModule
             context.Events.Publish(EventHub.Topics.Command, json);
         };
     }
+
+    /// <summary>Commands that run many times a second by design (an agent's position stream); they publish no <c>command</c> event.</summary>
+    private static readonly HashSet<string> QuietCommands = new(StringComparer.Ordinal) { "session.move" };
 
     /// <summary>Whether a result is small enough to push to every UI (counted in JSON nodes, stopping early).</summary>
     private static bool FitsInEvent(JsonNode node)

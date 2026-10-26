@@ -282,7 +282,11 @@ internal static class PlayerbotOpportunityModel
         if (guards.Any(guard => guard.Level >= engagement.BotLevel + OverLevelMargin)) return Verdict(OpportunityDecision.Refuse, "over-level");
 
         float tolerance = riskOptions.Tolerance * options.RiskAppetite * facts.Personality * (facts.Interrupting ? InterruptRiskFactor : 1f);
-        var scaled = new PlayerbotRiskOptions { Tolerance = Math.Clamp(tolerance, 0.25f, 4f) };
+        // Every key Assess reads comes along (RestManaBelowPct, with the RecoverHealthPct that caps it), so a live change reaches this path (bot QA #1480).
+        var scaled = new PlayerbotRiskOptions
+        {
+            Tolerance = Math.Clamp(tolerance, 0.25f, 4f), RestManaBelowPct = riskOptions.RestManaBelowPct, RecoverHealthPct = riskOptions.RecoverHealthPct,
+        };
         // The pack as one pull: its loot value is the find's, less the time cost; the guards' experience the model adds itself.
         PlayerbotEngagement assessed = PlayerbotRiskModel.Assess(
             engagement with { LootValue = facts.RiskOnly ? facts.LootUnits : facts.LootUnits - timeCost, QuestObjective = false }, scaled);

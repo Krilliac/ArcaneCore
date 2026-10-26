@@ -1103,6 +1103,26 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
+    public async Task Follow_StopFromAUiThatDoesNotOwnTheFollow_ReportsTheFollowThatContinues()
+    {
+        await using var rig = new LiveRig();
+        rig.View.Patch(Obj("""{"follow":"1A"}"""), "ui:a");
+        rig.View.Patch(Obj("""{"follow":"2B"}"""), "ui:b");
+
+        JsonObject refused = rig.Feed.Follow(null, "ui:a");
+
+        Assert.Equal("2B", refused["following"]!.GetValue<string>());
+        Assert.Contains("owned by another session", refused["note"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("2B", rig.View.Current.FollowGuid);
+        Assert.Equal("ui:b", rig.View.FollowOrigin);
+
+        JsonObject stopped = rig.Feed.Follow(null, "ui:b");
+
+        Assert.Null(stopped["following"]);
+        Assert.Null(rig.View.Current.FollowGuid);
+    }
+
+    [Fact]
     public async Task ADisposedClient_FailsFurtherConnects_AndStopsTheConnection()
     {
         await using var rig = new LiveRig();

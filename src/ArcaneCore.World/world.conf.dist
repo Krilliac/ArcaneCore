@@ -8339,6 +8339,9 @@ World.Maps.GridCleanUpDelayMs = 300000
 #                     objects, active ones included, look half this distance around themselves. 0
 #                     turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside
 #                     the update): it changes when the files are read, not what is loaded or when.
+#                     It also turns off the arrival prefetch (the tiles of a teleport's destination
+#                     are read when the teleport starts), which has a budget of its own so it never
+#                     evicts the approach prefetches.
 #        Type: float
 #        Default: 200
 #        Allowed: a number, '.' is the decimal point
@@ -13538,6 +13541,24 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.CutRegionMaxPolygons
+#        Description: The most polygons a cut region (a navigation region that is the only way
+#                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
+#                     hold and still be exempt from shared world pins and from refusing a bot's
+#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
+#                     whole region, so a larger bound lets more real snags go unshared. The default,
+#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
+#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
+#                     retail behaviour depends on it.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CutRegionMaxPolygons = 5000
+
+#
 #    World.Playerbots.Economy.BankDeposit
 #        Description: Deposit goods the bot does not need (trade goods and reagents no spell of its
 #                     own uses, gems, recipes, stackable curios) at a banker while it stays at its
@@ -16164,6 +16185,19 @@ World.Playerbots.Risk.PartyRetreatOnWipe = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Risk.RecoverHealthPct = 80
+
+#
+#    World.Playerbots.Risk.RestManaBelowPct
+#        Description: A bot that spends mana and has less than this percentage left (0..100; 0 turns
+#                     it off) recovers before its next pull when the fight would be fine at full
+#                     health and mana, instead of pulling with nothing to cast.
+#        Type: float
+#        Default: 35
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.RestManaBelowPct = 35
 
 #
 #    World.Playerbots.Risk.RetreatHealthPct

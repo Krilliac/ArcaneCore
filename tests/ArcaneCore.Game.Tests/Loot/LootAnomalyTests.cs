@@ -182,6 +182,56 @@ public sealed class LootAnomalyTests
     }
 
     [Fact]
+    public void ALooterWhoMoves_LosesACorpseWindow_SoItsViewersEmpty()
+    {
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1106-1110): moving closes a non-item loot window.
+        Rig rig = CreateRig(7106, 0, ItemTestData.ToughJerky);
+        Player alice = rig.Join(7106);
+        Creature wolf = rig.Kill(alice);
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));
+        LootBag bag = rig.Loot.OpenLootOf(alice)!;
+        Assert.Single(bag.Viewers);
+
+        rig.Loot.ReleaseOnMovement(alice);
+
+        Assert.Null(rig.Loot.OpenLootOf(alice));
+        Assert.Empty(bag.Viewers);
+        Assert.Equal((UnitFlags)0, alice.UnitFlags & UnitFlags.Looting);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ADeadOrFarLooter_IsReleasedAfterTwoAudits_WithoutAnAnomaly(bool dead)
+    {
+        Rig rig = CreateRig(dead ? 7107u : 7108u, 0, ItemTestData.ToughJerky);
+        Player alice = rig.Join(dead ? 7107u : 7108u);
+        Creature wolf = rig.Kill(alice);
+        using AnomalyCapture cap = rig.Capture(wolf);
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));
+        LootBag bag = rig.Loot.OpenLootOf(alice)!;
+        for (int i = 0; i < 4; i++) rig.Loot.Rolls.Update(rig.Map, 1000);
+        Assert.Empty(cap.Notices); // an intact window of a live looter beside the corpse is left alone
+
+        if (dead)
+        {
+            alice.Health = 0;
+        }
+        else
+        {
+            alice.SetPosition(alice.X + 200f, alice.Y, alice.Z, 0f);
+        }
+
+        rig.Loot.Rolls.Update(rig.Map, 1000);
+        Assert.NotNull(rig.Loot.OpenLootOf(alice)); // the first strike
+        rig.Loot.Rolls.Update(rig.Map, 1000);
+        Assert.Empty(cap.Notices); // dying or walking off with the window open is an ordinary event, not window-left-open
+        Assert.Equal(0, cap.Count("loot/window-left-open"));
+        Assert.Null(rig.Loot.OpenLootOf(alice));
+        Assert.Empty(bag.Viewers);
+    }
+
+    [Fact]
     public void RollPastItsTimeout_IsReportedWhenTheHeldItemIsTouched_YoungRollIsNot()
     {
         Rig rig = CreateRig(7104, 0, ItemTestData.ToughJerky, BlueSword);

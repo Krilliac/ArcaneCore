@@ -95,6 +95,15 @@ public sealed class HangStackCapture
     /// <summary>The longest a capture may run before the tool is stopped.</summary>
     public static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>The GC pause share of the hung frame at or above which the capture header says the stack is not the cause.</summary>
+    public const double GcDominatedShare = 0.5;
+
+    /// <summary>Passed as the GC pause when reading it faulted: the capture header then says the pause is unknown.</summary>
+    public const long GcPauseUnknown = -1;
+
+    /// <summary>The marker of one thread's block in dotnet-stack report output; none in the output means the tool captured no stacks.</summary>
+    public const string ThreadMarker = "Thread (";
+
     private readonly TickMonitorOptions _options;
     private readonly ILogger _logger;
     private readonly IHangStackRunner _runner;
@@ -124,8 +133,10 @@ public sealed class HangStackCapture
     /// <summary>
     /// Watchdog thread, when a tick has been running past the hang threshold: start a capture unless one is running, the last started less
     /// than the interval ago, or no tool is available. True when a capture was started. Never throws.
+    /// <paramref name="runningMicros"/> is how long the tick had been running and <paramref name="gcPauseMicros"/> the GC pause inside that time (<see cref="GcPauseUnknown"/> when unknown);
+    /// when the pause covers <see cref="GcDominatedShare"/> or more of it the capture header says the stack shows where the thread was parked, not the cause.
     /// </summary>
-    public bool TryCapture(long nowMicros, string reason)
+    public bool TryCapture(long nowMicros, string reason, long runningMicros = 0, long gcPauseMicros = 0)
     {
         try
         {
@@ -159,7 +170,7 @@ public sealed class HangStackCapture
             _lastStartMicros = nowMicros;
             DateTime at = _utcNow();
             string directory = _options.StackCaptureDirectory;
-            Last = Task.Run(() => CaptureAsync(tool, directory, at, reason));
+            Last = Task.Run(() => CaptureAsync(tool, directory, at, reason, runningMicros, gcPauseMicros));
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -169,7 +180,7 @@ public sealed class HangStackCapture
         }
     }
 
-    private async Task CaptureAsync(string tool, string directory, DateTime at, string reason)
+    private async Task CaptureAsync(string tool, string directory, DateTime at, string reason, long runningMicros, long gcPauseMicros)
     {
         try
         {
@@ -180,12 +191,37 @@ public sealed class HangStackCapture
             text.Append("# ").Append(at.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC, process ").Append(_processId)
                 .Append(", ").Append(tool).Append(" exit ").Append(exitCode).AppendLine();
             text.Append("# ").AppendLine(reason.ReplaceLineEndings(" "));
-            text.AppendLine("# The world thread is the one inside ArcaneCore.Game.Maps.WorldRuntime.RunTick; the capture starts when the hang is first reported, so the stack is where the tick was stuck then.");
+            bool empty = string.IsNullOrWhiteSpace(output) || (exitCode == 0 && !output.Contains(ThreadMarker, StringComparison.Ordinal)); // the marker assumes dotnet-stack report prints "Thread (" per thread
+            bool gcDominated = runningMicros > 0 && gcPauseMicros >= runningMicros * GcDominatedShare;
+            if (empty)
+            {
+                text.AppendLine("# EMPTY CAPTURE: the tool printed no thread stacks, so this hang has no stack.");
+            }
+
+            if (gcPauseMicros == GcPauseUnknown)
+            {
+                text.AppendLine("# GC pause unknown: reading the host-load sampler failed (see the fault ledger), so this stack may be GC-dominated.");
+            }
+
+            if (gcDominated)
+            {
+                text.Append("# GC-DOMINATED: the GC pause was ").Append(gcPauseMicros / 1000).Append(" ms of the ").Append(runningMicros / 1000)
+                    .AppendLine(" ms the tick had been running. The watchdog was suspended by that pause too, so the stack below shows where the threads were parked after it, not what caused the stall.");
+            }
+            else
+            {
+                text.AppendLine("# The world thread is the one inside ArcaneCore.Game.Maps.WorldRuntime.RunTick; the capture starts when the hang is first reported, so the stack is where the tick was stuck then.");
+            }
+
             text.Append(output);
             await File.WriteAllTextAsync(path, text.ToString()).ConfigureAwait(false);
-            if (exitCode == 0)
+            if (empty)
             {
-                _logger.LogWarning("world tick hang: the stacks of every managed thread were written to {Path}", path);
+                _logger.LogWarning("world tick hang: the stack tool captured no thread stacks (exit {ExitCode}), the capture is empty: {Path}", exitCode, path);
+            }
+            else if (exitCode == 0)
+            {
+                _logger.LogWarning("world tick hang: the stacks of every managed thread were written to {Path}{GcNote}", path, gcDominated ? " (GC-dominated frame: the stack shows where the threads were parked, not the cause)" : string.Empty);
             }
             else
             {

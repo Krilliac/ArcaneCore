@@ -59,7 +59,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
 - By default slow world frames and slow map updates are not one line each: `PerformanceLog:SummaryIntervalSeconds` (60) writes ONE
   `Slow update summary` per interval, and only when something was slow (world frames over the threshold as N of M with p50/p95/max; per map
   instance the count, p50/p95/max of its own work and the top three contributors by summed ms; the host-starved / quiet / gc verdict counts;
-  the number of suppressed detail lines). Verdicts are host-starved, quiet and gc (gc-pauses and gc-paging are both counted as gc), plus process-busy and process-stalled when they occur; `unknown`
+  the number of suppressed detail lines). Verdicts are host-starved, quiet and gc (gc-pauses and gc-paging are both counted as gc), plus process-busy, process-stalled, memory-starved and process-blocked when they occur; `unknown`
   (the old "other") counts samples with no host sampler or no verdict. The label is the real elapsed time (a stop or a hitch gives a different
   length), the contributor table holds 64 names per map and prints `(+N ms unattributed)` past that, and the detail cap restarts at each interval. An update over `SlowWorldUpdateDetail` (250) / `SlowMapUpdateDetail` (200) ms still gets its own
   line, at most `DetailLinesPerMapPerInterval` (1) per map instance (and for the world) per interval. `SummaryIntervalSeconds = 0` restores
