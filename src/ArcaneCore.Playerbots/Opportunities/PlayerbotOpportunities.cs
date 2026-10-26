@@ -106,6 +106,14 @@ internal sealed partial class PlayerbotOpportunities
     private bool _scanned;
     private uint _nextScanMs;
     private TileWait _tileWait;
+
+    // The tile wait of the chest verdict (ChestNavMeshVerdict): kept between scans, so a chest whose tiles never arrive is refused once the
+    // wait is spent (TileWait.MaxMs) instead of being asked again for ever; restarted for another find.
+    private TileWait _chestWait;
+    private ulong _chestWaitKey;
+
+    /// <summary>Test seam: the wall clock (a <see cref="System.Diagnostics.Stopwatch"/> timestamp) of the chest verdict's tile wait (null: the real one).</summary>
+    internal Func<long>? ChestWaitRealTicks { get; set; }
     private PlayerbotRoute? _route;
     private ObjectGuid _routeTarget;
 
@@ -137,6 +145,12 @@ internal sealed partial class PlayerbotOpportunities
 
     /// <summary>The find the bot is on, or null (inspection and tests).</summary>
     internal ulong? ActiveKey => _episode?.Key;
+
+    /// <summary>
+    /// The last scan set a find aside for now because its route was still being searched (no verdict, nothing refused). The brain reads it
+    /// after an update that took nothing, so a policy promotion is not counted as refused; it clears it before it asks.
+    /// </summary>
+    internal bool ScanDeferred { get; set; }
 
     /// <summary>The verdict of the find the bot is on, or the last one it refused (inspection and tests).</summary>
     internal OpportunityVerdict? LastVerdict { get; private set; }
@@ -271,8 +285,14 @@ internal sealed partial class PlayerbotOpportunities
             _scanned = true;
             _nextScanMs = unchecked(now + ScanEveryMs);
             if (_session.ManagedBudget is not { Remaining: > 0 } || PlayerbotTownGoals.FreeBagSlots(player) <= 0) return OpportunityStep.None;
+            ScanDeferred = false;
             Begin(player, map, now, interrupting);
-            if (_episode is null) return OpportunityStep.None;
+            if (_episode is null)
+            {
+                // A find whose route is still being searched is no verdict: the next think scans again, not after ScanEveryMs.
+                if (ScanDeferred) _scanned = false;
+                return OpportunityStep.None;
+            }
         }
 
         return Step(player, map, elapsedMs, now);
@@ -317,8 +337,8 @@ internal sealed partial class PlayerbotOpportunities
 
             if (find.Kind != OpportunityKind.Rare && find.Distance > InteractYards && map.Collision.Pathfinder is NavMeshPathfinder)
             {
-                PlanOutcome onMesh = ChestNavMeshVerdict(player, find.At, now);
-                if (onMesh == PlanOutcome.Pending) continue; // a trial search is under way: no verdict, not set aside, asked again at the next scan
+                PlanOutcome onMesh = ChestNavMeshVerdict(player, find.Key, find.At, now);
+                if (onMesh == PlanOutcome.Pending) { ScanDeferred = true; continue; } // a trial search is under way: no verdict, not set aside, asked again at the next scan
                 if (onMesh == PlanOutcome.Refused)
                 {
                     _ledger.SetAside(find.Key, now, RefusedRecheckMs);
@@ -877,10 +897,16 @@ internal sealed partial class PlayerbotOpportunities
     /// toward the chest across a cliff, not a missing walk: one wide search inside the same region, otherwise a leg to a portal of the
     /// graph's way. Pending while the graph is still being built. Refused when the graph does not join them, so the caller reports it.
     /// </summary>
-    private PlanOutcome ChestNavMeshVerdict(Player player, Vector3 goal, uint now)
+    private PlanOutcome ChestNavMeshVerdict(Player player, ulong key, Vector3 goal, uint now)
     {
         if (!(PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)) return PlanOutcome.Route;
-        TileWait wait = _tileWait;
+        if (key != _chestWaitKey)
+        {
+            _chestWaitKey = key;
+            _chestWait = new TileWait { RealTicks = ChestWaitRealTicks };
+        }
+
+        ref TileWait wait = ref _chestWait;
         bool pending = false;
         if (ChestFound(ChestExactVerdict(player, goal, now, ref wait), ref pending)
             || ChestFound(ChestGraphVerdict(player, goal, now), ref pending)

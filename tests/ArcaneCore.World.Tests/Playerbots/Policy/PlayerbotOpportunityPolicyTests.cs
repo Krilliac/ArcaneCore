@@ -1,14 +1,20 @@
 using System.Buffers;
+using System.Numerics;
 using System.Text.Json;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -196,6 +202,81 @@ public sealed class PlayerbotOpportunityPolicyTests
         Assert.Equal(PlayerbotPolicySource.Refused, (await rig.World(() => agent.LastVerdict))?.Source);
         Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
         Assert.False(await rig.World(() => rig.Bot.Brain.OpportunityDriven));
+        await engine.DisposeAsync();
+    }
+
+    /// <summary>
+    /// A promoted opportunity whose far chest still waits for its region route (a search outstanding, here a lost one marked asked) has no
+    /// verdict yet: it is not a refusal. The policy's refusal count and the snapshot's window stay as they were, the scan is asked again on
+    /// the next think instead of after the scan interval, and the chest is taken once the pair is answered.
+    /// </summary>
+    [Fact]
+    public async Task APromotedOpportunityWhoseRouteIsPending_IsNotRefused_AndIsTakenOnceTheRouteIsSearched()
+    {
+        const float cell = 1f;
+        const int width = 150;
+        const int lastRow = 46;
+        ChestSpawn chest = new(FreeChest, 9, 0f, lastRow * cell + 2f);
+        using var fixture = new NavMeshFixture();
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - (cell / 2f), StartY - (cell / 2f), width, lastRow + 1, cell)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (i, j) => (j & 1) == 0 || i == ((((j - 1) / 2) & 1) == 0 ? width - 1 : 0),
+            LinkedSides = [0],
+        });
+        fixture.WriteTile(0, fileX + 1, fileY, new CellTile(detourX + 1, detourY, StartX - (cell / 2f), StartY - (cell / 2f) + ((lastRow + 1) * cell), width, 10, cell)
+        {
+            Height = (_, _) => StartZ,
+            LinkedSides = [4],
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(0, fileX, fileY));
+        Assert.True(nav.LoadTile(0, fileX + 1, fileY));
+        Task<NavRegionGraph?>? building = nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotNull(building);
+        NavRegionGraph graph = (await building)!;
+
+        await using Rig rig = await Rig.StartAsync([chest], tweak: options =>
+        {
+            options.Opportunities.Enabled = false;
+            options.Opportunities.ScanRadiusYards = 80f;
+            options.Opportunities.PersonalityVariance = 0f;
+            options.Opportunities.MinValue = 0f;
+        });
+        (PlayerbotPolicyEngine engine, PlayerbotPolicyAgent agent) = await rig.StartPolicyAsync();
+        (int from, int to, Vector3 here, Vector3 goal) = await rig.World(() =>
+        {
+            WorldCollision.Of(rig.Host.World).Install(pathfinder: nav);
+            GameObject box = (GameObject)rig.Player.Map!.FindObject(new ObjectGuid(ChestGuid(chest)))!;
+            Vector3 position = PlayerbotMotion.CurrentPosition(rig.Player);
+            Vector3 target = new(box.X, box.Y, box.Z);
+            var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+            return (nav.RegionAt(graph, position, locate), nav.RegionAt(graph, target, locate), position, target);
+        });
+        Assert.True(from >= 0 && to >= 0 && from != to, $"regions {from}, {to}");
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        cache.MarkAsked(from, to, long.MaxValue / 2); // a search that never comes back, never old enough to be searched on the think
+
+        PlayerbotPolicyGoalMask open = default(PlayerbotPolicyGoalMask).With(PlayerbotPolicyGoal.Town).With(PlayerbotPolicyGoal.Opportunity)
+            .With(PlayerbotPolicyGoal.Explore);
+        await rig.InjectAsync(engine, agent, open);
+
+        for (int think = 0; think < 3; think++) await rig.ThinkBrainAsync();
+
+        PlayerbotPolicyVerdict? verdict = await rig.World(() => agent.LastVerdict);
+        Assert.Equal(0, engine.Stats.Refused);
+        Assert.True(verdict is { Source: PlayerbotPolicySource.Applied, Promote: PlayerbotPolicyGoal.Opportunity }, $"source {verdict?.Source}, promote {verdict?.Promote}");
+        Assert.Null(rig.Bot.Brain.Opportunities.ActiveKey);
+        Assert.Equal(0, cache.Searches);
+
+        // Answered: the next think takes the chest (a refused window would have left it to the ladder).
+        cache.Search(from, here, to, goal);
+        Assert.Equal(1, cache.Searches);
+        Assert.True(await rig.RunBrainAsync(() => rig.Bot.Brain.Opportunities.ActiveKey == ChestGuid(chest)), "the chest was never taken up after the route was searched");
+        Assert.Equal(0, engine.Stats.Refused);
         await engine.DisposeAsync();
     }
 
@@ -572,6 +653,19 @@ public sealed class PlayerbotOpportunityPolicyTests
             Bot.Brain.Update(500);
             return true;
         });
+
+        /// <summary>Thinks the brain until <paramref name="done"/> or the step budget ends.</summary>
+        public async Task<bool> RunBrainAsync(Func<bool> done, int steps = 40)
+        {
+            for (int i = 0; i < steps; i++)
+            {
+                await ThinkBrainAsync();
+                if (await World(done)) return true;
+                await Task.Delay(5);
+            }
+
+            return false;
+        }
 
         /// <summary>Steps the controller (real time passing for the server's replies) until <paramref name="done"/> or the step budget ends.</summary>
         public async Task<bool> RunAsync(Func<bool> done, int steps = 60)

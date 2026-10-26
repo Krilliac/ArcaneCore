@@ -110,14 +110,13 @@ internal static class PlayerbotRegionRoutes
                 return true;
             }
 
-            Exception? waiting;
-            lock (QueueGate) waiting = EnsureWorker();
-            if (waiting is not null) ReportWorkerFault(waiting, logger);
+            bool start;
+            lock (QueueGate) start = ReserveWorker();
+            if (start) StartWorker(logger);
             return Pending(out status, out portals);
         }
 
-        bool queueFull, answered = false;
-        Exception? fault = null;
+        bool queueFull, answered = false, startWorker = false;
         status = NavRegionRouteStatus.Exhausted;
         portals = [];
         lock (QueueGate)
@@ -133,12 +132,12 @@ internal static class PlayerbotRegionRoutes
                 else
                 {
                     if (claim == ClaimResult.Claimed) Queued.Enqueue(new Work(cache, fromRegion, from, toRegion, to, logger));
-                    fault = EnsureWorker();
+                    startWorker = ReserveWorker();
                 }
             }
         }
 
-        if (fault is not null) ReportWorkerFault(fault, logger);
+        if (startWorker) StartWorker(logger);
         if (!queueFull) return answered;
 
         // The queue is full: nothing is recorded (the bot asks again on its next think); a search here only within the budget.
@@ -160,29 +159,37 @@ internal static class PlayerbotRegionRoutes
     }
 
     /// <summary>
-    /// Start a worker when work is queued and fewer than <see cref="MaxInFlight"/> run. The caller holds the queue's gate. Returns the
-    /// exception when the pool refused the worker (the caller reports it with <see cref="ReportWorkerFault"/> after it released the gate).
+    /// Count a worker when work is queued and fewer than <see cref="MaxInFlight"/> run. True: the caller starts it with
+    /// <see cref="StartWorker"/> after it released the gate. The caller holds the queue's gate.
     /// </summary>
-    private static Exception? EnsureWorker()
+    private static bool ReserveWorker()
     {
-        if (Queued.Count == 0 || s_workers >= MaxInFlight) return null;
+        if (Queued.Count == 0 || s_workers >= MaxInFlight) return false;
         s_workers++;
+        return true;
+    }
+
+    /// <summary>
+    /// Start the worker <see cref="ReserveWorker"/> counted. The caller does not hold the gate: a refusal is recorded and logged here, and
+    /// nothing is logged under the gate. The count is given back when the pool refuses; the work then waits for the next ask to start one.
+    /// </summary>
+    private static void StartWorker(ILogger? logger)
+    {
         try
         {
             Task.Run(Worker);
-            return null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            s_workers--;
-            return ex;
+            lock (QueueGate) s_workers--;
+            FaultLedger.Shared.Record("playerbot.region-route", ex);
+            (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route worker could not be started");
         }
-    }
-
-    private static void ReportWorkerFault(Exception ex, ILogger? logger)
-    {
-        FaultLedger.Shared.Record("playerbot.region-route", ex);
-        (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route worker could not be started");
+        catch (OutOfMemoryException)
+        {
+            lock (QueueGate) s_workers--; // the count is given back; out of memory is not recorded as a fault
+            throw;
+        }
     }
 
     private static void Worker()
@@ -216,14 +223,14 @@ internal static class PlayerbotRegionRoutes
                 // An exception that SearchQueued does not catch (OutOfMemoryException) ended this worker with its count still held and its
                 // pair still marked asked: give both back so the queue keeps draining (the count changes only under the gate).
                 if (running is { } lost) lost.Cache.ClearAsked(lost.From, lost.To);
-                Exception? fault;
+                bool replace;
                 lock (QueueGate)
                 {
                     s_workers--;
-                    fault = EnsureWorker();
+                    replace = ReserveWorker();
                 }
 
-                if (fault is not null) ReportWorkerFault(fault, running?.Logger);
+                if (replace) StartWorker(running?.Logger);
             }
         }
     }
@@ -279,7 +286,11 @@ internal static class PlayerbotRegionRoutes
         private readonly Dictionary<(int From, int To), Route> _routes = [];
         private readonly Queue<(int From, int To)> _order = new();
         private readonly Dictionary<(int From, int To), long> _asked = [];
+        private readonly HashSet<(int From, int To)> _faultedOnce = [];
         private long _searches;
+
+        /// <summary>Test seam: runs at the start of each search, inside its fault handling (a test makes the search fault by throwing here).</summary>
+        internal Action<int, int>? SearchProbe { get; set; }
 
         /// <summary>The searches this cache ran (misses).</summary>
         internal long Searches => Interlocked.Read(ref _searches);
@@ -376,9 +387,11 @@ internal static class PlayerbotRegionRoutes
         {
             NavRegionRouteStatus found;
             List<Vector3> chain;
+            bool faulted = false;
             try
             {
                 Interlocked.Increment(ref _searches);
+                SearchProbe?.Invoke(fromRegion, toRegion);
                 found = graph.FindRoute(fromRegion, from, toRegion, to, PlayerbotNavigation.RegionSearchNodes, nearestFromAnywhere: true, out chain, out _);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -387,6 +400,7 @@ internal static class PlayerbotRegionRoutes
                 (logger ?? NullLogger.Instance).LogFault("playerbot-region-route", ex, "Region route search from region {From} to region {To} failed", fromRegion, toRegion);
                 found = NavRegionRouteStatus.Exhausted;
                 chain = [];
+                faulted = true;
             }
 
             Vector3[] kept = [.. chain];
@@ -395,6 +409,15 @@ internal static class PlayerbotRegionRoutes
             lock (_gate)
             {
                 _asked.Remove((fromRegion, toRegion));
+                // A first fault is not kept (a transient one must not refuse the pair until it is evicted): the next ask searches again. A
+                // pair that faults twice is kept as "no decision" so a lasting fault is not searched on every ask.
+                if (faulted && !_routes.ContainsKey((fromRegion, toRegion)) && _faultedOnce.Count < MaxEntries && _faultedOnce.Add((fromRegion, toRegion)))
+                {
+                    Derive(route, from, out status, out portals);
+                    return;
+                }
+
+                _faultedOnce.Remove((fromRegion, toRegion));
                 if (_routes.TryAdd((fromRegion, toRegion), route))
                 {
                     _order.Enqueue((fromRegion, toRegion));

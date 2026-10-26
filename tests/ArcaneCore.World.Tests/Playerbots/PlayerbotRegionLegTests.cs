@@ -225,6 +225,44 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.True(cache.TryGet(from, 1000, Start, out _, out _));
     }
 
+    /// <summary>
+    /// A search that faults once is not kept: the next ask searches again and gets the real answer (a transient fault must not refuse the
+    /// pair until it is evicted). A pair that faults twice is kept as "no decision", so a lasting fault is not searched on every ask.
+    /// </summary>
+    [Fact]
+    public async Task AFaultedRegionSearch_IsRetriedOnce_AndKeptOnlyWhenItFaultsTwice()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+
+        int calls = 0;
+        cache.SearchProbe = (_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) throw new InvalidOperationException("transient fault");
+        };
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus first, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, first);
+        Assert.Equal(0, cache.Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus second, out _));
+        Assert.NotEqual(NavRegionRouteStatus.Exhausted, second);
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(2, cache.Searches);
+
+        cache.SearchProbe = (_, _) => throw new InvalidOperationException("lasting fault");
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out NavRegionRouteStatus one, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, one);
+        Assert.Equal(1, cache.Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out NavRegionRouteStatus two, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, two);
+        Assert.Equal(2, cache.Count);
+        long searches = cache.Searches;
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(searches, cache.Searches); // kept: a hit
+    }
+
     /// <summary>A rebuilt graph is a new instance: it starts with an empty cache, and the old graph's routes never answer for it.</summary>
     [Fact]
     public async Task ARebuiltGraph_DoesNotSeeTheOldGraphsRoutes_AndTheCacheIsBounded()

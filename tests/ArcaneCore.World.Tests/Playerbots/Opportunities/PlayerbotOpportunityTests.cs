@@ -1277,6 +1277,77 @@ public sealed class PlayerbotOpportunityTests
         Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
     }
 
+    /// <summary>
+    /// A far chest whose tile is never read (the read does not finish) answers pending while the tile wait runs, and is set aside once the
+    /// wait is spent (<see cref="TileWait.MaxMs"/>, wall clock and game clock): it is not asked again at every scan for ever.
+    /// </summary>
+    [Fact]
+    public async Task AChestWhoseTileNeverArrives_IsSetAside_OnceTheTileWaitIsSpent()
+    {
+        const float cell = 1f;
+        const int width = 150;
+        const int lastRow = 46;
+        ChestSpawn chest = new(FreeChest, 9, 0f, lastRow * cell + 2f);
+        using var fixture = new NavMeshFixture();
+        using var gate = new ManualResetEventSlim();
+        bool blockReads = false;
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - (cell / 2f), StartY - (cell / 2f), width, lastRow + 1, cell)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (i, j) => (j & 1) == 0 || i == ((((j - 1) / 2) & 1) == 0 ? width - 1 : 0),
+            LinkedSides = [0],
+        });
+        fixture.WriteTile(0, fileX + 1, fileY, new CellTile(detourX + 1, detourY, StartX - (cell / 2f), StartY - (cell / 2f) + ((lastRow + 1) * cell), width, 10, cell)
+        {
+            Height = (_, _) => StartZ,
+            LinkedSides = [4],
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory)
+        {
+            FileReader = path =>
+            {
+                if (blockReads && path.EndsWith(".mmtile", StringComparison.Ordinal)) gate.Wait();
+                return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            },
+        };
+        try
+        {
+            Assert.True(nav.LoadTile(0, fileX, fileY)); // the bot's own tile is in; the chest's tile is read on the pool and never finishes
+            Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
+            blockReads = true;
+
+            await using Rig rig = await Rig.StartAsync([chest], tweak: options =>
+            {
+                options.Opportunities.ScanRadiusYards = 80f;
+                options.Opportunities.PersonalityVariance = 0f;
+                options.Opportunities.MinValue = 0f;
+            });
+            long realTicks = 0;
+            rig.Bot.Controller.ChestWaitRealTicks = () => Interlocked.Read(ref realTicks);
+            await rig.World(() => { WorldCollision.Of(rig.Host.World).Install(pathfinder: nav); return true; });
+
+            bool setAside = false;
+            for (int second = 1; second <= 60 && !setAside; second++)
+            {
+                await rig.World(() => rig.Bot.Step());
+                rig.Clock += 1_000;
+                Interlocked.Add(ref realTicks, System.Diagnostics.Stopwatch.Frequency);
+                setAside = rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock);
+                if (second <= 5) Assert.False(setAside, $"set aside after {second} s, while the tile wait still runs");
+            }
+
+            Assert.True(setAside, "the chest was asked again at every scan for a minute and never set aside: " + rig.Bot.Controller.Report);
+            Assert.Null(rig.Bot.Controller.ActiveKey);
+        }
+        finally
+        {
+            gate.Set();
+        }
+    }
+
     [Fact]
     public async Task AChestTheBotCannotWalkTo_IsReportedUnreachableOnce_AndSetAside()
     {
