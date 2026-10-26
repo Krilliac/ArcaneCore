@@ -151,6 +151,13 @@ public sealed partial class SummonService
             prior = _saveTails.GetValueOrDefault(characterId) ?? Task.CompletedTask;
             _saveTails[characterId] = done.Task;
         }
+        bool hasDeletePersistence = Persistence is not null || DeletePersistence is not null;
+        if (!hasDeletePersistence && prior.IsCompleted)
+        {
+            lock (_cacheGate) _failedDeletes.Remove(characterId);
+            done.SetResult();
+            return;
+        }
         _ = Task.Run(() => DeleteQueuedAsync(characterId, prior, done)); // the store call never runs on the calling (world/map) thread
     }
 
@@ -275,6 +282,20 @@ public sealed partial class SummonService
             // A newer save or a delete replaced the retained snapshot after the barrier read it: never write the older state
             // over that; the barrier waits for the newer write instead.
             await FlushCharacterAsync(snapshot.CharacterId).ConfigureAwait(false);
+            return;
+        }
+        bool hasPersistence = Persistence is not null || SavePersistence is not null || SaveDetachedPersistence is not null;
+        if (!hasPersistence && prior.IsCompleted)
+        {
+            lock (_cacheGate)
+            {
+                if (ReferenceEquals(_retained.GetValueOrDefault(snapshot.CharacterId), snapshot))
+                {
+                    _retained.Remove(snapshot.CharacterId);
+                }
+                _failedDeletes.Remove(snapshot.CharacterId);
+            }
+            done.SetResult();
             return;
         }
         try
