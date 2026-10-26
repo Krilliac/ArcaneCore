@@ -91,6 +91,33 @@ public static class ClientRejectionDecoder
     /// <summary>True when a packet of this opcode can be a refusal (the payload decides).</summary>
     public static bool IsCandidate(WorldOpcode opcode) => (uint)(ushort)opcode < (uint)Candidates.Length && Candidates[(ushort)opcode];
 
+    private static readonly bool[] ServerErrorReasons = BuildServerErrorReasons();
+
+    private static bool[] BuildServerErrorReasons()
+    {
+        var table = new bool[(Enum.GetValues<ClientRejectionKind>().Length) << 8];
+        Mark(table, ClientRejectionKind.MailResult, (uint)MailResult.InternalError);
+        Mark(table, ClientRejectionKind.AuctionCommand, (uint)AuctionError.Database);
+        Mark(table, ClientRejectionKind.CastResult, (uint)SpellCastResult.Unknown);
+        Mark(table, ClientRejectionKind.PetCastFailed, (uint)SpellCastResult.Unknown);
+        Mark(table, ClientRejectionKind.InventoryChange, (uint)Items.InventoryResult.ItemNotFound);
+        Mark(table, ClientRejectionKind.BuyFailed, (uint)BuyResult.CantFindItem);
+        Mark(table, ClientRejectionKind.SellFailed, (uint)SellResult.CantFindVendor);
+        return table;
+    }
+
+    private static void Mark(bool[] table, ClientRejectionKind kind, uint reason) => table[((int)kind << 8) | (int)reason] = true;
+
+    /// <summary>
+    /// True when the refusal says the server itself failed (a mail or auction internal error, an unknown cast failure, an item or vendor the server
+    /// cannot find) rather than that the player asked for something not allowed. One bounds check and one table load; no allocation.
+    /// </summary>
+    public static bool IsServerError(in ClientRejection rejection)
+    {
+        int index = ((int)rejection.Kind << 8) | (int)(rejection.Reason & 0xFF);
+        return rejection.Reason <= 0xFF && (uint)index < (uint)ServerErrorReasons.Length && ServerErrorReasons[index];
+    }
+
     private const uint TradeStatusCloseWindow = (uint)TradeStatus.CloseWindow;
 
     /// <summary>The trade statuses that mean the trade cannot go on (not the normal flow: open, accept, complete, close, cancel).</summary>
