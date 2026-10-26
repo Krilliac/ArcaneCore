@@ -144,7 +144,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     }
 
     /// <summary>The areas round the enemies' fight starts a pursuer gives up outside of: (centre, radius), two for each enemy.</summary>
-    private static List<(Vector3 Anchor, float Safe)> BuildZones(Player player, IReadOnlyList<Creature> enemies,
+    internal static List<(Vector3 Anchor, float Safe)> BuildZones(Player player, IReadOnlyList<Creature> enemies,
         IReadOnlyDictionary<ObjectGuid, Vector3> anchors)
     {
         var zones = new List<(Vector3 Anchor, float Safe)>(enemies.Count * 2);

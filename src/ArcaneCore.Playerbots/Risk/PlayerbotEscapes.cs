@@ -50,13 +50,16 @@ internal static class PlayerbotEscapes
     internal const string HammerOfJustice = "Hammer of Justice";
     internal const string DivineShield = "Divine Shield";
     internal const string FrostShock = "Frost Shock";
+    internal const string Frostbolt = "Frostbolt";
+    internal const string ConeOfCold = "Cone of Cold";
+    internal const string CurseOfExhaustion = "Curse of Exhaustion";
 
     /// <summary>Every escape name a bot may resolve from its spellbook.</summary>
     internal static IReadOnlyList<string> All { get; } =
     [
         FrostNova, Blink, Vanish, Sprint, Gouge, FeignDeath, ConcussiveShot, WingClip, AspectOfTheCheetah, PsychicScream,
         PowerWordShield, Fade, Fear, HowlOfTerror, DeathCoil, IntimidatingShout, Hamstring, EntanglingRoots, TravelForm, CatForm,
-        Dash, HammerOfJustice, DivineShield, FrostShock,
+        Dash, HammerOfJustice, DivineShield, FrostShock, Frostbolt, ConeOfCold, CurseOfExhaustion,
     ];
 
     /// <summary>The escapes of a class in the order they are tried.</summary>
@@ -139,7 +142,7 @@ internal static class PlayerbotEscapes
         Vanish or FeignDeath => EscapeKind.BreaksContact,
         // Travel Form (783) carries no speed aura of its own: the 40% is on a separate passive spell (5419), so it buys nothing here.
         Sprint or AspectOfTheCheetah or Dash => EscapeKind.SelfSpeed,
-        Hamstring or WingClip or ConcussiveShot or FrostShock => EscapeKind.VictimSnare,
+        Hamstring or WingClip or ConcussiveShot or FrostShock or Frostbolt or ConeOfCold or CurseOfExhaustion => EscapeKind.VictimSnare,
         _ => EscapeKind.None,
     };
 
