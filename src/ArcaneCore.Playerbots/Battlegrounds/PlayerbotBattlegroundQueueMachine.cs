@@ -114,6 +114,9 @@ internal readonly record struct PlayerbotBattlegroundFacts
 
     /// <summary>The walk to the battlemaster refused a route (or arrived at an empty/dead battlemaster spot).</summary>
     public bool TravelRefused { get; init; }
+
+    /// <summary>Travel: the length of the walk to the battlemaster as estimated when it was planned, in yards (0: not known, the base timeout).</summary>
+    public float TravelYards { get; init; }
 }
 
 /// <summary>
@@ -126,6 +129,27 @@ internal static class PlayerbotBattlegroundQueueMachine
 {
     /// <summary>The longest a bot walks to a battlemaster.</summary>
     internal const uint TravelTimeoutMs = 600_000;
+
+    /// <summary>The slowest pace (yards a second) a walk to a battlemaster is expected to keep, fights and detours included; a run is 7.</summary>
+    internal const float TravelYardsPerSecond = 3f;
+
+    /// <summary>The most a walk to a battlemaster is given, however long its way.</summary>
+    internal const uint MaxTravelTimeoutMs = 3_600_000;
+
+    /// <summary>A walk is longer than its straight line: the way round a ridge or a river (the estimate of a walk's length is the line times this).</summary>
+    internal const float TravelDetourFactor = 1.5f;
+
+    /// <summary>
+    /// The longest a bot walks to a battlemaster whose way is <paramref name="pathYards"/> long: <see cref="TravelTimeoutMs"/> for a short or
+    /// unknown way, longer by the pace <see cref="TravelYardsPerSecond"/> for a long one, at most <see cref="MaxTravelTimeoutMs"/>. A flat
+    /// ten minutes timed out the long walks across a continent (live: 'timed out walking to ArathiBasin battlemaster').
+    /// </summary>
+    internal static uint TravelTimeoutFor(float pathYards)
+    {
+        if (!float.IsFinite(pathYards) || pathYards <= 0f) return TravelTimeoutMs;
+        double ms = pathYards / (double)TravelYardsPerSecond * 1000.0;
+        return (uint)Math.Clamp(ms, TravelTimeoutMs, MaxTravelTimeoutMs);
+    }
 
     /// <summary>The longest the server takes to put the bot in a queue after the join.</summary>
     internal const uint JoinReplyTimeoutMs = 15_000;
@@ -148,7 +172,7 @@ internal static class PlayerbotBattlegroundQueueMachine
                 return f.Roll ? (PlayerbotBattlegroundPhase.Travel, PlayerbotBattlegroundAction.PlanToBattlemaster) : (phase, PlayerbotBattlegroundAction.None);
 
             case PlayerbotBattlegroundPhase.Travel:
-                if (f.Taken || f.Unable || f.InPhaseMs > TravelTimeoutMs) return (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.Release);
+                if (f.Taken || f.Unable || f.InPhaseMs > TravelTimeoutFor(f.TravelYards)) return (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.Release);
                 if (f.InReach) return (PlayerbotBattlegroundPhase.Join, PlayerbotBattlegroundAction.Hello);
                 return f.TravelRefused ? (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.SetAside) : (phase, PlayerbotBattlegroundAction.None);
 

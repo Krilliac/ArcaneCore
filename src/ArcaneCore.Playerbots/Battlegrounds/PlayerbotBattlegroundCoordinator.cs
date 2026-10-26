@@ -90,6 +90,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>The Warsong Gulch plan of each match and team, made at most once per tick (<see cref="WarsongOrder"/>).</summary>
     private readonly Dictionary<(uint Instance, Team Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> _wsgPlans = [];
 
+    /// <summary>
+    /// The settled Warsong Gulch midfield of each match and team (<see cref="ResolveWarsongMidfield(Map, Vector3, Vector3, out bool)"/>): only a
+    /// point the mesh was asked about with every tile read is kept; one resolved while tiles were pending is asked again next tick.
+    /// </summary>
+    private readonly Dictionary<(uint Instance, Team Team), Vector3> _wsgMidfields = [];
+
     /// <summary>The Warsong Gulch flag stand spawns (Alliance, Horde) of the loaded object content (the stands are despawned while their flag is away).</summary>
     private (object? Of, Vector3? Alliance, Vector3? Horde) _wsgStands;
 
@@ -150,6 +156,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _orderedBots.Clear();
             _setAside.Clear();
             _wsgPlans.Clear();
+            _wsgMidfields.Clear();
             _refusedMasters.Clear();
             _scanElapsed = ScanMs;
             _world = null;
@@ -177,6 +184,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         public Team Team { get; set; }
         public ObjectGuid Battlemaster { get; set; }
         public Vector3 MasterAt { get; set; }
+
+        /// <summary>The walk to the battlemaster as planned: its straight distance from where the bot started, scaled for the way round (<see cref="PlayerbotBattlegroundQueueMachine.TravelTimeoutFor"/>).</summary>
+        public float TravelYards { get; set; }
         public bool HelloSent { get; set; }
         public bool JoinSent { get; set; }
         public uint QueuedSinceMs { get; set; }
@@ -401,6 +411,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             InPhaseMs = unchecked(Now - t.PhaseSinceMs),
             MatchGone = bound && match is null,
             TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && t.AI?.TravelRefused == true,
+            TravelYards = t.TravelYards,
         };
     }
 
@@ -518,7 +529,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 break;
 
             case PlayerbotBattlegroundAction.Release:
-                if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutMs)
+                if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutFor(facts.TravelYards))
                 {
                     SetAside(t.BotId, t.Type);
                     RefuseMaster(t.Battlemaster, player);
@@ -619,6 +630,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (unchecked((int)(until - now)) <= 0) _refusedMasters.Remove(key);
         foreach (KeyValuePair<(uint, Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> plan in _wsgPlans.ToArray())
             if (_tick - plan.Value.Tick > 1) _wsgPlans.Remove(plan.Key);
+        foreach ((uint, Team) key in _wsgMidfields.Keys.ToArray())
+            if (!_wsgPlans.ContainsKey(key)) _wsgMidfields.Remove(key);
 
         BattlegroundManager manager = feature.Manager;
         BuildDemand(manager);
@@ -647,6 +660,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             {
                 Phase = PlayerbotBattlegroundPhase.Travel, PhaseSinceMs = now, Type = choice.Type, Bracket = choice.Bracket, Team = player.Team,
                 Battlemaster = master.Guid, MasterAt = master.At, AI = new PlayerbotBattlegroundAI(bot.Session, _options),
+                TravelYards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At) * PlayerbotBattlegroundQueueMachine.TravelDetourFactor,
             };
             _tracked[bot.BotId] = tracked;
             _demand.AddBotCommitted(choice.Type, choice.Bracket, player.Team);
@@ -816,8 +830,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         Vector3 ownRoom = new(room.X, room.Y, room.Z);
         Vector3 enemyStand = enemy == Team.Alliance ? allianceStand : hordeStand;
         Vector3 ownStand = team == Team.Alliance ? allianceStand : hordeStand;
-        Vector3 middle = ResolveWarsongMidfield(map, ownStand, enemyStand);
-
+        if (!_wsgMidfields.TryGetValue((wsg.InstanceId, team), out Vector3 middle))
+        {
+            middle = ResolveWarsongMidfield(map, ownStand, enemyStand, out bool settled);
+            if (settled) _wsgMidfields[(wsg.InstanceId, team)] = middle;
+        }
 
         var bots = new List<PlayerbotWsgMember>();
         foreach (Tracked t in _tracked.Values)
@@ -880,8 +897,20 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         };
     }
 
+    /// <summary><see cref="ResolveWarsongMidfield(Map, Vector3, Vector3, out bool)"/> without the settled answer.</summary>
     internal static Vector3 ResolveWarsongMidfield(Map map, Vector3 ownStand, Vector3 enemyStand)
+        => ResolveWarsongMidfield(map, ownStand, enemyStand, out _);
+
+    /// <summary>
+    /// The middle of the Warsong Gulch field the bots hold: the point between the two flag stands, snapped to the ground and then to the
+    /// walkable mesh (the nearest ring point that passes <see cref="CheckWarsongMidfield"/>; failing all, the nearest walkable point on the way
+    /// to the bot's own stand, else the stand itself). With a mesh, a point the mesh was never asked about is not returned: the answer is one
+    /// the mesh accepted, or one whose tile was still being read. <paramref name="settled"/> is false in the second case (and whenever a tile
+    /// read was waited for on the way), and the caller does not keep the answer: it asks again once the tiles are loaded.
+    /// </summary>
+    internal static Vector3 ResolveWarsongMidfield(Map map, Vector3 ownStand, Vector3 enemyStand, out bool settled)
     {
+        long pendingMark = PlayerbotNavigation.PendingMark;
         Vector3 middle = (ownStand + enemyStand) / 2f;
         float probeZ = MathF.Max(ownStand.Z, enemyStand.Z) + 5f;
         float terrain = map.Terrain.GetHeight(middle.X, middle.Y, middle.Z);
@@ -901,39 +930,78 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             middle.Z = ground;
         }
 
-        if (map.Collision.MeshPoints is not null && !IsWalkableWarsongMidfield(map, middle, ownStand))
+        if (map.Collision.MeshPoints is null)
         {
-            ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f, 28f];
-            foreach (float radius in radii)
+            settled = true;
+            return middle;
+        }
+
+        MidfieldCheck first = CheckWarsongMidfield(map, middle, ownStand);
+        if (first != MidfieldCheck.NotWalkable)
+        {
+            settled = first == MidfieldCheck.Walkable && !PlayerbotNavigation.PendingSince(pendingMark);
+            return middle;
+        }
+
+        ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f, 28f];
+        foreach (float radius in radii)
+        {
+            for (int i = 0; i < 8; i++)
             {
-                for (int i = 0; i < 8; i++)
-                {
-                    float angle = i * MathF.PI / 4f;
-                    float x = middle.X + (radius * MathF.Cos(angle));
-                    float y = middle.Y + (radius * MathF.Sin(angle));
-                    float candZ = middle.Z;
-                    float candTerrain = map.Terrain.GetHeight(x, y, candZ);
-                    float candGround = candTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candTerrain)
-                        ? map.Collision.GetHeight(x, y, candTerrain + 2f, maxSearchDistance: 6f)
-                        : map.Collision.GetHeight(x, y, candZ + 6f, maxSearchDistance: 12f);
-                    if (candGround > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candGround))
-                        candZ = candGround;
-                    if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
-                        candZ = candMeshZ;
-                    var candidate = new Vector3(x, y, candZ);
-                    if (IsWalkableWarsongMidfield(map, candidate, ownStand))
-                        return candidate;
-                }
+                float angle = i * MathF.PI / 4f;
+                Vector3 candidate = SnapToGround(map, middle.X + (radius * MathF.Cos(angle)), middle.Y + (radius * MathF.Sin(angle)), middle.Z);
+                MidfieldCheck check = CheckWarsongMidfield(map, candidate, ownStand);
+                if (check == MidfieldCheck.NotWalkable) continue;
+                settled = check == MidfieldCheck.Walkable && !PlayerbotNavigation.PendingSince(pendingMark);
+                return candidate;
             }
         }
 
-        return middle;
+        // No point around the middle passed the reach probe, and the middle itself is off the mesh: it is never returned. Walk back along the
+        // line to the bot's own stand for the nearest ground the mesh accepts, and fall back to the stand (a walkable place by construction).
+        ReadOnlySpan<float> fractions = [0.05f, 0.1f, 0.15f, 0.2f, 0.3f, 0.4f, 0.5f, 0.65f, 0.8f];
+        foreach (float fraction in fractions)
+        {
+            Vector3 candidate = SnapToGround(map, middle.X + ((ownStand.X - middle.X) * fraction), middle.Y + ((ownStand.Y - middle.Y) * fraction),
+                middle.Z + ((ownStand.Z - middle.Z) * fraction));
+            if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
+            settled = !PlayerbotNavigation.PendingSince(pendingMark);
+            return candidate;
+        }
+
+        settled = !PlayerbotNavigation.PendingSince(pendingMark);
+        return ownStand;
     }
 
-    private static bool IsWalkableWarsongMidfield(Map map, Vector3 candidate, Vector3 ownStand)
+    /// <summary>The ground at (<paramref name="x"/>, <paramref name="y"/>) near <paramref name="z"/>: terrain, then the collision floor, then the mesh floor.</summary>
+    private static Vector3 SnapToGround(Map map, float x, float y, float z)
+    {
+        float candZ = z;
+        float candTerrain = map.Terrain.GetHeight(x, y, candZ);
+        float candGround = candTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candTerrain)
+            ? map.Collision.GetHeight(x, y, candTerrain + 2f, maxSearchDistance: 6f)
+            : map.Collision.GetHeight(x, y, candZ + 6f, maxSearchDistance: 12f);
+        if (candGround > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candGround))
+            candZ = candGround;
+        if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
+            candZ = candMeshZ;
+        return new Vector3(x, y, candZ);
+    }
+
+    /// <summary>What the mesh says of a midfield candidate (<see cref="CheckWarsongMidfield"/>).</summary>
+    private enum MidfieldCheck : byte
+    {
+        NotWalkable,
+        Walkable,
+
+        /// <summary>A tile of the probe is still being read: no verdict yet.</summary>
+        Pending,
+    }
+
+    private static MidfieldCheck CheckWarsongMidfield(Map map, Vector3 candidate, Vector3 ownStand)
     {
         if (!PlayerbotNavigation.OnWalkableMesh(map, candidate))
-            return false;
+            return MidfieldCheck.NotWalkable;
         Vector2 toOwn = new(ownStand.X - candidate.X, ownStand.Y - candidate.Y);
         Vector2 dir = toOwn.LengthSquared() > 1f ? Vector2.Normalize(toOwn) : new Vector2(1f, 0f);
         float probeX = candidate.X + (dir.X * 18f);
@@ -951,13 +1019,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             LoadTiles = true,
         });
         if ((reach.Type & PathType.TilesPending) != 0)
-            return true;
+            return MidfieldCheck.Pending;
         if (!reach.HasPath || (reach.Type & PathType.NoPath) != 0)
-            return false;
+            return MidfieldCheck.NotWalkable;
         if ((reach.Type & PathType.Incomplete) != 0
             && Vector2.Distance(new Vector2(reach.End.X, reach.End.Y), new Vector2(candidate.X, candidate.Y)) < 10f)
-            return false;
-        return true;
+            return MidfieldCheck.NotWalkable;
+        return MidfieldCheck.Walkable;
     }
 
     /// <summary>Where the two Warsong Gulch flag stands are spawned (cached per object content).</summary>
@@ -989,8 +1057,14 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>
     /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
-    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
-    /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
+    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>)
+    /// and can walk to. The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
+    /// <para>
+    /// Nearest is by straight line, but a master is only taken when the walk is possible: not in a walking region the bot's own does not join
+    /// (<see cref="PlayerbotNavigation.IsInOtherWalkingRegion"/>: Teldrassil's island against the mainland, which <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>
+    /// lets through when the bot's region is much the smaller or the master stands indoors) and, within one route's reach
+    /// (<see cref="PlayerbotOptions.MaxRouteYards"/>), with an exact route (<see cref="PlayerbotNavigation.PlanExact"/>; a plan still waiting for a tile is no refusal).
+    /// </para>
     /// </summary>
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
@@ -1001,6 +1075,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         // A spawn a game event holds back is not in the world while its event is off (the Warsong Emissary, 15105, of game event 19 "Call
         // to Arms: Warsong Gulch"; vmangos GameEventMgr GameEventSpawn/GameEventUnspawn): walking to it finds nobody.
         ArcaneCore.Game.WorldState.Events.ISpawnGate? gate = map.FindUpdater<CreatureMapSystem>()?.SpawnGate;
+        var candidates = new List<(Battlemaster Master, float Distance)>();
         foreach (Battlemaster master in MastersOn(player.MapId))
         {
             if (master.Type != type) continue;
@@ -1014,11 +1089,31 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
                 || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
                 continue;
-            nearest = distance;
+            candidates.Add((master, distance));
+        }
+
+        candidates.Sort(static (a, b) => a.Distance.CompareTo(b.Distance));
+        foreach ((Battlemaster master, float distance) in candidates)
+        {
+            if (PlayerbotNavigation.IsInOtherWalkingRegion(player, master.At) || !CanPlanTo(player, master.At, distance)) continue;
             best = master;
+            break;
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Whether an exact route to <paramref name="at"/> (<paramref name="distance"/> yards away in a straight line) is not refused. Beyond one
+    /// route's reach the walk goes by legs (<see cref="PlayerbotNavigation.PlanToward"/>) and no exact plan decides; a plan waiting for a tile
+    /// is not a refusal. A trial plan: its refusal is no evidence that the bot is boxed in.
+    /// </summary>
+    private bool CanPlanTo(Player player, Vector3 at, float distance)
+    {
+        if (distance > _options.MaxRouteYards) return true;
+        var wait = default(TileWait);
+        PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, at, _options, ref wait, Now, out _, trial: true);
+        return outcome != PlanOutcome.Refused;
     }
 
     private List<Battlemaster> MastersOn(uint mapId)
