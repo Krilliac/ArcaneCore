@@ -443,7 +443,7 @@ public sealed class NavCommandTests : IDisposable
     {
         Add(32, 32);
         // 13 yd above the mesh (at height 10): the near box's 5-yd and the wide box's 10-yd half heights both miss it even after
-        // Detour rounds the query box's low corner down to an even BV quantum (D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\
+        // Detour rounds the query box's low corner down to an even BV quantum (vmangos@0e3ff01 dep/recastnavigation/Detour/
         // Source\DetourNavMesh.cpp:829-831; the synthetic tile quantizes at 1 per yard), which a point only 11 yd above would still
         // reach with the wide box; only the far column (200 yd) holds it.
         Vector3 above = Cell(32, 32, 4, 1, 1, height: 23f);

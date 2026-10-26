@@ -15,7 +15,7 @@ WoWDBDefs repository code has a separate BSD-3-Clause license; no code was copie
 
 ## Realm PIN and client integrity algorithms
 
-- Repository: `gtker/wow_srp_csharp` (https://github.com/gtker/wow_srp_csharp), local snapshot at `D:/ArcaneCore-lanes/_refs/csharp-cores/wow_srp_csharp`
+- Repository: `gtker/wow_srp_csharp` (https://github.com/gtker/wow_srp_csharp), read from a local read-only snapshot
 - Commit: `85ad800a0957fcf64621d640430f3b19af36490c`
 - License: MIT OR Apache-2.0 (upstream dual license, `WowSrp/WowSrp.csproj` `PackageLicenseExpression` and `README.md`); ArcaneCore uses it under the MIT terms below
 - Source files studied: `WowSrp/src/Pin.cs`, `WowSrp/src/Internal/PinImplementation.cs`, `WowSrp/src/Integrity.cs`; regression vectors from `WowSrp.Test/tests/pin/regression.txt`, `WowSrp.Test/tests/integrity/generic_regression.txt` and `WowSrp.Test/tests/integrity/reconnect_regression.txt` (first three rows of each), decoded as in `WowSrp.Test/src/TestUtils.cs`
@@ -73,7 +73,7 @@ The upstream source repository contains no standalone license file at this commi
 
 ## Sonder-Inference sampling module (ported)
 
-- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), local read-only snapshot at `D:/ArcaneCore-lanes/_refs/sonder-inference`
+- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), read from a local read-only snapshot
 - Commit: `1c4c152acc0be1f4f811c60e8c20b17cfb794b0b`
 - License: Apache-2.0 (`LICENSE` in the upstream repository; upstream `NOTICE`: "Sonder-Inference, Copyright 2026 Nate Witkowski")
 - Source files ported: `src/sampling/include/sonder/sampling/{types,rng,config,constraint,sampler,samplers,chain,stop}.hpp`, `src/sampling/src/{types,rng,config,constraint,samplers,chain,stop}.cpp`, and the unit tests `src/sampling/tests/test_{rng,stop,config,samplers,chain,constraint}.cpp` (rewritten for xUnit)
@@ -83,7 +83,7 @@ The upstream source repository contains no standalone license file at this commi
 
 ## Sonder-Inference scheduler, KV cache and session lifecycle (bot chat inference)
 
-- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), read-only clone at `D:/ArcaneCore-lanes/_refs/sonder-inference`
+- Repository: Krilliac/Sonder-Inference (https://github.com/Krilliac/Sonder-Inference), read from a local read-only clone
 - Commit: `1c4c152acc0be1f4f811c60e8c20b17cfb794b0b`
 - License: Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0). Upstream NOTICE: "Sonder-Inference, Copyright 2026 Nate Witkowski. This product is licensed under the Apache License, Version 2.0." No upstream third-party component (llama.cpp, cpp-httplib, doctest) was ported.
 - Source files ported to C#: `src/scheduler/include/sonder/inference/scheduler/*.hpp` and `src/scheduler/src/*.cpp` (types, clock, kv_capacity, config, stats, scheduler, simulator); `src/cache/include/sonder/inference/cache/*.hpp`, `src/cache/types.cpp`, `src/cache/eviction_policy.cpp`, `src/cache/kv_cache_manager.cpp`; `src/engine/kv_capacity_adapter.hpp`; lifecycle ideas from `src/sessions/session.cpp` and `src/engine/request_runtime.hpp`.

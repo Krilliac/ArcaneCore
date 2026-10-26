@@ -219,7 +219,7 @@ public sealed partial class GroupManager(SocialContext context)
         Group? inviterGroup = GroupForPartyRules(inviter.Guid);
         Group? targetGroup = GroupForPartyRules(target.Guid);
 
-        // D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:120-143:
+        // vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:120-143:
         // AddLeaderInvite succeeds, then AddInvite(self)
         // fails because the inviter already has an invite; the temporary group is discarded.
         if (target.Guid == inviter.Guid && inviterGroup is null && GetInvite(inviter.Guid) is null)
@@ -802,7 +802,7 @@ public sealed partial class GroupManager(SocialContext context)
     }
 
     /// <summary>
-    /// D:\refs\vmangos\src\game\World.cpp:2063-2072 and Group/Group.cpp:1448-1471:
+    /// vmangos@0e3ff01 src/game/World.cpp:2063-2072 and Group/Group.cpp:1448-1471:
     /// after the configured delay, choose an online assistant first, then another online member.
     /// If nobody is online, keep the offline leader.
     /// </summary>

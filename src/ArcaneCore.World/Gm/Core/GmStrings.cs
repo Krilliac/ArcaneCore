@@ -4,9 +4,9 @@ namespace ArcaneCore.World.Gm.Core;
 
 /// <summary>
 /// The reply texts of GM commands, keyed by the vmangos <c>LANG_*</c> id
-/// (D:\refs\vmangos\src\game\Language.h). vmangos' base <c>mangos_string</c> rows are not in the
+/// (vmangos@0e3ff01 src/game/Language.h). vmangos' base <c>mangos_string</c> rows are not in the
 /// reference tree, so each English text is the one mangos-classic ships at the same id
-/// (D:\refs\mangos-classic\sql\base\mangos.sql:3423-3880); ids a vmangos migration overrides
+/// (mangos-classic sql/base/mangos.sql:3423-3880); ids a vmangos migration overrides
 /// are noted on the member. Format arguments use the C printf order.
 /// </summary>
 public static class GmStrings

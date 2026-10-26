@@ -4,7 +4,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Gm.Args;
 
 /// <summary>
-/// Vectors for the vmangos ChatHandler Extract* grammar (D:\refs\vmangos\src\game\Chat\Chat.cpp:2690-3290)
+/// Vectors for the vmangos ChatHandler Extract* grammar (vmangos@0e3ff01 src/game/Chat/Chat.cpp:2690-3290)
 /// and the Util.cpp time helpers (:197-282). Expected values are derived by reading those functions.
 /// </summary>
 public sealed class CommandArgsTests

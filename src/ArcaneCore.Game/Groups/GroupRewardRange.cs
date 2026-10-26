@@ -28,7 +28,7 @@ public sealed record GroupRewardOptions
 
 /// <summary>
 /// "Is this player close enough to the victim to share its rewards", a port of
-/// WorldObject::IsWithinLootXPDist (D:\refs\vmangos\src\game\Objects\Object.cpp:1478-1499, distance
+/// WorldObject::IsWithinLootXPDist (vmangos@0e3ff01 src/game/Objects/Object.cpp:1478-1499, distance
 /// test 1738-1752) and Player::IsAtGroupRewardDistance (Player.cpp:20034-20050). The test is 2D,
 /// strict (<c>&lt;</c>), and widened by both bounding radii.
 /// </summary>

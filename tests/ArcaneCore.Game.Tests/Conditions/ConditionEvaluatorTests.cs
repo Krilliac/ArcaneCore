@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Tests.Conditions;
 
 /// <summary>
 /// ConditionEntry::Meets / Evaluate truth tables with the cmangos numbering
-/// (D:\refs\mangos-classic\src\game\Globals\Conditions.cpp:109-514, Conditions.h:30-88).
+/// (mangos-classic src/game/Globals/Conditions.cpp:109-514, Conditions.h:30-88).
 /// </summary>
 public sealed class ConditionEvaluatorTests
 {

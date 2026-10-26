@@ -121,7 +121,7 @@ internal static class ChatSamples
     };
 
     public static BotChatAsk Ask(string text, BotChatPersona? persona = null, ulong sender = 0x42, ChatType channel = ChatType.Whisper,
-        bool fromMaster = false, bool inviteAllowed = false, Guid? bot = null, string name = "Nathan", int account = 0)
+        bool fromMaster = false, bool inviteAllowed = false, Guid? bot = null, string name = "Testplayer", int account = 0)
         => new(bot ?? BotId, new ObjectGuid(0x7), persona ?? Persona(), new ObjectGuid(sender), name, channel, text, fromMaster, inviteAllowed, account);
 
     public static readonly Guid BotId = Guid.Parse("00000000-0000-0000-0000-0000000000b0");

@@ -16,7 +16,7 @@ using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
-/// CMSG_AUCTION_SELL_ITEM against vmangos HandleAuctionSellItem (D:\refs\vmangos\src\game\Handlers\AuctionHouseHandler.cpp:230-405):
+/// CMSG_AUCTION_SELL_ITEM against vmangos HandleAuctionSellItem (vmangos@0e3ff01 src/game/Handlers/AuctionHouseHandler.cpp:230-405):
 /// the 2,000,000,000 client limit (:236), the per-account limit (:274-280), Rate.Auction.Time (:362) and the
 /// INVENTORY / ITEM_NOT_FOUND answers (:314-346). Only SQLite is exercised; no store changed.
 /// </summary>

@@ -5,9 +5,9 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Economy;
 
 /// <summary>
-/// Mail timing and limits against vmangos: D:\refs\vmangos\src\game\Handlers\MailHandler.cpp:155-166 (limits),
-/// :404-406 (delivery delay), D:\refs\vmangos\src\game\Mail\Mail.cpp:312-326 (expiry from the delivery time),
-/// D:\refs\vmangos\src\game\World.cpp:691 (MailDeliveryDelay = 1 hour).
+/// Mail timing and limits against vmangos: vmangos@0e3ff01 src/game/Handlers/MailHandler.cpp:155-166 (limits),
+/// :404-406 (delivery delay), vmangos@0e3ff01 src/game/Mail/Mail.cpp:312-326 (expiry from the delivery time),
+/// vmangos@0e3ff01 src/game/World.cpp:691 (MailDeliveryDelay = 1 hour).
 /// </summary>
 public sealed class MailTimingRulesTests
 {

@@ -26,7 +26,7 @@ namespace ArcaneCore.Atlas.Server;
 /// </summary>
 public sealed class VMapLayerSource : ServerLayerSource
 {
-    /// <summary>Edge of one WMO liquid square in yards (<c>LIQUID_TILE_SIZE</c>; ref: D:\refs\vmangos\src\game\vmap\VMapDefinitions.h:22).</summary>
+    /// <summary>Edge of one WMO liquid square in yards (<c>LIQUID_TILE_SIZE</c>; ref: vmangos@0e3ff01 src/game/vmap/VMapDefinitions.h:22).</summary>
     public const float LiquidTileSize = 533.333f / 128.0f;
 
     private const int MaxListedNames = 16;
@@ -251,7 +251,7 @@ public sealed class VMapLayerSource : ServerLayerSource
                     o["group"] = groupIndex;
                     o["groupWmoId"] = group.GroupWmoId;
                     o["mogpFlags"] = Hex(group.MogpFlags);
-                    // ref: src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:62 MogpExterior 0x8000; D:/refs/vmangos/src/game/Maps/GridMap.cpp:875-878 IsOutdoorWMO
+                    // ref: src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:62 MogpExterior 0x8000; vmangos@0e3ff01 src/game/Maps/GridMap.cpp:875-878 IsOutdoorWMO
                     o["outdoors"] = (group.MogpFlags & ModelAreaInfo.MogpExterior) != 0;
                     o["colorKey"] = GroupColorKey(group);
                     o["triangles"] = group.Triangles.Count;
@@ -470,7 +470,7 @@ public sealed class VMapLayerSource : ServerLayerSource
         }
 
         // ref: src/ArcaneCore.Game/Maps/Collision/VMaps/VMapFormat.cs:28-34 internal = (MapMid - x, MapMid - y, z), its own inverse
-        // ref: D:/refs/vmangos/src/game/vmap/VMapManager2.cpp:51-56 convertPositionToInternalRep
+        // ref: vmangos@0e3ff01 src/game/vmap/VMapManager2.cpp:51-56 convertPositionToInternalRep
         Vector3 centre = (low + high) * 0.5f;
         if (WorldGrid.TileOf(tile.MapId, centre.X, centre.Y) is { } owner)
         {

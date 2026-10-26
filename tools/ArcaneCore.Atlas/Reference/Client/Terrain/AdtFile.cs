@@ -25,8 +25,8 @@ public enum AdtLiquidKind
 /// </summary>
 public sealed class AdtLiquidLayer
 {
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:60-66 (one layer per set MCNK liquid flag, in this bit order)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:487-497 (river, ocean, magma, slime order; 804 bytes per layer)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:60-66 (one layer per set MCNK liquid flag, in this bit order)
+    // ref: Worldforge src/terrain.cpp:487-497 (river, ocean, magma, slime order; 804 bytes per layer)
 
     /// <summary>MCNK flag selecting a river layer.</summary>
     public const uint McnkRiver = 0x04;
@@ -43,8 +43,8 @@ public sealed class AdtLiquidLayer
     /// <summary>All four liquid flags.</summary>
     public const uint McnkMask = McnkRiver | McnkOcean | McnkMagma | McnkSlime;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:69 (0x0F: sub-cell not shown)
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:70 (0x80: dark water)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:69 (0x0F: sub-cell not shown)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:70 (0x80: dark water)
 
     /// <summary>Square flag byte of a square the client does not draw.</summary>
     public const byte HiddenSquare = 0x0F;
@@ -52,8 +52,8 @@ public sealed class AdtLiquidLayer
     /// <summary>Square flag bit marking dark (deep) water.</summary>
     public const byte DarkWaterSquare = 0x80;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:72-74 and :99 (804 bytes per layer, static_assert)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:478-486 (8 + 81*8 + 64 + 4 + 2*40 = 804)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:72-74 and :99 (804 bytes per layer, static_assert)
+    // ref: Worldforge src/terrain.cpp:478-486 (8 + 81*8 + 64 + 4 + 2*40 = 804)
     internal const int LayerBytes = 804;
 
     private readonly float[] _heights;
@@ -138,8 +138,8 @@ public sealed class AdtLiquidLayer
 
     internal static AdtLiquidLayer Read(ReadOnlySpan<byte> data, int start, AdtLiquidKind kind)
     {
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:79-97 (f32 height1, f32 height2, 9x9 {u32, f32 height}, u8 flags[8][8], u8 data[84])
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:506-519 (the height is always the last four bytes of the 8-byte vertex)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:79-97 (f32 height1, f32 height2, 9x9 {u32, f32 height}, u8 flags[8][8], u8 data[84])
+        // ref: Worldforge src/terrain.cpp:506-519 (the height is always the last four bytes of the 8-byte vertex)
         float min = ClientChunks.F32(data, start);
         float max = ClientChunks.F32(data, start + 4);
         var heights = new float[81];
@@ -168,12 +168,12 @@ public sealed class AdtLiquidLayer
 /// </summary>
 public sealed class AdtChunk
 {
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:46-58 (MCVT: 9x9 + 8x8 = 145 floats)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:46-58 (MCVT: 9x9 + 8x8 = 145 floats)
     public const int HeightCount = 145;
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:440 and :450 (outer sample [y][x] at y*17+x, inner sample [y][x] at y*17+9+x)
-    // ref: D:\WoW-RE-Research\formats\terrain-adt.md:269-276 (17 alternating rows of 9 and 8)
-    // ref: D:\New folder\Worldforge\src\terrain.cpp:827-828 (the same split: 81 outer samples, then 64 inner)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:440 and :450 (outer sample [y][x] at y*17+x, inner sample [y][x] at y*17+9+x)
+    // ref: WoW-RE-Research formats/terrain-adt.md:269-276 (17 alternating rows of 9 and 8)
+    // ref: Worldforge src/terrain.cpp:827-828 (the same split: 81 outer samples, then 64 inner)
     private const int Stride = 17;
 
     private readonly float[] _mcvt;
@@ -252,7 +252,7 @@ public sealed class AdtChunk
             throw new ArgumentOutOfRangeException(nameof(y), $"outer samples are 0..8, got ({y}, {x}).");
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:417 and :440 (V9 = base height + MCVT value, as float addition)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:417 and :440 (V9 = base height + MCVT value, as float addition)
         return BaseHeight + _mcvt[(y * Stride) + x];
     }
 
@@ -264,7 +264,7 @@ public sealed class AdtChunk
             throw new ArgumentOutOfRangeException(nameof(y), $"inner samples are 0..7, got ({y}, {x}).");
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:426 and :450 (V8 = base height + MCVT value)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:426 and :450 (V8 = base height + MCVT value)
         return BaseHeight + _mcvt[(y * Stride) + 9 + x];
     }
 
@@ -276,8 +276,8 @@ public sealed class AdtChunk
             throw new ArgumentOutOfRangeException(nameof(y), $"squares are 0..7, got ({y}, {x}).");
         }
 
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:60-63 (bit (row / 2) * 4 + (col / 2))
-        // ref: D:\refs\vmangos\src\game\Maps\GridMap.cpp:41-42 and :274-283 (holetab_h x holetab_v select that same bit)
+        // ref: Worldforge src/terrain.cpp:60-63 (bit (row / 2) * 4 + (col / 2))
+        // ref: vmangos@0e3ff01 src/game/Maps/GridMap.cpp:41-42 and :274-283 (holetab_h x holetab_v select that same bit)
         return (Holes & (1 << (((y / 2) * 4) + (x / 2)))) != 0;
     }
 
@@ -310,20 +310,20 @@ public sealed class AdtChunk
 public sealed class AdtFile
 {
     /// <summary>MVER value of every 1.12.1 ADT.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\loadlib.h:33 (FILE_FORMAT_VERSION 18); loadlib.cpp:52-55
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/loadlib.h:33 (FILE_FORMAT_VERSION 18); loadlib.cpp:52-55
     public const uint FormatVersion = 18;
 
     /// <summary>MCNK chunks per tile edge.</summary>
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:39 (ADT_CELLS_PER_GRID 16)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:39 (ADT_CELLS_PER_GRID 16)
     public const int ChunksPerSide = 16;
 
     /// <summary>MCNK chunks per tile.</summary>
     public const int ChunkTotal = ChunksPerSide * ChunksPerSide;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.cpp:60 (MHDR payload is sizeof(adt_MHDR) - 8 = 64 bytes)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.cpp:60 (MHDR payload is sizeof(adt_MHDR) - 8 = 64 bytes)
     private const int HeaderPayloadBytes = 64;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:317-347 (MHDR: flags, then offsets relative to the payload start)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:317-347 (MHDR: flags, then offsets relative to the payload start)
     private const int HeaderMcin = 1;
     private const int HeaderMtex = 2;
     private const int HeaderMmdx = 3;
@@ -334,13 +334,13 @@ public sealed class AdtFile
     private const int HeaderModf = 8;
     private const int HeaderMh2o = 10;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.cpp:121-130 (MCVT payload is 145 floats = 580 bytes)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.cpp:121-130 (MCVT payload is 145 floats = 580 bytes)
     private const int McvtBytes = AdtChunk.HeightCount * 4;
 
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:121-162 (MCNK header is 128 bytes; offsets below are inside it)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:121-162 (MCNK header is 128 bytes; offsets below are inside it)
     private const int McnkHeaderBytes = 128;
 
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:294-300 (a layer per set flag, in river, ocean, magma, slime order)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:294-300 (a layer per set flag, in river, ocean, magma, slime order)
     private static readonly AdtLiquidKind[] LayerOrder = [AdtLiquidKind.River, AdtLiquidKind.Ocean, AdtLiquidKind.Magma, AdtLiquidKind.Slime];
 
     private AdtFile(
@@ -428,7 +428,7 @@ public sealed class AdtFile
             throw new InvalidDataException($"{context}: MVER is {version}, 1.12.1 ADTs are {FormatVersion}.");
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.cpp:48 (MHDR is the chunk right after MVER)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.cpp:48 (MHDR is the chunk right after MVER)
         ClientChunks.Chunk mhdr = ClientChunks.Expect(data, mver.End, "MHDR", context);
         if (mhdr.Size != HeaderPayloadBytes)
         {
@@ -477,7 +477,7 @@ public sealed class AdtFile
         var chunks = new AdtChunk[ChunkTotal];
         for (int index = 0; index < ChunkTotal; index++)
         {
-            // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:205-211 (MCIN entry: u32 offset, u32 size, u32 flags, u32 async id)
+            // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:205-211 (MCIN entry: u32 offset, u32 size, u32 flags, u32 async id)
             int entry = mcin.DataStart + (index * 16);
             uint offset = ClientChunks.U32(data, entry);
             uint size = ClientChunks.U32(data, entry + 4);
@@ -500,7 +500,7 @@ public sealed class AdtFile
 
     private static ClientChunks.Chunk? Locate(ReadOnlySpan<byte> data, ClientChunks.Chunk mhdr, uint[] header, int field, string id, string context)
     {
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:344-345 (offsets count from the MHDR payload; zero means absent)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:344-345 (offsets count from the MHDR payload; zero means absent)
         uint relative = header[field];
         if (relative == 0)
         {
@@ -564,8 +564,8 @@ public sealed class AdtFile
             throw new InvalidDataException($"{context}: holds {mcnk.Size} bytes, the header alone is {McnkHeaderBytes}.");
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:130-162 (field order; offsets below are payload-relative)
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:23-45 (the same header offsets, checked against real tiles)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:130-162 (field order; offsets below are payload-relative)
+        // ref: Worldforge src/terrain.cpp:23-45 (the same header offsets, checked against real tiles)
         int h = mcnk.DataStart;
         uint flags = ClientChunks.U32(data, h);
         uint indexX = ClientChunks.U32(data, h + 0x04);
@@ -581,8 +581,8 @@ public sealed class AdtFile
         float baseHeight = ClientChunks.F32(data, h + 0x70);
 
         // The MCIN slot is the position the extractor uses; the MCNK's own IndexX (column) and IndexY (row) must agree.
-        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:391 (cells->getMCNK(i, j): i is the row, j the column)
-        // ref: D:\WoW-RE-Research\formats\terrain-adt.md:203-208 (IndexX = column, IndexY = row)
+        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:391 (cells->getMCNK(i, j): i is the row, j the column)
+        // ref: WoW-RE-Research formats/terrain-adt.md:203-208 (IndexX = column, IndexY = row)
         if (indexX != (uint)(index % ChunksPerSide) || indexY != (uint)(index / ChunksPerSide))
         {
             throw new InvalidDataException($"{context}: header says column {indexX}, row {indexY} but its MCIN slot is column {index % ChunksPerSide}, row {index / ChunksPerSide}.");
@@ -593,7 +593,7 @@ public sealed class AdtFile
             throw new InvalidDataException($"{context}: the header position ({baseX}, {baseY}, {baseHeight}) is not finite.");
         }
 
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:165-170 (MCVT offset counts from the MCNK chunk start; zero = none)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:165-170 (MCVT offset counts from the MCNK chunk start; zero = none)
         var mcvt = new float[AdtChunk.HeightCount];
         bool hasHeights = offsetMcvt != 0;
         if (hasHeights)
@@ -627,9 +627,9 @@ public sealed class AdtFile
 
     private static AdtLiquidLayer[] ReadLiquid(ReadOnlySpan<byte> data, ClientChunks.Chunk mcnk, uint flags, uint offsetMclq, uint sizeMclq, string context)
     {
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:171-190 (layers = (sizeMCLQ - 8) / 804; the size counts the 8-byte chunk header)
-        // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.cpp:110-116 (an MCLQ chunk must be there when the offset is set)
-        // ref: D:\New folder\Worldforge\src\terrain.cpp:478-486 (the MCLQ chunk's own size field is unreliable; the MCNK header drives the layout)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:171-190 (layers = (sizeMCLQ - 8) / 804; the size counts the 8-byte chunk header)
+        // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.cpp:110-116 (an MCLQ chunk must be there when the offset is set)
+        // ref: Worldforge src/terrain.cpp:478-486 (the MCLQ chunk's own size field is unreliable; the MCNK header drives the layout)
         int expected = BitOperations.PopCount(flags & AdtLiquidLayer.McnkMask);
         int stored = 0;
         long layersStart = 0;

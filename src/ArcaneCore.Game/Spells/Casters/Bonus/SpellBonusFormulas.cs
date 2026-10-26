@@ -5,8 +5,8 @@ namespace ArcaneCore.Game.Spells.Casters.Bonus;
 /// caster side (SpellDamageBonusDone / SpellHealingBonusDone) and the target side
 /// (SpellDamageBonusTaken / SpellHealingBonusTaken). Callers gather the aura inputs; this class
 /// only does the arithmetic so it can be tested against oracle values.
-/// Sources: D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:1457-1526, 1560-1700, 1737-1803 and
-/// D:\refs\vmangos\src\game\Objects\Unit.cpp:5175-5195, 5328-5385.
+/// Sources: vmangos@0e3ff01 src/game/Objects/SpellCaster.cpp:1457-1526, 1560-1700, 1737-1803 and
+/// vmangos@0e3ff01 src/game/Objects/Unit.cpp:5175-5195, 5328-5385.
 /// </summary>
 public static class SpellBonusFormulas
 {

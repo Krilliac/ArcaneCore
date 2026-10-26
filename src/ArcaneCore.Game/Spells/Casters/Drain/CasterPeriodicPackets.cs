@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Spells.Casters.Drain;
 
 /// <summary>
 /// Packet of the drain auras that the shared <see cref="SpellPackets"/> builders cannot express: the PERIODIC_MANA_LEECH entry of
-/// SMSG_PERIODICAURALOG. Layout: D:\refs\wow_messages\wow_message_parser\wowm\world\spell\smsg_periodicauralog.wowm
+/// SMSG_PERIODICAURALOG. Layout: wow_messages wow_message_parser/wowm/world/spell/smsg_periodicauralog.wowm
 /// (AuraLog, aura_type == PERIODIC_MANA_LEECH: u32 misc_value, u32 damage, f32 gain_multiplier).
 /// </summary>
 public static class CasterPeriodicPackets

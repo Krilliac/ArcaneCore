@@ -1,6 +1,6 @@
 # ArcaneCore remote-admin (RA) client for PowerShell 5+ (docs/ops/remote-admin.md, docs/ops/botctl.md).
 #   . tools/botctl/RaClient.ps1
-#   $ra = Connect-Ra -TokenFile D:\ArcaneCore-live\bin\ra-token.txt     # or -User ADMIN -Password secret
+#   $ra = Connect-Ra -TokenFile ra-token.txt     # or -User ADMIN -Password secret
 #   $r = Invoke-Ra $ra '.botctl state Alice --json'; $r.Ok; $r.Reason; $r.Json.bots[0].data.hp
 #   Disconnect-Ra $ra
 # Invoke-Ra returns [pscustomobject]@{ Command; Ok; Reason; Lines; Json; Events }.

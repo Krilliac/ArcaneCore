@@ -1,7 +1,7 @@
 # Security hardening (lane `security-hardening`)
 
 Scope of this document: what the lane delivered, how each rule maps to the real references
-(`D:\refs\vmangos` primary), which behaviours are deliberate hardening that retail does not
+(`<refs-root>\vmangos` primary), which behaviours are deliberate hardening that retail does not
 have, and what is still open. Reference code was read only; nothing was copied.
 
 ## Delivered
