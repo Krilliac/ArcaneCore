@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Protocol;
@@ -122,6 +123,12 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, remembered.SpellId, TotemSlots.None, 0);
             ApplyOwner(creature, owner, remembered.SpellId);
             InitPet(creature, SummonKind.Pet, owner, remembered.PetNumber);
+            if (IsPermanentPetFor(owner, creature))
+            {
+                // Pet::LoadPetFromDB: m_charmInfo->SetPetNumber(petNumber, IsPermanentPetFor(owner)), Pet.cpp:262
+                creature.SetUInt32(UpdateFields.UnitFieldPetnumber, remembered.PetNumber);
+            }
+
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, remembered.Experience);
             creature.NpcFlags = 0;
             PetInitializer.InitStatsForLevel(creature, owner, owner.Level, Content);
@@ -172,6 +179,13 @@ public sealed partial class SummonService
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         return pet;
     }
+
+    /// <summary>
+    /// vmangos Pet::IsPermanentPetFor (Pet.cpp:2192-2202) for a SUMMON_PET: a warlock's demon is permanent (a hunter pet always is, and writes its
+    /// number on its own path); every other summoned pet is not. Pure; world thread.
+    /// </summary>
+    private static bool IsPermanentPetFor(Player owner, Creature pet)
+        => owner.Class == Class.Warlock && pet.Template.CreatureType == CharmService.CreatureTypeDemon;
 
     private sealed record TemporarilyUnsummonedPet(
         uint PetNumber,

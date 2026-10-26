@@ -198,6 +198,42 @@ public sealed class PetFixesTests
         Assert.Equal((byte)2, pet.GetByte(UpdateFields.UnitFieldBytes0, 2));
     }
 
+    private const uint FelhunterEntry = 417;
+    private const uint SummonFelhunterSpell = 691;
+
+    [Fact]
+    public void AWarlockDemonRestoredAfterATemporaryUnsummon_CarriesItsPetNumberField()
+    {
+        using var kit = new PetTestKit(
+            [Spell(SummonFelhunterSpell, Effect(SpellEffectName.SummonPet, 0, (SpellImplicitTarget)32, misc: (int)FelhunterEntry)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 }],
+            extraTemplates:
+            [
+                CreatureTestKit.Template(FelhunterEntry, b =>
+                {
+                    b.Faction = 14;
+                    b.MinLevel = 5;
+                    b.MaxLevel = 5;
+                    b.MinLevelHealth = 100;
+                    b.MaxLevelHealth = 100;
+                }) with { CreatureType = global::ArcaneCore.Game.Pets.Control.CharmService.CreatureTypeDemon },
+            ]);
+        kit.Service.InstallDemons(kit.Spells.System);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+        owner.Level = 10;
+        kit.Cast(owner, SummonFelhunterSpell);
+        Creature demon = Assert.Single(kit.Creatures.Creatures, c => c.IsPet);
+        uint number = demon.Summon!.Charm!.PetNumber;
+        Assert.Equal(number, demon.GetUInt32(UpdateFields.UnitFieldPetnumber));
+
+        Assert.True(kit.Service.UnsummonPetTemporarily(owner));
+        Creature back = Assert.IsType<Creature>(kit.Service.ResummonTemporarilyUnsummonedPet(owner));
+
+        Assert.NotSame(demon, back);
+        Assert.NotEqual(0u, number);
+        Assert.Equal(number, back.GetUInt32(UpdateFields.UnitFieldPetnumber));
+    }
+
     // --- E: runaway and loyalty -------------------------------------------------------------------------
 
     private const uint BeastEntry = 5241;
