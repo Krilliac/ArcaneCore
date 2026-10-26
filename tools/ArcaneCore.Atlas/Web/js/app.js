@@ -89,6 +89,8 @@ export class App {
         this._pending = null;
         this._staleRemote = false;
         this._staleCamera = false;
+        /** Counts view events (and hellos) that took the shared camera, so a view.get result can tell whether one landed since its request. */
+        this._cameraTakes = 0;
         this._peerFollow = false;
         this._helloing = false;
         this._lastConnection = null;
@@ -168,6 +170,7 @@ export class App {
         this._lastConnection = m.connection ?? '';
         // A follow owned by another UI is neither adopted nor allowed to drag this camera, on the first hello as on a reconnect.
         this._peerFollow = typeof m.followOrigin === 'string' && m.followOrigin.startsWith('ui:') && m.followOrigin !== `ui:${m.connection}`;
+        this._cameraTakes++;
         this._helloing = true;
         try {
             if (m.view) {
@@ -267,6 +270,9 @@ export class App {
         // tell, so it counts as a camera change).
         const fromPeerUi = typeof data.origin === 'string' && data.origin.startsWith('ui:') && data.origin !== this.socket.origin;
         const takeCamera = !fromPeerUi && !(data.origin === 'live' && followedByPeer) && data.cameraChanged !== false;
+        if (takeCamera) {
+            this._cameraTakes++;
+        }
         if (this.interacting || this._pending) {
             this._staleRemote = true;
             this._staleCamera = this._staleCamera || takeCamera;
@@ -491,17 +497,24 @@ export class App {
      * own unless `takeCamera` (after it ran a camera command, or when the host refused its patch).
      */
     async refreshView({ takeCamera = false } = {}) {
+        const takesBefore = this._cameraTakes;
         const result = await this.runCommand('view.get', {}, { quiet: true, noRefresh: true });
         if (result.ok) {
             const body = result.data?.view ?? result.data;
             const version = Number(result.data?.version);
             if (Number.isFinite(version) && version < this.viewVersion) {
+                // A result older than the last view event applied must not undo a newer follow, ownership or shared state. This UI's own
+                // camera command is the exception for the camera alone: its camera never arrives as an event (own-origin events are
+                // ignored), so it is still taken unless an event moved this camera after the request was sent.
+                if (takeCamera && this._cameraTakes === takesBefore) {
+                    this.#replaceView({ ...this.view, camera: normalizeView(body, this.view).camera }, 'refresh');
+                }
                 return;
             }
             // The host says who owns the follow it holds (`followOrigin`, present when something is followed), so a command result that
             // beats the view event cannot leave a stale peer-ownership flag that would drop this UI's own follow. A host that sends
             // no owner for a held follow (an older one) leaves the flag as the last event set it. A result older than the last view
-            // event applied is skipped above, so it cannot undo a newer follow or view state that arrived in the meantime.
+            // event applied took only the camera above, so it cannot undo a newer follow or view state that arrived in the meantime.
             const held = typeof body?.follow === 'string' && body.follow.length > 0;
             const owner = result.data?.followOrigin;
             if (!held) {

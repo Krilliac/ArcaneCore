@@ -661,6 +661,45 @@ test('app: when an event clears the follow, a stale view.get cannot restore it',
     assert.equal(app._peerFollow, false);
 });
 
+test('app: a stale view.get still gives this UI the camera of its own camera command when no event took the camera since', async () => {
+    const other = 'ui:other0000000';
+    for (const event of [
+        { version: 7, origin: other, cameraChanged: true, followOrigin: other },
+        { version: 7, origin: 'live', cameraChanged: true, followOrigin: other },
+    ]) {
+        const { app, socket } = makeApp();
+        app.view = { ...app.view, camera: camera(111) };
+        app.viewVersion = 5;
+
+        // The goto's view.get snapshot (version 6) is on its way; a peer's event at 7 does not take this UI's camera and arrives first.
+        socket.respond = (name) => (name === 'view.get'
+            ? { command: name, ok: true, data: { ...hostView(app, { camera: camera(999), follow: '0xAA' }), version: 6, followOrigin: socket.origin }, elapsedMs: 0 }
+            : { command: name, ok: true, data: {}, elapsedMs: 0 });
+        const pending = app.refreshView({ takeCamera: true });
+        socket.emit('event', 'view', { ...event, view: hostView(app, { follow: null }) });
+        await pending;
+        assert.equal(app.viewVersion, 7, 'the stale result never lowers the version');
+        assert.equal(app.view.camera.target[0], 999, `the camera of the own command is taken (${event.origin})`);
+        assert.equal(app.view.follow, null, 'but never the follow of the stale snapshot');
+        assert.equal(app._peerFollow, true, 'nor the ownership');
+    }
+});
+
+test('app: a stale view.get does not give back the camera after an event that took the camera was applied since the request', async () => {
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, camera: camera(111) };
+    app.viewVersion = 5;
+
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: { ...hostView(app, { camera: camera(999) }), version: 6 }, elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+    const pending = app.refreshView({ takeCamera: true });
+    // The CLI moves the camera at version 7 while the request is in flight: the newer camera wins.
+    socket.emit('event', 'view', { version: 7, origin: 'cli', cameraChanged: true, view: hostView(app, { camera: camera(555) }) });
+    await pending;
+    assert.equal(app.view.camera.target[0], 555, 'the stale camera does not undo the newer one');
+});
+
 test('app: a first hello whose follow belongs to another UI starts at the shared camera but adopts no follow, and ignores its live frames', () => {
     const other = 'ui:other0000000';
     const { app, socket } = makeApp();

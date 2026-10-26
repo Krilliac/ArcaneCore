@@ -125,9 +125,9 @@ public sealed class HostCommandTests
         Assert.Equal(0, initial.Num("version"));
 
         // While something is followed, followOrigin reflects the owner.
-        await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = "0x1234" }, CommandOrigin.Cli);
+        await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = "1234ABCD" }, CommandOrigin.Cli);
         JsonNode following = await rig.DataAsync("view.get");
-        Assert.Equal("0x1234", following.Str("follow"));
+        Assert.Equal("1234ABCD", following.Str("follow"));
         Assert.Equal("cli", following.Str("followOrigin"));
         Assert.Equal(1, following.Num("version"));
 
