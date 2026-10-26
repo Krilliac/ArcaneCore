@@ -793,12 +793,13 @@ public sealed class DataDrivenEscortTests
     public void Plucky_TurnsHumanOnChicken_ForTwoMinutes()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry;
-        CreatureWaypoint first = RealPath(entry)[0];
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
+        CreatureWaypoint[] path = [new(1, 0, 0, 0, 0, 0)];
+        CreatureWaypoint first = path[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
-            _ = AddPlayer(world, 1, first.X, first.Y);
             (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
             Creature plucky = Assert.Single(system.Creatures);
             world.RunTick(100);
@@ -818,12 +819,13 @@ public sealed class DataDrivenEscortTests
     public void MagramiSpectre_TurnsHostileWhenItsWalkEnds()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.MagramiSpectreAI.Entry;
-        CreatureWaypoint first = RealPath(entry)[0];
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []));
+        CreatureWaypoint[] path = [new(1, 0, 0, 0, 0, 0)];
+        CreatureWaypoint first = path[0];
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []),
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
-            _ = AddPlayer(world, 1, first.X, first.Y);
             AddPlayer(world, 1, 30, 0);
             Creature spectre = Assert.Single(system.Creatures);
             spectre.AI!.OnMovementInform(MovementGeneratorType.Point, 1);
