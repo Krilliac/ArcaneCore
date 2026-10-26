@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots.Population;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -101,15 +102,12 @@ internal static class PlayerbotQaClassifier
     }
 
     /// <summary>
-    /// A world anomaly whose cause is the imported content, not server behaviour: a chest whose loot template names no rows or only unknown items
-    /// (<c>loot/gameobject-loot-empty</c> reasons no-rows and all-unknown) and a use refused because the object's lock id has no Lock.dbc row
-    /// (<c>gameobject/use-failed</c>). Matched on the stable detail phrases those reporters write.
+    /// A world anomaly whose cause is the imported content, not server behaviour. The reporters give those defects their own ledger keys
+    /// (<c>loot/gameobject-loot-no-data</c>: a chest whose loot template names no rows or only unknown items; <c>gameobject/use-failed-unknown-lock</c>:
+    /// a use refused because the object's lock id has no lock_template row), so the cause follows the key and never the last occurrence's detail.
     /// </summary>
     private static bool IsContentDefect(QaSignal s)
-        => (string.Equals(s.Goal, "loot", StringComparison.Ordinal) && string.Equals(s.Reason, "gameobject-loot-empty", StringComparison.Ordinal)
-                && (s.Detail.Contains("reason no-rows", StringComparison.Ordinal) || s.Detail.Contains("reason all-unknown", StringComparison.Ordinal)))
-            || (string.Equals(s.Goal, "gameobject", StringComparison.Ordinal) && string.Equals(s.Reason, "use-failed", StringComparison.Ordinal)
-                && s.Detail.Contains("has no lock_template row", StringComparison.Ordinal));
+        => PlayerbotQaAnomalyFeed.ContentDefectKeys.Contains(AnomalyLedger.KeyOf(s.Goal, s.Reason));
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";

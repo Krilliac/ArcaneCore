@@ -928,10 +928,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>Anomaly code of a use refused for a reason the content or the server is at fault for, not the player.</summary>
     public const string UseFailedCode = "use-failed";
 
+    /// <summary>Anomaly code of a use refused because the object's lock id has no lock_template row (a content defect).</summary>
+    public const string UseFailedUnknownLockCode = "use-failed-unknown-lock";
+
     /// <summary>
     /// Report a refusal that is a defect rather than a player mistake: an object type the server cannot use at all (Unsupported), a
     /// chest/door/button/goober refused although it is not flagged non-interactive or in use (NotUsable), or a lock id with no
-    /// Lock.dbc row (Locked). TooFar, Dead, NeedsQuest, MissingKey, SkillTooLow, InUse, LevelTooLow, Immune, NotFound and OnCooldown are the
+    /// lock_template row (Locked, reported under <see cref="UseFailedUnknownLockCode"/>). TooFar, Dead, NeedsQuest, MissingKey, SkillTooLow, InUse, LevelTooLow, Immune, NotFound and OnCooldown are the
     /// player's doing and never reach here. Strings are built only when a report is due; ids and guid low only, no names.
     /// </summary>
     private void ReportUseDefect(Player player, ObjectGuid guid, GameObject? go, GameObjectUseResult result)
@@ -942,10 +945,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         string why;
+        string code = UseFailedCode;
         switch (result)
         {
             case GameObjectUseResult.Unsupported when go.Type == GameObjectType.QuestGiver:
-                why = "the quest menu did not open (no quest giver service is wired, or it refused the object)";
+                if (QuestGiver is not null)
+                {
+                    return; // the seam is wired: a refusal may be transient (a settlement pending) or the player's, not a defect
+                }
+
+                why = "no quest giver service is wired";
                 break;
             case GameObjectUseResult.Unsupported:
                 why = "no handler for the object's type or its loot is unavailable";
@@ -957,6 +966,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 break;
             case GameObjectUseResult.Locked when GameObjectLocks.LockIdOf(go.Template) is var lockId and not 0 && _content.FindLock(lockId) is null:
                 why = $"lock {lockId} has no lock_template row";
+                code = UseFailedUnknownLockCode;
                 break;
             default:
                 return;
@@ -964,7 +974,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         AnomalyLedger.Shared.Report(
             "gameobject",
-            UseFailedCode,
+            code,
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"gameobject entry {go.Entry} type {go.Template.Type}"),
             string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"use refused ({result}): {why}; spawn {go.Spawn?.Guid.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} guid {guid.Low} map {Map.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}; player guid {player.Guid.Low}"),

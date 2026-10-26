@@ -17,13 +17,13 @@ public sealed class PlayerbotQaAnomalyFeedTests
         var ledger = new AnomalyLedger();
         var feed = new PlayerbotQaAnomalyFeed(ledger);
 
-        ledger.Report("loot", "gameobject-loot-empty", "gameobject entry 180523 loot 17378", "reason no-rows", AnomalySeverity.Error);
+        ledger.Report(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode, "gameobject entry 180523 loot 17378", "reason guaranteed-missing", AnomalySeverity.Error);
 
         QaSignal signal = Assert.Single(feed.Pull());
         Assert.Equal(QaSignalKind.Anomaly, signal.Kind);
         Assert.Equal("loot/gameobject-loot-empty", signal.FaultCode);
-        Assert.Equal("loot", signal.Goal);
-        Assert.Equal("gameobject-loot-empty", signal.Reason);
+        Assert.Equal(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, signal.Goal);
+        Assert.Equal(ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode, signal.Reason);
     }
 
     [Fact]
@@ -34,12 +34,12 @@ public sealed class PlayerbotQaAnomalyFeedTests
 
         for (int i = 0; i < 4; i++)
         {
-            ledger.Report("gameobject", "use-failed", "gameobject entry 5 type 3", "use refused (Unsupported)", AnomalySeverity.Warning);
+            ledger.Report("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedCode, "gameobject entry 5 type 3", "use refused (Unsupported)", AnomalySeverity.Warning);
         }
 
         Assert.Empty(feed.Pull());
 
-        ledger.Report("gameobject", "use-failed", "gameobject entry 5 type 3", "use refused (Unsupported)", AnomalySeverity.Warning);
+        ledger.Report("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedCode, "gameobject entry 5 type 3", "use refused (Unsupported)", AnomalySeverity.Warning);
 
         QaSignal signal = Assert.Single(feed.Pull());
         Assert.Equal("gameobject/use-failed", signal.FaultCode);
@@ -58,13 +58,15 @@ public sealed class PlayerbotQaAnomalyFeedTests
     }
 
     [Fact]
-    public void TheFourWorldKeys_AreExactlyTheOnesTheServerReports()
+    public void TheSixWorldKeys_AreExactlyTheOnesTheServerReports()
     {
         // Built from the constants the reporting code passes to the ledger, so a renamed code breaks this test instead of silently leaving the feed.
         string[] reported =
         [
             AnomalyLedger.KeyOf(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode),
+            AnomalyLedger.KeyOf(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootNoDataCode),
             AnomalyLedger.KeyOf("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedCode),
+            AnomalyLedger.KeyOf("gameobject", ArcaneCore.Game.GameObjects.GameObjectMapSystem.UseFailedUnknownLockCode),
             AnomalyLedger.KeyOf("gameobject", ArcaneCore.World.Skills.GatheringSpells.OpenNoEffectCode),
             AnomalyLedger.KeyOf("spell", ArcaneCore.Game.Spells.SpellSystem.GameObjectEffectSkippedCode),
         ];

@@ -19,6 +19,7 @@ namespace ArcaneCore.Game.Tests.Loot;
 public sealed class GameObjectLootEmptyAnomalyTests
 {
     private const string Key = "loot/gameobject-loot-empty";
+    private const string NoDataKey = "loot/gameobject-loot-no-data";
     private const uint UnknownItem = 99_999_999;
 
     private sealed class Rig
@@ -54,7 +55,7 @@ public sealed class GameObjectLootEmptyAnomalyTests
     }
 
     private static AnomalyCapture CaptureFor(uint entry)
-        => AnomalyLedger.Shared.Capture(n => n.Key == Key && n.Subject.StartsWith($"gameobject entry {entry} ", StringComparison.Ordinal));
+        => AnomalyLedger.Shared.Capture(n => n.Key is Key or NoDataKey && n.Subject.StartsWith($"gameobject entry {entry} ", StringComparison.Ordinal));
 
     [Fact]
     public void ChestWhoseLootIdHasNoRows_IsReportedAsAnError_WithoutThePlayerName()
@@ -69,6 +70,8 @@ public sealed class GameObjectLootEmptyAnomalyTests
 
         AnomalyNotice notice = Assert.Single(cap.Notices);
         Assert.Equal(AnomalySeverity.Error, notice.Severity);
+        Assert.Equal(NoDataKey, notice.Key);
+        Assert.Equal(LootService.GameObjectLootNoDataCode, "gameobject-loot-no-data");
         Assert.Contains("loot 9001", notice.Subject);
         Assert.Contains("reason no-rows", notice.Detail);
         Assert.Contains($"opener guid {player.Guid.Low}", notice.Detail);
@@ -84,7 +87,9 @@ public sealed class GameObjectLootEmptyAnomalyTests
 
         rig.System.Use(player, rig.Single(7_101_002).Guid);
 
-        Assert.Contains("reason all-unknown", Assert.Single(cap.Notices).Detail);
+        AnomalyNotice notice = Assert.Single(cap.Notices);
+        Assert.Equal(NoDataKey, notice.Key);
+        Assert.Contains("reason all-unknown", notice.Detail);
     }
 
     [Fact]

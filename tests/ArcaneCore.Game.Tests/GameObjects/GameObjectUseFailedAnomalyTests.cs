@@ -16,6 +16,7 @@ namespace ArcaneCore.Game.Tests.GameObjects;
 public sealed class GameObjectUseFailedAnomalyTests
 {
     private const string Key = "gameobject/use-failed";
+    private const string UnknownLockKey = "gameobject/use-failed-unknown-lock";
 
     private static (WorldRuntime World, GameObjectMapSystem System, Player Player) Create(uint playerId, GameObjectTemplate template, float x)
     {
@@ -30,7 +31,7 @@ public sealed class GameObjectUseFailedAnomalyTests
     }
 
     private static AnomalyCapture CaptureFor(uint entry)
-        => AnomalyLedger.Shared.Capture(n => n.Key == Key && n.Subject.StartsWith($"gameobject entry {entry} ", StringComparison.Ordinal));
+        => AnomalyLedger.Shared.Capture(n => n.Key is Key or UnknownLockKey && n.Subject.StartsWith($"gameobject entry {entry} ", StringComparison.Ordinal));
 
     [Fact]
     public void ChestWithNoLootService_ReportsUnsupported_WithoutThePlayerName()
@@ -50,6 +51,42 @@ public sealed class GameObjectUseFailedAnomalyTests
             Assert.Contains($"player guid {player.Guid.Low}", notice.Detail);
             Assert.DoesNotContain(player.Name, notice.Detail);
         }
+    }
+
+    [Fact]
+    public void QuestGiverWithNoSeamWired_ReportsUnsupported()
+    {
+        GameObjectTemplate giver = GoTemplate(7_201_006, GameObjectType.QuestGiver);
+        (WorldRuntime world, GameObjectMapSystem system, Player player) = Create(7206, giver, 3);
+        using (world)
+        {
+            using AnomalyCapture cap = CaptureFor(7_201_006);
+
+            Assert.Equal(GameObjectUseResult.Unsupported, system.Use(player, system.GameObjects.Single().Guid));
+
+            Assert.Contains("no quest giver service is wired", Assert.Single(cap.Notices).Detail);
+        }
+    }
+
+    [Fact]
+    public void QuestGiverWhoseWiredSeamRefuses_IsNotADefect_ItMayBeNotReady()
+    {
+        GameObjectTemplate giver = GoTemplate(7_201_007, GameObjectType.QuestGiver);
+        (WorldRuntime world, GameObjectMapSystem system, Player player) = Create(7207, giver, 3);
+        using (world)
+        {
+            system.QuestGiver = new RefusingQuestGiver();
+            using AnomalyCapture cap = CaptureFor(7_201_007);
+
+            Assert.Equal(GameObjectUseResult.Unsupported, system.Use(player, system.GameObjects.Single().Guid));
+
+            Assert.Empty(cap.Notices);
+        }
+    }
+
+    private sealed class RefusingQuestGiver : IGameObjectQuestGiver
+    {
+        public bool OpenQuestMenu(Player player, GameObject go) => false;
     }
 
     [Fact]
@@ -106,7 +143,10 @@ public sealed class GameObjectUseFailedAnomalyTests
             Assert.Empty(cap.Notices);
 
             system.RecordUseAttemptOutcome(player, go.Guid, go, GameObjectUseResult.Locked);
-            Assert.Contains("lock 9999 has no lock_template row", Assert.Single(cap.Notices).Detail);
+            AnomalyNotice notice = Assert.Single(cap.Notices);
+            Assert.Equal(UnknownLockKey, notice.Key);
+            Assert.Equal(GameObjectMapSystem.UseFailedUnknownLockCode, "use-failed-unknown-lock");
+            Assert.Contains("lock 9999 has no lock_template row", notice.Detail);
         }
     }
 }

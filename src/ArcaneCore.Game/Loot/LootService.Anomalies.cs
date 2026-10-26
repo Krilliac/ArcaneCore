@@ -35,6 +35,12 @@ public sealed partial class LootService
     /// <summary>A chest-like object was opened and its loot is empty although its loot id promises something (or names no usable rows).</summary>
     public const string GameObjectLootEmptyCode = "gameobject-loot-empty";
 
+    /// <summary>
+    /// A chest-like object was opened and its loot is empty because the imported loot template is itself defective: it names no rows, or only
+    /// items that do not exist (a content defect, not a server behaviour bug).
+    /// </summary>
+    public const string GameObjectLootNoDataCode = "gameobject-loot-no-data";
+
     /// <summary>The most reference_loot_template hops <see cref="GuaranteeOf"/> follows.</summary>
     internal const int GuaranteeMaxReferenceDepth = 4;
 
@@ -161,7 +167,7 @@ public sealed partial class LootService
 
     /// <summary>
     /// After a chest-like object generated an empty bag with no money: report when its loot id is real and either names no rows, names
-    /// only unknown items, or <see cref="GuaranteeOf"/> finds a row that must have dropped. Loot id 0 (a deliberately lootless object) never reports.
+    /// only unknown items (both under <see cref="GameObjectLootNoDataCode"/>), or <see cref="GuaranteeOf"/> finds a row that must have dropped. Loot id 0 (a deliberately lootless object) never reports.
     /// Strings are built only when a report is due.
     /// </summary>
     private void CheckGameObjectLootEmpty(Player opener, GameObject go, uint lootId, LootBag bag, IReadOnlyList<Player> recipients)
@@ -174,13 +180,16 @@ public sealed partial class LootService
         IReadOnlyList<LootStoreRow> rows = Content.GetRows(LootTableKind.GameObject, lootId);
         string reason;
         string row = "-";
+        string code = GameObjectLootEmptyCode;
         if (rows.Count == 0)
         {
             reason = "no-rows";
+            code = GameObjectLootNoDataCode;
         }
         else if (!rows.Any(r => r.MinCountOrRef < 0) && rows.All(r => Items.Find(r.Item) is null))
         {
             reason = "all-unknown";
+            code = GameObjectLootNoDataCode;
         }
         else if (GuaranteeOf(LootTableKind.GameObject, lootId, recipients) is { } guaranteed)
         {
@@ -195,7 +204,7 @@ public sealed partial class LootService
         string where = go.Spawn is { } spawn
             ? string.Create(CultureInfo.InvariantCulture, $"spawn {spawn.Guid}")
             : "no spawn";
-        AnomalyLedger.Shared.Report(AnomalySubsystem, GameObjectLootEmptyCode,
+        AnomalyLedger.Shared.Report(AnomalySubsystem, code,
             string.Create(CultureInfo.InvariantCulture, $"gameobject entry {go.Entry} loot {lootId}"),
             string.Create(CultureInfo.InvariantCulture,
                 $"{where}, map {go.MapId} at {go.X:0.##} {go.Y:0.##} {go.Z:0.##}, type {go.Template.Type}, reason {reason}, row {row}, opener guid {opener.Guid.Low} opened it and the bag holds nothing"),

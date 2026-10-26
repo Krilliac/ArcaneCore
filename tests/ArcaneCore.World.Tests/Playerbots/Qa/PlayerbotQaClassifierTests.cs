@@ -14,10 +14,12 @@ public sealed class PlayerbotQaClassifierTests
 
     /// <summary>Content defects of the world anomaly keys are missing data; a behaviour defect of the same keys stays a behaviour bug.</summary>
     [Theory]
-    [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason no-rows, row -", QaCause.MissingData)]
-    [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason all-unknown, row -", QaCause.MissingData)]
+    [InlineData("loot", "gameobject-loot-no-data", "gameobject entry 1 loot 2: reason no-rows, row -", QaCause.MissingData)]
+    [InlineData("loot", "gameobject-loot-no-data", "gameobject entry 1 loot 2: reason all-unknown, row -", QaCause.MissingData)]
+    [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason no-rows, row -", QaCause.BehaviourBug)]
     [InlineData("loot", "gameobject-loot-empty", "gameobject entry 1 loot 2: reason guaranteed-missing, row item 5", QaCause.BehaviourBug)]
-    [InlineData("gameobject", "use-failed", "use refused (Locked): lock 93 has no lock_template row; spawn 1", QaCause.MissingData)]
+    [InlineData("gameobject", "use-failed-unknown-lock", "use refused (Locked): lock 93 has no lock_template row; spawn 1", QaCause.MissingData)]
+    [InlineData("gameobject", "use-failed", "use refused (Locked): lock 93 has no lock_template row; spawn 1", QaCause.BehaviourBug)]
     [InlineData("gameobject", "use-failed", "use refused (Unsupported): no handler for the object's type or its loot is unavailable", QaCause.BehaviourBug)]
     [InlineData("gameobject", "open-no-effect", "the open returned Ok for a chest but the player has no loot window on it", QaCause.BehaviourBug)]
     [InlineData("bot-quest", "giver-missing", "reason no-rows", QaCause.BehaviourBug)]

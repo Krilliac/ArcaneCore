@@ -191,7 +191,7 @@ public sealed class InstanceChestDurabilityTests
     }
 
     /// <summary>
-    /// A dungeon chest whose bag is already live (or restored from its stored record) opens synchronously, so a post-open hook that drops the
+    /// A dungeon chest whose bag is already live opens synchronously, so a post-open hook that drops the
     /// window leaves an Ok with no window and no pending generation: that must be reported, instance map or not.
     /// </summary>
     [Fact]
