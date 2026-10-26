@@ -39,7 +39,7 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
     [
         Stealth, Premeditation, Garrote, Ambush, CheapShot, Vanish, Preparation, SliceAndDice, Eviscerate, KidneyShot, ExposeArmor,
         Rupture, Blind, AdrenalineRush, Gouge, Kick, Evasion, ColdBlood, BladeFlurry, Backstab, GhostlyStrike, Hemorrhage,
-        SinisterStrike, Sprint,
+        SinisterStrike, Sprint, ShootBow, ShootGun, ShootCrossbow, Throw,
     ];
 
     /// <summary>
@@ -94,7 +94,8 @@ internal sealed class PlayerbotRogueRotation : PlayerbotClassRotation
             ?? Do(s, GhostlyStrike, v)
             ?? Do(s, Hemorrhage, v)
             ?? Do(s, SinisterStrike, v)
-            ?? Do(s, Sprint, s.Self, s.InCombat && !v.InMeleeRange && !s.IsRooted);
+            ?? Do(s, Sprint, s.Self, s.InCombat && !v.InMeleeRange && !s.IsRooted)
+            ?? (s.InCombat ? RangedShot(s, v) : null); // RangedShot skips a Gouged target: the shot would break it
     }
 
     /// <summary>

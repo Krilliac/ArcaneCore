@@ -13,5 +13,5 @@ namespace ArcaneCore.World.Gm.Audit;
 /// the periodic retry, <see cref="KeyedStoreWriteQueue{TStore}.RetryRetainedAsync"/> and the stop. The world keeps its own
 /// in-memory working set, so a retained write never changes what staff see.
 /// </summary>
-public sealed class GmAuditWriteQueue(IServiceScopeFactory scopes, ILogger logger)
-    : KeyedStoreWriteQueue<IGmAuditStore>(scopes, logger, "GM audit");
+public sealed class GmAuditWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null)
+    : KeyedStoreWriteQueue<IGmAuditStore>(scopes, logger, "GM audit", drain);
