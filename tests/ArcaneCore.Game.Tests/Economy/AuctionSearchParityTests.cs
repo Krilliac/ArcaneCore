@@ -37,6 +37,31 @@ public sealed class AuctionSearchParityTests
     }
 
     [Fact]
+    public void The_filter_runs_over_the_house_in_stored_order_and_only_the_matches_are_sorted()
+    {
+        AuctionRecord[] auctions =
+        [
+            new() { Id = 1, ItemEntry = 1, Buyout = 900 },
+            new() { Id = 2, ItemEntry = 2, Buyout = 100 },
+            new() { Id = 3, ItemEntry = 1, Buyout = 500 },
+            new() { Id = 4, ItemEntry = 3, Buyout = 300 },
+        ];
+        List<uint> visited = [];
+        ItemTemplate? Spy(uint entry)
+        {
+            visited.Add(entry);
+            return Find(entry);
+        }
+
+        (IReadOnlyList<AuctionRecord> page, int total) = AuctionSearch.Run(auctions, All with { ItemClass = 4 }, Spy);
+
+        // Sorting the whole house before filtering would visit the entries in buyout order (2, 3, 1, 1).
+        Assert.Equal([1u, 2u, 1u, 3u], visited);
+        Assert.Equal([2u, 4u], page.Select(a => a.Id));
+        Assert.Equal(2, total);
+    }
+
+    [Fact]
     public void Which_fifty_rows_a_page_shows_depends_on_the_buyout_order()
     {
         List<AuctionRecord> auctions = [.. Enumerable.Range(1, 60).Select(i => new AuctionRecord { Id = (uint)i, ItemEntry = 1, Buyout = (uint)(1000 - i) })];
