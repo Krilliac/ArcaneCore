@@ -268,12 +268,13 @@ public sealed class PlayerbotGatherLootWaitTests
     public async Task ANodeAnotherPlayerHasOpen_IsNeverPicked_AndIsPickedOnceItIsFree()
     {
         await using Rig rig = await Rig.StartAsync();
+        Bot other = await EnterAsync(rig.Host, "OTHERGATHER", "Gathertwo", 1, new PlayerbotOptions { Enabled = true }, new PlayerbotClaims(8), () => 0);
         int casts = 0;
         await rig.Host.OnWorldAsync(() =>
         {
             var node = NodeOf(rig);
             var bag = new ArcaneCore.Game.Loot.LootBag(node.Guid, ArcaneCore.Game.Loot.LootSourceKind.GameObject, ArcaneCore.Game.Loot.LootType.Corpse) { Gold = 1 };
-            bag.Viewers.Add(rig.Player); // stands for another looter: any viewer holds the node
+            bag.Viewers.Add(other.Player); // another looter holds the node
             node.Loot = bag;
             rig.Bot.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.CmsgCastSpell) casts++; };
             rig.Think();
@@ -288,6 +289,47 @@ public sealed class PlayerbotGatherLootWaitTests
             return true;
         });
         Assert.Equal(1, casts);
+        other.Brain.Stop();
+        other.Session.Kick();
+        await other.Session.ManagedClosed;
+    }
+
+    [Fact]
+    public async Task ANodeOnlyTheBotItselfHasOpen_IsStillPicked()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        int casts = 0;
+        await rig.Host.OnWorldAsync(() =>
+        {
+            var node = NodeOf(rig);
+            var bag = new ArcaneCore.Game.Loot.LootBag(node.Guid, ArcaneCore.Game.Loot.LootSourceKind.GameObject, ArcaneCore.Game.Loot.LootType.Corpse) { Gold = 1 };
+            bag.Viewers.Add(rig.Player);
+            node.Loot = bag;
+            rig.Bot.Session.ManagedDispatchObserver = op => { if (op == WorldOpcode.CmsgCastSpell) casts++; };
+            rig.Think();
+            return true;
+        });
+        Assert.Equal(1, casts);
+    }
+
+    [Fact]
+    public async Task ATurnOnlyMovementBlock_KeepsTheNodeWindowOpen()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await CastAndLandAsync(rig);
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
+
+        Assert.True(await rig.Host.OnWorldAsync(() =>
+        {
+            MovementInfo turning = rig.Player.Movement;
+            turning.Flags |= MovementFlags.TurnLeft; // not MOVEFLAG_MASK_MOVING; position unchanged
+            var writer = new PacketWriter(64);
+            turning.Write(writer);
+            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5);
+            return rig.Bot.Session.TryManagedAction(WorldOpcode.MsgMoveStartTurnLeft, writer.AsMemory().ToArray());
+        }));
+
+        Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
     }
 
     [Fact]

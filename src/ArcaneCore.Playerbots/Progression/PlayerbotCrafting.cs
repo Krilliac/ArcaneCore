@@ -1278,7 +1278,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                 || go.LootState is GameObjectLootState.JustDeactivated or GameObjectLootState.NotReady
                 || (!go.User.IsEmpty && go.User != player.Guid)
                 || go.Loot is { IsEmpty: true }
-                || go.Loot is { Viewers.Count: > 0 } // another looter holds the window: the cast is refused with CHEST_IN_USE (GatheringSpells)
+                || (go.Loot is { Viewers.Count: > 0 } looted && !looted.Viewers.Contains(player)) // another looter holds the window: the cast is refused with CHEST_IN_USE (GatheringSpells)
                 || go.Template.GetData(GameObjectMapSystem.ChestLevelData) > player.Level + GameObjectMapSystem.ChestLevelLeeway
                 || (reqQuest != 0
                     && (goSystem?.Quests is { } goQuests
