@@ -14,6 +14,8 @@ public sealed class SqliteWriteGateProgressTests
 {
     private const int BoundMs = 1000;
 
+    private static readonly AsyncLocal<bool> CountingFlow = new();
+
     private sealed class FakeClock : IWriteGateClock
     {
         private readonly object _lock = new();
@@ -152,6 +154,8 @@ public sealed class SqliteWriteGateProgressTests
         for (int i = 0; i < links; i++)
         {
             await StepAsync(clock, releaseHolder, chain[i], stepMs);
+            // The writer only checks its patience when it polls; without this the fake clock races ahead of it and a grant that arrives after the cap wins.
+            await LetWaitersPoll();
             Link current = chain[i];
             releaseHolder = current.Release;
             if (writer.IsCompleted) break;
@@ -318,9 +322,11 @@ public sealed class SqliteWriteGateProgressTests
         int timeoutExceptions = 0;
         void OnFirstChance(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
         {
-            if (e.Exception is TimeoutException) Interlocked.Increment(ref timeoutExceptions);
+            // First-chance events are process-wide and test classes run in parallel: count only this test's own async flow.
+            if (e.Exception is TimeoutException && CountingFlow.Value) Interlocked.Increment(ref timeoutExceptions);
         }
 
+        CountingFlow.Value = true;
         AppDomain.CurrentDomain.FirstChanceException += OnFirstChance;
         try
         {
