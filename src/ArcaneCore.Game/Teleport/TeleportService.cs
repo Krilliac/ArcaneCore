@@ -434,11 +434,6 @@ public sealed partial class TeleportService
             return true;
         }
 
-        // A far transfer ends the client's flight and fixed Z (the client enters the world afresh), so a leftover GM cheat would only keep
-        // whitelisting the fly hack's own flags (MovementCheats.GrantedFor) for a player who is no longer flying. A near teleport keeps the
-        // client's swimming and levitating (ArriveNear), so the cheat stays there.
-        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
-
         var pending = new Pending(this, player, destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {
             StartedMs = _world.NowMs,
@@ -671,6 +666,11 @@ public sealed partial class TeleportService
 
         if (TryEnterMap(player, dest))
         {
+            // A far transfer ends the client's flight and fixed Z (the client enters the world afresh in vmangos HandleMoveWorldportAck,
+            // MovementHandler.cpp:46-170), so a leftover GM cheat would only keep whitelisting the fly hack's own flags
+            // (MovementCheats.GrantedFor) for a player who is no longer flying. Cleared only on successful arrival: a failed, refused, or
+            // bailed-out transfer keeps them so the client is not flagged by anticheat while still flying on the source map.
+            player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
             VerifyLanding(player, dest, dest.MapId);
             HonorlessTargetDue?.Invoke(player, true);
         }
