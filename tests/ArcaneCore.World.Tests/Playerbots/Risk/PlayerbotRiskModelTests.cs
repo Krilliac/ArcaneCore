@@ -102,6 +102,18 @@ public sealed class PlayerbotRiskModelTests
     }
 
     [Fact]
+    public void TheLowManaLine_IsCappedAtRecoverHealthPct_BotQa1480()
+    {
+        // RestManaBelowPct 90 above RecoverHealthPct 80: the rest ends at 80, so the line is 80 and a bot at 85 is not held for good.
+        var options = new PlayerbotRiskOptions { RestManaBelowPct = 90f, RecoverHealthPct = 80f };
+        PlayerbotEngagementFacts hybrid = Bot(Mob(dps: 5f)) with { BotManaPct = 85f, ManaDependence = 0.4f };
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid, options).Decision);
+        PlayerbotEngagement below = PlayerbotRiskModel.Assess(hybrid with { BotManaPct = 79f }, options);
+        Assert.Equal(PlayerbotEngageDecision.Rest, below.Decision);
+        Assert.Equal("low-mana", below.Reason);
+    }
+
+    [Fact]
     public void AHybridBelowRestManaBelowPct_RestsBeforeAnEasyPull_BotQa1480()
     {
         // A hybrid (ManaDependence 0.4) at 1% mana still weighs an easy mob as fine (risk 0.45 against 0.62 accepted; the 7 dps default mob

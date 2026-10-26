@@ -228,7 +228,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
 
     /// <summary>
     /// Bot QA #1482: a bot in the Barrens farther from the Great Lift than one route reaches (<see cref="PlayerbotOptions.MaxRouteYards"/>)
-    /// began the trip with a goal in Thousand Needles and walked the straight line until the 60 s no-progress bound failed it. It begins
+    /// began the trip with a goal in Thousand Needles and approached it in PlanToward legs, which ended after MaxRefusedPlans refusals in a row or at the 60 s no-progress bound, failing the trip. It begins
     /// none until it is within reach; then it does.
     /// </summary>
     [Fact]
