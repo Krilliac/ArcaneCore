@@ -181,7 +181,7 @@ internal sealed class PlayerbotThinkProbe
     /// The process-wide garbage-collector pause time in milliseconds between <see cref="Begin"/> and <see cref="End"/>
     /// (<see cref="GC.GetTotalPauseDuration"/>): time the world thread may have been suspended without the think doing anything.
     /// </summary>
-    internal double GcPauseMs { get; set; }
+    internal double GcPauseMs { get; private set; }
 
     /// <summary>Gen 0, gen 1 and gen 2 collections between <see cref="Begin"/> and <see cref="End"/> (process-wide).</summary>
     internal (int Gen0, int Gen1, int Gen2) GcCollections { get; private set; }
@@ -238,12 +238,8 @@ internal sealed class PlayerbotThinkProbe
         long now = _time.GetTimestamp();
         Close(now);
         _elapsed = now - _started;
-        GcPauseMs = ReferenceEquals(_time, TimeProvider.System)
-            ? (GC.GetTotalPauseDuration() - _gcPauseBefore).TotalMilliseconds
-            : 0;
-        GcCollections = ReferenceEquals(_time, TimeProvider.System)
-            ? (GC.CollectionCount(0) - _gc0Before, GC.CollectionCount(1) - _gc1Before, GC.CollectionCount(2) - _gc2Before)
-            : default;
+        GcPauseMs = (GC.GetTotalPauseDuration() - _gcPauseBefore).TotalMilliseconds;
+        GcCollections = (GC.CollectionCount(0) - _gc0Before, GC.CollectionCount(1) - _gc1Before, GC.CollectionCount(2) - _gc2Before);
         Search = PathSearchCounters.Current - _searchBefore;
         SlowestTile = PathSearchCounters.SlowestTile;
         PathSearchCounters.EndTileCapture();
