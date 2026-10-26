@@ -63,7 +63,7 @@ World.Tests pass.
 
 - The 4.18 MiB wave 10 figure was a live server with the real world, playerbots and features; this harness reproduces the creature,
   formation and pool paths with synthetic content, so the absolute numbers differ. The same cuts apply to the live paths (they are the
-  shared per-creature update), but a live before/after on Nate's server was not taken from the box.
+  shared per-creature update), but a live before/after on the maintainer's server was not taken from the box.
 - The audit's scratch world has no DBCs and no event gate: event pools spawn as if their events ran (as in `PoolScratchWorldProbeTests`).
 - `dotnet-counters`/`dotnet-trace` were not used; the in-process GCAllocationTick sampler gives types (about one sample per 100 KB), and
   the methods were attributed by reading which methods construct the sampled closure types.

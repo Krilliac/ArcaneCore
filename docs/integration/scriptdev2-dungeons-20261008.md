@@ -23,7 +23,7 @@ ClassicDB z2815 `script_texts` now imports into the existing creature text catal
 
 ## Verification
 
-Before implementation, focused dungeon and import tests failed. Final `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false`: 0 warnings, 0 errors. Full Release `--no-build` suites: Game 7,097 passed / 11 skipped; World 2,522 passed / 6 skipped; Data 1,293 passed / 10 skipped. The opt-in `RealClassicDbDump_ImportsAllAiRows` probe against `D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz` passed (1/1). `git diff --check` exited 0. Free RAM was checked before every build (Get-Counter fallback: CIM access was denied by the sandbox).
+Before implementation, focused dungeon and import tests failed. Final `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false`: 0 warnings, 0 errors. Full Release `--no-build` suites: Game 7,097 passed / 11 skipped; World 2,522 passed / 6 skipped; Data 1,293 passed / 10 skipped. The opt-in `RealClassicDbDump_ImportsAllAiRows` probe against `<refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz` passed (1/1). `git diff --check` exited 0. Free RAM was checked before every build (Get-Counter fallback: CIM access was denied by the sandbox).
 
 ## Remaining data and limits
 

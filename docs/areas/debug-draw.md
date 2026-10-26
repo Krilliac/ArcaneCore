@@ -91,7 +91,7 @@ Marker models (`DebugMarkerModels`, resolved once at startup):
 - The model a marker shows is its object's display id field (the glow companions share their kind's entry and template already), so
   an override does not change the synthetic template.
 
-Checked against the client-effective file (patch.MPQ copy, 1638 rows, identical to `D:\server-Zero\run\dbc`): all 19 distinct
+Checked against the client-effective file (patch.MPQ copy, 1638 rows, identical to `<server-zero-run>\dbc`): all 19 distinct
 built-in ids exist with the model paths in the table above, and each model's `.m2` is present in the client's MPQs.
 
 ## Tests

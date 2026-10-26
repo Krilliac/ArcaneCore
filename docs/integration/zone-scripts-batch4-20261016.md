@@ -1,7 +1,7 @@
 # Zone scripts, batch 4 — 2026-10-16
 
 Lane `zone-scripts-batch4`, base `d977435a`. References (read-only, local): mangos-classic `src/game/AI/ScriptDevAI/scripts/` at `8ec338a170`
-(`D:\refs\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` (`D:\refs\classic-db`), spell ids checked against the 5875 client
+(`<refs-root>\mangos-classic`), data from ClassicDB `ClassicDB_1_12_1_z2815` (`<refs-root>\classic-db`), spell ids checked against the 5875 client
 `Spell.dbc`. Batches 1-3 (Lazy Peon, Galen, Miran, Keeshan, Kinelory, Defias Traitor, Yenniku, Kanati, OOX-09/HL, Foreman Klaven Mortwake,
 Prospector Remtravel, the Barrens stealth-alert speakers) have no note of their own; this one follows their structure: creature scripts are
 `CreatureAI` classes in `src/ArcaneCore.Game/Creatures/Scripts/`, registered by creature entry in `CreatureAiFactory` (the entry-script table

@@ -11,7 +11,7 @@ shows up in the running server a few seconds after you save it, without restarti
 Local test machine only: Debug build, Development environment, loopback addresses, a disposable database.
 
 1. **Check the tools.** `dotnet --list-sdks` must list an 11.x SDK (this was measured with 10.0.401). The client's
-   `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `D:\World of Warcraft Classic 1.12.1`).
+   `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `<wow-client-dir>`).
 2. **Start everything with one command**, from the repo root (never needs `-ExecutionPolicy Bypass`):
 
    ```powershell

@@ -1,6 +1,6 @@
 # Maps, vmaps and mmaps: does ArcaneCore need client-extracted data?
 
-Question (Nathan, 2026-10-07): do we need the map/vmap/mmap files extracted from the game client, or can
+Question (the maintainer, 2026-10-07): do we need the map/vmap/mmap files extracted from the game client, or can
 we get the same effect without them? Are they only a way to save the server work?
 
 ## Short answer
@@ -61,15 +61,15 @@ Observed on this machine (read only, 2026-10-07):
   ("reading .map files from …" or "no data directory configured"). Worth confirming.
   (Later on 2026-10-07: the live profile's `World:Maps:DataDirectory` points at an earlier maps-only
   extraction, `playable-content-20261005/terrain-r1`: `.map` files only, no vmaps or mmaps.)
-- `D:/server-Zero/run/{maps,vmaps,mmaps}` (258 MB, 553 MB, 794 MB) is a MaNGOS Zero extraction:
+- `<server-zero-run>/{maps,vmaps,mmaps}` (258 MB, 553 MB, 794 MB) is a MaNGOS Zero extraction:
   `.map` "z1.5", "VMAP_4.0", mmap version 5. **ArcaneCore cannot read it** (expects z1.4, VMAP_7.0,
   mmap 6); its readers would log and treat it as missing.
-- `D:/World of Warcraft Classic 1.12.1/Data` holds the 1.12.1 MPQs (`base`, `dbc`, `misc`, …) the
+- `<wow-client-dir>/Data` holds the 1.12.1 MPQs (`base`, `dbc`, `misc`, …) the
   extractors need.
 
 ## Ways to get the effect
 
-1. **Extract once from Nathan's own 1.12.1 client with vmangos' tools** (`MapExtractor`,
+1. **Extract once from the maintainer's own 1.12.1 client with vmangos' tools** (`MapExtractor`,
    `VMapExtractor` + `VMapAssembler`, `MoveMapGenerator`). Produces exactly the formats the readers
    expect. **Done on 2026-10-07**, see [Extraction](#extraction-2026-10-07) and the
    [rebuild recipe](#rebuild-recipe): maps and vmaps take about four minutes, the continents' navmesh
@@ -80,7 +80,7 @@ Observed on this machine (read only, 2026-10-07):
    Recast; a managed port (e.g. DotRecast, zlib licence) would be a new dependency, and generation
    should run as a background/offline job with cached output, never on the world thread.
 3. **Ship generated data.** Convenient, but the output is derived from Blizzard's assets: fine on
-   Nathan's machines, not for the public repository or releases.
+   The maintainer's machines, not for the public repository or releases.
 4. **Approximate without client data.** Possible pieces: a coarse heightfield interpolated from the
    world database's spawn Z coordinates, or learned from real players' movement packets; a grid A*
    over a heightfield with a slope limit. None of them knows about buildings, caves, bridges or
@@ -89,8 +89,8 @@ Observed on this machine (read only, 2026-10-07):
 
 ## Extraction (2026-10-07)
 
-Produced with vmangos `0e3ff01` (`D:/refs/vmangos`) from `D:/World of Warcraft Classic 1.12.1`
-(read only) into `D:/ArcaneCore-lanes/terrain-out`:
+Produced with vmangos `0e3ff01` (`<refs-root>/vmangos`) from `<wow-client-dir>`
+(read only) into `<lanes-root>/terrain-out`:
 
 | Directory | Files | Size | Format | Time |
 |---|---|---|---|---|
@@ -108,7 +108,7 @@ sea), so the continents have fewer `.mmtile` files than `.map` files. Its workin
 All of it is `tools/terrain/build-terrain-data.ps1` (run from the repository root):
 
 ```powershell
-pwsh -File tools/terrain/build-terrain-data.ps1 -ToolsDir D:\terrain-tools -OutDir D:\ArcaneCore-data
+pwsh -File tools/terrain/build-terrain-data.ps1 -ToolsDir <terrain-tools-dir> -OutDir <data-root>
 # parts: -Steps Tools,Maps,VMaps,MMaps   continents only: -MMapRun '0','1'   one tile: -MMapRun '0 --tile 32,48'
 ```
 
@@ -154,7 +154,7 @@ directory holding `maps/`, `vmaps/`, `mmaps/`); the oracle test also needs
 `ARCANECORE_TEST_VMAP_ORACLE` = the `VMapProbe.exe` the script builds:
 
 ```powershell
-$env:ARCANECORE_TEST_TERRAIN_DIR = 'D:\ArcaneCore-lanes\terrain-out'
+$env:ARCANECORE_TEST_TERRAIN_DIR = '<lanes-root>\terrain-out'
 $env:ARCANECORE_TEST_VMAP_ORACLE = '<ToolsDir>\vmangos-src\bin\VMapProbe.exe'
 dotnet test tests/ArcaneCore.Game.Tests --filter "FullyQualifiedName~RealTerrainDataTests|FullyQualifiedName~VMapNativeOracleTests"
 ```

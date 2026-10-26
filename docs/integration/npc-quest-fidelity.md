@@ -1,6 +1,6 @@
 # NPC services and quest fidelity (lane `npc-services-quests`)
 
-Standing directive: vanilla 1.12.1 behaviour, mechanics and data, verified against D:\refs
+Standing directive: vanilla 1.12.1 behaviour, mechanics and data, verified against `<refs-root>`
 (`vmangos` primary, `mangos-classic` = cmangos, `wow_messages`, `classic-db`). Nothing here copies
 reference code or data; every rule cites `file:line`. A deliberate deviation is listed in "Deviations" at the end;
 each says whether it is behind a config switch (defaulting to retail) or is a stated limit with no switch.
@@ -122,7 +122,7 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
 ### Delivered
 
 * The handler used to read the bag and slot and drop them ("the item goes wherever it fits"). It now
-  follows vmangos `WorldSession::HandleBuyItemInSlotOpcode` (`D:\refs\vmangos\src\game\Handlers\ItemHandler.cpp:659-686`):
+  follows vmangos `WorldSession::HandleBuyItemInSlotOpcode` (`<refs-root>\vmangos\src\game\Handlers\ItemHandler.cpp:659-686`):
   the bag GUID resolves to the backpack side (the player's own GUID, bag byte 255) or to the worn bag
   in slots 19-22 with that GUID; an unknown bag is ignored with no reply, as a cheat.
 * The placement half of `Player::BuyItemFromVendor` (`Player.cpp:18453-18496`) is
@@ -257,7 +257,7 @@ The design's NQ0 imports eleven new tables. Only the table with a finished consu
 * **Real data, optional.** `ConditionsRealDumpTests` reads the dump named by `ARCANECORE_CLASSICDB_SQL` (`.sql` or
   `.sql.gz`; never copied into the repository) and prints sizing; without the variable it is skipped with an explicit
   message ("did NOT run"). Against the classic-db z2815 dump used while developing this slice
-  (`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`) the importer read 1133 `conditions` rows, all of them
+  (`<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`) the importer read 1133 `conditions` rows, all of them
   passed the cmangos validation (`ConditionTable`), and every type used is a known cmangos type. These counts are sizing,
   not test constants.
 

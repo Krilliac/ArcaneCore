@@ -1,6 +1,6 @@
 # Graveyards and resurrection
 
-Lane `graveyards-resurrection` (wave 4). Everything is checked against the real references (`D:\refs\vmangos` primary,
+Lane `graveyards-resurrection` (wave 4). Everything is checked against the real references (`<refs-root>\vmangos` primary,
 `mangos-classic`, `wow_messages`, `classic-db`); no code or data is copied, and no GPL data is committed. File:line
 citations are in the code comments; the list below is the map.
 
