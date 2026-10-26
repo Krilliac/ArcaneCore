@@ -112,6 +112,10 @@ public sealed class TeleportArrivalPrefetchTests : IDisposable
             Assert.True(teleports.TeleportTo(a, 0, -1500, 10, 30, 0f));
             Assert.True(teleports.IsBeingTeleportedNear(a));
             Assert.True(WorldMaps.Of(world).Terrain.IsPrefetched(0, tx, ty, out _));
+
+            // The read runs on the thread pool. Wait for it before the next world rewrites the same tile file (and before Dispose deletes the
+            // directory): a read still holding the file open makes that write throw a sharing violation on Windows, which a loaded run hits.
+            WaitForPrefetch(WorldMaps.Of(world).Terrain, 0, tx, ty);
         }
 
         using (WorldRuntime world = CreateWorld(prefetchDistance: 0f))
