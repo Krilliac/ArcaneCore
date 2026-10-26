@@ -221,6 +221,9 @@ public sealed class PlayerbotOptions
     /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
     public PlayerbotRiskOptions Risk { get; set; } = new();
 
+    /// <summary>Kiting and letting the pet hold aggro (<c>World:Playerbots:Combat</c>; live).</summary>
+    public PlayerbotCombatOptions Combat { get; set; } = new();
+
     /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
     public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
 
@@ -341,6 +344,8 @@ public sealed class PlayerbotOptions
         Party.Validate();
         if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
         Risk.Validate();
+        if (Combat is null) throw new InvalidOperationException($"{SectionName}:Combat is missing.");
+        Combat.Validate();
         if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
         Opportunities.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
