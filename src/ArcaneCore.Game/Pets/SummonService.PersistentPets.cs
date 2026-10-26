@@ -637,6 +637,7 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnumber, snapshot.PetNumber); // a permanent pet: SetPetNumber(n, true), Pet.cpp:262
             if (creature.Summon.Charm is { } initCharm)
             {
                 initCharm.Name = string.IsNullOrWhiteSpace(snapshot.Name) ? creature.Template.Name : snapshot.Name;

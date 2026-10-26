@@ -93,7 +93,7 @@ dead with the pet out of combat, or when the spell duration ends.
   stay/follow/returning/command flags, and the pet's spell list with autocast state. Every pet, guardian
   and mini pet has one (`Pet::Pet`: "pets always have a charminfo"). The pet number is also the entry part
   of the HIGHGUID_PET GUID (`Pet::Create`, `Object::_Create(guidlow, petNumber, HIGHGUID_PET)`);
-  `UNIT_FIELD_PETNUMBER` stays 0 (`SetPetNumber(n, false)`). Pets also carry the misc byte flags
+  `UNIT_FIELD_PETNUMBER` is written for a warlock demon and a loaded or tamed hunter pet (`SetPetNumber(n, true)`, `SpellEffects.cpp:3269`, `Pet.cpp:262`) and stays 0 for guardians and mini pets (`SetPetNumber(n, false)`). Pets also carry the misc byte flags
   `0x08 | 0x10 | 0x20` and a mini pet `IMMUNE_TO_PLAYER | IMMUNE_TO_NPC` (`Pet.cpp:2264-2268`).
 * **Server packets** (`PetPackets`): `SMSG_PET_SPELLS` on summoning a pet (`Player::PetSpellInitialize`,
   `Player.cpp:17354-17398`; a guardian or mini pet gets none) and the empty one (GUID 0) when a pet is

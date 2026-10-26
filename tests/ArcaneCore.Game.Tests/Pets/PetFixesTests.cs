@@ -125,4 +125,48 @@ public sealed class PetFixesTests
         Assert.True(events.IndexOf("create-pet") is >= 0 and var create && create < bar, $"pet bar before the pet create block: {string.Join(", ", events)}");
         Assert.True(events.IndexOf("owner-summon") is >= 0 and var summon && summon < bar, $"pet bar before UNIT_FIELD_SUMMON: {string.Join(", ", events)}");
     }
+
+    [Fact]
+    public void SummonImp_WritesThePetNumberToUnitFieldPetnumber()
+    {
+        using PetTestKit kit = ImpKit();
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.Level = 10;
+
+        kit.Cast(owner, SummonImpSpell);
+
+        Creature imp = Assert.Single(kit.Creatures.Creatures, c => c.IsPet);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        Assert.NotEqual(0u, number);
+        Assert.Equal(number, imp.GetUInt32(UpdateFields.UnitFieldPetnumber));
+        Assert.Equal(number, imp.Guid.Entry); // the pet number is also the entry part of the HIGHGUID_PET guid
+    }
+
+    [Fact]
+    public async Task CallPet_WritesTheStablePetNumberToTheField()
+    {
+        using PetTestKit kit = new([Spell(CallPetSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))]);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 802, PetEntry, 5, 0, 50, 0, 0, 1, [1, 2, 3], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+
+        kit.Cast(owner, CallPetSpell);
+
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        Assert.Equal(802u, pet.GetUInt32(UpdateFields.UnitFieldPetnumber));
+    }
+
+    [Fact]
+    public void AGuardianKeepsAZeroPetNumberField()
+    {
+        using PetTestKit kit = ImpKit();
+        (Player owner, _) = kit.AddPlayer(1);
+
+        kit.Cast(owner, GuardianSpell);
+
+        Creature guardian = Assert.Single(kit.Creatures.Creatures);
+        Assert.Equal(0u, guardian.GetUInt32(UpdateFields.UnitFieldPetnumber));
+    }
 }

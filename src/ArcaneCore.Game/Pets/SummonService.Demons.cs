@@ -73,6 +73,12 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, spellId, TotemSlots.None, 0);
             ApplyOwner(creature, caster, spellId);
             InitPet(creature, SummonKind.Pet, caster, petNumber);
+            if (caster is Player)
+            {
+                // CharmInfo::SetPetNumber(petNumber, true) for a player-owned summon (SpellEffects.cpp:3269): the client's pet frame, name query and stat window need it
+                creature.SetUInt32(UpdateFields.UnitFieldPetnumber, petNumber);
+            }
+
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
