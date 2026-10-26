@@ -597,6 +597,27 @@ public sealed class ItemInventoryTests
     }
 
     [Fact]
+    public void Load_DuplicateOwnSlot_PreservesDisplacedRow_AcrossSave()
+    {
+        (Player player, _) = CreatePlayer();
+        var shirt1 = new ItemInstanceData { Guid = 10, Entry = RecruitsShirt, Count = 1 };
+        var shirt2 = new ItemInstanceData { Guid = 11, Entry = RecruitsShirt, Count = 1 };
+        InventoryItemData[] rows =
+        [
+            new(0, InventorySlots.Body, shirt1),
+            new(0, InventorySlots.Body, shirt2),
+        ];
+
+        player.Inventory.Load(rows);
+        Assert.Single(player.Inventory.AllItems);
+        Assert.Equal(10u, player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Body)?.Guid.Low);
+        InventorySnapshot snapshot = player.Inventory.CreateSnapshot();
+        Assert.Equal(2, snapshot.Items.Count);
+        Assert.Contains(snapshot.Items, r => r.Item.Guid == 10 && r.ContainerGuid == 0 && r.Slot == InventorySlots.Body);
+        Assert.Contains(snapshot.Items, r => r.Item.Guid == 11 && r.ContainerGuid == 0 && r.Slot == InventorySlots.Body);
+    }
+
+    [Fact]
     public void Validation_IsValidPosition()
     {
         (Player player, _) = CreatePlayer();

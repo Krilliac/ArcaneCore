@@ -163,7 +163,7 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
 
         IItemTemplateStore templates = await EnsureLoadedAsync().ConfigureAwait(false);
         IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>> equipped =
-            await store.GetEquippedEntriesAsync(characters.Select(c => c.Id).ToList()).ConfigureAwait(false);
+            await store.GetEquippedEntriesAsync(characters.Select(c => c.Id).ToList(), id => templates.Find(id) is not null).ConfigureAwait(false);
         var result = new Dictionary<int, CharEnumItem[]>();
         foreach ((int id, IReadOnlyDictionary<byte, uint> slots) in equipped)
         {

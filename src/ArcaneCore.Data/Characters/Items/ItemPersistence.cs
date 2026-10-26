@@ -265,21 +265,26 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
     }
 
     public async Task<IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>>> GetEquippedEntriesAsync(
-        IReadOnlyCollection<int> characterIds, CancellationToken cancellationToken = default)
+        IReadOnlyCollection<int> characterIds, Func<uint, bool>? templateExists = null, CancellationToken cancellationToken = default)
     {
         List<int> ids = [.. characterIds];
         var rows = await db.Set<CharacterInventoryRow>().AsNoTracking()
             .Where(r => ids.Contains(r.Guid) && r.Bag == 0 && r.Slot < 20)
             .OrderBy(r => r.ItemGuid)
-            .Select(r => new { r.Guid, r.Slot, r.ItemId })
+            .Select(r => new { r.Guid, r.Slot, r.ItemId, r.ItemGuid })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
-        // character_inventory is keyed by item_guid only, so two rows can share (guid, bag 0, slot); the lowest item guid wins instead of
-        // one bad row failing the whole account's character list.
+        // character_inventory is keyed by item_guid only, so two rows can share (guid, bag 0, slot).
+        // Prefer the row whose item template exists, then lowest item guid, so a stale unloadable row
+        // does not hide the equipped item or fail the whole account's character list.
+
         var result = new Dictionary<int, IReadOnlyDictionary<byte, uint>>();
         foreach (var group in rows.GroupBy(r => r.Guid))
         {
             var slots = new Dictionary<byte, uint>();
-            foreach (var row in group)
+            var ordered = group
+                .OrderByDescending(r => templateExists?.Invoke(r.ItemId) ?? true)
+                .ThenBy(r => r.ItemGuid);
+            foreach (var row in ordered)
             {
                 slots.TryAdd(row.Slot, row.ItemId);
             }

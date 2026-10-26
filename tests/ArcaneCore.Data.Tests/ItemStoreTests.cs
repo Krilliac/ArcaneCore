@@ -79,6 +79,23 @@ public sealed class ItemStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task GetEquippedEntries_PrefersRowWithItemTemplate_OverLowestGuid(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        var store = new EfItemStore(db);
+
+        // Stale unloadable row has lower item guid (101, entry 25 without template); equipped row has higher guid (102, entry 26 with template).
+        await store.SaveInventoryAsync(7, new InventorySnapshot([new(0, 15, Item(101, 25)), new(0, 15, Item(102, 26)), new(0, 16, Item(103, 27))]));
+
+        IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>> equipped =
+            await store.GetEquippedEntriesAsync([7], id => id == 26 || id == 27);
+        Assert.Equal(new Dictionary<byte, uint> { [15] = 26, [16] = 27 }, equipped[7]);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task CharacterSave_WritesTheInventory_AndDeleteRemovesIt(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);

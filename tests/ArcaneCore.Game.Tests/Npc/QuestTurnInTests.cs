@@ -100,6 +100,8 @@ public sealed class QuestTurnInTests
 
         // Every jerky is in the trade window, so the delivery is short and nothing is taken.
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _, offered));
+        Assert.Contains("missing required delivery item", kit.Services.DiagnoseTurnInRefusal(kit.Player, kit.Creature.Guid, Id, 0, offered));
+
         Assert.Equal(before, kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky));
 
         // Without a trade the same turn-in works.
@@ -242,5 +244,7 @@ public sealed class QuestTurnInTests
         };
         var singleQuest = new Quest(singleRewardTemplate);
         Assert.True(QuestNpcServices.CanFitQuestRewards(kit.Player, singleQuest, 0));
+        HashSet<ObjectGuid> offered = [.. kit.Player.Inventory.AllItems.Where(i => i.Entry == ItemTestData.ToughJerky).Select(i => i.Guid)];
+        Assert.False(QuestNpcServices.CanFitQuestRewards(kit.Player, singleQuest, 0, offered: offered));
     }
 }

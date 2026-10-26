@@ -668,6 +668,7 @@ public sealed partial class EconomyFeature
             }
 
             box.ListReadInFlight = true;
+            box.SendWhenDone = true;
         }
 
         long revision = box.Revision;
@@ -682,14 +683,6 @@ public sealed partial class EconomyFeature
                 .Select(m => new MailView(m, m.HasItem ? items.GetValueOrDefault(m.ItemGuid) : null)).ToList();
         }, mails =>
         {
-            bool queued = false;
-            if (sendList)
-            {
-                requestedBox.ListReadInFlight = false;
-                queued = requestedBox.SendWhenDone;
-                requestedBox.SendWhenDone = false;
-            }
-
             if (!ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) || !_mailboxes.TryGetValue(id, out Mailbox? current)
                 || !ReferenceEquals(current, requestedBox))
             {
@@ -698,26 +691,24 @@ public sealed partial class EconomyFeature
 
             if (current.ReadGeneration != readGeneration)
             {
-                // A newer read owns the box; requests that waited on this one still get their list.
-                if (queued)
-                {
-                    LoadMailbox(player, sendList: true);
-                }
-
                 return;
             }
+
+            bool send = current.SendWhenDone;
+            current.SendWhenDone = false;
+            current.ListReadInFlight = false;
 
             if (current.Revision != revision)
             {
                 // A commit changed this box while the read ran; read again.
-                LoadMailbox(player, sendList || queued);
+                LoadMailbox(player, send);
                 return;
             }
 
             current.Mails = mails;
             current.Loaded = true;
             ScheduleNextDelivery(id);
-            if (sendList || queued)
+            if (send)
             {
                 long now = Now;
                 List<MailView> visible = [.. mails.Where(m => m.Mail.DeliverTime <= now && m.Mail.ExpireTime > now)];
@@ -725,7 +716,7 @@ public sealed partial class EconomyFeature
             }
         }, failed: () =>
         {
-            if (sendList)
+            if (requestedBox.ReadGeneration == readGeneration)
             {
                 requestedBox.ListReadInFlight = false;
                 requestedBox.SendWhenDone = false;

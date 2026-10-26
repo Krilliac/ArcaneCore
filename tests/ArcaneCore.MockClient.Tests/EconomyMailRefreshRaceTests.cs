@@ -11,6 +11,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
+using System.Reflection;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.MockClient.Tests;
 
@@ -97,6 +100,47 @@ public sealed class EconomyMailRefreshRaceTests
         Assert.Equal(1, Volatile.Read(ref gate.Calls) - baseline);
     }
 
+    [Fact]
+    public async Task LaterNonListReadBumpingReadGeneration_DoesNotDropOriginalListReply()
+    {
+        var gate = new ListReadGate();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            services => services.AddScoped<IEconomyStore>(provider => new GatedReadStore(
+                new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), gate)));
+        EconomyFeature economy = rig.Server.Services.GetRequiredService<EconomyFeature>();
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        await SeedAsync(rig);
+
+        gate.Armed = true;
+        try
+        {
+            // 1. Client requests mail list: starts a background DB read with sendList = true (generation 1).
+            await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+
+            // Wait until the list read has started and entered the store.
+            await gate.FirstReadEntered.Task.WaitAsync(rig.Token);
+
+            // 2. A later non-list read arrives (login / delete cleanup path) and bumps ReadGeneration to 2.
+            await rig.Server.World.InvokeAsync(() =>
+            {
+                Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+                typeof(EconomyFeature).GetMethod("LoadMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(economy, [receiver, false]); return true;
+            }).WaitAsync(rig.Token);
+        }
+        finally
+        {
+            gate.Release.TrySetResult(true);
+        }
+
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        // Even though generation was bumped by the non-list read, the original requester still gets their mail list.
+        byte[] result = await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token);
+        Assert.Equal(2, result[0]);
+    }
+
     private static async Task SeedAsync(Rig rig)
     {
         await using (AsyncServiceScope itemScope = rig.Server.Services.CreateAsyncScope())
@@ -135,6 +179,7 @@ public sealed class EconomyMailRefreshRaceTests
     {
         internal volatile bool Armed;
         internal int Calls;
+        internal TaskCompletionSource<bool> FirstReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -146,6 +191,7 @@ public sealed class EconomyMailRefreshRaceTests
             IReadOnlyList<MailRecord> result = await inner.GetMailsAsync(id, cancellationToken);
             if (gate.Armed)
             {
+                gate.FirstReadEntered.TrySetResult(true);
                 await gate.Release.Task.WaitAsync(cancellationToken);
             }
 

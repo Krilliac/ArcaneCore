@@ -69,7 +69,7 @@ public sealed class PlayerDumpTests : IAsyncLifetime
             CharacterInventoryRow bag = inv.Single(r => r.ItemId == 4500);
             Assert.Equal(bag.ItemGuid, inv.Single(r => r.ItemId == 117).Bag);
             List<ItemInstanceRow> items = await db.Set<ItemInstanceRow>().Where(r => r.OwnerGuid == clone).ToListAsync();
-            Assert.Equal(4, items.Count); // three carried, one in the mail
+            Assert.Equal(3, items.Count); // three carried; mailed item is escrowed with owner 0
             Assert.All(inv, r => Assert.Contains(items, i => i.Guid == r.ItemGuid));
 
             // The written letter keeps its text under a new id; the mail's item is the clone's new item.
@@ -79,7 +79,8 @@ public sealed class PlayerDumpTests : IAsyncLifetime
             MailRow mail = await db.Set<MailRow>().SingleAsync(m => m.ReceiverId == clone);
             Assert.NotEqual(50u, mail.Id);
             Assert.Equal("mail body", (await db.Set<ItemTextRow>().SingleAsync(t => t.Id == mail.ItemTextId)).Text);
-            Assert.Equal(25u, items.Single(i => i.Guid == mail.ItemGuid).ItemId);
+            ItemInstanceRow mailItem = await db.Set<ItemInstanceRow>().SingleAsync(i => i.Guid == mail.ItemGuid);
+            Assert.Equal((25u, 0), (mailItem.ItemId, mailItem.OwnerGuid));
             Assert.Equal(1, await db.Set<ItemLootRow>().CountAsync(r => r.ItemGuid == bag.ItemGuid)); // the bag's loot came along
             Assert.Equal(5u, (await db.Set<ItemLootStateRow>().SingleAsync(r => r.ItemGuid == bag.ItemGuid)).Gold);
 
@@ -201,6 +202,53 @@ public sealed class PlayerDumpTests : IAsyncLifetime
         }
 
         // The clone's first inventory save must not delete the mailed item.
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            await new EfItemStore(db).SaveInventoryAsync(clone, new InventorySnapshot([]));
+        }
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            Assert.True(await db.Set<ItemInstanceRow>().AnyAsync(i => i.Guid == escrowGuid && i.OwnerGuid == 0));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Load_MailedItemWithNonZeroOwner_StaysWithMailAsOwnerless(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice) = await SeedAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            // An old or imported dump row may have non-zero OwnerGuid on a mailed item.
+            db.Add(new ItemInstanceRow { Guid = 105, OwnerGuid = alice, ItemId = 2589, Count = 5 });
+            db.Add(new MailRow { Id = 52, ReceiverId = alice, SenderId = 0, Subject = "escrow-nonzero", ItemGuid = 105, ItemEntry = 2589 });
+            await db.SaveChangesAsync();
+        }
+
+        string dump;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            dump = (await new PlayerDumpWriter(db).GetDumpAsync(alice))!;
+        }
+
+        PlayerDumpLoad load;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            load = await new PlayerDumpReader(db).LoadDumpAsync(dump, accountId: 4, "CloneTwo", 0, await StoredPlayerDumpIds.CreateAsync(db));
+        }
+
+        Assert.Equal(DumpReturn.Success, load.Result);
+        int clone = load.CharacterId;
+        uint escrowGuid;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            escrowGuid = (await db.Set<MailRow>().SingleAsync(m => m.ReceiverId == clone && m.Subject == "escrow-nonzero")).ItemGuid;
+            Assert.NotEqual(105u, escrowGuid);
+            Assert.Equal(2589u, (await new EfEconomyStore(db).GetEscrowItemsAsync([escrowGuid]))[escrowGuid].Entry);
+        }
+
+        // The clone's inventory save must not delete the mailed item.
         await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
         {
             await new EfItemStore(db).SaveInventoryAsync(clone, new InventorySnapshot([]));

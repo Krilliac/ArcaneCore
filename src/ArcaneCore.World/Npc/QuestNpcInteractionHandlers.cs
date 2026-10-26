@@ -80,7 +80,10 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     private static void Complete(WorldSession session, Player player, byte[] payload)
     {
         (ObjectGuid guid, uint quest) = ReadQuest(payload);
-        Services(session).CompleteQuest(player, guid, quest);
+        IReadOnlySet<ObjectGuid>? offered = session.Services.GetService<Economy.EconomyFeature>()?.TradeOf(player) is { } trade
+            ? trade.SideOf(player).TradedItems.ToHashSet()
+            : null;
+        Services(session).CompleteQuest(player, guid, quest, offered);
     }
 
     private static void RequestReward(WorldSession session, Player player, byte[] payload)

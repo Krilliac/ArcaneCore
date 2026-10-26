@@ -67,7 +67,7 @@ public interface IItemStore
 
     /// <summary>Item entries in the character's own slots 0..19 (equipment + first bag slot), for the character list.</summary>
     Task<IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>>> GetEquippedEntriesAsync(
-        IReadOnlyCollection<int> characterIds, CancellationToken cancellationToken = default);
+        IReadOnlyCollection<int> characterIds, Func<uint, bool>? templateExists = null, CancellationToken cancellationToken = default);
 
     /// <summary>The highest item GUID in use (0 when none), to seed the GUID allocator.</summary>
     Task<uint> GetMaxItemGuidAsync(CancellationToken cancellationToken = default);

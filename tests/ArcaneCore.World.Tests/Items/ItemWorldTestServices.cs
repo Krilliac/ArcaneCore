@@ -92,7 +92,7 @@ internal sealed class InMemoryItemStore : IItemStore, IItemStateStore
     }
 
     public Task<IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>>> GetEquippedEntriesAsync(
-        IReadOnlyCollection<int> characterIds, CancellationToken cancellationToken = default)
+        IReadOnlyCollection<int> characterIds, Func<uint, bool>? templateExists = null, CancellationToken cancellationToken = default)
     {
         var result = new Dictionary<int, IReadOnlyDictionary<byte, uint>>();
         foreach (int id in characterIds)

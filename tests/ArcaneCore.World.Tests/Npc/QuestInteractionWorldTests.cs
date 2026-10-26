@@ -12,6 +12,13 @@ using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections;
+using System.Reflection;
+using ArcaneCore.Game.Economy;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.World.Economy;
+using ArcaneCore.World.Tests.Items;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Npc;
@@ -282,6 +289,62 @@ public sealed class QuestInteractionWorldTests
         await client.CollectAsync();
         await client.SendAsync(opcode, new byte[length]);
         Assert.True(await client.IsClosedByServerAsync());
+    }
+
+    [Fact]
+    public async Task ChooseReward_WhileDeliveryItemOfferedInOpenTrade_RefusesTurnInAndLeavesStackAlone()
+    {
+        const uint cloth = 2589;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = cloth, Class = 7, Name = "Linen Cloth", DisplayId = 1, Stackable = 20, Quality = 1 });
+        items.Templates.StartingItems.Add(new StartingItem(1, 1, cloth, 2));
+
+        var fixture = new QuestInteractionFixture
+        {
+            RepeatableItem = cloth,
+            RepeatableItemCount = 2,
+        };
+
+        WorldTestHost host;
+        using (items.Use())
+        {
+            host = Start(fixture);
+        }
+
+        await using (host)
+        await using (WorldTestClient crafter = await host.EnterWorldAsync("CRAFTER", "Crafter"))
+        await using (WorldTestClient partner = await host.EnterWorldAsync("PARTNER", "Partner"))
+        {
+            await VisibleAsync(host, "Crafter");
+            await VisibleAsync(host, "Partner");
+
+            (bool settlementStarted, uint countAfter) = await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Crafter")!;
+                Player other = host.World.FindOnlinePlayer("Partner")!;
+                Item stack = Assert.Single(player.Inventory.AllItems, i => i.Entry == cloth);
+                Assert.Equal(2u, stack.Count);
+
+                EconomyFeature economy = host.WorldServices.GetRequiredService<EconomyFeature>();
+                var trades = (IDictionary)typeof(EconomyFeature).GetField("_trades", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(economy)!;
+                var trade = new TradeSession(player, other) { Opened = true };
+                trades[player] = trade;
+                trades[other] = trade;
+
+                // Put the delivery item stack in trade slot 0 (one of the six TradedItems).
+                trade.SideOf(player)[0] = stack.Guid;
+
+                QuestNpcFeature feature = ((WorldSession)player.Session).Services.GetRequiredService<QuestNpcFeature>();
+
+                // Driving the real wiring: QuestNpcFeature.Rewards.cs:96-99 extracts TradeOf -> SideOf -> TradedItems.
+                feature.ChooseReward((WorldSession)player.Session, player, QuestInteractionFixture.Guid, QuestInteractionFixture.QuestId, 0);
+
+                return (player.IsQuestSettlementPending, player.Inventory.GetItemCount(cloth));
+            });
+
+            Assert.False(settlementStarted);
+            Assert.Equal(2u, countAfter);
+        }
     }
 
     private static WorldTestHost Start(QuestInteractionFixture fixture)

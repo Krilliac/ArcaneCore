@@ -250,7 +250,10 @@ public sealed partial class PlayerInventory
         foreach (InventoryItemData row in pending.Where(r => r.ContainerGuid == 0).OrderBy(r => r.Slot))
         {
             ItemTemplate? template = Templates.Find(row.Item.Entry);
-            if (template is null || !CanLoadIntoOwnSlot(template, row.Slot))
+            // vmangos Player::_LoadInventory (Player.cpp:19712, 19780): CanEquipItem fails if the destination
+            // slot is already occupied. Problematic items that cannot be loaded are not placed into that slot;
+            // keeping the duplicate row untouched in _unloadable prevents the next inventory save from deleting it.
+            if (template is null || !CanLoadIntoOwnSlot(template, row.Slot) || _items[row.Slot] is not null)
             {
                 _unloadable.Add(row);
                 continue;

@@ -25,7 +25,7 @@ public sealed partial class QuestNpcServices
     /// items and is complete (GossipDef.cpp:484-497). A repeatable quest not in the log is completable from the ender's
     /// list (CanCompleteRepeatableQuest). This request never credits an objective.
     /// </summary>
-    public void CompleteQuest(Player player, ObjectGuid guid, uint questId)
+    public void CompleteQuest(Player player, ObjectGuid guid, uint questId, IReadOnlySet<ObjectGuid>? offered = null)
     {
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest))
         {
@@ -33,8 +33,8 @@ public sealed partial class QuestNpcServices
         }
 
         bool complete = state.Quests.GetStatus(questId) != QuestStatus.Complete && quest.IsRepeatable
-            ? CanCompleteRepeatableQuest(state, quest)
-            : CanRewardQuest(state, quest, msg: false);
+            ? CanCompleteRepeatableQuest(state, quest, offered)
+            : CanRewardQuest(state, quest, msg: false, offered);
         SendRequestItems(player, guid, quest, complete, closeOnCancel: false);
     }
 

@@ -443,6 +443,13 @@ public sealed partial class PlayerInventory
 
     private void PlaceInOwnSlot(byte slot, Item item)
     {
+        if (_items[slot] is { } displaced && !ReferenceEquals(displaced, item))
+        {
+            // vmangos Player::_LoadInventory (Player.cpp:19780): do not silently drop an item occupying this slot;
+            // preserving its row in _unloadable ensures the next inventory save does not delete it from database.
+            _unloadable.Add(new InventoryItemData(0, slot, displaced.ToData()));
+        }
+
         _items[slot] = item;
         SetSlotField(slot, item.Guid);
         item.ContainedIn = _ownerGuid;
