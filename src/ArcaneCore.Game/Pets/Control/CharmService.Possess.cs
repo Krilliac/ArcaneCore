@@ -246,7 +246,7 @@ public sealed partial class CharmService
                 if (!WithinDistance(pet, player, Maps.Map.VisibilityRange))
                 {
                     summons?.QueueCurrentPetSave(player);
-                    summons?.Unsummon(pet);
+                    summons?.Unsummon(pet, "possession ended out of range");
                 }
             }
         }

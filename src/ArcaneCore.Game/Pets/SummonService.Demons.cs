@@ -75,7 +75,7 @@ public sealed partial class SummonService
             InitPet(creature, SummonKind.Pet, caster, petNumber);
             if (caster is Player)
             {
-                // CharmInfo::SetPetNumber(petNumber, true) for a player-owned summon (SpellEffects.cpp:3269): the client's pet frame, name query and stat window need it
+                // CharmInfo::SetPetNumber(petNumber, true) for a player-owned summon (SpellEffects.cpp:3269): vmangos writes it for every player-owned summon; the client likely reads it for the pet frame and name query (unconfirmed)
                 creature.SetUInt32(UpdateFields.UnitFieldPetnumber, petNumber);
             }
 
@@ -121,13 +121,13 @@ public sealed partial class SummonService
                 return false; // a pet in corpse state can't be unsummoned by a call pet
             }
 
-            Unsummon(old);
+            Unsummon(old, "replaced a dead pet by a new summon");
             return true;
         }
 
         if (caster is Player && newEntry != 0)
         {
-            Unsummon(old);
+            Unsummon(old, "replaced by a new summon");
             return true;
         }
 

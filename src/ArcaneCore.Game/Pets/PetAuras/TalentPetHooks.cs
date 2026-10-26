@@ -55,7 +55,7 @@ public sealed class TalentPetHooks : IDisposable
             _pets.QueueDetachedPetSave(player); // read from the live pet, so before it goes
         }
 
-        _pets.Unsummon(pet);
+        _pets.Unsummon(pet, "talents reset");
     }
 
     /// <summary>The owner learned a talent rank: its pet takes the talent pet auras it is missing.</summary>

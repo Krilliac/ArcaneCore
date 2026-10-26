@@ -119,7 +119,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             if (live is not null)
             {
                 summons.ForgetPetForSpiritHealer(player);
-                summons.Unsummon(live);
+                summons.Unsummon(live, "stabled");
             }
 
             summons.ReplaceCachedPet(id, null);
@@ -246,7 +246,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             if (live is not null)
             {
                 summons.ForgetPetForSpiritHealer(player);
-                summons.Unsummon(live);
+                summons.Unsummon(live, "taken out of the stable (swap)");
             }
 
             summons.ReplaceCachedPet(id, null);

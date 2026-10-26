@@ -43,7 +43,7 @@ public sealed partial class SummonService
             bool found = false;
             foreach (Creature old in pets.GuardiansOf(caster, entry).ToArray())
             {
-                Unsummon(old);
+                Unsummon(old, "guardian re-summoned");
                 found = true;
             }
 
@@ -248,14 +248,14 @@ public sealed partial class SummonService
         // for same pet just despawn
         if (old is not null && old.Entry == entry)
         {
-            Unsummon(old);
+            Unsummon(old, "mini pet dismissed");
             return;
         }
 
         // despawn old pet before summon new
         if (old is not null)
         {
-            Unsummon(old);
+            Unsummon(old, "mini pet replaced");
         }
 
         bool hasDest = context.Cast.Targets.HasDest;

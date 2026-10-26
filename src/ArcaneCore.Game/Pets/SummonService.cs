@@ -153,19 +153,22 @@ public sealed partial class SummonService : ISpellSummonSink
 
     /// <summary>
     /// Every pet that goes away says why: a pet vanishing without a trace (the loyalty runaway, a leash, a dismiss) cannot otherwise be told
-    /// apart from a bug. A pet is logged at Information, a guardian, mini pet or wild summon at Debug (they come and go all the time).
+    /// apart from a bug. A pet is logged at Information; a guardian, mini pet or wild summon, a temporary put-away or a logout (reason
+    /// "temporary" / "logout") and any pet of a bot owner at Debug (they come and go all the time).
     /// </summary>
     private void LogUnsummon(Creature creature, SummonLinks links, string reason)
     {
         uint owner = creature.OwnerGuid.Low;
         uint number = links.Charm?.PetNumber ?? 0;
-        if (links.Kind == SummonKind.Pet)
+        bool routine = reason.Contains("temporar", StringComparison.OrdinalIgnoreCase) || reason.Contains("logout", StringComparison.OrdinalIgnoreCase)
+            || creature.GetOwner() is Player { Session.IsPlayerbot: true };
+        if (links.Kind == SummonKind.Pet && !routine)
         {
             _logger.LogInformation("pet unsummoned: entry {Entry} number {PetNumber} owner {OwnerGuid} reason {Reason}", creature.Entry, number, owner, reason);
         }
         else
         {
-            _logger.LogDebug("summon unsummoned: kind {Kind} entry {Entry} owner {OwnerGuid} reason {Reason}", links.Kind, creature.Entry, owner, reason);
+            _logger.LogDebug("summon unsummoned: kind {Kind} entry {Entry} number {PetNumber} owner {OwnerGuid} reason {Reason}", links.Kind, creature.Entry, number, owner, reason);
         }
     }
 
@@ -173,7 +176,7 @@ public sealed partial class SummonService : ISpellSummonSink
     /// Send SMSG_PET_SPELLS only after the owner has the pet's create block and its own UNIT_FIELD_SUMMON. vmangos adds the pet to the map (which
     /// sends the create block at once), sets the pet link and only then runs <c>Player::PetSpellInitialize</c> (SpellEffects.cpp:3306-3321). Here
     /// <c>SpawnSummoned</c> only queues the create block for the end-of-tick flush, so without this the client got the pet bar for a unit it did not
-    /// know yet and its pet frame (UNIT_PET / PET_BAR_UPDATE) never refreshed. The visibility of the pet and the owner's queued values are pushed
+    /// know yet, which is the likely reason (a hypothesis, not confirmed against a client) a pet frame refresh was missed. The visibility of the pet and the owner's queued values are pushed
     /// now, in that order, into the owner's update buffer, which is flushed before the packet is queued. World thread; no I/O.
     /// </summary>
     internal static void SendPetSpellsAfterCreate(Player owner, Creature pet, byte[] payload)

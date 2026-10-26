@@ -288,7 +288,7 @@ public sealed partial class PetController
                     break;
                 }
 
-                _summons.Unsummon(pet);
+                _summons.Unsummon(pet, "pet dismissed by the owner");
                 break;
         }
     }
