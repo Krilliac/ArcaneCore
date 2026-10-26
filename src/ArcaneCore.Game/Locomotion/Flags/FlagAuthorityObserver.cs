@@ -41,7 +41,6 @@ public sealed class FlagAuthorityObserver : IClientMovementObserver
         LocomotionState state = player.Locomotion;
         if (state.SuppressAnomalies
             || player.IsGameMaster
-            || player.HasMovementCheat // .cheat fly / fixedz: the GM chose to move this way (no vmangos counterpart; its anticheat judges flags, not speed)
             || LocomotionEnvironment.For(context.World).IsBeingTeleported(player)
             || state.ActiveSpline is not null
             || state.Pending.HasPendingOfType(MovementChangeType.KnockBack)

@@ -171,6 +171,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // "Do not jump or flying mode will be removed": a jump takes the client out of the air-swim, so the cheat ends with it.
+        if (opcode == WorldOpcode.MsgMoveJump)
+        {
+            MovementCheats.EndFlyOnJump(player);
+        }
+
         // The anticheat judges the block as the client sent it, before the observers correct it (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.BeforeMovement(session, player, opcode, movement);

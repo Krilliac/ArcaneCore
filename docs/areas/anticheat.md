@@ -36,13 +36,12 @@ Never checked: accounts at or above `AntiCheat:ExemptSecurity` (default Moderato
 on (`.gm on`), and the server's own managed playerbot sessions (`AntiCheat:ExemptManagedBots`, default true: they are
 trusted server code and move by `TryManagedAction`). `AntiCheat:Enabled = false` exempts everyone.
 
-While a GM has given a player `.cheat fly` or `.cheat fixedz` (`Player.HasMovementCheat`), that player's movement blocks,
-movement acknowledgements and time-skip reports are not judged at all: the client swims, levitates and flies in the air, never
-falls, and may cross terrain at will. The speed-violation anomaly (`FlagAuthorityObserver`), fall tracking and fall damage
-(`FallObserver`) and the void kill and under-map recovery (`UndermapObserver`) stand down for the same time. Only the cheat
-exempts, so the same packets are judged again as soon as it is turned off, and the first block after either change is a new
-baseline. `.cheat waterwalk` and `.cheat featherfall` grant the water walk and slow fall flags (`MovementCheats.GrantedFlags`);
-a feather fall cheat also takes the fall damage away. The rejection points (an unknown spell, a far game object) are not movement
+A GM cheat is a grant of flags, not an exemption (vmangos reads `PLAYER_CHEAT_FLY` and `PLAYER_CHEAT_FIXED_Z` only in the flag
+checks, MovementAnticheat.cpp:789-806, 1090): `.cheat fly` lets the levitating and swim-fly flags pass the flag test and the
+swimming-out-of-water test, `.cheat waterwalk` and `.cheat featherfall` grant the water walk and slow fall flags
+(`MovementCheats.GrantedFlags`). Speed, teleport, fall damage, the void kill and the time checks judge the player as always, and a
+jump ends fly mode. `UNIT_FLAG_SERVER_CONTROLLED` (`.cheat wallclimb`) switches the climbed-into-the-air test off for that
+player (vmangos NO_WALL_CLIMB_CHECK_UNIT_FLAGS). A feather fall cheat also takes the fall damage away. The rejection points (an unknown spell, a far game object) are not movement
 and still apply. The cheats live on the `Player`, are never saved, and end with the session.
 
 ## The checks

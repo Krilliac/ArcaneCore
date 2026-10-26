@@ -120,11 +120,15 @@ public sealed class GmMovementCheatTests
         (_, MovementInfo on) = DecodeHeartbeat(await gm.ReadUntilAsync(WorldOpcode.MsgMoveHeartbeat));
         Assert.Equal(0x01A00400u, (uint)on.Flags);
         Assert.Equal(PlayerCheats.Fly, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+        // The command also replied in chat ("You set fly mode ..." and the jump warning); read those so the next read sees the next reply.
+        Assert.Equal($"You set fly mode to on for {GmLink}.", (await gm.ReadChatAsync()).Text);
+        Assert.Equal("WARNING: Do not jump or flying mode will be removed.", (await gm.ReadChatAsync()).Text);
 
         await SayAsync(gm, ".gm fly off");
         (_, MovementInfo off) = DecodeHeartbeat(await gm.ReadUntilAsync(WorldOpcode.MsgMoveHeartbeat));
         Assert.Equal(0u, (uint)off.Flags);
         Assert.Equal(PlayerCheats.None, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+        Assert.Equal($"You set fly mode to off for {GmLink}.", (await gm.ReadChatAsync()).Text);
 
         await SayAsync(gm, ".gm fly maybe");
         Assert.Equal("Incorrect value, use on or off", (await gm.ReadChatAsync()).Text);
@@ -321,6 +325,79 @@ public sealed class GmMovementCheatTests
 
     // --- the movement checks -------------------------------------------------------------------------------------------------------------------
 
+    [Fact]
+    public async Task CheatFly_WithACreatureSelected_FliesTheInvoker()
+    {
+        // vmangos HandleCheatFlyCommand: getSelectedPlayer() is null for a creature, and the handler falls back to the invoker (CharacterCommands.cpp:105-107).
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await EnterGmAsync(host);
+        const ulong creatureGuid = 0xF130_0000_0000_0001UL;
+        await gm.SendAsync(WorldOpcode.CmsgSetSelection, BitConverter.GetBytes(creatureGuid));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Movegm")!.Selection.Value == creatureGuid, "the creature selection");
+
+        foreach (string command in new[] { ".cheat fly on", ".cheat fixedz on", ".cheat wallclimb on" })
+        {
+            await SayAsync(gm, command);
+        }
+
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Movegm")!.Cheats == (PlayerCheats.Fly | PlayerCheats.FixedZ), "fly and fixed z on the invoker");
+        Assert.True(await host.PlayerStateAsync("Movegm", p => (p.UnitFlags & UnitFlags.ServerControlled) != 0));
+    }
+
+    [Fact]
+    public async Task CheatFlyOff_KeepsTheFlagsFlightDoesNotOwn()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await EnterGmAsync(host);
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Movegm")!;
+            p.Cheats = PlayerCheats.Fly;
+            p.SetMovementFlags(MovementCheats.FlyFlags | MovementFlags.WaterWalking | MovementFlags.SafeFall | MovementFlags.Root);
+        });
+
+        await SayAsync(gm, ".cheat fly off");
+        (_, MovementInfo off) = DecodeHeartbeat(await gm.ReadUntilAsync(WorldOpcode.MsgMoveHeartbeat));
+        Assert.Equal(MovementFlags.WaterWalking | MovementFlags.SafeFall | MovementFlags.Root, off.Flags);
+        Assert.Equal(MovementFlags.WaterWalking | MovementFlags.SafeFall | MovementFlags.Root, await host.PlayerStateAsync("Movegm", p => p.Movement.Flags));
+        Assert.Equal(PlayerCheats.None, await host.PlayerStateAsync("Movegm", p => p.Cheats));
+    }
+
+    [Fact]
+    public async Task AJumpEndsFlyMode_AndOnlyFlyMode()
+    {
+        // The command's own warning: "Do not jump or flying mode will be removed." The client walks again after a jump, so the cheat must not stay.
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("JUMPER", "Jumper");
+        await client.CollectAsync();
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Jumper")!.Cheats = PlayerCheats.Fly | PlayerCheats.FeatherFall | PlayerCheats.FixedZ);
+
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementCheats.FlyFlags, 100));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Jumper")!.Movement.Z == 100f, "the flying block");
+        Assert.Equal(PlayerCheats.Fly | PlayerCheats.FeatherFall | PlayerCheats.FixedZ, await host.PlayerStateAsync("Jumper", p => p.Cheats));
+
+        await client.SendAsync(WorldOpcode.MsgMoveJump, FallBlock(MovementFlags.Jumping, 101));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Jumper")!.Movement.Z == 101f, "the jump block");
+        Assert.Equal(PlayerCheats.FeatherFall | PlayerCheats.FixedZ, await host.PlayerStateAsync("Jumper", p => p.Cheats));
+    }
+
+    [Fact]
+    public void FlyGrantsTheLevitatingAndFlyingFlags_FixedZGrantsNone()
+    {
+        var table = new Dictionary<PlayerCheats, MovementFlags>
+        {
+            [PlayerCheats.Fly] = MovementFlags.Levitating | MovementFlags.Flying,
+            [PlayerCheats.FixedZ] = MovementFlags.None,
+            [PlayerCheats.WaterWalk] = MovementFlags.WaterWalking,
+            [PlayerCheats.FeatherFall] = MovementFlags.SafeFall,
+        };
+        Assert.Equal(MovementFlags.Levitating | MovementFlags.Flying, MovementCheats.GrantedFor(PlayerCheats.Fly));
+        foreach ((PlayerCheats cheat, MovementFlags flags) in table)
+        {
+            Assert.Equal(flags, MovementCheats.GrantedFor(cheat));
+        }
+    }
+
     private static AntiCheatFeature AntiCheatOf(WorldTestHost host) => host.WorldServices.GetRequiredService<AntiCheatFeature>();
 
     [Fact]
@@ -422,11 +499,35 @@ public sealed class GmMovementCheatTests
             JumpZSpeed = -7.95f, JumpCosAngle = 1, JumpSinAngle = 0, JumpXySpeed = 7,
         });
 
+    [Fact]
+    public Task AFortyYardFall_DoesNotHurt_WhileFeatherFallIsOn() => AFortyYardFall_DoesNotHurt(PlayerCheats.FeatherFall);
+
     [Theory]
     [InlineData(PlayerCheats.Fly)]
     [InlineData(PlayerCheats.FixedZ)]
-    [InlineData(PlayerCheats.FeatherFall)]
-    public async Task AFortyYardFall_DoesNotHurt_WhileTheCheatIsOn(PlayerCheats cheat)
+    public async Task AFortyYardFall_StillHurts_UnderFlyOrFixedZ(PlayerCheats cheat)
+    {
+        // vmangos reads PLAYER_CHEAT_FLY / PLAYER_CHEAT_FIXED_Z only in the flag checks (MovementAnticheat.cpp:789-806, 1090): a player who
+        // really falls (a jump removes flying) is hurt as usual, 1432 of 3000 health.
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("FALLER", "Faller");
+        await client.CollectAsync();
+        await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Faller")!;
+            p.MaxHealth = 3000;
+            p.Health = 3000;
+            p.Cheats = cheat;
+        });
+
+        await client.SendAsync(WorldOpcode.MsgMoveJump, FallBlock(MovementFlags.Jumping, 100));
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping | MovementFlags.FallingFar, 80, 1500));
+        await client.SendAsync(WorldOpcode.MsgMoveFallLand, FallBlock(MovementFlags.None, 60, 3000));
+        byte[] log = await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog);
+        Assert.Equal(1432u, BitConverter.ToUInt32(log, 9));
+    }
+
+    private static async Task AFortyYardFall_DoesNotHurt(PlayerCheats cheat)
     {
         // Without a cheat the same fall costs 1432 of 3000 health (FallDamageEndToEndTests.AFortyYardFall_SendsOneFallDamageLog_AndHurtsThePlayer).
         await using WorldTestHost host = WorldTestHost.Start();
@@ -452,9 +553,9 @@ public sealed class GmMovementCheatTests
     [Theory]
     [InlineData(PlayerCheats.Fly)]
     [InlineData(PlayerCheats.FixedZ)]
-    public async Task BelowTheVoidHeight_IsNotKillingAFlyingOrGlidingPlayer(PlayerCheats cheat)
+    public async Task BelowTheVoidHeight_StillTakesHalfTheHealth_UnderFlyOrFixedZ(PlayerCheats cheat)
     {
-        // Without a cheat FallingBelowTheVoidHeight_TakesHalfTheHealth (FallDamageEndToEndTests) shows the half-health void damage.
+        // The void kill (-500) is not one of the places vmangos reads the two cheats (MovementAnticheat.cpp:789-806, 1090).
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("VOID", "Voider");
         await client.CollectAsync();
@@ -467,14 +568,12 @@ public sealed class GmMovementCheatTests
         });
 
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, FallBlock(MovementFlags.Jumping | MovementFlags.FallingFar, -501f, 5000));
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Voider")!.Movement.Z == -501f, "the block to be stored");
-
-        Assert.Equal(2000u, await host.PlayerStateAsync("Voider", p => p.Health));
-        Assert.DoesNotContain(await client.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgEnvironmentaldamagelog);
+        byte[] log = await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog);
+        Assert.Equal(1000u, BitConverter.ToUInt32(log, 9));
     }
 
     [Fact]
-    public async Task FlyOn_ASpeedHopIsNotAnAnomaly_ButTheSameHopWithoutTheCheatIs()
+    public async Task FlyOn_ASpeedHopIsStillAnAnomaly_LikeTheSameHopWithoutTheCheat()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient flyer = await host.EnterWorldAsync("HOPFLYER", "Hopflyer");
@@ -494,8 +593,10 @@ public sealed class GmMovementCheatTests
             await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)!.Movement.X == x + 201, "the hop");
         }
 
-        Assert.Equal(1, capture.Count("move/speed-violation"));
-        Assert.StartsWith("player Hopwalker ", capture.Notices.Single().Subject, StringComparison.Ordinal);
+        // Neither cheat is a speed grant (vmangos reads PLAYER_CHEAT_FLY only for the levitating and swim-fly flags).
+        Assert.Equal(2, capture.Count("move/speed-violation"));
+        Assert.Contains(capture.Notices, n => n.Subject.StartsWith("player Hopflyer ", StringComparison.Ordinal));
+        Assert.Contains(capture.Notices, n => n.Subject.StartsWith("player Hopwalker ", StringComparison.Ordinal));
     }
 
     [Fact]

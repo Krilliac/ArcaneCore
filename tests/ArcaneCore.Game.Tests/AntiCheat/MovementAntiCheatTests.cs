@@ -25,6 +25,7 @@ public sealed class MovementAntiCheatTests
         public bool Rooted;
         public bool Alive = true;
         public MovementFlags Granted;
+        public bool ServerControlled;
         public TransportClaim Transport = TransportClaim.None;
         public IAntiCheatTerrain? Terrain;
         public int Latency = 100;
@@ -42,7 +43,7 @@ public sealed class MovementAntiCheatTests
             Checks.Observe(new MovementSample
             {
                 Opcode = opcode, Movement = movement, ReceivedMs = Received, LatencyMs = Latency, AllowedSpeed = Allowed, Alive = Alive,
-                Rooted = Rooted, GrantedFlags = Granted, Transport = Transport, Terrain = Terrain,
+                Rooted = Rooted, GrantedFlags = Granted, ServerControlled = ServerControlled, Transport = Transport, Terrain = Terrain,
             }, findings);
             StoredX = X;
             StoredY = Y;
@@ -568,6 +569,38 @@ public sealed class MovementAntiCheatTests
         stairs.Send(WorldOpcode.MsgMoveStartForward);
         stairs.Z += 6;
         Assert.Empty(stairs.Step(500, 1));
+    }
+
+    [Fact]
+    public void SwimFlyingInTheAir_IsNotSwimmingOutOfWater_WhenTheServerGrantedFlight_AndIsWhenItDidNot()
+    {
+        // .cheat fly: the client swims in the air (vmangos MovementAnticheat.cpp:796-806 exempts the swim-fly flags for PLAYER_CHEAT_FLY only).
+        MovementFlags flying = MovementFlags.Forward | MovementFlags.Levitating | MovementFlags.Swimming | MovementFlags.Moved | MovementFlags.Flying;
+        var granted = new Client { Terrain = new FakeTerrain { Liquid = false }, Flags = flying, Granted = MovementFlags.Levitating | MovementFlags.Flying };
+        granted.Send(WorldOpcode.MsgMoveStartSwim);
+        granted.RunFor(6, Run);
+        Assert.Empty(granted.All);
+
+        var notGranted = new Client { Terrain = new FakeTerrain { Liquid = false }, Flags = flying };
+        notGranted.Send(WorldOpcode.MsgMoveStartSwim);
+        notGranted.RunFor(6, Run);
+        Assert.True(Has(notGranted.All, AntiCheatViolation.Physics));
+        Assert.True(Has(notGranted.All, AntiCheatViolation.Flag));
+    }
+
+    [Fact]
+    public void ClimbingIntoTheAir_WithServerControlled_IsNotScored_AndIsWithoutIt()
+    {
+        // .cheat wallclimb sets UNIT_FLAG_SERVER_CONTROLLED, which vmangos lists in NO_WALL_CLIMB_CHECK_UNIT_FLAGS (MovementAnticheat.cpp:1170).
+        var climber = new Client { Terrain = new FakeTerrain { Floor = 10 }, ServerControlled = true };
+        climber.Send(WorldOpcode.MsgMoveStartForward);
+        climber.Z += 6;
+        Assert.Empty(climber.Step(500, 1));
+
+        var plain = new Client { Terrain = new FakeTerrain { Floor = 10 } };
+        plain.Send(WorldOpcode.MsgMoveStartForward);
+        plain.Z += 6;
+        Assert.True(Has(plain.Step(500, 1), AntiCheatViolation.Vertical));
     }
 
     [Fact]

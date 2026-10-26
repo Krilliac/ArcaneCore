@@ -25,10 +25,9 @@ namespace ArcaneCore.World.Gm.Character;
 /// (SEC_GAMEMASTER, HandleKnockBackCommand, UnitCommands.cpp:2761). The cooldown/cast time/power options live in
 /// <see cref="Player.Cheats"/> (the spell side is <c>GmCheatSpellModule</c>); god is <c>InvincibilityHpThreshold</c> 1
 /// (Player::SetCheatGod). Fly and fixed Z port vmangos <c>Player::SetCheatFly</c> / <c>SetCheatFixedZ</c> (see
-/// <see cref="MovementCheats"/>), and the movement anticheat and the fall, void and speed observers stand down while either is on.
+/// <see cref="MovementCheats"/>); the movement anticheat accepts the flags fly grants and nothing else changes for the player.
 /// Wallclimb is UNIT_FLAG_SERVER_CONTROLLED on the target (HandleCheatWallclimbCommand, CharacterCommands.cpp:509-541). Feather fall has no
-/// vmangos command: it sends SMSG_MOVE_FEATHER_FALL / SMSG_MOVE_NORMAL_FALL (mangoszero <c>Player::SetFeatherFall</c>,
-/// PlayerMovement.cpp:157) through the existing movement-change path, as <c>.cheat waterwalk</c> does for water walking. The dev cheat
+/// vmangos command: it sends SMSG_MOVE_FEATHER_FALL / SMSG_MOVE_NORMAL_FALL (vmangos MovementPacketSender.cpp:346) through the existing movement-change path, as <c>.cheat waterwalk</c> does for water walking. The dev cheat
 /// opcodes (toggle gravity, toggle collision, start swim) are never sent: there is no evidence a 1.12.1 client handles them from the
 /// server, and <c>StrippedDevOpcodes</c> keeps them out. None of it is saved (vmangos does not save the cheat options either).
 /// </summary>
@@ -183,7 +182,7 @@ public sealed class GmCheatCommands : ICommandGroup
         return true;
     }
 
-    // Not a vmangos command (mangoszero Player::SetFeatherFall is the packet source): the Toggle shape of the other cheats, with a name argument.
+    // Not a vmangos command (the packets are vmangos MovementPacketSender.cpp:346): the Toggle shape of the other cheats, with a name argument.
     private static bool FeatherFall(CommandContext context, string text)
         => Toggle(context, text, "feather fall mode", (target, on) => MovementCheats.SetFeatherFall(target, on));
 
@@ -216,13 +215,8 @@ public sealed class GmCheatCommands : ICommandGroup
             return false;
         }
 
-        Player? selected = context.SelectedPlayerOrSelf();
-        if (selected is null)
-        {
-            context.Reply(GmStrings.NoCharSelected);
-            return false;
-        }
-
+        // getSelectedPlayer() is null for a creature or an offline selection, and vmangos then uses the invoker (CharacterCommands.cpp:105-107, 131-133).
+        Player selected = context.SelectedPlayerOrSelf() ?? context.Player;
         if (!context.CanActOn(selected))
         {
             return false;

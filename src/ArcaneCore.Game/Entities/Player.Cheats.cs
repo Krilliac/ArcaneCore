@@ -37,12 +37,6 @@ public sealed partial class Player
     public bool HasCheat(PlayerCheats cheat) => cheat != PlayerCheats.None && (Cheats & cheat) == cheat;
 
     /// <summary>
-    /// Whether <see cref="PlayerCheats.Fly"/> or <see cref="PlayerCheats.FixedZ"/> is on: the client then sends swimming, levitating and
-    /// flying flags in mid-air and never falls, so the fall, void, speed and anticheat checks skip it (vmangos MovementAnticheat.cpp:789-806, 1090).
-    /// </summary>
-    public bool HasMovementCheat => (Cheats & (PlayerCheats.Fly | PlayerCheats.FixedZ)) != PlayerCheats.None;
-
-    /// <summary>
     /// <c>.gm visible off</c> (vmangos Player::SetGMVisible false, PLAYER_EXTRA_GM_INVISIBLE): players of a lower account security than this
     /// one stop seeing it (<see cref="Maps.GmInvisibilityRule"/>). Not saved.
     /// </summary>
