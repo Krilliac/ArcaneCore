@@ -410,7 +410,7 @@ internal static class PlayerbotNavigation
         if (region < 0)
         {
             float surface = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
-            if (!InvalidHeight(surface) && MathF.Abs(surface - point.Z) > 1f && MathF.Abs(surface - point.Z) <= 25f)
+            if (!InvalidHeight(surface) && MathF.Abs(surface - point.Z) > 2f && MathF.Abs(surface - point.Z) <= 25f)
                 region = nav.RegionAt(graph, point with { Z = surface }, WalkingLocate);
         }
 

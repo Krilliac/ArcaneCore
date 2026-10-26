@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
@@ -261,6 +262,199 @@ public sealed class PlayerbotExploreStallFixTests
         (_, PlayerbotRoute? route, string trace, _) = await WanderOnceAsync(new GatePathfinder(() => false), null);
         Assert.Null(route);
         Assert.Contains("wander-refused:no-path", trace);
+    }
+
+    // --- review rework ----------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A respawn keeps the creature's guid (the same object comes back): farming one spawn must count every kill, not the first only.
+    /// </summary>
+    [Fact]
+    public async Task TheSameCreatureRespawned_AndKilledAgain_CountsAsAnotherKill()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(o => { o.StallSeconds = 120; o.Risk.Enabled = false; });
+        CreatureTemplate template = RiskTestWorld.Template(993302, level: 60, health: 20, minDamage: 0, maxDamage: 0);
+        await world.OnWorldAsync(() =>
+        {
+            world.Player.Level = 60;
+            WorldCollision.Of(world.Host.World).Install(pathfinder: new GatePathfinder(() => false));
+            return true;
+        });
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(template, 3, 0));
+        await world.SeeAsync(mob);
+        for (uint expected = 1; expected <= 2; expected++)
+        {
+            Assert.True(await world.ThinkUntilAsync(10_000, () => world.Brain.TargetEntry == template.Entry && mob.IsAlive), "the bot never took the beast");
+            await world.OnWorldAsync(() => { world.Player.Map!.Combat.DealDamage(world.Player, mob, mob.Health, direct: true, meleeDamage: true); return true; });
+            bool respawned = false;
+            Assert.True(await world.ThinkUntilAsync(10_000, () => respawned, each: () =>
+            {
+                // The moment the kill is counted the creature comes back (before its corpse is gone), as a spawn's respawn does: same object, same guid.
+                if (!respawned && world.Brain.LootedKills >= expected && !mob.IsAlive)
+                {
+                    Assert.Equal(expected, world.Brain.LootedKills);
+                    // What a spawn's respawn does to the object (CreatureMapSystem.Respawn): the same creature, the same guid, alive again.
+                    // A temporary creature cannot respawn (its corpse is removed with the object), so the state is restored by hand.
+                    mob.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Alive;
+                    mob.DeathState = CreatureDeathState.Alive;
+                    mob.Health = 20;
+                    mob.ClearLootRecipient();
+                    mob.ResetKillCredit();
+                    respawned = true;
+                }
+            }), $"kill {expected} was not counted (goal {world.Brain.Goal} target {world.Brain.TargetEntry} alive {mob.IsAlive} kills {world.Brain.LootedKills} credit {mob.KillCreditAllowed})");
+            Assert.True(await world.OnWorldAsync(() => mob.IsAlive), "the creature did not respawn: the test proves nothing");
+        }
+    }
+
+    /// <summary>
+    /// Kills are progress for <see cref="PlayerbotStallWatch.KillProgressBounds"/> stall bounds only: a bot farming one spawn for ever with
+    /// nothing else changing is stalled after that.
+    /// </summary>
+    [Fact]
+    public async Task KillsAlone_KeepTheStallClockResetOnlyForTheBound()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            uint firstGiveUpMs = await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                var watch = new PlayerbotStallWatch();
+                uint kills = 0, first = 0;
+                for (uint now = 1_000; now <= 900_000 && first == 0; now += 30_000)
+                {
+                    kills++;
+                    uint count = kills;
+                    if (watch.Observe(player, PlayerbotGoalKind.Explore, 0, 0, now, 120_000,
+                            _ => new PlayerbotStallWatch.Fingerprint(60, 0, 0, 0, 0, 0, 0, 0, 0, count)))
+                        first = now;
+                }
+
+                return first;
+            });
+            uint bound = PlayerbotStallWatch.KillProgressBounds * 120_000u;
+            Assert.NotEqual(0u, firstGiveUpMs);
+            Assert.True(firstGiveUpMs - 1_000 >= bound, $"kills stopped counting after {firstGiveUpMs - 1_000} ms, before {bound}");
+            Assert.True(firstGiveUpMs - 1_000 <= bound + 120_000 + 60_000, $"the stall came only after {firstGiveUpMs - 1_000} ms");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Live think gaps are about 13 s: holds more than <see cref="TileWait.GapMs"/> apart are still one streak, so the bound expires and the
+    /// wander leg runs (a 5 s gap restarted the streak at every think and the bound never came).
+    /// </summary>
+    [Fact]
+    public async Task ExplorePending_WithSlowThinks_StillExpires()
+    {
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 99102, Name = "right", MinLevel = 8, MaxLevel = 8, Faction = 14 }],
+            [new CreatureSpawn { Guid = 99102, Entry = 99102, MapId = 0, X = StartX + 140, Y = StartY, Z = StartZ }], [], [], []);
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<ICreatureDataStore>(new ContentStore(content));
+            services.AddSingleton<IWorldFeature, PlayerbotTileHoldTests.ManualClock>();
+            services.AddSingleton(new FactionTemplateCatalog([
+                new FactionTemplateRecord(1, 1, 0, 1, 0, 0),
+                new FactionTemplateRecord(14, 0, 0, 8, 0, 1)]));
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 2500, Risk = { Enabled = false } });
+        var pathfinder = new PhasePendingPathfinder("explore plan");
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                session.Player!.Level = 8;
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+                return true;
+            });
+            MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var plans = new List<int>();
+            for (int think = 0; think < 4; think++)
+            {
+                plans.Add(await host.OnWorldAsync(() =>
+                {
+                    var probe = new PlayerbotThinkProbe();
+                    probe.Begin();
+                    try
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(8);
+                        explore.Invoke(brain, [session.Player!, 500u]);
+                    }
+                    finally { probe.End(); }
+                    return brain.ExploreWanderPlans;
+                }));
+                await host.World.AdvanceClockAsync(6_000); // a think gap beyond TileWait.GapMs
+            }
+
+            Assert.True(pathfinder.PendingAnswers > 0, "the candidate was never planned: the test proves nothing");
+            Assert.Equal(0, plans[0]);
+            Assert.Equal(0, plans[1]);
+            Assert.True(plans[3] > 0, $"the wander leg never ran in 18 s of slow thinks (wander plans {string.Join(",", plans)})");
+            Assert.Contains("explore-pending", await host.OnWorldAsync(() => Snapshot(brain, session.Player!)));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// Eight refused wander legs in one 10-yard cell take one region-graph leg toward the home's centre (no wander leg had walked): the leg
+    /// is planned through the seam, once, and walked.
+    /// </summary>
+    [Fact]
+    public async Task EightWanderRefusalsInOneCell_TakeOneRegionLeg_TowardTheHomeCentre()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        bool open = false;
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } })
+        {
+            WanderComponentProbe = (_, _) => 1,
+        };
+        var asked = new List<Vector3>();
+        brain.WanderRegionLegPlanner = (player, goal) =>
+        {
+            asked.Add(goal);
+            open = true;
+            bool planned = PlayerbotNavigation.TryPlan(player, goal, new PlayerbotOptions(), out PlayerbotRoute? route);
+            open = false;
+            return planned && route is not null ? (PlanOutcome.Route, route) : (PlanOutcome.Refused, null);
+        };
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, StartZ, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new GatePathfinder(() => open));
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(300f, 100f, StartZ), 750f, "SeamHome");
+                return true;
+            });
+            MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            int legAtThink = 0;
+            PlayerbotRoute? leg = null;
+            for (int think = 1; think <= 20 && legAtThink == 0; think++)
+            {
+                leg = await host.OnWorldAsync(() =>
+                {
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    explore.Invoke(brain, [session.Player!, 500u]);
+                    return brain.WanderRegionLegs > 0 ? routeField.GetValue(brain) as PlayerbotRoute : null;
+                });
+                if (leg is not null) legAtThink = think;
+            }
+
+            Assert.Equal(PlayerbotBrain.WanderRegionLegRefusals + 1, legAtThink);
+            Assert.Equal(1, brain.WanderRegionLegs);
+            Vector3 goal = Assert.Single(asked);
+            Assert.True(Vector2.Distance(new(goal.X, goal.Y), new(300f, 100f)) < 1f, $"the leg's goal was {goal}");
+            Assert.True(Vector2.Distance(new(leg!.Points[^1].X, leg.Points[^1].Y), new(300f, 100f)) < 5f);
+            Assert.Contains("wander-regionleg", await host.OnWorldAsync(() => Snapshot(brain, session.Player!)));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }
 
     // --- fixtures -------------------------------------------------------------------------------------------------------------------
