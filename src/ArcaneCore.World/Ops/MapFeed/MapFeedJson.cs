@@ -23,6 +23,11 @@ internal static class MapFeedJson
     private static readonly JsonEncodedText OpResult = JsonEncodedText.Encode("result");
     private static readonly JsonEncodedText OpError = JsonEncodedText.Encode("error");
     private static readonly JsonEncodedText Protocol = JsonEncodedText.Encode("protocol");
+    private static readonly JsonEncodedText Rev = JsonEncodedText.Encode("rev");
+    private static readonly JsonEncodedText CombatFlag = JsonEncodedText.Encode("cb");
+    private static readonly JsonEncodedText DisplayIdProperty = JsonEncodedText.Encode("d");
+    private static readonly JsonEncodedText RaceProperty = JsonEncodedText.Encode("r");
+    private static readonly JsonEncodedText ClassProperty = JsonEncodedText.Encode("cl");
     private static readonly JsonEncodedText Sha = JsonEncodedText.Encode("sha");
     private static readonly JsonEncodedText Pid = JsonEncodedText.Encode("pid");
     private static readonly JsonEncodedText Tools = JsonEncodedText.Encode("tools");
@@ -140,6 +145,7 @@ internal static class MapFeedJson
         writer.WriteStartObject();
         writer.WriteString(Op, OpHello);
         writer.WriteNumber(Protocol, MapFeedProtocol.Version);
+        writer.WriteNumber(Rev, MapFeedProtocol.Revision);
         writer.WriteString(Sha, sha);
         writer.WriteNumber(Pid, pid);
         if (tools)
@@ -191,6 +197,23 @@ internal static class MapFeedJson
         using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
         {
             WriteError(writer, code, message);
+        }
+
+        return Finish(buffer);
+    }
+
+    /// <summary>The finished <c>error</c> line that answers request <paramref name="id"/> (an <c>error</c> with an <c>id</c> field), newline included.</summary>
+    public static byte[] ErrorLine(string code, string message, long id)
+    {
+        var buffer = new ArrayBufferWriter<byte>(256);
+        using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+        {
+            writer.WriteStartObject();
+            writer.WriteString(Op, OpError);
+            writer.WriteNumber("id"u8, id);
+            writer.WriteString(Code, code);
+            writer.WriteString(Message, message);
+            writer.WriteEndObject();
         }
 
         return Finish(buffer);
@@ -382,6 +405,26 @@ internal static class MapFeedJson
         if ((entity.Parts & FeedEntityParts.Health) != 0)
         {
             writer.WriteNumber(Health, entity.HealthPercent);
+        }
+
+        if (entity.InCombat)
+        {
+            writer.WriteBoolean(CombatFlag, true);
+        }
+
+        if (entity.DisplayId != 0)
+        {
+            writer.WriteNumber(DisplayIdProperty, entity.DisplayId);
+        }
+
+        if (entity.Race != 0)
+        {
+            writer.WriteNumber(RaceProperty, entity.Race);
+        }
+
+        if (entity.Class != 0)
+        {
+            writer.WriteNumber(ClassProperty, entity.Class);
         }
 
         if (entity.Kind == FeedEntityKind.Creature)

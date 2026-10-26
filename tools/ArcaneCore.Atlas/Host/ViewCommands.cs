@@ -32,6 +32,8 @@ internal static class ViewCommands
                 new("theme", ArgType.String, "UI chrome theme.", Choices: [.. Enum.GetValues<Theme>().Select(ViewState.Name)]),
                 new("hud", ArgType.Boolean, "Show the viewport overlays."),
                 new("follow", ArgType.String, "Hex guid of the live entity the camera follows; null stops following."),
+                new("textureRadius", ArgType.Integer, $"Tiles around the focus tile whose textured layers load, 0 to {ViewState.MaxTextureRadius}. Default {ViewState.DefaultTextureRadius}."),
+                new("textureBudgetMb", ArgType.Integer, $"Browser texture memory budget in MiB, {ViewState.MinTextureBudgetMb} to {ViewState.MaxTextureBudgetMb}. Default {ViewState.DefaultTextureBudgetMb}."),
             ],
             ViewSet));
         registry.Register(new CommandDefinition(
@@ -79,10 +81,12 @@ internal static class ViewCommands
             BookmarkGo));
         registry.Register(new CommandDefinition(
             "bookmark.add",
-            "Saves the current camera as a bookmark, replacing a saved one of the same name.",
+            "Saves a camera as a bookmark, replacing a saved one of the same name. Without map and camera it saves the shared view's camera (that of whichever client moved last); a UI that flies its own camera passes its map and camera, which are saved without changing the shared view.",
             [
                 new("name", ArgType.String, "1 to 64 letters, digits, spaces or . _ - ' characters.", Required: true),
                 new("note", ArgType.String, "Free text shown in the bookmark list."),
+                new("map", ArgType.Integer, "Map id to save instead of the shared view's."),
+                new("camera", ArgType.Object, "Camera fields to save instead of the shared view's, as in view.set: target [x,y,z], distance, yaw, pitch, fov, mode (orbit|fly|top)."),
             ],
             BookmarkAdd));
         registry.Register(new CommandDefinition(
@@ -93,7 +97,18 @@ internal static class ViewCommands
     }
 
     private static Task<JsonNode?> ViewGet(CommandInvocation invocation, CancellationToken cancellationToken)
-        => Task.FromResult<JsonNode?>(invocation.Service<AtlasContext>().View.Current.ToJson());
+    {
+        // The view, version, and the follow owner come from one snapshot. `followOrigin` is added only while something is followed.
+        (ViewState view, long version, string? followOrigin) = invocation.Service<AtlasContext>().View.Snapshot();
+        JsonObject json = view.ToJson();
+        json["version"] = version;
+        if (view.FollowGuid is not null)
+        {
+            json["followOrigin"] = followOrigin;
+        }
+
+        return Task.FromResult<JsonNode?>(json);
+    }
 
     private static Task<JsonNode?> ViewSet(CommandInvocation invocation, CancellationToken cancellationToken)
     {
@@ -379,6 +394,23 @@ internal static class ViewCommands
     {
         string name = ArgReader.RequiredText(invocation, "name").Trim();
         ViewState view = invocation.Service<AtlasContext>().View.Current;
+        var given = new JsonObject();
+        if (invocation.Has("map"))
+        {
+            given["map"] = ArgReader.Map(invocation, view);
+        }
+
+        if (invocation.OptionalObject("camera") is { } camera)
+        {
+            given["camera"] = camera.DeepClone();
+        }
+
+        // Applied to a copy: the shared view is neither read for these fields nor changed.
+        if (given.Count > 0)
+        {
+            view = view.Apply(given);
+        }
+
         CameraState c = view.Camera;
         var bookmark = new Bookmark(name, view.MapId, c.Target, c.Distance, c.Yaw, c.Pitch, c.Mode, ArgReader.Text(invocation, "note"), null);
         invocation.Service<BookmarkStore>().Save(bookmark);

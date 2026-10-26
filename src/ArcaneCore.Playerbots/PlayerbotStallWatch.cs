@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Playerbots;
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-internal sealed class PlayerbotStallWatch
+internal sealed partial class PlayerbotStallWatch
 {
     /// <summary>Moving this far from where the watch last saw progress is progress.</summary>
     internal const float ProgressYards = 10f;
@@ -246,6 +246,34 @@ internal sealed class PlayerbotStallWatch
         DeferKey key = PinKey(mapId, x, y);
         return Ledger.Strikes(key) >= PinStallsToEscalate && Ledger.IsDeferred(key, LedgerTime(nowMs));
     }
+
+    /// <summary>The pins every bot of the world shares (<see cref="PlayerbotSharedPins"/>), or null (a watch used alone).</summary>
+    internal PlayerbotSharedPins? SharedPins { get; set; }
+
+    /// <summary>
+    /// Whether other bots' dead-end pins made the cell containing <c>(x, y)</c> a world pin at world time <paramref name="nowMs"/>. Not part of
+    /// <see cref="IsDeadEndPin"/>: route planning keeps the per-bot rule; world pins only steer exploring and a first stall's escalation.
+    /// </summary>
+    internal bool IsWorldPin(uint mapId, uint instanceId, float x, float y, uint nowMs)
+        => SharedPins?.IsWorldPin(mapId, instanceId, x, y, nowMs) == true;
+
+    /// <summary>
+    /// This bot dead-end-pinned the cell containing <c>(x, y)</c>: tell the world. Returns what newly became a world pin, or null.
+    /// <paramref name="inCutRegion"/> (the cell lies in a region that joins two large parts of the mesh,
+    /// <see cref="PlayerbotNavigation.IsCutRegionAt"/>) tells nothing: stalls in a tunnel are bots in each other's way, and a world pin
+    /// there would have every bot avoid the only way between the two parts (Timbermaw Hold, issues #1478 and #1479).
+    /// </summary>
+    internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs, bool inCutRegion = false)
+        => inCutRegion ? null : SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs);
+
+    /// <summary>
+    /// <see cref="ReportDeadEndPin(ulong, uint, uint, float, float, uint, bool)"/> for a cell in <paramref name="region"/> of
+    /// <paramref name="graph"/> (null: not built; -1: none): a cut region of at most <paramref name="maxCutRegionPolygons"/> polygons
+    /// (<see cref="PlayerbotNavigation.IsCutRegion"/>, <see cref="PlayerbotOptions.CutRegionMaxPolygons"/>) tells nothing.
+    /// </summary>
+    internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs,
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons)
+        => ReportDeadEndPin(bot, mapId, instanceId, x, y, nowMs, PlayerbotNavigation.IsCutRegion(graph, region, maxCutRegionPolygons));
 
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and

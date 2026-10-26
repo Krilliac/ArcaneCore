@@ -9,9 +9,9 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 
 | Component | Current version | Version-1 base tables |
 |---|---|---|
-| `auth` | 5 | `account`, `realmlist` |
-| `characters` | 64 | `characters` |
-| `world` | 55 | `player_create_info`, `race_info`, `class_info` |
+| `auth` | 6 | `account`, `realmlist` |
+| `characters` | 66 | `characters` |
+| `world` | 56 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -21,6 +21,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 3 | `Auth.BanDataModule` | creates `account_banned`, `ip_banned` |
 | 4 | `Auth.Playerbots.ManagedPlayerbotProvisionDataModule` | creates `managed_playerbot_provision` |
 | 5 | `Auth.AccountLoginSecurityDataModule` | adds columns `account.LockFlags`, `account.SecurityInfo`, `account.LastIp` |
+| 6 | `Auth.AccountLoginInfoDataModule` | adds columns `account.LastLoginUtc`, `account.LastOs`, `account.LastPlatform`, `account.LastLocale`, `account.LastBuild` |
 
 ## `characters`
 
@@ -89,6 +90,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 62 | `Characters.Transfers.ClusterTransferDataModule` | creates `cluster_transfer_decision`, `cluster_transfer_owner`, `cluster_world_handoff` | yes |
 | 63 | `Characters.Pets.PetStableDataModule` | creates `character_pet_stable`, `character_pet_stable_slots` | yes |
 | 64 | `Characters.Playerbots.PlayerbotRelationDataModule` | creates `playerbot_relation` | yes |
+| 65 | `Characters.Transfers.ClusterTransferStateIndexDataModule` | repairs the model's indexes of `cluster_transfer_decision` | yes |
+| 66 | `Characters.Playerbots.PlayerbotTradeRecordDataModule` | creates `playerbot_trade_record` | yes |
 
 ## `world`
 
@@ -148,5 +151,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 53 | `Npc.VendorTemplateDataModule` | creates `npc_vendor_template`; adds columns `creature_template.VendorTemplateId` |
 | 54 | `World.WorldState.GameEventPlayerbotDataModule` | creates `game_event_playerbot_group`, `game_event_playerbot_post`, `game_event_playerbot_siege`, `game_event_playerbot_waypoint` |
 | 55 | `Content.Maps.WmoAreaDataModule` | creates `wmo_area_template` |
+| 56 | `World.Creatures.CreatureEquipmentDataModule` | creates `creature_equip_template`; adds columns `creature_template.EquipmentTemplateId` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

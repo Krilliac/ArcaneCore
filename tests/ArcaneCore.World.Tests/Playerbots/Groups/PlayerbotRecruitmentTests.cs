@@ -59,12 +59,12 @@ public sealed class PlayerbotRecruitmentTests
     public void TheRefusalWindows_AreShiftedPerPair_AndTurnOverExactlyEveryPeriod()
     {
         const uint period = 60_000;
-        var first = Guid.Parse("11111111-2222-3333-4444-555555555555");
-        var second = Guid.Parse("66666666-7777-8888-9999-000000000001");
+        const ulong first = 3, second = 4; // character guids: the phase is a function of the guid and the group alone, the same on every run
+        Assert.Equal(21461u, PlayerbotRecruitment.RefusalPhase(period, 3, 1)); // fixed by the guid and the group: nothing random in it
         Assert.NotEqual(PlayerbotRecruitment.RefusalPhase(period, first, 7), PlayerbotRecruitment.RefusalPhase(period, second, 7));
         Assert.NotEqual(PlayerbotRecruitment.RefusalPhase(period, first, 7), PlayerbotRecruitment.RefusalPhase(period, first, 8)); // the group is part of the pair
 
-        List<uint> Boundaries(Guid bot)
+        List<uint> Boundaries(ulong bot)
         {
             var found = new List<uint>();
             for (uint t = 1; t < 4 * period; t++)

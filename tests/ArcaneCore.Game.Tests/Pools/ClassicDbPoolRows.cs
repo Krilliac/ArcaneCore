@@ -3,7 +3,7 @@ using ArcaneCore.Kernel.WorldData.Pools;
 namespace ArcaneCore.Game.Tests.Pools;
 
 /// <summary>
-/// cmangos pools as classic-db 1.12.1 z2815 (D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz) has them: pool, member, chance,
+/// cmangos pools as classic-db 1.12.1 z2815 (classic-db Full_DB/ClassicDB_1_12_1_z2815.sql.gz) has them: pool, member, chance,
 /// limit, entry and respawn values are the dump's rows; positions are moved next to the test player (the dump's are hundreds of yards
 /// apart), keeping their order. The dump is GPL data and is not committed; these few values are fixtures, as the other real-row tests keep
 /// theirs.

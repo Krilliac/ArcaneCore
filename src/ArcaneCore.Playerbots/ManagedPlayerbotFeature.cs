@@ -132,6 +132,36 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private uint _oldestSilentMs;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
+    private PlayerbotPathJobs? _pathJobs;
+    private uint _lastPathJobSweepMs;
+
+    /// <summary>The bots' far path searches as pool jobs (<see cref="PlayerbotPathJobs"/>); created on first use, world thread.</summary>
+    private PlayerbotPathJobs PathJobs => _pathJobs ??= new PlayerbotPathJobs(_options,
+        PathJobRunnerForTests ?? new NavJobSystemRunner(() => NavJobSystem.SharedIfStarted ?? NavJobSystem.Shared(PathJobThreads(), logger)),
+        () => unchecked((uint)ClockMs), logger);
+
+    /// <summary>Test seam: the runner the path-job service submits to instead of the shared pool. Set before the first think creates the service.</summary>
+    internal IPlayerbotPathJobRunner? PathJobRunnerForTests { get; set; }
+
+    /// <summary>
+    /// The pool's size when this feature is the first to start it: the creatures' <c>Creatures:Movement:PathJobThreads</c> from the
+    /// configuration (their default when unset), so a bot-first start does not size the pool the creatures would have. A pool already
+    /// running keeps its own size (<see cref="NavJobSystem.Shared"/> warns once when the counts differ).
+    /// </summary>
+    private int PathJobThreads()
+    {
+        var creatures = new ArcaneCore.Game.Creatures.CreatureOptions();
+        if (services.GetService<Microsoft.Extensions.Configuration.IConfiguration>() is { } configuration)
+        {
+            Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(
+                configuration.GetSection(ArcaneCore.Game.Creatures.CreatureOptions.SectionName), creatures);
+        }
+
+        return creatures.Movement.PathJobThreads;
+    }
+
+    /// <summary>The bots' path-job service; null until a think or a test created it.</summary>
+    internal PlayerbotPathJobs? PathJobsForTests => _pathJobs;
     private PlayerbotSlowThinkLog? _slowThinks;
 
     /// <summary>
@@ -234,9 +264,23 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private BotSocial.PlayerbotSocialRecorder CreateSocial()
     {
         var created = new BotSocial.PlayerbotSocialRecorder(
-            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger);
+            new BotSocial.PlayerbotSocialMemory(_options.Social.Memory, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds(), _options.Social.WarMode, logger), logger,
+            new BotSocial.PlayerbotTradeLedger(_options.Social.Trading, _options.Social.WarMode, () => _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()));
         return Interlocked.CompareExchange(ref _social, created, null) ?? created;
     }
+
+    private Events.PlayerbotWorldEventBoard? _eventBoard;
+    private BotSocial.PlayerbotSocialFeature? _socialFeature;
+
+    /// <summary>
+    /// The world's picture of the festivals and the places bots hold around their NPCs (docs/areas/playbots-social.md, World events), on the
+    /// social feature's clock so the bots and the events lane agree on time. Created on first use; hears the game events from the attach on;
+    /// world thread (it is dropped at a detach, and the next attach makes a new one).
+    /// </summary>
+    internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
+        services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt);
+
+    private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
     private readonly ConcurrentDictionary<Guid, PlayerbotHome> _homes = new();
@@ -436,8 +480,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             groupCoordinator.ChatSafety = _chat?.Safety;
         }
 
+        // A kill with either side in a siege group is organised PvP, not a grudge; the "rivals off" choices live in the social feature (one store for all bots).
+        Social.InSiegeGroup = coordinator is null ? null : coordinator.IsInSiegeGroup;
+        Social.RivalryOptOut = services.GetService<BotSocial.PlayerbotSocialFeature>()?.RivalryOptOut;
+
         _world = world;
+        EventBoard.Attach(world);
         _sharedSetAsides.World = world;
+        _sharedPins.World = world;
         // A player killed by another player (or its pet or totem) is rivalry for the managed bot on either side. The feed hears every map of this
         // world, so a kill reaches only this world's memory, exactly once, whether or not a bot has thought since it changed maps; the detach takes it off.
         BotSocial.PlayerbotSocialRecorder pvpRecorder = Social;
@@ -480,6 +530,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             ActiveBot active = NewActiveBot(entry, brain);
             active.SavedSetAsideVersion = -1; // written again at the next checkpoint
             active.SavedRelationVersion = -1;
+            active.SavedTradeVersion = -1;
             if (controllers?.TryGetValue(entry.BotId, out IPlayerbotController? controller) == true) active.Controller = controller;
             if (_active.TryAdd(entry.BotId, active)) Interlocked.Increment(ref _activeVersion);
         }
@@ -539,6 +590,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>The body of <see cref="Detach"/>, with the operation lock held.</summary>
     private void DetachHeld(FeatureHandover handover)
     {
+        _pathJobs?.ForgetAll();
         long unixNow = _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds();
         var setAsides = new Dictionary<Guid, PlayerbotSetAside[]>();
         var controllers = new Dictionary<Guid, IPlayerbotController>();
@@ -567,6 +619,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverSharedSetAsides, _sharedSetAsides.Export(nowMs, unixNow));
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
         handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
+        handover.Set(HandoverTradeRecords, Social.Ledger?.SnapshotAll() ?? []);
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -588,6 +641,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _snapshotEpoch++;
         }
 
+        // The festival board stops hearing game events and drops every place (the bots they belonged to are gone with their brains).
+        Interlocked.Exchange(ref _eventBoard, null)?.Dispose();
         _subscriptions = null;
         _world = null;
     }
@@ -608,6 +663,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (handover.TryGet(HandoverClock, out long clock)) Interlocked.Exchange(ref _clockMs, clock);
         RestoreMainPass(handover);
         if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
+        if (Social.Ledger is { } ledger && handover.TryGet<PlayerbotTradeRecord[]>(HandoverTradeRecords, out var tradeRecords)) ledger.Load(tradeRecords);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -691,7 +747,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         };
         party.Social = Social;
         Social.Track(entry.BotId, entry.Record.CharacterId);
-        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId) };
+        var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId), SavedTradeVersion = Social.Ledger?.Version(entry.BotId) ?? 0 };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
         {
             Recorder = Social,
@@ -765,6 +821,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 logger.LogWarning(ex, "Playerbot social memory could not be loaded ({Type}); the bots start with none", ex.GetType().Name);
             }
         }
+        await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
@@ -849,7 +906,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal void GatherSocialBots(PlayerbotGroupCoordinator? groups, List<BotSocial.PlayerbotSocialBot> destination)
     {
         destination.Clear();
-        ActiveBot[] bots = _ordered;
+        ActiveBot[] bots = RefreshOrdered().Bots;
         destination.EnsureCapacity(bots.Length);
         foreach (ActiveBot active in bots)
         {
@@ -1132,7 +1189,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (controller is not null && active.GroupDriven)
             {
                 // A controller takes over a member of a bot-led group: it leaves the group (and the brain resumes when it detaches).
-                coordinator?.Forget(botId);
+                coordinator?.Forget(botId); _pathJobs?.Forget(botId);
                 active.GroupDriven = false;
                 active.Brain.ResumeAfterGroup();
             }
@@ -1480,7 +1537,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // The coordinator may already hold the bot without a group-driven think yet (matched in this very tick): it lets go either way.
         if (bot.GroupDriven || coordinator?.Drives(botId) == true)
         {
-            coordinator?.Forget(botId);
+            coordinator?.Forget(botId); _pathJobs?.Forget(botId);
             if (bot.GroupDriven)
             {
                 bot.GroupDriven = false;
@@ -1852,6 +1909,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task ShutdownBeforeWorldStopAsync()
     {
         Volatile.Write(ref _stopping, true);
+        _pathJobs?.ForgetAll();
         coordinator?.BeginShutdown();
         await _checkpoint.ConfigureAwait(false);
         try { await _warWipeTask.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false); } // the war layer wipe (no new one starts once stopping)
@@ -1971,7 +2029,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         // Every brain records through the feature's recorder (kill steals, help), a replacement too (ReplaceBrain), and has it before it is
         // registered anywhere below.
-        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor) { Home = AreaOf(botId), PolicyEngine = _policy, Social = Social };
+        var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
+        {
+            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+        };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
         {
@@ -2012,6 +2073,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     // What every bot sets aside after several of them stalled on it (PlayerbotSharedSetAsides).
     private readonly PlayerbotSharedSetAsides _sharedSetAsides = new();
+
+    // The dead-end pin cells every bot avoids once several of them were pinned in one (PlayerbotSharedPins); thread-safe.
+    private readonly PlayerbotSharedPins _sharedPins = new();
 
     // The soft claims of the fleet on untagged mobs (PlayerbotClaims): one table for every bot, touched on the world thread only.
     private readonly PlayerbotClaims _claims = new();
@@ -2098,7 +2162,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
             void Quiesce()
             {
-                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
+                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
                 _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
@@ -2276,6 +2340,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
         uint now = world.NowMs;
+        if (_pathJobs is { } pathJobs && unchecked(now - _lastPathJobSweepMs) >= 1_000)
+        {
+            _lastPathJobSweepMs = now;
+            pathJobs.Sweep();
+        }
         // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
         // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
         foreach (ActiveBot active in bots)
@@ -2445,10 +2514,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private void Think(ActiveBot active, ManagedActionBudget budget, int botOrdinal = 0)
     {
         _probe.NodeBudget = _options.MaxThinkSearchNodes;
+        _probe.SyncQueryMaxMs = _options.SyncPathQueryMaxMs;
         _probe.Begin();
         string driver;
+        // The think's far path searches are the pool's (PlayerbotPathJobs): bound to this bot for the think.
+        PlayerbotPathJobs.BindScope bound = active.Session.Player is { } thinker0 ? PathJobs.Bind(active.Record.BotId, thinker0) : default;
         try { driver = ThinkCore(active, budget, botOrdinal); }
-        finally { _probe.End(); }
+        finally
+        {
+            bound.Dispose();
+            _probe.End();
+        }
         // The decision telemetry, outside the think's probe: what it costs is not the brain's.
         if (driver == "brain" && _policy?.Telemetry is { } telemetry && active.Session.Player is { } thinker && _world is { } thinkWorld)
         {
@@ -2702,6 +2778,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotThinkProbe.Phase("party");
             uint partyRenewals = PlayerbotMotion.RenewalsOf(driven);
             active.Party.Update(driven, sinceLast);
+            PlayerbotThinkProbe.Phase("settle");
             PlayerbotMotion.SettleAfterDriver(active.Session, driven, partyRenewals, sinceLast);
             return "party AI";
         }
@@ -2710,7 +2787,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             PlayerbotGoalKind goalBefore = active.Brain.Goal;
             uint renewals = PlayerbotMotion.RenewalsOf(driven);
             active.Brain.Update(sinceLast);
+            PlayerbotThinkProbe.Phase("settle");
             SettleMotion(active.Session, active.Brain, driven, goalBefore, renewals, sinceLast);
+            PlayerbotThinkProbe.Phase("stall log");
             string? report = active.Brain.StallReport;
             bool awaitRelease = report?.StartsWith("death loop:", StringComparison.Ordinal) == true && !driven.IsAlive
                 && !driven.RepopDestinationResolved;
@@ -3166,7 +3245,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
-        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); battlegrounds?.Forget(botId); return true; });
+        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); return true; });
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
         Social.Untrack(active.Record.CharacterId);
@@ -3480,6 +3559,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
             foreach ((Guid botId, _) in removed) memory.Forget(botId);
+            await ForgetTradeLedgerAsync(provider, removed).ConfigureAwait(false);
             HashSet<Guid> survivors = [];
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
@@ -3510,6 +3590,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private async Task SaveBotRelationsAsync(ActiveBot active)
     {
         Guid botId = active.Record.BotId;
+        await SaveBotTradeLedgerAsync(active).ConfigureAwait(false); // the trade ledger rides every relation save (stop, pause, checkpoint)
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
@@ -3916,6 +3997,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public PlayerbotBrain Brain = brain;
         public int SavedSetAsideVersion;
         public long SavedRelationVersion;
+        public long SavedTradeVersion;
 
         /// <summary>The bot's social view of its fights (helpers, the low-health window, the call for help); survives a brain replacement.</summary>
         public BotSocial.PlayerbotFightSocial? Fight;

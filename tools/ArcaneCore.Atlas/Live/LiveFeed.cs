@@ -282,7 +282,7 @@ public sealed class LiveFeed : IDisposable
     /// </summary>
     public async Task<JsonObject> SubscribeAsync(LiveSubscription subscription, CancellationToken cancellationToken)
     {
-        // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:215,223 (subscribe names one map/instance; unsubscribe names none)
+        // ref: ATLAS-2026-10-18.md:215,223 (subscribe names one map/instance; unsubscribe names none)
         // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/WorldMapFeed.cs:299,314 (a subscribe replaces the connection's previous one)
         ArgumentNullException.ThrowIfNull(subscription);
         ThrowIfDisposed();
@@ -375,6 +375,93 @@ public sealed class LiveFeed : IDisposable
 
         return data;
     }
+
+    /// <summary>
+    /// Sends a generic id-correlated query (<c>{"op":"query","kind":...}</c>) and returns the result fields (without op, id and ok).
+    /// A world that answers <c>bad-args</c> with "unknown query kind" predates the kind: that is an <c>unavailable</c> error, remembered for
+    /// this connection so the kind is not asked again (a new connection asks afresh, the world may have been upgraded). Any other refusal
+    /// is a <c>failed</c> error carrying the world's message.
+    /// </summary>
+    public async Task<JsonObject> RequestAsync(JsonObject query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        FeedSession session = RequireSession();
+        string kind = query["kind"] is JsonValue kv && kv.TryGetValue(out string? kindText) ? kindText : "query";
+        if (session.UnsupportedKinds.ContainsKey(kind))
+        {
+            throw UnsupportedKind(kind);
+        }
+
+        var message = (JsonObject)query.DeepClone();
+        message["op"] = LiveProtocol.OpQuery;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        JsonObject reply = await session.QueryAsync(message, linked.Token).ConfigureAwait(false);
+        if (!(reply["ok"] is JsonValue okValue && okValue.TryGetValue(out bool ok) && ok))
+        {
+            string code = reply["code"] is JsonValue c && c.TryGetValue(out string? codeText) ? codeText : "refused";
+            string why = reply["message"] is JsonValue m && m.TryGetValue(out string? text) ? text : "it gave no reason";
+            if (code == "bad-args" && why.Contains("unknown query kind", StringComparison.Ordinal))
+            {
+                session.UnsupportedKinds[kind] = 0;
+                throw UnsupportedKind(kind);
+            }
+
+            throw new CommandException(CommandException.Failed, $"the world daemon could not answer the {kind} query: {why}");
+        }
+
+        var data = new JsonObject();
+        foreach ((string key, JsonNode? value) in reply)
+        {
+            if (key is not ("op" or "id" or "ok"))
+            {
+                data[key] = value?.DeepClone();
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Sends one extension line (<c>caps</c> or <c>action</c>; any other op is a <c>bad-args</c> <see cref="CommandException"/>, because subscribe and
+    /// unsubscribe get no reply, the tools must go through <see cref="ToolAsync"/>'s checks, and a <c>hello</c> could change the connection's role)
+    /// as it is (the transport adds the <c>id</c>) and returns the daemon's whole answer object, <c>ok:false</c> refusals included: the caller
+    /// decides what a refusal means. Unlike <see cref="RequestAsync"/> it neither forces <c>op:query</c> nor strips the answer. Unavailable when
+    /// not connected or when the connection closes while waiting; a timeout (<paramref name="timeout"/>, else <see cref="LiveOptions.QueryTimeout"/>)
+    /// is a <c>failed</c> error; an id-carrying <c>op:"error"</c> reply is also a <c>failed</c> <see cref="CommandException"/>; cancellation (the
+    /// caller's, or this feed's disposal) throws <see cref="OperationCanceledException"/>. Any thread.
+    /// </summary>
+    public async Task<JsonObject> ExchangeAsync(JsonObject message, CancellationToken cancellationToken, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        string? op = message["op"] is JsonValue opValue && opValue.TryGetValue(out string? opText) ? opText : null;
+        if (op is not ("caps" or "action"))
+        {
+            throw new CommandException(CommandException.BadArguments, $"ExchangeAsync sends only the caps and action ops, not '{op}'.");
+        }
+
+        FeedSession session = RequireSession();
+        var line = (JsonObject)message.DeepClone();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        return await session.QueryAsync(line, linked.Token, timeout).ConfigureAwait(false);
+    }
+
+    private static CommandException UnsupportedKind(string kind)
+        => new(CommandException.Unavailable, $"the connected world daemon does not support the {kind} query (it predates live insight); update and restart it.");
+
+    /// <summary>Identifies the open connection (larger for a later one); 0 when not connected. A cache of per-connection facts keys on it.</summary>
+    public long ConnectionId
+    {
+        get
+        {
+            lock (_state)
+            {
+                return _session is { IsOpen: true } session ? session.Id : 0;
+            }
+        }
+    }
+
+    /// <summary>The connected feed's revision (hello <c>rev</c>, 1 when absent); 1 when not connected.</summary>
+    public int FeedRevision => _session?.FeedRevision ?? 1;
 
     /// <summary>
     /// Sends one packet-tools request (docs/areas/map-feed.md, "Packet tools") and returns its result fields. Unavailable when not connected
@@ -512,11 +599,26 @@ public sealed class LiveFeed : IDisposable
     /// Sets (or, with null, clears) the view's follow and, when the entity is known, moves the camera to it in the same patch. While a
     /// follow is set, every frame that moves the entity moves the camera target again (and switches the view to the entity's map).
     /// </summary>
-    public JsonObject Follow(ulong? guid)
+    /// <param name="guid">The entity to follow, or null to stop.</param>
+    /// <param name="origin">The origin label of whoever asked (a <c>ui:&lt;connection&gt;</c>, <c>cli</c>, <c>mcp</c> ...), which the view records as the owner of the follow; default <c>live</c>.</param>
+    public JsonObject Follow(ulong? guid, string? origin = null)
     {
+        origin ??= ViewOrigin;
         if (guid is null)
         {
-            _view.Patch(new JsonObject { ["follow"] = null }, ViewOrigin);
+            ViewState after = _view.Patch(new JsonObject { ["follow"] = null }, origin);
+
+            // The view store ignores a clear from a UI while another UI owns the follow: report what the view really holds.
+            if (after.FollowGuid is { } kept)
+            {
+                return new JsonObject
+                {
+                    ["following"] = kept,
+                    ["found"] = LiveGuid.TryParse(kept, out ulong keptId) && Store.TryGetEntity(keptId, out _),
+                    ["note"] = "the follow is owned by another session; only its owner can stop it.",
+                };
+            }
+
             lock (_state)
             {
                 _followId = 0;
@@ -534,7 +636,7 @@ public sealed class LiveFeed : IDisposable
             AddCameraMove(patch, entity!);
         }
 
-        _view.Patch(patch, ViewOrigin);
+        _view.Patch(patch, origin);
         lock (_state)
         {
             _followId = id;

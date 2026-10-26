@@ -22,7 +22,7 @@ internal enum TownIdleAction : byte
 /// quest left still finds creatures to hunt and none is stuck in town for the whole stay.
 /// <para>Thread affinity: one instance per brain, the world thread.</para>
 /// </summary>
-internal sealed class PlayerbotTownIdle
+internal sealed partial class PlayerbotTownIdle
 {
     /// <summary>A bot this close to the town centre (yards; the innkeeper's spawn) is at the inn: inside the NPC interaction distance (5), so it can bind there.</summary>
     internal const float LingerYards = 4f;
@@ -66,6 +66,9 @@ internal sealed class PlayerbotTownIdle
     internal const uint StallDeferMs = 180_000;
 
     private bool _exploring;
+
+    /// <summary>Whether the last decision put a secondary town's bot in its explore window (it leaves the town for now).</summary>
+    internal bool Exploring => _exploring;
     private uint _until;
     private TownIdleAction _last = TownIdleAction.Explore;
 
@@ -81,27 +84,49 @@ internal sealed class PlayerbotTownIdle
         _last = TownIdleAction.Explore;
         _bestDistance = float.MaxValue;
     }
+
+    /// <summary>
+    /// The town centre this idle is measured from has changed (a festival spot became the centre, or the bot gave it up and the inn is again):
+    /// the walk state belongs to one centre, so it is cleared. The best distance and a give-up of the old centre mean nothing against the
+    /// new one, and a walk given up toward the old centre must not hold the bot back from the new one. The linger and explore window of a
+    /// secondary town is a clock, not walk state, and is kept.
+    /// </summary>
+    internal void Recentre()
+    {
+        _last = TownIdleAction.Explore;
+        _bestDistance = float.MaxValue;
+        _deferred = false;
+    }
+
+    /// <summary>The bot has another home: the linger and explore window of the old one is dropped and the walk state with it.</summary>
+    internal void Rehomed()
+    {
+        (_started, _exploring) = (false, false);
+        Recentre();
+    }
+
     private bool _started;
     private float _bestDistance = float.MaxValue;
     private uint _bestAt;
     private bool _deferred;
     private uint _deferUntil;
 
-    /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre.</summary>
-    internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs)
+    /// <summary>The action for the bot's idle think, <paramref name="distance"/> yards from the town centre (it has arrived within <paramref name="arriveYards"/>).</summary>
+    internal TownIdleAction Decide(TownStay stay, float distance, uint nowMs, float arriveYards = LingerYards)
     {
-        TownIdleAction action = Choose(stay, distance, nowMs);
+        TownIdleAction action = Choose(stay, distance, nowMs, arriveYards);
         _last = action;
         return action;
     }
 
-    private TownIdleAction Choose(TownStay stay, float distance, uint nowMs)
+    private TownIdleAction Choose(TownStay stay, float distance, uint nowMs, float arriveYards)
     {
+        if (stay != TownStay.Secondary) _exploring = false; // an explore window belongs to a secondary town's stay only
         if (stay == TownStay.None) return TownIdleAction.Explore;
         if (stay == TownStay.Secondary) Advance(nowMs);
         else _started = false; // the capital: always town; the secondary's window starts afresh on return
         if (stay == TownStay.Secondary && _exploring) return TownIdleAction.Explore;
-        if (distance <= LingerYards)
+        if (distance <= arriveYards)
         {
             _bestDistance = float.MaxValue;
             return TownIdleAction.Linger;

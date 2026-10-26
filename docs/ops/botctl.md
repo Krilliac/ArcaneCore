@@ -16,7 +16,7 @@ Most verbs take `<bots>` as the first argument:
 
 | Selector | Bots |
 | --- | --- |
-| `Alice` or a bot id | One bot. |
+| `Alice` or a bot id | One bot. A leading `$` is optional (`$Alice`, `$Ali*`), the form the other debug commands use for names. |
 | `Ali*` | Every bot whose name starts with `Ali`. |
 | `Alice,Bob,Carl` | A list (any selectors). |
 | `all`, `running`, `controlled` (or `mine`) | All bots, the running ones, the ones under `.botctl` control. |
@@ -132,7 +132,7 @@ You can send the same thing as one line: `.botctl run Alice take ; move npc:197 
   (`{"command":..., "ok":..., "reason":..., "lines":[...], "json":...}`). The exit code is 1 when a command failed.
 
   ```
-  python tools/botctl/ra.py --token-file D:\ArcaneCore-live\bin\ra-token.txt ".botctl take Alice" ".botctl state Alice --json"
+  python tools/botctl/ra.py --token-file <live-home>\bin\ra-token.txt ".botctl take Alice" ".botctl state Alice --json"
   python tools/botctl/ra.py --token-file ... --script test.botctl --stop-on-error
   python tools/botctl/ra.py --token-file ... --stream Alice --seconds 60     # print #event lines
   ```

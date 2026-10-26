@@ -227,6 +227,9 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
     public float ClosestToDestination { get; set; } = float.PositiveInfinity;
     public PlayerbotRoute? Route { get; set; }
 
+    /// <summary>The options of the last think (<see cref="PlayerbotTram.Drive"/>); the pump chooses a missed car again with them. Null before the first think.</summary>
+    public PlayerbotOptions? Options { get; set; }
+
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) when the platform spot beside a car is planned.</summary>
     public TileWait Tiles;
     public float Best { get; set; } = float.PositiveInfinity;
@@ -275,7 +278,7 @@ internal sealed class TramTrip(TramNetwork network, TramPlatform from, TramPlatf
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-internal static class PlayerbotTram
+internal static partial class PlayerbotTram
 {
     internal const string AnomalyArea = "tram";
 
@@ -334,8 +337,26 @@ internal static class PlayerbotTram
     /// <summary>Tolerance around the intended exit teleport landing on the continent.</summary>
     internal const float WrongStationYards = 80f;
 
-    /// <summary>Time on the tram map beyond 1.5 car cycles (180 s) is reported as a slow trip.</summary>
-    internal const uint SlowTramMapMs = 180_000;
+    /// <summary>
+    /// A legitimate trip on the tram map, measured from arrival: the walk to the dock, a wait for the chosen car's next stop (up to one
+    /// full cycle when the bot just missed a car, and the choice is made again at a think), then the ride (about 57 s of the real
+    /// 143,333 ms cycle), the walk to the exit. That is up to <see cref="SlowTramCycles"/> cycles plus
+    /// <see cref="SlowTramWalkAllowanceMs"/>. (The old fixed 180 s assumed a 120 s cycle; the real one is 143.3 s, so it fired on trips that were fine, #1499.)
+    /// </summary>
+    /// <remarks>
+    /// Note the order of the bounds: a bot that never gets aboard fails first (<c>no-car-stopped</c> after 2 cycles + 30 s in
+    /// <see cref="AtPlatform"/>), before this bound (2 cycles + 60 s). In practice trip-slow means a trip that boarded and then took
+    /// too long (a slow ride, a slow walk out); a bot stuck waiting is reported as a failed trip.
+    /// <para>The bound cannot flag a single missed cycle: one missed car costs at most one cycle (the next car stops within a cycle), which
+    /// is inside 2 cycles + 60 s. Only a trip that lost two or more cycles, or lost one and then also walked or rode slowly, is reported.</para>
+    /// </remarks>
+    internal const uint SlowTramCycles = 2;
+
+    /// <summary>The walks to the dock and to the exit, and a think's slack, on top of <see cref="SlowTramCycles"/> cycles.</summary>
+    internal const uint SlowTramWalkAllowanceMs = 60_000;
+
+    /// <summary>The time on the tram map beyond which a trip is reported slow, for a car cycle of <paramref name="cycleMs"/> ms (0 when no car runs).</summary>
+    internal static uint SlowBoundMs(uint cycleMs) => unchecked((SlowTramCycles * cycleMs) + SlowTramWalkAllowanceMs);
 
     private static readonly ConditionalWeakTable<Player, TramTrip> Trips = [];
     private static readonly ConditionalWeakTable<Player, StrongBox<uint>> SentHomeAt = [];
@@ -430,11 +451,17 @@ internal static class PlayerbotTram
         return leg;
     }
 
-    private static bool CanReachEntranceApproach(Player player, Vector3 approach)
+    /// <summary>
+    /// Whether a walk to <paramref name="approach"/> is worth committing the trip to. Within 150 yd a trial plan decides; beyond it the
+    /// plan is too costly to run, so the region graph decides: a start in another walking component than the approach has no walk there
+    /// (live: 128 no-way-to-entrance failures from Coldridge Valley and from indoors in Ironforge, #1499). Unknown (graph not built, no
+    /// region) stays true.
+    /// </summary>
+    internal static bool CanReachEntranceApproach(Player player, Vector3 approach)
     {
-        Vector3 at = new(player.X, player.Y, player.Z);
+        Vector3 at = PlayerbotMotion.CurrentPosition(player);
         if (Vector2.Distance(Flat(at), Flat(approach)) > 150f)
-            return true;
+            return !PlayerbotNavigation.InOtherWalkingComponent(player, approach);
         var options = new PlayerbotOptions();
         if (!PlayerbotNavigation.TryPlanToward(player, approach, options, out PlayerbotRoute? route) || route is null)
             return false;
@@ -486,6 +513,27 @@ internal static class PlayerbotTram
             EnterTramMapFromEntrance(player, trip, now);
         if (unchecked(now - trip.LastDriveMs) < SampleMs || unchecked(now - trip.LastPumpMs) < SampleMs) return;
         trip.LastPumpMs = now;
+
+        // The chosen car has left without the bot: choose again now. At a think 12-23 s apart a missed car cost the bot a full cycle (#1499).
+        // A choice that finds nothing leaves Car null, and the next think decides (wait, or leave after the failure).
+        if (trip.Stage is TramStage.ToPlatform or TramStage.Waiting && trip.Options is { } thinkOptions
+            && trip.Car is { IsInWorld: true } missedCar && ReferenceEquals(missedCar.Map, map)
+            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000
+            && map.FindUpdater<GameObjectMapSystem>() is { } carSystem)
+        {
+            TramPlatform platform = trip.Network.Other(trip.To);
+            ReportBoardMissed(player, trip, missedCar, platform, new Vector3(player.X, player.Y, player.Z), now, CanReport(session, player));
+            // The pump cannot walk (no TryAdvance without the think's elapsed time): it keeps the soonest car (first in Ready order) only when
+            // the bot already stands beside its spot (no route is planned, so none is thrown away), and boards it while the stop window is
+            // open. Never a later car: that would lock in a later stop over a sooner one on the other track. Otherwise Car stays null and
+            // the next think chooses and walks in one step.
+            bool chosen = ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _, standingOnly: true);
+            if (!chosen)
+            {
+                trip.Car = null;
+                trip.Route = null;
+            }
+        }
 
         switch (trip.Stage)
         {
@@ -693,10 +741,15 @@ internal static class PlayerbotTram
             EnterTramMapFromEntrance(player, trip, now);
         }
 
-        if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported)
+        trip.Options = options;
+        // A trip that already failed (it leaves by the platform it stands at) is a failed trip, reported as trip-failed once the bot is
+        // out; it is not also a slow one. Without a running car there is no cycle to measure against (AtPlatform fails that trip).
+        if (map.MapId == TramNetwork.TramMapId && !trip.SlowReported && trip.Failure is null && map.FindUpdater<GameObjectMapSystem>() is { } carSystem)
         {
+            uint cycle = 0;
+            foreach (GameObject running in carSystem.MapWideElevators) cycle = Math.Max(cycle, carSystem.ElevatorCycle(running));
             uint mapStartMs = trip.PlatformSinceMs != 0 ? trip.PlatformSinceMs : trip.StartedMs;
-            if (unchecked(now - mapStartMs) > SlowTramMapMs)
+            if (cycle != 0 && unchecked(now - mapStartMs) > SlowBoundMs(cycle))
             {
                 trip.SlowReported = true;
                 if (CanReport(session, player))
@@ -762,6 +815,19 @@ internal static class PlayerbotTram
         return TramStep.Traveling;
     }
 
+    /// <summary>Reports the missed car once per choice (the caller has found <c>now - DockChosenMs &gt; DepartMs + 1000</c>).</summary>
+    private static void ReportBoardMissed(Player player, TramTrip trip, GameObject missedCar, TramPlatform here, Vector3 bot, uint now, bool canReport)
+    {
+        if (trip.BoardMissedChosenMs == trip.DockChosenMs) return;
+        trip.BoardMissedChosenMs = trip.DockChosenMs;
+        if (canReport)
+        {
+            PlayerbotAnomalies.Report(player, AnomalyArea, "board-missed",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stage={trip.Stage} platform={here.Name} car={missedCar.Guid.Entry} arriveMs={trip.Dock.ArriveMs} departMs={trip.Dock.DepartMs} elapsedMs={unchecked(now - trip.DockChosenMs)} pos=({bot.X:F1},{bot.Y:F1},{bot.Z:F1})"));
+        }
+    }
+
     private static TramStep AtPlatform(WorldSession session, Player player, Map map, TramTrip trip, PlayerbotOptions options, uint elapsedMs, uint now)
     {
         if (map.MapId != TramNetwork.TramMapId) return Fail(session, player, trip, now, "tram: left the tram map before boarding", "left-map");
@@ -783,16 +849,9 @@ internal static class PlayerbotTram
         GameObjectMapSystem system = map.FindUpdater<GameObjectMapSystem>()!;
         Vector3 bot = new(player.X, player.Y, player.Z);
         if (trip.Car is { IsInWorld: true } missedCar && ReferenceEquals(missedCar.Map, map)
-            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000
-            && trip.BoardMissedChosenMs != trip.DockChosenMs)
+            && unchecked(now - trip.DockChosenMs) > trip.Dock.DepartMs + 1_000)
         {
-            trip.BoardMissedChosenMs = trip.DockChosenMs;
-            if (CanReport(session, player))
-            {
-                PlayerbotAnomalies.Report(player, AnomalyArea, "board-missed",
-                    string.Create(CultureInfo.InvariantCulture,
-                        $"stage={trip.Stage} platform={here.Name} car={missedCar.Guid.Entry} arriveMs={trip.Dock.ArriveMs} departMs={trip.Dock.DepartMs} elapsedMs={unchecked(now - trip.DockChosenMs)} pos=({bot.X:F1},{bot.Y:F1},{bot.Z:F1})"));
-            }
+            ReportBoardMissed(player, trip, missedCar, here, bot, now, CanReport(session, player));
         }
 
         if (trip.Car is null || !trip.Car.IsInWorld || !ReferenceEquals(trip.Car.Map, map)
@@ -885,7 +944,7 @@ internal static class PlayerbotTram
     private const uint InsideMarginMs = 1_000;
 
     private static bool ChooseCar(Player player, Map map, GameObjectMapSystem system, TramTrip trip, TramPlatform here, PlayerbotOptions options,
-        uint now, out string? failure, out string? category, out bool waitingForTiles)
+        uint now, out string? failure, out string? category, out bool waitingForTiles, bool standingOnly = false)
     {
         failure = null;
         category = null;
@@ -918,8 +977,10 @@ internal static class PlayerbotTram
 
         foreach ((GameObject car, TramDock dock, _) in candidates.OrderBy(c => c.Ready).ThenBy(c => c.Car.Guid.Value))
         {
-            if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending) is not { } spot)
+            // standingOnly: the soonest car or none (no later stop is locked in by DockChosenMs over a sooner one).
+            if (Beside(player, map, car, dock.Position, here, options, ref trip.Tiles, now, out PlayerbotRoute? route, out bool pending, standingOnly) is not { } spot)
             {
+                if (standingOnly) return false;
                 waitingForTiles |= pending;
                 continue;
             }
@@ -943,9 +1004,10 @@ internal static class PlayerbotTram
     /// <summary>
     /// The spot on the platform beside a car standing at <paramref name="dock"/> (either side of the track, <see cref="BesideYards"/> from
     /// its centre line, where a floor level with the landing is), with the route to it (null when the bot stands there already).
+    /// <paramref name="standingOnly"/> plans no route: only a spot the bot already stands at is returned.
     /// </summary>
     private static Vector3? Beside(Player player, Map map, GameObject car, Vector3 dock, TramPlatform here, PlayerbotOptions options,
-        ref TileWait tiles, uint now, out PlayerbotRoute? route, out bool pending)
+        ref TileWait tiles, uint now, out PlayerbotRoute? route, out bool pending, bool standingOnly = false)
     {
         route = null;
         pending = false;
@@ -953,6 +1015,7 @@ internal static class PlayerbotTram
         foreach (Vector3 spot in Sides(map, car, dock, here.Landing.Z).OrderBy(s => Vector2.DistanceSquared(Flat(s), Flat(bot))))
         {
             if (Vector2.Distance(Flat(spot), Flat(bot)) <= 1.5f) return spot;
+            if (standingOnly) continue;
             PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, spot, options, ref tiles, now, out PlayerbotRoute? planned);
             pending |= outcome == PlanOutcome.Pending;
             if (outcome == PlanOutcome.Route && planned is not null

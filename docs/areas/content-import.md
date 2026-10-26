@@ -6,6 +6,16 @@ dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyr
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
 database or report inside a git work tree unless git ignores the path.
 
+World schema v56 adds `creature_equip_template` (`Entry`, `EquipEntry1..3`, item entries for the main hand, off hand and ranged slot) and `creature_template.EquipmentTemplateId`
+(`CreatureEquipmentDataModule`). The importer reads ClassicDB/cmangos `EquipmentTemplateId` and `equipentry1..3`, and the vmangos `equipment_id` with its `item1..3` rows (patch range containing 10; of several
+probability rows of one id the most probable is kept, since one id holds one set). `refresh` replaces the table and updates the template links, and reports
+`creature_equip_template` and `creature_template (EquipmentTemplateId)` counts; a dump without the table or the column leaves that half alone. The creature
+system resolves each item entry through the world item store when a creature is created or respawns and writes the three virtual item slots (display, then
+class / subclass / material / inventory type, then the sheath word), emptying slots that have no item; an item the store does not know is warned about once per entry.
+A running game event's `equipment_id` is a `creature_equip_template` entry too and replaces the template's set while the event runs. z2815 has 5,318 rows and
+5,298 templates that name one (entry 68, Stormwind City Guard, holds items 1899 / 143 / 2551). Upgrade an existing world with `arcane-db upgrade`, then run
+`refresh` from the z2815 dump (see the PR description for the exact commands); until then its creatures hold nothing, as before.
+
 World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link. The standard deploy migrates with `arcane-db upgrade` first and then runs `refresh` without `--migrate` (which refuses an older schema); `refresh --migrate` upgrades and refreshes in one step. Refresh replaces the shared stock and updates the links without replacing direct `npc_vendor` rows, and reports the number of links it changed. An `npc_vendor_template` table missing a required column (for example `slot` or `condition_id`) is skipped with a warning, not an abort. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
 
 ## Delivered
@@ -39,7 +49,7 @@ new `gameobject` rows 155000-155054 with their event links; those are war-effort
 |---|---|---|---|---|
 | 37 MOVE_DYNAMIC | 2 (relays 19, 9996) | skipped | runs | contact point (datalong 0; fixedDist datalong3, COMMAND_ADDITIONAL without radii) or random point minDist..maxDist; dataint walk/run, dataint2 arrival relay, dataint3&1 clear; skipped in combat. No terrain/LoS height adjust. |
 | 39 SET_HOVER | 2 (30601, 30611) | skipped | runs | MOVEFLAG_HOVER + SMSG_SPLINE_MOVE_(UN)SET_HOVER; the fly-anim byte flag (COMMAND_ADDITIONAL, unused) is reported. |
-| 42 SET_EQUIPMENT_SLOTS | 2 (25, 20603) | skipped | runs | dataint..3 item entries (-1 keep, 0 empty) via the world item store; "reset default" restores the slots as they were before the first scripted change (ArcaneCore has no `creature_equip_template`). |
+| 42 SET_EQUIPMENT_SLOTS | 2 (25, 20603) | skipped | runs | dataint..3 item entries (-1 keep, 0 empty) via the world item store; "reset default" restores the slots as they were before the first scripted change (a creature's own equipment comes from `creature_equip_template` since world schema 56, applied at creation and respawn; a script's "reset" puts back the slots as they were before its first change). |
 | 52 SET_GOSSIP_MENU | 4 (33, 84) | skipped | runs | target creature's default menu (`Creature.DefaultGossipMenuId`, used by gossip, conditions and EventAI); not reset by respawn, as cmangos. |
 | 51 FORMATION | 1 (1162501) | skipped | skipped | dynamic formations (Cork Gizelton caravan) are not modelled. |
 | 20 MOVEMENT random with expiry | 4 | skipped | (other worker, `grok/relay-random-movement`) | |
@@ -275,9 +285,9 @@ were copied into the implementation.
 |---|---|
 | `plan <dump>...` | reads the dumps and prints, per table an importer reads, dialect, rows, keys, duplicates, mapped and not-imported columns; then the tables no importer reads yet and the statements not applied. Writes no database. |
 | `import <dump>...` | the scan above, then `CreatureDumpImporter`, `GameObjectLootDumpImporter` and `ItemQuestDumpImporter` inside one `ImportTransaction`. `--replace` empties the importers' tables first; without it a key conflict fails and nothing changes. `--dry-run` reads and counts, writes nothing. `--dbc-dir <DBFilesClient>` also reads `Lock.dbc` (game object locks). `--quest-xp derived|none` (default derived, see below). |
-| `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). |
+| `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). With `Map.dbc` and `AreaTable.dbc` (and `WMOAreaTable.dbc`) in the directory it also fills `map_template`, `area_template` and `wmo_area_template` the way `import-map-dbc` does, but only when they are empty (a world with rows keeps them). It fills `areatrigger_template`, `taxi_nodes` and `taxi_path` from `AreaTrigger.dbc`, `TaxiNodes.dbc` and `TaxiPath.dbc` the same way (only when empty); `refresh <dump> --dbc-dir <dir>` rewrites them. |
 | `refresh-portals <dump>...` | Replace only `areatrigger_teleport` in an existing current-schema world, including required item, quest and condition fields. It leaves `game_tele`, area-trigger quest relations and other content untouched. The source must contain portal rows; `--dry-run` counts them without writing. |
-| `verify` | table counts and spawns whose template does not exist (entry 0 is reported as a note, see Limits). |
+| `verify` | table counts and spawns whose template does not exist (entry 0 is reported as a note, see Limits). An empty `map_template`, `area_template`, `areatrigger_template`, `taxi_nodes` or `taxi_path` is a problem (exit 6) that names the command filling it: without them the World skips every instance portal and `.gps` keeps the login zone. |
 
 Targets: `--database <file>` (SQLite) or `--provider sqlite|mariadb|mysql|postgresql --connection-string <cs>` (or the
 `ARCANECORE_CONTENT_CONNECTION` variable, to keep the password off the command line). The target is created at the current
@@ -370,7 +380,8 @@ feature reads:
   to the tables the current world reads, and touches nothing else (creatures, objects, items, quests, loot and NPC services stay as they
   are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`
   (`WorldSafeLocs.dbc` in `--dbc-dir` adds the ids the dump lacks; a dump row keeps its facing, which the DBC does not have), the four
-  battleground tables, `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
+  battleground tables, `creature_equip_template` and `creature_template.EquipmentTemplateId` (world 56, `CreatureDumpImporter.RefreshEquipmentAsync`),
+  `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
   (`TransportDumpImporter`; a cmangos row has no build and gets 0), `spell_proc_event` (build 5875; `--cooldown-unit auto` reads the
   classic-db core revision from `db_version`: seconds before z2829, milliseconds from it, refused when the dump names none), the relay DB
   scripts, the quest, gossip and event DB scripts and `script_waypoint` (world 42, `DbScriptDumpImporter.ReplaceAsync`: it also sets
@@ -509,8 +520,7 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 ## Limits (explicit, not done)
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
-  NPC vendors (11,890 rows), trainers (27,309), `npc_trainer_template` (it needs `creature_template.TrainerTemplateId`, which the creature template does not carry, plus schema and Game-side consumers; `npc_vendor_template` and `VendorTemplateId` are imported since world schema 53), conditions, equipment
-  and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates and
+  NPC vendors (11,890 rows), trainers (27,309), `npc_trainer_template` (it needs `creature_template.TrainerTemplateId`, which the creature template does not carry, plus schema and Game-side consumers; `npc_vendor_template` and `VendorTemplateId` are imported since world schema 53), conditions, template addons, `creature_template_classlevelstats` and the template multipliers, movement templates and
   game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), `playercreateinfo_action` (215 rows, needs
   the action-button seam wired at character creation) and `playercreateinfo_skills` (77; no skills consumer), `race_info`/`class_info`
   (still dev seeds; their retail source is ChrRaces.dbc), graveyards. The unmapped columns of every read table are printed by `plan`.
@@ -539,8 +549,8 @@ The creature importer now maps ClassicDB `script_texts` into the existing creatu
 
 ## References
 
-- vmangos (`D:\refs\vmangos`): `src/game/ObjectMgr.cpp` (`LoadCreatureTemplates` :1190, `LoadCreatures` :2319, game objects
+- vmangos (`<refs-root>\vmangos`): `src/game/ObjectMgr.cpp` (`LoadCreatureTemplates` :1190, `LoadCreatures` :2319, game objects
   :2527, `LoadGameObjectTemplates` :8140), `src/game/LootMgr.cpp:105`.
-- mangos-classic (`D:\refs\mangos-classic`): `sql/base/mangos.sql` (`creature.spawnMask` :722, `gameobject.spawnMask` :1935), `sql/updates/mangos/z2823_01_mangos_displayid_probability.sql`.
-- classic-db (`D:\refs\classic-db`): `Full_DB/ClassicDB_1_12_1_z2815.sql.gz` (column names of every table above, `db_version`),
+- mangos-classic (`<refs-root>\mangos-classic`): `sql/base/mangos.sql` (`creature.spawnMask` :722, `gameobject.spawnMask` :1935), `sql/updates/mangos/z2823_01_mangos_displayid_probability.sql`.
+- classic-db (`<refs-root>\classic-db`): `Full_DB/ClassicDB_1_12_1_z2815.sql.gz` (column names of every table above, `db_version`),
   `README.md`/`COPYRIGHT.md` (licensing), `LICENSE.md` (GPL v3). Read-only; nothing copied.

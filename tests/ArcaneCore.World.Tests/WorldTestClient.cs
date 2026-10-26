@@ -168,8 +168,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// follows it until <paramref name="quiet"/> passes with nothing new. Every packet read is returned, including
     /// those that arrived before <paramref name="first"/>. Use this, not <see cref="CollectAsync"/>, right after
     /// sending a request: a loaded machine can take longer than the quiet window to answer at all.
+    /// <paramref name="readTimeout"/> bounds each read until <paramref name="first"/> (default: the read timeout); pass
+    /// <see cref="HandshakeTimeout"/> when the awaited reply is setup work such as a login.
     /// </summary>
-    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectFromAsync(WorldOpcode first, TimeSpan? quiet = null)
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectFromAsync(WorldOpcode first, TimeSpan? quiet = null, TimeSpan? readTimeout = null)
     {
         var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
         while (true)
@@ -177,7 +179,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
             (WorldOpcode Opcode, byte[] Payload) packet;
             try
             {
-                packet = await ReadAsync();
+                packet = await ReadAsync(readTimeout);
             }
             catch (OperationCanceledException ex)
             {
@@ -209,8 +211,74 @@ internal sealed class WorldTestClient : IAsyncDisposable
             lines.Add(ChatMessage.Parse(payload).Text);
         }
 
-        lines.AddRange((await CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text));
+        lines.AddRange((await CollectRepliesAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text));
         return [.. lines];
+    }
+
+    /// <summary>Total time <see cref="CollectThroughBarrierAsync"/> waits for the barrier answer (not restarted by each read).</summary>
+    private static readonly TimeSpan BarrierDeadline = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Everything the server sends for the packets this client has already sent, however late it is scheduled: sends a barrier,
+    /// CMSG_PLAYED_TIME (empty, no side effects, not audited, not mute-gated, answered by exactly one SMSG_PLAYED_TIME), and reads
+    /// until its answer. The barrier takes the same path as a chat command: <c>WorldSession.DispatchAsync</c> puts every
+    /// <c>OnWorld</c> packet on the session's one FIFO world queue and the world thread is its only consumer, and a command writes all
+    /// of its reply lines synchronously inside its handler. So the barrier is handled after the command, and all of the command's
+    /// lines come before the answer, with nothing to guess about timing. Unlike CMSG_PING, which the read loop answers at once,
+    /// the answer cannot overtake a command still waiting in the queue. The barrier answer itself is not returned.
+    /// A reply written in more than one synchronous block can still arrive after the barrier: a part posted with <c>World.Post</c>, written
+    /// by an async continuation, or sent from a later tick (<c>CommandContext.CanReplyLater</c>). The caller must read the command's first
+    /// reply line before calling this; that makes a single deferred block safe, because the block has then already started.
+    /// The barrier is silently dropped, and the helper then times out, when the session is not InWorld, when a quest settlement is
+    /// pending, when <c>player.Map</c> is null (between SMSG_NEW_WORLD and the worldport ack), or when the opcode budget drops it.
+    /// The caller must not have another CMSG_PLAYED_TIME in flight. If the server closes the connection the packets read so far are
+    /// returned, since nothing more will come. The whole wait is bounded by <see cref="BarrierDeadline"/>, however many unrelated
+    /// packets keep arriving.
+    /// </summary>
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectThroughBarrierAsync()
+    {
+        var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await SendAsync(WorldOpcode.CmsgPlayedTime, []);
+            while (true)
+            {
+                TimeSpan remaining = BarrierDeadline - watch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    throw new OperationCanceledException();
+                }
+
+                (WorldOpcode Opcode, byte[] Payload) packet = await ReadAsync(remaining);
+                if (packet.Opcode == WorldOpcode.SmsgPlayedTime)
+                {
+                    return packets;
+                }
+
+                packets.Add(packet);
+            }
+        }
+        catch (OperationCanceledException ex)
+        {
+            throw new TimeoutException($"timed out after {BarrierDeadline.TotalSeconds:F0} s waiting for the SMSG_PLAYED_TIME barrier (CMSG_PLAYED_TIME); read {packets.Count} packets: {string.Join(", ", packets.TakeLast(12).Select(p => p.Opcode))}", ex);
+        }
+        catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException)
+        {
+            return packets; // the server closed the connection (a kick, a ban): the reply is whatever arrived before it
+        }
+    }
+
+    /// <summary>
+    /// <see cref="CollectThroughBarrierAsync"/>, then whatever else follows until <paramref name="quiet"/> passes with nothing new
+    /// (<see cref="CollectAsync"/>). The barrier makes the reply complete; the quiet tail only keeps the old behaviour of also
+    /// taking replies a command posts to a later tick. Use it, not <see cref="CollectAsync"/>, to gather a command's reply.
+    /// </summary>
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectRepliesAsync(TimeSpan? quiet = null)
+    {
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await CollectThroughBarrierAsync();
+        packets.AddRange(await CollectAsync(quiet));
+        return packets;
     }
 
     /// <summary>CMSG_MESSAGECHAT: u32 type, u32 language, [target], message.</summary>

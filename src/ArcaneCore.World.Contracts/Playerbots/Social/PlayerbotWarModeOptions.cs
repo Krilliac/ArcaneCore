@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// deliberately. War Mode never changes what a bot normally remembers: each relation keeps a second, war layer (affinity and Rival flag) that is fed the
 /// same events under the war rules only while this is on, and every decision reads the war layer only while it is on, so switching it off leaves
 /// normal behaviour exactly as if it had never been on. It does not change the rules of the game (it never force-flags anyone for PvP and a
-/// player's opt-out still applies; the rivalry that acts on this memory is a later phase). Every key is live.
+/// player's opt-out still applies; the first rivalry that acts on this memory is the emote lane, <c>Social:Rivalry</c>, which reads the war layer toward real players only). Every key is live.
 /// </summary>
 public sealed class PlayerbotWarModeOptions
 {

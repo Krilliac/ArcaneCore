@@ -12,4 +12,8 @@
   <ItemGroup>
     <ProjectReference Include="../../tools/ArcaneCore.Atlas/ArcaneCore.Atlas.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The map feed wire lines shared with the other test project. -->
+    <Compile Include="..\Shared\MapFeedWireFixture.cs" Link="MapFeedWireFixture.cs" />
+  </ItemGroup>
 </Project>

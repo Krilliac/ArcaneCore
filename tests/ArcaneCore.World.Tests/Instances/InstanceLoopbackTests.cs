@@ -312,7 +312,18 @@ public sealed class InstanceLoopbackTests
     }
 
     [Fact]
-    public async Task ReloginIntoAGroupPermanentlyBoundInstance_SendsSaveCreatedAfterVerifyWorld()
+    public Task ReloginIntoAGroupPermanentlyBoundInstance_SendsSaveCreatedAfterVerifyWorld() => ReloginIntoBoundInstanceAsync(stallWorld: false);
+
+    /// <summary>
+    /// The deterministic form of a loaded machine: the world thread is busy for longer than <c>Quiet</c> when the login is sent, so
+    /// a quiet-window read started at the send (the earlier CollectAsync) returns before SMSG_LOGIN_VERIFY_WORLD. The read must still
+    /// collect every login packet.
+    /// </summary>
+    [Fact]
+    public Task ReloginIntoAGroupPermanentlyBoundInstance_WithTheWorldThreadStalled_StillCollectsEveryLoginPacket()
+        => ReloginIntoBoundInstanceAsync(stallWorld: true);
+
+    private static async Task ReloginIntoBoundInstanceAsync(bool stallWorld)
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient leader = await host.EnterWorldAsync("INSTPL", "Instpl");
@@ -341,8 +352,13 @@ public sealed class InstanceLoopbackTests
 
         await using WorldTestClient again = await host.ConnectAsync();
         await again.AuthenticateAsync("INSTPM", key);
+        Task stall = stallWorld ? host.OnWorldAsync(() => { Thread.Sleep(500); return true; }) : Task.CompletedTask;
         await again.SendAsync(WorldOpcode.CmsgPlayerLogin, BitConverter.GetBytes((ulong)id));
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await again.CollectAsync(Quiet);
+        // Not CollectAsync: its 200 ms quiet window starts at the send, and when the login is answered later than that (a loaded machine,
+        // or the stalled world thread above) it returned before SMSG_LOGIN_VERIFY_WORLD. Read until the last login packet
+        // (SMSG_INIT_WORLD_STATES), each read bounded like the other setup reads, then the quiet tail.
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await again.CollectFromAsync(WorldOpcode.SmsgInitWorldStates, Quiet, again.HandshakeTimeout);
+        await stall;
 
         int verify = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgLoginVerifyWorld);
         int created = packets.FindIndex(p => p.Opcode == WorldOpcode.SmsgInstanceSaveCreated);

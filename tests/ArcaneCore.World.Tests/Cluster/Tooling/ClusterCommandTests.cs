@@ -9,6 +9,7 @@ using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Cluster.Tooling;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -17,13 +18,15 @@ using static ArcaneCore.World.Tests.Gm.Audit.TicketTests;
 namespace ArcaneCore.World.Tests.Cluster.Tooling;
 
 /// <summary>Tests for the <c>.cluster</c> and <c>.arcane cluster</c> GM/operator inspection commands.</summary>
+[Collection("ClusterEndpointsEnv")]
 public sealed class ClusterCommandTests
 {
     private static WorldTestHost StartWithClusterServices(
         ClusterMapPlacementTable? placement = null,
         IRealmAuthorityLeaseStore? leases = null,
         IRealmPresenceDirectory? presence = null,
-        bool fencingEnabled = true)
+        bool fencingEnabled = true,
+        Action<IServiceCollection>? more = null)
     {
         placement ??= CreateDefaultPlacement();
         leases ??= CreateDefaultLeases();
@@ -44,6 +47,7 @@ public sealed class ClusterCommandTests
             services.AddSingleton(leases);
             services.AddSingleton(presence);
             services.AddSingleton<IClusterSocialRouter>(router);
+            more?.Invoke(services);
         });
     }
 
@@ -82,7 +86,7 @@ public sealed class ClusterCommandTests
     }
 
     /// <summary>The lines of <c>.cluster status</c> (and of a bare <c>.cluster</c>) for one player on map 0 with every lease held.</summary>
-    private const int StatusLines = 5;
+    private const int StatusLines = 6;
 
     private static readonly System.Text.RegularExpressions.Regex ActiveMaps = new(@"^Active maps matching filter: (\d+) loaded,", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
@@ -146,7 +150,7 @@ public sealed class ClusterCommandTests
 
         var drained = new ClusterNodeDescriptor("n", nameof(ClusterRole.Combined), Guid.NewGuid(), ClusterNodeLifecycleState.Drained,
             ClusterNodeManifest.CurrentContractVersion, schema.Auth, schema.Characters, schema.World, "rev", IsFencedWriter: true);
-        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
+        ClusterRollbackSnapshot snapshot = ClusterCommands.BuildRollbackSnapshot(1, [drained], 0, 0, 0, fencingEnabled: true, hasOwnershipToken: false, schema);
 
         Assert.Equal(schema.Auth, snapshot.AuthSchemaVersion);
         Assert.Equal(schema.Characters, snapshot.CharactersSchemaVersion);
@@ -157,6 +161,88 @@ public sealed class ClusterCommandTests
         // A drained, fenced, write-free realm at this build's own schema must read as safe to roll back.
         ClusterRollbackVerdict verdict = new ClusterRollbackCoordinator().VerifySafeRollbackToLocal(snapshot);
         Assert.True(verdict.SafeToRollback, string.Join(" | ", verdict.BlockingReasons));
+    }
+
+    [Fact]
+    public async Task ClusterDiag_ReportsTheAggregateUnresolvedTransferCount_NotAHardCodedZero()
+    {
+        var store = new InMemoryTransferDecisionStore();
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(store));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMT", "Admtransfer");
+
+        string[] none = await LinesAsync(admin, ".cluster diag");
+        Assert.Contains("xferPending=0", none[0], StringComparison.Ordinal);
+
+        // Two characters mid-transfer, a third whose transfer was aborted (resolved).
+        var a = new WorkerNodeId("worker:EK");
+        var b = new WorkerNodeId("worker:Kalimdor");
+        Guid aborted = Guid.NewGuid();
+        await store.CreateReservationAsync(Guid.NewGuid(), 101, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:101", 1, Guid.NewGuid()));
+        await store.CreateReservationAsync(Guid.NewGuid(), 102, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:102", 1, Guid.NewGuid()));
+        await store.CreateReservationAsync(aborted, 103, 1, 1, a, b, 0, 0, 1, 0, new CharacterOwnershipToken("char:103", 1, Guid.NewGuid()));
+        await store.AbortPreCommitAsync(aborted, "test");
+
+        string[] two = await LinesAsync(admin, ".cluster diag");
+        Assert.Contains("xferPending=2", two[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClusterDiag_WhenTheStoreCannotCount_RepliesThatTheCountIsUnavailable_InsteadOfFaulting()
+    {
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(new UncountableTransferStore()));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMU", "Admuncount");
+
+        string[] lines = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Single(lines);
+        Assert.Contains("Cluster diagnostics unavailable", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("xferPending", lines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClusterDiag_CountsTheUnresolvedTransfersOffTheWorldThread_AndRepliesWithTheCount()
+    {
+        var store = new ThreadRecordingTransferStore(5);
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(store));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMW", "Admworld");
+        int worldThread = await host.OnWorldAsync(() => Environment.CurrentManagedThreadId);
+
+        string[] lines = await LinesAsync(admin, ".cluster diag");
+
+        Assert.Contains("xferPending=5", lines[0], StringComparison.Ordinal);
+        Assert.NotEqual(0, store.CountThread);
+        Assert.NotEqual(worldThread, store.CountThread);
+    }
+
+    /// <summary>A decision store that answers the count and records the thread it was asked on.</summary>
+    private sealed class ThreadRecordingTransferStore(int unresolved) : UncountableTransferStore
+    {
+        private int _countThread;
+
+        public int CountThread => Volatile.Read(ref _countThread);
+
+        public override Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _countThread, Environment.CurrentManagedThreadId);
+            return Task.FromResult(unresolved);
+        }
+    }
+
+    /// <summary>A decision store whose aggregate count fails, as a database fault would.</summary>
+    private class UncountableTransferStore : ITransferDecisionStore
+    {
+        public virtual Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<int>(new InvalidOperationException("store offline"));
+
+        public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => throw new NotSupportedException();
+        public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CreateReservationAsync(Guid transferId, ulong characterGuid, int accountId, long sessionGeneration, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, uint sourceMapId, uint sourceInstanceId, uint targetMapId, uint targetInstanceId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord> AbortPreCommitAsync(Guid transferId, string reason, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<TransferDecisionRecord?> GetDecisionAsync(Guid transferId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<TransferDecisionRecord>> GetUnresolvedForCharacterAsync(ulong characterGuid, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     [Theory]
@@ -184,7 +270,8 @@ public sealed class ClusterCommandTests
         await using WorldTestClient gm = await Staff(host, AccountSecurity.GameMaster, "GMA", "Gmaaa");
 
         string[] statusLines = await LinesAsync(gm, ".cluster status", StatusLines);
-        Assert.Equal(5, statusLines.Length);
+        Assert.Equal(6, statusLines.Length);
+        Assert.Equal(ClusterCommands.BridgeDisabledLine, statusLines[5]);
         Assert.Contains("Cluster node: world-node-alpha | role=Combined", statusLines[0], StringComparison.Ordinal);
         Assert.Contains("Ownership fence: enabled | worldToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", statusLines[1], StringComparison.Ordinal);
         Assert.Contains("You / target: Gmaaa", statusLines[2], StringComparison.Ordinal);
@@ -199,6 +286,28 @@ public sealed class ClusterCommandTests
         Assert.Contains("effectiveToken=world:epoch=7:inc=11111111-2222-3333-4444-555555555555", nodeLines[3], StringComparison.Ordinal);
 
         Assert.Equal("Player not found!", (await LinesAsync(gm, ".cluster node NobodyHere"))[0]);
+    }
+
+    [Fact]
+    public async Task ClusterStatus_AndNodes_SayEnabledWithNoValidEndpoints_WhenTheBridgeIsOnButNothingParsed()
+    {
+        using EndpointsEnv env = EndpointsEnv.Set(null);
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:NodeBridge:Enabled"] = "true",
+            ["Cluster:NodeBridge:Endpoints"] = "garbage",
+        }).Build();
+        await using WorldTestHost host = StartWithClusterServices(more: services =>
+            services.Configure<ClusterNodeBridgeOptions>(configuration.GetSection(ClusterNodeBridgeOptions.SectionName)));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMN", "Admnone");
+
+        string[] statusLines = await LinesAsync(admin, ".cluster status", StatusLines);
+        Assert.Equal(ClusterCommands.BridgeNoEndpointsLine, statusLines[5]);
+        Assert.Equal("Cluster bridge: enabled, no valid endpoints", ClusterCommands.BridgeNoEndpointsLine);
+
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 6);
+        Assert.Contains(ClusterCommands.BridgeNoEndpointsLine, nodesLines);
+        Assert.DoesNotContain(ClusterCommands.BridgeDisabledLine, nodesLines);
     }
 
     [Fact]
@@ -218,7 +327,8 @@ public sealed class ClusterCommandTests
         Assert.DoesNotContain(filteredRoutes, l => l.Contains("route static map 1", StringComparison.Ordinal));
         Assert.Contains(filteredRoutes, l => l.Contains("route static map 0", StringComparison.Ordinal));
 
-        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 5);
+        string[] nodesLines = await LinesAsync(admin, ".cluster nodes", 6);
+        Assert.Contains(ClusterCommands.BridgeDisabledLine, nodesLines);
         Assert.Contains(nodesLines, l => l.StartsWith("Local host: node=world-node-alpha role=Combined state=Active", StringComparison.Ordinal));
         Assert.Contains("Registered placement workers: 3", nodesLines);
         Assert.Contains(nodesLines, l => l.StartsWith("worker worker:EK: ready=True draining=False players=478/1200", StringComparison.Ordinal));

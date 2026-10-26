@@ -122,7 +122,7 @@ public sealed partial class CreatureMapSystem : ISpawnGroupHost
 
     private void AddGroupMember(SpawnGroupState state, CreatureSpawn spawn, CreatureTemplate template, LoadedGrid grid)
     {
-        var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates);
+        var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates, itemResolver: EquipmentItemResolver);
         ApplyEventData(creature);
         if (_options.Respawn.DrawDelayAtLoad)
         {

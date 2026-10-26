@@ -71,7 +71,7 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
     internal static bool CommandsHelp(CommandContext context, string text)
     {
-        bool isGm = context.IsConsole || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
+        bool isGm = context.IsTrueConsole() || context.Security >= AccountSecurity.GameMaster || (!context.IsConsole && context.Player.IsGameMaster);
         context.Reply(PlayerbotChatCommands.HelpFor(isGm));
         context.Reply(isGm
             ? "Dot commands: .bot <commands|gear|summon|party|raid|status|list|debug|cadence> (or .playerbot ...)."
@@ -184,7 +184,22 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
                      guid => context.World.FindOnlinePlayer(new ObjectGuid(guid))?.Name, memory.NowMs))
             context.Reply(line);
         if (feature.Social.Mood.Enabled) context.Reply(MoodLine(feature.Social.Mood.Get(botId)));
+        if (memory.Enabled) context.Reply(string.Create(CultureInfo.InvariantCulture, $"rivals={memory.Snapshot(botId).Count(row => (row.Flags & PlayerbotRelationFlags.Rival) != 0 && (row.Flags & PlayerbotRelationFlags.WarOnly) == 0)}"));
+        if (EventLine(feature.EventBoard, botId) is { } eventLine) context.Reply(eventLine);
         return true;
+    }
+
+    /// <summary>
+    /// The festival line of <c>.playerbot social</c>: the place the bot holds at a festival NPC, or that a festival runs and it holds none.
+    /// Null when no festival runs and the bot holds nothing (the usual case: the reply is unchanged).
+    /// </summary>
+    internal static string? EventLine(Events.PlayerbotWorldEventBoard board, Guid botId)
+    {
+        long now = board.NowMs;
+        if (board.Claims.ClaimOf(botId, now) is { } claim)
+            return string.Create(CultureInfo.InvariantCulture,
+                $"Festival spot: event {claim.Anchor.Root} ({claim.Anchor.Kind}), NPC {claim.Anchor.Entry} (spawn {claim.Anchor.Guid}) in {claim.Town}, held {(now - claim.SinceMs) / 1000}s.");
+        return board.AnyFestival() ? "Festival: one runs, this bot holds no spot." : null;
     }
 
     /// <summary>The last line of <c>.playerbot social</c>: the bot's mood, its tone and the factor on the chance of its own initiative.</summary>
@@ -243,8 +258,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
             return true;
         }
 
-        if (!context.IsConsole && context.Security < AccountSecurity.GameMaster)
+        if (!context.IsTrueConsole() && context.Security < AccountSecurity.GameMaster)
         {
+            if (context.IsConsole)
+            {
+                context.Reply(GmStrings.SecurityTooLow); // a remote invoker has no character to share a group with
+                return true;
+            }
+
             GroupManager? groups = context.Session.Services.GetService<SocialFeature>()?.Context.Groups;
             if (groups?.AreInSameGroup(context.Player.Guid, botPlayer.Guid) != true)
             {
@@ -593,8 +614,14 @@ public sealed class PlayerbotExtraCommands : ICommandExtension
 
     internal static bool SummonSingleOrFleet(CommandContext context, string text)
     {
-        if (!context.IsConsole && context.Security < AccountSecurity.GameMaster)
+        if (!context.IsTrueConsole() && context.Security < AccountSecurity.GameMaster)
         {
+            if (context.IsConsole)
+            {
+                context.Reply(GmStrings.SecurityTooLow); // a remote invoker has no character to share a group with
+                return true;
+            }
+
             var args = new CommandArgs(text);
             string? targetArg = args.ExtractArg();
             if (string.IsNullOrEmpty(targetArg) || !args.IsEmpty)

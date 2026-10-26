@@ -1,5 +1,7 @@
 using System.Numerics;
 using System.Text.Json;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -59,6 +61,39 @@ public sealed class MapFeedStreamTests
     }
 
     [WindowsFact]
+    public async Task TheCapture_CarriesRevisionTwo_TheCombatFlagAndTheDisplayId_OfRealUnits()
+    {
+        await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup { Content = true });
+        await world.AddPlayerAsync("Feedalice");
+        await WaitForSpawnsAsync(world, 1, 1);
+        (uint wolfDisplay, uint playerDisplay) = await world.Host.OnWorldAsync(() =>
+        {
+            Map map = world.Host.World.FindMap(0, 0)!;
+            Creature wolf = map.FindUpdater<CreatureMapSystem>()!.Creatures.Single(c => c.Guid.Value == FeedWorld.WolfGuid);
+            Player player = map.Players.Single();
+
+            // The real entry into combat, on the player: a creature with nothing to fight evades within the tick, a player does not.
+            map.Combat.SetInCombatState(player, 60_000);
+            return (wolf.DisplayId, player.DisplayId);
+        });
+        FeedClient client = await world.ConnectAsync(hello: false);
+
+        JsonElement hello = await client.HelloAsync();
+        JsonElement frame = await SubscribeAndReadFirstAsync(client, FeedClient.Subscribe());
+
+        Assert.Equal(2, hello.GetProperty("rev").GetInt32());
+        Assert.NotEqual(0u, wolfDisplay);
+        Assert.NotEqual(0u, playerDisplay);
+        JsonElement player = Assert.Single(frame.OfKind("player"));
+        Assert.True(player.GetProperty("cb").GetBoolean());
+        Assert.Equal(playerDisplay, player.GetProperty("d").GetUInt32());
+        JsonElement wolfLine = frame.Entity(FeedWorld.WolfGuid);
+        Assert.False(wolfLine.TryGetProperty("cb", out _), "a creature out of combat carries no flag");
+        Assert.Equal(wolfDisplay, wolfLine.GetProperty("d").GetUInt32());
+        Assert.False(frame.Entity(FeedWorld.ChestGuid).TryGetProperty("d", out _), "a game object has no display id on the wire");
+    }
+
+    [WindowsFact]
     public async Task TheFirstFrame_ArrivesAtOnce_AndDescribesTheMapAroundThePlayer()
     {
         if (!OperatingSystem.IsWindows())
@@ -100,8 +135,18 @@ public sealed class MapFeedStreamTests
         Assert.True(player.TryGetProperty("hp", out _));
         Assert.False(player.TryGetProperty("e", out _), "a player has no entry");
         Assert.False(player.TryGetProperty("mt", out _), "only creatures have a motion");
+        (byte race, byte playerClass) = await world.Host.OnWorldAsync(() =>
+        {
+            Player real = world.Host.World.FindMap(0, 0)!.Players.Single();
+            return ((byte)real.Race, (byte)real.Class);
+        });
+        Assert.NotEqual(0, race);
+        Assert.NotEqual(0, playerClass);
+        Assert.Equal(race, player.GetProperty("r").GetByte());
+        Assert.Equal(playerClass, player.GetProperty("cl").GetByte());
 
         JsonElement wolf = frame.Entity(FeedWorld.WolfGuid);
+        Assert.False(wolf.TryGetProperty("r", out _), "a creature carries no race");
         Assert.Equal("creature", wolf.GetProperty("k").GetString());
         Assert.Equal(FeedWorld.WolfEntry, wolf.GetProperty("e").GetUInt32());
         Assert.Equal("Young Wolf", wolf.GetProperty("n").GetString());

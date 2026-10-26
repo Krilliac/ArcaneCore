@@ -249,15 +249,7 @@ public static partial class ContentImporterCli
                 warnings.Add($"no Map.dbc and AreaTable.dbc in '{dbcDirectory}': map_template and area_template are left as they are");
             }
 
-            string triggerPath = Path.Combine(dbcDirectory, "AreaTrigger.dbc");
-            if (File.Exists(triggerPath))
-            {
-                triggers = ReadDbc("AreaTrigger.dbc", () => AreaTriggerDbcReader.Load(triggerPath));
-            }
-            else
-            {
-                warnings.Add($"no AreaTrigger.dbc in '{dbcDirectory}': areatrigger_template is left as it is");
-            }
+            triggers = ReadOptionalDbc(dbcDirectory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, warnings);
 
             string safeLocsPath = Path.Combine(dbcDirectory, "WorldSafeLocs.dbc");
             if (File.Exists(safeLocsPath))
@@ -268,25 +260,8 @@ public static partial class ContentImporterCli
             }
 
             // The flight masters' nodes and paths (vmangos reads them from these DBCs; the world reads the tables), and the ships' paths.
-            string taxiNodesPath = Path.Combine(dbcDirectory, "TaxiNodes.dbc");
-            if (File.Exists(taxiNodesPath))
-            {
-                taxiNodes = ReadDbc("TaxiNodes.dbc", () => NpcServiceDbcReaders.LoadTaxiNodes(taxiNodesPath));
-            }
-            else
-            {
-                warnings.Add($"no TaxiNodes.dbc in '{dbcDirectory}': taxi_nodes is left as it is");
-            }
-
-            string taxiPathPath = Path.Combine(dbcDirectory, "TaxiPath.dbc");
-            if (File.Exists(taxiPathPath))
-            {
-                taxiPaths = ReadDbc("TaxiPath.dbc", () => NpcServiceDbcReaders.LoadTaxiPaths(taxiPathPath));
-            }
-            else
-            {
-                warnings.Add($"no TaxiPath.dbc in '{dbcDirectory}': taxi_path is left as it is");
-            }
+            taxiNodes = ReadOptionalDbc(dbcDirectory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, warnings);
+            taxiPaths = ReadOptionalDbc(dbcDirectory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, warnings);
 
             string taxiPathNodePath = Path.Combine(dbcDirectory, "TaxiPathNode.dbc");
             if (File.Exists(taxiPathNodePath))
@@ -347,6 +322,7 @@ public static partial class ContentImporterCli
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
+        Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
@@ -464,6 +440,17 @@ public static partial class ContentImporterCli
                     if (relays.HasVendorTemplateIdColumn && !vendorStockRejected)
                     {
                         counts["creature_template (VendorTemplateId)"] = linksChanged;
+                    }
+
+                    (int equipRows, int equipLinks) = await relays.RefreshEquipmentAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasEquipTemplateTable)
+                    {
+                        counts[CreatureEquipmentDataModule.EquipTemplateTable] = equipRows;
+                    }
+
+                    if (relays.HasEquipmentTemplateIdColumn)
+                    {
+                        counts["creature_template (EquipmentTemplateId)"] = equipLinks;
                     }
 
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
@@ -780,6 +767,20 @@ public static partial class ContentImporterCli
             default:
                 throw new UsageException($"unknown --cooldown-unit '{given}' (auto, ms, seconds)");
         }
+    }
+
+    /// <summary>Reads <paramref name="file"/> from the client directory with <paramref name="load"/>; null (and a warning) when the file is absent.</summary>
+    private static T? ReadOptionalDbc<T>(string directory, string file, string table, Func<string, T> load, List<string> warnings)
+        where T : class
+    {
+        string path = Path.Combine(directory, file);
+        if (!File.Exists(path))
+        {
+            warnings.Add($"no {file} in '{directory}': {table} is left as it is");
+            return null;
+        }
+
+        return ReadDbc(file, () => load(path));
     }
 
     private static T ReadDbc<T>(string name, Func<T> read)

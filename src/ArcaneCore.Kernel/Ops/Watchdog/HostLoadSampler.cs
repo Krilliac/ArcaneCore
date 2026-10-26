@@ -198,6 +198,8 @@ public readonly record struct HostLoadReport(
             HostLoadVerdict.HostStarved => "host-starved (other processes are using the machine)",
             HostLoadVerdict.GcPauses => "gc-pauses",
             HostLoadVerdict.GcPaging => "gc-paging (the GC pause covers most of the stall while this process used almost no cpu and the machine is short of memory: free host memory; the GC is compacting paged-out heap)",
+            HostLoadVerdict.MemoryStarved => "memory-starved (this process used almost no cpu while the machine is short of memory: its threads waited on paging, not on its code; free host memory)",
+            HostLoadVerdict.ProcessBlocked => "process-blocked (this process used almost no cpu and memory is not the cause: the thread was waiting on a lock, I/O or a call, not computing)",
             HostLoadVerdict.ProcessBusy => "process-busy (this process is using the cpu)",
             HostLoadVerdict.Quiet => "host-quiet (the time went in the code, not the machine)",
             _ => "unknown",
@@ -237,6 +239,18 @@ public enum HostLoadVerdict
     /// the collector's high-memory threshold: the collector was waiting on paged-out heap, so the cure is free host memory, not code.
     /// </summary>
     GcPaging = 6,
+
+    /// <summary>
+    /// This process used at most half a core over a window of 1 s or more while the machine's memory load was at or above the collector's high-memory
+    /// threshold (or 90% when it reports none): the threads waited on paging, so the cure is free host memory, not code.
+    /// </summary>
+    MemoryStarved = 7,
+
+    /// <summary>
+    /// This process used at most half a core over a window of 1 s or more with no memory pressure to explain it: the thread was waiting (a lock, I/O, a call),
+    /// which is neither the machine's fault nor computing, so it is not the host-quiet "the time went in the code" verdict.
+    /// </summary>
+    ProcessBlocked = 8,
 }
 
 /// <summary>
@@ -277,6 +291,9 @@ public sealed class HostLoadSampler : IWatchdogMonitor
 
     /// <summary>The least unexplained watchdog stall (1 s beyond the check interval) that is the stalled verdict: scheduling jitter never reaches it.</summary>
     public const long MinStallMicros = 1_000_000;
+
+    /// <summary>The shortest window (1 s) over which near-zero process cpu is read as the thread waiting rather than as a short sample with nothing to do.</summary>
+    public const long MinIdleWindowMicros = 1_000_000;
 
     private readonly HostLoadOptions _options;
     private readonly WatchdogClock _clock;
@@ -443,6 +460,16 @@ public sealed class HostLoadSampler : IWatchdogMonitor
         {
             // Checked before the process-cpu verdicts: a stopped process uses no cpu, so it would otherwise read as host-quiet and blame the code.
             verdict = HostLoadVerdict.ProcessStalled;
+        }
+        else if (window >= MinIdleWindowMicros && process * cpus / 100.0 <= IdleProcessCores && memoryThreshold > 0 && memoryLoad >= memoryThreshold)
+        {
+            // The process barely ran while the machine is short of memory: the threads were parked on page faults, which is not the code's time.
+            verdict = HostLoadVerdict.MemoryStarved;
+        }
+        else if (window >= MinIdleWindowMicros && process * cpus / 100.0 <= IdleProcessCores)
+        {
+            // The process barely ran and memory is not the reason: the thread was waiting (a lock, I/O, a call), so "host-quiet" would wrongly say it was computing.
+            verdict = HostLoadVerdict.ProcessBlocked;
         }
         else if (process >= ProcessShareThreshold)
         {

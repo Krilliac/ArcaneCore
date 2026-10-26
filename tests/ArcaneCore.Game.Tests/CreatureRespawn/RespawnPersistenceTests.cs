@@ -32,6 +32,9 @@ public sealed class RespawnPersistenceTests
         public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId)
             => Stored.Where(e => e.Key.Map == mapId && e.Key.Instance == instanceId).ToDictionary(e => e.Key.Guid, e => e.Value);
 
+        public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds)
+            => Stored.TryGetValue((mapId, instanceId, spawnGuid), out respawnUnixSeconds);
+
         public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds)
         {
             Calls.Add($"save:{mapId}:{instanceId}:{spawnGuid}:{respawnUnixSeconds}");
@@ -374,6 +377,15 @@ public sealed class RespawnPersistenceTests
 
     [Fact]
     public void ADeadWanderingCreature_WhoseForeignGridUnloadsWhileHomeGridStaysLoaded_RespawnsOnScheduleWithoutRespawnStuck()
+        => RunForeignGridScenario(raiseForeignNoticeMidRun: false);
+
+    [Fact]
+    public void TheForeignGridScenario_IgnoresARespawnStuckNoticeRaisedForAnotherSpawnMidRun()
+        // Regression for the parallel-test flake: CreatureAnomalyHardeningTests raises respawn/stuck for another spawn while this runs.
+        // A key-only capture (the old filter) sees it and fails; the subject-scoped capture must not.
+        => RunForeignGridScenario(raiseForeignNoticeMidRun: true);
+
+    private void RunForeignGridScenario(bool raiseForeignNoticeMidRun)
     {
         var options = new CreatureOptions { CorpseDecayNormalSeconds = 90 };
         var persistence = new FakePersistence();
@@ -414,6 +426,12 @@ public sealed class RespawnPersistenceTests
         // Advance well past RespawnAtMs (80 s) + 60 s dormant-stuck threshold while home cell (30, 0) remains inactive;
         // then reactivate the home cell and verify the creature respawns cleanly.
         Run(world, 80_000, 1_000);
+        if (raiseForeignNoticeMidRun)
+        {
+            ArcaneCore.Game.Creatures.CreatureAnomalies.ReportRespawnStuck(
+                Spawn(ScenarioSpawnGuid + 1, WolfEntry, 30, 0, respawnSeconds: 80), 64_990, "foreign notice from an unrelated test");
+        }
+
         Assert.Empty(capture.Notices);
 
         homeAnchor.Relocate(30, 0, 83.5f, 0, 0);

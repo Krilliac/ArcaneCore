@@ -28,6 +28,7 @@ public sealed class EventAiTextTemplateCliTests : IDisposable
         using var json = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(report));
         Assert.Equal(3, json.RootElement.GetProperty("imported").GetProperty("dbscript_random_templates").GetInt32());
         output.GetStringBuilder().Clear();
+        await VerifyWorldSeed.AddGeographyAsync(db);
         int verified = await ContentImporterCli.RunAsync(["verify", "--database", db], output, error, CancellationToken.None);
         Assert.Equal(valid ? ExitCodes.Ok : ExitCodes.Verify, verified);
         Assert.Contains("creature_ai_text_template  3", output.ToString(), StringComparison.Ordinal);

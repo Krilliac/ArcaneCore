@@ -119,7 +119,7 @@ public sealed class PlayerbotPolicyTelemetryTests
             JsonElement root = document.RootElement;
             Assert.Equal(["v", "k", "t", "bot", "map", "zone", "f", "open", "ladder", "pick", "src", "x", "arm", "goal", "kind", "w", "o"],
                 root.EnumerateObject().Select(p => p.Name));
-            Assert.Equal(2, root.GetProperty("v").GetInt32());
+            Assert.Equal(3, root.GetProperty("v").GetInt32());
             Assert.Equal("goal", root.GetProperty("k").GetString());
             Assert.Equal(42, root.GetProperty("t").GetInt64());
             Assert.Equal("ABC", root.GetProperty("bot").GetString());
@@ -213,7 +213,7 @@ public sealed class PlayerbotPolicyTelemetryTests
             Assert.Equal(2, records.Length);
             Assert.Equal(["v", "k", "t", "ms", "over", "budget"], records[0].EnumerateObject().Select(p => p.Name));
             Assert.Equal("health", records[0].GetProperty("k").GetString());
-            Assert.Equal(2, records[0].GetProperty("v").GetInt32());
+            Assert.Equal(3, records[0].GetProperty("v").GetInt32());
             Assert.Equal(time.GetUtcNow().ToUnixTimeMilliseconds() - 10_000, records[0].GetProperty("t").GetInt64());
             Assert.Equal(10_000, records[0].GetProperty("ms").GetInt64());
             Assert.Equal(3, records[0].GetProperty("over").GetInt64());

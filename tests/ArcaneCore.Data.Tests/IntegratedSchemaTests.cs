@@ -54,6 +54,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         [
             (typeof(BanDataModule), DatabaseComponent.Auth, BanDataModule.Version),
             (typeof(AccountLoginSecurityDataModule), DatabaseComponent.Auth, AccountLoginSecurityDataModule.Version),
+            (typeof(AccountLoginInfoDataModule), DatabaseComponent.Auth, AccountLoginInfoDataModule.Version),
             (typeof(ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule), DatabaseComponent.Auth, ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule.Version),
             (typeof(CreatureDataModule), DatabaseComponent.World, 2),
             (typeof(MapDataModule), DatabaseComponent.World, 3),
@@ -108,6 +109,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Npc.VendorTemplateDataModule), DatabaseComponent.World, ArcaneCore.Data.Npc.VendorTemplateDataModule.Version),
             (typeof(ArcaneCore.Data.World.WorldState.GameEventPlayerbotDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.GameEventPlayerbotDataModule.Version),
             (typeof(WmoAreaDataModule), DatabaseComponent.World, WmoAreaDataModule.Version),
+            (typeof(ArcaneCore.Data.World.Creatures.CreatureEquipmentDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Creatures.CreatureEquipmentDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -169,6 +171,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Ids.CharacterIdRangeDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Ids.CharacterIdRangeDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Transfers.ClusterTransferDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transfers.ClusterTransferDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Pets.PetStableDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Pets.PetStableDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Transfers.ClusterTransferStateIndexDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transfers.ClusterTransferStateIndexDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Playerbots.PlayerbotTradeRecordDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.PlayerbotTradeRecordDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -199,9 +203,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(55, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53), game_event_playerbot_* bot scenarios (54), wmo_area_template (55)
-        Assert.Equal(64, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61), cluster transfer journal (62), hunter pet stable (63), playerbot relations (64)
-        Assert.Equal(5, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5)
+        Assert.Equal(56, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53), game_event_playerbot_* bot scenarios (54), wmo_area_template (55), creature_equip_template and creature_template.EquipmentTemplateId (56)
+        Assert.Equal(66, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61), cluster transfer journal (62), hunter pet stable (63), playerbot relations (64), cluster transfer state index (65), playerbot trade ledger (66)
+        Assert.Equal(6, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5), account last-login info (6)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {

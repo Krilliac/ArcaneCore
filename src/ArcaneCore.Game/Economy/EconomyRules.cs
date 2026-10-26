@@ -118,9 +118,10 @@ public sealed class EconomyOptions
     /// Seconds one economy settlement (auction, mail, trade) may take end to end, and one economy store read, before it is abandoned:
     /// an operation that did not commit is answered with its ordinary failure reply (auction DATABASE error, mail INTERNAL_ERROR,
     /// trade cancelled), one whose outcome cannot be read kicks its actors. Operational, not a gameplay rule: 15 is the shipped value,
-    /// three lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the
+    /// three typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the
     /// character save queue's one consumer, the actors' own saves, the settlement transaction), so one locked write ahead of it cannot use
-    /// up the budget. Valid range 1-300.
+    /// up the budget. A write-gate wait is not capped at one bound: it gives up after 5 s without a hand-off or 20 s of active waiting, but the
+    /// settlement's budget token ends any wait it is passed to earlier. Valid range 1-300.
     /// </summary>
     public int SettlementBudgetSeconds { get; set; } = 15;
 

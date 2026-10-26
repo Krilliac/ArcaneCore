@@ -2,7 +2,7 @@
 
 Branch `claude/vw4-live-ban-enforcement` (base `claude/vw3-inbound-queue-cap`). Standing rule: retail
 behaviour first, every deviation behind a `Bans:*` option that defaults to retail. References are
-`D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\classic-db`, `D:\refs\wow_messages`.
+`<refs-root>\vmangos` (primary), `<refs-root>\mangos-classic`, `<refs-root>\classic-db`, `<refs-root>\wow_messages`.
 Nothing was copied from them; behaviour is re-implemented and cited.
 
 ## What was missing
@@ -29,7 +29,7 @@ enforcement.
 | `.ban`, `.unban`, `.baninfo`, `.banlist` x `account`/`character`/`ip` | `src/ArcaneCore.World/Bans/BanCommands.cs`, `BanCommandText.cs`, `Kernel/Accounts/BanTime.cs` | `AccountCommands.cpp:516-1010`, `World.cpp:2500-2665`, `Util.cpp:197-275`, `Chat.cpp:2818-2945` |
 | `arcane-account ban / unban / baninfo / banlist` | `tools/ArcaneCore.AccountTool/Program.cs` | n/a |
 
-Texts are `mangos_string` 408-428 and 499 (`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`). The
+Texts are `mangos_string` 408-428 and 499 (`<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`). The
 multi-line IP entry (423) follows `mangos-classic sql/base/mangos.sql:3776` because the classic-db dump lost
 its newlines. Security follows vmangos `Chat.cpp:170-191, 1022-1024, 1263-1266`: Moderator (ticketmaster) for
 `baninfo`/`banlist` account and character, GameMaster for `ban account`/`character` and `baninfo`/`banlist ip`,

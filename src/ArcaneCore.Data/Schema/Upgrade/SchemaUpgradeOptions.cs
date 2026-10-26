@@ -4,8 +4,8 @@ namespace ArcaneCore.Data.Schema.Upgrade;
 
 /// <summary>
 /// What a process may do to an existing database when it starts (retail-like servers refuse to start on
-/// a database that is behind and make the operator apply updates; D:\refs\vmangos\src\mangosd\Master.cpp:415-470
-/// and D:\refs\vmangos\src\shared\Database\Database.cpp:587-640, D:\refs\mangos-classic\src\shared\Database\Database.cpp:448-498).
+/// a database that is behind and make the operator apply updates; vmangos@0e3ff01 src/mangosd/Master.cpp:415-470
+/// and vmangos@0e3ff01 src/shared/Database/Database.cpp:587-640, mangos-classic src/shared/Database/Database.cpp:448-498).
 /// </summary>
 public enum SchemaPolicy
 {

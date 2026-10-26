@@ -8,6 +8,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Playerbots.Chat;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
@@ -115,9 +116,19 @@ public sealed class PlayerbotSocialTriggerWorldTests
     [Fact]
     public async Task ACompletedTrade_RecordsTradeCompleted_AndACancelledOneRecordsNothing()
     {
-        await using SocialWorld world = await SocialWorld.StartAsync(
-            options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone, frozen: true,
-            services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new PlayerbotPartyTests.StubEconomyStore()));
+        // A trade counts for the bot's memory only when it gave something or was given at least 100 copper of vendor value (P4 S0).
+        const uint giftEntry = 995_101;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = giftEntry, Class = 15, SubClass = 0, Name = "Trigger Gift", DisplayId = 1, Quality = 1, SellPrice = 500, Stackable = 1 });
+        SocialWorld world;
+        using (items.Use())
+        {
+            world = await SocialWorld.StartAsync(
+                options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone, frozen: true,
+                services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new PlayerbotPartyTests.StubEconomyStore()));
+        }
+
+        await using SocialWorld _ = world;
         Guid bot = await world.AddBotAsync("Tradebot");
         await using WorldTestClient master = await world.AddPlayerAsync("Tradeplayer");
         ObjectGuid masterGuid = await world.Host.PlayerStateAsync("Tradeplayer", p => p.Guid);
@@ -151,6 +162,14 @@ public sealed class PlayerbotSocialTriggerWorldTests
         // Begun and accepted by both: the bot sees BeginTrade (status 1) and then Complete (status 8).
         await master.SendAsync(WorldOpcode.CmsgInitiateTrade, initiate.ToArray());
         Assert.Equal((uint)TradeStatus.OpenWindow, BitConverter.ToUInt32(await master.ReadUntilAsync(WorldOpcode.SmsgTradeStatus), 0));
+        byte[] offer = await world.Host.OnWorldAsync(() =>
+        {
+            Player owner = world.Host.World.FindOnlinePlayer("Tradeplayer")!;
+            Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, owner.Inventory.AddItem(giftEntry, 1, out ArcaneCore.Game.Items.Item? gift));
+            return new byte[] { 0, gift!.BagSlot, gift.Slot };
+        });
+        await master.SendAsync(WorldOpcode.CmsgSetTradeItem, offer);
+        await Task.Delay(1100); // an accept right after a change is bounced by scam prevention
         await master.SendAsync(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u));
         uint last;
         do last = BitConverter.ToUInt32(await master.ReadUntilAsync(WorldOpcode.SmsgTradeStatus), 0);
@@ -329,9 +348,10 @@ public sealed class PlayerbotSocialTriggerWorldTests
         await world.AddBotAsync("Socialempty");
         await using WorldTestClient admin = await world.Host.EnterWorldAsync("QUILLADMINB", "Quillbranch", AccountSecurity.Administrator);
 
-        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 3);
+        List<string> reply = await FleetWorld.SayAsync(admin, ".playerbot social Socialempty", lines: 4);
         Assert.StartsWith("Socialempty: sociability ", reply[0]);
         Assert.Equal("No relations yet.", reply[1]);
+        Assert.Equal("rivals=0", reply[3]); // the line P6a adds, after the mood line
 
         Assert.Equal(["Playerbot not found."], await FleetWorld.SayAsync(admin, ".playerbot social Nosuchbot"));
     }

@@ -272,6 +272,13 @@ public sealed record PathOptions
     public int MaxSearchNodes { get; init; } = DefaultMaxSearchNodes;
 
     /// <summary>
+    /// Wall-time bound on one A* search in milliseconds (0 = none). A search past it stops as one that ran out of nodes does: it is
+    /// capped and answers the corridor to the node closest to the goal (<see cref="PathSearchCounters.DeadlineHits"/> counts it). A
+    /// relative duration, so it can sit in a shared options instance. Checked every 32 expansions.
+    /// </summary>
+    public double MaxSearchMs { get; init; }
+
+    /// <summary>
     /// Whether the query may read the navigation tiles it needs that no grid holds: the start's and the end's, and each tile the
     /// search crosses into. vmangos loads navmesh tiles only with the map's grids (round the players), so a search towards a far
     /// destination stops at the last loaded tile and answers the point nearest the goal there; with this set the search follows
@@ -375,6 +382,12 @@ public interface ICollisionTilePrefetch
 {
     /// <summary>Start reading the tile's data in the background (no effect when it is loaded or already on its way).</summary>
     void Prefetch(uint mapId, int tileX, int tileY);
+
+    /// <summary>
+    /// As <see cref="Prefetch"/>, for a teleport's destination: a service that bounds its prefetches counts it against a budget of its own,
+    /// so arrivals do not evict the prefetches of players approaching grids. The default is <see cref="Prefetch"/>.
+    /// </summary>
+    void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY);
 }
 
 /// <summary>

@@ -67,6 +67,9 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
     /// <summary>Topics waiting for a guild (tests and status).</summary>
     internal int Waiting(int guildId) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count : 0;
 
+    /// <summary>The topics waiting for a guild, in queue order (tests).</summary>
+    internal IReadOnlyList<PlayerbotGuildTopic> Queued(int guildId) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.ToArray() : [];
+
     /// <summary>Topics with this <paramref name="key"/> waiting for a guild (tests and status).</summary>
     internal int Waiting(int guildId, string key) => _topics.TryGetValue(guildId, out List<PlayerbotGuildTopic>? list) ? list.Count(topic => topic.Key == key) : 0;
 
@@ -111,11 +114,11 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
     /// A unit died: a dungeon or raid boss (the instance-bind flag, <see cref="InstanceManager.CreatureFlagExtraInstanceBind"/>, or a world-boss
     /// rank) killed by a player queues one topic for each guild of the killer and of its group members. A boss keeps the same creature guid in every
     /// instance of its dungeon, so a kill is keyed by the map instance too and forgotten after <see cref="BossSeenLifeMs"/> (an open-world boss, instance 0, respawns).
+    /// On a continent only a boss of the world-boss catalogue (<see cref="IsWorldBossEntry"/>) is remarked on, naming its zone (<see cref="ZoneOf"/>).
     /// </summary>
     internal void OnUnitKilled(PlayerbotSocialPass pass, Map map, Unit? killer, Unit victim)
     {
-        if (victim is not Creature creature || map.Template is not { IsDungeon: true } template) return;
-        if ((creature.Template.ExtraFlags & InstanceManager.CreatureFlagExtraInstanceBind) == 0 && !creature.IsWorldBoss) return;
+        if (victim is not Creature creature || PlayerbotBossKills.PlaceOf(map, creature, IsWorldBossEntry, ZoneOf) is not { } place) return;
         if (killer is null || DuelRules.ControllingPlayer(killer) is not { } player) return;
         var members = new List<Player> { player };
         if (pass.Social.Groups.GetGroup(player.Guid) is { } group)
@@ -123,8 +126,14 @@ internal sealed class PlayerbotGuildChat(ILogger logger)
                 if (slot.Guid != player.Guid && pass.World.FindOnlinePlayer(slot.Guid) is { } other) members.Add(other);
         foreach (Player member in members)
             if (pass.Social.Guilds.GetGuildOf(member) is { } guild)
-                QueueBoss(pass, guild, map.InstanceId, creature.Guid.Value, creature.Template.Name, template.Name, player.Name);
+                QueueBoss(pass, guild, map.InstanceId, creature.Guid.Value, creature.Template.Name, place, player.Name);
     }
+
+    /// <summary>Whether an entry is a catalogued world boss (the group coordinator's frozen snapshot; any thread); null: no catalogue, continent kills stay silent.</summary>
+    internal Func<uint, bool>? IsWorldBossEntry { get; set; }
+
+    /// <summary>The name of the zone a creature stands in (null: not known, the map's name is used); set by the social feature.</summary>
+    internal Func<Map, Creature, string?>? ZoneOf { get; set; }
 
     /// <summary>Queue the boss remark for <paramref name="guild"/> unless this (guild, instance, victim) was remarked on within <see cref="BossSeenLifeMs"/>.</summary>
     internal bool QueueBoss(PlayerbotSocialPass pass, Guild guild, uint instanceId, ulong victimGuid, string boss, string instance, string who)

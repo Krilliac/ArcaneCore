@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Reload;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Reload;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -376,6 +377,33 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotSocialTrading_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The trade desk (a later P4 step) will read Trading:Enabled and the limits from this options object at every pass: switching off mid-trade will cancel the window.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Trading": { "Enabled": false, "TradeTimeoutSeconds": 90, "Limits": { "MaxConcurrentTrades": 4, "DailyOutflowCopperServer": 5000 } } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.False(playerbots.Social.Trading.Enabled);
+        Assert.Equal(90, playerbots.Social.Trading.TradeTimeoutSeconds);
+        Assert.Equal(4, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+        Assert.Equal(5000, playerbots.Social.Trading.Limits.DailyOutflowCopperServer);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Trading": { "Limits": { "MaxConcurrentTrades": 257 } } } } } }""");
+        ReloadResult refused = await coordinator.ReloadAsync("config");
+        Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+        Assert.Equal(4, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(playerbots.Social.Trading.Enabled);
+        Assert.Equal(45, playerbots.Social.Trading.TradeTimeoutSeconds);
+        Assert.Equal(16, playerbots.Social.Trading.Limits.MaxConcurrentTrades);
+        Assert.Equal(2_000_000, playerbots.Social.Trading.Limits.DailyOutflowCopperServer);
+    }
+
+    [Fact]
     public async Task PlayerbotThinkLimits_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // ManagedPlayerbotFeature reads SlowThinkLogMs and MaxThinkSearchNodes from this options object at every think.
@@ -401,7 +429,7 @@ public sealed class ConfigReloadTests : IDisposable
     public async Task PlayerbotRisk_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // The brains and party AIs read World:Playerbots:Risk from this options object at every decision.
-        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "RestManaBelowPct": 50, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
         var playerbots = new PlayerbotOptions { Enabled = true };
         PlayerbotRiskOptions risk = playerbots.Risk;
         ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
@@ -411,6 +439,7 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.False(risk.Enabled);
         Assert.Equal(2f, risk.Tolerance);
         Assert.Equal(20f, risk.RetreatHealthPct);
+        Assert.Equal(50f, risk.RestManaBelowPct);
         Assert.Equal(30, risk.DangerMemorySeconds);
         Assert.False(risk.PartyRetreatOnWipe);
 
@@ -422,7 +451,37 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
         Assert.True(risk.Enabled);
         Assert.Equal(1f, risk.Tolerance);
+        Assert.Equal(35f, risk.RestManaBelowPct);
         Assert.Equal(300, risk.DangerMemorySeconds);
+    }
+
+    [Fact]
+    public async Task PlayerbotRivalry_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The rivalry lane and the party AIs read World:Playerbots:Social:Rivalry from this options object at every pass and every emote.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Rivalry": { "Enabled": false, "AllowOptOut": false, "Emotes": { "RudeAtBots": true, "RangeYards": 10 }, "Safeguards": { "SafeAreas": "35,392" } }, "Memory": { "OrganisedPvpKills": true } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotSocialRivalryOptions rivalry = playerbots.Social.Rivalry;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(rivalry, playerbots.Social.Rivalry); // changed in place: the running lane holds this object
+        Assert.False(rivalry.Enabled);
+        Assert.False(rivalry.AllowOptOut);
+        Assert.True(rivalry.Emotes.RudeAtBots);
+        Assert.Equal(10, rivalry.Emotes.RangeYards);
+        Assert.Equal("35,392", rivalry.Safeguards.SafeAreas);
+        Assert.True(playerbots.Social.Memory.OrganisedPvpKills);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Rivalry": { "Emotes": { "RangeYards": 99 } } } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(10, rivalry.Emotes.RangeYards);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(rivalry.Enabled);
+        Assert.False(rivalry.Emotes.RudeAtBots);
+        Assert.False(playerbots.Social.Memory.OrganisedPvpKills);
     }
 
     [Fact]
@@ -560,6 +619,54 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotSocialEvents_AreLive_AndABadExcludedEventsListIsRefusedKeepingTheOldOne()
+    {
+        // The festival board and the events lane read World:Playerbots:Social:Events from this object at every decision (P7a slice 1).
+        string path = Write("""
+            { "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Social": { "Events": {
+                "Enabled": false, "Holidays": { "CelebrateChance": 25, "ExcludedEvents": "12, 24 25", "MaxPerServiceAnchor": 0 } } } } } }
+            """);
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+
+        var events = playerbots.Social.Events;
+        Assert.False(events.Enabled);
+        Assert.Equal(25, events.Holidays.CelebrateChance);
+        Assert.Equal("12, 24 25", events.Holidays.ExcludedEvents);
+        Assert.Equal(0, events.Holidays.MaxPerServiceAnchor);
+        Assert.Same(events, playerbots.Social.Events); // changed in place: what the board holds is what the reload wrote
+
+        // A live string compares by value, so the same text again is no change, and a different one is applied.
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { "ExcludedEvents": "12, 24 25" } } } } } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { "ExcludedEvents": "2" } } } } } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal("2", events.Holidays.ExcludedEvents);
+        Assert.True(events.Enabled); // a key removed from the file returns to its default
+        Assert.Equal(60, events.Holidays.CelebrateChance);
+
+        // Bad values: the reload is refused as a whole and the old values stay.
+        foreach (string bad in new[]
+        {
+            "\"ExcludedEvents\": \"12, x\"", "\"ExcludedEvents\": \"0\"", "\"ExcludedEvents\": \"65536\"", "\"CelebrateChance\": 101",
+            "\"SpotRadiusYards\": 19", "\"MaxPerTown\": 0", "\"EmotesPerListenerMinute\": 11", "\"TalkZoneGapSeconds\": 0",
+            "\"EmoteMinSeconds\": 120, \"EmoteMaxSeconds\": 60",
+        })
+        {
+            File.WriteAllText(path, $$"""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Social": { "Events": { "Holidays": { {{bad}} } } } } } }""");
+            ReloadResult refused = await coordinator.ReloadAsync("config");
+            Assert.NotEqual(ReloadStatus.Applied, refused.Status);
+            Assert.Equal("2", events.Holidays.ExcludedEvents);
+            Assert.Equal(60, events.Holidays.CelebrateChance);
+            Assert.Equal(250, events.Holidays.SpotRadiusYards);
+            Assert.Equal(24, events.Holidays.MaxPerTown);
+            Assert.Equal((30, 90), (events.Holidays.EmoteMinSeconds, events.Holidays.EmoteMaxSeconds));
+        }
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -650,6 +757,14 @@ public sealed class ConfigReloadTests : IDisposable
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SlowThinkLogMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxThinkSearchNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxPerBot)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxInFlight)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxInFlightNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobSyncNodeThreshold)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobWorkerMaxMs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobWaitMaxMs)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SyncPathQueryMaxMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.AsyncNavigationEnabled)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
@@ -683,7 +798,8 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
-            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)))
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotWorldBossOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
         }
@@ -713,6 +829,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotRaidRunOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{runsPath}:Raids:{property.Name}");
+        }
+
+        // World-boss raids are live key by key (docs/areas/playbots-groups.md, World-boss raids).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotWorldBossOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{nameof(PlayerbotGroupOptions.WorldBosses)}:{property.Name}");
         }
 
         // Following and catch-up is live key by key (docs/areas/playbots.md, Following and catch-up).
@@ -786,6 +908,22 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Gratitude:{property.Name}");
         }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingDealsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Deals:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingGiftsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Gifts:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialTradingLimitsOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType.IsValueType))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Trading:Limits:{property.Name}");
+        }
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialMoodOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Mood:{property.Name}");
@@ -794,6 +932,32 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{PlayerbotOptions.SectionName}:Social:Initiative:{property.Name}");
         }
+        // Rivalry (P6a): the switches, the emote rules and the safeguards are live key by key (docs/areas/playbots-social.md, Rivalry).
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalryOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(PlayerbotSocialRivalryEmoteOptions) && p.PropertyType != typeof(PlayerbotSocialRivalrySafeguardOptions)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalryEmoteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:Emotes:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(PlayerbotSocialRivalrySafeguardOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Rivalry:Safeguards:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEventsOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotHolidayOptions)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Events:{property.Name}");
+        }
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotHolidayOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:Social:Events:Holidays:{property.Name}");
+        }
+
+        // The social pass's per-tick time budget (a scalar of the Social section itself).
+        expected.Add($"{PlayerbotOptions.SectionName}:Social:{nameof(global::ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialOptions.PassBudgetMs)}");
 
         // The bot economy section is live key by key (docs/areas/playbots-economy.md).
         foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))

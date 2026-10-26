@@ -5,8 +5,8 @@ logs as missing: ItemSets, ItemRandomProperties, PageText, SpellItemEnchantment,
 
 ## What changed
 
-* **Data.** The five client files were extracted read-only from `D:\World of Warcraft Classic 1.12.1\Data` with the same mpqcli v0.11.0
-  into `D:\refs\client-dbc-5875-effective` (patch-2 over patch over dbc; listed in its `SHA256SUMS` and `README.txt`): ItemSet.dbc and
+* **Data.** The five client files were extracted read-only from `<wow-client-dir>\Data` with the same mpqcli v0.11.0
+  into `<refs-root>\client-dbc-5875-effective` (patch-2 over patch over dbc; listed in its `SHA256SUMS` and `README.txt`): ItemSet.dbc and
   SpellItemEnchantment.dbc from patch-2.MPQ, ItemRandomProperties.dbc, CharSections.dbc and CharacterFacialHairStyles.dbc from patch.MPQ.
   The patch-2 ItemSet.dbc differs from the patch.MPQ copy; the live profile's `DBFilesClient-5875` copies of ItemRandomProperties and
   SpellItemEnchantment are byte-identical to the effective ones. `page_text` and `item_enchantment_template` stay in the classic-db dump,
@@ -20,7 +20,7 @@ logs as missing: ItemSets, ItemRandomProperties, PageText, SpellItemEnchantment,
 
 ## Proof on a copy of the live profile
 
-`D:\ArcaneCore-lanes\_logs\w4-optional-dbcs\`: the live `appsettings.json` and the three databases (SQLite backup API from read-only
+`<lanes-root>\_logs\w4-optional-dbcs\`: the live `appsettings.json` and the three databases (SQLite backup API from read-only
 connections) copied to `profile-copy\`, ports moved to 28471/23871, Realm and World from this branch's Release build.
 
 * `copy-red\world.log` (live keys only): the five warnings (ItemSets, ItemRandomProperties, PageText, Enchanting, CharacterCreation).
@@ -49,11 +49,11 @@ The content refresh step gains one argument; then the World is restarted as usua
 
 ```
 powershell -NoProfile -File <deploy>\tools\content\refresh-world-content.ps1 -WorldDatabase ...\complete-r5\world.db
-  -DbcDirectory D:\refs\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll
+  -DbcDirectory <refs-root>\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll
   -BackupDirectory <out>\content-refresh-backups -Report <out>\04-refresh-report.json
-  -AppSettings C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\ArcaneCore-playable-standard-20261005-r3\appsettings.json
+  -AppSettings <live-profile>\appsettings.json
 ```
 
 or, on its own with the World stopped, `set-optional-data.ps1 -AppSettings <profile>\appsettings.json -DbcDirectory
-D:\refs\client-dbc-5875-effective`. Expected: five "matches SHA256SUMS" lines, the dump line, seven key lines, the backup line, then after
+<refs-root>\client-dbc-5875-effective`. Expected: five "matches SHA256SUMS" lines, the dump line, seven key lines, the backup line, then after
 the restart none of the five warnings in `world.log`. Rollback: copy `appsettings.json.<stamp>.bak` back and restart the World.

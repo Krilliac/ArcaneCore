@@ -251,6 +251,32 @@ public sealed class PlayerbotChatServiceTests
     }
 
     [Fact]
+    public async Task ARejectedOpenAIRequest_NamesJsonResponseFormat_InTheWarning()
+    {
+        await using var rig = new Rig(chat => chat.Providers = [Local()]);
+        rig.Client.ThenReturn(BotChatResult.Fail(BotChatOutcome.Rejected));
+        await rig.AskAsync(ChatSamples.Ask("hello"));
+        Assert.Contains(rig.Log.Lines, line => line.Contains("JsonResponseFormat=false", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MalformedModelJson_IsAnAnomalyAndTheFallbackReply_NotAFault()
+    {
+        static long PromptFaults() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+            .Where(s => s.Site == "playerbot.chat-prompts" && s.ExceptionType.Contains("JsonException", StringComparison.Ordinal)).Sum(s => s.Count);
+
+        await using var rig = new Rig(chat => chat.Providers = [Anthropic()]);
+        using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
+            n => n.Key == "bot-chat/prompt-json-invalid");
+        long before = PromptFaults();
+        rig.Client.ThenReturn(new BotChatResult(BotChatOutcome.Ok, "{oops: no reply field here}"));
+        BotChatReply reply = (await rig.AskAsync(ChatSamples.Ask("hello")))!;
+        Assert.Equal("Builtin", reply.Provider);
+        Assert.True(capture.Count("bot-chat/prompt-json-invalid") >= 1);
+        Assert.Equal(before, PromptFaults());
+    }
+
+    [Fact]
     public async Task ThePerPlayerCooldown_HoldsAcrossBots_AndExpires()
     {
         await using var rig = new Rig(chat => chat.PerPlayerCooldownSeconds = 10);

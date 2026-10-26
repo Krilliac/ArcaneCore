@@ -242,7 +242,12 @@ public sealed class ArcaneCommandTests
             await admin.SendChatAsync(ChatType.Say, Language.Common, $".gmannounce n{i}");
         }
 
-        await admin.CollectAsync();
+        // Each .gmannounce echoes to the sender; read up to the last echo so none can still be in flight and be
+        // mistaken for part of the gmlog reply (a fixed quiet window is not enough on a loaded machine).
+        while (!(await admin.ReadChatAsync()).Text.EndsWith("n5", StringComparison.Ordinal))
+        {
+        }
+
         string[] lines = await LinesAsync(admin, ".arcane gmlog");
 
         Assert.Equal(3, lines.Length);
@@ -287,7 +292,7 @@ public sealed class ArcaneCommandTests
 
         string[] lines = await LinesAsync(admin, ".arcane queues");
 
-        Assert.Contains("gm audit: 0 pending", lines);
+        Assert.Contains("gm audit: 0 pending, halted n/a", lines);
         Assert.All(lines, l => Assert.Contains(" pending", l, StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("character saves: ", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("RETAINED", StringComparison.Ordinal));
@@ -296,10 +301,10 @@ public sealed class ArcaneCommandTests
         AuditOf(host).Mute(2, 600, "Admiral", AccountSecurity.Administrator, "r");
         await AuditOf(host).Writes.FlushAsync();
 
-        Assert.Contains("gm audit: 0 pending, RETAINED after failed writes: mute:2", await LinesAsync(admin, ".arcane queues"));
+        Assert.Contains("gm audit: 0 pending, RETAINED after failed writes: mute:2, halted n/a", await LinesAsync(admin, ".arcane queues"));
 
         await AuditOf(host).Writes.RetryRetainedAsync();
-        Assert.Contains("gm audit: 0 pending", await LinesAsync(admin, ".arcane queues"));
+        Assert.Contains("gm audit: 0 pending, halted n/a", await LinesAsync(admin, ".arcane queues"));
         Assert.StartsWith("Syntax: .arcane queues", (await LinesAsync(admin, ".arcane queues now"))[0], StringComparison.Ordinal);
     }
 }

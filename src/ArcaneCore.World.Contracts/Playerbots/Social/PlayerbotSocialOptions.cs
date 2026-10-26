@@ -52,9 +52,26 @@ public sealed class PlayerbotSocialOptions
     /// <summary>Bots starting conversations and commenting on their surroundings (<c>World:Playerbots:Social:Initiative</c>).</summary>
     public PlayerbotSocialInitiativeOptions Initiative { get; set; } = new();
 
+    /// <summary>Cross-faction greetings, rude emotes at rivals and stance-aware replies to emotes (<c>World:Playerbots:Social:Rivalry</c>).</summary>
+    public PlayerbotSocialRivalryOptions Rivalry { get; set; } = new();
+    /// <summary>Answering trade windows, deals, group gifts and the outflow limits (<c>World:Playerbots:Social:Trading</c>).</summary>
+    public PlayerbotSocialTradingOptions Trading { get; set; } = new();
+
+    /// <summary>Bots and the world's events: festival gathering, celebration and talk (<c>World:Playerbots:Social:Events</c>).</summary>
+    public PlayerbotSocialEventsOptions Events { get; set; } = new();
+
+    /// <summary>
+    /// The most milliseconds of one world tick the social pass may use (0..1000, default 4; 0 = no limit). The pass is spread over as many
+    /// ticks as that takes, so a large fleet no longer stalls one tick once a second; a pass that takes longer than its interval simply
+    /// carries on (the next one starts when it has finished). The per-bot lanes stop between bots once the budget is spent (a tick may
+    /// overshoot by one bot); the lanes that work on the whole population run whole.
+    /// </summary>
+    public double PassBudgetMs { get; set; } = 4.0;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social";
+        if (!double.IsFinite(PassBudgetMs) || PassBudgetMs is < 0 or > 1000) throw new InvalidOperationException($"{section}: PassBudgetMs must be 0..1000.");
         if (Guilds is null) throw new InvalidOperationException($"{section}:Guilds is missing.");
         if (GuildChat is null) throw new InvalidOperationException($"{section}:GuildChat is missing.");
         if (Emotes is null) throw new InvalidOperationException($"{section}:Emotes is missing.");
@@ -69,6 +86,12 @@ public sealed class PlayerbotSocialOptions
         Mood.Validate();
         if (Initiative is null) throw new InvalidOperationException($"{section}:Initiative is missing.");
         Initiative.Validate();
+        if (Rivalry is null) throw new InvalidOperationException($"{section}:Rivalry is missing.");
+        Rivalry.Validate();
+        if (Trading is null) throw new InvalidOperationException($"{section}:Trading is missing.");
+        Trading.Validate();
+        if (Events is null) throw new InvalidOperationException($"{section}:Events is missing.");
+        Events.Validate();
         Lists.Validate();
         Guilds.Validate();
         GuildChat.Validate();

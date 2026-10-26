@@ -270,6 +270,9 @@ public sealed class DebugToolsCommands : ICommandExtension
         return true;
     }
 
+    private static string TruncateFault(string? fault)
+        => fault is null ? "-" : fault.Length <= 120 ? fault : string.Concat(fault.AsSpan(0, 117), "...");
+
     private static bool Sqlite(CommandContext context, string args)
     {
         if (args.Trim().Length != 0)
@@ -291,7 +294,7 @@ public sealed class DebugToolsCommands : ICommandExtension
                 ? "free"
                 : string.Create(C, $"held {hold.HeldMs:F0} ms by {hold.Owner} (waited {hold.WaitedMs:F0} ms)");
             context.Reply(string.Create(C,
-                $"{System.IO.Path.GetFileName(gate.Path)}: {gate.AcquiredTotal} writes, {gate.TimeoutsTotal} timeouts, {gate.ForcedTotal} forced and {gate.DeadTotal} dead releases since start; {gate.Waiting} waiting; {holder}"));
+                $"{System.IO.Path.GetFileName(gate.Path)}: {gate.AcquiredTotal} writes, {gate.TimeoutsTotal} timeouts, {gate.ForcedTotal} forced and {gate.DeadTotal} dead releases and {gate.HandlerFaultsTotal} release-handler faults{(gate.HandlerFaultsTotal == 0 ? "" : " (first: " + TruncateFault(gate.FirstHandlerFault) + ")")} since start; {gate.Waiting} waiting; {holder}"));
         }
 
         return true;

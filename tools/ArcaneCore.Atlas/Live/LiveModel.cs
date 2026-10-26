@@ -23,7 +23,7 @@ public enum LiveKind
 /// <summary>The wire names of <see cref="LiveKind"/>.</summary>
 public static class LiveKinds
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:217 ("k":"player|bot|creature|gameobject")
+    // ref: ATLAS-2026-10-18.md:217 ("k":"player|bot|creature|gameobject")
     private static readonly string[] WireNames = ["player", "bot", "creature", "gameobject"];
 
     /// <summary>All wire names, in <see cref="LiveKind"/> order.</summary>
@@ -141,6 +141,8 @@ public sealed record LiveRoute(IReadOnlyList<WorldPoint> Points, int Next, IRead
 /// <param name="Home">The creature's home point.</param>
 /// <param name="Spline">The movement spline in progress.</param>
 /// <param name="Route">The bot route in progress.</param>
+/// <param name="Race">The player's race id (<c>r</c>, an optional feed field; the feed revision is unchanged); 0 when the server did not send one. Players and bots only.</param>
+/// <param name="Class">The player's class id (<c>cl</c>, an optional feed field; the feed revision is unchanged); 0 when the server did not send one. Players and bots only.</param>
 public sealed record LiveEntity(
     ulong Id,
     LiveKind Kind,
@@ -155,7 +157,9 @@ public sealed record LiveEntity(
     ulong? Target,
     WorldPoint? Home,
     LiveSpline? Spline,
-    LiveRoute? Route)
+    LiveRoute? Route,
+    byte Race = 0,
+    byte Class = 0)
 {
     /// <summary>The canonical guid text.</summary>
     public string GuidText => LiveGuid.Format(Id);
@@ -282,7 +286,7 @@ public sealed record LiveSubscription(uint Map, uint Instance, double Hz, IReadO
 public sealed record LiveQuery(string Kind, uint Map, uint Instance, WorldPoint A, WorldPoint? B)
 {
     /// <summary>The query kinds the protocol defines.</summary>
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:220 ("kind":"los|height|path|undermap")
+    // ref: ATLAS-2026-10-18.md:220 ("kind":"los|height|path|undermap")
     public static IReadOnlyList<string> Kinds { get; } = ["los", "height", "path", "undermap"];
 
     /// <summary>Whether <paramref name="kind"/> needs the second point.</summary>

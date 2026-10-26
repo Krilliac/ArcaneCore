@@ -87,6 +87,19 @@ public sealed class PlayerbotOpportunityModelTests
     }
 
     [Fact]
+    public void ALowManaBot_WaitsForTheOpportunity_UnlessRestManaBelowPctIsOff_BotQa1480()
+    {
+        // A hybrid at 1% mana facing one easy guard: the risk is fine, but it has nothing to cast, so the default holds it.
+        OpportunityFacts easy = Facts(3f, 10, Guard(10, 1f, 40));
+        OpportunityFacts facts = easy with { Engagement = easy.Engagement with { BotManaPct = 1f, ManaDependence = 0.4f } };
+        var options = new PlayerbotOpportunityOptions { PersonalityVariance = 0f };
+        OpportunityVerdict waits = PlayerbotOpportunityModel.Decide(facts, options, new PlayerbotRiskOptions());
+        Assert.Equal(OpportunityDecision.Wait, waits.Decision);
+        Assert.Equal("low-mana", waits.Reason);
+        Assert.Equal(OpportunityDecision.Engage, PlayerbotOpportunityModel.Decide(facts, options, new PlayerbotRiskOptions { RestManaBelowPct = 0f }).Decision);
+    }
+
+    [Fact]
     public void ARecoveringBot_Waits_AndALethalGuardIsRefused()
     {
         Assert.Equal(OpportunityDecision.Wait, Decide(Facts(5f, 10) with { Recovering = true }).Decision);

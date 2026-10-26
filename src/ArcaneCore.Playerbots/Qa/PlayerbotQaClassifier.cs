@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.World.Playerbots.Population;
 
 namespace ArcaneCore.World.Playerbots.Qa;
 
@@ -69,6 +70,12 @@ internal static class PlayerbotQaClassifier
                 return new QaClassification(QaCause.ServerFault, "the world tick hung in its " + (s.Stage.Length != 0 ? s.Stage : "unknown") + " phase while running "
                     + (s.Reason.Length != 0 ? s.Reason : "unknown work") + "; the watchdog's log line (event 7102) carries the durations and the slowest features", title);
             case QaSignalKind.UnreachableGoal:
+                if (AcrossWater(s, facts))
+                {
+                    return new QaClassification(QaCause.BehaviourBug, string.Create(CultureInfo.InvariantCulture,
+                        $"goal across water: the travel (boat or portal) failed; see bot-travel/leg-failed. Target {s.Target} spawns only across water from the bot on map {s.Map} ({s.Detail})"), title);
+                }
+
                 return new QaClassification(QaCause.MissingData, string.Create(CultureInfo.InvariantCulture,
                     $"bots skipped target {s.Target} without walking: the walking navigation mesh (steep slopes excluded) does not join the ground they stood on to the goal's ({s.Detail}). A spawn on an island platform or beyond a mesh gap: check the spawn and the mesh there"), title);
 
@@ -82,8 +89,9 @@ internal static class PlayerbotQaClassifier
                     + ": an effect that silently does nothing, or a rule that drops it", title);
 
             case QaSignalKind.Anomaly:
-                return new QaClassification(QaCause.BehaviourBug,
-                    "recurring bot outcome anomaly " + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
+                return new QaClassification(IsContentDefect(s) ? QaCause.MissingData : QaCause.BehaviourBug,
+                    (s.Goal.Length != 0 && !s.Goal.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal) ? "recurring world anomaly " : "recurring bot outcome anomaly ")
+                    + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                     + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
 
             default:
@@ -91,6 +99,14 @@ internal static class PlayerbotQaClassifier
                 throw new ArgumentOutOfRangeException(nameof(s), s.Kind, "no classification for this bot QA kind");
         }
     }
+
+    /// <summary>
+    /// A world anomaly whose cause is the imported content, not server behaviour. The reporters give those defects their own ledger keys
+    /// (<c>loot/gameobject-loot-no-data</c>: a chest whose loot template names no rows or only unknown items; <c>gameobject/use-failed-unknown-lock</c>:
+    /// a use refused because the object's lock id has no lock_template row), so the cause follows the key and never the last occurrence's detail.
+    /// </summary>
+    private static bool IsContentDefect(QaSignal s)
+        => PlayerbotQaAnomalyFeed.ContentDefectKeys.Contains(s.FaultCode);
 
     private static string SpellPrefix(QaSignal s)
         => PlayerbotQaAggregator.SpellOf(s) + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $" effect {s.EffectIndex} ({s.EffectName})") : string.Empty) + ": ";
@@ -253,6 +269,24 @@ internal static class PlayerbotQaClassifier
         "StageTimeout" => "turn-in stage timed out",
         _ => code,
     };
+
+    /// <summary>
+    /// Whether every spawn of an unreachable goal's target on the bot's map lies across water from the bot (<see cref="PopulationTownProgression.SeparatedByWater"/>):
+    /// the walk failed because the boat or portal leg failed, not because content is missing. The log line carries only the bot's position, so the goal's
+    /// position comes from the target's spawns; a spawn on the bot's own side keeps the mesh-gap verdict.
+    /// </summary>
+    private static bool AcrossWater(QaSignal s, IQaContentFacts facts)
+    {
+        if (!facts.Available || !s.HasPosition || s.Target == 0) return false;
+        IReadOnlyList<(float X, float Y)> spawns = facts.SpawnPositions(s.Map, s.Target);
+        if (spawns.Count == 0) return false;
+        foreach ((float x, float y) in spawns)
+        {
+            if (!PopulationTownProgression.SeparatedByWater(s.Map, s.X, s.Y, s.Map, x, y)) return false;
+        }
+
+        return true;
+    }
 
     private static int Spawns(QaSignal s, IQaContentFacts facts, uint entry)
         => OnItsMap(s) ? facts.SpawnCount(s.Map, entry) : facts.SpawnCountAnyMap(entry);

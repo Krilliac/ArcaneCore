@@ -63,6 +63,14 @@ public sealed partial class PlayerbotGroupCoordinator
     internal const uint SiegeWinAnnounceMs = 4_000;
 
     private PlayerbotSiege? _siege = null;
+
+    // The characters of the siege's raids as they were formed, published whole when the siege starts and cleared when it ends: the social memory reads it
+    // from a map's thread (a PvP kill), so it is a set nothing changes after it is published.
+    private volatile HashSet<ObjectGuid> _siegeMembers = [];
+
+    /// <summary>Whether <paramref name="guid"/> belongs to a raid of the siege under way (any thread). A kill with either side in one is organised PvP, not a grudge.</summary>
+    internal bool IsInSiegeGroup(ObjectGuid guid) => _siegeMembers.Contains(guid);
+
     private readonly List<Vector3> _siegeWaypoints = [];
     private uint _siegeWaypointMap = 0;
     private uint _siegeTickedMs = 0;
@@ -213,6 +221,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         _siege = siege;
+        _siegeMembers = [.. siege.Raids.Where(raid => raid.Group is not null).SelectMany(raid => raid.Group!.Members).Select(member => member.Guid)];
         SiegeOutcome = null;
         _siegeTicked = false;
         Note($"siege {siege.Id} started: {siege.Raids.Count} raids, {siege.Waypoints.Count} waypoints on map {mapId}, objective {objectiveEntry}");
@@ -234,6 +243,7 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (!ReferenceEquals(_siege, siege)) return;
         _siege = null;
+        _siegeMembers = [];
         SiegeOutcome = reason == "won" ? "won" : "stopped: " + reason;
         foreach (PlayerbotSiegeRaid raid in siege.Raids)
             if (raid.Group is { } group && _groups.Contains(group) && group.State != PlayerbotGroupState.Disbanding)

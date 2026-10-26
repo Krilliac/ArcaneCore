@@ -52,6 +52,52 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// Whether the active <see cref="CastCustomSpell"/> of <paramref name="spell"/> by <paramref name="caster"/> gives every effect in
+    /// <paramref name="effectMask"/> an explicit value that is final (die of 0 or 1 sides) and not above 0, so the effect does nothing by design (vmangos
+    /// CastCustomSpell: Frenzied Regeneration's tick heals <c>rage * amount / 10</c>, which is 0 at 0 rage). False outside such a cast, for another caster
+    /// (the scope is matched like <see cref="CustomValueModifier"/> does), for an effect the cast leaves at the spell's own value, and for an empty mask.
+    /// It evaluates only the spell's base and custom values (<see cref="SpellMath.CalculateEffectValue"/>), not the full value-modifier chain (flat and percent
+    /// spell mods, auras), so a mod could still lift a non-positive value above 0: it is conservative only for spells that no such mod touches. Read by the
+    /// playerbot QA monitor from <see cref="ISpellCastObserver.OnTargetOutcome"/>, which runs inside the synchronous cast (<see cref="Prepare"/> inside the
+    /// try of <see cref="CastCustomSpell"/>), so the scope is still set. Thread: the scope is one plain field of the system, shared with the
+    /// pre-existing <see cref="CustomValueModifier"/>; it is consistent only while casts do not overlap. On the live setting
+    /// (<c>World:Parallel:Ungated=CreatureMapSystem,GameObjectMapSystem</c>) casts stay inside the serial gate (CreatureMapSystem.cs:153-159, 1093-1094,
+    /// 1140-1155 take Serial() around casts; only the spline and wander legs run ungated; GameObjectMapSystem.cs:288-293). The exposure would appear only if
+    /// the Packets or Heartbeat stage, or a casting part of those two updaters, were ungated.
+    /// </summary>
+    public bool CustomValueIsNonPositive(Unit caster, SpellInfo spell, int effectMask)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(spell);
+        if (effectMask == 0 || _customValues is not { } scope || !ReferenceEquals(scope.Caster, caster) || scope.Spell.Id != spell.Id)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            if ((effectMask & (1 << i)) == 0)
+            {
+                continue;
+            }
+
+            SpellEffectInfo effect = spell.Effects[i];
+            if (i >= 3 || scope.BasePoints[i] is not { } explicitBasePoints || effect.DieSides is < 0 or > 1 || effect.DicePerLevel != 0)
+            {
+                return false;
+            }
+
+            SpellEffectInfo replaced = effect with { BasePoints = explicitBasePoints - effect.BaseDice };
+            if (SpellMath.CalculateEffectValue(spell, replaced, CasterLevelOf(scope.Caster), Random) > 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Add the script of the periodic trigger-spell aura of <paramref name="spellId"/>. The script replaces what the aura
     /// tick would cast (vmangos Aura::TriggerSpell switches on the aura's spell id); a second script for the same spell is a
     /// startup error.

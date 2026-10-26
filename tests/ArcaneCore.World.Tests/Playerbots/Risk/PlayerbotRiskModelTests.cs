@@ -102,6 +102,39 @@ public sealed class PlayerbotRiskModelTests
     }
 
     [Fact]
+    public void TheLowManaLine_IsCappedAtRecoverHealthPct_BotQa1480()
+    {
+        // RestManaBelowPct 90 above RecoverHealthPct 80: the rest ends at 80, so the line is 80 and a bot at 85 is not held for good.
+        var options = new PlayerbotRiskOptions { RestManaBelowPct = 90f, RecoverHealthPct = 80f };
+        PlayerbotEngagementFacts hybrid = Bot(Mob(dps: 5f)) with { BotManaPct = 85f, ManaDependence = 0.4f };
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid, options).Decision);
+        PlayerbotEngagement below = PlayerbotRiskModel.Assess(hybrid with { BotManaPct = 79f }, options);
+        Assert.Equal(PlayerbotEngageDecision.Rest, below.Decision);
+        Assert.Equal("low-mana", below.Reason);
+    }
+
+    [Fact]
+    public void AHybridBelowRestManaBelowPct_RestsBeforeAnEasyPull_BotQa1480()
+    {
+        // A hybrid (ManaDependence 0.4) at 1% mana still weighs an easy mob as fine (risk 0.45 against 0.62 accepted; the 7 dps default mob
+        // is 0.63 there, which the old rule already rested for), so it was pulled with nothing to cast.
+        PlayerbotEngagementFacts hybrid = Bot(Mob(dps: 5f)) with { BotManaPct = 1f, ManaDependence = 0.4f };
+        PlayerbotEngagement dry = PlayerbotRiskModel.Assess(hybrid, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Rest, dry.Decision);
+        Assert.Equal("low-mana", dry.Reason);
+
+        // At or above the line, with no mana use, or with the key at 0 the pull is taken as before.
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid with { BotManaPct = 35f }, Defaults).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid with { ManaDependence = 0f }, Defaults).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(hybrid, new PlayerbotRiskOptions { RestManaBelowPct = 0f }).Decision);
+        Assert.Equal(PlayerbotEngageDecision.Engage, PlayerbotRiskModel.Assess(Bot(Mob()), Defaults).Decision); // no mana bar (a warrior)
+
+        // A fight too strong even at full mana is still avoided, not rested for.
+        PlayerbotEngagement pack = PlayerbotRiskModel.Assess(Bot(Mob(), Mob(RiskJoin.Assist), Mob(RiskJoin.FightSpot)) with { BotManaPct = 1f, ManaDependence = 0.4f }, Defaults);
+        Assert.Equal(PlayerbotEngageDecision.Avoid, pack.Decision);
+    }
+
+    [Fact]
     public void RememberedDanger_RaisesTheRisk_AndARememberedCreatureIsNotPulled()
     {
         PlayerbotEngagement plain = PlayerbotRiskModel.Assess(Bot(Mob()), Defaults);
@@ -137,6 +170,37 @@ public sealed class PlayerbotRiskModelTests
         Assert.False(PlayerbotRiskModel.Judge(new(250, 300, 10f, 10f, 400, 1, 100f), Defaults).Retreat);
         Assert.True(PlayerbotRiskModel.Judge(new(250, 300, 10f, 10f, 400, 1, 100f), new PlayerbotRiskOptions { RetreatHealthPct = 90f }).Retreat);
         Assert.Equal("losing-to-3", PlayerbotRiskModel.Judge(new(30, 300, 20f, 20f, 900, 3, 90f), Defaults).Reason);
+    }
+
+    [Fact]
+    public void ALowBotFacingSeveral_RetreatsWhenOneRoundWouldCarryItBelowTheLine_WhileTheRetreatCanStillSucceed()
+    {
+        // 25 of 60 health (41%, above the 35% line), three pursuers at 4.2 yards a second against the bot's 7, 30 yards to run.
+        var pursuit = new PlayerbotPursuit(30f, 7f, [new RiskPursuer(4.2f, 4.7f / 3f), new RiskPursuer(4.2f, 4.7f / 3f), new RiskPursuer(4.2f, 4.7f / 3f)],
+            PlayerbotEscapeKit.None, FleeDamageFactor: 1.25f);
+        PlayerbotFightFacts facts = new(25, 60, 4.7f, 2f, 180, 3, 100f, Pursuit: pursuit);
+
+        // The mean rate alone says "behind"; one round of three blows (15) would leave 10 health (17%), under the line.
+        PlayerbotFightVerdict burst = PlayerbotRiskModel.Judge(facts with { RoundDamage = 15f }, Defaults);
+        Assert.True(burst.Retreat, burst.ToString());
+        Assert.Equal("losing-burst-3", burst.Reason);
+
+        PlayerbotFightVerdict mean = PlayerbotRiskModel.Judge(facts with { RoundDamage = 0f }, Defaults);
+        Assert.False(mean.Retreat);
+        Assert.Equal("behind", mean.Reason);
+
+        // A round that leaves the bot above the line changes nothing.
+        Assert.Equal("behind", PlayerbotRiskModel.Judge(facts with { RoundDamage = 3f }, Defaults).Reason);
+
+        // A lone attacker keeps the plain line however hard its round: the verdict is unchanged.
+        PlayerbotFightVerdict lone = PlayerbotRiskModel.Judge(facts with { Enemies = 1, RoundDamage = 15f }, Defaults);
+        Assert.False(lone.Retreat);
+        Assert.Equal("behind", lone.Reason);
+
+        // Feasibility is judged at the current health: at 8 health the run (at least 8.4 health of blows) is no way out.
+        PlayerbotFightVerdict cornered = PlayerbotRiskModel.Judge(facts with { BotHealth = 8, RoundDamage = 15f }, Defaults);
+        Assert.False(cornered.Retreat);
+        Assert.Equal(PlayerbotRiskModel.CorneredReason, cornered.Reason);
     }
 
     [Theory]

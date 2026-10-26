@@ -401,7 +401,7 @@ public sealed partial class PlayerbotGroupCoordinator
             var facts = new PlayerbotRecruitFacts(PlayerbotTraits.For(player.Guid.Value).Sociability, affinityToAnchor, worst, rival, fillsRole, guildmate,
                 AnsweredCall: offer || pledged || called);
             if (PlayerbotRecruitment.Refuses(coop, facts)) continue;
-            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(now, refusalPeriod, bot.BotId, groupId)), facts))
+            if (!pledged && !PlayerbotRecruitment.Accepts(coop, player.Guid.Value, PlayerbotRecruitment.RollGroup(groupId, PlayerbotRecruitment.RefusalWindow(now, refusalPeriod, player.Guid.Value, groupId)), facts))
             {
                 if (!offer) _recruitRefused[(groupId, bot.BotId)] = now; // decided: not asked again for this group
                 continue;

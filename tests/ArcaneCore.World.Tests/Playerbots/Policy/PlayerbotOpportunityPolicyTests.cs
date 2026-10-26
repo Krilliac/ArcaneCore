@@ -65,9 +65,9 @@ public sealed class PlayerbotOpportunityPolicyTests
     }
 
     [Fact]
-    public void TheRecordVersion_IsTwo_BecauseTheOpenBitsMoved()
+    public void TheRecordVersion_IsThree()
     {
-        Assert.Equal(2, PlayerbotPolicyRecord.SchemaVersion);
+        Assert.Equal(3, PlayerbotPolicyRecord.SchemaVersion);
     }
 
     [Fact]
@@ -99,12 +99,9 @@ public sealed class PlayerbotOpportunityPolicyTests
     [Fact]
     public async Task TheSnapshot_ListsTheOpportunityOpen_OnlyWhileAFindIsInReach()
     {
+        // A frozen think clock: HasOptionalThinkBudget(15.0) guards the opportunity probe in PolicySnapshot (PlayerbotBrain.Policy.cs:72).
         await using Rig rig = await Rig.StartAsync([Free]);
-        PlayerbotPolicyGoalMask open = await rig.World(() =>
-        {
-            rig.Bot.Session.ManagedBudget = new ManagedActionBudget(5); // as a think has
-            return rig.Bot.Brain.PolicySnapshot(rig.Player, new float[PlayerbotPolicySchema.FeatureCount]);
-        });
+        PlayerbotPolicyGoalMask open = await rig.PolicySnapshotAsync();
         Assert.True(open.Contains(PlayerbotPolicyGoal.Opportunity), $"open bits {open.Bits}");
         Assert.True(open.Contains(PlayerbotPolicyGoal.Explore));
 
@@ -113,12 +110,14 @@ public sealed class PlayerbotOpportunityPolicyTests
         Assert.False(await rig.World(() => rig.Bot.Brain.Opportunities.HasCandidate(rig.Player)));
         // With the goal off, and with no find at all, it is not open either.
         await rig.World(() => { rig.Bot.Brain.Opportunities.Ledger.Forget(ChestGuid(Free)); rig.Options.Opportunities.Enabled = false; return true; });
-        Assert.False((await rig.World(() => rig.Bot.Brain.PolicySnapshot(rig.Player, new float[PlayerbotPolicySchema.FeatureCount]))).Contains(PlayerbotPolicyGoal.Opportunity));
+        Assert.False((await rig.PolicySnapshotAsync()).Contains(PlayerbotPolicyGoal.Opportunity));
     }
 
     [Fact]
     public async Task APolicyThatPrefersTheOpportunity_PromotesItAheadOfAnEarlierOpenGoal()
     {
+        // A frozen think clock: HasOptionalThinkBudget(15.0) guards the promoted goal (PlayerbotBrain.Policy.cs:117, 136).
+        // Under CI load or GC pauses, a wall-clock think can exceed 15 ms and cause the promotion to be refused.
         await using Rig rig = await Rig.StartAsync([Free], tweak: options => options.Opportunities.Enabled = false);
         var engine = new PlayerbotPolicyEngine(new PlayerbotPolicyOptions { Enabled = true },
             policy: new PlayerbotPolicyEngineTests.StubPolicy(PlayerbotPolicyGoal.Opportunity));
@@ -155,6 +154,8 @@ public sealed class PlayerbotOpportunityPolicyTests
     [Fact]
     public async Task APromotedOpportunityWithAGuard_HandsTheThinkToTheCombatPath_SoTheGuardIsTheTarget()
     {
+        // A frozen think clock: HasOptionalThinkBudget(15.0) guards the promoted goal (PlayerbotBrain.Policy.cs:117, 136).
+        // Under CI load or GC pauses, a wall-clock think can exceed 15 ms and cause the promotion to be refused.
         await using Rig rig = await Rig.StartAsync([Free], tweak: options => options.Opportunities.Enabled = false);
         await rig.World(() => { InstallOpenGround(rig.Host); return true; });
         (PlayerbotPolicyEngine engine, PlayerbotPolicyAgent agent) = await rig.StartPolicyAsync();
@@ -528,6 +529,11 @@ public sealed class PlayerbotOpportunityPolicyTests
 
         public PlayerbotOptions Options => Bot.Options;
 
+        // A frozen think clock: HasOptionalThinkBudget(15.0) checks the probe's running time (PlayerbotBrain.Policy.cs:117,
+        // PlayerbotBrain.cs:638-641). Running under a deterministic probe with a non-advancing clock isolates tests from
+        // wall-clock preemption and GC pauses under load.
+        public PlayerbotThinkProbe Probe { get; } = new(new PlayerbotThinkProbeTests.ManualClock());
+
         public static async Task<Rig> StartAsync(IEnumerable<ChestSpawn> chests, Action<PlayerbotOptions>? tweak = null)
         {
             ChestSpawn[] spawns = [.. chests];
@@ -565,11 +571,28 @@ public sealed class PlayerbotOpportunityPolicyTests
             await engine.WhenIdleAsync();
         }
 
-        /// <summary>One think of the whole brain (its ladder, with the policy hook) with a fresh action budget.</summary>
+        /// <summary>Takes a policy snapshot of the bot under a fresh action budget and the deterministic think probe.</summary>
+        public Task<PlayerbotPolicyGoalMask> PolicySnapshotAsync() => World(() =>
+        {
+            Bot.Session.ManagedBudget = new ManagedActionBudget(5); // as a think has
+            Probe.Begin();
+            try { return Bot.Brain.PolicySnapshot(Player, new float[PlayerbotPolicySchema.FeatureCount]); }
+            finally { Probe.End(); }
+        });
+
+        /// <summary>One think of the whole brain (its ladder, with the policy hook) with a fresh action budget under the frozen think clock.</summary>
         public Task ThinkBrainAsync() => World(() =>
         {
             Bot.Session.ManagedBudget = new ManagedActionBudget(5);
-            Bot.Brain.Update(500);
+            Probe.Begin();
+            try
+            {
+                Bot.Brain.Update(500);
+            }
+            finally
+            {
+                Probe.End();
+            }
             return true;
         });
 

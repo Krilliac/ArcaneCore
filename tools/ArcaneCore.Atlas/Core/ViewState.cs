@@ -78,8 +78,9 @@ public sealed record LayerStyle(bool Visible, string Color, double Opacity, Rend
 }
 
 /// <summary>
-/// Everything the viewport shows, as one immutable value. Its JSON form is the <c>view.get</c> result and the
-/// <c>view.set</c> argument (a JSON merge patch, RFC 7396), and is what saved views and headless captures replay.
+/// Everything the viewport shows, as one immutable value. Its JSON form is the basis of the <c>view.get</c> result
+/// (which adds <c>version</c> and optional <c>followOrigin</c>) and the <c>view.set</c> argument (a JSON merge patch,
+/// RFC 7396), and is what saved views and headless captures replay.
 /// </summary>
 public sealed record ViewState(
     uint MapId,
@@ -90,9 +91,23 @@ public sealed record ViewState(
     int LoadRadiusTiles,
     Theme Theme,
     bool ShowHud,
-    string? FollowGuid)
+    string? FollowGuid,
+    int TextureRadius = ViewState.DefaultTextureRadius,
+    int TextureBudgetMb = ViewState.DefaultTextureBudgetMb)
 {
     public const int MaxLoadRadiusTiles = 4;
+
+    /// <summary>Tiles around the focus tile whose textured layers load (0 none, 2 at most); others fall back to the untextured layer.</summary>
+    public const int DefaultTextureRadius = 1;
+
+    public const int MaxTextureRadius = 2;
+
+    /// <summary>Browser GPU budget for every texture the viewer holds, in MiB.</summary>
+    public const int DefaultTextureBudgetMb = 384;
+
+    public const int MinTextureBudgetMb = 64;
+
+    public const int MaxTextureBudgetMb = 2048;
 
     /// <summary>
     /// Eastern Kingdoms, inside the Lion's Pride Inn in Goldshire (the real-terrain test anchor,
@@ -143,6 +158,8 @@ public sealed record ViewState(
             ["theme"] = Name(Theme),
             ["hud"] = ShowHud,
             ["follow"] = FollowGuid,
+            ["textureRadius"] = TextureRadius,
+            ["textureBudgetMb"] = TextureBudgetMb,
         };
     }
 
@@ -236,7 +253,21 @@ public sealed record ViewState(
             (int)radius,
             Enum<Theme>(json, "theme"),
             Bool(json, "hud"),
-            follow);
+            follow,
+            OptionalWhole(json, "textureRadius", 0, MaxTextureRadius, DefaultTextureRadius),
+            OptionalWhole(json, "textureBudgetMb", MinTextureBudgetMb, MaxTextureBudgetMb, DefaultTextureBudgetMb));
+    }
+
+    /// <summary>A whole number within [min, max]; the default when the field is absent (older clients do not send it).</summary>
+    private static int OptionalWhole(JsonObject json, string name, int min, int max, int fallback)
+    {
+        if (json[name] is null)
+        {
+            return fallback;
+        }
+
+        double value = Num(json, name, min, max);
+        return Math.Floor(value) == value ? (int)value : throw Bad($"{name} must be a whole number");
     }
 
     /// <summary>Applies a JSON merge patch (RFC 7396) and validates the result; invalid patches throw <see cref="CommandException"/>.</summary>
@@ -353,10 +384,52 @@ public sealed record ViewState(
 public sealed class ViewStore(ViewState initial)
 {
     private readonly Lock _gate = new();
+
+    // Held around the state change and its notifications, so versions are published in order: without it, two threads can
+    // change the view (v5, v6) and then publish v6 first, and a subscriber that drops versions at or below the latest it saw loses v5.
+    // Always taken before _gate, never the other way round.
+    private readonly Lock _publishGate = new();
     private ViewState _current = initial ?? throw new ArgumentNullException(nameof(initial));
     private long _version;
+    private string? _followOrigin;
 
     public event Action<ViewState, long, string>? Changed;
+
+    /// <summary>
+    /// Raised just before <see cref="Changed"/> with the view as it was before this change, for subscribers that need to
+    /// know what the change altered (arguments: previous, next, version, origin, and the origin that owns the follow).
+    /// </summary>
+    public event Action<ViewState, ViewState, long, string, string?>? Applied;
+
+    /// <summary>
+    /// Says whether a <c>ui:&lt;connection&gt;</c> origin is still connected; the host sets it. Null means every origin counts as connected
+    /// (no host serves the store). Called under the store's lock, so it must be quick and must not call back into the store.
+    /// </summary>
+    public Func<string, bool>? OriginConnected { get; set; }
+
+    /// <summary>
+    /// The origin of the patch or set that last changed <see cref="ViewState.FollowGuid"/> (a clear counts), or null before any
+    /// follow change. Later patches that keep the same follow, such as the live feed moving the camera each frame, do not take it over.
+    /// </summary>
+    public string? FollowOrigin
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _followOrigin;
+            }
+        }
+    }
+
+    /// <summary>The view, its version and the follow owner read under one lock, so they describe the same moment (a null owner when nothing is followed).</summary>
+    public (ViewState View, long Version, string? FollowOrigin) Snapshot()
+    {
+        lock (_gate)
+        {
+            return (_current, _version, _current.FollowGuid is null ? null : _followOrigin);
+        }
+    }
 
     public ViewState Current
     {
@@ -381,33 +454,137 @@ public sealed class ViewStore(ViewState initial)
     }
 
     /// <summary>Applies a merge patch atomically; <paramref name="origin"/> names the writer (for example <c>ui</c> or <c>mcp</c>).</summary>
+    /// <remarks>
+    /// A UI cannot stop a follow that another UI owns: a patch from a <c>ui:</c> origin that only clears <c>follow</c> while a different
+    /// UI owns it has that member ignored (the rest of the patch still applies). Anything else, including a UI taking the follow over, goes through.
+    /// A patch from a <c>ui:</c> origin that sets a follow after <see cref="OriginConnected"/> says that UI is gone has the member ignored too,
+    /// so a command still running when its socket closed cannot leave a follow owned by nobody.
+    /// </remarks>
     public ViewState Patch(JsonObject patch, string origin)
     {
-        ViewState next;
-        long version;
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(patch);
+        lock (_publishGate)
         {
-            next = _current.Apply(patch);
-            _current = next;
-            version = ++_version;
-        }
+            ViewState previous;
+            ViewState next;
+            long version;
+            string? followOrigin;
+            lock (_gate)
+            {
+                JsonObject effective = patch;
+                bool followKey = patch.ContainsKey("follow");
+                if (followKey && IgnoresFollowLocked(patch["follow"] is null, origin))
+                {
+                    effective = (JsonObject)patch.DeepClone();
+                    effective.Remove("follow");
+                    followKey = false;
+                }
 
-        Changed?.Invoke(next, version, origin);
-        return next;
+                previous = _current;
+                next = _current.Apply(effective);
+                _current = next;
+                version = ++_version;
+                followOrigin = NoteFollowLocked(next, origin, followKey);
+            }
+
+            Applied?.Invoke(previous, next, version, origin, followOrigin);
+            Changed?.Invoke(next, version, origin);
+            return next;
+        }
     }
 
-    /// <summary>Replaces the whole view.</summary>
+    /// <summary>
+    /// True when a change of the follow from <paramref name="origin"/> must be dropped: a <c>ui:</c> origin that is no longer connected may
+    /// not set a follow, and one UI may not clear a follow another UI owns. The caller holds <c>_gate</c>.
+    /// </summary>
+    private bool IgnoresFollowLocked(bool clears, string origin)
+    {
+        if (!clears)
+        {
+            return origin.StartsWith("ui:", StringComparison.Ordinal) && OriginConnected is { } connected && !connected(origin);
+        }
+
+        return _current.FollowGuid is not null && IsPeerUi(_followOrigin, origin);
+    }
+
+    private static bool IsPeerUi(string? owner, string origin)
+        => owner is not null
+            && owner.StartsWith("ui:", StringComparison.Ordinal)
+            && origin.StartsWith("ui:", StringComparison.Ordinal)
+            && !string.Equals(owner, origin, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Stops the follow when <paramref name="owner"/> is the origin that owns it (a UI that disconnected); the check and the change are one
+    /// atomic step, so a follow another origin took over in the meantime is left alone. False when nothing was released.
+    /// </summary>
+    public bool ReleaseFollow(string owner)
+    {
+        lock (_publishGate)
+        {
+            ViewState previous;
+            ViewState next;
+            long version;
+            lock (_gate)
+            {
+                if (_current.FollowGuid is null || !string.Equals(_followOrigin, owner, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                previous = _current;
+                next = _current.Apply(new JsonObject { ["follow"] = null });
+                _current = next;
+                version = ++_version;
+                NoteFollowLocked(next, owner, followKey: true);
+            }
+
+            Applied?.Invoke(previous, next, version, owner, null);
+            Changed?.Invoke(next, version, owner);
+            return true;
+        }
+    }
+
+    /// <summary>Replaces the whole view. The follow rules of <see cref="Patch"/> apply: a replacement that would clear or set the follow against them keeps the current follow.</summary>
     public ViewState Set(ViewState state, string origin)
     {
         ArgumentNullException.ThrowIfNull(state);
-        long version;
-        lock (_gate)
+        lock (_publishGate)
         {
-            _current = state;
-            version = ++_version;
+            ViewState previous;
+            long version;
+            string? followOrigin;
+            lock (_gate)
+            {
+                previous = _current;
+                bool followChanged = previous.FollowGuid != state.FollowGuid;
+                if (followChanged && IgnoresFollowLocked(state.FollowGuid is null, origin))
+                {
+                    state = state with { FollowGuid = previous.FollowGuid };
+                    followChanged = false;
+                }
+
+                _current = state;
+                version = ++_version;
+                followOrigin = NoteFollowLocked(state, origin, followChanged);
+            }
+
+            Applied?.Invoke(previous, state, version, origin, followOrigin);
+            Changed?.Invoke(state, version, origin);
+            return state;
+        }
+    }
+
+    /// <summary>
+    /// Records who owns the follow: the origin of any patch that names <c>follow</c> (even with the guid already followed, so a second
+    /// origin can take the follow over), or of a whole-view replacement that changes it. Returns the owner to publish, null when nothing is followed.
+    /// </summary>
+    private string? NoteFollowLocked(ViewState next, string origin, bool followKey)
+    {
+        if (followKey)
+        {
+            _followOrigin = origin;
         }
 
-        Changed?.Invoke(state, version, origin);
-        return state;
+        return next.FollowGuid is null ? null : _followOrigin;
     }
 }

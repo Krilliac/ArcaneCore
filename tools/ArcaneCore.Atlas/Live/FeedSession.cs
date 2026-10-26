@@ -73,6 +73,12 @@ internal sealed class FeedSession : IDisposable
     /// <summary>The server's hello reply; set once <see cref="OpenAsync"/> has returned.</summary>
     public HelloInfo? Hello { get; private set; }
 
+    /// <summary>The map-feed revision the server's hello announced (<c>rev</c>; 2 adds the combat counters and insight queries); 1 when absent or malformed.</summary>
+    public int FeedRevision { get; private set; } = 1;
+
+    /// <summary>Query kinds this connection's world answered "unknown query kind" to; they are not asked again on this connection.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, byte> UnsupportedKinds { get; } = new(StringComparer.Ordinal);
+
     /// <summary>What this connection has received and refused.</summary>
     public LiveStats Stats { get; } = new();
 
@@ -476,7 +482,7 @@ internal sealed class FeedSession : IDisposable
 
         if (_expectedPid is { } expected)
         {
-            // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:214 (the hello reply carries "pid"), so a reply without it cannot be checked.
+            // ref: ATLAS-2026-10-18.md:214 (the hello reply carries "pid"), so a reply without it cannot be checked.
             if (hello.Pid is not { } actual)
             {
                 _hello.TrySetException(new CommandException(
@@ -500,6 +506,8 @@ internal sealed class FeedSession : IDisposable
             Warn(string.Create(CultureInfo.InvariantCulture, $"the hello dropped {hello.MapsRejected} malformed map entr{(hello.MapsRejected == 1 ? "y" : "ies")}; first: {hello.FirstMapProblem}"));
         }
 
+        // rev is read here rather than in FrameParser so the shared hello record stays untouched.
+        FeedRevision = root["rev"] is JsonValue revNode && revNode.TryGetValue(out int rev) && rev is >= 1 and <= 1000 ? rev : 1;
         _helloDone = true;
         _hello.TrySetResult(hello);
     }

@@ -109,6 +109,30 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>Trust (permille) change toward the member who died first in a wipe (-500..500).</summary>
     public int TrustPerFirstDeathInWipe { get; set; } = -30;
 
+    /// <summary>
+    /// Count a PvP kill in organised play as a grudge (off by default). Off: a kill on a battleground map, or with either side in a group-coordinator
+    /// siege group, records neither KilledBy nor KilledThem, so players met in a battleground or a GM-ordered siege are not taunted or remembered
+    /// as rivals in the open world. On: those kills are recorded like any other.
+    /// </summary>
+    public bool OrganisedPvpKills { get; set; }
+    /// <summary>Affinity gained when a trade deal completes at the agreed terms (0..30).</summary>
+    public int AffinityPerFairDeal { get; set; } = 3;
+
+    /// <summary>Trust (permille) gained toward a partner whose deal completed at the agreed terms (-500..500).</summary>
+    public int TrustPerFairDeal { get; set; } = 20;
+
+    /// <summary>Affinity change toward a partner who changed a deal's value after matching it (-100..0).</summary>
+    public int AffinityPerTradeScam { get; set; } = -15;
+
+    /// <summary>Trust (permille) change toward that partner (-500..500).</summary>
+    public int TrustPerTradeScam { get; set; } = -200;
+
+    /// <summary>Affinity gained for a gift worth at least the trading gift minimum (0..30).</summary>
+    public int AffinityPerGiftReceived { get; set; } = 4;
+
+    /// <summary>Affinity change toward a partner who agreed a deal and never completed it (-100..0).</summary>
+    public int AffinityPerDealFlaked { get; set; } = -1;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Social:Memory";
@@ -140,6 +164,12 @@ public sealed class PlayerbotSocialMemoryOptions
         Check(AffinityPerAbandonedRun, -100, 0, nameof(AffinityPerAbandonedRun));
         Check(TrustPerGroupSuccess, -500, 500, nameof(TrustPerGroupSuccess));
         Check(TrustPerFirstDeathInWipe, -500, 500, nameof(TrustPerFirstDeathInWipe));
+        Check(AffinityPerFairDeal, 0, 30, nameof(AffinityPerFairDeal));
+        Check(AffinityPerGiftReceived, 0, 30, nameof(AffinityPerGiftReceived));
+        Check(AffinityPerTradeScam, -100, 0, nameof(AffinityPerTradeScam));
+        Check(AffinityPerDealFlaked, -100, 0, nameof(AffinityPerDealFlaked));
+        Check(TrustPerFairDeal, -500, 500, nameof(TrustPerFairDeal));
+        Check(TrustPerTradeScam, -500, 500, nameof(TrustPerTradeScam));
         CheckUnit(CallForHelpBaseChance, nameof(CallForHelpBaseChance));
         CheckUnit(CallForHelpSociabilityWeight, nameof(CallForHelpSociabilityWeight));
 

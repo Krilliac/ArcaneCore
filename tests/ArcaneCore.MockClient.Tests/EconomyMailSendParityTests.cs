@@ -18,9 +18,9 @@ using Xunit;
 namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
-/// CMSG_SEND_MAIL against vmangos: silent drops (D:\refs\vmangos\src\game\Handlers\MailHandler.cpp:155-166), the
+/// CMSG_SEND_MAIL against vmangos: silent drops (vmangos@0e3ff01 src/game/Handlers/MailHandler.cpp:155-166), the
 /// recipient box cap (:258), COD zeroing and the one-hour delivery delay (:404-411), SMSG_RECEIVED_MAIL when a delayed
-/// letter becomes deliverable (D:\refs\vmangos\src\game\Chat\MasterPlayer.cpp:66-76), the 3-day read clamp (:454-458).
+/// letter becomes deliverable (vmangos@0e3ff01 src/game/Chat/MasterPlayer.cpp:66-76), the 3-day read clamp (:454-458).
 /// Only SQLite is exercised here; no store, query or schema changed.
 /// </summary>
 public sealed class EconomyMailSendParityTests

@@ -50,6 +50,7 @@ public static class WorldServiceCollectionExtensions
     {
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<CharacterFencingOptions>(configuration.GetSection(CharacterFencingOptions.SectionName));
+        services.Configure<Cluster.Tooling.ClusterNodeBridgeOptions>(configuration.GetSection(Cluster.Tooling.ClusterNodeBridgeOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));
@@ -80,9 +81,11 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
         services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
         services.TryAddSingleton<WorldWriterGuard>(); // the characters database's single-writer file lock (WorldStartup takes it before the schema initializers)
+        services.TryAddSingleton<ShutdownDrain>(); // the stall-only shutdown lanes of the write queues (WorldHost begins them)
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();
+        services.AddSingleton(sp => Gm.Diagnostics.WorldPersistenceProbes.CreateRegistry(sp)); // every write-behind queue, for .arcane queues
         services.AddSingleton(sp => new WorldRuntime(
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,
             sp.GetRequiredService<ICharacterSaveQueue>(),

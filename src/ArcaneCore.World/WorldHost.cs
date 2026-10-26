@@ -33,7 +33,8 @@ public sealed class WorldHost(
     IOptions<WorldOptions>? worldOptions = null,
     IServiceProvider? rootServices = null,
     IOptions<Cluster.Gateway.GatewayWorkerOptions>? workerOptions = null,
-    Cluster.Gateway.WorkerAdmission? admission = null) : IHostedService
+    Cluster.Gateway.WorkerAdmission? admission = null,
+    ShutdownDrain? drain = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
     private readonly Cluster.Gateway.GatewayWorkerOptions? _worker = workerOptions?.Value;
@@ -135,6 +136,21 @@ public sealed class WorldHost(
                 IReadOnlyList<CharacterIdentity> identities = await scope.ServiceProvider
                     .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
                 directory.Load(identities);
+
+                // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
+                // grid spawns) resolve their creature_equip_template items through it, and an unloaded store would warn and leave the slots empty.
+                // A failed load is not fatal here: it is not cached, the next request (a login) retries and fails closed itself.
+                if (scope.ServiceProvider.GetService<Items.ItemsFeature>() is { } itemsFeature)
+                {
+                    try
+                    {
+                        await itemsFeature.EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+                    {
+                        logger.LogWarning(ex, "Item templates could not be loaded at startup; they load on first use and creature equipment resolves after that");
+                    }
+                }
 
                 // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
                 _attached = true;
@@ -380,6 +396,7 @@ public sealed class WorldHost(
             failures.Add(ex);
         }
         finally { world.Stop(); }
+        drain?.Features.Begin(); // the feature write queues share this stall-only lane; the save queue's lane is begun separately below
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -390,6 +407,9 @@ public sealed class WorldHost(
             FaultLedger.Shared.Record("world-host.stop-features", ex);
             failures.Add(ex);
         }
+
+        ReportStopDrain(drain?.Features);
+        drain?.Saves.Begin();
         bool queueStopped = false;
         try
         {
@@ -402,16 +422,31 @@ public sealed class WorldHost(
             failures.Add(ex);
         }
 
+        ReportStopDrain(drain?.Saves);
+
         if (failures.Count == 0 && queueStopped)
         {
             await ReleaseOwnershipAsync(cancellationToken, failures).ConfigureAwait(false);
         }
+
+        // Sessions may still hold open packet traces: stop them and wait (bounded) so their records reach the disk before the process ends.
+        // Captures are diagnostics, so this comes after the player saves (a stalled capture disk must not delay them) and the ownership release.
+        await Task.Run(() => Net.PacketCapture.DrainAll(TimeSpan.FromSeconds(10), logger)).ConfigureAwait(false);
 
         // The file lock is not released here: the SQLite checkpointer's final WAL checkpoint runs after this host stops, so the guard is
         // disposed with the host container (Program) or the process, after every hosted service has stopped.
         if (failures.Count == 0) logger.LogInformation("World saved and stopped");
         else logger.LogError("World stop did not complete; durable ownership was retained");
         if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
+    }
+
+    /// <summary>Logs how a shutdown stall lane ended. A refusal is recorded once per refusing queue (its stop report); the host adds no second ledger entry.</summary>
+    private void ReportStopDrain(StopDrainBudget? lane)
+    {
+        if (lane is not null)
+        {
+            logger.LogInformation("{Drain}", lane.Describe());
+        }
     }
 
     /// <summary>

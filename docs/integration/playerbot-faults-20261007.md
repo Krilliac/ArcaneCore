@@ -4,7 +4,7 @@ Lane `claude/w3-bot-faults` (wave 3).
 
 ## What happened
 
-On the live movement build (`D:/ArcaneCore-lanes/_deploy/claude-movement-r1/world.log`, lines 468 and 520) two managed bots logged
+On the live movement build (`<deploy-root>/claude-movement-r1/world.log`, lines 468 and 520) two managed bots logged
 `Playerbot <id> action failed (InvalidOperationException)` with no message or stack:
 
 | Bot | Character | GhostTime (unix) | Fault saved (UpdatedUnix) | Ghost to fault |
@@ -16,7 +16,7 @@ Afterwards both rows had `DesiredEnabled = 0`, so neither came back at the next 
 
 ## Root cause
 
-Read from the saved state (`D:/ArcaneCore-lanes/_deploy/live-w2-r1/before-characters.db`, copied): both rows were saved with goal 8
+Read from the saved state (`<deploy-root>/live-w2-r1/before-characters.db`, copied): both rows were saved with goal 8
 (`Recover`), both characters were ghosts (`character_vitals.IsGhost = 1`) standing exactly on their corpses, and both had died more than once
 within five minutes (`DeathExpireTime = GhostTime + 600`), so the reclaim delay was 60 to 120 s (vmangos `Player::GetCorpseReclaimDelay`, the
 30/60/120 s steps).
@@ -28,9 +28,9 @@ and was waiting out a 60 s delay hit the cap at 47 to 49 s and threw `InvalidOpe
 `DesiredEnabled = false`.
 
 RED: `PlayerbotRecoveryTests.GhostAtCorpse_WaitsOutAScaledReclaimDelay_AtAShortThinkInterval_ThenReclaims` threw exactly
-`playerbot-recovery-stalled` before the fix (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/red-bot-faults.log`).
+`playerbot-recovery-stalled` before the fix (`<lanes-root>/_logs/w3-bot-faults/red-bot-faults.log`).
 
-End-to-end replay (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/repro/`, `setup_repro.py`): copies of `live-w2-r1/before-*.db`, only the two
+End-to-end replay (`<lanes-root>/_logs/w3-bot-faults/repro/`, `setup_repro.py`): copies of `live-w2-r1/before-*.db`, only the two
 bots desired, their ghosts' `GhostTime` moved to the launch time and `DeathExpireTime` to launch + 900 s (a 120 s delay, as live),
 private worlds on 127.0.0.1:18185-18187.
 
@@ -59,7 +59,7 @@ private worlds on 127.0.0.1:18185-18187.
    `docs/areas/playbots.md`, "Faults and quarantine".
 4. **Restore at startup**: a desired bot that cannot log in at startup (`login-refused`, for example saved on a map outside
    `AllowedMaps`) is quarantined and retried the same way. Before, the failed restore also cleared `DesiredEnabled`
-   (`ManagedPlayerbotLifecycleTests.AFailedRestoreOnStartup_KeepsTheBotDesired`, RED: `D:/ArcaneCore-lanes/_logs/w3-bot-faults/red-restore.log`).
+   (`ManagedPlayerbotLifecycleTests.AFailedRestoreOnStartup_KeepsTheBotDesired`, RED: `<lanes-root>/_logs/w3-bot-faults/red-restore.log`).
 
 Tests: `ManagedPlayerbotLifecycleTests.OneActionFault_LogsTheException_AndKeepsTheBotDesired` (RED before: the bot was stopped and not
 desired), `AQuarantinedBot_LogsInAgainAfterTheBackoff_Autonomous`, `TheLastAllowedFault_DisablesTheBot_AndItStaysOut`,
@@ -74,7 +74,7 @@ silently within the delay.
    the same quarantine entry) and otherwise ends with `quarantine-cleared`; it removes only its own entry. The startup restore keeps its
    own start kind. Test: `ManagedPlayerbotLifecycleTests.AnOperatorStop_BetweenTheRetrySnapshotAndItsStart_StaysStopped` forces the
    window (a second bot's checkpoint update is held inside the lock, the stop queues, the lock is FIFO) and checks the log shows the
-   refused retry. RED: the bot was `Running` again (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/rework/red.log`).
+   refused retry. RED: the bot was `Running` again (`<lanes-root>/_logs/w3-bot-faults/rework/red.log`).
 6. **ErrorCode text.** The stored code now carries exception text, echoed to chat by `.playerbot` status: control characters become
    spaces and the 128-unit cut never splits a surrogate pair (`ManagedPlayerbotFeature.Code`). Test:
    `AFaultMessage_IsStoredWithoutControlCharacters_AndCutOnACharacterBoundary` (RED: the CR LF of the message stored as is).

@@ -62,6 +62,9 @@ internal sealed class PlayerbotConversations
 
     /// <summary>Conversations running now (tests).</summary>
     internal int Active => _active.Count;
+    /// <summary>The remarks waiting to be told (tests).</summary>
+    internal IReadOnlyCollection<(ulong Player, BotChatEventKind Kind, string Value, string? Where)> Noticed => _noticed;
+
 
     /// <summary>Conversations started so far.</summary>
     internal int Started { get; private set; }
@@ -113,14 +116,22 @@ internal sealed class PlayerbotConversations
 
     // --- events ----------------------------------------------------------------------------------------------------------
 
-    /// <summary>A unit died (any thread that runs the map): a dungeon or raid boss killed by a player's side is news for its group's bots.</summary>
+    /// <summary>
+    /// A unit died (any thread that runs the map): a dungeon or raid boss, or a boss of the world-boss catalogue (<see cref="IsWorldBossEntry"/>) on a continent,
+    /// killed by a player's side is news for its group's bots.
+    /// </summary>
     internal void OnUnitKilled(Map map, Unit? killer, Unit victim)
     {
-        if (victim is not Creature creature || map.Template is not { IsDungeon: true } template) return;
-        if ((creature.Template.ExtraFlags & InstanceManager.CreatureFlagExtraInstanceBind) == 0 && !creature.IsWorldBoss) return;
+        if (victim is not Creature creature || PlayerbotBossKills.PlaceOf(map, creature, IsWorldBossEntry, ZoneOf) is not { } place) return;
         if (killer is null || DuelRules.ControllingPlayer(killer) is not { } player || string.IsNullOrWhiteSpace(creature.Template.Name)) return;
-        if (_noticed.Count < MaxNoticed) _noticed.Enqueue((player.Guid.Value, BotChatEventKind.BossKill, creature.Template.Name, template.Name));
+        if (_noticed.Count < MaxNoticed) _noticed.Enqueue((player.Guid.Value, BotChatEventKind.BossKill, creature.Template.Name, place));
     }
+
+    /// <summary>Whether an entry is a catalogued world boss (the group coordinator's frozen snapshot; any thread); null: no catalogue, continent kills stay silent.</summary>
+    internal Func<uint, bool>? IsWorldBossEntry { get; set; }
+
+    /// <summary>The name of the zone a creature stands in (null: not known, the map's name is used); set by the social feature.</summary>
+    internal Func<Map, Creature, string?>? ZoneOf { get; set; }
 
     private void OnQuestRewarded(Player player, ObjectGuid questGiver, Quest quest)
     {

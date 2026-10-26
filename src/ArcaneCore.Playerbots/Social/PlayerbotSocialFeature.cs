@@ -16,6 +16,7 @@ using ArcaneCore.World.Names;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Playerbots.Events;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Progression;
@@ -114,6 +115,9 @@ internal sealed class PlayerbotSocialPass(
     /// <summary>The group coordinator, when the host runs one (guild calls for a forming group, <see cref="PlayerbotGuildChat"/>).</summary>
     internal PlayerbotGroupCoordinator? Coordinator { get; init; }
 
+    /// <summary>The world's festival board (the events lane and the event remark); null without one.</summary>
+    internal PlayerbotWorldEventBoard? Events { get; init; }
+
     /// <summary>The bots' social memory seam (friend and ignore lists, guild invitations by affinity); null without one.</summary>
     internal PlayerbotSocialRecorder? Recorder { get; init; }
 
@@ -132,12 +136,18 @@ internal sealed class PlayerbotSocialPass(
     /// <summary>World time since the previous pass.</summary>
     internal long ElapsedMs => elapsedMs;
 
+    /// <summary>
+    /// The pass over the whole population, set on a slice of an incremental pass (<see cref="Bots"/> is then only the slice a per-bot lane
+    /// works on now; the lookups by character and id still cover every bot of the pass). Null on a pass that is not a slice.
+    /// </summary>
+    internal PlayerbotSocialPass? Whole { get; init; }
+
     internal IReadOnlyList<PlayerbotSocialBot> Bots => _bots ??= gather();
 
     /// <summary>The running bots by character id.</summary>
-    internal IReadOnlyDictionary<uint, PlayerbotSocialBot> ByCharacter => _byCharacter ??= BuildByCharacter();
+    internal IReadOnlyDictionary<uint, PlayerbotSocialBot> ByCharacter => Whole?.ByCharacter ?? (_byCharacter ??= BuildByCharacter());
 
-    internal IReadOnlySet<Guid> BotIds => _ids ??= BuildBotIds();
+    internal IReadOnlySet<Guid> BotIds => Whole?.BotIds ?? (_ids ??= BuildBotIds());
 
     private Dictionary<uint, PlayerbotSocialBot> BuildByCharacter()
     {
@@ -228,10 +238,12 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildFounding _founding = new(logger);
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
+    private readonly PlayerbotRivalryLane _rivalry = new(new PlayerbotRivalryOptOut());
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
     private readonly PlayerbotInitiativeLane _initiative = new();
+    private PlayerbotEventLane? _events;
     private readonly PlayerbotChannelMembership _channels = new();
     private readonly PlayerbotConversations _conversations = new();
     private readonly PlayerbotWorldChatter _worldChatter = new();
@@ -261,6 +273,15 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The intervals in use (tests shorten them).</summary>
     internal PlayerbotSocialTimings Timings { get; } = new();
 
+    /// <summary>
+    /// The feature's own clock (world milliseconds summed over its updates): the time base of the events lane, the festival board and the
+    /// brains' festival goals, so a claim, an arrival and an emote due time agree with each other.
+    /// </summary>
+    internal long ClockMs => _clockMs;
+
+    /// <summary>The festival events lane: arrival lines and celebration emotes (tests and status).</summary>
+    internal PlayerbotEventLane Events => _events ??= new PlayerbotEventLane(_initiative);
+
     /// <summary>The generator of every random choice (tests seed it).</summary>
     internal Random Random { get; set; } = new();
 
@@ -277,6 +298,12 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     internal PlayerbotGuildChat GuildChat => _chat;
 
     internal PlayerbotSocialEmotes Emotes => _emotes;
+
+    /// <summary>The cross-faction rivalry lane (tests and status).</summary>
+    internal PlayerbotRivalryLane Rivalry => _rivalry;
+
+    /// <summary>The one server-wide store of "rivals off" choices, read by the lane and by every bot's party AI.</summary>
+    internal PlayerbotRivalryOptOut RivalryOptOut => _rivalry.OptOut;
 
     /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
     internal PlayerbotHelpLane Help => _help;
@@ -332,6 +359,31 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         // The per-map kill handlers come and go with the maps; the bag undoes whichever are still on at detach.
         subscriptions.Add(new Undo(UnsubscribeMaps));
         foreach (Map map in world.Maps) OnMapCreated(map);
+        // The kill talk asks the group coordinator's frozen world-boss snapshot (any thread) and names the zone a catalogued boss fell in.
+        _chat.IsWorldBossEntry = _conversations.IsWorldBossEntry = IsWorldBossEntry;
+        _chat.ZoneOf = _conversations.ZoneOf = ZoneNameOf;
+    }
+
+    /// <summary>Whether <paramref name="entry"/> is in the group coordinator's world-boss catalogue (read from the map threads: a volatile snapshot).</summary>
+    private bool IsWorldBossEntry(uint entry) => (_groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>())?.IsWorldBossEntry(entry) == true;
+
+    /// <summary>The zone-and-area lookup of a place (tests replace it to make the lookup fail; null: the map's terrain).</summary>
+    internal Func<Map, ArcaneCore.Game.Creatures.Creature, (uint ZoneId, uint AreaId)>? ZoneLookup { get; set; }
+
+    /// <summary>The zone name of the place a creature stands in, from the area table; null where the terrain or the table does not know it.</summary>
+    internal string? ZoneNameOf(Map map, ArcaneCore.Game.Creatures.Creature creature)
+    {
+        if (_world is not { } world) return null;
+        try
+        {
+            (uint zoneId, _) = ZoneLookup?.Invoke(map, creature) ?? map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z);
+            return zoneId == 0 ? null : ArcaneCore.Game.Maps.Templates.WorldMaps.Of(world).Areas.GetById(zoneId)?.Name;
+        }
+        catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
+        {
+            FaultLedger.Shared.Record("playerbot.social.bosskill", error);
+            return null; // a minimal host without terrain or area data: the map's name is named instead
+        }
     }
 
     /// <summary>Start no further bot registry read, then wait for one still running (the only background work).</summary>
@@ -385,6 +437,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>End what is in flight and forget the world (the bag removes the subscriptions).</summary>
     private void Release()
     {
+        EndPass();
         CancelTips();
         UnsubscribeMaps();
         _conversations.Stop();
@@ -415,20 +468,33 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     // --- the pass ----------------------------------------------------------------------------------------------------
 
-    private void Update(uint elapsedMs)
+    internal void Update(uint elapsedMs)
     {
         _clockMs += elapsedMs;
-        if (!_options.Enabled) return;
+        if (!_options.Enabled)
+        {
+            EndPass();
+            return;
+        }
+
         _sinceLastPassMs += elapsedMs;
-        if (_sinceLastPassMs < Timings.PassIntervalMs) return;
-        long elapsed = _sinceLastPassMs;
-        _sinceLastPassMs = 0;
+        // A pass in flight is finished before the next one starts (and the interval then counts from the start of the finished one, so a
+        // pass that outlasts its interval is followed by the next at once, never by one pass per missed interval).
+        if (!_running && _sinceLastPassMs < Timings.PassIntervalMs) return;
         try
         {
-            RunPass(elapsed);
+            if (!_running)
+            {
+                long elapsed = _sinceLastPassMs;
+                _sinceLastPassMs = 0;
+                if (!BeginPass(elapsed)) return;
+            }
+
+            Advance(_options.Social.PassBudgetMs);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            EndPass();
             // Social life is never worth the world thread: log (the first few times in full) and carry on at the next pass.
             FaultLedger.Shared.Record("playerbot.social", error);
             AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
@@ -466,24 +532,258 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
+            Events = bots?.EventBoard,
         };
     }
 
+    /// <summary>One whole pass now, with no time limit (tests; the world thread's own passes go through <see cref="Update"/> under the budget).</summary>
     internal void RunPass(long elapsed)
     {
-        if (ResolveManagedBots() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return;
+        if (!_running && !BeginPass(elapsed)) return;
+        Advance(0);
+    }
+
+    // --- the incremental pass ----------------------------------------------------------------------------------------
+    //
+    // A pass is a list of stages run in order: the packet intake, the injected lanes, then the built-in lanes (LaneNames). Per-bot stages
+    // (the intake, the injected lanes and the lanes IsSlicedLane names) walk the pass's snapshot of bots in slices and stop between slices
+    // once the tick's budget (World:Playerbots:Social:PassBudgetMs) is spent; the next tick carries on at the next bot. Every other lane
+    // is population-wide (it keeps a cursor of its own, a per-pass quota or a set of "who is running", or it works out the whole
+    // population's guilds and charters) and runs whole, as one stage, over the snapshot. A stage never starts before the one before it has
+    // finished, so every bot still meets the lanes in their usual order, and a new pass starts only when the last one is over.
+
+    /// <summary>Most bots one slice may take (the time a slice takes is only known after it has run).</summary>
+    private const int MaxSliceBots = 128;
+
+    /// <summary>A pass in flight for longer than this many intervals is reported once as starved.</summary>
+    private const long StarvedPassIntervals = 20;
+
+    /// <summary>The lanes that act on one bot at a time, independently of the rest, and so may run on a slice of the population.</summary>
+    private static bool IsSlicedLane(int lane) => lane is 0 or 12; // answer-invites, emotes
+
+    private sealed class PassRun
+    {
+        public PassRun()
+        {
+            WholeGather = () => Bots;
+            ChunkGather = () => Chunk;
+        }
+
+        /// <summary>The bots of the pass, taken when it started and thinned of those who have left the world since.</summary>
+        public readonly List<PlayerbotSocialBot> Bots = [];
+
+        /// <summary>The slice a per-bot stage is running on.</summary>
+        public readonly List<PlayerbotSocialBot> Chunk = [];
+
+        public readonly Func<List<PlayerbotSocialBot>> WholeGather;
+        public readonly Func<List<PlayerbotSocialBot>> ChunkGather;
+        public long ElapsedMs;
+        public long StartedMs;
+        public int InjectedCount;
+
+        /// <summary>0: the intake; then the injected lanes; then the built-in lanes.</summary>
+        public int Stage;
+
+        /// <summary>The next bot of <see cref="Bots"/> a per-bot stage takes.</summary>
+        public int Cursor;
+
+        public bool StarvedReported;
+
+        public int StageCount => 1 + InjectedCount + LaneNames.Length;
+
+        public void Reset()
+        {
+            Bots.Clear();
+            Chunk.Clear();
+            ElapsedMs = 0;
+            StartedMs = 0;
+            InjectedCount = 0;
+            Stage = 0;
+            Cursor = 0;
+            StarvedReported = false;
+        }
+    }
+
+    private readonly PassRun _state = new();
+    private bool _running;
+
+    /// <summary>The clock, in milliseconds, that the pass's time budget is measured with (tests substitute a fake one).</summary>
+    internal Func<double> PassClockMs { get; set; } = static () => System.Diagnostics.Stopwatch.GetTimestamp() * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+    /// <summary>Whether a pass has started and not yet finished (its remaining stages run in the next ticks).</summary>
+    internal bool PassInProgress => _running;
+
+    /// <summary>Take the snapshot of bots and do the once-per-pass work that must precede every lane. False: nothing to run now.</summary>
+    private bool BeginPass(long elapsed)
+    {
+        if (ResolveManagedBots() is null || NewPass(elapsed, gatherBots: true) is not { } pass) return false;
         EnsureSubscribed(pass.Social);
         MaintainRegistry(pass);
-        Intake(pass);
-        for (int i = 0; i < InjectedLanes.Count; i++) RunInjected(InjectedLanes[i], pass);
-        for (int lane = 0; lane < LaneNames.Length; lane++) RunLane(lane, pass);
+        PassRun run = _state;
+        run.Reset();
+        run.Bots.AddRange(pass.Bots);
+        run.ElapsedMs = elapsed;
+        run.StartedMs = _clockMs;
+        run.InjectedCount = InjectedLanes.Count;
+        _running = true;
+        return true;
+    }
+
+    private void EndPass()
+    {
+        _running = false;
+        _state.Reset();
+    }
+
+    /// <summary>A pass over <paramref name="gather"/>'s bots at the current world time; <paramref name="whole"/> is set for a slice of a pass.</summary>
+    private PlayerbotSocialPass? NewPassOver(long elapsed, Func<List<PlayerbotSocialBot>> gather, PlayerbotSocialPass? whole)
+    {
+        if (_world is not { } world || TryContext() is not { } social) return null;
+        ManagedPlayerbotFeature? bots = ResolveManagedBots();
+        HashSet<uint>? registry = Volatile.Read(ref _registry);
+        return new PlayerbotSocialPass(_options, social, world, services, bots?.Chat, registry ?? EmptyRegistry, registry is not null, Timings, Random, _clockMs,
+            elapsed, gather,
+            whole is null ? _byCharacterScratch : null, whole is null ? _botIdsScratch : null)
+        {
+            Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
+            Recorder = bots?.Social,
+            Whole = whole,
+        };
+    }
+
+    private static bool IsLive(PlayerbotSocialBot bot)
+        => bot.Session.State == SessionState.InWorld && bot.Player is { IsInWorld: true, Map: not null };
+
+    /// <summary>Drop the bots that left the world since the snapshot was taken, keeping the cursor on the bot it pointed at.</summary>
+    private static void DropGone(PassRun run)
+    {
+        List<PlayerbotSocialBot> bots = run.Bots;
+        int kept = 0;
+        int cursor = run.Cursor;
+        for (int i = 0; i < bots.Count; i++)
+        {
+            if (IsLive(bots[i])) bots[kept++] = bots[i];
+            else if (i < run.Cursor) cursor--;
+        }
+
+        if (kept < bots.Count) bots.RemoveRange(kept, bots.Count - kept);
+        run.Cursor = cursor;
+    }
+
+    /// <summary>
+    /// Run the pass's stages until it is over or <paramref name="budgetMs"/> (0: no limit) is spent in this call. At least one stage or
+    /// slice of one bot runs per call, so a pass always moves on. World thread.
+    /// </summary>
+    private void Advance(double budgetMs)
+    {
+        PassRun run = _state;
+        DropGone(run);
+        if (NewPassOver(run.ElapsedMs, run.WholeGather, null) is not { } whole)
+        {
+            EndPass();
+            return;
+        }
+
+        Func<double> clock = PassClockMs;
+        double start = clock();
+        bool limited = budgetMs > 0;
+        int stages = run.StageCount;
+        while (run.Stage < stages)
+        {
+            if (!RunStage(run, whole, clock, start, budgetMs))
+            {
+                ReportStarved(run);
+                return;
+            }
+
+            run.Stage++;
+            run.Cursor = 0;
+            // The pass yields, between stages and between slices alike, only once the budget is exceeded: a tick spends the budget plus at most one slice.
+            if (limited && run.Stage < stages && clock() - start > budgetMs)
+            {
+                ReportStarved(run);
+                return;
+            }
+        }
+
         Passes++;
+        EndPass();
+    }
+
+    /// <summary>Run the current stage; false when it is unfinished because the budget is spent (the next call resumes it).</summary>
+    private bool RunStage(PassRun run, PlayerbotSocialPass whole, Func<double> clock, double start, double budgetMs)
+    {
+        int lane = run.Stage - 1 - run.InjectedCount;
+        if (lane >= 0 && !IsSlicedLane(lane))
+        {
+            RunLane(lane, whole);
+            return true;
+        }
+
+        List<PlayerbotSocialBot> bots = run.Bots;
+        if (bots.Count == 0 && run.Stage > 0) RunSlice(run, whole, 0, 0); // an injected lane still runs, once, over no bots
+        bool limited = budgetMs > 0;
+        double perBotMs = -1; // unknown until the first slice has run: that one takes a single bot
+        while (run.Cursor < bots.Count)
+        {
+            int count = bots.Count - run.Cursor;
+            if (limited)
+            {
+                if (perBotMs < 0) count = 1;
+                else if (perBotMs > 1e-6) count = (int)Math.Clamp((budgetMs - (clock() - start)) / perBotMs, 1, Math.Min(count, MaxSliceBots));
+                else count = Math.Min(count, MaxSliceBots);
+            }
+
+            double before = clock();
+            RunSlice(run, whole, run.Cursor, count);
+            run.Cursor += count;
+            double now = clock();
+            perBotMs = (now - before) / count;
+            if (limited && run.Cursor < bots.Count && now - start > budgetMs) return false;
+        }
+
+        return true;
+    }
+
+    private void RunSlice(PassRun run, PlayerbotSocialPass whole, int from, int count)
+    {
+        if (run.Stage == 0)
+        {
+            Intake(whole, run.Bots, from, from + count);
+            return;
+        }
+
+        List<PlayerbotSocialBot> chunk = run.Chunk;
+        chunk.Clear();
+        for (int i = from; i < from + count; i++) chunk.Add(run.Bots[i]);
+        if (NewPassOver(run.ElapsedMs, run.ChunkGather, whole) is not { } slice) return;
+        if (run.Stage <= run.InjectedCount)
+        {
+            int index = run.Stage - 1;
+            if (index < InjectedLanes.Count) RunInjected(InjectedLanes[index], slice);
+        }
+        else
+        {
+            RunLane(run.Stage - 1 - run.InjectedCount, slice);
+        }
+    }
+
+    /// <summary>Report, once per pass, a pass that has been in flight for far longer than its interval (the think rotation's starvation report, for the social pass).</summary>
+    private void ReportStarved(PassRun run)
+    {
+        long ageMs = _clockMs - run.StartedMs;
+        if (run.StarvedReported || ageMs <= Math.Max(1, Timings.PassIntervalMs) * StarvedPassIntervals) return;
+        run.StarvedReported = true;
+        AnomalyLedger.Shared.Report("bot-social", "pass-starved", "social",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"social pass unfinished after {ageMs} ms (interval {Timings.PassIntervalMs} ms, budget {_options.Social.PassBudgetMs:F1} ms per tick; stage {run.Stage + 1} of {run.StageCount}, {run.Bots.Count} bots)"),
+            origin: _world?.Identity);
     }
 
     private static readonly string[] LaneNames =
     [
         "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
-        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "prune",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "rivalry", "prune",
     ];
 
     /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
@@ -515,6 +815,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 case 14: _conversations.Run(pass); break;
                 case 15: _worldChatter.Run(pass); break;
                 case 16: _voice.Run(pass); break;
+                case 17: Events.Run(pass); break;
+                case 18: _rivalry.Run(pass); break;
                 default: _membership.Prune(pass); break;
             }
         }
@@ -582,10 +884,11 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     }
 
     /// <summary>The server packets this feature reads from each bot, and nothing else (the party AI and the brain drain their own).</summary>
-    private void Intake(PlayerbotSocialPass pass)
+    private void Intake(PlayerbotSocialPass pass, List<PlayerbotSocialBot> bots, int from, int to)
     {
-        foreach (PlayerbotSocialBot bot in pass.Bots)
+        for (int index = from; index < to; index++)
         {
+            PlayerbotSocialBot bot = bots[index];
             foreach (ManagedSessionPacket packet in bot.Session.DrainManagedPackets(PlayerbotSocialPackets.IntakeOpcodes))
             {
                 switch (packet.Opcode)

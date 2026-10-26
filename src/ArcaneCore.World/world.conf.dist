@@ -26,57 +26,57 @@
 
 # SECTIONS
 #
-#   ANTICHEAT                   44 keys
-#   AUCTIONHOUSEBOT             39 keys
-#   AURAS                       4 keys
-#   AUTOBROADCAST               3 keys
-#   BANS                        7 keys
-#   BATTLEGROUND                8 keys
-#   CHARACTERCREATION           13 keys
-#   CLIENTDATA                  2 keys
-#   CLUSTER                     15 keys
-#   COMBAT                      11 keys
-#   CONDITIONS                  2 keys
-#   CRAFTING                    1 keys
-#   CREATURES                   67 keys
-#   DATABASE                    26 keys
-#   DIAGNOSTICS                 13 keys
-#   ECONOMY                     29 keys
-#   ENCHANTING                  3 keys
-#   FORMS                       1 keys
-#   GAMEOBJECTS                 5 keys
-#   HOTRELOAD                   5 keys
-#   ITEMRANDOMPROPERTIES        2 keys
-#   ITEMSETS                    1 keys
-#   ITEMS                       7 keys
-#   LOCOMOTION                  17 keys
-#   LOGGING                     16 keys
-#   LOOT                        15 keys
-#   MODULES                     6 keys
-#   NAMES                       2 keys
-#   NET                         16 keys
-#   NPCSERVICES                 8 keys
-#   OPS                         60 keys
-#   PAGETEXT                    1 keys
-#   PERFORMANCELOG              8 keys
-#   PETS                        7 keys
-#   PROGRESSION                 7 keys
-#   QUESTS                      14 keys
-#   RANGED                      4 keys
-#   REPUTATION                  7 keys
-#   RESILIENCE                  14 keys
-#   REST                        5 keys
-#   SERVERMAIL                  1 keys
-#   SKILLS                      19 keys
-#   SPECIALLOOT                 4 keys
-#   SPELLRULES                  8 keys
-#   SPELLS                      10 keys
-#   STARTUP                     1 keys
-#   STATS                       1 keys
-#   TALENTS                     12 keys
-#   TOTEMS                      3 keys
-#   WARDEN                      15 keys
-#   WORLD                       729 keys
+#   ANTICHEAT
+#   AUCTIONHOUSEBOT
+#   AURAS
+#   AUTOBROADCAST
+#   BANS
+#   BATTLEGROUND
+#   CHARACTERCREATION
+#   CLIENTDATA
+#   CLUSTER
+#   COMBAT
+#   CONDITIONS
+#   CRAFTING
+#   CREATURES
+#   DATABASE
+#   DIAGNOSTICS
+#   ECONOMY
+#   ENCHANTING
+#   FORMS
+#   GAMEOBJECTS
+#   HOTRELOAD
+#   ITEMRANDOMPROPERTIES
+#   ITEMSETS
+#   ITEMS
+#   LOCOMOTION
+#   LOGGING
+#   LOOT
+#   MODULES
+#   NAMES
+#   NET
+#   NPCSERVICES
+#   OPS
+#   PAGETEXT
+#   PERFORMANCELOG
+#   PETS
+#   PROGRESSION
+#   QUESTS
+#   RANGED
+#   REPUTATION
+#   RESILIENCE
+#   REST
+#   SERVERMAIL
+#   SKILLS
+#   SPECIALLOOT
+#   SPELLRULES
+#   SPELLS
+#   STARTUP
+#   STATS
+#   TALENTS
+#   TOTEMS
+#   WARDEN
+#   WORLD
 #
 ###############################################################################
 
@@ -1717,6 +1717,42 @@ Cluster.Fencing.Enabled = false
 #        Docs: docs/reference/configuration.md#clusterfencing
 #
 # Cluster.Fencing.TakeoverIncarnation =
+
+#----------------------------------------------------------------------------
+# Cluster:NodeBridge
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.NodeBridge.Enabled
+#        Description: true starts the node bridge: the World connects to each endpoint in Endpoints,
+#                     logs node connection events and heartbeats, and syncs live worker placement.
+#                     false, the default, does nothing at all: no sockets, no log lines, no
+#                     background task. Read once when the daemon starts.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternodebridge
+#
+Cluster.NodeBridge.Enabled = false
+
+#
+#    Cluster.NodeBridge.Endpoints
+#        Description: The nodes the bridge monitors, as ;-separated entries of
+#                     nodeId|role|host:port|maps, where maps is a comma list of map ids or - for a
+#                     realm-wide node. The default is the seven local nodes: worker:EK 19081,
+#                     worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085,
+#                     coordinator 19086, supervisor 19087. A blank value means the seven default
+#                     nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set,
+#                     replaces it but does not turn the bridge on (a warning is logged when Enabled
+#                     is false). Only read when Enabled is true.
+#        Type: string
+#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternodebridge
+#
+Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
 # Cluster:Worker
@@ -3540,7 +3576,9 @@ Diagnostics.PacketCapture.Enabled = false
 #
 #    Diagnostics.PacketCapture.MaxBytes
 #        Description: Maximum bytes in one trace, including its header; a full trace stops
-#                     automatically.
+#                     automatically. A trace also stops when the disk writer falls 8192 records
+#                     behind. Records are written by a background writer and the file is finished
+#                     asynchronously after a stop; the server drains open traces at shutdown.
 #        Type: long
 #        Default: 67108864
 #        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
@@ -3885,10 +3923,13 @@ Economy.ReturnExpiredMoneyOnlyMail = true
 #                     commit is answered with its ordinary failure reply (auction DATABASE error,
 #                     mail INTERNAL_ERROR, trade cancelled), one whose outcome cannot be read kicks
 #                     its actors. Operational, not a gameplay rule: 15 is the shipped value, three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the actors' own saves, the settlement transaction), so one
-#                     locked write ahead of it cannot use up the budget. Valid range 1-300.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the actors' own saves, the settlement transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4015,11 +4056,13 @@ Forms.ResetFistAttackTimeOnFormLoss = false
 #                     save, the instance write drain, the loot transaction) before it is abandoned:
 #                     a take that never started is refused to the client as usual, one whose outcome
 #                     cannot be read kicks the taker. Operational, not a gameplay rule: 15 is the
-#                     shipped value, three lock waits of the shipped 5 s
+#                     shipped value, three typical lock waits of the shipped 5 s
 #                     Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already
 #                     in flight on the character save queue's one consumer, the taker's own save,
 #                     the loot transaction), so one locked write ahead of it cannot use up the
-#                     budget. Valid range 1-300.
+#                     budget. A write-gate wait is not capped at one bound: it gives up after 5 s
+#                     without a hand-off or 20 s of active waiting, but the settlement's budget
+#                     token ends any wait it is passed to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -6633,12 +6676,14 @@ Quests.RewardMode = AllSupported
 #        Description: Seconds one reward settlement may take end to end (save, drains, the reward
 #                     transaction) before it is abandoned and reconciled from the stored rows.
 #                     Operational, not a gameplay rule: 15 is the shipped value. It covers three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the settlement's own save, the reward transaction), so one
-#                     locked write ahead of it cannot use up the budget. A test that deliberately
-#                     holds a settlement open raises it so its observation window is not a race
-#                     against this deadline.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the settlement's own save, the reward transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. A test that deliberately holds a settlement open raises it so its
+#                     observation window is not a race against this deadline.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -8303,6 +8348,9 @@ World.Maps.GridCleanUpDelayMs = 300000
 #                     objects, active ones included, look half this distance around themselves. 0
 #                     turns the prefetch off. An ArcaneCore addition (vmangos reads the tiles inside
 #                     the update): it changes when the files are read, not what is loaded or when.
+#                     It also turns off the arrival prefetch (the tiles of a teleport's destination
+#                     are read when the teleport starts), which has a budget of its own so it never
+#                     evicts the approach prefetches.
 #        Type: float
 #        Default: 200
 #        Allowed: a number, '.' is the decimal point
@@ -8732,7 +8780,8 @@ World.Respawn.Dynamic.ScalePerPlayer = 0.1
 #        Description: The character save queue warns while its oldest waiting snapshot has waited
 #                     this many milliseconds. 0 disables the age check. Default 5000, the characters
 #                     database's write bound (Database:SqliteWriteTimeoutMs): a snapshot that old
-#                     has waited out at least one locked write (docs/areas/persistence.md).
+#                     has waited out at least one write-gate bound (5 s without a hand-off; a moving
+#                     queue may keep a waiter up to 20 s) (docs/areas/persistence.md).
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -9858,6 +9907,22 @@ World.Console.Enabled = true
 #----------------------------------------------------------------------------
 
 #
+#    World.Control.MapFeed.AnomaliesUnowned
+#        Description: Whether the anomaly ring keeps notices that carry no owner identity
+#                     (AnomalyNotice.Origin null). The ledger is process-wide, and a notice with an
+#                     owner is kept only when the owner is this world; a reporter that passes none
+#                     cannot be told apart, so it is kept only when this is true. Default true,
+#                     because the daemon runs one world per process; tests that run several worlds
+#                     in one process set it false.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeed
+#
+World.Control.MapFeed.AnomaliesUnowned = true
+
+#
 #    World.Control.MapFeed.Enabled
 #        Description: Serve the map feed on a local Windows named pipe. A connected tool may watch
 #                     one map at a time (players, bots, creatures, game objects, creature splines,
@@ -9911,6 +9976,301 @@ World.Control.MapFeed.MaxEntitiesPerFrame = 4096
 #        Docs: docs/reference/configuration.md#worldcontrolmapfeed
 #
 World.Control.MapFeed.MaxHz = 5
+
+#----------------------------------------------------------------------------
+# World:Control:MapFeed:Actions
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.MapFeed.Actions.AllowOnLiveServer
+#        Description: A second, deliberate opt-in: let Enabled take effect on the live server
+#                     (ARCANECORE_LIVE_SERVER=1, set by the live launcher, which runs the server as
+#                     Development). The daemon then logs a warning at start. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.AllowOnLiveServer = false
+
+#
+#    World.Control.MapFeed.Actions.AuditDirectory
+#        Description: The directory of the durable audit file; null: logs beside the working
+#                     directory (where the server log goes).
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# World.Control.MapFeed.Actions.AuditDirectory =
+
+#
+#    World.Control.MapFeed.Actions.AuditLocalDurable
+#        Description: Also append local actions to the durable audit file (atlas-web-audit.jsonl).
+#                     Web actions are always recorded. Default on.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.AuditLocalDurable = true
+
+#
+#    World.Control.MapFeed.Actions.BulkConfirmAbove
+#        Description: A template applied to more targets than this needs a confirm code. 0 to 50.
+#                     Default 1.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.BulkConfirmAbove = 1
+
+#
+#    World.Control.MapFeed.Actions.Deny
+#        Description: Command paths no actor may run, local included (same matching as PublicDeny).
+#                     Default none.
+#        Type: List<string>
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# Empty by default.
+# World.Control.MapFeed.Actions.Deny.0 =
+
+#
+#    World.Control.MapFeed.Actions.Enabled
+#        Description: Accept action requests on the map feed (World:Control:MapFeed:Enabled must be
+#                     on too). Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.Enabled = false
+
+#
+#    World.Control.MapFeed.Actions.LocalAccountId
+#        Description: The account id the local actor counts as for "my own character" checks (.atlas
+#                     tele of a player at GameMaster level). Set here, in the world's configuration,
+#                     never by a tool. Default none: the local actor has no account.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# World.Control.MapFeed.Actions.LocalAccountId =
+
+#
+#    World.Control.MapFeed.Actions.LocalBurst
+#        Description: Local actor: burst. Default 20.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalBurst = 20
+
+#
+#    World.Control.MapFeed.Actions.LocalPerSecond
+#        Description: Local actor: actions per second. Default 10.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalPerSecond = 10
+
+#
+#    World.Control.MapFeed.Actions.LocalSecurity
+#        Description: The security the local actor (whoever controls the daemon's Windows account on
+#                     this machine; the world sees "the daemon account") runs commands at. Player to
+#                     Administrator: there is no Console level, so the local actor is never the true
+#                     console. Default Administrator. Values: Player, Moderator, GameMaster,
+#                     Administrator.
+#        Type: AccountSecurity
+#        Default: Administrator
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.LocalSecurity = Administrator
+
+#
+#    World.Control.MapFeed.Actions.PublicAllowModeration
+#        Description: Let web actors run .ban and .unban: removes them from PublicDeny. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.PublicAllowModeration = false
+
+#
+#    World.Control.MapFeed.Actions.PublicDeny
+#        Description: Command paths no web actor may run, matched on the path the command table
+#                     resolved (so an abbreviation cannot dodge a rule): a path is denied when it
+#                     starts with an entry's words ("ban" denies "ban account", "botctl raw" denies
+#                     "botctl raw send"). The default list is the account, lifecycle, reload,
+#                     hot-code, raw bot and moderation commands.
+#        Type: List<string>
+#        Default: 0 = account; 1 = server shutdown; 2 = server restart; 3 = server idleshutdown; 4 =
+#                 server idlerestart; 5 = reload; 6 = hotcode; 7 = hotmodule; 8 = botctl raw; 9 =
+#                 ban; 10 = unban
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+# These entries are the default list. They are commented out because a list you write is appended to the default list, not
+# substituted for it; uncomment them only to document the list, or set the keys of the entries you want to add.
+# World.Control.MapFeed.Actions.PublicDeny.0 = "account"
+# World.Control.MapFeed.Actions.PublicDeny.1 = "server shutdown"
+# World.Control.MapFeed.Actions.PublicDeny.2 = "server restart"
+# World.Control.MapFeed.Actions.PublicDeny.3 = "server idleshutdown"
+# World.Control.MapFeed.Actions.PublicDeny.4 = "server idlerestart"
+# World.Control.MapFeed.Actions.PublicDeny.5 = "reload"
+# World.Control.MapFeed.Actions.PublicDeny.6 = "hotcode"
+# World.Control.MapFeed.Actions.PublicDeny.7 = "hotmodule"
+# World.Control.MapFeed.Actions.PublicDeny.8 = "botctl raw"
+# World.Control.MapFeed.Actions.PublicDeny.9 = "ban"
+# World.Control.MapFeed.Actions.PublicDeny.10 = "unban"
+
+#
+#    World.Control.MapFeed.Actions.PublicMaxSecurity
+#        Description: The highest security a web actor runs at, whatever its account has. Default
+#                     GameMaster. Values: Player, Moderator, GameMaster, Administrator.
+#        Type: AccountSecurity
+#        Default: GameMaster
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.PublicMaxSecurity = GameMaster
+
+#
+#    World.Control.MapFeed.Actions.SettleSeconds
+#        Description: Seconds an action waits for its command to settle (a command that holds itself
+#                     open) before the answer goes out. 1 to 600. Default 30.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.SettleSeconds = 30
+
+#
+#    World.Control.MapFeed.Actions.WebAuditDays
+#        Description: Days the durable audit file's rotated copies are kept. 1 to 3650. Default 90.
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebAuditDays = 90
+
+#
+#    World.Control.MapFeed.Actions.WebBurst
+#        Description: Each web actor: burst. Default 5.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebBurst = 5
+
+#
+#    World.Control.MapFeed.Actions.WebLogin
+#        Description: Accept web actors (tickets issued by the public Atlas listener's login). Needs
+#                     the true-console predicate (CommandContextConsole, design 1.7) in this build:
+#                     without it the channel logs a warning and refuses web actors. Default off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebLogin = false
+
+#
+#    World.Control.MapFeed.Actions.WebLoginMinSecurity
+#        Description: The lowest account security a web login is accepted for. Default Moderator.
+#                     Values: Player, Moderator, GameMaster, Administrator.
+#        Type: AccountSecurity
+#        Default: Moderator
+#        Allowed: Player | Moderator | GameMaster | Administrator
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebLoginMinSecurity = Moderator
+
+#
+#    World.Control.MapFeed.Actions.WebPerSecond
+#        Description: Each web actor: actions per second. Default 2.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedactions
+#
+World.Control.MapFeed.Actions.WebPerSecond = 2
+
+#----------------------------------------------------------------------------
+# World:Control:MapFeed:Web
+#----------------------------------------------------------------------------
+
+#
+#    World.Control.MapFeed.Web.ClientAccount
+#        Description: The one Windows account allowed to open the web pipe: a SID (S-1-5-21-...) or
+#                     an account name (MACHINE\atlas-public). Required when Enabled is set; without
+#                     it the pipe is not created. A group or built-in principal is refused
+#                     (Everyone, Authenticated Users, SYSTEM, LOCAL/NETWORK SERVICE, BUILTIN\, NT
+#                     AUTHORITY\ and NT SERVICE\ names, S-1-5-32-*, any account with a RID below
+#                     1000), and so is the daemon's own account: Problems checks the text at
+#                     start-up, the pipe checks the resolved SID.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+# World.Control.MapFeed.Web.ClientAccount =
+
+#
+#    World.Control.MapFeed.Web.Enabled
+#        Description: Serve the web pipe (World:Control:MapFeed:Enabled must be on too). Default
+#                     off.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+World.Control.MapFeed.Web.Enabled = false
+
+#
+#    World.Control.MapFeed.Web.MaxConnections
+#        Description: The most web connections at once, independent of the local pipe's count. 1 to
+#                     8. Default 2.
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldcontrolmapfeedweb
+#
+World.Control.MapFeed.Web.MaxConnections = 2
 
 #----------------------------------------------------------------------------
 # World:Control:PacketTools
@@ -10347,6 +10707,21 @@ World.GameEvents.YearlyRebase = SpanNewYear
 #----------------------------------------------------------------------------
 
 #
+#    World.GmCommands.AllowDangerousDebug
+#        Description: ArcaneCore only: allow the debug commands that can hurt a running world (time
+#                     offset, inject, opcode disable, stall, combat RNG override, forced acks,
+#                     map/grid unload, watchdog dumps) behind DangerousDebugGate. Off by default;
+#                     changing it needs a restart. On the live server (ARCANECORE_LIVE_SERVER=1) the
+#                     commands are refused whatever this says.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommands
+#
+World.GmCommands.AllowDangerousDebug = false
+
+#
 #    World.GmCommands.AuditTailSize
 #        Description: How many of the latest audit lines .arcane gmlog can show (ArcaneCore only;
 #                     the lines are the ones LogCommands writes, kept in memory, lost on restart). 0
@@ -10479,12 +10854,12 @@ World.GmCommands.RetailLevels = true
 
 #
 #    World.GmCommands.SecurityMap
-#        Description: The retail account level (vmangos AccountTypes,
-#                     D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1,
-#                     TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6,
-#                     CONSOLE 7) each stored AccountSecurity stands for. ArcaneCore stores four
-#                     levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored
-#                     level onto them (an operator may remap, e.g. GameMaster=4).
+#        Description: The retail account level (vmangos AccountTypes, vmangos@0e3ff01
+#                     src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER
+#                     3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored
+#                     AccountSecurity stands for. ArcaneCore stores four levels, so the retail
+#                     levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an
+#                     operator may remap, e.g. GameMaster=4).
 #        Type: Dictionary<AccountSecurity, byte>
 #        Default: Player = 0; Moderator = 1; GameMaster = 3; Administrator = 6
 #        Allowed: a map: one key per entry name; each value is a whole number, 0 to 255
@@ -12306,8 +12681,9 @@ World.Playerbots.Chat.PerPlayerCooldownSeconds = 8
 #                     listed, and when listed it must be last. See docs/areas/playbots.md for the
 #                     provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable, Headers,
 #                     MaxRepliesPerHour, MaxTokens, TokenLimitParameter, ReasoningEffort,
-#                     InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
-#                     ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
+#                     JsonResponseFormat, InputUsdPerMillionTokens, OutputUsdPerMillionTokens,
+#                     Moderation, ModerationBaseUrl, ModerationModel,
+#                     ModerationApiKeyEnvironmentVariable).
 #        Type: PlayerbotChatProviderOptions[]
 #        Default: (empty list)
 #        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys
@@ -13148,6 +13524,21 @@ World.Playerbots.Contention.ContentionSuspendMinutes = 5
 World.Playerbots.Contention.HelpChance = 0.35
 
 #
+#    World.Playerbots.Contention.InvincibleTargetAbandonSeconds
+#        Description: Seconds a bot may hold a target whose health stays at or below its
+#                     death-prevention threshold (InvincibilityHpThreshold: a creature an EventAI
+#                     script keeps at 1 health until some condition is met, such as the Blasted
+#                     Lands servants of quest 2681) before it sets the creature aside as one it
+#                     cannot kill (1..600).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number from 1 to 600 (seconds)
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
+
+#
 #    World.Playerbots.Contention.SomeoneElsesMemorySeconds
 #        Description: Seconds a bot leaves a mob alone after it found it to be someone else's
 #                     (1..600), and the least between two decisions about the same mob.
@@ -13158,6 +13549,24 @@ World.Playerbots.Contention.HelpChance = 0.35
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
+
+#
+#    World.Playerbots.CutRegionMaxPolygons
+#        Description: The most polygons a cut region (a navigation region that is the only way
+#                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
+#                     hold and still be exempt from shared world pins and from refusing a bot's
+#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
+#                     whole region, so a larger bound lets more real snags go unshared. The default,
+#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
+#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
+#                     retail behaviour depends on it.
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CutRegionMaxPolygons = 5000
 
 #
 #    World.Playerbots.Economy.BankDeposit
@@ -13962,6 +14371,294 @@ World.Playerbots.Groups.MinTank = 1
 World.Playerbots.Groups.RaidsEnabled = true
 
 #
+#    World.Playerbots.Groups.WorldBosses.CatchUpTeleport
+#        Description: Teleport a straggler to the raid (off by default: members walk). The follow
+#                     options' own teleport rules still apply when on.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.CatchUpTeleport = false
+
+#
+#    World.Playerbots.Groups.WorldBosses.DefaultRaidSize
+#        Description: The raid size asked for when a boss has no entry in SizeOverrides (5..40; the
+#                     cooperation raid cap bounds it).
+#        Type: int
+#        Default: 40
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.DefaultRaidSize = 40
+
+#
+#    World.Playerbots.Groups.WorldBosses.DeriveFromContent
+#        Description: Add every rank-3 creature on a continent that is no faction leader, flagged
+#                     friendly or event placed to the catalogue (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.DeriveFromContent = true
+
+#
+#    World.Playerbots.Groups.WorldBosses.Enabled
+#        Description: Let bots raid world bosses (on by default). Off: no raid forms; raids under
+#                     way finish.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.Enabled = true
+
+#
+#    World.Playerbots.Groups.WorldBosses.ExcludedEntries
+#        Description: Entries removed from the catalogue, comma separated; wins over every other
+#                     source.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.ExcludedEntries = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.HoldSeconds
+#        Description: Seconds the raid holds back while somebody else has a claim on the boss
+#                     (another's tap or fight, real players near) before it gives the attempt up as
+#                     taken (10..1800). Waiting for its own members does not count.
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.HoldSeconds = 180
+
+#
+#    World.Playerbots.Groups.WorldBosses.IncludedEntries
+#        Description: Further bosses, comma separated: entry (the creature needs a spawn on map 0 or
+#                     1) or entry@map (map 0 or 1; the boss is placed by something other than a
+#                     database spawn and is looked for on that map).
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.IncludedEntries = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.LevelGap
+#        Description: Levels below the lower of the boss's level and the player level cap that a bot
+#                     may stand (0..20), so a level-60 bot qualifies for a level-63 boss at the
+#                     default 2 (floor 58).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.LevelGap = 2
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxAttemptsPerDay
+#        Description: The most raids per boss and UTC day that reached the walk to the boss (0..24;
+#                     0 opens none). A raid that never left the muster is not counted.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxAttemptsPerDay = 3
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxConcurrentRaids
+#        Description: The most world-boss raids at once, server wide (0..8; 0 opens none).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxConcurrentRaids = 1
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxRaidMinutes
+#        Description: Minutes a raid may last from its formation (10..480).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxRaidMinutes = 90
+
+#
+#    World.Playerbots.Groups.WorldBosses.MaxWipes
+#        Description: Wipes the raid recovers from before it gives up (1..10).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MaxWipes = 2
+
+#
+#    World.Playerbots.Groups.WorldBosses.MinRaidSize
+#        Description: The fewest members a raid may start with (5..40; not above DefaultRaidSize).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MinRaidSize = 30
+
+#
+#    World.Playerbots.Groups.WorldBosses.MusterRadiusYards
+#        Description: The farthest from the boss, in yards, a bot may stand and still be asked to
+#                     muster (300..20000). The raid walks there.
+#        Type: float
+#        Default: 3000
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MusterRadiusYards = 3000
+
+#
+#    World.Playerbots.Groups.WorldBosses.MusterWindowSeconds
+#        Description: Seconds an open muster waits for enough willing bots before it gives up
+#                     (30..1800).
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.MusterWindowSeconds = 180
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayerGraceMinutes
+#        Description: Minutes a boss must have been seen up before the bots go for it, so a player
+#                     gets the first chance (0..240; 0 opens at the first sighting). The clock
+#                     restarts when the boss is killed or its grid unloads.
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayerGraceMinutes = 15
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayersNearCount
+#        Description: The number of real players within PlayersNearYards that holds the pull
+#                     (1..40).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayersNearCount = 3
+
+#
+#    World.Playerbots.Groups.WorldBosses.PlayersNearYards
+#        Description: The distance, in yards, within which a real player counts as "at the boss" for
+#                     the holds below (0..400; 0 turns the player hold off).
+#        Type: float
+#        Default: 100
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PlayersNearYards = 100
+
+#
+#    World.Playerbots.Groups.WorldBosses.PresentFraction
+#        Description: The fraction of the raid that must stand at the rally before it pulls
+#                     (0.5..1).
+#        Type: float
+#        Default: 0.8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PresentFraction = 0.8
+
+#
+#    World.Playerbots.Groups.WorldBosses.PullWaitSeconds
+#        Description: Seconds the raid waits at the rally for PresentFraction (10..900). Past it the
+#                     raid pulls with whoever is there when at least MinRaidSize are, and gives up
+#                     otherwise.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.PullWaitSeconds = 120
+
+#
+#    World.Playerbots.Groups.WorldBosses.RallyYards
+#        Description: The distance from the boss, in yards, at which the raid gathers before the
+#                     pull (20..200).
+#        Type: float
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.RallyYards = 50
+
+#
+#    World.Playerbots.Groups.WorldBosses.RetrySeconds
+#        Description: Seconds before the same boss is mustered for again after a raid or a failed
+#                     muster (60..86400).
+#        Type: int
+#        Default: 1800
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.RetrySeconds = 1800
+
+#
+#    World.Playerbots.Groups.WorldBosses.SizeOverrides
+#        Description: Raid sizes per boss, comma separated entry:size pairs, size 5..40 (for example
+#                     6109:25,12397:40). Empty: every boss uses DefaultRaidSize.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.SizeOverrides = ""
+
+#
+#    World.Playerbots.Groups.WorldBosses.WatchSeconds
+#        Description: Seconds between looks at the catalogued bosses (5..600).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.WorldBosses.WatchSeconds = 30
+
+#
 #    World.Playerbots.Home.DangerLevelMargin
 #        Description: Auto mode: the straight line from the bot to the centre crossing an area whose
 #                     AreaTable level (AreaLevel, the 1.12.1 AreaTable.dbc exploration level) is
@@ -14413,6 +15110,102 @@ World.Playerbots.Party.MasterTimeoutSeconds = 60
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Party.TeleportToLeader = true
+
+#
+#    World.Playerbots.PathJobSyncNodeThreshold
+#        Description: A path query of at most this many nodes stays on the world thread even with
+#                     PathJobs (2048, vmangos' own budget, is a goal within about 100 yards;
+#                     0..32768).
+#        Type: int
+#        Default: 2048
+#        Allowed: a whole number from 0 to 32768
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobSyncNodeThreshold = 2048
+
+#
+#    World.Playerbots.PathJobWaitMaxMs
+#        Description: How long one query may wait for its path job (wall ms) before it runs once on
+#                     the world thread, held to SyncPathQueryMaxMs (1000..600000).
+#        Type: int
+#        Default: 30000
+#        Allowed: a whole number from 1000 to 600000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobWaitMaxMs = 30000
+
+#
+#    World.Playerbots.PathJobWorkerMaxMs
+#        Description: The longest wall time in milliseconds a path job may hold a pool thread (a
+#                     search past it ends as one that ran out of nodes; 10..60000).
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number from 10 to 60000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobWorkerMaxMs = 1000
+
+#
+#    World.Playerbots.PathJobs
+#        Description: Whether a bot plan's far navigation-mesh search (more than
+#                     PathJobSyncNodeThreshold nodes) runs on the shared path-job pool instead of
+#                     the world thread: the bot answers "pending" for the think and the finished
+#                     answer is applied on a later one, as it waits for a navigation tile still
+#                     being read. A finished answer within 15% of the distance (10 to 40 yards) of a
+#                     destination that keeps moving is applied as a route cut short, spliced from
+#                     where the bot stands, and a refresh job for the new destination is queued in
+#                     the same think. Off by default (rollout). Separately from this switch, and on
+#                     whatever it says: a follower keeps walking its current route while a re-plan
+#                     is pending (it also covers a navigation tile still being read). Live: .reload
+#                     config (jobs in flight finish and are dropped or applied by the same checks).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobs = false
+
+#
+#    World.Playerbots.PathJobsMaxInFlight
+#        Description: The most bot path jobs in flight together (1..1024); a bot past it waits in
+#                     line, oldest first, and answers "pending" until a slot frees; one held that
+#                     long still runs a single search on the world thread after PathJobWaitMaxMs,
+#                     held to SyncPathQueryMaxMs.
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number from 1 to 1024
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxInFlight = 64
+
+#
+#    World.Playerbots.PathJobsMaxInFlightNodes
+#        Description: The most search nodes (the sum of the jobs' MaxSearchNodes) the bot path jobs
+#                     in flight may hold together: it bounds pool time, not only the job count
+#                     (4096..100000000).
+#        Type: long
+#        Default: 262144
+#        Allowed: a whole number from 4096 to 100000000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxInFlightNodes = 262144
+
+#
+#    World.Playerbots.PathJobsMaxPerBot
+#        Description: The most path jobs one bot may have in flight (1..8).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number from 1 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathJobsMaxPerBot = 1
 
 #
 #    World.Playerbots.Policy.AbPolicyShare
@@ -15095,6 +15888,23 @@ World.Playerbots.Population.SecondaryStayMaxMinutes = 90
 World.Playerbots.Population.SecondaryStayMinMinutes = 30
 
 #
+#    World.Playerbots.Population.SpawnsPerBot
+#        Description: Zone capacity: a zone takes no new or relocated bot once its assigned bots
+#                     reach the zone's level-fitting outdoor creature spawns (on the surface, not
+#                     indoors or underground, hostile to the bot's faction) divided by this many
+#                     (0..100; 0 turns the cap off). Keeps a small zone such as Deadwind Pass (47
+#                     surface spawns, 600 s respawn) from taking a hundred bots that find every
+#                     creature dead. The spawn survey runs off the world thread; until it is in, no
+#                     zone is capped.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.SpawnsPerBot = 3
+
+#
 #    World.Playerbots.Population.TargetOnline
 #        Description: The number of managed bots to keep running (0..5000). The effective target is
 #                     the lower of this and World:Playerbots:MaxBots. Bots an operator created count
@@ -15387,6 +16197,19 @@ World.Playerbots.Risk.PartyRetreatOnWipe = true
 World.Playerbots.Risk.RecoverHealthPct = 80
 
 #
+#    World.Playerbots.Risk.RestManaBelowPct
+#        Description: A bot that spends mana and has less than this percentage left (0..100; 0 turns
+#                     it off) recovers before its next pull when the fight would be fine at full
+#                     health and mana, instead of pulling with nothing to cast.
+#        Type: float
+#        Default: 35
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Risk.RestManaBelowPct = 35
+
+#
 #    World.Playerbots.Risk.RetreatHealthPct
 #        Description: A losing bot retreats once its health falls to this percentage (5..95); one
 #                     about to die retreats at any health.
@@ -15448,8 +16271,10 @@ World.Playerbots.Scenarios.StepTimeoutSeconds = 20
 #
 #    World.Playerbots.SlowThinkLogMs
 #        Description: A single bot think longer than this many milliseconds is logged with its bot,
-#                     goal, phases and path searches (PlayerbotSlowThinkLog; 0 = off, 0..60000).
-#                     Live: .reload config applies a change at once.
+#                     goal, phases and path searches (PlayerbotSlowThinkLog; 0 = off, 0..60000). A
+#                     think over it only because of garbage-collector pauses (think time minus GC
+#                     pause under the threshold) is counted as bot-brain/think-gc-stall at Info
+#                     instead of think-slow. Live: .reload config applies a change at once.
 #        Type: double
 #        Default: 50
 #        Allowed: a number from 0 to 60000 ('.' is the decimal point); 0 turns the log off
@@ -15472,6 +16297,201 @@ World.Playerbots.SlowThinkLogMs = 50
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Emotes.Enabled = true
+
+#
+#    World.Playerbots.Social.Events.Enabled
+#        Description: Let bots take part in the world's events (on by default). Off: festival places
+#                     are given up (the bots go back to the inn at their next idle think) and no
+#                     event line or emote is made.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Enabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.CelebrateChance
+#        Description: The percent chance (0..100, default 60) that a bot celebrates a festival on a
+#                     given day; rolled per bot per festival per day (the day changes for each bot
+#                     at a time of its own). Sociable bots celebrate more often: p = 1 - (1 -
+#                     c)^(0.5 + sociability), which is exactly c at sociability 0.5. 0 sends nobody,
+#                     100 every bot.
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.CelebrateChance = 60
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmoteMaxSeconds
+#        Description: The longest gap between two celebration emotes of one bot, in seconds
+#                     (5..3600, not below EmoteMinSeconds, default 90).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmoteMaxSeconds = 90
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmoteMinSeconds
+#        Description: The shortest gap between two celebration emotes of one bot, in seconds
+#                     (5..3600, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmoteMinSeconds = 30
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmotesPerAnchorMinute
+#        Description: The festival text emotes around one anchor per minute, players in range or not
+#                     (0..30, default 3).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmotesPerAnchorMinute = 3
+
+#
+#    World.Playerbots.Social.Events.Holidays.EmotesPerListenerMinute
+#        Description: The festival text emotes one real player receives per minute from all bots
+#                     together (0..10, default 2; 0 sends none while a player is in range).
+#        Type: int
+#        Default: 2
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.EmotesPerListenerMinute = 2
+
+#
+#    World.Playerbots.Social.Events.Holidays.Enabled
+#        Description: Gather and celebrate at running festivals (on by default;
+#                     Social:Events:Enabled is the master switch).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.Enabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.ExcludedEvents
+#        Description: Game event ids that are never treated as a festival or part of one, separated
+#                     by commas and/or spaces ("12, 24 25"; each 1..65535, at most 64; empty: none).
+#                     A string so that a reload compares it by value.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.ExcludedEvents = ""
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerGossipAnchor
+#        Description: The most bots around one festival NPC that only talks (1..20, default 6).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerGossipAnchor = 6
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerServiceAnchor
+#        Description: The most bots around one festival quest giver or vendor (0..10, default 3; 0
+#                     keeps bots away from them).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerServiceAnchor = 3
+
+#
+#    World.Playerbots.Social.Events.Holidays.MaxPerTown
+#        Description: The most bots celebrating in one town per team (1..200, default 24).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.MaxPerTown = 24
+
+#
+#    World.Playerbots.Social.Events.Holidays.SpotBackoffMinutes
+#        Description: The minutes a festival NPC whose spot a bot could not reach is set aside for
+#                     that bot, and a town whose crowd was attacked by a player is set aside for
+#                     that team (1..1440, default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.SpotBackoffMinutes = 30
+
+#
+#    World.Playerbots.Social.Events.Holidays.SpotRadiusYards
+#        Description: How far from the town centre a festival NPC may stand to count, in yards
+#                     (20..1000, default 250); it must also be inside the bot's home.
+#        Type: int
+#        Default: 250
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.SpotRadiusYards = 250
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkBotGapMinutes
+#        Description: The minutes between two festival lines of the same bot (1..1440, default 20).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkBotGapMinutes = 20
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkEnabled
+#        Description: Let bots say the arrival line and the named event remark (on by default; chat
+#                     must be on as well).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkEnabled = true
+
+#
+#    World.Playerbots.Social.Events.Holidays.TalkZoneGapSeconds
+#        Description: The seconds between two festival lines in the same zone, whichever bot
+#                     (1..86400, default 120).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Events.Holidays.TalkZoneGapSeconds = 120
 
 #
 #    World.Playerbots.Social.Gratitude.Enabled
@@ -15959,6 +16979,29 @@ World.Playerbots.Social.Memory.AffinityPerApology = 10
 World.Playerbots.Social.Memory.AffinityPerChat = 1
 
 #
+#    World.Playerbots.Social.Memory.AffinityPerDealFlaked
+#        Description: Affinity change toward a partner who agreed a deal and never completed it
+#                     (-100..0).
+#        Type: int
+#        Default: -1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerDealFlaked = -1
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerFairDeal
+#        Description: Affinity gained when a trade deal completes at the agreed terms (0..30).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerFairDeal = 3
+
+#
 #    World.Playerbots.Social.Memory.AffinityPerFriendlyEmote
 #        Description: Affinity gained when someone makes a friendly emote at the bot (0..20).
 #        Type: int
@@ -15968,6 +17011,17 @@ World.Playerbots.Social.Memory.AffinityPerChat = 1
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.AffinityPerFriendlyEmote = 2
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerGiftReceived
+#        Description: Affinity gained for a gift worth at least the trading gift minimum (0..30).
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerGiftReceived = 4
 
 #
 #    World.Playerbots.Social.Memory.AffinityPerGroup
@@ -16094,6 +17148,18 @@ World.Playerbots.Social.Memory.AffinityPerStrike = -15
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.AffinityPerTrade = 3
+
+#
+#    World.Playerbots.Social.Memory.AffinityPerTradeScam
+#        Description: Affinity change toward a partner who changed a deal's value after matching it
+#                     (-100..0).
+#        Type: int
+#        Default: -15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.AffinityPerTradeScam = -15
 
 #
 #    World.Playerbots.Social.Memory.AffinityPerWatchedDie
@@ -16255,6 +17321,21 @@ World.Playerbots.Social.Memory.MaxDailyAffinityGainPerPair = 20
 World.Playerbots.Social.Memory.MaxRelationsPerBot = 256
 
 #
+#    World.Playerbots.Social.Memory.OrganisedPvpKills
+#        Description: Count a PvP kill in organised play as a grudge (off by default). Off: a kill
+#                     on a battleground map, or with either side in a group-coordinator siege group,
+#                     records neither KilledBy nor KilledThem, so players met in a battleground or a
+#                     GM-ordered siege are not taunted or remembered as rivals in the open world.
+#                     On: those kills are recorded like any other.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.OrganisedPvpKills = false
+
+#
 #    World.Playerbots.Social.Memory.RivalAffinity
 #        Description: At or below this affinity the Rival flag is set; above it again, the flag is
 #                     cleared (-100..0).
@@ -16277,6 +17358,18 @@ World.Playerbots.Social.Memory.RivalAffinity = -50
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Memory.RivalHalfLifeDays = 45
+
+#
+#    World.Playerbots.Social.Memory.TrustPerFairDeal
+#        Description: Trust (permille) gained toward a partner whose deal completed at the agreed
+#                     terms (-500..500).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerFairDeal = 20
 
 #
 #    World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe
@@ -16303,6 +17396,17 @@ World.Playerbots.Social.Memory.TrustPerFirstDeathInWipe = -30
 World.Playerbots.Social.Memory.TrustPerGroupSuccess = 30
 
 #
+#    World.Playerbots.Social.Memory.TrustPerTradeScam
+#        Description: Trust (permille) change toward that partner (-500..500).
+#        Type: int
+#        Default: -200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Memory.TrustPerTradeScam = -200
+
+#
 #    World.Playerbots.Social.Mood.Enabled
 #        Description: Let bots have a mood (on by default). Off: every mood reads 0 and events
 #                     change nothing.
@@ -16324,6 +17428,510 @@ World.Playerbots.Social.Mood.Enabled = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Social.Mood.HalfLifeMinutes = 30
+
+#
+#    World.Playerbots.Social.PassBudgetMs
+#        Description: The most milliseconds of one world tick the social pass may use (0..1000,
+#                     default 4; 0 = no limit). The pass is spread over as many ticks as that takes,
+#                     so a large fleet no longer stalls one tick once a second; a pass that takes
+#                     longer than its interval simply carries on (the next one starts when it has
+#                     finished). The per-bot lanes stop between bots once the budget is spent (a
+#                     tick may overshoot by one bot); the lanes that work on the whole population
+#                     run whole.
+#        Type: double
+#        Default: 4
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.PassBudgetMs = 4
+
+#
+#    World.Playerbots.Social.Rivalry.AllowOptOut
+#        Description: Parse the whispered commands "rivals off", "rivals on" and "rivals" (on by
+#                     default); they are also parsed while
+#                     PlayerbotSocialRivalryEmoteOptions.RudeRequiresOptIn is on. Off: the line is
+#                     not a command and goes on to ordinary whisper handling. It never undoes an
+#                     opt-out already recorded: a player who opted out stays out whatever this says.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.AllowOptOut = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.BotToBot
+#        Description: Let bots greet each other across factions when a real player is close enough
+#                     to see it (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.BotToBot = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.EmotesPerMinute
+#        Description: The most greetings and rude emotes the lane sends in a minute, from all bots,
+#                     counted apart for bot targets and player targets (0..120; 0 silences the lane;
+#                     default 12). Replies are not counted.
+#        Type: int
+#        Default: 12
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.EmotesPerMinute = 12
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.Enabled
+#        Description: Let idle bots greet characters of the other faction and send rude emotes at
+#                     rivals (lane "rivalry"; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.Enabled = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.FriendlyAffinity
+#        Description: The affinity from which a bot regards a character as a friend (0..100; default
+#                     20).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.FriendlyAffinity = 20
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.GreetStrangerChance
+#        Description: The chance (0..1, times the bot's sociability) that a bot greets a stranger of
+#                     the other faction; a known neutral is greeted at half the bot's sociability, a
+#                     friend always (default 0.25).
+#        Type: double
+#        Default: 0.25
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.GreetStrangerChance = 0.25
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RangeYards
+#        Description: How close, in yards, a character of the other faction must stand to be greeted
+#                     or taunted (5..25; default 20). The range actually used is never more than
+#                     World:ListenRangeTextEmote, which is read at every pass.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RangeYards = 20
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RivalEmotes
+#        Description: Send rude emotes at rivals and let a rival or a disliked character be answered
+#                     rudely or not at all (on by default). Off: every reply is by a neutral stance.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RivalEmotes = true
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudeAtBots
+#        Description: Let rude emotes and rude replies reach other bots (off by default). Off:
+#                     nothing the rivalry stage sends to a bot is ever rude, a rude emote aimed at a
+#                     bot is met with a shrug or a sigh, so no exchange between two bots can lower
+#                     an affinity.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudeAtBots = false
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudePairGapMinutes
+#        Description: The least time, in minutes, between two rude emotes from one bot to one
+#                     character (1..1440; default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudePairGapMinutes = 30
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudePerTargetMinutes
+#        Description: The least time, in minutes, between two rude emotes at one character from all
+#                     bots together (1..1440; default 30).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudePerTargetMinutes = 30
+
+#
+#    World.Playerbots.Social.Rivalry.Emotes.RudeRequiresOptIn
+#        Description: Send rude emotes only to real players who whispered "rivals on" (off by
+#                     default: they go to every real rival who has not opted out).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Emotes.RudeRequiresOptIn = false
+
+#
+#    World.Playerbots.Social.Rivalry.Enabled
+#        Description: The master switch (on by default). Off: the lane sends nothing and an emote is
+#                     answered as before the stance existed. Recorded opt-outs are kept.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Enabled = true
+
+#
+#    World.Playerbots.Social.Rivalry.Safeguards.SafeAreas
+#        Description: Area ids (comma separated; the sub-zone a character stands in, not its zone)
+#                     where no rude emote is sent, on top of every capital city, which is always
+#                     quiet. The default is the six neutral towns with a guard post for both
+#                     factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361
+#                     Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals.
+#        Type: string
+#        Default: "35,392,976,2255,2361,2268"
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Rivalry.Safeguards.SafeAreas = "35,392,976,2255,2361,2268"
+
+#
+#    World.Playerbots.Social.Trading.AcceptGifts
+#        Description: Accept gift windows (an empty bot side) from partners the rules allow (on by
+#                     default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.AcceptGifts = true
+
+#
+#    World.Playerbots.Social.Trading.AnswerTrades
+#        Description: Busy or ignore a trade window nobody expected, and open an allowed one as a
+#                     gift window (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.AnswerTrades = true
+
+#
+#    World.Playerbots.Social.Trading.Deals.DealMinutes
+#        Description: The minutes an agreed deal stays open (1..60, default 5).
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.DealMinutes = 5
+
+#
+#    World.Playerbots.Social.Trading.Deals.DislikeMarkupPercent
+#        Description: The ask markup in percent for a partner the bot dislikes, scaled by the
+#                     negative affinity (0..200, default 25).
+#        Type: int
+#        Default: 25
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.DislikeMarkupPercent = 25
+
+#
+#    World.Playerbots.Social.Trading.Deals.Enabled
+#        Description: Fixed-price WTS completion (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.Enabled = true
+
+#
+#    World.Playerbots.Social.Trading.Deals.FriendDiscountPercent
+#        Description: The ask discount in percent for a friend at full affinity, scaled by the bot's
+#                     giving affinity (0..100, default 20).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.FriendDiscountPercent = 20
+
+#
+#    World.Playerbots.Social.Trading.Deals.MaxDealCopper
+#        Description: The most a single deal may be worth in copper (0..100000000, default 500000 =
+#                     50 g; 0 disables deals).
+#        Type: int
+#        Default: 500000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.MaxDealCopper = 500000
+
+#
+#    World.Playerbots.Social.Trading.Deals.PairCooldownMinutes
+#        Description: The minutes a pair waits after a deal expired, was declined or was cancelled
+#                     before a new one (0..1440, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.PairCooldownMinutes = 10
+
+#
+#    World.Playerbots.Social.Trading.Deals.PriceBookHours
+#        Description: The hours an auction house observation is kept in the price book (1..720,
+#                     default 24).
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.PriceBookHours = 24
+
+#
+#    World.Playerbots.Social.Trading.Deals.PriceBookMinSellers
+#        Description: The distinct seller accounts an item needs before an auction house reading
+#                     prices a deal (1..20, default 3).
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.PriceBookMinSellers = 3
+
+#
+#    World.Playerbots.Social.Trading.Enabled
+#        Description: Master switch (on by default). Once the trade desk lands (a later P4 step),
+#                     off will cancel every window it drives at its next pass; no effect until then.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Enabled = true
+
+#
+#    World.Playerbots.Social.Trading.GiftMinValueCopper
+#        Description: The vendor value in copper below which a gift earns no affinity and a
+#                     stranger's gift is cancelled (0..1000000, default 100).
+#        Type: int
+#        Default: 100
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.GiftMinValueCopper = 100
+
+#
+#    World.Playerbots.Social.Trading.Gifts.Enabled
+#        Description: Group gifts after a run (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Gifts.Enabled = true
+
+#
+#    World.Playerbots.Social.Trading.Gifts.GiftClaimSeconds
+#        Description: The seconds a bot listens for an answer to its "anyone need" line (5..120,
+#                     default 15).
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Gifts.GiftClaimSeconds = 15
+
+#
+#    World.Playerbots.Social.Trading.Gifts.MaxGiftValueCopper
+#        Description: The most a gift may be worth in copper at level 60, scaled down by the bot's
+#                     level (0..1000000, default 5000; 0 means no gifts).
+#        Type: int
+#        Default: 5000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Gifts.MaxGiftValueCopper = 5000
+
+#
+#    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerAccount
+#        Description: The copper one real account, all its characters together, may receive from all
+#                     bots per UTC day (0..100000000, default 20000 = 2 g).
+#        Type: int
+#        Default: 20000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerAccount = 20000
+
+#
+#    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerBot
+#        Description: The copper one bot may give real players per UTC day, gifts and discounts
+#                     counted (0..100000000, default 20000 = 2 g).
+#        Type: int
+#        Default: 20000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerBot = 20000
+
+#
+#    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperServer
+#        Description: The copper all bots together may give real players per UTC day (0..1000000000,
+#                     default 2000000 = 200 g).
+#        Type: int
+#        Default: 2000000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.DailyOutflowCopperServer = 2000000
+
+#
+#    World.Playerbots.Social.Trading.Limits.MaxConcurrentTrades
+#        Description: The trade windows open at once in the world (0..256, default 16).
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.MaxConcurrentTrades = 16
+
+#
+#    World.Playerbots.Social.Trading.Limits.MaxTradesPerAccountPerHour
+#        Description: The trades all bots together may complete toward one real account in an hour
+#                     (0..120, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.MaxTradesPerAccountPerHour = 10
+
+#
+#    World.Playerbots.Social.Trading.Limits.MaxTradesPerBotPerHour
+#        Description: The trades one bot may complete with real players in an hour (0..120, default
+#                     6).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Limits.MaxTradesPerBotPerHour = 6
+
+#
+#    World.Playerbots.Social.Trading.LowTrustPermille
+#        Description: The trust (permille) below which a partner's deals are capped at a quarter of
+#                     the deal maximum (0..1000, default 350).
+#        Type: int
+#        Default: 350
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.LowTrustPermille = 350
+
+#
+#    World.Playerbots.Social.Trading.MaxGiftsReceivedPerHour
+#        Description: The gifts one bot accepts from one partner in an hour (0..120, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.MaxGiftsReceivedPerHour = 10
+
+#
+#    World.Playerbots.Social.Trading.NinjaMemoryDays
+#        Description: The days a bot gives a partner who looted ninja-style no group gifts and asks
+#                     more (0..365, default 14).
+#        Type: int
+#        Default: 14
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.NinjaMemoryDays = 14
+
+#
+#    World.Playerbots.Social.Trading.ScamMemoryDays
+#        Description: The days a bot refuses every trade and gift from a partner who scammed it
+#                     (0..365, default 30; 0 forgets at once, the scam still costs affinity and
+#                     trust).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.ScamMemoryDays = 30
+
+#
+#    World.Playerbots.Social.Trading.TradeTimeoutSeconds
+#        Description: The seconds one trade may take from the initiate to the close, a running
+#                     settlement not counted (10..300, default 45).
+#        Type: int
+#        Default: 45
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.TradeTimeoutSeconds = 45
 
 #
 #    World.Playerbots.Social.WarMode.ClearOnDisable
@@ -16401,6 +18009,20 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.StallSeconds = 120
+
+#
+#    World.Playerbots.SyncPathQueryMaxMs
+#        Description: The longest wall time in milliseconds one navigation-mesh search may take on
+#                     the world thread (0 = no bound, else 10..60000): a search past it stops as one
+#                     that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2
+#                     168 ms in a single 32 768-node search. Live: .reload config.
+#        Type: int
+#        Default: 0
+#        Allowed: 0 (no bound), or a whole number from 10 to 60000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.SyncPathQueryMaxMs = 0
 
 #
 #    World.Playerbots.Taxi.BackoffMinutes
@@ -17313,7 +18935,7 @@ World.Social.MaxJoinedChannels = 0
 #
 #    World.Social.OfflineLeaderDelaySeconds
 #        Description: Seconds before an offline group leader yields to an online member. Zero
-#                     disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072
+#                     disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072
 #                     defaults to 300 seconds.
 #        Type: int
 #        Default: 300

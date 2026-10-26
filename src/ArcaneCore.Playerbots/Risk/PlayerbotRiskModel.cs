@@ -129,8 +129,11 @@ internal sealed record PlayerbotPursuit(float EscapeYards, float BotRunSpeed, IR
 
 /// <summary>Everything one in-combat estimate reads.</summary>
 /// <param name="Pursuit">What a retreat would face; null when the caller does not know (the retreat is then never refused).</param>
+/// <param name="RoundDamage">The non-crit max hit of each melee attacker added up (0 when unknown). The mean <c>DpsIn</c> lags a
+/// burst of aligned blows, so against several enemies a bot just above the retreat line retreats when such a round would carry it to
+/// or below the line while a retreat can still succeed.</param>
 internal readonly record struct PlayerbotFightFacts(uint BotHealth, uint BotMaxHealth, float DpsIn, float DpsOut, uint EnemyHealth,
-    int Enemies, float TargetHealthPct, bool Lethal = false, PlayerbotPursuit? Pursuit = null);
+    int Enemies, float TargetHealthPct, bool Lethal = false, PlayerbotPursuit? Pursuit = null, float RoundDamage = 0f);
 
 /// <summary>The in-combat verdict: the times to kill and to die and whether to retreat.</summary>
 internal readonly record struct PlayerbotFightVerdict(bool Retreat, float TimeToKill, float TimeToDie, string Reason)
@@ -205,6 +208,15 @@ internal static class PlayerbotRiskModel
         int eliteMargin = EliteLevelMargin + (facts.GroupSize > 1 ? GroupEliteLevelMargin : 0);
         if (target.Elite && target.Level >= facts.BotLevel + eliteMargin && !facts.QuestObjective)
             return Verdict(PlayerbotEngageDecision.Avoid, "elite-above");
+        // A mana user below RestManaBelowPct recovers before the next pull when the fight is fine at full health and mana, even when
+        // it would also be fine at the mana left: a hybrid at 1% mana weighs an easy mob as fine (ManaDependence 0.4) and would pull it
+        // with nothing to cast (bot QA #1480). Without food or drink the brain sits and regenerates (while mana cannot rise, from a mana-drain aura or a state that does not regenerate, the Rest verdict persists and the bot explores instead of grinding; the fruitless-wait guard does not end that).
+        // The line is capped at RecoverHealthPct: the rest ends there, so a higher line (90 against 80) would hold the bot below it for good.
+        float restManaBelow = MathF.Min(options.RestManaBelowPct, options.RecoverHealthPct);
+        if (restManaBelow > 0 && facts.ManaDependence > 0 && facts.BotManaPct is { } lowMana && lowMana < restManaBelow
+            && !facts.Enemies.Any(enemy => enemy.Remembered && enemy.Join == RiskJoin.Path)
+            && Risk(facts, facts.BotMaxHealth, 100f, facts.Enemies) <= accept)
+            return Verdict(PlayerbotEngageDecision.Rest, "low-mana");
         if (risk <= accept)
         {
             // A remembered creature only along the way: the fight may be taken, never by walking through its reach (the fight without
@@ -400,7 +412,9 @@ internal static class PlayerbotRiskModel
     /// <summary>
     /// The in-combat verdict from the observed damage rates: time to kill (the enemies' health over the bot's damage per second)
     /// against time to die (the bot's health over the damage it takes). A losing bot (time to die times Tolerance below the time to
-    /// kill) retreats at <see cref="PlayerbotRiskOptions.RetreatHealthPct"/> or when it would die within 4 seconds; a single enemy at
+    /// kill) retreats at <see cref="PlayerbotRiskOptions.RetreatHealthPct"/>, against several enemies when one more round of their max
+    /// hits (<see cref="PlayerbotFightFacts.RoundDamage"/>) would leave it at or below that line, or when it would die within 4 seconds
+    /// (whether the retreat can succeed is judged at the current health); a single enemy at
     /// <see cref="PlayerbotRiskOptions.NearlyWonHealthPct"/> or less is finished unless the bot would die in half the time.
     /// </summary>
     internal static PlayerbotFightVerdict Judge(PlayerbotFightFacts facts, PlayerbotRiskOptions options)
@@ -416,11 +430,17 @@ internal static class PlayerbotRiskModel
             return new(false, ttk, ttd, "nearly-won");
         bool losing = ttd * options.Tolerance < ttk;
         if (!losing) return new(false, ttk, ttd, "winning");
-        if (healthPct <= options.RetreatHealthPct || ttd < 4f)
+        // The mean rate lags a burst: against several enemies also leave when one round of their aligned blows would end at or under
+        // the line (a retreat the bot can survive now, which a round later it may not be). A lone enemy keeps the plain line.
+        bool roundBelowLine = facts.Enemies > 1 && facts.RoundDamage > 0f && facts.BotMaxHealth != 0
+            && (facts.BotHealth - Math.Min(facts.BotHealth, facts.RoundDamage)) * 100f / facts.BotMaxHealth <= options.RetreatHealthPct;
+        bool plain = healthPct <= options.RetreatHealthPct || ttd < 4f;
+        if (plain || roundBelowLine)
         {
             // A retreat that cannot break contact before the bot dies is only a death with no blow dealt on the way: fight on.
             if (facts.Pursuit is { } pursuit && !RetreatSucceeds(pursuit, facts.BotHealth, facts.DpsIn))
                 return new(false, ttk, ttd, CorneredReason);
+            if (!plain) return new(true, ttk, ttd, $"losing-burst-{facts.Enemies}");
             return new(true, ttk, ttd, facts.Enemies > 1 ? $"losing-to-{facts.Enemies}" : "losing");
         }
 

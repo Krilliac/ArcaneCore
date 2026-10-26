@@ -87,13 +87,15 @@ Events queue **topics** per guild (at most four, the oldest dropped; one older t
 | `guild.welcome` | a real player joined (not through a charter) | any bot but the newcomer |
 | `guild.ding` | a bot member reached level 10, 20, ... | that bot |
 | `guild.grats` | a real player reached such a level | another bot |
-| `guild.boss` | a dungeon or raid boss (instance-bind flag or world-boss rank) was killed by a player: the guilds of the killer and its group | any bot |
+| `guild.boss` | a dungeon or raid boss (instance-bind flag or world-boss rank), or a continent boss of the world-boss catalogue, was killed by a player: the guilds of the killer and its group | any bot |
 | `guild.bgwin` | a bot won a battleground (`SMSG_BATTLEFIELD_WIN`), once per guild in ten minutes | any bot |
 | `guild.chatter` | small talk, a chance per pass aiming at half of `MessagesPerHour` an hour | any bot |
 
 A boss kill is remembered per guild, **map instance** and victim for ten minutes of world time (at most 4096 entries). A boss keeps the
 same creature guid in every instance of its dungeon, so each instance's kill is remarked on once, and a respawning open-world boss again
 after the window.
+
+**World bosses on the continents (kill talk).** A kill on a continent is remarked on only when the creature is in the group coordinator's world-boss catalogue (`World:Playerbots:Groups:WorldBosses`, see `docs/areas/playbots-groups.md`, World-boss raids): rank 3 alone is not enough, because the faction leaders and Archbishop Benedictus are rank 3 on the continents. The coordinator publishes a frozen snapshot of the catalogue's entries that the map threads read (`PlayerbotGroupCoordinator.IsWorldBossEntry`); with no catalogue wired, or before it is built, a continent kill stays silent. The place named is the zone the boss stood in, from the area table (the map's name where the area is not known), where a dungeon boss names the dungeon; the guild line and the conversations' boss news (`BotChatEventKind.BossKill`) both use it (`PlayerbotBossKills.PlaceOf`). The scope is dungeon parity: any player's kill of a catalogued boss makes the guild bots of the killer and its group talk, whether or not a bot raid was involved (the alternative, only a group with a bot member, is an open decision). The zone lookup's fault site is `playerbot.social.bosskill`.
 
 **Rate limits and the safety path.** A topic is said only when guild chat is on, `MessagesPerHour` is above zero, the bot chat service
 is on (`World:Playerbots:Chat:Enabled`), a real player who can read guild chat is online (nothing is ever said to bots alone), the
@@ -125,7 +127,7 @@ Each bot also has five stable traits from its guid (sociability, chattiness, gen
 
 **Events and deltas** (`World:Playerbots:Social:Memory`, all live, on by default; `PlayerbotSocialMemory.Note`): a chat exchange
 (`AffinityPerChat`), grouped (`AffinityPerGroup`), a group's run succeeding (`AffinityPerGroupSuccess`), a wipe (+1, shared hardship), a
-kick from a group (`AffinityPerKick`), a completed trade (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
+kick from a group (`AffinityPerKick`), a completed party-AI trade window in which the bot received at least 100 copper of item vendor value (gold is not counted) or gave something (`AffinityPerTrade`), helping or being helped (`AffinityPerHelp`), a chat
 safety strike (`AffinityPerStrike`), a PvP kill either way (`AffinityPerKilledBy`, `AffinityPerKilledThem`; duels never count), and a
 friendly or rude emote aimed at the bot, from either faction (`AffinityPerFriendlyEmote`, `AffinityPerRudeEmote`). Every event adds one
 familiarity; a chat exchange or emote does so at most once per pair in `ChatFamiliarityCooldownMinutes`, and a friendly emote raises
@@ -134,8 +136,8 @@ below `RivalAffinity` sets the Rival flag and above it clears it. Over the limit
 affinity of 50 or more either way unless every one is like that.
 
 **Where each event comes from**: chat lines heard by a bot and addressed to it (`PlayerbotChat.LineHeard`); the group coordinator (forming,
-wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from the begin-trade packet or the bot's own
-request, completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
+wipe, success); `GroupManager.MemberKicked` for kicks; the party AI for trades (the trader from a begin-trade packet of the master or a group member, or the bot's own
+request; a stranger's begin-trade is not answered and sets nothing, and any close status forgets the window; completion on trade status 8) and for text emotes (`SMSG_TEXT_EMOTE` naming the bot); the chat safety screen for strikes; the
 brain's assist and heal-the-tagger paths for help; `PlayerbotPvpKillFeed` for PvP kills (the feature hears `MapCombat.UnitKilled` of every map of its own world, so a kill is
 recorded exactly once even right after a teleport or a brain replacement; no process-wide event, which kept every disposed world reachable). All of them go through
 `PlayerbotSocialRecorder`, which never throws into game logic (fault site `playerbot.social-memory`).
@@ -202,7 +204,7 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   positive war affinity halves on its half-life while dormant and, with `NeverForget` off, so does negative war affinity (with it on, a
   war grudge keeps its value). It comes back as it has drifted when War Mode is switched on again, war-only rows included, unless
   `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
-  never force-flags anyone for PvP and a player's opt-out still applies (the rivalry that acts on this memory is a later phase).
+  never force-flags anyone for PvP and a player's opt-out still applies (the first rivalry that acts on this memory is Rivalry (P6a) below: emotes only; hunting parties are a later phase).
 
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
@@ -309,9 +311,113 @@ loses 1 affinity (`OpeningIgnored`, no familiarity) and the cooldown for that pl
 penalty; only a positive reply clears the back-off.
 
 **Surroundings comments** (`CommentsEnabled`): a free bot with a real same-faction listener within earshot rarely says (template, or the model) one of: a rare creature (rank rare or rare elite)
-within 60 yards, a game event that started since the last pass, four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
+within 60 yards, a festival that started since the last pass (see World events, below), four or more real (not managed-bot) players of the other faction within 80 yards, a familiar player's first mount. The mount is
 simplified and in memory only: a player of level 40 or more seen on foot and later seen mounted (nothing is persisted, and there is no spellbook or skill check, so a restart forgets who was seen on foot).
 Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one per bot per `CommentBotGapMinutes` (10) and one per zone per `CommentZoneGapSeconds` (60).
+
+## Rivalry (P6a, `World:Playerbots:Social:Rivalry`, live)
+
+`PlayerbotRivalryLane` (lane `rivalry`, `Social/PlayerbotRivalry.cs`; design phase P6, first slice: emotes and the rival stance, **no combat**). Two switches
+share a name and are not the same: `World:Playerbots:Social:Emotes:Enabled` is the same-faction wave (lane `emotes`, above);
+`World:Playerbots:Social:Rivalry:Emotes:Enabled` is this lane, the **cross-faction** greetings and rude emotes. `World:Playerbots:Social:Rivalry:Enabled` switches everything here off at once
+(replies go back to the old table; recorded opt-outs are kept).
+
+**Stance.** One pure function, `PlayerbotRivalryRules.StanceOf(relation, layer)`, reads one layer of the bot's memory: `Rival` (that layer's Rival flag), `Disliked`
+(affinity below 0), `Friendly` (affinity at least `World:Playerbots:Social:Rivalry:Emotes:FriendlyAffinity`, default 20), otherwise `Neutral` (a stranger too).
+**Toward another bot the normal layer decides, War Mode or not**; toward a real player the lane's own emotes read the layer the memory's decisions read (the war layer
+while War Mode is on), and replies to a real player read the normal layer (a reply is budgeted speech). Every emote the lane sends is a direct, unbudgeted `CMSG_TEXT_EMOTE`,
+rolls are hashes of bot, target and the half hour, and limiters are kept apart for bot targets and player targets, so what War Mode makes a bot do to a player never
+changes what it does to a bot (test: `PlayerbotRivalryWarParityWorldTests`).
+
+**Greetings.** Each pass up to 24 idle bots (autonomous, alive, out of combat, not in a battleground or instance, round robin) look at characters of the **other** team within
+`min(Emotes:RangeYards, World:ListenRangeTextEmote)` (20 yards by default; the listen range is read every pass), alive, out of combat, not ignoring the bot. A `Neutral` or `Friendly`
+target is greeted when its roll passes: a stranger with `World:Playerbots:Social:Rivalry:Emotes:GreetStrangerChance` (0.25) times the bot's sociability, a known neutral half the sociability, a friend always;
+a failed roll leaves that target out for the half hour and the walk goes on to the next. A friend gets a wave, bow, salute, cheer or hail, anyone else a wave, nod or bow. Limits (world
+time, apart from the same-faction wave's): once per bot and target in 30 minutes, once per target in 10, once per bot in 5, and `World:Playerbots:Social:Rivalry:Emotes:EmotesPerMinute` (12) for all bots,
+counted separately for bot targets and player targets. A bot is only greeted where a real player is within the listen range of the greeter (`World:Playerbots:Social:Rivalry:Emotes:BotToBot`).
+
+**Rude emotes.** A `Rival` gets one of rude, chicken, threaten, mock or violin (`RivalEmotes`), at most once per bot and target in `RudePairGapMinutes` (30), once per bot in 10 minutes
+and **once per target in `RudePerTargetMinutes` (30) from all bots together**; they count against `EmotesPerMinute`. Never at a player who opted out (below); with
+`World:Playerbots:Social:Rivalry:Emotes:RudeRequiresOptIn` only at players who whispered `rivals on`. Never at a bot unless `World:Playerbots:Social:Rivalry:Emotes:RudeAtBots` (off by default). Never while the bot or the target stands in a
+capital, in a `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` area (area ids, default the six towns with a guard post for both factions: Booty Bay 35, Ratchet 392, Gadgetzan 976, Everlook 2255, Nighthaven 2361,
+Light's Hope Chapel 2268) or anywhere the zone table cannot place (zone 0 or a zone it does not hold): the check fails closed, greetings are unaffected. The first rude emote a real
+player receives in a login is followed by one system notice that says how to stop them.
+
+**Replies.** An emote aimed at a bot is answered by `PlayerbotRivalryRules.ReplyTo(stance, emote, toBot, roll, rudeAtBots, optedOut)` (only while bot chat is on, as before):
+
+| The bot's stance toward the emoter | Friendly emote | Rude emote | Other |
+|---|---|---|---|
+| Rival | to a player a rude emote or nothing; to a bot a shrug or nothing | to a player a rude emote; to a bot a shrug or a sigh | as before |
+| Disliked | a shrug or nothing | to a player a rude emote; to a bot a shrug or a sigh | as before |
+| Friendly | as before | a shrug or a sigh | as before |
+| Neutral | as before | as before to a player; to a bot a shrug or a sigh | as before |
+
+**Toward a bot, an answer that classifies as rude is replaced by a shrug unless `RudeAtBots` is on**, in every stance (this also stops the old one-in-three rude answer to a rude emote and the
+chicken answer to a threat): two bots with different opinions of each other can then never trade rude emotes, so no exchange between bots lowers an affinity. A player who opted out is not
+answered at all until `rivals on`. **A rude answer to a real player keeps the lane's safeguards**: with `RudeRequiresOptIn` it needs a `rivals on`, and when either character
+stands in a capital, a safe area or a place the zone table cannot place it becomes a shrug (the per-target and per-pair rude caps belong to the lane; a reply is limited by `EmoteReplyGapSeconds` and the speech budget). A rival bot can
+still answer a real player's friendly emote rudely (the table above): the owner's ruling R11 covers it.
+
+**Opting out.** Whisper any bot of **your own faction** `rivals off`: the server drops a whisper between factions unless `World:AllowTwoSideChat`, but the choice is server-wide, one store shared by every
+bot of both factions, and holds for the whole account. `rivals on` undoes it and `rivals` alone tells the status; the line is read as the "ai off" command is (letters and spaces, any case), answered by a
+system message at most once per 10 seconds, and consumed (the chat service never hears it). It works with bot chat off and when the bot ignores you. **The choice lasts until the server restarts**
+(it is kept in memory); the answers say so. The store holds 8192 players: past that the oldest `rivals on` is dropped to make room, an opt-out is never dropped, and a new choice made while every slot holds an opt-out is refused (the player is told, and the optouts meter counts `refused`). A bare `rivals` whispered to a bot is consumed even while `World:Playerbots:Social:Rivalry:Enabled` is off, so a player can opt out beforehand. `World:Playerbots:Social:Rivalry:AllowOptOut` (on) only decides whether the line is parsed (it is also parsed while `RudeRequiresOptIn` is on); a choice already recorded is always honoured.
+
+**Organised kills.** `World:Playerbots:Social:Memory:OrganisedPvpKills` (off): a PvP kill on a battleground map, or with either side in a GM-ordered siege group, records no `KilledBy` or `KilledThem`, so players met
+in a match are not remembered as rivals in the open world. On, they are recorded like any other.
+
+Meters: `arcanecore_playerbot_rivalry_emotes_total{kind}` (`greet`, `rude`, `reply_rude`, `reply_shrug`) and `arcanecore_playerbot_rivalry_optouts_total{change}` (`off`, `on`, `refused`; docs/ops/metrics.md); `.playerbot social $bot` ends with `rivals=N`, the
+number of rivals in the bot's normal layer. Faults go to `playerbot.social`.
+
+## World events: festivals (`World:Playerbots:Social:Events`, live)
+
+While a festival runs, idle bots that stay in a town gather around the festival's NPCs instead of at the inn, celebrate there with text
+emotes, and now and then say a line that names the festival. Code: `src/ArcaneCore.Playerbots/Events/` (`PlayerbotHolidayCatalog`,
+`PlayerbotWorldEventBoard`, `PlayerbotFestivalRules`, `PlayerbotFestivalClaims`, `PlayerbotEventListeners`, `PlayerbotEventLane`,
+`PlayerbotWorldEventGoals`, `PlayerbotEventMeters`) and `PlayerbotBrain.Events.cs`. Everything is on by default and every key is live.
+
+- **Which events are festivals.** A game event with a holiday id (the Hourly Bells, the day and night events and the war-effort events never
+  are) is a *root*. An event linked to a running root (`game_event.linked_to`, at most four links; Wickerman Ember to Hallow's End) counts
+  while its root runs; event 21 (Winter Veil: Gifts) is not linked in the data, counts as nothing in slice 1 and is held for the later event-quest stage. A festival has a flavour (Midsummer, Winter Veil, Lunar
+  Festival, Love is in the Air, Noblegarden, Children's Week, Hallow's End, Harvest Festival, Darkmoon Faire, fishing contest, or a plain
+  "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The fishing contest names itself but does not gather
+  (its NPCs run a contest, not a party). `World:Playerbots:Social:Events:Holidays:ExcludedEvents` is a comma list of event ids (at most 64) that are never festivals.
+- **The board.** `PlayerbotWorldEventBoard` listens to the game events and rebuilds its picture only when a festival event starts or stops:
+  the placed NPCs of the running festival (the positive `game_event_creature` rows of the root and its running members) that talk, give
+  quests or sell, are selectable and are no guard. Per town and team it keeps the anchors a bot may use: present for the team, inside the
+  bot's home, within `World:Playerbots:Social:Events:Holidays:SpotRadiusYards` of the town centre, approachable (a hostile NPC is not), outside
+  zones where PvP is enforced on the bot's team and outside the areas of a running event scenario.
+- **A spot.** A bot that is idle in a town it stays in rolls once per game day per festival (`World:Playerbots:Social:Events:Holidays:CelebrateChance`,
+  scaled by its sociability, staggered by bot so they do not all start at the same minute). If it celebrates, it takes a place on a ring 8 to
+  12 yards from an anchor (a gossip NPC first, then a vendor or quest giver), so it stands near the NPC and never in a player's interaction
+  range. Places are capped: `World:Playerbots:Social:Events:Holidays:MaxPerGossipAnchor`, `World:Playerbots:Social:Events:Holidays:MaxPerServiceAnchor` and
+  `World:Playerbots:Social:Events:Holidays:MaxPerTown` per team. The place is the bot's idle centre: the town idle rule (`PlayerbotTownIdle`) walks to it and holds there as it does at the inn, and a place 5 or more
+  yards above or below (Undercity, Thunder Bluff, Ironforge) is never "arrived". A walk the idle rule gives up, or a bot on the wrong floor,
+  sets that NPC aside for the bot for `World:Playerbots:Social:Events:Holidays:SpotBackoffMinutes`, frees the place, reports the Info anomaly `event/festival-spot-unreachable` (once per NPC per hour) and sends the bot
+  back to the inn. A bot has arrived at its place within 3 yards of it (so never within 5 yards of the NPC) and is held there only while it stands at least 5 yards from the NPC (a stalled walk that stops inside the interaction distance is given up like any other). A secondary town's bot takes no place in its explore window. The Social section has no master switch of its own; the gathering is gated by `World:Playerbots:Social:Events:Enabled` and `World:Playerbots:Social:Events:Holidays:Enabled` only. A place lasts 60 seconds past the last held think. Any other goal (a quest, combat, a hunt, rest) frees it at once: the
+  festival is idle behaviour and never keeps a bot from questing. A bot a player attacks at a spot sets the town's festival aside for its team for
+  the same time (a crowd that draws attacks disperses). A festival that ends, or a switch turned off, sends the bots back to the inn at their next think.
+- **Arrival line** (events lane, once per place): with chance 0.6 x (0.5 + chattiness) x the mood multiplier a bot says one /say line
+  `event.<flavour>.arrive`. The listeners are the real players of **either faction** within `ListenRangeSay` (25 yards): none, one who ignores the bot, or one the chat safety
+  cut off means no line; every listener must be free in the initiative's per-player ledger (`OpeningCooldownMinutes`, the same one the openings use, so festival lines, event remarks and
+  openings together reach a player once per 30 minutes); a listener who said "ai off" makes the line built-in only (no model); at most one line per bot per
+  `World:Playerbots:Social:Events:Holidays:TalkBotGapMinutes` and per zone per `World:Playerbots:Social:Events:Holidays:TalkZoneGapSeconds`.
+  `World:Playerbots:Social:Events:Holidays:TalkEnabled` turns the lines off.
+- **Celebration emotes.** A held bot sends one untargeted text emote from its festival's set every `World:Playerbots:Social:Events:Holidays:EmoteMinSeconds` to
+  `World:Playerbots:Social:Events:Holidays:EmoteMaxSeconds` (shorter for sociable bots). The server shows a text emote to everyone within `ListenRangeTextEmote` (25 yards), so it is sent only when
+  every real player in that range has room in its own budget (`World:Playerbots:Social:Events:Holidays:EmotesPerListenerMinute`, from all bots together) and the anchor has room in its own
+  (`World:Playerbots:Social:Events:Holidays:EmotesPerAnchorMinute`, listeners or not). No emote is aimed at anyone: a friendly emote at a bot would feed the social memory (affinity, familiarity), so festivals add no
+  memory source.
+- **The "an event has started" remark** (the initiative's surroundings comment) is now said only for a festival root, in a zone that has an anchor NPC of it, to the
+  same listener filter and ledger, with the festival's name (`{event}`); the Hourly Bells and member events say nothing.
+- **Switches.** `World:Playerbots:Social:Events:Enabled` is the master switch, `World:Playerbots:Social:Events:Holidays:Enabled` the holiday half. Off, bots give their places up at their next think and say and emote nothing.
+- **Observability.** `.playerbot social <bot>` adds a line with the bot's place (or that a festival runs and it holds none). Metrics:
+  `arcanecore_playerbot_events_total{kind,outcome}`, `arcanecore_playerbot_event_lines_total{kind}` and `arcanecore_playerbot_event_suppressed_total{reason}`
+  ([metrics](../ops/metrics.md)); the suppression reasons are `no_listener`, `listener_cap`, `cut_off`, `ignored`, `emote_listener_budget` and `emote_anchor_budget`, so a cap that never lets anything through is visible.
+  A fault in the festival code is recorded under `playerbot.social.events` and pauses that bot's festival goals for a minute.
+- **Cost.** One dictionary lookup per held bot and pass, no allocation per think; a small listener list is allocated per emote or line attempt (one attempt per 30 to 90 s per held bot) and per arrival; the board is rebuilt only when a festival event changes; the walk to a place is the ordinary town walk.
+- **Not done in this slice.** Targeted festival emotes at friendly real players, and the war-effort and scenario festival chapters.
+  Tests: `tests/ArcaneCore.World.Tests/Playerbots/Events/`.
 
 ## Review round 1 (P2)
 
@@ -331,13 +437,31 @@ Chance 0.35 x (0.5 + Chattiness) x the mood multiplier per minute; at most one p
 - **Verified.** `TryAnnounce` does not refuse whispers to non-opted players (the opt-in only gates model use), so the Interacted gate in the lane is the guard. `SpellSystem.HolderAdded` is raised on the world thread. The thank emote id 97 is the repo's `PlayerbotSocialEmotes.TextEmotes.Thank`.
 
 
+## Trading (`World:Playerbots:Social:Trading`, P4a foundation)
+
+Status: the 26 Trading keys are registered and documented, but until the trade desk and the deal steps land (later P4 steps) nothing reads them except `ScamMemoryDays` and `NinjaMemoryDays`, which the trade ledger applies when it reads a row. Setting the others changes no bot behaviour yet.
+
+The trade ledger (`playerbot_trade_record`, characters schema) keeps, per bot and partner, the fair deals and scams counted, the last scam and ninja times and the last UTC day a gift counted: counts and times only, no items, prices or chat. It is fed by the social recorder (a scam, ninja loot or gift note) whether or not `World:Playerbots:Social:Trading:Enabled` or `World:Playerbots:Social:Memory:Enabled` is on; the switches gate what bots do with it, not what is counted. It holds at most 4096 partners per bot and is written at the bot's checkpoint only when it changed. Deleting a bot removes its own rows and the rows other bots hold about it (written again without them right away, like the relation table). Rows about a real player have no time expiry: they stay until the bot's 4096-partner bound evicts them (a partner with no scam or ninja loot inside its window and the fewest fair deals goes first). A bot that was deleted is not fed again.
+
 ## Cost and persistence
 
 One pass every second of world time. A pass does a constant number of dictionary lookups per bot and per bot guild (the bot list is
 gathered once per pass and only when something needs it; an event handler's pass gathers none), drains only the guild-invite,
 charter-signature and battleground-win packets of each bot's capture queue, and makes at most one chat admission per guild. The rate
 limiters and the boss and battleground-win maps are bounded and swept; a pass that throws is logged (the first five in full) and the world
-carries on. Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
+carries on.
+
+**The pass is incremental** (`World:Playerbots:Social:PassBudgetMs`, default 4; 0 = no limit). A pass starts when its interval has passed and no
+pass is in flight, takes a snapshot of the running bots (a bot that leaves the world meanwhile is dropped from it) and walks its stages in
+order, at most the budget per world tick (plus one slice): the packet intake, the injected test lanes, then the lanes in their usual order.
+The lanes that act on one bot at a time and independently of the others (`answer-invites`, `emotes`) run on slices of the snapshot and stop
+between slices once the budget is spent; the next tick resumes at the next bot. Every other lane is population-wide (it has its own cursor
+and per-pass quota, or reasons about guilds, charters and the set of running bots) and runs whole as one stage, so the registry check, the
+intake and these lanes keep their once-per-pass meaning. A stage never starts before the one before it has finished, a pass that outlasts
+its interval is simply followed by the next as soon as it ends (no catch-up passes), and a pass in flight for more than 20 intervals is
+reported once to the anomaly ledger (`bot-social` / `pass-starved`).
+
+Guilds, ranks, petitions and members persist through the existing social system (the social memory has its own table, above), and the feature's own
 state is in memory or read back from it.
 
 ## Tests

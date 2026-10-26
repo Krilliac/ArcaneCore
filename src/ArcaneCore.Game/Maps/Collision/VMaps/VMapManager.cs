@@ -138,6 +138,51 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
     }
 
+    /// <summary>Whether the model tile under (<paramref name="x"/>, <paramref name="y"/>) is loaded or known to be empty (a grid or an on-demand request holds it). World thread.</summary>
+    public bool HoldsTile(uint mapId, float x, float y)
+        => Terrain.TerrainTile.TileOf(x, y) is { } tile
+            && (_emptyTiles.Contains((mapId, tile.X, tile.Y)) || _trees.GetValueOrDefault(mapId) is { } tree && tree.IsTileLoaded(tile.X, tile.Y));
+
+    /// <summary>
+    /// Release the tile under (<paramref name="x"/>, <paramref name="y"/>) only when it is held on demand, never a tile a grid holds.
+    /// For a caller that loaded it for one question and no longer needs it. World thread.
+    /// </summary>
+    public bool ReleaseOnDemandTile(uint mapId, float x, float y)
+    {
+        if (Terrain.TerrainTile.TileOf(x, y) is not { } tile || !_onDemand.ContainsKey((mapId, tile.X, tile.Y)))
+        {
+            return false;
+        }
+
+        UnloadTile(mapId, tile.X, tile.Y);
+        return true;
+    }
+
+    /// <summary>Models parsed and cached, loaded tiles or not (diagnostics and tests).</summary>
+    public int CachedModelCount => _models.Count;
+
+    /// <summary>
+    /// Drop the cached models no loaded tile uses (the cache otherwise only grows: a model stays after the last tile naming it unloads).
+    /// A later tile that names one parses it again. Returns how many were dropped. World thread.
+    /// </summary>
+    public int TrimUnusedModels()
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (VMapTree? tree in _trees.Values)
+        {
+            tree?.CollectModelNames(used);
+        }
+
+        string[] unused = [.. _models.Where(m => m.Value is not null && !used.Contains(m.Key)).Select(m => m.Key)];
+        foreach (string name in unused)
+        {
+            _models.Remove(name);
+            _cachedModelNames.TryRemove(name, out _);
+        }
+
+        return unused.Length;
+    }
+
     void ICollisionTileLifecycle.OnTileLoaded(uint mapId, int tileX, int tileY)
     {
         _onDemand.Remove((mapId, tileX, tileY)); // the grid holds it now
@@ -222,12 +267,20 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
 
+    /// <summary>Whether a prefetch of the tile was asked for, is finished and has not been taken (diagnostics and tests).</summary>
+    internal bool IsPrefetchFinished(uint mapId, int tileX, int tileY) => _prefetch.Contains(mapId, tileX, tileY) && !_prefetch.IsRunning(mapId, tileX, tileY);
+
     /// <summary>
     /// Read and parse a tile's <c>.vmtile</c> and the model files it names that are not cached yet, on the thread pool
     /// (<see cref="TilePrefetchCache{T}"/>), so <see cref="LoadTile"/> only instantiates them. Nothing happens for a map without vmap
     /// data, an untiled map or a tile already loaded. World thread.
     /// </summary>
-    public void Prefetch(uint mapId, int tileX, int tileY)
+    public void Prefetch(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: false);
+
+    /// <summary><see cref="Prefetch(uint, int, int)"/> for a teleport's destination, against the arrival budget (<see cref="TilePrefetchCache{T}.MaxArrivalEntries"/>). World thread.</summary>
+    public void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: true);
+
+    private void Prefetch(uint mapId, int tileX, int tileY, bool arrival)
     {
         if (GetTree(mapId) is not { IsTiled: true } tree || tree.IsTileLoaded(tileX, tileY))
         {
@@ -273,7 +326,7 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
             }
 
             return spawns;
-        });
+        }, arrival);
     }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY) => UnloadTile(mapId, tileX, tileY);

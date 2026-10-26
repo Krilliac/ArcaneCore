@@ -3,11 +3,13 @@
 
 import { eye as cameraEye, frameBounds, intersectPlaneZ, lookAtPoint, ndcToScreen, project, rayThrough, screenToNdc, vec } from './camera.js';
 import { LabelLayer, drawLabels, layoutLabels, LABEL_FONT } from './labels.js';
+import { PEER_CSS_COLOR, peerLabelCandidates } from './presence.js';
 import { buildLiveGeometry, pickEntity } from './live.js';
 import { describeSurface, normalizePick } from './normalize.js';
 import { computeNotices } from './notices.js';
 import { Renderer, RendererUnavailable } from './renderer.js';
 import { Scene } from './scene.js';
+import { TextureStore } from './materials/textures.js';
 import { wantedTileLayers } from './layerstate.js';
 import { Navigator } from './nav.js';
 import { tileOf } from './tiles.js';
@@ -19,6 +21,10 @@ const BACKGROUND = [0x10 / 255, 0x1a / 255, 0x21 / 255];
 const MAX_DPR = 2;
 const PEEK_DEBOUNCE_MS = 300;
 const CAPTURE_MIN = 16;
+const MIB = 1024 * 1024;
+// Frames under 80 % of the texture budget before a radius given up to an over-budget working set is taken back.
+const TEXTURE_RECOVERY_FRAMES = 120;
+const isTexturedLayer = (id) => id.endsWith('.tex');
 
 export class Viewport {
     constructor(app, root) {
@@ -57,6 +63,9 @@ export class Viewport {
         this.depthHint = 100;
         this.liveAnimated = false;
         this.liveCounts = { entities: 0, splines: 0, routes: 0 };
+        this.textureStore = null;
+        this.textureBackoff = 0;
+        this.textureRecovery = 0;
     }
 
     // ------------------------------------------------------------------------------------------------------------
@@ -71,6 +80,7 @@ export class Viewport {
                     app.toast('The GPU context was lost. The map reloads when it comes back.', 'warn');
                 },
                 onContextRestored: () => {
+                    this.#createTextures();
                     this.scene?.reset();
                     this.#dropOverlaySets();
                     this.liveSets = null;
@@ -81,6 +91,7 @@ export class Viewport {
                 },
             });
             app.webgl = { ok: true, message: '' };
+            this.#createTextures();
             this.scene = new Scene({ api: app.api, renderer: this.renderer });
             this.scene.setLayerInfos(app.layers);
             app.scene = this.scene;
@@ -99,6 +110,13 @@ export class Viewport {
 
         app.events.on('view', (view, changed) => {
             this.dirty = true;
+            if (changed.has('textureBudgetMb')) {
+                this.textureStore?.setBudget(view.textureBudgetMb * MIB);
+            }
+            if (changed.has('textureRadius')) {
+                this.textureBackoff = 0;
+                this.textureRecovery = 0;
+            }
             if (changed.has('layers') || changed.has('follow') || changed.has('compare') || changed.has('map')) {
                 this.liveDirty = true;
             }
@@ -111,6 +129,7 @@ export class Viewport {
             this.dirty = true;
         });
         app.events.on('overlays', () => (this.dirty = true));
+        app.events.on('presence', () => (this.dirty = true));
         app.events.on('selection', () => {
             this.liveDirty = true;
             this.dirty = true;
@@ -128,6 +147,47 @@ export class Viewport {
         document.addEventListener('visibilitychange', () => (this.dirty = true));
         this.#syncScene();
         this.raf = requestAnimationFrame((t) => this.#tick(t));
+    }
+
+    /** A fresh texture store on the renderer's current GL context (at start and after a context restore). */
+    #createTextures() {
+        this.textureStore?.dispose();
+        const allowDxt = new URLSearchParams(window.location.search).get('texfmt') !== 'rgba';
+        this.textureStore = new TextureStore({
+            gl: this.renderer.gl,
+            fetchTexture: (key, options) => this.app.api.texture(key, options),
+            budgetBytes: this.app.view.textureBudgetMb * MIB,
+            allowDxt,
+            onChange: () => (this.dirty = true),
+        });
+        this.renderer.setTextureStore(this.textureStore);
+    }
+
+    /**
+     * Anti-thrash (design section 4): while the textures in use do not fit the budget the textured layers load one tile ring fewer;
+     * the ring comes back after TEXTURE_RECOVERY_FRAMES frames under 80 % of the budget.
+     */
+    #adaptTextures() {
+        const stats = this.textureStore?.stats();
+        if (!stats) {
+            return;
+        }
+        const wanted = this.app.view.textureRadius;
+        if (stats.overBudget) {
+            this.textureRecovery = 0;
+            if (this.textureBackoff < wanted) {
+                this.textureBackoff++;
+                this.#syncScene();
+            }
+        } else if (this.textureBackoff > 0 && stats.bytes < 0.8 * stats.budgetBytes) {
+            if (++this.textureRecovery >= TEXTURE_RECOVERY_FRAMES) {
+                this.textureRecovery = 0;
+                this.textureBackoff--;
+                this.#syncScene();
+            }
+        } else {
+            this.textureRecovery = 0;
+        }
     }
 
     #resize() {
@@ -165,13 +225,15 @@ export class Viewport {
         const focus = this.#focusPoint();
         const tile = tileOf(focus[0], focus[1]);
         const layers = wantedTileLayers(app.resolved());
-        const key = `${view.map}|${tile ? `${tile.x},${tile.y}` : 'none'}|${view.loadRadius}|${layers.join(',')}`;
+        const textureRadius = Math.max(0, view.textureRadius - this.textureBackoff);
+        const key = `${view.map}|${tile ? `${tile.x},${tile.y}` : 'none'}|${view.loadRadius}|${layers.join(',')}|${textureRadius}`;
         if (key === this.syncKey && !force) {
             return;
         }
         const tileChanged = key.split('|').slice(0, 3).join('|') !== this.syncKey.split('|').slice(0, 3).join('|');
         this.syncKey = key;
-        this.scene.update({ map: view.map, focusTile: tile, radius: view.loadRadius, layers });
+        const layerRadius = Object.fromEntries(layers.filter(isTexturedLayer).map((id) => [id, textureRadius]));
+        this.scene.update({ map: view.map, focusTile: tile, radius: view.loadRadius, layers, layerRadius });
         if (tileChanged || force) {
             this.#schedulePeek();
         }
@@ -392,6 +454,8 @@ export class Viewport {
             app.stats.drawCalls = this.renderer.stats.drawCalls;
             app.stats.triangles = this.renderer.stats.triangles;
             app.stats.lines = this.renderer.stats.lines;
+            app.stats.textures = this.textureStore?.stats() ?? app.stats.textures;
+            this.#adaptTextures();
         }
         this.#drawLabels(view);
         this.hud.updateView(view, this.cssWidth, this.cssHeight, this.depthHint);
@@ -400,7 +464,8 @@ export class Viewport {
         this.drawTimes.push(time);
     }
 
-    #labelCandidates() {
+    /** Label candidates of the live entities, the visible overlays and the other sessions (`peers`: those on the current map). */
+    #labelCandidates(peers = this.app.presence.onMap(this.app.view.map)) {
         const candidates = [...this.liveLabels];
         for (const entry of this.app.overlays.entries()) {
             if (entry.visible) {
@@ -409,17 +474,22 @@ export class Viewport {
                 }
             }
         }
+        candidates.push(...peerLabelCandidates(peers, this.app.view.map));
         return candidates;
     }
 
     #drawLabels(view) {
         const ctx = this.labels.ctx;
-        this.labels.draw(this.#labelCandidates(), view.camera);
+        const peers = this.app.presence.onMap(view.map);
+        this.labels.draw(this.#labelCandidates(peers), view.camera);
         // Pins: the selected point (cobalt) and the point under the cursor (white). Drawn in 2D, so they never hide behind terrain.
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         const sel = this.app.selection.point;
         if (sel) {
             this.#pin(ctx, sel, '#4F8BFF', 9, true);
+        }
+        for (const peer of peers) {
+            this.#pin(ctx, peer.at, PEER_CSS_COLOR, 6, false);
         }
         const hov = this.hoverInfo;
         if (hov && !this.nav.flying) {
@@ -495,6 +565,9 @@ export class Viewport {
             this.app.stats.tiles = this.scene.totals(ids);
         }
         this.app.stats.gpuBytes = this.renderer?.stats.gpuBytes ?? 0;
+        if (this.textureStore) {
+            this.app.stats.textures = this.textureStore.stats();
+        }
         this.app.events.emit('stats', this.app.stats);
     }
 

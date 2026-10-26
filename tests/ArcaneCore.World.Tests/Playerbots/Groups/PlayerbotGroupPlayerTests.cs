@@ -45,6 +45,24 @@ public sealed class PlayerbotGroupPlayerTests
             return true;
         });
 
+    /// <summary>Advances up to <paramref name="maxMs"/> in short slices, putting the bot back on the player before each, and returns whether the player was invited.</summary>
+    private static async Task<bool> RunBesidePlayerUntilAsync(GroupTestWorld world, Guid botId, string playerName, uint maxMs)
+    {
+        const uint SliceMs = 1_000;
+        for (uint elapsed = 0; elapsed < maxMs; elapsed += SliceMs)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                Player them = world.World.Host.World.FindOnlinePlayer(playerName)!;
+                world.Player(botId).Relocate(them.X + 2, them.Y, them.Z, 0, world.World.Host.World.NowMs);
+                return true;
+            });
+            if (await world.RunUntilAsync(SliceMs, () => PlayerInvited(world))) return true;
+        }
+
+        return PlayerInvited(world);
+    }
+
     private static bool PlayerInvited(GroupTestWorld world) => world.Coordinator.Groups.Any(g => g.Members.Any(m => m.Real && m.Invited));
 
     [Fact]
@@ -235,13 +253,13 @@ public sealed class PlayerbotGroupPlayerTests
         var bot = await world.AddBotAsync("Askertwo", Human, Warrior, 1, []);
         await GivePlayerQuestAsync(world, "Groupstrange", DuoQuest);
 
-        await world.RunAsync(30_000);
-        Assert.False(PlayerInvited(world), "a stranger with no affinity and no AI chat opt-in is not invited");
+        // The waiting bot grinds and wanders; an invite only reaches a player within InvitePlayerYards, so each phase keeps the bot beside the player
+        // (otherwise a "not invited" phase proves nothing and the final phase depends on where the bot happened to roam).
+        Assert.False(await RunBesidePlayerUntilAsync(world, bot.Id, "Groupstrange", 30_000), "a stranger with no affinity and no AI chat opt-in is not invited");
         await RememberPlayerAsync(world, bot, "Groupstrange", 19);
-        await world.RunAsync(10_000);
-        Assert.False(PlayerInvited(world), "affinity 19 is below InvitePlayerAffinity (20)");
+        Assert.False(await RunBesidePlayerUntilAsync(world, bot.Id, "Groupstrange", 10_000), "affinity 19 is below InvitePlayerAffinity (20)");
         await RememberPlayerAsync(world, bot, "Groupstrange", 20);
-        Assert.True(await world.RunUntilAsync(30_000, () => PlayerInvited(world)), await world.TraceAsync());
+        Assert.True(await RunBesidePlayerUntilAsync(world, bot.Id, "Groupstrange", 30_000), await world.TraceAsync());
     }
 
     [Fact]
@@ -461,8 +479,15 @@ public sealed class PlayerbotGroupPlayerTests
         var healer = await world.AddBotAsync("Chatprie", Human, Priest, 10, [LesserHeal, Smite]);
         var mage = await world.AddBotAsync("Chatmage", Human, Mage, 10, [Fireball]);
         Assert.True(world.Options.Chat.Enabled);
-        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
+        // Forming ends either with every member joined or with the group giving up (an invitation refused or unanswered, or a member not online,
+        // for InviteTimeoutMs of game time; it then disbands). The bots' acceptances are game-time driven (PlayerbotPartyAI.Intake runs once per
+        // think interval of game time for an ungrouped invitee, and the answer goes through a synchronous managed action), so the manual clock
+        // cannot outrun them. A group that gave up would have passed the old wait ("state is not Forming") and failed later on the member count
+        // without a reason (hypothesis: the failing run was not reproduced). Wait for the group that completed instead, so a group that gave up
+        // fails with the trace and the coordinator's events. Why a 3-bot group would give up is still unknown.
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is not (PlayerbotGroupState.Forming or PlayerbotGroupState.Disbanding) && g.Members.All(m => m.Joined))), await world.TraceAsync());
         Assert.Equal(3, await world.OnWorldAsync(() => world.GroupManager.GetGroup(world.Player(tank.Id).Guid)?.MemberCount ?? 0));
+        Assert.DoesNotContain(await world.OnWorldAsync(() => world.Coordinator.Events.ToArray()), e => e.Contains("gave up") || e.Contains("did not join"));
 
         await using WorldTestClient player = await world.World.EnterWorldAsync("CHATGROUPP", "Chatgroupp", AccountSecurity.Player);
         await player.CollectAsync();

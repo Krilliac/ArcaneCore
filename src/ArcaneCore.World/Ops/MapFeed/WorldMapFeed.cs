@@ -5,7 +5,9 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Bots;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Ops.Control;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -88,6 +90,12 @@ public sealed class WorldMapFeed : IHostedService
         // Sized from the limit the options allow (a value outside it keeps the feed off, but the service is still built).
         int connections = Math.Clamp(_options.MaxConnections, 1, WorldMapFeedOptions.MaxMaxConnections);
 
+        // The separate web pipe's connections are served by this feed too (their frames come from the same pool).
+        if (services.GetService<IOptions<WebFeedPipeOptions>>()?.Value is { Enabled: true } web)
+        {
+            connections += Math.Clamp(web.MaxConnections, 1, WebFeedPipeOptions.MaxMaxConnections);
+        }
+
         // Per connection at most MaxInFlightFrames frames are reserved, and one tick's own frames are held until the tick's end.
         _pool = new FramePool(((MapFeedConnection.MaxInFlightFrames + 1) * connections) + 1);
         _tickFrames = new FeedFrame?[connections];
@@ -129,8 +137,45 @@ public sealed class WorldMapFeed : IHostedService
     /// <summary>Whether this is the live server (null: read <see cref="WorldPacketToolsOptions.LiveServerVariable"/>); tests set it instead of the process environment.</summary>
     internal bool? LiveServer { get; init; }
 
+    /// <summary>The ring of this world's anomalies (docs/areas/atlas-insight.md): attached while the feed listens, null before and after.</summary>
+    internal MapFeedAnomalyRing? AnomalyRing { get; private set; }
+
+    /// <summary>The spell system, whose aura holders an <c>inspect</c> lists (null when the spell feature is not attached).</summary>
+    internal SpellSystem? Spells => _services.GetService<SpellFeature>()?.System;
+
+    /// <summary>The playerbot pack's route seam (null without managed bots or without the pack).</summary>
+    internal IBotRouteSource? RouteSource => _services.GetService<ManagedBotRegistry>()?.RouteSource;
+
+    /// <summary>Whether <paramref name="guid"/> is a managed bot's player (world thread).</summary>
+    internal bool IsBot(ulong guid)
+    {
+        if (_services.GetService<ManagedBotRegistry>() is not { Count: > 0 } registry)
+        {
+            return false;
+        }
+
+        foreach (ManagedBot bot in registry.Bots)
+        {
+            if (bot.Session.Player is { } player && player.Guid.Value == guid)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The server streams of the pipe instances (tests read their security descriptors); empty when the pipe is off.</summary>
     internal IReadOnlyList<NamedPipeServerStream> Servers => _servers;
+
+    /// <summary>The protocol extension (the action channel), or null when the host registered none. Set when the feed starts.</summary>
+    internal IFeedExtension? Extension { get; set; }
+
+    /// <summary>Whether <c>World:Control:MapFeed:Enabled</c> is set (the web pipe and the action channel are served by an enabled feed only).</summary>
+    internal bool IsEnabled => _options.Enabled;
+
+    /// <summary>Whether this process is the live server (the <see cref="LiveServer"/> override, else the <see cref="WorldPacketToolsOptions.LiveServerVariable"/> marker).</summary>
+    internal bool IsLiveServer => LiveServer ?? WorldPacketToolsOptions.IsLiveServer();
 
     /// <summary>The world the feed reads.</summary>
     internal WorldRuntime World => _world;
@@ -174,6 +219,7 @@ public sealed class WorldMapFeed : IHostedService
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        MapFeedExtensions.FeedStarted(this, _services);
         if (!_options.Enabled)
         {
             _logger.LogDebug("map feed off: World:Control:MapFeed:Enabled is false");
@@ -205,10 +251,17 @@ public sealed class WorldMapFeed : IHostedService
             return Task.CompletedTask;
         }
 
+        // The ring exists before the pipe does, so a tool that connects at once never finds the anomalies query unanswerable.
+        AnomalyRing = new MapFeedAnomalyRing(AnomalyLedger.Shared, _world.Identity, _options.AnomaliesUnowned);
         Listen(name);
         if (PipeName is not null)
         {
             EnableTools();
+        }
+        else
+        {
+            AnomalyRing.Dispose();
+            AnomalyRing = null;
         }
 
         return Task.CompletedTask;
@@ -366,13 +419,13 @@ public sealed class WorldMapFeed : IHostedService
     }
 
     /// <summary>Serve one connection on <paramref name="stream"/> until it ends (tests call this with an in-memory stream).</summary>
-    internal async Task ServeConnectionAsync(Stream stream, string client, CancellationToken token)
+    internal async Task ServeConnectionAsync(Stream stream, string client, CancellationToken token, FeedRole role = FeedRole.Unbound)
     {
         Interlocked.Increment(ref _active);
         try
         {
             using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(token, _stopping.Token);
-            await new MapFeedConnection(this, stream, client, _logger, linked.Token).RunAsync().ConfigureAwait(false);
+            await new MapFeedConnection(this, stream, client, _logger, linked.Token, role).RunAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -664,6 +717,8 @@ public sealed class WorldMapFeed : IHostedService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
+        AnomalyRing?.Dispose();
+        AnomalyRing = null;
         lock (_gate)
         {
             Volatile.Write(ref _subscriptions, []);

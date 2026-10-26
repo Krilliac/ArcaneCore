@@ -68,6 +68,30 @@ internal sealed class FakeGh : IQaProcessRunner
         })]).ToJsonString());
     }
 
+    /// <summary>Whether the search index misses every issue (a lagging index: it answers 0 hits).</summary>
+    public bool SearchLags { get; set; }
+
+    /// <summary>The query of a search call: the <c>q=</c> field.</summary>
+    public static string QueryOf(QaProcessRequest r) => r.Arguments.Single(a => a.StartsWith("q=", StringComparison.Ordinal))[2..];
+
+    private Task<QaProcessResult> ApiSearch(QaProcessRequest request)
+    {
+        string query = QueryOf(request);
+        int open = query.IndexOf('"', StringComparison.Ordinal);
+        int close = query.LastIndexOf('"');
+        string phrase = query[(open + 1)..close].Replace("\\\"", "\"", StringComparison.Ordinal).Replace("\\\\", "\\", StringComparison.Ordinal);
+        JsonObject[] hits = SearchLags ? [] : [.. _issues.Where(i => ((string)i["body"]!).Contains(phrase, StringComparison.Ordinal))];
+        return Ok(new JsonObject
+        {
+            ["total_count"] = hits.Length,
+            ["incomplete_results"] = false,
+            ["items"] = new JsonArray([.. hits.Select(i => (JsonNode?)new JsonObject
+            {
+                ["number"] = (int)i["number"]!, ["state"] = ((string)i["state"]!).ToLowerInvariant(), ["html_url"] = (string)i["url"]!, ["body"] = (string)i["body"]!,
+            })]),
+        }.ToJsonString());
+    }
+
     public void SetReason(int number, string reason)
     {
         lock (_gate) _issues.Single(i => (int)i["number"]! == number)["stateReason"] = reason;
@@ -89,6 +113,7 @@ internal sealed class FakeGh : IQaProcessRunner
         {
             _requests.Add(request);
             if (Override?.Invoke(request) is { } forced) return Task.FromResult(forced);
+            if (request.Arguments.Contains("search/issues")) return ApiSearch(request);
             if (IsApiList(request)) return ApiList(request);
             string verb = request.Arguments[1];
             string? file = request.Arguments.Contains("--body-file") ? request.Arguments[request.Arguments.ToList().IndexOf("--body-file") + 1] : null;
@@ -463,17 +488,132 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
     }
 
     [Fact]
-    public async Task Publisher_WithAListCutShort_DoesNotCreate_BecauseItCannotKnowTheIssueIsAbsent()
+    public async Task Publisher_WithAListCutShort_AndASearchThatFails_DoesNotCreate_BecauseItCannotKnowTheIssueIsAbsent()
     {
-        var gh = new FakeGh();
+        var gh = new FakeGh { Override = r => r.Arguments.Contains("search/issues") ? new QaProcessResult(1, string.Empty, "gh: HTTP 500 server error", false) : null };
         for (int i = 0; i < 100; i++) gh.Add("unrelated");
         Rig rig = NewRig(o => o.MaxListPages = 1, [Finding(A)], gh);
 
         await rig.Run();
 
         Assert.Equal(0, gh.Count("create"));
-        Assert.Equal(QaPublicationState.Pending, rig.State.Get(A)!.Publication.State);
-        Assert.Contains(rig.Log.At(Microsoft.Extensions.Logging.LogLevel.Warning), m => m.Contains("cut at", StringComparison.Ordinal));
+        Assert.Equal(1, SearchCount(gh));
+        Assert.NotEqual(QaPublicationState.Published, rig.State.Get(A)!.Publication.State);
+    }
+
+    private static int SearchCount(FakeGh gh) => gh.Requests.Count(r => r.Arguments.Contains("search/issues"));
+
+    // ----- search (the list is capped at MaxListPages; the 1001st bot-qa issue is beyond it) --------------------------------------------------
+
+    [Fact]
+    public async Task Publisher_AMarkerBeyondTheListedPages_IsFoundBySearch_AndNothingIsCreated()
+    {
+        var gh = new FakeGh();
+        for (int i = 0; i < 1000; i++) gh.Add("unrelated " + i.ToString(CultureInfo.InvariantCulture));
+        int target = gh.Add(PlayerbotQaIssueComposer.MarkerOf(A) + "\nx");
+        Rig rig = NewRig(o => o.MaxListPages = 10, [Finding(A)], gh);
+
+        await rig.Run();
+
+        Assert.Equal(10, gh.Count("list"));
+        Assert.Equal(1, SearchCount(gh));
+        Assert.Equal(0, gh.Count("create"));
+        QaFindingView view = rig.State.Get(A)!;
+        Assert.Equal(QaPublicationState.Published, view.Publication.State);
+        Assert.Equal(target, view.Publication.Issue);
+    }
+
+    [Fact]
+    public async Task Publisher_ASearchWithNoHit_CreatesTheIssue_AndDoesNotSearchItAgainOnTheNextPass()
+    {
+        var gh = new FakeGh();
+        for (int i = 0; i < 100; i++) gh.Add("unrelated");
+        Rig rig = NewRig(o => o.MaxListPages = 1, [Finding(A)], gh);
+
+        await rig.Run();
+        await rig.Run();
+
+        Assert.Equal(1, gh.Count("create"));
+        Assert.Equal(1, SearchCount(gh));
+        Assert.Equal(QaPublicationState.Published, rig.State.Get(A)!.Publication.State);
+    }
+
+    [Fact]
+    public async Task Publisher_ARateLimitedSearch_KeepsTheFindingPending_AndCreatesNothing()
+    {
+        var gh = new FakeGh { Override = r => r.Arguments.Contains("search/issues") ? new QaProcessResult(1, string.Empty, "gh: API rate limit exceeded for user ID 1. (HTTP 403)", false) : null };
+        for (int i = 0; i < 100; i++) gh.Add("unrelated");
+        Rig rig = NewRig(o => o.MaxListPages = 1, [Finding(A), Finding(B)], gh);
+
+        await rig.Run();
+
+        Assert.Equal(0, gh.Count("create"));
+        Assert.Equal(1, SearchCount(gh)); // a transient failure stops the pass
+        Assert.Equal(QaPublicationState.Failed, rig.State.Get(A)!.Publication.State);
+        Assert.Equal(0, rig.State.Get(A)!.Publication.Issue);
+        Assert.Equal(QaPublicationState.Pending, rig.State.Get(B)!.Publication.State);
+    }
+
+    [Fact]
+    public async Task Search_AfterARateLimit_DoesNotCallGhAgain_AndIsTransient()
+    {
+        var gh = new FakeGh { Override = r => new QaProcessResult(1, string.Empty, "You have exceeded a secondary rate limit", false) };
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+
+        var first = await Assert.ThrowsAsync<PlayerbotQaPublishException>(() => client.SearchByMarkerAsync(A, CancellationToken.None));
+        var second = await Assert.ThrowsAsync<PlayerbotQaPublishException>(() => client.SearchByMarkerAsync(B, CancellationToken.None));
+
+        Assert.True(first.Transient);
+        Assert.True(second.Transient);
+        Assert.Equal(1, SearchCount(gh));
+    }
+
+    [Fact]
+    public async Task Search_ATimeoutOrAnIncompleteResult_IsTransient_NeverNull()
+    {
+        var gh = new FakeGh { Override = _ => new QaProcessResult(-1, string.Empty, string.Empty, true) };
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+        var timedOut = await Assert.ThrowsAsync<PlayerbotQaPublishException>(() => client.SearchByMarkerAsync(A, CancellationToken.None));
+        Assert.True(timedOut.Transient);
+        Assert.Equal(TimeSpan.FromSeconds(30), gh.Requests[0].Timeout);
+
+        gh.Override = _ => new QaProcessResult(0, """{"total_count":0,"incomplete_results":true,"items":[]}""", string.Empty, false);
+        var incomplete = await Assert.ThrowsAsync<PlayerbotQaPublishException>(() => client.SearchByMarkerAsync(A, CancellationToken.None));
+        Assert.True(incomplete.Transient);
+
+        gh.Override = _ => new QaProcessResult(0, """{"total_count":0,"incomplete_results":false,"items":[]}""", string.Empty, false);
+        Assert.Null(await client.SearchByMarkerAsync(A, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Search_RemembersTheIssuesItCreated_WhileTheSearchIndexLags()
+    {
+        var gh = new FakeGh { SearchLags = true };
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+        QaIssueRef created = await client.CreateIssueAsync("t", PlayerbotQaIssueComposer.MarkerOf(A) + "\nbody", ["bot-qa"], CancellationToken.None);
+
+        QaIssueRef? found = await client.SearchByMarkerAsync(A, CancellationToken.None);
+        QaIssueRef? other = await client.SearchByMarkerAsync(B, CancellationToken.None);
+
+        Assert.Equal(created.Number, found!.Number);
+        Assert.Null(other);
+        Assert.Equal(1, SearchCount(gh)); // A was answered from memory; only B called gh
+    }
+
+    [Fact]
+    public async Task Search_PassesTheQueryAsOneArgvEntry_WithQuotesAndBackslashesEscaped()
+    {
+        var gh = new FakeGh();
+        using PlayerbotQaGhCliClient client = NewClient(gh);
+        const string id = "we ird\"id\\x & $(rm -rf)";
+
+        await client.SearchByMarkerAsync(id, CancellationToken.None);
+
+        QaProcessRequest request = Assert.Single(gh.Requests);
+        Assert.Equal(["api", "--method", "GET", "search/issues", "-f"], request.Arguments.Take(5).ToArray());
+        Assert.Equal($"q=repo:{QaData.Repo} is:issue in:body \"arcanecore-bot-qa:we ird\\\"id\\\\x & $(rm -rf)\"", request.Arguments[5]);
+        Assert.Equal(["-f", "per_page=30"], request.Arguments.Skip(6).ToArray());
+        Assert.Equal(TimeSpan.FromSeconds(30), request.Timeout);
     }
 
     [Fact]

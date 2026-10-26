@@ -50,6 +50,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<CharacterSaveQueue> _logger;
     private readonly IOpsAnnouncer? _announcer;
+    private readonly StopDrainBudget _drain; // the save queue's reserved shutdown lane (ShutdownDrain.Saves)
     private readonly WorldRuntimeOptions _settings; // the shared options object: the two warning thresholds are live (.reload config)
     private readonly Lock _gate = new();
     private readonly Lock _reportGate = new();
@@ -85,8 +86,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// <param name="logger">Diagnostics.</param>
     /// <param name="options">Backlog warning thresholds (<c>World:SaveQueueWarnDepth</c>, <c>World:SaveQueueWarnAgeMs</c>); the defaults when null.</param>
     /// <param name="announcer">Tells the staff about queue trouble (World:Announce:Saves); none when null. Any thread; never blocks, never throws.</param>
-    public CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<CharacterSaveQueue> logger, IOptions<WorldRuntimeOptions>? options = null, IOpsAnnouncer? announcer = null)
+    /// <param name="drain">The shutdown stall lanes; this queue uses <see cref="ShutdownDrain.Saves"/>. A private lane when null, so a queue stopped outside the world host is still bounded.</param>
+    public CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<CharacterSaveQueue> logger, IOptions<WorldRuntimeOptions>? options = null, IOpsAnnouncer? announcer = null, ShutdownDrain? drain = null)
     {
+        _drain = drain?.Saves ?? new StopDrainBudget { Name = "character save queue's stop drain", StallBudget = ShutdownDrain.SavesStallBudget };
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _settings = options?.Value ?? new WorldRuntimeOptions();
@@ -108,6 +111,30 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
     /// <summary>Characters with a snapshot waiting or being written.</summary>
     public int Pending => Volatile.Read(ref _pending);
+
+    /// <summary>Ids of characters whose snapshot failed to save and is still held (retried or parked), ascending.</summary>
+    public IReadOnlyList<int> RetainedCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _failed.Keys.Order()];
+            }
+        }
+    }
+
+    /// <summary>The failure that halted the queue for good (a rejected character ownership), or null while it is running.</summary>
+    public Exception? TerminalFailure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _terminalFailure;
+            }
+        }
+    }
 
     /// <summary>How long the longest-waiting snapshot has been waiting or being written (zero when nothing is pending).</summary>
     public TimeSpan OldestPendingAge
@@ -337,6 +364,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         lock (_gate)
         {
             _stopped = true;
+            _drain.Begin(); // idempotent: the world host begins the lane just before it stops this queue
             consumer = _consumer ??= Task.Run(ConsumeAsync);
         }
 
@@ -451,6 +479,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             failed = _failed.Keys.ToArray();
         }
 
+        int refusedRecoveries = 0;
         foreach (int id in failed)
         {
             try
@@ -460,6 +489,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             catch (OperationCanceledException)
             {
                 /* expected on shutdown */
+            }
+            catch (StopDrainExhaustedException)
+            {
+                refusedRecoveries++; // retained and named below; the refusal is recorded once, not once per snapshot
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -484,7 +517,24 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
         if (notDrained is not null)
         {
-            AnomalyLedger.Shared.Report("persist", "write-dropped-on-shutdown", "queue CharacterSaveQueue", $"queue=CharacterSaveQueue reason=undrained-on-stop message={notDrained.Message}", AnomalySeverity.Error);
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-dropped-on-shutdown",
+                "queue CharacterSaveQueue",
+                $"queue=CharacterSaveQueue reason=undrained-on-stop message={notDrained.Message} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
+                AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.character-stop-drain", refusal);
+                _logger.LogFault(
+                    "writequeue-character-stop-drain",
+                    refusal,
+                    "character save queue shutdown drain stalled; {Refused} snapshots were not attempted ({Recoveries} in the final pass): {Summary}",
+                    _drain.Refused,
+                    refusedRecoveries,
+                    _drain.Describe());
+            }
+
             Announce(AnnounceSeverity.Critical, "The character save queue could not drain: snapshots were not written", notDrained.Message, "save-drain-failed");
             throw notDrained;
         }
@@ -573,6 +623,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             /* expected on shutdown */
             error = ex;
+        }
+        catch (StopDrainExhaustedException ex)
+        {
+            error = ex; // refused by the stop drain: the snapshot stays retained and waiters fault with it; no per-snapshot fault (the stop reports the refusal once)
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -663,13 +717,17 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// Write <paramref name="state"/>; on failure retain it in <c>_failed</c>. A failure that is SQLite reporting the file busy or locked (another
     /// connection holds it; the store's bounded wait has already elapsed) is NOT retried inline: the snapshot is retained, the whole queue pauses
     /// for a backoff (1 s, 2 s, then 5 s while it keeps happening, reset by the next successful write) and the method returns true, so the consumer
-    /// moves on and the snapshot is retried later (<see cref="TakeRetained"/>, a barrier, or a newer snapshot of the character). Any other failure, and any failure while
-    /// the queue is stopping (the drain has nothing else to do), is retried inline up to <see cref="MaxAttempts"/> times and then thrown.
+    /// moves on and the snapshot is retried later (<see cref="TakeRetained"/>, a barrier, or a newer snapshot of the character). Any other failure is retried inline up to
+    /// <see cref="MaxAttempts"/> times and then thrown. While the queue is stopping, a busy failure is a plain failure and every snapshot keeps its <see cref="MaxAttempts"/> inline
+    /// attempts with their backoff, as before the stop drain existed; what the stop adds is the save queue's stop-drain lane: once it has stalled, no first attempt starts
+    /// (<see cref="StopDrainBudget.Refuse"/>: the snapshot stays retained with a <see cref="StopDrainExhaustedException"/> and <see cref="StopAsync"/> names it) and no retry
+    /// follows a failure (the snapshot is retained with its real failure).
     /// Returns false when the snapshot was written (or dropped by quarantine).
     /// </summary>
     private async Task<bool> SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken, bool trustedSettlement = false)
     {
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        int attempts = MaxAttempts; // also at stop: player saves are no less durable than before the stop drain, bounded only by the saves lane
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
             lock (_gate)
             {
@@ -684,12 +742,24 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 }
             }
 
+            if (attempt == 1 && IsStopping() && _drain.Refuse() is { } refused)
+            {
+                lock (_gate)
+                {
+                    _failed[state.Id] = new FailedSave(state, refused);
+                }
+
+                throw refused; // nothing is attempted: the snapshot stays retained and StopAsync names it
+            }
+
             try
             {
                 long writeStart = Stopwatch.GetTimestamp();
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
                 await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                progress.Succeeded();
                 int previousStreak;
                 lock (_gate)
                 {
@@ -765,7 +835,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 _logger.LogWarning(ex, "saving character {Id} failed: the database is locked by another writer; snapshot retained, saves pause {PauseMs} ms then retry", state.Id, (long)pause.TotalMilliseconds);
                 return true;
             }
-            catch (Exception ex) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested && ex is not OutOfMemoryException)
+            catch (Exception ex) when (attempt < attempts && !cancellationToken.IsCancellationRequested && ex is not OutOfMemoryException)
             {
                 lock (_gate)
                 {
@@ -774,35 +844,47 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
                 FaultLedger.Shared.Record("writequeue.character-retry", ex);
                 _logger.LogWarning(ex, "saving character {Id} failed (attempt {Attempt}); retrying", state.Id, attempt);
+                if (IsStopping() && _drain.Exhausted)
+                {
+                    RetainExhaustedSave(state, ex, attempt); // the lane has stalled: no retry, the snapshot keeps its real failure (never masked by a refusal)
+                    throw;
+                }
+
                 await Task.Delay(200 * attempt, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("persist.character-save-queue", ex);
-                bool newEpisode;
-                lock (_gate)
-                {
-                    _failed[state.Id] = new FailedSave(state, ex);
-                    newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
-                }
-
-                if (newEpisode)
-                {
-                    AnomalyLedger.Shared.Report(
-                        "persist",
-                        "write-retry-exhausted",
-                        $"character {state.Id}",
-                        $"queue=CharacterSaveQueue character={state.Id} attempts={attempt} error={ex.GetType().Name}",
-                        AnomalySeverity.Error);
-                }
-
-                _logger.LogFault("writequeue.character", ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
-                Announce(AnnounceSeverity.Error, "A character save failed; the snapshot is retained", $"character {state.Id}: {ex.GetType().Name}: {ex.Message}", "save-failed");
+                RetainExhaustedSave(state, ex, attempt);
                 throw;
             }
         }
 
         return false;
+    }
+
+    /// <summary>Retains <paramref name="state"/> with the failure that ended its attempts and reports it (<paramref name="attempts"/> is the number actually made). A rethrow from a sibling catch does not reach the final catch, so both call this.</summary>
+    private void RetainExhaustedSave(CharacterState state, Exception ex, int attempts)
+    {
+        FaultLedger.Shared.Record("persist.character-save-queue", ex);
+        bool newEpisode;
+        lock (_gate)
+        {
+            _failed[state.Id] = new FailedSave(state, ex);
+            newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
+        }
+
+        if (newEpisode)
+        {
+            AnomalyLedger.Shared.Report(
+                "persist",
+                "write-retry-exhausted",
+                $"character {state.Id}",
+                $"queue=CharacterSaveQueue character={state.Id} attempts={attempts} error={ex.GetType().Name}",
+                AnomalySeverity.Error);
+        }
+
+        _logger.LogFault("writequeue.character", ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
+        Announce(AnnounceSeverity.Error, "A character save failed; the snapshot is retained", $"character {state.Id}: {ex.GetType().Name}: {ex.Message}", "save-failed");
     }
 
     private bool IsStopping()

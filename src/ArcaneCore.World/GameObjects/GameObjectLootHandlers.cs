@@ -8,6 +8,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.DebugDraw;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -201,7 +202,12 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         if (payload.Length >= 2 && player.Inventory.GetItem(payload[0], payload[1]) is { } wrapped
             && (wrapped.DynamicFlags & ItemDynFlags.Wrapped) != 0)
         {
-            OpenGift(player, wrapped);
+            // Opening can destroy the gift or change its entry; refused while it is offered in a trade (stricter than vmangos, unscored).
+            if (!ItemHandlers.RefuseIfOffered(session, player, wrapped, score: false))
+            {
+                OpenGift(player, wrapped);
+            }
+
             return;
         }
 
@@ -213,6 +219,12 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         if (player.Inventory.GetItem(payload[0], payload[1]) is not { } item)
         {
             player.Inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+            return;
+        }
+
+        // Opening a lockbox or clam uses up the item (or one of its stack); same refusal as a gift.
+        if (ItemHandlers.RefuseIfOffered(session, player, item, score: false))
+        {
             return;
         }
 

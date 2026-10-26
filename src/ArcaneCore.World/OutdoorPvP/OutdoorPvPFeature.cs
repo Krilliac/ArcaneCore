@@ -27,7 +27,7 @@ namespace ArcaneCore.World.OutdoorPvP;
 /// <c>HandlePlayerEnterZone/LeaveZone</c>, Player.cpp:6596-6598), logout (Player.cpp:2215), area triggers, the Silithyst flag drop on
 /// mount or stealth (Unit.cpp:5802-5810, SpellAuras.cpp:3637-3645), the world tick and SMSG_INIT_WORLD_STATES. World thread.
 /// </summary>
-public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<OutdoorPvPFeature> logger)
+public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger<OutdoorPvPFeature> logger)
     : IWorldFeature, IPlayerLocationListener, IAreaTriggerListener, IWorldStateProvider, IGraveyardLinkSource
 {
     private readonly Dictionary<Map, OutdoorPvPZoneScript> _scripts = new(ReferenceEqualityComparer.Instance);
@@ -57,6 +57,10 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         _host = new OutdoorPvPWorldHost(this);
+        // Attach runs before the world thread starts (WorldHost attaches every feature through FeatureHost.AttachAll before world.Start; the
+        // console "feature attach" only re-attaches an IDetachableWorldFeature, which this is not): read the saved Silithyst limit here, so that map creation on the world thread
+        // never waits on the database.
+        _silithystMax = LoadSilithystMax();
         WorldStateHooks.For(world).WorldStates.Add(this);
         world.Post(Install);
         world.WorldTick += OnWorldTick;
@@ -95,7 +99,7 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         OutdoorPvPZoneScript? script = map.MapId switch
         {
             EasternPlaguelandsCatalog.MapId => new EasternPlaguelandsZone(_host),
-            SilithusCatalog.MapId => new SilithusZone(_host, LoadSilithystMax()) { AreaTriggerPosition = TriggerPosition, Saved = SaveSilithyst },
+            SilithusCatalog.MapId => new SilithusZone(_host, _silithystMax) { AreaTriggerPosition = TriggerPosition, Saved = SaveSilithyst },
             _ => null,
         };
         if (script is null)
@@ -144,7 +148,7 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
 
     internal Map? MapOf(OutdoorPvPZoneScript script) => _scripts.FirstOrDefault(p => ReferenceEquals(p.Value, script)).Key;
 
-    /// <summary>vmangos SetupZoneScript: <c>GetSavedVariable(WS_OPVP_SI_SILITHYST_MAX, SI_MAX_RESOURCES_DEFAULT)</c>.</summary>
+    /// <summary>vmangos SetupZoneScript: <c>GetSavedVariable(WS_OPVP_SI_SILITHYST_MAX, SI_MAX_RESOURCES_DEFAULT)</c>. Blocks on the store: Attach time only.</summary>
     private uint LoadSilithystMax()
     {
         try
@@ -165,6 +169,8 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         return SilithusCatalog.DefaultMaxResources;
     }
 
+    private uint _silithystMax = SilithusCatalog.DefaultMaxResources;
+
     private StateSaveQueue<int, SilithystState>? _silithystSaves;
 
     /// <summary>The Silithyst counters' writer: off the world thread (a turn-in saved on it).</summary>
@@ -174,7 +180,11 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
         if (scope.ServiceProvider.GetService<ISilithystStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
     }, logger, "Silithyst");
 
-    private void SaveSilithyst(uint alliance, uint horde, uint max) => SilithystSaves.Save(0, new SilithystState(alliance, horde, max));
+    private void SaveSilithyst(uint alliance, uint horde, uint max)
+    {
+        _silithystMax = max > 0 ? max : _silithystMax;
+        SilithystSaves.Save(0, new SilithystState(alliance, horde, max));
+    }
 
     /// <summary>Writes every queued Silithyst state before shutdown completes.</summary>
     public Task StopAsync() => _silithystSaves?.FlushAsync() ?? Task.CompletedTask;
@@ -332,6 +342,17 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
     {
         if (holder.Target is Player player && holder.Spell.Id == SilithusCatalog.SpellSilithystFlag)
         {
+            // vmangos SilithystAuraScript::OnAfterApply (spell_special.cpp:371-380): losing the aura in Silithus to a cancel, death or
+            // dispel runs HandleDropFlag; a turn-in, expiry, stack or mount/stealth strip (Default) does not. A flag dropped here leaves no
+            // same-tick marker, or a stealth/mount applied in the same ms would drop a second mound in OnHolderAdded.
+            if (player.ZoneId == SilithusCatalog.SilithusZone
+                && holder.RemoveMode is AuraRemoveMode.Cancel or AuraRemoveMode.Death or AuraRemoveMode.Dispel)
+            {
+                _flagRemovedAt.Remove(player.Guid);
+                DropFlag(player);
+                return;
+            }
+
             _flagRemovedAt[player.Guid] = World.NowMs;
         }
     }
@@ -350,7 +371,15 @@ public sealed class OutdoorPvPFeature(IServiceProvider services, ILogger<Outdoor
 
         bool held = Spells?.HasAura(player, SilithusCatalog.SpellSilithystFlag) == true
             || (_flagRemovedAt.TryGetValue(player.Guid, out uint at) && at == World.NowMs);
-        if (held && _present.TryGetValue(player.Guid, out var current))
+        if (held)
+        {
+            DropFlag(player);
+        }
+    }
+
+    private void DropFlag(Player player)
+    {
+        if (_present.TryGetValue(player.Guid, out var current))
         {
             try
             {

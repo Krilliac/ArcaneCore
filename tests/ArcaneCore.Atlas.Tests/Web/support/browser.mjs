@@ -1,5 +1,6 @@
 // Drives a headless Chromium (Chrome or Edge) over the DevTools protocol, using only node's built-in WebSocket client.
-// The browser is a child process this module starts and always kills (the whole tree on Windows) in close().
+// The browser is a child process this module starts and always kills (the whole tree on Windows) in close(); on Windows
+// close() also sweeps any msedge.exe/chrome.exe that owns this launch's profile dir, since a self-relaunching launcher exits.
 
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -7,6 +8,35 @@ import os from 'node:os';
 import path from 'node:path';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Longest a single DevTools request may take; a loaded machine is slow, a wedged browser never answers. */
+const COMMAND_TIMEOUT_MS = 60_000;
+
+/**
+ * PIDs of the msedge.exe/chrome.exe processes whose command line passes this launch's own profile dir as the
+ * `--user-data-dir` value (optionally quoted: a relaunched browser re-quotes it). Windows only; null elsewhere.
+ * A launcher that relaunched itself (pending browser update) exits, leaving the real browser outside the child's tree.
+ * Other processes, even ones that merely mention the path, are never selected. The path reaches PowerShell through
+ * the environment, not through the script text, so no quoting can break the query.
+ */
+async function profileOwners(profile) {
+    if (process.platform !== 'win32') {
+        return null;
+    }
+    const script = [
+        "$p = [regex]::Escape($env:ATLAS_BROWSER_PROFILE)",
+        "$re = '--user-data-dir=\"?' + $p + '(\"|\\s|$)'",
+        "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -match $re } | ForEach-Object { $_.ProcessId }",
+    ].join('; ');
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const output = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+        { windowsHide: true, timeout: 15_000, env: { ...process.env, ATLAS_BROWSER_PROFILE: profile } }, (_error, stdout) => resolve(String(stdout ?? ''))));
+    return output.split(/\r?\n/).map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+async function killTree(pid) {
+    await new Promise((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 15_000 }, () => resolve()));
+}
 
 export class Browser {
     static async launch(executable, { width = 1440, height = 900 } = {}) {
@@ -28,11 +58,25 @@ export class Browser {
         ], { stdio: 'ignore', windowsHide: true });
         const browser = new Browser(child, profile);
         const portFile = path.join(profile, 'DevToolsActivePort');
-        const deadline = Date.now() + 30_000;
+        const deadline = Date.now() + 90_000; // generous: several builds and test runs share the machine
+        let exitedAt;
         while (!fs.existsSync(portFile)) {
-            if (Date.now() > deadline || child.exitCode !== null) {
+            // A launcher may relaunch itself (pending browser update) and exit 0; the real browser still writes the port file.
+            if (Date.now() > deadline || (child.exitCode !== null && child.exitCode !== 0)) {
                 await browser.close();
                 throw new Error('The browser did not start a DevTools endpoint.');
+            }
+            if (child.exitCode === 0) {
+                // Exit 0 means the launcher handed off to another process; give it ~2 s, then fail fast if nothing owns the profile.
+                exitedAt ??= Date.now();
+                if (Date.now() - exitedAt > 2000) {
+                    const owners = await profileOwners(profile);
+                    if (owners !== null && owners.length === 0 && !fs.existsSync(portFile)) {
+                        await browser.close();
+                        throw new Error('The browser launcher exited and no browser process owns the profile, so no DevTools endpoint will appear.');
+                    }
+                    exitedAt = Date.now();
+                }
             }
             await sleep(100);
         }
@@ -51,7 +95,7 @@ export class Browser {
                     throw error;
                 }
             }
-            if (Date.now() > deadline || child.exitCode !== null) {
+            if (Date.now() > deadline || (child.exitCode !== null && child.exitCode !== 0)) {
                 await browser.close();
                 throw new Error('The browser did not publish a DevTools port.');
             }
@@ -66,7 +110,7 @@ export class Browser {
     }
 
     async #json(route, method = 'GET') {
-        const response = await fetch(`${'http'}://127.0.0.1:${this.port}${route}`, { method });
+        const response = await fetch(`${'http'}://127.0.0.1:${this.port}${route}`, { method, signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS) });
         return response.json();
     }
 
@@ -92,9 +136,14 @@ export class Browser {
         const pid = this.child.pid;
         if (pid && this.child.exitCode === null) {
             if (process.platform === 'win32') {
-                await new Promise((resolve) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => resolve()));
+                await killTree(pid);
             } else {
                 this.child.kill('SIGKILL');
+            }
+        }
+        if (process.platform === 'win32') {
+            for (const owner of await profileOwners(this.profile)) {
+                await killTree(owner);
             }
         }
         for (let i = 0; i < 20; i++) {
@@ -120,9 +169,10 @@ export class Page {
 
     connect() {
         return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('The DevTools socket did not open in time.')), COMMAND_TIMEOUT_MS);
             this.ws = new WebSocket(this.url);
-            this.ws.onopen = () => resolve();
-            this.ws.onerror = () => reject(new Error('Could not open the DevTools socket.'));
+            this.ws.onopen = () => { clearTimeout(timer); resolve(); };
+            this.ws.onerror = () => { clearTimeout(timer); reject(new Error('Could not open the DevTools socket.')); };
             this.ws.onmessage = (event) => this.#message(JSON.parse(event.data));
         });
     }
@@ -165,10 +215,19 @@ export class Page {
         }
     }
 
-    send(method, params = {}) {
+    /** Sends a DevTools command; rejects after `timeoutMs` so a stalled browser fails this test instead of hanging the run. */
+    send(method, params = {}, timeoutMs = COMMAND_TIMEOUT_MS) {
         const id = this.nextId++;
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject, method });
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error(`${method}: no answer from the browser within ${timeoutMs} ms`));
+            }, timeoutMs);
+            this.pending.set(id, {
+                method,
+                resolve: (value) => { clearTimeout(timer); resolve(value); },
+                reject: (error) => { clearTimeout(timer); reject(error); },
+            });
             this.ws.send(JSON.stringify({ id, method, params }));
         });
     }

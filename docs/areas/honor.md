@@ -1,6 +1,6 @@
 # Honor and PvP ranks
 
-The vanilla 1.12 honor system after vmangos (primary reference, `D:\refs\vmangos`), with mangos-classic, wow_messages, classic-db and
+The vanilla 1.12 honor system after vmangos (primary reference, `<refs-root>\vmangos`), with mangos-classic, wow_messages, classic-db and
 the vmangos wiki used for the differences and the data. Reference files are read for verification only; no code or data is copied.
 Code: `src/ArcaneCore.Game/Honor/` (rules and world-thread state), `src/ArcaneCore.Kernel/Honor/` (store contract),
 `src/ArcaneCore.Data/Honor/` (characters schema), `src/ArcaneCore.World/Honor/` (daemon features, handlers, commands). Shared-file edits and the

@@ -28,7 +28,7 @@ public sealed class RenderModule : IAtlasModule
     public void Register(AtlasContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        var renderer = new CpuRenderer(context.Layers, context.Cache);
+        var renderer = new CpuRenderer(context.Layers, context.Cache, context.Services.Get<Textures.TextureCache>(), context.Services.Get<CpuMaterials>());
         context.Services.Add<IHeadlessRenderer>(renderer);
         var handlers = new Handlers(context, renderer, context.Loggers.CreateLogger("ArcaneCore.Atlas.Render"));
         context.Commands.Register(new CommandDefinition(

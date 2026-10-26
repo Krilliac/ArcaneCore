@@ -1875,3 +1875,63 @@ input[type="range"] {
     font-variant-numeric: tabular-nums;
 }
 
+/* Live insight (docs/areas/atlas-insight.md). The canvases above are positioned, so the overlays are too, with a z-index over them. */
+.perfhud {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    min-width: 180px;
+    padding: 8px 10px;
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    color: var(--ink);
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.perfhud[hidden],
+.replay-badge[hidden] {
+    display: none;
+}
+
+.perfhud-title {
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.replay-badge {
+    padding: 4px 8px;
+    background: var(--amber);
+    border-radius: 4px;
+    color: #1B262C;
+    font-weight: 600;
+}
+
+.inspect-box,
+.insight-out {
+    margin-top: 6px;
+    overflow: auto;
+    max-height: 240px;
+    overflow-wrap: anywhere;
+}
+
+.scrub {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+
+/* ---- Session name ------------------------------------------------------------------------------------------ */
+
+.session-name {
+    width: 14ch;
+    height: 20px;
+    padding: 0 6px;
+    font-size: var(--fs-11);
+}

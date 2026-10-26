@@ -46,7 +46,7 @@ public enum TeleportStage
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class TeleportService
+public sealed partial class TeleportService
 {
     private readonly WorldRuntime _world;
     private readonly Action<Player> _beforeAddToMap;
@@ -378,6 +378,7 @@ public sealed class TeleportService
 
         // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
         current.Combat.ReviveForDungeonEntry(player, mapId);
+        WorldMaps maps = WorldMaps.Of(_world);
 
         // vmangos TeleportTo (Player.cpp:1868-1872): leave the ship unless told to stay on it.
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
@@ -390,6 +391,10 @@ public sealed class TeleportService
         ResetMovementForTeleport(player, staysAboard);
 
         var destination = new TeleportDestination(mapId, x, y, z, orientation);
+
+        // The grids the player will load on arrival (Map.AddPlayer, or the relocation of a near teleport's ack) are read on the thread pool
+        // from now, while the transfer screen or the ack round trip runs, instead of inside the tick that places the player. Timing only.
+        maps.PrefetchArrival(mapId, x, y);
         if (current.MapId == mapId && !staysAboard && (options & TeleportOptions.ForceFar) == 0)
         {
             bool leavesCombat = (options & TeleportOptions.NotLeaveCombat) == 0;
@@ -661,6 +666,15 @@ public sealed class TeleportService
 
         if (TryEnterMap(player, dest))
         {
+            // ArcaneCore behaviour, not vmangos parity: vmangos never clears PLAYER_CHEAT_FLY / PLAYER_CHEAT_FIXED_Z on a teleport (see
+            // MovementCheats.cs). A far transfer makes the client enter the world afresh (the point after Map::Add in vmangos
+            // HandleMoveWorldportAckOpcode, MovementHandler.cpp:117-124), so a leftover cheat would only keep whitelisting the fly hack's
+            // flags (MovementCheats.GrantedFor) for a player who is no longer flying. It is cleared on arrival. A far teleport that never
+            // sends SMSG_NEW_WORLD (bailed out in ExecuteTeleportFar, or stalled while scheduled) keeps the cheats, because the client is
+            // still flying on the source map and would otherwise be flagged. A map-entry failure (the return-to-origin branch below)
+            // also keeps them: SMSG_NEW_WORLD was already sent there, but a stale cheat grants no immunity (MovementCheats.cs), so
+            // clearing it would add a second behaviour for no gain.
+            player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
             VerifyLanding(player, dest, dest.MapId);
             HonorlessTargetDue?.Invoke(player, true);
         }

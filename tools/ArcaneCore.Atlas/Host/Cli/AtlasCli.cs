@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Console;
 namespace ArcaneCore.Atlas.Host.Cli;
 
 /// <summary>
-/// The verbs of <c>arcane-atlas</c>: <c>serve</c>, <c>ctl</c>, <c>run</c>, <c>script</c>, <c>mcp</c>, <c>layers</c> and <c>help</c>.
+/// The verbs of <c>arcane-atlas</c>: <c>serve</c>, <c>ctl</c>, <c>url</c>, <c>run</c>, <c>script</c>, <c>mcp</c>, <c>layers</c> and <c>help</c>.
 /// Exit codes: 0 success, 1 a command (or the environment it needs) failed, 2 usage error. Command output is one JSON document
 /// per command on standard output; diagnostics go to standard error.
 /// Stateless: every input comes from the <see cref="CliEnvironment"/>, so verbs can run side by side in one process.
@@ -30,11 +30,19 @@ public static class AtlasCli
     public const string Usage = """
         usage: arcane-atlas <verb> [options]
 
-          serve   [--data DIR] [--client DIR] [--port N] [--open] [--log-level LEVEL] [--log-file PATH]
+          serve   [--data DIR] [--client DIR] [--port N] [--open] [--public [--public-bind HOST:PORT] [--public-config FILE]] [--log-level LEVEL] [--log-file PATH]
                   Start the loopback web app on 127.0.0.1 (a random port unless --port) and print its address as one JSON line.
                   --open starts Microsoft Edge (else Google Chrome) as an app window; Ctrl+C stops the server.
+                  --public also starts the public listener (Guest and Account tiers; needs TLS, see docs/areas/atlas-public.md).
+          public  [--config FILE] [--bind HOST:PORT] [--pid N] [--log-level LEVEL] [--log-file PATH]
+                  Run only the public listener, as its own process (no Local listener, no Local feed connection), against the world's web pipe.
+                  Operator commands (public.status, public.sessions, public.kick, public.revoke) are read from standard input.
           ctl     [--pid N] [--compact] <command> [key=value ...] [--json OBJECT|-]
                   Send one command to a running serve instance (found through its discovery file).
+          url     [--pid N] [--name NAME]
+                  Print {"pid":N,"url":"http://127.0.0.1:PORT/#t=TOKEN[&name=NAME]"}: the address that opens the UI of a running serve instance
+                  (found through its discovery file; no network call). With --name the browser session joins under that display name.
+                  The URL contains the instance's token: treat it as a secret, anyone who has it can drive the instance.
           run     [--data DIR] [--client DIR] [--compact] [--log-level LEVEL] [--log-file PATH] <command> [key=value ...] [--json OBJECT|-]
                   Run one command headless: no UI and no server; captures use the CPU renderer.
           script  [--attach [--pid N]] [--keep-going] [--data DIR] [--client DIR] [--log-level LEVEL] [--log-file PATH] <file.jsonl|->
@@ -87,9 +95,11 @@ public static class AtlasCli
             {
                 "serve" => await ServeAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "ctl" => await CtlAsync(rest, environment, cancellationToken).ConfigureAwait(false),
+                "url" => Url(rest, environment),
                 "run" => await RunVerbAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "script" => await ScriptAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "mcp" => await McpAsync(rest, environment, cancellationToken).ConfigureAwait(false),
+                "public" => await PublicAsync(rest, environment, cancellationToken).ConfigureAwait(false),
                 "layers" => Layers(rest, environment),
                 _ => throw new UsageException($"unknown verb '{args[0]}'"),
             };
@@ -128,8 +138,12 @@ public static class AtlasCli
 
     private static async Task<int> ServeAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)
     {
-        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--port"] = true, ["--open"] = false, ["--log-level"] = true, ["--log-file"] = true });
+        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--data"] = true, ["--client"] = true, ["--port"] = true, ["--open"] = false, ["--public"] = false, ["--public-bind"] = true, ["--public-config"] = true, ["--log-level"] = true, ["--log-file"] = true });
         RejectPositionals(parsed, "serve");
+        if (!parsed.Has("--public") && (parsed.Has("--public-bind") || parsed.Has("--public-config")))
+        {
+            throw new UsageException("--public-bind and --public-config apply together with --public");
+        }
         int port = 0;
         if (parsed.Value("--port") is { } portText
             && (!int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out port) || port > 65535))
@@ -174,6 +188,7 @@ public static class AtlasCli
                     }
                 }
 
+                Public.PublicServer? publicServer = await StartPublicAsync(parsed, environment, context, server.Port, cancellationToken).ConfigureAwait(false);
                 try
                 {
                     await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
@@ -182,9 +197,95 @@ public static class AtlasCli
                 {
                     // Ctrl+C or SIGTERM: leave the scope, which stops the listener and deletes the discovery file.
                 }
+                finally
+                {
+                    if (publicServer is not null)
+                    {
+                        await publicServer.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             return ExitOk;
+        }
+        finally
+        {
+            owned?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Starts the public listener beside the Local one when <c>--public</c> or <c>Atlas:Public:Enabled</c> asks for it (design 0.2). A refusal (no TLS, a bad
+    /// bind, a feed that offers the packet tools) is written to standard error and the Local listener keeps running; the result is null then.
+    /// </summary>
+    private static async Task<Public.PublicServer?> StartPublicAsync(ParsedArguments parsed, CliEnvironment environment, AtlasContext context, int loopbackPort, CancellationToken cancellationToken)
+    {
+        var overrides = new List<KeyValuePair<string, string?>>();
+        if (parsed.Has("--public"))
+        {
+            overrides.Add(new("Enabled", "true"));
+        }
+
+        if (parsed.Value("--public-bind") is { } bind)
+        {
+            overrides.Add(new("Bind", bind));
+        }
+
+        Public.PublicOptions options;
+        try
+        {
+            options = Public.PublicOptions.Load(parsed.Value("--public-config") ?? Path.Combine(environment.State.Root, "atlas.json"), environment.EnvironmentVariables, overrides);
+        }
+        catch (InvalidDataException e)
+        {
+            environment.Error.WriteLine($"arcane-atlas: {e.Message}");
+            return null;
+        }
+
+        if (!options.Enabled)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await Public.PublicServer.StartAsync(
+                new Public.PublicStartup
+                {
+                    Options = options,
+                    Loggers = context.Loggers,
+                    Mode = Public.PublicProcessMode.InProcess,
+                    LoopbackPort = loopbackPort,
+                    Assets = environment.Assets,
+                    State = context.Services.Get<Public.PublicState>(),
+                    GetEnvironmentVariable = environment.GetEnvironmentVariable,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Public.PublicStartException e)
+        {
+            foreach (string error in e.Errors)
+            {
+                environment.Error.WriteLine($"arcane-atlas: public listener not started: {error}");
+            }
+
+            return null;
+        }
+    }
+
+    private static async Task<int> PublicAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)
+    {
+        ParsedArguments parsed = ParsedArguments.Parse(args, Public.PublicProcess.Options);
+        RejectPositionals(parsed, "public");
+        if (parsed.Value("--pid") is { } pid && (!int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out int pidValue) || pidValue <= 0))
+        {
+            throw new UsageException("--pid must be a process id");
+        }
+
+        ILoggerFactory? owned = OwnedLoggers(parsed, environment, LogLevel.Information);
+        try
+        {
+            return await Public.PublicProcess.RunAsync(parsed, environment, environment.Loggers ?? owned!, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -199,6 +300,26 @@ public static class AtlasCli
         DiscoveryRecord record = ResolveInstance(parsed, environment, required: true)!;
         using var client = new RemoteCommandClient(record, CommandOrigin.Cli);
         return await ExecuteOneAsync(client, command, commandArgs, parsed.Has("--compact"), environment, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>url</c>: the browser address of the running instance, from its discovery file (the same lookup as <c>ctl</c>), as one JSON line.
+    /// Makes no request. The address holds the token the discovery file already holds for this user.
+    /// </summary>
+    private static int Url(IReadOnlyList<string> args, CliEnvironment environment)
+    {
+        ParsedArguments parsed = ParsedArguments.Parse(args, new Dictionary<string, bool> { ["--pid"] = true, ["--name"] = true });
+        RejectPositionals(parsed, "url");
+        string? name = parsed.Value("--name");
+        if (parsed.Has("--name") && string.IsNullOrWhiteSpace(name))
+        {
+            throw new UsageException("--name needs a display name");
+        }
+
+        DiscoveryRecord record = ResolveInstance(parsed, environment, required: true)!;
+        var json = new JsonObject { ["pid"] = record.Pid, ["url"] = AtlasServer.BrowserUrl(record.Port, record.Token, name?.Trim()) };
+        environment.Out.WriteLine(json.ToJsonString());
+        return ExitOk;
     }
 
     private static async Task<int> RunVerbAsync(IReadOnlyList<string> args, CliEnvironment environment, CancellationToken cancellationToken)

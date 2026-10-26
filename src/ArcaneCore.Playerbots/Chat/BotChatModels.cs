@@ -242,7 +242,14 @@ internal sealed record BotChatAsk(
     BotSpeech? Speech = null,
     bool SenderIsBot = false,
     bool Addressed = true,
-    bool TradeAllowed = false);
+    bool TradeAllowed = false)
+{
+    /// <summary>
+    /// An announcement a listener asked to keep away from models ("ai off"): the built-in line is said even while a model provider is
+    /// configured and <c>Safety:RequireOptIn</c> is off. Honoured by <c>PlayerbotChat.AnnounceAsync</c>; every other path ignores it.
+    /// </summary>
+    public bool BuiltinOnly { get; init; }
+}
 
 /// <summary>
 /// A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.
@@ -278,6 +285,12 @@ public sealed record BotChatPrompt(string StaticSystem, string DynamicSystem, IR
     /// drops stale ambient lines). Never sent to a provider.
     /// </summary>
     public BotChatWorkload Workload { get; init; } = BotChatWorkload.Interactive;
+
+    /// <summary>
+    /// Whether the answer is a JSON object (the reply prompts). An OpenAI-compatible provider with <c>JsonResponseFormat</c> on then
+    /// gets <c>response_format: {"type":"json_object"}</c>, so the server constrains the output. Not sent to any other provider kind.
+    /// </summary>
+    public bool ExpectsJson { get; init; }
 }
 
 /// <summary>Who is waiting on a model request, most urgent first.</summary>

@@ -100,7 +100,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
 
     /// <summary>An in-fight verdict's features (fight record, <c>retreat.f</c>).</summary>
     internal static readonly string[] FightFeatureNames =
-        ["health", "dps_in", "dps_out", "enemies", "time_to_kill", "time_to_die", "target_health"];
+        ["health", "dps_in", "dps_out", "enemies", "time_to_kill", "time_to_die", "target_health", "round_damage"];
 
     /// <summary>One in-fight target candidate's features (fight record, <c>targets[].c[]</c>).</summary>
     internal static readonly string[] TargetFeatureNames = ["target_health", "level_diff", "distance", "attacking_bot", "elite"];
@@ -193,6 +193,7 @@ internal sealed class PlayerbotCombatTelemetry(Action<IPlayerbotTelemetryRecord>
                 Seconds(verdict.TimeToKill),
                 Seconds(verdict.TimeToDie),
                 facts.TargetHealthPct / 100f,
+                facts.BotMaxHealth > 0 ? facts.RoundDamage / facts.BotMaxHealth : 0f,
             ];
         }
     }

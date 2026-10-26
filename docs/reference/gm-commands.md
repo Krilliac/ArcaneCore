@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 374 |
-| `Administrator` | 6 | 570 |
+| `GameMaster` | 3 | 396 |
+| `Administrator` | 6 | 596 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -48,6 +48,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cheat immunepc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunepc on\|off [$name] Players cannot attack the player. |
 | `.cheat immunenpc` | 3 | GameMaster | declared retail level | Syntax: .cheat immunenpc on\|off [$name] Creatures cannot attack the player. |
 | `.cheat untargetable` | 3 | GameMaster | declared retail level | Syntax: .cheat untargetable on\|off [$name] Nobody can select the player. |
+| `.cheat fly` | 3 | GameMaster | declared retail level | Syntax: .cheat fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
+| `.cheat fixedz` | 3 | GameMaster | declared retail level | Syntax: .cheat fixedz on\|off The selected player or you get a fixed height: a jump glides across the map (MOVEFLAG_FIXED_Z). |
+| `.cheat wallclimb` | 3 | GameMaster | declared retail level | Syntax: .cheat wallclimb on\|off The selected player or you climb walls (UNIT_FLAG_SERVER_CONTROLLED). |
+| `.cheat featherfall` | 3 | GameMaster | declared retail level | Syntax: .cheat featherfall on\|off [$name] Falls never hurt (not a vmangos command). |
 | `.cheat status` | 3 | GameMaster | declared retail level | Syntax: .cheat status [$name] List the cheats active on the player. |
 | `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
 | `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
@@ -64,7 +68,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
 | `.debug script` | 3 | GameMaster | declared retail level | Syntax: .debug script $entry [$map] Say which AI the creature entry gets on the map (default: your map): the layer (map entry AI, dungeon boss AI, ScriptName, entry script, EventAI, SmartAI, built-in or default), the implementing type, and whether its ScriptName is implemented. From the console the map is required. |
 | `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
-| `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. |
+| `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. The trace stops by itself at the size limit or when the disk writer falls 8192 records behind; the file is finished asynchronously after a stop. |
 | `.debug tick` | 3 | GameMaster | declared retail level | Syntax: .debug tick Show the world tick: target interval, body p50/p99/max over the last minute, each phase (commands, world-tick handlers, features, maps, autosave) over the last minute, late and skipped starts, and what the world thread is doing right now. |
 | `.debug slowticks` | 3 | GameMaster | declared retail level | Syntax: .debug slowticks [#seconds] List the slowest recent world ticks kept for the hang log (within #seconds, default 60, at most 600). The ring holds only 8 ticks: when it is full a new slow tick replaces an entry older than 60 s first, else the fastest one, and the hang log itself uses only the last 60 s; an older entry stays listed until it is replaced, and faster ticks may be missing when the ring is full. Shows duration, phase split, GC and the slowest features of each. |
 | `.debug features` | 3 | GameMaster | declared retail level | Syntax: .debug features [#count] List the world features by their smoothed per-tick time (about the last 50 ticks) with their allocation per tick, slowest first (default 15 rows). The playerbot think pass is one of them. |
@@ -77,7 +81,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug sessions` | 3 | GameMaster | declared retail level | Syntax: .debug sessions [#count] Show the in-world sessions: players and bots, client latency (median, p90, max over the players) and the sessions with the most queued inbound world packets (client packets waiting for the world thread; default 10 rows, at most 60). |
 | `.debug scheduler` | 3 | GameMaster | declared retail level | Syntax: .debug scheduler [#count] Show the world tick scheduler (interval, late tolerance, late and skipped ticks, next due) and the deferred work queues: posted world commands, pending teleports, and the maps with the most queued work (delayed unit actions, charm links, AI relocation notices, assist calls, relay and db script steps, arrival relays, script despawns; default 15 maps). |
 | `.debug opcodes` | 3 | GameMaster | declared retail level | Syntax: .debug opcodes [on\|off\|reset\|in\|out\|bytes] [#count] Per-opcode traffic since the last reset: packets and bytes in and out by protocol and opcode, busiest first (by packets in+out, 'in', 'out' or 'bytes'; default 15 rows). Counting runs while a metrics listener is attached or after '.debug opcodes on' (off again with 'off'); 'reset' starts a new window. |
-| `.debug botthink` | 3 | GameMaster | declared retail level | Syntax: .debug botthink [#count] Show playerbot think diagnostics: logged-in and running counts, split-brain latch, playerbot feature tick time, slow-think anomaly count and recent slowest phases, active goal distribution, and up to #count bots (default 10, max 60). |
+| `.debug botthink` | 3 | GameMaster | declared retail level | Syntax: .debug botthink [#count] Show playerbot think diagnostics: logged-in and running counts, split-brain latch, playerbot feature tick time, slow-think anomaly count and recent slowest phases (thinks over the threshold only for GC pauses are counted apart as think-gc-stall), active goal distribution, and up to #count bots (default 10, max 60). |
 | `.debug lift` ... | 3 | GameMaster | declared retail level | Syntax: .debug lift [#guid] Show an elevator (the nearest within 100 yards without #guid): cycle length, progress, the stops (stationary runs, numbered by start), time to the next stop, speed, frozen, and the players who have it in view. Change it with: .debug lift phase\|stop\|freeze\|resume\|speed\|reset. |
 | `.debug lift phase` | 6 | Administrator | stored level through the map | Syntax: .debug lift phase #ms [#guid] Jump the elevator to #ms into its cycle (taken modulo the cycle) and resend it to the players who have it. Not saved; ends when its grid unloads (a map-wide tram car: with reset, or when the map has no players). A player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified. |
 | `.debug lift stop` | 6 | Administrator | stored level through the map | Syntax: .debug lift stop #n [#guid] Jump the elevator to the start of its Nth stationary run (see .debug lift) and resend it to the players who have it. A player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified. |
@@ -109,6 +113,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.gm ingame` | 1 | Moderator | stored level through the map | Syntax: .gm ingame List the game masters online with their GM mode on, and whether they accept whispers. |
 | `.gm list` | 6 | Administrator | stored level through the map | Syntax: .gm list List every staff member online with their security level. |
 | `.gm visible` | 3 | GameMaster | declared retail level | Syntax: .gm visible [on/off] Show or hide yourself from players of a lower security level, or show the current state. |
+| `.gm fly` | 3 | GameMaster | declared retail level | Syntax: .gm fly on\|off The selected player or you swim in the air. Do not jump or flying mode will be removed. |
 | `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
 | `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
 | `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
@@ -166,7 +171,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.list object` | 3 | GameMaster | declared retail level | Syntax: .list object #object_id [#max_count] Output the database spawns of the gameobject template (default 10). |
 | `.list auras` | 3 | GameMaster | declared retail level | Syntax: .list auras List the auras of the selected unit, or yours. |
 | `.lookup` ... | 1 | Moderator | declared retail level | Syntax: .lookup $subcommand |
-| `.lookup item` | 2 | GameMaster | declared retail level | Syntax: .lookup item $itemname Looks up an item by name. |
+| `.lookup item` | 2 | GameMaster | declared retail level | Syntax: .lookup item $itemname Looks up an item by name. From the console, the first use replies that item content is not loaded yet while it loads in the background; run the command again shortly. |
 | `.lookup creature` | 2 | GameMaster | declared retail level | Syntax: .lookup creature $namepart Looks up a creature by name. |
 | `.lookup object` | 2 | GameMaster | declared retail level | Syntax: .lookup object $objname Looks up a gameobject by name. |
 | `.lookup tele` | 2 | GameMaster | declared retail level | Syntax: .lookup tele $substring Search and output all teleport locations containing $substring. |
@@ -244,6 +249,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server anomalies` | 3 | GameMaster | stored level through the map | Syntax: .server anomalies [$subsystem \| show $key \| reset] Summarize outcome anomalies by subsystem and top keys; list keys for one subsystem; show one key in full; reset (administrator) clears the ledger. |
 | `.server set` ... | 6 | Administrator | declared retail level | Syntax: .server set $subcommand |
 | `.server set motd` | 6 | Administrator | declared retail level | Syntax: .server set motd $MOTD Set the server message of the day. |
+| `.server config` ... | 3 | GameMaster | stored level through the map | Server options. Syntax: .server config [list\|get\|set\|reset\|diff\|sources\|dump] |
+| `.server config list` | 3 | GameMaster | stored level through the map | Syntax: .server config list [$filter] [page #n] List the server options (value, apply class: live, next-load or restart, and whether read-only or overridden). $filter: part of a path, alias or description (maps, xp, anticheat...). 25 rows per page. |
+| `.server config get` | 3 | GameMaster | stored level through the map | Syntax: .server config get $key Show one option: value, type and bounds, apply class, aliases and, when overridden, its baseline and who changed it. $key: a path (World:Maps:GridUnload), a rate name or an alias. |
+| `.server config set` | 6 | Administrator | declared retail level | Syntax: .server config set $key $value [$reason] Change a live or next-load option for everyone until .reload config or restart (PacketHeuristics and pack options: until restart; not saved to any file). Restart-only keys are read-only. $value is checked against the key's type and bounds; quote a text value that has spaces. $reason is logged with the change. |
+| `.server config reset` | 6 | Administrator | declared retail level | Syntax: .server config reset [$key\|all] Put one option (or all overridden ones, the default) back to the value it had before the first change. |
+| `.server config diff` | 3 | GameMaster | stored level through the map | Syntax: .server config diff List the options changed since start or the last .reload config (PacketHeuristics and pack options: since start): baseline, value now, who and why. |
+| `.server config sources` | 6 | Administrator | declared retail level | Syntax: .server config sources [$filter] [page #n] List the configuration providers (last one wins) and, for each option matching $filter, which provider supplies its value, or whether it is a built-in default or overridden. |
+| `.server config dump` | 6 | Administrator | declared retail level | Syntax: .server config dump $section [page #n] Print the effective value of every option whose path starts with $section (World:Maps, Rate, AntiCheat...), secrets masked. |
 | `.server wiring` | 6 | Administrator | declared retail level | Syntax: .server wiring List what the running server declares but does not wire: client opcodes that arrived with no handler (counted since start), options that a class asks for but nothing configures, config checks that check-config never runs, handlers registered for server-only opcodes. |
 | `.tele` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .tele #location — teleport to a location from the game_tele table (name, part of a name, or id). |
 | `.tele add` | 5 | Administrator | declared retail level | Syntax: .tele add $name — save your current location. |
@@ -280,6 +293,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands [page \| text [page]] Display an overview of the commands available to you, one page at a time; with text, list the commands whose name contains it (e.g. .commands npc). |
 | `.demorph` | 3 | GameMaster | declared retail level | Syntax: .demorph Restore the native model of the selected unit or yourself. |
 | `.die` | 3 | GameMaster | declared retail level | Syntax: .die Kill the selected unit or yourself without kill credit. |
+| `.knockback` | 3 | GameMaster | declared retail level | Syntax: .knockback [#horizontal_speed [#vertical_speed]] Knock the selected player or yourself back from you (10 and 10 by default); a creature is not moved. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.dismount` | 0 | Player | declared retail level | Syntax: .dismount Dismount you, if you are mounted. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
@@ -346,7 +360,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.send message` | 6 | Administrator | declared retail level | Syntax: .send message $playername $message Show a message from the administrator in the middle of the player's screen. |
 | `.send money` | 6 | Administrator | declared retail level | Syntax: .send money #playername "#subject" "#text" #money Send a letter with money (in copper) to a player, online or not. |
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
-| `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
+| `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again, clearing the GM mute, the flood mute and the chat restriction mute. The character may be offline. |
 | `.damage` | 3 | GameMaster | declared retail level | Syntax: .damage #amount Deal direct physical damage to the selected unit. |
 | `.combatstop` | 3 | GameMaster | declared retail level | Syntax: .combatstop [$playername] Stop combat for the selected or named player. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
@@ -384,7 +398,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cluster nodes` | 3 | GameMaster | stored level through the map | Syntax: .cluster nodes List the active cluster worker and authority nodes, their readiness, drain state, and player/instance load. |
 | `.cluster leases` | 3 | GameMaster | stored level through the map | Syntax: .cluster leases Show durable character ownership fencing, realm singleton authority leases (economy, social, instances), and write-behind queue depths. |
 | `.cluster social` | 3 | GameMaster | stored level through the map | Syntax: .cluster social Show cross-worker social presence counts by continent/worker, active groups, guilds, and social router state. |
-| `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are not counted yet and read 0. |
+| `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |
@@ -394,6 +408,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.creature despawntemp` | 3 | GameMaster | declared retail level | Syntax: .creature despawntemp [#radius] Remove the temporary creatures (clones, .npc add without save, script summons; not pets, guardians, totems or database spawns) within #radius yards of you (default 30, at most 200). |
 | `.creature clone` | 3 | GameMaster | declared retail level | Syntax: .creature clone [#count] Place #count (default 1, at most 25) temporary copies of the selected creature's template around you. They are not saved and do not respawn. |
 | `.creature spawnmany` | 3 | GameMaster | declared retail level | Syntax: .creature spawnmany #entry #count [#radius] Place #count (1-200) temporary creatures of #entry spread evenly over a disc of #radius yards around you (default 15, 2-100) at ground height. Not saved; remove them with .creature despawntemp. |
+| `.atlas` ... | 3 | GameMaster | stored level through the map | Atlas tool commands (used by the map tool's action templates). |
+| `.atlas place` ... | 3 | GameMaster | stored level through the map | Place a temporary creature or game object at a point. |
+| `.atlas place creature` | 3 | GameMaster | declared retail level | Syntax: .atlas place creature #entry #map $x $y $z [$o] Place a temporary creature (not saved) at the point on the map. |
+| `.atlas place gobject` | 3 | GameMaster | declared retail level | Syntax: .atlas place gobject #entry #map $x $y $z [$o] Place a temporary game object (not saved) at the point on the map. |
+| `.atlas tele` | 3 | GameMaster | declared retail level | Syntax: .atlas tele 0xGUID #map $x $y $z Teleport the player to the point. A GameMaster may move characters of their own account only; another account's character needs Administrator. |
+| `.atlas moveto` | 3 | GameMaster | declared retail level | Syntax: .atlas moveto 0xGUID $x $y $z Walk the creature to the point. |
+| `.atlas debug` | 3 | GameMaster | declared retail level | Syntax: .atlas debug 0xGUID Print one JSON object with the creature's aggro radius, leash, home, spawn, current path points, threat list and AI. |
+| `.atlas spawns` | 3 | GameMaster | declared retail level | Syntax: .atlas spawns #map $x $y $radius Print one JSON object listing the creature and game object spawn points within the radius (at most 500 rows). |
 | `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
 | `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
@@ -402,7 +424,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
-| `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
+| `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. From the console, the items line reads "not loaded yet" while item content loads in the background; run the command again shortly. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
@@ -633,6 +659,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.rates show` | 3 | GameMaster | stored level through the map | Syntax: .rates [show] [$filter] Show the live-tunable server rates: the value in force, the configured value and whether it is overridden. $filter: part of a name (xp, drop, creature...). |
 | `.rates set` | 6 | Administrator | stored level through the map | Syntax: .rates set $name $value [$reason] Change a server rate for everyone until .rates reset, .reload config or restart (not saved to any file). $name: a vmangos name such as Rate.XP.Kill or a short form (xp, xp.quest, drop.money, money, drop.epic...), any case. $value: 0 to 100 (1 is retail), some rates have their own bounds; .rates show lists them. $reason is logged with the change. |
 | `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
+| `.rates history` | 3 | GameMaster | stored level through the map | Syntax: .rates history [#n] The last n rate changes (set, reset, reload), newest first, with who and why (25 by default, at most 25; the server keeps the last 100). |
+| `.rates overrides` | 3 | GameMaster | stored level through the map | Syntax: .rates overrides The .rates set lines that recreate every overridden rate, with the configured value each one would return to. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

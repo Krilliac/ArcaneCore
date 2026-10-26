@@ -16,7 +16,7 @@ that part is ArcaneCore's own.
 
 | File (`src/ArcaneCore.Playerbots/Risk/`) | What it does |
 |---|---|
-| `PlayerbotRiskOptions.cs` | `World:Playerbots:Risk`: `Enabled`, `Tolerance`, `RetreatHealthPct`, `NearlyWonHealthPct`, `RecoverHealthPct`, `DangerMemorySeconds`, `DeathLoopMemorySeconds`, `PartyRetreatOnWipe`. |
+| `PlayerbotRiskOptions.cs` | `World:Playerbots:Risk`: `Enabled`, `Tolerance`, `RetreatHealthPct`, `RestManaBelowPct`, `NearlyWonHealthPct`, `RecoverHealthPct`, `DangerMemorySeconds`, `DeathLoopMemorySeconds`, `PartyRetreatOnWipe`. |
 | `PlayerbotRiskModel.cs` | The pure arithmetic: the pre-engagement verdict (`Assess`) and the in-combat verdict (`Judge`). Unit tested on snapshots. |
 | `PlayerbotRisk.cs` | The world side, one per bot: gathers the facts of each candidate, chooses the target, watches the fight, starts and runs the retreat, the recovery wait. |
 | `PlayerbotFightTracker.cs` | The observed damage rates of the current fight over a rolling 8 seconds of world time, where each enemy joined, and the bot's damage per second across fights. |
@@ -68,7 +68,7 @@ The **decision**:
 | `avoid` (`lethal`) | a creature that would be in the fight has a spell that kills the bot outright: `SPELL_EFFECT_INSTAKILL`, or one hit of at least the bot's maximum health (the Scourge invasion's Skeletal Soldier and Spectral Apparition, Scourge Strike 28265) | Next candidate, quest objective or not. |
 | `avoid` (`elite-above`) | an elite three or more levels above the bot that is not a quest objective | Next candidate. |
 | `avoid` (`remembered`) | the bot fled from or died to this very creature within `DangerMemorySeconds` | Next candidate (it is not even listed). |
-| `rest` (`low-health`, `low-mana`) | it would be an `engage` at full health and mana | When nothing else is worth it, the bot waits (eating or drinking when it carries food or water) until `RecoverHealthPct`, at most 90 s. |
+| `rest` (`low-health`, `low-mana`) | it would be an `engage` at full health and mana. `low-mana` also holds a bot that spends mana (`ManaDependence` above 0) below `RestManaBelowPct` (35, 0 turns it off, live; capped at `RecoverHealthPct`, since the rest ends there) even when the fight is fine at the mana left, so a hybrid does not pull an easy mob at 1% mana (#1480) | When nothing else is worth it, the bot waits (eating or drinking when it carries food or water) until `RecoverHealthPct`, at most 90 s. |
 | `detour` (`path-adds-N`) | the fight is acceptable without the creatures on the way | Walks via a waypoint 15, 25 or 35 yards to either side of the straight line, chosen so the route and the last leg stay 2 yards outside the reach of every visible creature that would attack the bot and is not part of the fight anyway (those on the way and any other, e.g. one standing beside the waypoint), and out of its hazards; `avoid` when none does. |
 | `avoid` (`pack-of-N`, `too-strong`, `elite`) | otherwise | Next candidate; with none, the brain's destinations or exploring as before. |
 
@@ -89,7 +89,11 @@ stand. Then `time to kill = enemies' health / damage dealt`, `time to die = bot 
 * An enemy with a spell that kills outright: retreat at once (`lethal`) unless the fight ends within 2 seconds.
 * A single enemy at or below `NearlyWonHealthPct` (20%) is finished unless the bot would die in less than half the time it needs.
 * Winning (`time to die x Tolerance >= time to kill`): fight on.
-* Losing: retreat at `RetreatHealthPct` (35%) or when the bot would die within 4 seconds; until then fight on (`behind`).
+* Losing: retreat at `RetreatHealthPct` (35%), against more than one enemy when one more round would take the bot to or below that
+  line (`PlayerbotFightFacts.RoundDamage`: the non-crit max hit, `UnitFieldMaxdamage`, of each live, non-evading melee creature
+  attacking it, added up, so the mean damage rate cannot hide a burst of aligned blows that leaves the bot too weak to get away;
+  the retreat reason is `losing-burst-N`; a lone enemy keeps the plain line), or when the bot would die
+  within 4 seconds; until then fight on (`behind`). Whether the retreat can succeed is judged at the current health.
   A retreat that would not break contact before it kills the bot is no way out, and the bot fights on (`cornered-no-escape`,
   `PlayerbotRiskModel.RetreatSucceeds`): the damage predicted on the run must stay under 90% of the bot's health. A pursuer at
   least as fast as the bot (speed_run 1.14286 is 8 yards a second, an unbuffed bot 7) keeps hitting for the whole run and on

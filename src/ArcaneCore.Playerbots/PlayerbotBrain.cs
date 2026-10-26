@@ -16,6 +16,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Playerbots.Events;
 using ArcaneCore.World.Playerbots.Qa;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -143,10 +144,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private uint _exploreLastMap;
     private bool _exploreHasPosition;
     private Player? _exploreSearchPlayer;
+    private bool _exploreSearchSkipIndoor;
     private CreatureContent? _exploreSearchContent;
     private PlayerbotExploreAtlas? _exploreSearchAtlas;
     private FactionTemplateCatalog? _exploreSearchFactions;
     private FactionTemplateRecord? _exploreSearchSelf;
+    private ArcaneCore.Game.Reputation.INpcReactionSource? _exploreSearchReactions;
     private PlayerbotHomeArea? _exploreSearchHome;
     private IReadOnlyList<PlayerbotHazard> _exploreSearchHazards = [];
     private uint _exploreSearchMap;
@@ -176,6 +179,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private readonly Combat.PlayerbotInvincibleWatch _invincibleWatch = new();
     private PlayerbotPvpFight? _pvpFight;
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
@@ -198,6 +202,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (ReferenceEquals(_home, value)) return;
             _home = value;
             _homeReturn.Reset();
+            ReleaseEventSpot(PlayerbotEventMeters.Done); // the claim is the old town's: its coordinates, map and place
+            _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
             _crafting.Home = value;
@@ -349,8 +355,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // The claims registry and the bot's claim are world-thread state; Stop runs on any thread, so the release is posted.
         if (_session.World is { IsStopped: false } world)
         {
-            if (world.IsWorldThread) _contention.ReleaseClaim();
-            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); return true; });
+            if (world.IsWorldThread)
+            {
+                _contention.ReleaseClaim();
+                ReleaseEventSpot(PlayerbotEventMeters.Done);
+            }
+            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); return true; });
         }
         _destinations.Dispose();
     }
@@ -544,17 +554,24 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 $"no think for {silent / 1000} s of world time (goal {_goal}, last phase {LastThinkPhase}, think interval {_options.ThinkIntervalMs} ms)"));
     }
 
-    /// <summary>One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time: report when it overran (<see cref="ThinkOverranMs"/>), once per <see cref="ThinkAnomalyQuietMs"/>.</summary>
-    internal void CheckThinkOverran(Player player, double elapsedMs, uint now)
+    /// <summary>
+    /// One <see cref="Update"/> that took <paramref name="elapsedMs"/> of wall time, of which the collector held the process
+    /// <paramref name="gcPauseMs"/>: report when it overran (<see cref="ThinkOverranMs"/>) without those pauses (a collector pause is not
+    /// the bot's slowness: the think-slow log excludes it the same way, PlayerbotSlowThinkLog.Observe; bot QA #1483), once per
+    /// <see cref="ThinkAnomalyQuietMs"/>.
+    /// </summary>
+    internal void CheckThinkOverran(Player player, double elapsedMs, uint now, double gcPauseMs = 0)
     {
+        if (gcPauseMs > 0) elapsedMs = Math.Max(0, elapsedMs - gcPauseMs);
         if (!(elapsedMs >= ThinkOverranMs)) return;
         if (_overranReported && unchecked(now - _overranReportMs) < ThinkAnomalyQuietMs) return;
         _overranReported = true;
         _overranReportMs = now;
         string slowest = PlayerbotThinkProbe.Active is { } probe ? $", slowest phase {probe.SlowestPhaseNow}" : string.Empty;
+        string collector = gcPauseMs > 0 ? string.Create(CultureInfo.InvariantCulture, $", {gcPauseMs:F0} ms of collector pause not counted") : string.Empty;
         PlayerbotAnomalies.Report(player, "brain", "think-overran",
             string.Create(CultureInfo.InvariantCulture,
-                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest})"));
+                $"one think took {elapsedMs:F0} ms (the bots share a think budget per tick, at least {PlayerbotThinkRotation.TickBudgetMs:F0} ms by default; goal {_goal}, last phase {LastThinkPhase}{slowest}{collector})"));
     }
 
     internal void Update(uint elapsedMs)
@@ -594,7 +611,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         ThinkCount++;
         CheckAssistCredit(player);
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        _thinkStartedAt = startedAt;
+        TimeSpan gcPauseBefore = GC.GetTotalPauseDuration();
+        _thinkStartedAt = PlayerbotThinkProbe.Timestamp(); // on the running think's clock, as HasOptionalThinkBudget reads it
         try
         {
             UpdateCore(player, elapsedMs);
@@ -604,17 +622,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _thinkStartedAt = 0;
             // A think that ran any goal but Explore (a quest, combat, an errand, rest, a retreat...) broke the walk to the inn; the choke
             // point for all of them. Explore thinks that skip the town idle decision report it in Explore().
-            if (_goal != PlayerbotGoalKind.Explore) _townIdle.Interrupted();
+            if (_goal != PlayerbotGoalKind.Explore)
+            {
+                _townIdle.Interrupted();
+                ReleaseEventSpot(PlayerbotEventMeters.Done);
+            }
+
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
             _trace.ObserveState(this, _session.World.NowMs);
-            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs);
+            CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs,
+                (GC.GetTotalPauseDuration() - gcPauseBefore).TotalMilliseconds);
         }
     }
 
     internal bool HasOptionalThinkBudget(double maxElapsedMs = 15.0)
         => (PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)
-            && PlayerbotThinkProbe.Active is not { ElapsedMs: >= 15.0 }
-            && (_thinkStartedAt == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(_thinkStartedAt).TotalMilliseconds < maxElapsedMs);
+            && !(PlayerbotThinkProbe.Active is { } running && running.RunningMs >= maxElapsedMs)
+            && (_thinkStartedAt == 0 || PlayerbotThinkProbe.MsSince(_thinkStartedAt) < maxElapsedMs);
 
     private void UpdateCore(Player player, uint elapsedMs)
     {
@@ -1321,6 +1345,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_target is null || _target.Map != player.Map)
         {
             PlayerbotThinkProbe.Phase("choose target");
+            _invincibleWatch.Reset();
             Creature? previousTarget = _target;
             uint materialDropper = _quests.PreferredCreatureEntry == 0 && _quests.PreferredItemUseId == 0
                 ? _crafting.PreferredMaterialDropperEntry(player)
@@ -1403,7 +1428,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return;
             }
 
-            if (FightGoesNowhere(player, target))
+            if (FightGoesNowhere(player, target) || FightsInvincibleTarget(player, target))
             {
                 // Neither a blow landed nor a step was made at this target for FightNoProgressMs: it stands where the bot cannot reach it
                 // (a ledge, a cave floor, deep water) or cannot hurt it (an evading creature). It is set aside (StalledTargetMs), also as an
@@ -1740,12 +1765,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     {
         uint now = _session.World.NowMs;
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
+        // Asked before this bot reports: a cell other bots already found a dead end is one at this bot's first stall.
+        bool worldPin = _stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now);
         int pinStalls = _stall.RecordPinStall(player.MapId, player.X, player.Y, now);
-        bool deadEndPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
-        if (deadEndPin)
+        bool ownPin = pinStalls >= PlayerbotStallWatch.PinStallsToEscalate;
+        bool deadEndPin = ownPin || worldPin;
+        if (ownPin)
+        {
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
+            if (CanShareDeadEndPin(player) && ReportWorldPin(player, now) is { } newPin)
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+        }
+        else if (worldPin)
+        {
+            PlayerbotAnomalies.Report(player, "brain", "world-pin-escape",
+                string.Create(CultureInfo.InvariantCulture,
+                    $"stalled inside a world dead-end pin within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} and leaving"));
+        }
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
@@ -1758,7 +1796,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (deadEndPin)
                 {
                     _suspensions.SuspendEntryEscalating(TargetEntry, now);
-                    if (QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+                    if (ownPin && QuestId != 0 && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
                         _suspensions.MarkUnreachableQuest(QuestId, now);
                 }
                 else
@@ -1812,7 +1850,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     else _suspensions.SuspendEntry(TargetEntry, now);
                 }
                 if (_home is null && IsUnderLevelledForArea(player))
-                    TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true); // among creatures too strong for it
+                {
+                    uint leftZone = player.ZoneId;
+                    if (TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true)) RememberEscapedZone(leftZone); // among creatures too strong for it
+                }
                 break;
             case PlayerbotGoalKind.Rest:
             case PlayerbotGoalKind.Recover:
@@ -1830,7 +1871,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_goal != PlayerbotGoalKind.Quest && QuestId != 0)
         {
             _suspensions.SuspendQuest(QuestId, now);
-            if (deadEndPin && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
+            // Only the bot's own pin says the quest is unreachable; a first stall in a world pin leaves with the suspension alone.
+            if (ownPin && _suspensions.QuestSetAsideCount(QuestId) >= PlayerbotStallWatch.PinStallsToEscalate)
                 _suspensions.MarkUnreachableQuest(QuestId, now);
         }
 
@@ -1847,7 +1889,41 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotMovementControl.Stop(_session, player);
         // Sharing describes the stalled goal, not whether this bot can leave its current ground. A failed tram trip can begin
         // on an island too; suppressing the shared set-aside must not suppress local escape.
-        EscapeIsland(player, out _, deadEndPin);
+        EscapeIsland(player, out _, deadEndPin, worldPinOnly: !ownPin && worldPin);
+    }
+
+    /// <summary>
+    /// Whether this bot's dead-end pin may count towards a world pin: only on an open-world map (never a dungeon, raid or battleground, whose
+    /// stalls are the instance's) and outside a capital or city, where bots crowd round quest givers and vendors and stall for reasons that
+    /// say nothing about the ground. Fails closed when the area table is missing.
+    /// </summary>
+    private bool CanShareDeadEndPin(Player player)
+    {
+        if (player.Map is not { } map || map.Template is not { } template || template.Instanceable) return false;
+        ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
+        uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
+        return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+    }
+
+    /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
+    private string? ReportWorldPin(Player player, uint now)
+    {
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
+        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
+    }
+
+    /// <summary>
+    /// The rule of <see cref="CanShareDeadEndPin(Player)"/> on its inputs: an open-world map (not instanceable), a known zone, and neither
+    /// the zone nor the sub-area (<paramref name="areaId"/>, 0 when unknown) flagged as a capital, city or town
+    /// (<c>Capital</c>, <c>City</c>, <c>SlaveCapital</c>, <c>SlaveCapital2</c>), so Goldshire, Sentinel Hill or Booty Bay inside an open zone do not pin.
+    /// </summary>
+    internal static bool CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
+    {
+        if (template is null || template.Instanceable || zoneId == 0 || areas.GetById(zoneId) is not { } zone) return false;
+        const uint townFlags = (uint)(ArcaneCore.Game.WorldState.Zones.AreaFlags.Capital | ArcaneCore.Game.WorldState.Zones.AreaFlags.City
+            | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital2);
+        if ((zone.Flags & townFlags) != 0) return false;
+        return areaId == 0 || areas.GetById(areaId) is not { } area || (area.Flags & townFlags) == 0;
     }
 
     /// <summary>
@@ -1913,7 +1989,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// there, and stalled within two minutes of every login). True when the bot was moved.
     /// </para>
     /// </summary>
-    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null)
+    private bool EscapeIslandCore(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null,
+        bool worldPinOnly = false)
     {
         onIsland = false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { InstanceId: 0 }) return false;
@@ -1954,7 +2031,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         bool bindEscapes = player.Home != default && (player.Home.MapId != player.MapId
             || System.Numerics.Vector3.Distance(playerPos, new System.Numerics.Vector3(player.Home.X, player.Home.Y, player.Home.Z)) > PlayerbotStallWatch.ProgressYards);
         if (bindEscapes && TryTeleportToBindPoint(player,
-                deadEndPin && !island ? "stalled repeatedly at a dead-end pin" : "stalled on ground no route leaves",
+                deadEndPin && !island ? (worldPinOnly ? "first stall in a world dead-end pin" : "stalled repeatedly at a dead-end pin") : "stalled on ground no route leaves",
                 urgent: deadEndPin, safety: true))
             return true;
 
@@ -1968,6 +2045,35 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
 
         return false;
+    }
+
+    private readonly HashSet<uint> _escapedZones = [];
+
+    internal void RememberEscapedZone(uint zone)
+    {
+        if (zone != 0 && _escapedZones.Count < 8) _escapedZones.Add(zone);
+    }
+
+    /// <summary>
+    /// <see cref="EscapeIslandCore"/>, remembering the zone the bot left when it was moved so the population can veto relocating it back
+    /// there (<see cref="TakeEscapedZones"/>).
+    /// </summary>
+    private bool EscapeIsland(Player player, out bool onIsland, bool deadEndPin = false, System.Numerics.Vector3? confinedFrom = null,
+        bool worldPinOnly = false)
+    {
+        uint zone = player.ZoneId;
+        bool moved = EscapeIslandCore(player, out onIsland, deadEndPin, confinedFrom, worldPinOnly);
+        if (moved) RememberEscapedZone(zone);
+        return moved;
+    }
+
+    /// <summary>The zones of the dead-end, island and too-strong-creatures escapes since the last call; the population records them as relocation vetoes. World thread.</summary>
+    internal uint[] TakeEscapedZones()
+    {
+        if (_escapedZones.Count == 0) return [];
+        uint[] zones = [.. _escapedZones];
+        _escapedZones.Clear();
+        return zones;
     }
 
     /// <summary>What counts as progress for the stall watch besides moving.</summary>
@@ -2365,6 +2471,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature creature) continue;
+            // Picking a player's pet, guardian or totem is a PvP decision, not grinding.
+            if (creature.CharmerOrOwnerGuid.IsPlayer) continue;
             if (skip is not null && skip(creature)) continue;
             if (!creature.IsAlive || !map.Combat.Hooks.CanAttack(player, creature)) continue;
             if (creature.Level > player.Level + maxLevelsAbove
@@ -2682,6 +2790,31 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return true;
     }
 
+    /// <summary>
+    /// The target's health has been held at its death-prevention threshold for <c>Contention.InvincibleTargetAbandonSeconds</c> (a creature
+    /// an EventAI script keeps at 1 health, quest 2681's servants): the bot cannot kill it. True once, with the anomaly reported; the caller
+    /// sets the creature aside the way it does a fight that goes nowhere (<see cref="Combat.PlayerbotInvincibleWatch"/>).
+    /// </summary>
+    private bool FightsInvincibleTarget(Player player, Creature target)
+        => _invincibleWatch.Observe(player, target, _session.World.NowMs,
+            (uint)Math.Clamp(_options.Contention.InvincibleTargetAbandonSeconds, 1, 600) * 1000u);
+
+    /// <summary>
+    /// Whether the creature's EventAI holds it invincible from spawn until a particular spell hits it
+    /// (<see cref="ArcaneCore.Kernel.WorldData.Creatures.CreatureAiContent.IsInvincibleUntilSpellHit"/>): no target for a bot's grind or hunt.
+    /// </summary>
+    private bool IsHeldInvincibleEntry(Creature creature)
+    {
+        if (!_deferFeaturesLooked)
+        {
+            _deferCreatures = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
+            _deferQuests = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>();
+            _deferFeaturesLooked = true;
+        }
+
+        return _deferCreatures?.Content?.Ai.IsInvincibleUntilSpellHit(creature.Entry) == true;
+    }
+
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
 
@@ -2736,7 +2869,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// The defensive-attacker path does not use this: a bot always fights back.
     /// </summary>
     private bool IsSkipped(Creature creature)
-        => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
+        => IsUnreachable(creature) || IsHeldInvincibleEntry(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
             || _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
             || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
@@ -3115,7 +3248,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
 
         // The near teleport pending now is the resurrection's own, into the landing: the escape replaces it (urgent).
-        return TryTeleportToBindPoint(player, "was revived by the spirit healer among creatures too strong for it", urgent: true);
+        uint revivedIn = player.ZoneId;
+        bool toBind = TryTeleportToBindPoint(player, "was revived by the spirit healer among creatures too strong for it", urgent: true);
+        if (toBind) RememberEscapedZone(revivedIn);
+        return toBind;
     }
 
     /// <summary>The shortest time between two of the brain's own bind-point teleports that are not urgent (<see cref="TryTeleportToBindPoint"/>).</summary>
@@ -3260,23 +3396,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         bool budget = PlayerbotThinkProbe.Active is not { HasOptionalPlanBudget: false };
         if (_home is { Stay: not Population.TownStay.None } town && (player.Map?.MapId ?? player.MapId) == town.MapId)
         {
-            // Idle with a town home: back to the inn and wait there rather than roam the wilderness (PlayerbotTownIdle).
-            TownIdleAction idle = _townIdle.Decide(town.Stay, town.DistanceTo(player.X, player.Y), _session.World.NowMs);
-            if (idle == TownIdleAction.Linger && PlayerbotTownIdle.IsHeld(town.DistanceTo(player.X, player.Y)))
-            {
-                // Standing at the inn is what the idle rule asks for, not a stall: the watch starts afresh at every such think. Before, a bot
-                // lingering at its inn was reported stalled every stall bound, gave up its goal (which freed nothing: it was not stuck) and, at
-                // the second report within 10 yards, was sent home to where it stood (live 2026-10-17: 1 253 stalls of 186 bots at the
-                // Stormwind inn alone).
-                _stall.Reset();
-                PlayerbotMovementControl.Stop(_session, player);
-                TryBindAtInn(player, town);
-                return;
-            }
-
-            // A walk to the inn given up far from it (a Linger past HoldYards) falls through to the explore below: the bot hunts, or wanders
-            // inward (WanderLegEnd), for the give-up instead of standing in the open until the stall watch reports it.
-            if (idle == TownIdleAction.WalkToTown) { WalkTowardTown(player, town, elapsedMs); return; }
+            // Idle with a town home: back to the inn (or, while a festival runs, to the bot's place around a festival NPC) and wait there
+            // rather than roam the wilderness (PlayerbotTownIdle; PlayerbotBrain.Events.cs).
+            if (TownIdleThink(player, town, elapsedMs)) return;
         }
         else _townIdle.Interrupted(); // no town idle decision this think (another map, another kind of home)
 
@@ -3503,13 +3625,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             if (area.DistanceTo(from.X, from.Y) > area.ExploreRadius)
             {
-                destination = InwardLeg(area, from, _exploreRefusals);
+                destination = InwardLeg(area, from, _exploreRefusals, player.Map);
             }
             else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
                 destination = HasOptionalThinkBudget(15.0)
-                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals)
-                    : InwardLeg(area, from, _exploreRefusals);
+                    ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals, player.Map)
+                    : InwardLeg(area, from, _exploreRefusals, player.Map);
             }
         }
         return destination;
@@ -3521,7 +3643,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// continues across the zone rather than snapping its heading straight back toward the level-1 start spawn.
     /// </summary>
     internal static System.Numerics.Vector3 DeflectZoneBorderLeg(PlayerbotHomeArea area, System.Numerics.Vector3 from,
-        float baseAngle, bool preferPositive, int refusals)
+        float baseAngle, bool preferPositive, int refusals, Map? map = null)
     {
         for (int i = 0; i < BorderDeflectDegrees.Length; i++)
         {
@@ -3540,7 +3662,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
         }
 
-        return InwardLeg(area, from, refusals);
+        return InwardLeg(area, from, refusals, map);
     }
 
     /// <summary>
@@ -3699,10 +3821,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
             if (self is null) return false;
             _exploreSearchPlayer = player;
+            _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
             _exploreSearchContent = content;
             _exploreSearchAtlas = atlas;
             _exploreSearchFactions = factions;
             _exploreSearchSelf = self;
+            _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
+                as ArcaneCore.Game.Reputation.INpcReactionSource;
             _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
             _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
             _exploreSearchMap = mapId;
@@ -3781,14 +3906,54 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         FactionTemplateRecord? npc = _exploreSearchFactions?.Find(faction);
         FactionTemplateRecord? self = _exploreSearchSelf;
         if (npc is null || self is null) return false;
-        // FactionCombatHooks.ReactionTo: hostility wins over friendly bits in each direction. A player may attack a
-        // neutral creature, but CanAttack refuses when either direction's resulting reaction is Friendly.
+        return ExploreAttackable(_exploreSearchPlayer, npc, self, _exploreSearchReactions);
+    }
+
+    /// <summary>
+    /// Whether the bot may attack a creature of faction template <paramref name="npc"/>: its reputation reaction
+    /// (<see cref="ArcaneCore.Game.Reputation.INpcReactionSource"/>, as <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/> and
+    /// <see cref="PlayerbotQuestGoals.IsKillable"/> judge it) is below Friendly. The template alone says nothing of standing: Timbermaw
+    /// Hold's creatures read as a hostile faction to the bot's template, but a bot with Timbermaw reputation is not their enemy (issues
+    /// #1478 and #1479). Without a reaction source, or when it cannot resolve this pair, the templates decide: hostility wins over the
+    /// friendly bits in each direction (<c>FactionCombatHooks.ReactionTo</c>), and a player may attack a neutral creature, but CanAttack
+    /// refuses when either direction's resulting reaction is Friendly.
+    /// </summary>
+    internal static bool ExploreAttackable(Player? player, FactionTemplateRecord npc, FactionTemplateRecord self,
+        ArcaneCore.Game.Reputation.INpcReactionSource? reactions)
+    {
+        if (reactions is not null && player is not null
+            && reactions.TryGetNpcReaction(player, npc, self, out ArcaneCore.Game.Reputation.ReputationRank reaction))
+            return reaction < ArcaneCore.Game.Reputation.ReputationRank.Friendly;
         bool friendly = self.IsFriendlyTo(npc) || npc.IsFriendlyTo(self);
         return !friendly || self.IsHostileTo(npc) && npc.IsHostileTo(self);
     }
 
+    /// <summary>
+    /// Whether a creature with <paramref name="npcFlags"/> offers a service (gossip, quests or a vendor's wares): not a target for an
+    /// exploring bot, which walks to creatures to fight. The Timbermaw Hold vendors and quest givers drew bots into the tunnel
+    /// (issues #1478 and #1479).
+    /// </summary>
+    internal static bool IsExploreServiceNpc(uint npcFlags)
+        => (npcFlags & (uint)(ArcaneCore.Game.Npc.NpcFlags.Gossip | ArcaneCore.Game.Npc.NpcFlags.QuestGiver | ArcaneCore.Game.Npc.NpcFlags.Vendor)) != 0;
+
     private bool ExploreHostileFaction(uint faction)
         => _exploreSearchFactions?.Find(faction) is { } npc && _exploreSearchSelf is { } self && npc.IsHostileTo(self);
+
+    /// <summary>
+    /// Whether an explore candidate at <paramref name="point"/> is worth walking to: not in a dead-end pin of this bot or of the world, and not
+    /// indoors or underground when the bot stands outdoors (live 2026-10-25: spawns in a sealed Deadwind Pass crypt sent bots on searches that
+    /// ended at the node cap). Exploring is optional, so such spawns are simply left out. A dungeon or battleground is all indoors and is not judged.
+    /// </summary>
+    internal static bool ExploreSpotUsable(Player player, System.Numerics.Vector3 point, bool skipIndoor)
+    {
+        if (PlayerbotNavigation.IsDeadEndPin(player, point) || PlayerbotNavigation.IsWorldPin(player, point)) return false;
+        return !skipIndoor || player.Map is not { } map || PlayerbotNavigation.IsOutdoorsOnSurface(map, point);
+    }
+
+    /// <summary>Whether this bot's explore leaves out indoor spots: it stands outdoors on the surface of a map that is not a dungeon or battleground. Judged once per search.</summary>
+    internal static bool ExploreSkipsIndoor(Player player)
+        => player.Map is { } map && map.Template is not ({ IsDungeon: true } or { IsBattleground: true })
+            && PlayerbotNavigation.IsOutdoorsOnSurface(map, PlayerbotMotion.CurrentPosition(player));
 
     private bool ExploreEligible(PlayerbotExploreAtlas.Candidate candidate)
     {
@@ -3805,14 +3970,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_suspensions.IsEntrySuspended(spawn.Entry, now) || _destinations.IsVisited(spawn.Guid, now))
             return false;
         CreatureTemplate? template = content.FindTemplate(spawn.Entry);
-        if (template is null || !PlayerbotWorldDestinations.IsPresent(player, spawn)
+        if (template is null || IsExploreServiceNpc(template.NpcFlags) || !PlayerbotWorldDestinations.IsPresent(player, spawn)
             || _exploreSearchHome is { } home && home.DistanceTo(spawn.X, spawn.Y) > home.ExploreRadius)
             return false;
         var point = new System.Numerics.Vector3(spawn.X, spawn.Y, spawn.Z);
-        if (PlayerbotNavigation.IsDeadEndPin(player, point))
-            return false;
         foreach (PlayerbotHazard hazard in _exploreSearchHazards)
             if (hazard.Covers(point)) return false;
+        if (!ExploreSpotUsable(player, point, _exploreSearchSkipIndoor))
+            return false;
         if (atlas.HasStrongHazard(candidate, player.Level, threatFilter))
             return false;
         if (_exploreSearchHome is { } clippedHome && !clippedHome.Contains(spawn))
@@ -3840,10 +4005,30 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// finish at 48 yards.
     /// </summary>
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, Player player, int refusals)
-        => InwardLeg(home, new System.Numerics.Vector3(player.X, player.Y, player.Z), refusals);
+    {
+        var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        return InwardLeg(home, from, refusals, player.Map);
+    }
 
-    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained leg).</summary>
-    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, Player, int)"/> from <paramref name="from"/> (the end of the leg walked now, for a chained
+    /// leg), its end put on the floor nearest <paramref name="from"/>'s height on <paramref name="map"/>
+    /// (<see cref="PlayerbotNavigation.GroundNear(Map, System.Numerics.Vector3, System.Numerics.Vector3)"/>) when there is one.
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals, Map? map)
+    {
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground = null;
+        if (map is not null) ground = new PlayerbotNavigation.FloorProbe(map, from).Near;
+        return InwardLeg(home, from, refusals, ground);
+    }
+
+    /// <summary>
+    /// <see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> with the grounding given: <paramref name="ground"/>
+    /// maps the chosen end (at <paramref name="from"/>'s height) to the point on the floor, or null to leave it at that height. The
+    /// legs ended at the bot's own height, which in a cave or tunnel is a point in rock on no region (issues #1478 and #1479).
+    /// </summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals,
+        Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground)
     {
         float distance = home.DistanceTo(from.X, from.Y);
         float inward = MathF.Atan2(home.Centre.Y - from.Y, home.Centre.X - from.X);
@@ -3857,12 +4042,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             var end = new System.Numerics.Vector3(from.X + (MathF.Cos(angle) * length), from.Y + (MathF.Sin(angle) * length), from.Z);
             if (home.DistanceTo(end.X, end.Y) >= distance) continue;
             if (home.ZoneClipped && !home.InZone(end.X, end.Y, end.Z)) continue;
-            return end;
+            return ground is null ? end : ground(end);
         }
 
         float straight = MathF.Min(budget, distance);
-        return new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        var last = new System.Numerics.Vector3(from.X + (MathF.Cos(inward) * straight), from.Y + (MathF.Sin(inward) * straight), from.Z);
+        return ground is null ? last : ground(last);
     }
+
+    /// <summary><see cref="InwardLeg(PlayerbotHomeArea, System.Numerics.Vector3, int, Map?)"/> without a map: the end stays at <paramref name="from"/>'s height.</summary>
+    internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals)
+        => InwardLeg(home, from, refusals, (Func<System.Numerics.Vector3, System.Numerics.Vector3>?)null);
 
 }
 

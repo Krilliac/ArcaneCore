@@ -56,7 +56,7 @@ internal sealed record BotChatStatus(
 /// exchanges are sent, under character names, with emails and phone numbers replaced.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotChat : IAsyncDisposable
+internal sealed partial class PlayerbotChat : IAsyncDisposable
 {
     internal const int Workers = 2;
     internal const int MaxConversations = 512;
@@ -741,7 +741,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     {
         PlayerbotChatSafetyOptions safety = options.Safety;
         bool screening = safety.Enabled;
-        bool modelAllowed = options.HasModelProvider && !safety.RequireOptIn;
+        bool modelAllowed = options.HasModelProvider && !safety.RequireOptIn && !ask.BuiltinOnly;
         if (screening)
         {
             SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
@@ -1107,7 +1107,10 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
         if (changed)
             _logger.LogWarning("Bot chat provider #{Index} ({Provider}) failed: {Error}; the next provider answers{Hint}", index, provider.Label, error,
-                error == "reasoning-only" ? " (the model spent its tokens thinking; set ReasoningEffort=none for this provider)" : string.Empty);
+                error == "reasoning-only" ? " (the model spent its tokens thinking; set ReasoningEffort=none for this provider)"
+                : error == "rejected" && provider is { Kind: PlayerbotChatProviderKind.OpenAICompatible, JsonResponseFormat: true }
+                    ? " (the server may reject response_format json_object, e.g. LM Studio; set JsonResponseFormat=false for this provider)"
+                    : string.Empty);
     }
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;

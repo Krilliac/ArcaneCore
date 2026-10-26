@@ -366,6 +366,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private uint GoalTimeoutOf(BotGroup group)
     {
+        if (group.WorldBoss is not null) return (uint)Math.Max(1, Wb.MaxRaidMinutes) * 60_000u;
         if (group.Run is not { } run) return unchecked(GoalTimeoutMs + group.ExtraTimeMs);
         int minutes = run.Plan.Raid ? _options.Groups.DungeonRuns.Raids.MaxRunMinutes : _options.Groups.DungeonRuns.MaxRunMinutes;
         return (uint)Math.Max(1, minutes) * 60_000u;
@@ -374,7 +375,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>The longest the current step of <paramref name="group"/> may last: a run's travel budget, an instance group's distance budget, else <see cref="StepTimeoutMs"/>.</summary>
     internal uint StepLimitOf(BotGroup group)
     {
-        if (group.Run is not null && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Regrouping)
+        if ((group.Run is not null || group.WorldBoss is not null) && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Regrouping)
             return (uint)Math.Max(1, _options.Groups.DungeonRuns.TravelTimeoutMinutes) * 60_000u;
         if (group.StepBudgetMs != 0 && group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling) return group.StepBudgetMs;
         return StepTimeoutMs;

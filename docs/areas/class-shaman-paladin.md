@@ -6,9 +6,9 @@ and most shaman imbue content were **not** delivered by this lane; the wave-2 cl
 blessing/aura/seal stacking, Holy Light and Flash of Light, Blessing of Light, the resistance auras, Forbearance, Holy Shock, Hammer of Wrath,
 Consecration (persistent area auras) and the Flametongue/Rockbiter imbue procs: see [class-scripts](class-scripts.md).
 
-References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), **mangos-classic**
-`D:\refs\mangos-classic`, **wow_messages** `D:\refs\wow_messages`, **classic-db**
-`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`. Every formula cites file:line inline in the code.
+References (read only, never copied): **vmangos** `<refs-root>\vmangos` (primary), **mangos-classic**
+`<refs-root>\mangos-classic`, **wow_messages** `<refs-root>\wow_messages`, **classic-db**
+`<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`. Every formula cites file:line inline in the code.
 
 ## Delivered
 
@@ -123,8 +123,10 @@ See [player resurrection](../integration/player-resurrection-20261004.md).
   `SpellAuras.cpp:424-436`); friendliness/PvP filters, tick synchronisation and per-member rank selection of the area
   aura are not ported (`SpellSystem.AreaAuras.cs` belongs to the spell-breadth lane).
 - Active targeting inherits the combat core's faction/reputation and controlling-player limitations. Ordinary
-  `Creature` does not expose `IPlayerControlledUnit`, so owner-linked pet/creature PvP and same-faction duel reaction
-  parity are not claimed. Stealth uses the installed registry; separate invisibility masks are not implemented.
+  `Creature` does not expose `IPlayerControlledUnit`, so same-faction duel reaction parity is not claimed. The PvP-flag
+  rule is ported through the controlling player (`CombatHooks.CanAttack` via `DuelRules.ControllingPlayer`, as
+  vmangos `GetAffectingPlayer`): outside a duel, nothing a player controls can attack another player's unit (the player, or a
+  pet, guardian or totem) unless that unit's controlling player is PvP flagged. The attacker's own flag is not tested. Stealth uses the installed registry; separate invisibility masks are not implemented.
 - Retail selection does not prefilter ordinary visible units by LOS: a nearest enemy behind a wall can remain selected
   and prevent casts while a farther enemy is reachable. Normal spell casting refuses the blocked bolt.
 

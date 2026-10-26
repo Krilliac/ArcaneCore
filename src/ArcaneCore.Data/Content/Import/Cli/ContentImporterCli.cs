@@ -57,13 +57,17 @@ public static partial class ContentImporterCli
                                 tables game_weather (zone weather chances) and exploration_basexp, and the seven
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
-          import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
+          import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory; Map.dbc and
+                                AreaTable.dbc (and WMOAreaTable.dbc) there also fill map_template, area_template and
+                                wmo_area_template when those are empty (as import-map-dbc would); AreaTrigger.dbc,
+                                TaxiNodes.dbc and TaxiPath.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path
           import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
                                 entrance, script) from a classic-db instance_template or vmangos map_template;
                                 a WMOAreaTable.dbc also fills wmo_area_template (the area of each WMO group)
-          verify                count the imported tables and check references
+          verify                count the imported tables and check references; fails (exit 6) when map_template,
+                                area_template, areatrigger_template, taxi_nodes or taxi_path is empty
           class-masks <dump>... read spell_affect (the 64-bit class masks of the talent modifier auras)
                                 and write the overlay file Spells:Mods:ClassMaskFile reads
                                 (--class-mask-file <file>, outside the repository; --dry-run writes nothing)
@@ -720,6 +724,7 @@ public static partial class ContentImporterCli
             ["creature_spawn_entry"] = creatures.SpawnEntries,
             ["creature_model_info"] = creatures.Models,
             ["creature_addon"] = creatures.Addons,
+            ["creature_equip_template"] = creatures.Equipment,
             ["creature_ai_scripts"] = creatures.AiEvents,
             ["creature_ai_texts"] = creatures.AiTexts - creatures.ScriptTexts,
             ["script_texts"] = creatures.ScriptTexts,
@@ -800,12 +805,100 @@ public static partial class ContentImporterCli
             throw new CliException(ExitCodes.Io, $"cannot read the DBCs: {ex.Message}", ex);
         }
 
+        // Map.dbc and AreaTable.dbc in the same directory fill map_template, area_template and (with WMOAreaTable.dbc) wmo_area_template,
+        // so the documented setup (import, import-dbc) leaves the World its instance portals and zones. Read before the database is opened.
+        string mapPath = Path.Combine(directory, "Map.dbc");
+        string areaPath = Path.Combine(directory, "AreaTable.dbc");
+        string wmoAreaPath = Path.Combine(directory, "WMOAreaTable.dbc");
+        bool haveMaps = File.Exists(mapPath);
+        bool haveAreas = File.Exists(areaPath);
+        MapAreaDbcSnapshot? mapSnapshot = null;
+        if (haveMaps && haveAreas)
+        {
+            try
+            {
+                mapSnapshot = MapAreaDbcImporter.ReadSnapshot(mapPath, areaPath, null, File.Exists(wmoAreaPath) ? wmoAreaPath : null);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+            {
+                throw new CliException(ExitCodes.Io, "cannot read the map/area DBC inputs", ex);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException)
+            {
+                throw new CliException(ExitCodes.Schema, "map/area DBC layout or references were refused", ex);
+            }
+        }
+
+        // AreaTrigger.dbc, TaxiNodes.dbc and TaxiPath.dbc fill areatrigger_template, taxi_nodes and taxi_path the same way (refresh reads them too).
+        var dbcWarnings = new List<string>();
+        IReadOnlyList<AreaTriggerTemplateRow>? triggers = ReadOptionalDbc(directory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, dbcWarnings);
+        IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
+        IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
+        var kept = new List<string>();
+        var imported = new List<string>();
+
         o.WriteLine($"target: {target.Describe}");
+        MapAreaDbcImportReport? mapReport = null;
+        bool mapsAlreadyThere = false;
         try
         {
             await using WorldDbContext db = OpenWorld(target);
             await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
             await new EfSpellContentStore(db).ReplaceDbcTablesAsync(content, ct).ConfigureAwait(false);
+            if (mapSnapshot is not null)
+            {
+                // A world that has map rows keeps them (their dungeon columns may come from a dump); import-map-dbc --replace or refresh rewrites them.
+                mapsAlreadyThere = await db.Set<MapTemplateRow>().AnyAsync(ct).ConfigureAwait(false)
+                    || await db.Set<AreaTemplateRow>().AnyAsync(ct).ConfigureAwait(false)
+                    || (mapSnapshot.WmoAreas is not null && await db.Set<WmoAreaTemplateRow>().AnyAsync(ct).ConfigureAwait(false));
+                if (!mapsAlreadyThere)
+                {
+                    mapReport = await MapAreaDbcImporter.ImportSnapshotAsync(db, mapSnapshot, false, ct).ConfigureAwait(false);
+                }
+            }
+
+            // One unit: a failed insert rolls all three back, so a half-filled table is never mistaken for a complete one on the next run.
+            await ImportTransaction.RunAsync(db, async token =>
+            {
+                if (triggers is not null)
+                {
+                    if (await db.Set<AreaTriggerTemplateRow>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("areatrigger_template");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, triggers, token).ConfigureAwait(false);
+                        imported.Add($"Imported {triggers.Count} area triggers (areatrigger_template) from AreaTrigger.dbc.");
+                    }
+                }
+
+                if (taxiNodes is not null)
+                {
+                    if (await db.Set<TaxiNode>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("taxi_nodes");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, taxiNodes, token).ConfigureAwait(false);
+                        imported.Add($"Imported {taxiNodes.Count} taxi nodes (taxi_nodes) from TaxiNodes.dbc.");
+                    }
+                }
+
+                if (taxiPaths is not null)
+                {
+                    if (await db.Set<TaxiPath>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("taxi_path");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                        imported.Add($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
+                    }
+                }
+            }, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
         {
@@ -815,6 +908,35 @@ public static partial class ContentImporterCli
         o.WriteLine(
             $"Imported {content.Spells.Count} spells, {content.CastTimes.Count} cast times, {content.Durations.Count} durations, " +
             $"{content.Ranges.Count} ranges and {content.Radii.Count} radii.");
+        foreach (string line in imported)
+        {
+            o.WriteLine(line);
+        }
+        if (mapReport is not null)
+        {
+            o.WriteLine($"Imported {mapReport.MappedMaps} maps and {mapReport.MappedAreas} areas (map_template, area_template) from Map.dbc and AreaTable.dbc.");
+            if (mapSnapshot?.WmoAreas is not null)
+            {
+                o.WriteLine($"Imported {mapReport.MappedWmoAreas} WMO group area rows (wmo_area_template).");
+            }
+
+            PrintWarnings(o, mapReport.Warnings);
+        }
+        else if (mapsAlreadyThere)
+        {
+            o.WriteLine("map_template, area_template or wmo_area_template already have rows: Map.dbc and AreaTable.dbc were left unread (import-map-dbc --replace rewrites them)");
+        }
+        else
+        {
+            o.WriteLine($"no {(haveMaps ? "AreaTable.dbc" : haveAreas ? "Map.dbc" : "Map.dbc and AreaTable.dbc")} in '{directory}': map_template and area_template were not filled (import-map-dbc or refresh --dbc-dir fills them)");
+        }
+
+        if (kept.Count > 0)
+        {
+            o.WriteLine($"{string.Join(", ", kept)} already have rows: left as they are (refresh <dump> --dbc-dir <DBFilesClient> rewrites them)");
+        }
+
+        PrintWarnings(o, dbcWarnings);
         return ExitCodes.Ok;
     }
 
@@ -891,6 +1013,10 @@ public static partial class ContentImporterCli
 
     // --- verify -------------------------------------------------------------------------------------
 
+    private const string MapFill = "run import-dbc <DBFilesClient> with Map.dbc and AreaTable.dbc there, import-map-dbc, or refresh <dump> --dbc-dir <DBFilesClient>";
+
+    private const string RefreshFill = "run import-dbc <DBFilesClient> with AreaTrigger.dbc, TaxiNodes.dbc and TaxiPath.dbc there, or refresh <dump> --dbc-dir <DBFilesClient>";
+
     private static async Task<int> VerifyAsync(CliArguments a, TextWriter o, CancellationToken ct)
     {
         if (a.Positional.Count != 0)
@@ -918,6 +1044,7 @@ public static partial class ContentImporterCli
                 ("creature_spawn_entry", await db.Set<CreatureSpawnEntryRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_model_info", await db.Set<CreatureModelInfoRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_addon", await db.Set<CreatureAddonRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_equip_template", await db.Set<CreatureEquipmentRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_ai_text_template", await db.Set<CreatureTextTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("dbscripts_on_relay", await db.Set<RelayScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("dbscript_relay_template", await db.Set<RelayScriptTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
@@ -964,6 +1091,25 @@ public static partial class ContentImporterCli
             foreach ((string table, int count) in counts)
             {
                 o.WriteLine($"  {table}  {count.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            // The tables the World needs for instance portals, zone lookup and flight paths. An empty one is a setup step that
+            // was skipped, not a world with nothing to reference, so it fails the verify and names the command that fills it.
+            var geography = new (string Table, int Count, string Fill)[]
+            {
+                ("map_template", await db.Set<MapTemplateRow>().CountAsync(ct).ConfigureAwait(false), MapFill),
+                ("area_template", await db.Set<AreaTemplateRow>().CountAsync(ct).ConfigureAwait(false), MapFill),
+                ("areatrigger_template", await db.Set<AreaTriggerTemplateRow>().CountAsync(ct).ConfigureAwait(false), RefreshFill),
+                ("taxi_nodes", await db.Set<TaxiNode>().CountAsync(ct).ConfigureAwait(false), RefreshFill),
+                ("taxi_path", await db.Set<TaxiPath>().CountAsync(ct).ConfigureAwait(false), RefreshFill),
+            };
+            foreach ((string table, int count, string fill) in geography)
+            {
+                o.WriteLine($"  {table}  {count.ToString(CultureInfo.InvariantCulture)}");
+                if (count == 0)
+                {
+                    problems.Add($"{table} is empty ({fill})");
+                }
             }
 
             IQueryable<CreatureTemplateRow> templates = db.Set<CreatureTemplateRow>();

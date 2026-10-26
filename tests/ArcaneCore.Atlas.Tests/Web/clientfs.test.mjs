@@ -1,5 +1,5 @@
 // Lane D4 (devui-assets): the browser-side reader of the visitor's own WoW 1.12.1 folder, Web/js/clientfs/*.
-// Design: D:/ArcaneCore-lanes/_land/atlas-devui-design.md, sections 0.5, 0.5.1 and lane D4 (r1-r3).
+// Design: atlas-devui-design.md, sections 0.5, 0.5.1 and lane D4 (r1-r3).
 //
 // Run through ClientFsFixtureTests.cs, which first writes the synthetic client folder (MPQs built by MpqTestWriter, ADTs by
 // SyntheticTerrain, PE files with a version resource, malformed archives, and the ATG1 bytes ClientTerrainGeometry produces)
@@ -1179,12 +1179,13 @@ async function withBrowser(fn, { mode = 'public', helpers = PAGE_HELPERS } = {})
     assert.ok(executable, 'ARCANECORE_TEST_BROWSER does not name a Chrome or Edge executable; the clientfs browser tests cannot run (they never skip).');
     const fx = loadFixtures();
     const harness = await new Harness({ mode, fixtureDir: fx.dir }).start();
-    const browser = await Browser.launch(executable);
+    let browser = null;
     try {
+        browser = await Browser.launch(executable);
         const page = await openPage(browser, harness, { helpers });
         await fn({ fx, harness, browser, page });
     } finally {
-        await browser.close();
+        await browser?.close();
         await harness.stop();
     }
 }
@@ -1781,9 +1782,10 @@ test('never uploaded: no request, header, body or WebSocket frame carries a cana
     const fx = loadFixtures();
     const harness = await new Harness({ mode: 'public', fixtureDir: fx.dir }).start();
     assert.ok(executable, 'ARCANECORE_TEST_BROWSER does not name a Chrome or Edge executable; this test never skips.');
-    const browser = await Browser.launch(executable);
+    let browser = null;
     try {
-        const login = `(async () => {
+        browser = await Browser.launch(executable);
+        const login =`(async () => {
             const response = await fetch('/api/public/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user: 'tester' }) });
             const ws = new WebSocket('ws://' + location.host + '/api/ws');
             const welcome = await new Promise((resolve, reject) => {
@@ -1832,7 +1834,7 @@ test('never uploaded: no request, header, body or WebSocket frame carries a cana
         assert.deepEqual(await b.evaluate(login), { status: 200, welcome: '{"type":"welcome"}' });
         assert.deepEqual(problems(b), []);
     } finally {
-        await browser.close();
+        await browser?.close();
         await harness.stop();
     }
 

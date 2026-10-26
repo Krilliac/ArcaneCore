@@ -274,6 +274,24 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
         Assert.Equal(QaPublicationState.Published, rig.State.Get(B)!.Publication.State);
     }
 
+    /// <summary>A creature held at its invincibility threshold (PlayerbotQaSpellMonitor) is listed in the report only; any other bot anomaly is published.</summary>
+    [Fact]
+    public async Task HeldTargetAnomalies_AreReportOnly_ButOtherAnomaliesArePublished()
+    {
+        QaFindingView held = QaData.View(A, count: 50, bots: 1, kind: QaSignalKind.Anomaly) with
+        {
+            Goal = PlayerbotQaSpellMonitor.HeldTargetGoal, Reason = PlayerbotQaSpellMonitor.HeldTargetReason + "7668",
+        };
+        QaFindingView normal = QaData.View(B, count: 1, bots: 1, kind: QaSignalKind.Anomaly) with { Goal = "bot-travel", Reason = "stuck" };
+        Rig rig = NewRig(findings: [held, normal]);
+
+        await rig.Run();
+
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Pending, rig.State.Get(A)!.Publication.State);
+        Assert.Equal(QaPublicationState.Published, rig.State.Get(B)!.Publication.State);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

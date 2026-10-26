@@ -427,7 +427,7 @@ public sealed class PlayerbotDestinationAnomalyTests
     }
 
     /// <summary>A bot with broken boots and money, ten repair NPCs far east (<see cref="ManyRepairFixture"/>) all reachable; <paramref name="body"/> runs on the world thread.</summary>
-    private static async Task RepairTrip(Action<Player, Func<Player>, Action> body)
+    private static async Task RepairTrip(Action<Player, Func<Player>, Action> body, Action<PlayerbotTownGoals>? configure = null)
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate
@@ -447,6 +447,7 @@ public sealed class PlayerbotDestinationAnomalyTests
             });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+            configure?.Invoke(goals);
             try
             {
                 await host.OnWorldAsync(() =>
@@ -484,6 +485,27 @@ public sealed class PlayerbotDestinationAnomalyTests
             think();
             Assert.Equal(1, cap.Count(NpcMissing));
         });
+    }
+
+    /// <summary>
+    /// The entry of the NPC a bot found missing is set aside for that bot (<see cref="PlayerbotSuspensions.SuspendEntryEscalating"/>), so
+    /// it does not walk back to the same empty spawn when the trip rests and its blocked spawns are forgotten (Timbermaw Hold, issues
+    /// #1478 and #1479: 13 service-npc-missing lines for vendors 11557 and 11555 in a day).
+    /// </summary>
+    [Fact]
+    public async Task ArrivingAtARepairSpawnWithNoNpcInSight_SetsTheEntryAside()
+    {
+        var suspensions = new PlayerbotSuspensions();
+        await RepairTrip((player, _, think) =>
+        {
+            using var cap = PlayerbotAnomalies.CaptureFor(player);
+            think();
+            Assert.False(suspensions.IsEntrySuspended(950, 0));
+            player.Relocate(ScriptedPathfinder.SpawnX(0), player.Y, player.Z, player.Orientation, 0);
+            think();
+            Assert.Equal(1, cap.Count(NpcMissing));
+            Assert.True(suspensions.IsEntrySuspended(950, 0), "the entry of the missing NPC was not set aside");
+        }, goals => goals.Suspensions = suspensions);
     }
 
     [Fact]

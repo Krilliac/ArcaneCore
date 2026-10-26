@@ -13,7 +13,7 @@ public sealed class GmOptions
 
 
     /// <summary>
-    /// The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146:
+    /// The retail account level (vmangos AccountTypes, vmangos@0e3ff01 src/shared/Common.h:136-146:
     /// PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5,
     /// ADMINISTRATOR 6, CONSOLE 7) each stored <see cref="AccountSecurity"/> stands for.
     /// ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by
@@ -98,6 +98,13 @@ public sealed class GmOptions
     /// loaded tables (DebugCommands.cpp:471-536); ArcaneCore loads no such tables unless this is set.
     /// </summary>
     public string LiveFxDbcDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG
+    /// override, forced acks, map/grid unload, watchdog dumps) behind <see cref="DangerousDebugGate"/>. Off by default; changing it
+    /// needs a restart. On the live server (<c>ARCANECORE_LIVE_SERVER=1</c>) the commands are refused whatever this says.
+    /// </summary>
+    public bool AllowDangerousDebug { get; set; }
 
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);

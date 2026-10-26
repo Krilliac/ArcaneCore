@@ -104,9 +104,25 @@ internal sealed class PlayerbotGroupAI
     private readonly float _followAngle;
     private readonly float _followDistance;
     private bool _retreatStarted;
-    /// <summary>Consecutive thinks the wipe exit walk found no path; past <see cref="WipeExitGiveUp"/> the bot falls back to the retreat.</summary>
+    /// <summary>
+    /// Consecutive thinks the instance-exit walk found no path (or stood on an exit that did not fire); past <see cref="WipeExitGiveUp"/> a wiped
+    /// bot falls back to the retreat, and a bot in the retry regroup falls back to the regroup's own think (it fights back where it stands, or
+    /// with no target follows its leader), the count kept for the rest of that regroup.
+    /// It restarts at a death (the bot is revived somewhere else) and whenever the group's phase changes (<see cref="_wipeExitPhase"/>), so a
+    /// give-up holds for the wipe or the regroup it was reached in and no other.
+    /// </summary>
     private int _wipeExitFails;
-    private const int WipeExitGiveUp = 5;
+
+    /// <summary>
+    /// The group state, and whether it was the retry regroup (<see cref="PlayerbotRunStep.Retry"/> while Gathering), at this bot's last live think;
+    /// null before the first. A change restarts <see cref="_wipeExitFails"/>, even when the bot thought in none of the states in between (dead, or
+    /// a regroup that went on before its next think).
+    /// </summary>
+    private (PlayerbotGroupState State, bool Retry)? _wipeExitPhase;
+    internal const int WipeExitGiveUp = 5;
+
+    /// <summary>The current <see cref="_wipeExitFails"/> count (tests and traces).</summary>
+    internal int WipeExitFails => _wipeExitFails;
     private long _resurrectAtMs;
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
@@ -237,6 +253,8 @@ internal sealed class PlayerbotGroupAI
         _lagSinceMs = 0;
         _lagWaived = false;
         _approachTriedMs = 0;
+        _wipeExitFails = 0;
+        _wipeExitPhase = null;
         if (_risk.Retreat.Active) _risk.Retreat.Stop("released");
     }
 
@@ -285,6 +303,7 @@ internal sealed class PlayerbotGroupAI
             _lootActions.Clear();
             _spells.Reset();
             ForgetFight();
+            _wipeExitFails = 0; // revived, it stands somewhere else (the landing): a give-up on the exit from where it died does not hold there
             _deathRetired = true;
         }
 
@@ -329,7 +348,20 @@ internal sealed class PlayerbotGroupAI
         // A wiped group inside its dungeon leaves through the exit: instanceable maps have no soft leash (CreatureMapSystem.IsOutOfThreatArea is
         // false there, as in vmangos), so trash that is still alive keeps its target for good and a leash-based retreat only gets out if its
         // straight line happens to cross the exit trigger. Checked every think, so a member revived at the landing and pulled again leaves too.
-        if (group.State == PlayerbotGroupState.Wiped && player.Combat.IsInCombat && player.MapId == group.Goal.MapId
+        // The same holds once the run is on its Retry step and the group regroups (Gathering): the leader walks out to regroup at the entrance
+        // (Lead), and a member revived at the landing that the surviving trash engages (it attacks the unit it hits, vmangos
+        // Creature::OnEnterCombat -> AttackedBy) leaves through the exit too rather than fighting it at half health with no wipe check running.
+        // Past WipeExitGiveUp it goes on as it would have without an exit: it fights back where it stands (SelectTarget), or follows its leader.
+        bool retryRegroup = group.State == PlayerbotGroupState.Gathering && group.Run is { Step: PlayerbotRunStep.Retry };
+        // A give-up holds for the phase it was reached in: one reached while wiped does not carry into the retry regroup (a survivor that found
+        // no way out then may well have one after its retreat), and the next wipe starts afresh.
+        if (_wipeExitPhase != (group.State, retryRegroup))
+        {
+            _wipeExitPhase = (group.State, retryRegroup);
+            _wipeExitFails = 0;
+        }
+
+        if ((group.State == PlayerbotGroupState.Wiped || retryRegroup) && player.Combat.IsInCombat && player.MapId == group.Goal.MapId
             && WorldMaps.Of(_session.World).Registry.Find(player.MapId) is { IsDungeon: true }
             && _wipeExitFails < WipeExitGiveUp
             && PlayerbotGroupCoordinator.ExitOf(_session.World, player.MapId) is { } wipeExit)
@@ -344,7 +376,7 @@ internal sealed class PlayerbotGroupAI
             // Standing on the exit point and still in the instance means its trigger did not fire: that counts as a failure too, or the hold would reset the give-up for good.
             bool atExit = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), exitPoint) <= 1.5f;
             _wipeExitFails = walking && !atExit ? 0 : _wipeExitFails + 1;
-            Step = walking ? "wipe:run-exit" : "wipe:no-path-exit";
+            Step = retryRegroup ? walking ? "retry:run-exit" : "retry:no-path-exit" : walking ? "wipe:run-exit" : "wipe:no-path-exit";
             return;
         }
 
@@ -372,7 +404,6 @@ internal sealed class PlayerbotGroupAI
         else
         {
             _retreatStarted = false;
-            _wipeExitFails = 0;
         }
 
         Player? leader = group.LeaderPlayer(_session.World);
@@ -392,6 +423,7 @@ internal sealed class PlayerbotGroupAI
         if (isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: true } stood) RetryRetreatWalk(player, stood, interval);
         if (isLeader && group.Siege is null) TrackLag(player, group);
         else ClearLag();
+        if (!isLeader && SitOutMark(player, group, interval)) return;
         Unit? target = group.State is PlayerbotGroupState.Wiped or PlayerbotGroupState.Forming ? null
             : SelectTarget(player, group, me, leader, isLeader);
         if (target is not null)
@@ -451,6 +483,14 @@ internal sealed class PlayerbotGroupAI
         if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
+            case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
+                // A retry regroups at the entrance: a leader revived inside walks out rather than holding beside live trash with a half-health party
+                // (Gathered is false while it is inside, so the group does not go on from there on its own; only the GatherCatchUpMs fallback in
+                // CatchUpGathering can, 60 s on, when the leader found no path out). Members follow it on foot, and through Follow's exit
+                // branch once it is on another map.
+                if (WalkTo(player, new Vector3(retryExit.X, retryExit.Y, retryExit.Z), interval, toward: true)) Step = "lead:walk-exit";
+                else { Step = "lead:no-path-exit"; Hold(player); }
+                return;
             case PlayerbotGroupState.Forming:
             case PlayerbotGroupState.Gathering:
             case PlayerbotGroupState.Regrouping:
@@ -462,7 +502,8 @@ internal sealed class PlayerbotGroupAI
                 if (player.MapId != group.Goal.MeetingMap) { Step = "lead:hold-map"; HoldRun(player); return; }
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
-                PlayerbotNavigation.Guard(player, _options.Risk.Enabled ? _risk : null); // the leader keeps out of known hazards
+                // The leader keeps out of known hazards. Not on the way back after a world-boss wipe: the hazard at the spot the raid died on lies between the leader and the rally, and the raid is going back to that fight on purpose (a refusal there ended the raid as no-path-to-approach).
+                PlayerbotNavigation.Guard(player, _options.Risk.Enabled && group.WorldBoss is not { Wipes: > 0 } ? _risk : null);
                 Vector3 approach = TravelPoint(group);
                 bool approaching = WalkTo(player, approach, interval, toward: true);
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
@@ -482,6 +523,8 @@ internal sealed class PlayerbotGroupAI
                     return;
                 }
                 if (group.Run is { CurrentBoss: null }) { Step = "lead:hold-loot"; HoldRun(player); return; } // every boss is dead: the coordinator lets the loot settle
+                if (group.WorldBoss is { KilledAtMs: not 0 }) { Step = "lead:hold-loot"; HoldRun(player); return; } // the boss is down: the coordinator lets the loot settle
+                if (group.WorldBoss is { PullHeld: true }) { Step = "lead:hold-worldboss"; HoldRun(player); return; } // the pull waits for the players, or for the raid
                 if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
                 if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
                 if (!Ready(player)) { Step = "lead:hold-not-ready"; HoldRun(player); return; }
@@ -590,6 +633,8 @@ internal sealed class PlayerbotGroupAI
     /// <summary>Where the leader walks while engaging: the nearest visible objective creature, else the objective's spawn.</summary>
     private Vector3 ObjectivePoint(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
+        // A world-boss raid walks to its cached boss (one FindObject), else to where the boss was last known: never a scan.
+        if (group.WorldBoss is { } bossRaid) return !bossRaid.BossGuid.IsEmpty && player.Map?.FindObject(bossRaid.BossGuid) is Creature cached ? new Vector3(cached.X, cached.Y, cached.Z) : group.ObjectivePosition;
         if (FindObjectiveCreature(player, group) is { } creature) return new Vector3(creature.X, creature.Y, creature.Z);
 
         // A run's boss out of sight (it patrols away from its spawn): walk to where it is.
@@ -687,6 +732,7 @@ internal sealed class PlayerbotGroupAI
         {
             if (map.FindObject(guid) is not Creature { IsAlive: true } creature || creature.Entry != group.ObjectiveEntry) continue;
             if (!map.Combat.Hooks.CanAttack(player, creature) || group.IsShunned(creature.Guid, _session.World.NowMs)) continue;
+            if (group.WorldBoss is not null && PlayerbotBrain.IsSomeoneElses(player, creature, Groups())) continue; // a tap that lands between two scans still stops the pull
             float distance = Distance(player, creature);
             // The objective on the leader's own level first (a unit on the floor below is near in 3D and unreachable from here), then the nearest.
             bool otherLevel = PlayerbotTargetFilter.OnOtherLevel(new Vector3(creature.X, creature.Y, creature.Z), here);
@@ -796,7 +842,10 @@ internal sealed class PlayerbotGroupAI
     /// the group is not a dungeon run that fights through (which only walks, <see cref="ShouldCatchUp"/>).
     /// </summary>
     internal bool CanCatchUp(PlayerbotGroupCoordinator.BotGroup group)
-        => _options.Party.TeleportToLeader && _session.IsManaged && !(group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance);
+        => _options.Party.TeleportToLeader && _session.IsManaged && !(group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance) && !WalksOnly(group);
+
+    /// <summary>A world-boss raid walks to its rally unless <see cref="PlayerbotWorldBossOptions.CatchUpTeleport"/> lets the catch-up teleport a straggler.</summary>
+    private bool WalksOnly(PlayerbotGroupCoordinator.BotGroup group) => group.WorldBoss is not null && !_options.Groups.WorldBosses.CatchUpTeleport;
 
     /// <summary>
     /// Bring this bot (<paramref name="player"/>) to the group's leader now, to end the wait for it (<see cref="TrackLag"/>, the gathering's bound):
@@ -876,7 +925,7 @@ internal sealed class PlayerbotGroupAI
         // Gathering still walks (the leader holds until the members arrive on foot). A fight-through run never teleports.
         if (ShouldCatchUp(new PlayerbotGroupCatchUpFacts(group.State, distance, player.Combat.IsInCombat, leader.Combat.IsInCombat,
                 _options.Party.TeleportToLeader && _session.IsManaged, _options.Follow.CatchUpMode, _options.Follow.TeleportDistanceYards,
-                _options.Follow.LeaderCombatRangeYards, group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance))
+                _options.Follow.LeaderCombatRangeYards, group.Run is not null && !_options.Groups.DungeonRuns.TeleportToEntrance || WalksOnly(group)))
             && TryCatchUp(player, leader))
         {
             Step = "follow:catch-up";
@@ -993,6 +1042,8 @@ internal sealed class PlayerbotGroupAI
             return current ?? FindObstacle(player, group, TravelPoint(group));
         }
 
+        // A world-boss raid pulls only once its coordinator has released the pull, and not after the kill.
+        if (isLeader && group.WorldBoss is { } held) { if (held.KilledAtMs != 0) return null; if (held.PullHeld) return current is Creature { } fought && fought.Entry == group.ObjectiveEntry ? null : current; } // held: only a fight already on us (an add) is kept, the boss is never picked
         if (isLeader && group.State == PlayerbotGroupState.Engaging && !MembersBehind(player, group) && !group.AnyResting(_session.World)
             && Ready(player))
         {
@@ -1194,7 +1245,7 @@ internal sealed class PlayerbotGroupAI
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
                 return;
             case PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee:
-                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false))
+                if (!WalkTo(player, new Vector3(target.X, target.Y, target.Z), interval, toward: false, chase: true))
                 {
                     Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:no-path");
                     _target = null;
@@ -1512,6 +1563,41 @@ internal sealed class PlayerbotGroupAI
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this bot's plans.</summary>
     private TileWait _tileWait;
 
+    /// <summary>The Mark of Frost a player gets when Azuregos kills it (AzuregosKazzakAI.SpellMarkOfFrostPlayer; Kazzak does not apply it): a marked member sits the rest of the fight out.</summary>
+    internal const uint MarkOfFrost = 23182;
+
+    /// <summary>The world's spell service, resolved on the first world-boss think (a singleton for the session's life).</summary>
+    private SpellFeature? _spellFeature;
+
+    /// <summary>
+    /// A raid member carrying the Mark of Frost does not fight again: it stops, and holds at the rally (the leader's approach point) until the mark is gone.
+    /// True when it did (the member's think is over). A world-boss raid only; the leader is not held (its raid would stall).
+    /// </summary>
+    private bool SitOutMark(Player player, PlayerbotGroupCoordinator.BotGroup group, uint interval)
+    {
+        if (group.WorldBoss is null || (_spellFeature ??= _session.Services.GetService<SpellFeature>())?.System.HasAura(player, MarkOfFrost) != true) return false;
+        if (_target is not null)
+        {
+            if (_attacking) StopAttacking(player);
+            _target = null;
+            _attacking = false;
+            _route = null;
+            LastTargetGuid = ObjectGuid.Empty;
+            LastTargetEntry = 0;
+        }
+
+        Goal = PlayerbotGoalKind.Group;
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), group.Approach) > PlayerbotGroupCoordinator.WorldBossPresentSlackYards)
+            Step = WalkTo(player, group.Approach, interval, toward: true) ? "worldboss:walk-rally-marked" : "worldboss:no-path-rally-marked";
+        else
+        {
+            Step = "worldboss:hold-marked";
+            Hold(player);
+        }
+
+        return true;
+    }
+
     private void Hold(Player player)
     {
         _route = null;
@@ -1520,7 +1606,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>Walk towards <paramref name="goal"/>, planning again when it moved more than 2 yards since the last plan.</summary>
     /// <param name="toward">A far goal: a partial route towards it is fine (<see cref="PlayerbotNavigation.TryPlanToward"/>).</param>
-    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward)
+    /// <param name="chase">The goal is an enemy the bot closes on (<see cref="PlayerbotRoute.Chase"/>), planned as the brain plans its chase: the loop watch does not count its ends. Without it a waiting leader's walks to its waypoint and its fight chases to guards and attackers near it read as a back-and-forth (A, B, A) and the loop watch blacklisted the waypoint.</param>
+    private bool WalkTo(Player player, Vector3 goal, uint interval, bool toward, bool chase = false)
     {
         if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal) <= 1.5f)
         {
@@ -1551,6 +1638,8 @@ internal sealed class PlayerbotGroupAI
                 return planned == PlanOutcome.Pending;
             }
 
+            // Only the flag: a chase planned as the brain plans one (nearest mesh end, no fallbacks) would drop the far-end refusal that Fight reports as no-path.
+            _route.Chase = chase;
             _routeGoal = goal;
         }
 

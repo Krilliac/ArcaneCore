@@ -1,6 +1,6 @@
 # Playerbots: social, cooperative and learning behaviour (design proposal)
 
-Status: approved 2026-10-23; P1 implemented in this change. File references are to the code on the w43 integration branch (`src/ArcaneCore.Playerbots`, options in `src/ArcaneCore.World.Contracts/Playerbots`).
+Status: approved 2026-10-23; P1 implemented; P6a (cross-faction emotes and the rival stance, no combat) implemented, see docs/areas/playbots-social.md, Rivalry. File references are to the code on the w43 integration branch (`src/ArcaneCore.Playerbots`, options in `src/ArcaneCore.World.Contracts/Playerbots`).
 
 ## 1. What bots already do (so we build on it, not beside it)
 
@@ -176,7 +176,7 @@ Today bots play battlegrounds (`Battlegrounds/`) and GM-run event scenarios (`Ev
 | P2 Initiative & help | proactive openings, follow-ups, trouble scan, rez/buff strangers, surroundings comments | `Social/PlayerbotSocialInitiative.cs`, `PlayerbotBrain` help lane |
 | P3 Cooperation | recruitment of non-goal bots, bot LFG answering, guild grouping, affinity invite policy, raid escalation for world elites | `Groups/PlayerbotGroupCoordinator.cs`, `Party/PlayerbotGroupInvites.cs` |
 | P4 Trading | group gifts, bot↔bot swaps/loans, WTS completion, AH reagents | new `Economy/PlayerbotTrades.cs` |
-| P6 Rivalry & world PvP | cross-faction emotes, rival flag, hunting parties, defence groups, escalation to raids, safeguards | `Social/PlayerbotRivalry.cs`, `Groups/PlayerbotGroupCoordinator.cs` (rivalry/defence goals), `Risk/` |
+| P6 Rivalry & world PvP (P6a emotes and stance done; hunting and defence not started) | cross-faction emotes, rival flag, hunting parties, defence groups, escalation to raids, safeguards | `Social/PlayerbotRivalry.cs`, `Groups/PlayerbotGroupCoordinator.cs` (rivalry/defence goals), `Risk/` |
 | P7 World events | holidays and seasonal events; Ahn'Qiraj war effort; world PvP objectives (EPL towers, Silithyst); world-boss raids; social layer for battlegrounds | new `Events/PlayerbotWorldEventGoals.cs`, `Events/PlayerbotWarEffort.cs`, `Events/PlayerbotWorldPvpObjectives.cs`, `Groups/PlayerbotGroupCoordinator.cs` (world-boss raid goal) |
 | P5 Questions & learning | people-questions (a); curiosity mode (b) with claims, verification, trust, rumour spread | `Social/PlayerbotQuestions.cs`, `playerbot_knowledge` (schema 61) |
 
@@ -191,5 +191,5 @@ Approved with every new behaviour **on by default** and the **model enabled**:
 - **D3 Knowledge sharing**: rumours spread between bots, with confidence decaying per hop.
 - **D4 Model use**: model-backed openings, answers and claim parsing are enabled. The chat safety layer (opt-in, "ai off", strikes, disclosure, spend cap) still decides per player whether a model or a template speaks; templates remain the fallback.
 - **D5 Order**: P1 → P3 → P2 → P4 → P5, each phase its own PR.
-- **D7 World events** (added 2026-10-23): after the current work. Holidays and the war effort need no grouping and can follow P1; world-boss raids need P3; world PvP objectives build on P6. So: P7a holidays + war effort after P1, P7b world bosses after P3, P7c world PvP objectives after P6.
+- **D7 World events** (added 2026-10-23): after the current work. Holidays and the war effort need no grouping and can follow P1; world-boss raids need P3; world PvP objectives build on P6. So: P7a holidays + war effort after P1, P7b world bosses after P3, P7c world PvP objectives after P6. **Status (2026-10-24):** P7a slice 1 is built on `claude/p7a-world-events`: the festival gathering (idle bots stand 8 to 12 yards from a festival NPC for the event's length), their arrival lines and emotes, and the "an event has started" remark gated on `World:Playerbots:Social:Events:Enabled`; see [World events: festivals](../areas/playbots-social.md). Not in slice 1: the war effort, and emotes aimed at a player.
 - **D6 Rivalries** (added 2026-10-23): cross-faction emotes for neutral/friendly pairs; hunting parties against disliked targets and defence groups for the target, escalating up to raids. P1 already records PvP kills and emotes; P6 builds the behaviour after P3 (it reuses the group coordinator). Safeguards in 4.8 on by default.

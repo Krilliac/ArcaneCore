@@ -121,7 +121,7 @@ public sealed class QuestItemLootCountingWorldTests
     /// <summary>
     /// The 5875 client prints the centre-screen "Scorpid Worker Tail: n/10" line once per SMSG_QUESTUPDATE_ADD_ITEM it receives (n is its own bag
     /// count, so two packets print two identical lines); SMSG_ITEM_PUSH_RESULT only gives the chat "You receive loot" line
-    /// (D:/WoW-RE-Research/protocol/quest-item-progress.md). One looted tail must therefore produce exactly one of each on the wire, carrying the
+    /// (WoW-RE-Research protocol/quest-item-progress.md). One looted tail must therefore produce exactly one of each on the wire, carrying the
     /// item entry and the looted count.
     /// </summary>
     [Fact]

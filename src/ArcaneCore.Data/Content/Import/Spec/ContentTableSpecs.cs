@@ -35,6 +35,8 @@ public static class ContentTableSpecs
         "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
         "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
         "VendorTemplateId", "vendor_id",
+        // CreatureEquipmentDataModule (ClassicDB EquipmentTemplateId, vmangos equipment_id; ObjectMgr.cpp:1301)
+        "EquipmentTemplateId", "equipment_id",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
@@ -152,6 +154,9 @@ public static class ContentTableSpecs
             ["build", "bounding_radius", "combat_reach", "gender", "modelid_other_gender", "display_id_other_gender"], []),
         new("creature_display_info_addon", [new KeyColumn("modelid", "display_id")],
             ["build", "bounding_radius", "combat_reach", "gender", "modelid_other_gender", "display_id_other_gender"], []),
+        // creature_equip_template: ClassicDB equipentry1..3; vmangos item1..3 with a probability and a patch range (ObjectMgr.cpp:1735).
+        new("creature_equip_template", [new KeyColumn("entry")],
+            ["equipentry1", "equipentry2", "equipentry3", "item1", "item2", "item3", "probability", "patch_min", "patch_max"], []),
         new("creature_addon", [new KeyColumn("guid")],
             ["mount", "mount_display_id", "stand_state", "sheath_state", "emote", "emote_state"], []),
         new("creature_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")],

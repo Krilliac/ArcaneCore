@@ -14,7 +14,7 @@ namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
 /// A bid the bidder cannot afford and a cancellation whose cut the seller cannot pay get no answer in vmangos
-/// (D:\refs\vmangos\src\game\Handlers\AuctionHouseHandler.cpp:498-503 and :592-594). Packets of one session are answered
+/// (vmangos@0e3ff01 src/game/Handlers/AuctionHouseHandler.cpp:498-503 and :592-594). Packets of one session are answered
 /// in order, so the next deterministic answer proves the earlier request produced none.
 /// </summary>
 public sealed class EconomyAuctionSilentRefusalTests

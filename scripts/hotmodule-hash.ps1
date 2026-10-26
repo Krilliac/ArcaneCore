@@ -17,7 +17,7 @@
 .PARAMETER Label            Free text after the hash (default: the version of the file, if it has one).
 
 .EXAMPLE
-  powershell -File scripts\hotmodule-hash.ps1 -Name GmCommands -ModuleDirectory D:\arcane\modules -Allowlist D:\arcane\modules-allowlist.txt
+  powershell -File scripts\hotmodule-hash.ps1 -Name GmCommands -ModuleDirectory <modules-dir> -Allowlist <allowlist-file>
 #>
 [CmdletBinding()]
 param(

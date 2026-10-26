@@ -51,7 +51,7 @@ All other files are new, under these paths:
   - Grid math is in `GridDefines.ComputeGridCoord` (vmangos GridDefines). If a shared grid/cell index lands, the system's per-grid lists can move onto it.
 - **Quests / gossip / NPC services:**
   - `Creature.NpcFlags`, `Template.NpcFlags` and `FindCreature` for interaction checks.
-- **Items:** equipment (virtual item slots) is not set. Hook point: `Creature.InitializeFields`.
+- **Items:** equipment (virtual item slots) is set from `creature_equip_template` since world schema 56 (`Creature.ApplyEquipment`, called from `InitializeFields`).
 
 ## Merge notes
 

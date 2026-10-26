@@ -1,7 +1,9 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +25,7 @@ namespace ArcaneCore.World.Creatures;
 /// cannot be undone by one of them still waiting here.
 /// </para>
 /// </summary>
-public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger logger) : ICreatureRespawnPersistence
+public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null) : ICreatureRespawnPersistence
 {
     private const int MaxAttempts = 3;
 
@@ -41,6 +43,8 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     private Task? _timer;
     private Task? _consumer;
     private int _pending;
+    private volatile bool _stopping; // set by StopAsync: one attempt per write, and the stop drain's stall bound applies
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
 
     /// <summary>One queued store write. A spawn write names its key; an instance delete has <see cref="OpKey.SpawnGuid"/> 0 and <see cref="OpKey.InstanceWide"/> set.</summary>
     private sealed record Op(OpKey Key, long Sequence, CreatureRespawnRecord? SaveRecord, CreatureRespawnKey? DeleteKey, bool IsSweep = false)
@@ -81,6 +85,23 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             lock (_gate)
             {
                 return _retained.Count;
+            }
+        }
+    }
+
+    /// <summary>The retained writes by key (<c>spawn:INSTANCE/GUID</c>, or <c>instance:ID</c> for an instance-wide delete), ordinal order.</summary>
+    public IReadOnlyList<string> RetainedKeys
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_retained.Count == 0) return [];
+                string[] keys = [.. _retained.Keys.Select(k => k.InstanceWide
+                    ? $"instance:{k.InstanceId}"
+                    : $"spawn:{k.InstanceId}/{k.SpawnGuid}")];
+                Array.Sort(keys, StringComparer.Ordinal);
+                return keys;
             }
         }
     }
@@ -197,6 +218,13 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     public IReadOnlyDictionary<uint, long> GetPending(uint mapId, uint instanceId)
         => _times.TryGetValue((mapId, instanceId), out Dictionary<uint, long>? times) ? new Dictionary<uint, long>(times) : new Dictionary<uint, long>();
 
+    public bool TryGetPending(uint mapId, uint instanceId, uint spawnGuid, out long respawnUnixSeconds)
+    {
+        if (_times.TryGetValue((mapId, instanceId), out Dictionary<uint, long>? times) && times.TryGetValue(spawnGuid, out respawnUnixSeconds)) return true;
+        respawnUnixSeconds = 0;
+        return false;
+    }
+
     public void Save(uint mapId, uint instanceId, uint spawnGuid, long respawnUnixSeconds)
     {
         For(mapId, instanceId)[spawnGuid] = respawnUnixSeconds;
@@ -258,6 +286,8 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     public async Task StopAsync()
     {
+        _stopping = true;
+        _drain.Begin();
         if (!_timerStop.IsCancellationRequested)
         {
             await _timerStop.CancelAsync().ConfigureAwait(false);
@@ -309,6 +339,18 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 
         if (left.Length > 0)
         {
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.respawn-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-respawn-stop-drain",
+                    refusal,
+                    "creature respawn queue shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    _drain.Refused,
+                    left.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"creature respawn writes did not drain for {string.Join(", ", left)}", first);
         }
     }
@@ -355,23 +397,35 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     private async Task<Exception?> TryWriteAsync(Op op, bool sweep = false)
     {
-        int attempts = sweep ? 1 : MaxAttempts;
+        int attempts = sweep || _stopping ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; ; attempt++)
         {
+            if (attempt == 1 && _stopping && _drain.Refuse() is { } refused)
+            {
+                return refused; // shutdown drain only: nothing is attempted, the write stays retained
+            }
+
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICreatureRespawnStore>() is { } store)
                 {
                     await op.ExecuteAsync(store).ConfigureAwait(false);
                 }
 
+                progress.Succeeded();
                 return null;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && attempt < attempts && !DatabaseTransience.IsBusy(ex))
             {
                 ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn-attempt", ex);
                 logger.LogWarning(ex, "creature respawn write failed (attempt {Attempt}); retrying", attempt);
+                if (_stopping && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the write stays retained with its real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

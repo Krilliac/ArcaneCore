@@ -20,6 +20,23 @@ export function adoptToken({ hash, storage, clearFragment }) {
     return storage.getItem(SESSION_SLOT);
 }
 
+/**
+ * The display name a join link carries (`#t=<token>&name=Grok%20Bot`), decoded, or null when the fragment has none (or it is
+ * empty or malformed). Pure; read it before `adoptToken` clears the fragment. The app cleans it like any typed name.
+ */
+export function fragmentName(hash) {
+    const match = /(?:^#|&)name=([^&]*)/.exec(hash ?? '');
+    if (!match) {
+        return null;
+    }
+    try {
+        const name = decodeURIComponent(match[1]);
+        return name.trim().length > 0 ? name : null;
+    } catch {
+        return null;
+    }
+}
+
 export function forgetToken(storage) {
     storage.removeItem(SESSION_SLOT);
 }
@@ -148,6 +165,23 @@ export class Api extends Emitter {
             detail: decodeHeader(response.headers.get('X-Atlas-Tile-Detail')),
             body: await response.arrayBuffer(),
         };
+    }
+
+    /**
+     * GET /api/bin/texture: one ATX1 texture as bytes. `fmt` is 'rgba' or 'dxt' (compressed blocks, only when the browser
+     * advertises S3TC); `maxSize` (a power of two, 0 = none) drops the top mip levels host side. A key the host does not have
+     * answers 404, which surfaces as an ApiError with that status.
+     */
+    async texture(key, { fmt = 'rgba', maxSize = 0, signal } = {}) {
+        const query = new URLSearchParams({ key, fmt });
+        if (maxSize > 0) {
+            query.set('maxSize', String(maxSize));
+        }
+        const response = await this.#request(`/api/bin/texture?${query}`, { signal });
+        if (!response.ok) {
+            throw new ApiError(`GET /api/bin/texture answered ${response.status} for '${key}'.`, { status: response.status });
+        }
+        return new Uint8Array(await response.arrayBuffer());
     }
 
     async postCapture(id, blob) {

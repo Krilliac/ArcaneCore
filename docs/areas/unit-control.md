@@ -1,7 +1,7 @@
 # Unit control: charm, possession, mana burn, funnels and Spirit of Redemption
 
 Wave-2 lane "unit-control" (branch `claude/w2-unit-control`, based on the proc-engine tip). Every rule cites the vmangos source it was
-checked against (`D:\refs\vmangos`, GPL, read-only); spell shapes in the tests are reduced classic-db rows.
+checked against (`<refs-root>\vmangos`, GPL, read-only); spell shapes in the tests are reduced classic-db rows.
 
 ## Charm and possession (`Game/Pets/Control`)
 
@@ -119,4 +119,4 @@ Behaviour, in the order vmangos runs it:
   map-change case failed with the stun left on, and fails again with both the removal carry and the due-time redirect disabled, either alone
   passing it; the re-entry case guards against a double run).
 * Playerbot scenarios, `tests/ArcaneCore.World.Tests/Playerbots/Scenarios/UnitControlScenarioTests.cs` (3; RED: all 3 failed at the control
-  step): `control-possess`, `control-charm`, `spirit-of-redemption`. Logs: `D:/ArcaneCore-lanes/_logs/w2-unit-control/`.
+  step): `control-possess`, `control-charm`, `spirit-of-redemption`. Logs: `<lanes-root>/_logs/w2-unit-control/`.

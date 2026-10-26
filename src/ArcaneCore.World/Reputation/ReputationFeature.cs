@@ -12,6 +12,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -58,6 +59,9 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
 
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
+
+    /// <summary>The reputation write queue, once loaded (the persistence probe registry reads it).</summary>
+    internal ReputationWriteQueue? Writes => _writes;
 
     public void Attach(WorldRuntime world)
     {
@@ -278,7 +282,7 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
                 _logger.LogWarning("Reputation content: {Warning}", warning);
             }
 
-            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>(), services.GetService<IHostApplicationLifetime>());
+            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>(), services.GetService<IHostApplicationLifetime>(), services.GetService<ShutdownDrain>()?.Features);
             var rates = new ReputationRates { Gain = Options.RateGain, LowLevelKill = Options.RateLowLevelKill };
             return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
             {

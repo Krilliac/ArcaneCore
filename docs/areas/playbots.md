@@ -87,7 +87,7 @@ buy affordable weapon/armor/bag/recipe upgrades and crafting tools/reagents from
 quest objective creature is in immediate sight, harvest nearby herb and mining nodes (`TryGatherNode`), skin looted beast and dragonkin corpses
 (`TrySkinCorpse`; the loot window of a gather, skin or disenchant cast is taken on the brain update after it arrives, between thinks as a
 corpse's is, not on the crafting rung's next think, which higher rungs, other loot readers and the bounded packet ring stood between:
-`PlayerbotCrafting.UpdateGatherLoot`, GitHub #774), craft wearable upgrades, bags, ammo, bandages, potions, food and intermediate
+`PlayerbotCrafting.UpdateGatherLoot`, GitHub #774; a gather skips a node another looter has open, releases its own gather window server side on the loot timeout (only when that window belongs to the timed-out target, and not while a quest settlement is pending) so the node is not left "in use", and backs a node whose cast was refused with CHEST_IN_USE off for 60 s without a `craft-failed` report, GitHub #1468), craft wearable upgrades, bags, ammo, bandages, potions, food and intermediate
 reagents (moving to a nearby forge or anvil when `RequiresSpellFocus` demands one), and hunt creatures that drop missing crafting materials (`PreferredMaterialDropperEntry`).
 
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
@@ -247,6 +247,26 @@ which is exact and needs no path search.
   for the cell's backoff since its last stall (10, 30, then 60 minutes from the second stall, read against the world clock at each ask; the first stall is recorded but is no pin yet; a cell whose backoff ended an hour ago starts again; from the third stall a replaced navigation dataset frees it),
   `GiveUpStalledGoal` escalates the stalled target entry's suspension (`SuspendEntryEscalating`, doubling up to `MaxSuspendMs` = 80 minutes) and marks
   repeated quest stalls unreachable (the escalating mark above), and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+- **Timbermaw Hold tunnel** (issues #1478 and #1479; map 1, 6627,-2024 to 7020,-2140, the only Felwood to Winterspring walk; live 2026-10-25: 622 anomaly lines from 244 bots in a day).
+  - *Goal points on the cave floor.* `PlayerbotNavigation.GroundNear` puts a retreat goal (`PlayerbotRetreat.OnGround`) and an inward explore leg end (`PlayerbotBrain.InwardLeg`) on the floor
+    nearest the bot's own height: it probes from 2 yards above the bot, then from 20 (`GroundProbeLowYards`, `GroundProbeHighYards`), drops floors more than `GroundMaxDeltaYards` (30) from the bot and floors the walking region graph puts on no region
+    or in another component than the bot's (`NavRegionGraph.ComponentOf`; unfiltered while the graph is not built or the bot is on no region), and leaves the point as it was when none is left. Before, the one probe from 20 yards over the point started in the rock of a cave and the goal stayed at the bot's height, on no region.
+    A `PlayerbotNavigation.FloorProbe` looks up the bot's own region and component once per planning and serves every goal point of it (the retreat's up to six).
+  - *Explore judges by reputation.* `ExploreAttackable` asks the reputation reaction source (`INpcReactionSource`, as `CanApproachTrainer` and `IsKillable` do) and takes a creature whose reaction is below Friendly; the templates decide only without a source. Creatures with gossip, quest-giver or vendor npcflags
+    (`IsExploreServiceNpc`) are never explore candidates.
+  - *Town vendors the bot can use.* The vendor and repair index (`PlayerbotTownGoals.RefreshRepairSpawns`) needs a reaction above Unfriendly (`CanApproachTrainer(..., above: Unfriendly)`): vmangos `Player::CanInteractWithNPC` refuses ranks up to Unfriendly, as `QuestNpcServices.InteractableNpc` does,
+    so an Unfriendly vendor does not attack but cannot be used. The index key carries a stamp of the bot's usability verdict (`CanApproachTrainer`) for the factions of the vendor and repair NPCs that have spawns on this map (`RankStamp`), so a rank change that flips a verdict rebuilds it and one on another map does not. After a `town/service-npc-missing` report the entry is set aside (`SuspendEntryEscalating`).
+    Other `CanApproachTrainer` callers keep the Hostile floor.
+  - *One synchronous search per no-path episode.* A "no path" that an escalated world-thread search (`PlayerbotPathJobs.Escalate`, after `EscalateAfterFailures` failed jobs) finds is kept per bot for its (8-yard start cell, goal cell) pair for `NoPathMs` (30 s, wall clock):
+    `PlayerbotThinkProbe.Find` answers the pair with no path at once (`PlayerbotPathJobs.KnownNoPath`, counted in `NoPathCached`), with no job and no second search. The cells are 8 yards in X, Y and Z, and the key carries the query kind (mover, include and exclude flags, partial allowed), so a search with other options is not answered from it. Capped and tile-pending answers are never kept.
+    `PlayerbotRoutePlanWatch` suppresses a plan pair after repeated refusals from one spot; it works on the plan, not the query, and does not gate this escalation.
+  - *No world pins on cut regions.* `NavRegionGraph.IsArticulation` / `JoinsLargeParts` (iterative Tarjan over the portal links, O(regions + links), computed with the component labels by `Prepare` on the pool thread that builds the graph) find a region that is the only way between two large parts of the mesh.
+    A stall in such a region (`PlayerbotNavigation.TryRegionAt` plus `IsCutRegion`: both parts hold at least `CutRegionPartPolygons` = `FragmentPolygons` (500) polygons) is not reported to the shared pins (`PlayerbotStallWatch.ReportDeadEndPin`, by `(graph, region)` or `inCutRegion`), and `PlayerbotNavigation.PinRefuses` lets a pinned point through when its region is a cut region: both the plan destination (`PlanDirectCore`) and the end of a partial leg (`Usable`).
+    The decision is the seam `PinRefuses(deadEndPin, graph, region)` over `TryRegionAt` and `IsCutRegion`, tested on hand-built graphs (`NavRegionGraph.FromJoints`). The call sites are tested end to end on a real Detour mesh (`PlayerbotSharedPinsTests`: three linked tiles A - B - C, B one cell wide between two 529-polygon parts): `ReportWorldPin` through the brain, `PlanDirectCore` (plan destination) and `Usable` (partial leg end).
+    A region between a large part and a pocket is not a cut region in this sense, and pins as before. The bot's own pin memory, its entry set-asides and the escape stay.
+    *Size bound.* Only a cut region of at most `CutRegionMaxPolygons` polygons (`PlayerbotOptions`, default 5000, 0..1000000, 0 exempts none) is exempt (`NavRegionGraph.RegionPolygons`); a larger one pins and refuses as any other region. The tunnel's three route regions hold 4882, 292 and 496 polygons on the walking graph of map 1 (measured by `NavRegionGraphRealTerrainTests.Kalimdor_TimbermawHoldTunnel_ThroughRouteIsOneWalkingComponent_AndTheOffRoutePointsAreNotInIt`), so the default 5000 keeps them inside; the real-terrain probe asserts the bound: it fails when a route region grows past 5000 after an mmaps regeneration, on a machine with `ARCANECORE_TEST_TERRAIN_DIR` set (the default has only ~2% headroom over the tunnel's largest region; this real-terrain test skips in CI).
+    Trade-off: the test still judges the whole region, so a genuine snag anywhere inside an exempt cut region is never shared as a world pin, and the bot's own pin there no longer refuses a plan destination or a partial leg end. Entry suspensions, `EscapeIsland` and the blacklist still apply, but none of them stops a re-plan into the same cell. Measured on the extracted mmaps by the `NavRegionGraphRealTerrainTests` probes (`BothContinents_CutRegionSizes_ArePrinted`; skips in CI): cut regions are large (median about 1700 polygons) and the bound only trims the largest, so at 5000 the exempt regions still hold about 11% of each continent's polygons. The graph keeps no polygon geometry, so the area in square yards is not measured.
+  - *Probe.* `NavRegionGraphRealTerrainTests.Kalimdor_TimbermawHoldTunnel_ThroughRouteIsOneWalkingComponent_AndTheOffRoutePointsAreNotInIt` (needs `ARCANECORE_TEST_TERRAIN_DIR`) asserts, on the walking graph (SteepSlopes excluded): (1) the through-route samples share one walking component, so the tunnel is not cut; (2) at least one route region is an articulation region joining large parts (>= 500 polygons), and at least one route point lies in such a region; (3) 6957.6,-2044.4 and 6940,-2090 are not in that component (they stay unreachable on foot: the lane stops bots choosing or pinning them, it does not make them reachable); (4) with steep polygons allowed, 6957.6,-2044.4 joins the Felwood mouth's component and 6940,-2090 does not. It prints the number of such regions on maps 0 and 1.
 - **The defer ledger** (`PlayerbotDeferLedger`, one per bot, `PlayerbotSuspensions.Ledger`): the one place a bot records what it put off.
   A key is a `DeferKind` and an id; `Defer` gives it a deadline (the kind's step by strike: entry, quest and training keep their 10 minute steps, the entry doubling up to 80 minutes; an unreachable quest 60 s, 10 min, 1 h, 6 h, 24 h;
   a pin cell 10, 30, 60 min from its second stall) and optional wake causes
@@ -350,7 +370,9 @@ within a step and in sight leads over it. Live 2026-10-11 (bot QA #180, live-w23
 every goal they took (quest 65 to Wiley the Black, quest 2039 to Bingles Blastenheimer, the Harvest Watchers beside the farm), for hours and
 across restarts (Wfbotac was saved there). When a stall gives a goal up (`GiveUpStalledGoal`, including a failed tram trip's bot-local
 set-aside), the brain asks
-`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards) and, out of combat in the
+`PlayerbotNavigation.IsOnMeshIsland` (12 partial queries 120 yards out; an island ends every one within 55 yards; the queries share
+`IslandTotalSearchNodes` (16384 nodes, at most `IslandSearchNodes` (2048) each) and one that spends the budget or is cut short proves no island,
+bot QA #1483: it had run 12 synchronous searches of 8192 nodes, a 504 ms think) and, out of combat in the
 open world, moves the bot off as from an unsafe landing: a homed bot teleports home (`PlayerbotHomeTeleportReason.Island`, logged `stalled on
 ground no route leaves`) when that teleport would be made, else (an unhomed bot, or the home teleport's 5-minute cooldown) to its bind point.
 The bind-point teleport, here and after an unsafe landing, is refused as the teleport home is: in a group (a grouped bot can still run the
@@ -504,7 +526,12 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
-  reach (a route that stops short, at the foot of the cliff, is no way). A failed ride is not tried again for 10 minutes.
+  reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
+  (2000): the approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, and the walk
+  ends after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). This is a coarse guard, not the fix: of the
+  "no way to the Great Lift" failures that day those that began more than 2000 yards out (most of them in the 2026-10-25 live log) are covered and those inside it (among them the issue's own
+  -3557,-2240) are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, and the "in the shaft pit" failures at the lift itself are not. The journey or the walk leg
+  brings the bot within reach and the trip begins on a later think (all lifts share the rule). A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a
@@ -718,7 +745,7 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 
 | Key | Meaning |
 |---|---|
-| `v` | Record version (2). Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads both, remapping version 1 bits. |
+| `v` | Record version (3). Version 3 added the `losing-burst-N` retreat `reason` and the `round_damage` retreat feature to fight records (every other record kind keeps its layout). Servers built between PR 1427 and the bump wrote that change under version 2, so a version 2 fight record may already carry `round_damage` and `losing-burst-N`: a fight-record reader should go by the length of `retreat.f` (7 or 8), not by `v`. Version 2 added the `Opportunity` goal, which moved every goal after `Town` up one bit in `open` (`Explore` went from bit 6 to bit 7); a version 1 file has the old seven-goal bits. The trainer (`tools/playerbot-policy/train.py`) reads all three (1, 2, 3), remapping version 1 bits and labelling every record with the current version. An older `train.py` rejects version 3 goal records even though their layout is unchanged. |
 | `k` | `goal` (this table); `fight`, `skip` and `opportunity` are the combat records below; `health` is the tick-health record below. |
 | `t` | Unix ms of the decision. |
 | `bot` | The bot's player guid (hex). |
@@ -767,7 +794,8 @@ record comes from a build without it, or from a host with the tick monitor disab
     its own target when that is one of the enemies.
   - `retreat`: the retreat decision, null with risk scoring off. It is the verdict that ran (`retreat` 1) or the stay closest to
     running (`retreat` 0, the least time to die per time to kill). It holds `f` (`health`, `dps_in`, `dps_out`, `enemies`,
-    `time_to_kill`, `time_to_die`, `target_health`) and `reason`.
+    `time_to_kill`, `time_to_die`, `target_health`, `round_damage`: the non-crit max hit of each melee attacker added up, as a
+    share of the bot's maximum health) and `reason` (`losing-burst-N` is a retreat only the round-damage trigger caused).
   - `rest`: `f` (health, mana and resurrection sickness at the fight's end) and `rested` (1 when the bot's goal became `Rest` within
     5 s of the looting that followed the fight, or of the fight's end; `Rest` also covers waiting with no food and waiting sickness out,
     which `sick` helps tell apart).
@@ -820,6 +848,25 @@ whether to help someone who tagged a mob first. Code: `PlayerbotContention.cs`, 
   (`PlayerbotRisk.GroupSignal`); the coordinator matches by objective and, with `World:Playerbots:Groups:InvitePlayers`, invites a nearby real player.
 * **Stolen kills.** A corpse that is not the bot's to loot (another player's tap, or no credit) gets no loot request and no 10-second wait; the
   spawn is left alone for the memory window.
+* **Invincible targets.** Some creatures cannot be killed by a plain attack. Their EventAI holds them at 1 health from spawn (event 11,
+  action 42 `SET_DEATH_PREVENTION` with a nonzero first parameter, `Unit.InvincibilityHpThreshold` 1) until a particular spell hits them: the
+  Blasted Lands servants 7668-7671 of quest 2681 "The Stones That Bind Us" die only to Shackle Shatter (10805, 10834, 10835, 10836; rows
+  766801 and 766803 and the like). Two layers keep bots off them. (1) Quest side: `CreatureAiContent.IsInvincibleUntilSpellHit(entry)`, built
+  once at load from the entry's rows, is true when a spawn row sets the prevention and no row of the entry lifts it (action 42, parameter 0)
+  on an event other than a spell hit (a health or timer lift a plain attack can reach keeps the creature killable). `IsKillObjective` is then
+  false, so `CanExecuteObjectives` refuses the quest at acceptance and `Huntable` never picks those entries for a quest already in the log.
+  (2) Combat safety net: `PlayerbotInvincibleWatch` (one per brain, called from the fight step beside `FightGoesNowhere`) counts how long the
+  held target has stayed alive with `InvincibilityHpThreshold != 0` and health at or below it; after
+  `World:Playerbots:Contention:InvincibleTargetAbandonSeconds` (8, 1..600, live) the bot sets that creature aside exactly like a fight that
+  goes nowhere (`MarkUnreachable` for `StalledTargetMs`, `MarkFruitless`, then explores) and reports the anomaly `bot-combat` /
+  `invincible-target-abandoned` once per creature entry per bot, again only after 10 minutes, doubling up to 6 hours. A creature with a
+  threshold but health above it, or at low health with no threshold, is never abandoned, nor is any target on a dungeon or raid map (scripted
+  boss phases hold at 1 health) or a `NotSelectable` one. The brain resets the watch whenever it chooses a target afresh. Also: `IsSkipped` drops
+  these entries from solo grind and hunt target choice; a spell-hit lift with spell id 0 (any spell of its school) counts as an ordinary lift;
+  rows keyed by spawn guid are ignored (fail open, the watch catches them); and a bot that already holds such a quest in its log abandons
+  it through the client packet (`PlayerbotQuestGoals.UnkillableQuestToShed`, checked each quest update outside combat, set aside afterwards).
+  The anomaly key is `bot-combat/invincible-target-abandoned`. Follow-up, not done: using the quest's stone
+  and casting Shackle Shatter (quest 2681's real mechanic) so a bot could complete these objectives.
 * **No credit.** A quest creature that gained no credit (kill or quest item) in three minutes of *contested hunting* is set aside for the bot for
   `ContentionSuspendMinutes` (5). Only time at the spawns with every creature in sight taken by others counts (a lost or stolen mob adds 20 seconds); resting, dying and town trips add nothing, a gap of over five seconds pauses the clock, and walking around the spawns while every creature of the entry is taken does count. The bot then moves on: the bot hunts its next unfinished objective, or raises a `contention` group signal when none is left. Among
   its objectives a bot takes the one a hash of its guid ranks first, so bots with the same quests do not all take the first. A quest item
@@ -1124,6 +1171,23 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
     quests 400, 2160, 2997). These are navigation obstacles, not quest faults; the zone clip and the return teleport bring homed bots back from
     the first two, the third is on the Westfall-to-Ironforge line above.
 
+### Think time and the destination step budget
+
+A think is measured per phase (`PlayerbotThinkProbe`); `World:Playerbots:SlowThinkLogMs` logs the slow ones with their phases, and the
+destination planner's work is split into "destinations entries", "destinations transit", "destinations journey" and "destinations advance"
+(the plan queries stay in "grind destinations"). A think over the threshold only because the garbage collector paused the process (think
+time minus the GC pause under the threshold) is `bot-brain/think-gc-stall` at Info, not `think-slow`, and never reaches bot QA. The
+`bot-brain/think-overran` check (a whole `Update` over 500 ms) subtracts the collector's pause during that `Update` the same way (bot QA #1483).
+
+`PlayerbotWorldDestinations.Update` checks a step budget before each costly step (the tram, lift and taxi block, the unreachable skip, the
+path plan, a water journey): the think is past 25 ms, the destination loop past 20 ms (once a candidate was judged), or the think has made
+too many path queries. A spent budget **defers** the step: nothing is stored against the spawn (no back-off, no blocked spawn, no refused
+plan), and the next think resumes at the same candidate while its list is unchanged. A deferral is never "planning" to the stall watch, so a
+bot that is over budget on every think is still seen as stalled. After three deferrals in a row the next think runs its step whatever the
+budget, so the destination loop itself always progresses; the brain's own 15 ms optional-work gate can still skip a destination update.
+The cached nearest-spawn lists are kept per identity (quest givers, one hunted entry, one quest return; three at most), and blocked spawns
+survive switches between them.
+
 ### Faults and quarantine
 
 An exception out of a bot's update (brain, scripted controller or `PlayerbotMotion`) is an
@@ -1342,7 +1406,7 @@ MSG_MOVE_WORLDPORT_ACK a client would after its loading screen, so the bot resum
 | `instance` | Instance target, bot neither grouped with the target nor inside it. |
 | `other-instance` | Same map id, a different instance than the target's. |
 | `map-not-allowed` | The destination map is not in `AllowedMaps`. |
-| `security` | The bot's account outranks the invoker (never from the console). |
+| `security` | The bot's account outranks the invoker (never from the true console; a remote-administration invoker is checked like any other). |
 | `not-running` | The registered bot has no live in-world session. |
 | `not-managed` | The session is not a managed bot. |
 | `no-free-spot` | No ring slot with ground and line of sight was left for it. |
@@ -1522,6 +1586,7 @@ itself and plain game mechanics, never invented lore.
 | `MaxTokens` | The reply limit, 16..1024 (150). |
 | `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
 | `ReasoningEffort` | OpenAICompatible: sent as `reasoning_effort` when set: `none`, `minimal`, `low`, `medium`, `high` or `xhigh` (any case); empty (default) sends nothing. Set `none` for a thinking model (below). The `Classify` moderation call inherits it, and defaults to `none` for a server on this machine when it is empty. `omit` never sends the field, to the reply or to the classifier call (for a server that rejects it). |
+| `JsonResponseFormat` | OpenAICompatible: send `response_format: {"type":"json_object"}` with the reply prompts, so the server constrains the model to a JSON object (`true` by default; Ollama and OpenAI support it). Set `false` for a server that rejects the field: LM Studio answers 400 to `json_object` (it only takes `json_schema`), which shows as `failed: rejected` and a cooldown; the warning then names this option. A reply that is still not readable JSON (fenced, escaped, trailing text are tolerated) is reported as the `bot-chat/prompt-json-invalid` anomaly and the next provider answers; it is not a server fault. |
 | `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
 | `Moderation`, `ModerationBaseUrl`, `ModerationModel`, `ModerationApiKeyEnvironmentVariable` | The optional moderation step before a line is sent to this provider: `None` (default), `Endpoint` or `Classify` (see Safety and provider policies). |
 

@@ -2,8 +2,8 @@
 
 Lane `stats-combat-formulas` (branch `claude/vw-stats-combat-formulas`). Everything below is
 reimplemented from the behaviour of the references; no reference code or data is copied into this
-repository. `D:\refs\vmangos` is the primary reference (commit 4b3d241), `D:\refs\mangos-classic`
-the cross-check, `D:\refs\classic-db` the base data.
+repository. `<refs-root>\vmangos` is the primary reference (commit 4b3d241), `<refs-root>\mangos-classic`
+the cross-check, `<refs-root>\classic-db` the base data.
 
 Code: `src/ArcaneCore.Game/Stats/`, `src/ArcaneCore.Game/Combat/ICombatStatSource.cs`,
 `src/ArcaneCore.Kernel/WorldData/PlayerStats/`, `src/ArcaneCore.Data/World/PlayerStats/`,
@@ -70,7 +70,7 @@ points are the importer methods:
 ```csharp
 var importer = new PlayerStatsDumpImporter();
 importer.Read(textReaderOverTheClassicDbDump);          // classic-db player_* tables
-importer.ApplyMigrationDirectory(@"D:\refs\vmangos\sql\migrations");
+importer.ApplyMigrationDirectory(@"<refs-root>\vmangos\sql\migrations");
 PlayerStatsImportReport report = await importer.WriteAsync(worldDb, replace: true);
 ```
 
@@ -237,7 +237,7 @@ Code: `Spells/Auras/CombatStatAuras.cs`, `Spells/Auras/CombatTableAuras.cs`, `St
 `Combat/Melee/WeaponAuraModifiers.cs`, `Combat/Melee/MeleeDamageBonus.cs`, `Combat/MeleeHitTable.cs`, `Combat/MapCombat.Melee.cs`,
 `Spells/SpellCombatRules.cs`, `Spells/Casters/Bonus/SpellBonusModule.cs`. Tests: `Game.Tests/CombatMechanics/HitChanceAuraTests.cs`,
 `MeleeDamageBonusTests.cs`, `Game.Tests/Stats/CombatStatAurasTests.cs`, `Game.Tests/Spells/Casters/SpellDamageVersusTests.cs`,
-`World.Tests/Playerbots/Scenarios/CombatStatScenarioTests.cs` (scenario `combat-stat-auras`). Reference: vmangos (`D:/refs/vmangos`).
+`World.Tests/Playerbots/Scenarios/CombatStatScenarioTests.cs` (scenario `combat-stat-auras`). Reference: vmangos (`<refs-root>/vmangos`).
 
 | Area | Behaviour | vmangos |
 |---|---|---|
@@ -267,5 +267,7 @@ refreshed with another amount, as vmangos' HandleStatModifier does).
 
 Limits: the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
 SCHOOL_DAMAGE spells (Shield Slam and the like) still take only the DAMAGE spell mod, not the non-weapon branch of `MeleeDamageBonusDone`; creature
-damage fields are recomputed for the main hand only (creatures carry no off-hand data), and without creature equipment rows
-(`creature_equip_template`, not in the repository) no creature holds a weapon, so the 40% disarm factor needs that data to show in play.
+damage fields are recomputed for the main hand only (creatures carry no off-hand data). Creatures hold their `creature_equip_template` items since world
+schema 56 (see [content import](content-import.md), creature equipment), so `CreatureDamageStats.HasWeapon` (main-hand virtual item of class weapon) is
+true for the roughly half of the classic-db creatures that carry a weapon and the 40% disarm factor applies to them in play; a world imported before
+schema 56 (or never refreshed) has no equipment rows and keeps the old no-weapon behaviour.

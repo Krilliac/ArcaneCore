@@ -104,7 +104,13 @@ internal sealed class PlayerbotSocialEmotes
     internal static uint? ReplyTo(uint textEmote, Random random)
     {
         ArgumentNullException.ThrowIfNull(random);
-        uint[]? answers = textEmote switch
+        uint[]? answers = AnswersFor(textEmote);
+        return answers is null ? null : answers[random.Next(answers.Length)];
+    }
+
+    /// <summary>The answers <see cref="ReplyTo"/> picks among for <paramref name="textEmote"/> (a repeated one is likelier); null when the emote gets none. A new array on every call.</summary>
+    internal static uint[]? AnswersFor(uint textEmote)
+        => textEmote switch
         {
             TextEmotes.Wave or TextEmotes.Hello or TextEmotes.Greet or TextEmotes.Hail => [TextEmotes.Wave, TextEmotes.Wave, TextEmotes.Hello, TextEmotes.Smile],
             TextEmotes.Bow or TextEmotes.Curtsey => [TextEmotes.Bow, TextEmotes.Bow, TextEmotes.Curtsey],
@@ -128,8 +134,6 @@ internal sealed class PlayerbotSocialEmotes
             TextEmotes.Kneel => [TextEmotes.Bow, TextEmotes.Salute],
             _ => null,
         };
-        return answers is null ? null : answers[random.Next(answers.Length)];
-    }
 
     /// <summary>The 1.12 text emote ids used here (EmotesText.dbc; vmangos TextEmotes).</summary>
     internal static class TextEmotes
@@ -138,7 +142,7 @@ internal sealed class PlayerbotSocialEmotes
             Clap = 24, Congratulate = 26, Curtsey = 33, Dance = 34, Flex = 41, Flirt = 42, Giggle = 45, Greet = 48, Grin = 49, Hail = 53,
             Hello = 55, Hug = 56, Kiss = 58, Kneel = 59, Laugh = 60, No = 66, Nod = 67, Point = 72, Poke = 73, Rofl = 76, Rude = 77,
             Salute = 78, Shrug = 83, Shy = 84, Sigh = 85, Thank = 97, Threaten = 98, Victory = 100, Wave = 101, Welcome = 102,
-            Smile = 163, Wink = 363;
+            Mock = 119, Violin = 143, Smile = 163, Wink = 363;
     }
 
 }

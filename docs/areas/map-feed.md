@@ -40,9 +40,9 @@ injected payload of the largest client packet fits). Client lines:
 
 | Line | Meaning |
 |---|---|
-| `{"op":"hello","protocol":1}` | Must come first. Answered with `{"op":"hello","protocol":1,"sha":"...","pid":n,"maps":[{"map":0,"instance":0,"players":n,"creatures":n}]}`: the build's source revision, the daemon's process id, and every running map. A different protocol is refused with error `protocol` and the connection is closed. |
+| `{"op":"hello","protocol":1}` | Must come first. Answered with `{"op":"hello","protocol":1,"rev":2,"sha":"...","pid":n,"maps":[{"map":0,"instance":0,"players":n,"creatures":n}]}`: `rev` (the feed revision, see [atlas-insight](atlas-insight.md)), the build's source revision, the daemon's process id, and every running map. A different protocol is refused with error `protocol` and the connection is closed. |
 | `{"op":"subscribe","map":0,"instance":0,"hz":4,"kinds":["player","bot","creature","gameobject"],"paths":true}` | Watch one map. Every field but `map` is optional: `instance` 0, `hz` 4 (capped at `MaxHz`, at least 0.1), all kinds, paths on. A second subscribe replaces the first. |
-| `{"op":"query","id":n,"kind":"los\|height\|path\|undermap","map":0,"instance":0,"a":[x,y,z],"b":[x,y,z]}` | One question; `b` only for `los` and `path`. |
+| `{"op":"query","id":n,"kind":"los\|height\|path\|undermap\|inspect\|anomalies","map":0,"instance":0,"a":[x,y,z],"b":[x,y,z]}` | One question; `b` only for `los` and `path`; `inspect` takes `guid` and `anomalies` takes `since` and `max` instead of `a` (see [atlas-insight](atlas-insight.md)). |
 | `{"op":"unsubscribe"}` | Stop the frames. |
 
 Server lines besides `hello`:
@@ -55,7 +55,7 @@ Server lines besides `hello`:
   `deferredPaths`, `directFallbackPaths`, `noPathPaths`, `homePathTeleports`.
 * An entity is `{"g":"<16 hex digits>","k":"player|bot|creature|gameobject","n":"name","x":..,"y":..,"z":..,"o":..}` plus,
   when it has them: `e` (template entry, emitted for `creature` and `gameobject` only; players and bots have no entry and omit `e`),
-  `hp` (health percent), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
+  `hp` (health percent), `cb` (`true` when the unit is in combat, rev 2; omitted otherwise), `d` (display id, rev 2; omitted when 0), `r` and `cl` (a player's or bot's race id and class id; omitted when 0; optional, no revision change), `mt` (creature motion: `idle`, `random`, `waypoint`, `confused`, `chase`, `home`, `point`,
   `fleeing`, `distract`, `follow`, `formation`, else `unknown`), `tg` (the unit chased, else the selected target), `home` (`[x,y,z]`),
   `sp` (the creature's current spline: `{"id":n,"start":[x,y,z],"pts":[[x,y,z],...],"t0":clockMs,"dur":ms,"run":bool}`, with `"cut":true`
   when its points were cut at 512; `clockMs - t0` is the elapsed time the server itself uses), and `route` (a bot's current route:
@@ -95,6 +95,7 @@ never loads one.
 | `height` | `terrain`, `model` (the model floor below z + 2), `floor` (the server's chosen floor), `outdoors`; null where the data holds no answer. |
 | `path` | `hasPath`, `type` (the path flags), `length`, `pts` (at most 1024, `"cut":true` beyond), `data` (navigation data for the map). Tile reads stay off: when an intermediate navmesh tile between the loaded endpoints is not loaded, the search stops at the loaded boundary and reports the partial path in `type` (`"incomplete"`). |
 | `undermap` | `verdict` `ok`, `undermap` (with `depth` in yards) or `unknown`. |
+| `inspect`, `anomalies` | Described in [atlas-insight](atlas-insight.md). |
 
 ## Packet tools
 

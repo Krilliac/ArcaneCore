@@ -89,7 +89,7 @@ keep `dumps` private. `Max` also sets `Ops:Diagnostics:Dumps:Enabled=true` on th
 | `DOTNET_EnableEventPipe` (+ `DOTNET_EventPipeOutputPath`, `DOTNET_EventPipeConfig`, `DOTNET_EventPipeCircularMB`) | runtime | **Not enabled.** A startup EventPipe session writes a `.nettrace` for the life of the process: it grows without bound, and the sample-profiler and GC-verbose providers cost CPU on a loaded process. `dotnet-stack` and `dotnet-counters` use short, bounded EventPipe sessions through the diagnostics port instead; a long trace is an operator action (`dotnet-trace collect -p <pid> --duration ...`). |
 | `DOTNET_EnableCrashReport` (JSON crash report) | runtime | Not supported on Windows (Microsoft's "Collect dumps on crash" article), so there is nothing to enable; the crash dump above is the capture. |
 | `.debug alloc` (EventListener, GC keyword) | `diagnostics.md` | On demand only (administrator command); its sampling is measured as noise-level but it is not left running. |
-| `DOTNET_gcServer`, `DOTNET_GCHighMemPercent` | `ArcaneCore.World.csproj:12`, `launch-daemon.ps1` | Not diagnostics. `launch-daemon.ps1` already sets `DOTNET_GCHighMemPercent` for the World. |
+| `DOTNET_gcServer`, `DOTNET_GCHighMemPercent` | `ArcaneCore.World.csproj:12`, `launch-daemon.ps1` | Not diagnostics. `launch-daemon.ps1` already sets `DOTNET_GCHighMemPercent` for both daemons. |
 
 ## Verification
 

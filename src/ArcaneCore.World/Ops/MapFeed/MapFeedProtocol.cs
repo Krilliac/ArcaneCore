@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
 using ArcaneCore.Game.Maps.Grid;
@@ -26,6 +27,9 @@ internal enum FeedOp : byte
 
     /// <summary>Packet tools: stop the connection's tap.</summary>
     Untap,
+
+    /// <summary>An op an extension declared (<see cref="MapFeedExtensions.IsDeclared"/>: <c>role</c>, <c>action</c>, <c>caps</c>); the extension parses the line.</summary>
+    Extension,
 }
 
 /// <summary>Which packets a tap passes.</summary>
@@ -50,6 +54,12 @@ internal enum QueryKind : byte
     Height,
     Path,
     UnderMap,
+
+    /// <summary>Live insight: everything the server knows about one unit (docs/areas/atlas-insight.md).</summary>
+    Inspect,
+
+    /// <summary>Live insight: the anomalies the ledger reported for this world since a sequence number.</summary>
+    Anomalies,
 }
 
 /// <summary>A refusal: a stable machine code and a sentence for a person.</summary>
@@ -115,6 +125,21 @@ internal struct FeedRequest
 
     /// <summary>tap: the most payload bytes each packet line carries as hex.</summary>
     public int MaxBytes;
+
+    /// <summary>extension: the op name.</summary>
+    public string? ExtensionOp;
+
+    /// <summary>extension: the whole line, valid until the connection reads the next one (the extension parses it itself).</summary>
+    public ReadOnlyMemory<byte> ExtensionLine;
+
+    /// <summary>inspect: the object guid to describe.</summary>
+    public ulong InspectGuid;
+
+    /// <summary>anomalies: only notices with a sequence number above this are returned (0: from the oldest the ring holds).</summary>
+    public long Since;
+
+    /// <summary>anomalies: the most notices returned.</summary>
+    public int MaxResults;
 }
 
 /// <summary>
@@ -126,6 +151,14 @@ internal static class MapFeedProtocol
 {
     /// <summary>The protocol version this daemon speaks (the <c>protocol</c> of <c>hello</c>).</summary>
     public const int Version = 1;
+
+    /// <summary>
+    /// The feed revision (the <c>rev</c> of <c>hello</c>): 1 is the original shape, 2 adds <c>cb</c> (in combat, written only when true)
+    /// and <c>d</c> (display id, written when non-zero) to unit entities. Additive, so a consumer that predates it ignores both. Player and bot entities also carry
+    /// <c>r</c> (race id) and <c>cl</c> (class id), each written when non-zero; they are optional extras that did not change the revision, so a consumer
+    /// treats their absence as unknown.
+    /// </summary>
+    public const int Revision = 2;
 
     /// <summary>The longest client line in bytes; a longer one closes the connection.</summary>
     public const int MaxLineBytes = 4096;
@@ -238,6 +271,18 @@ internal static class MapFeedProtocol
     /// <summary>The session's dispatcher stayed busy.</summary>
     public const string Busy = "busy";
 
+    /// <summary>The most notices one <c>anomalies</c> answer carries (the ring's capacity).</summary>
+    public const int MaxAnomalyResults = 4096;
+
+    /// <summary>The notices an <c>anomalies</c> query returns when it gives no <c>max</c>.</summary>
+    public const int DefaultAnomalyResults = 256;
+
+    /// <summary>The most threat entries an <c>inspect</c> answer lists.</summary>
+    public const int MaxInspectThreat = 10;
+
+    /// <summary>An <c>inspect</c> names no object this world holds on that map (nothing is loaded to look for it).</summary>
+    public const string NotFound = "not-found";
+
     /// <summary>The connection already has a tap.</summary>
     public const string TapBusy = "tap-busy";
 
@@ -303,6 +348,14 @@ internal static class MapFeedProtocol
             {
                 request.Op = toolOp;
                 return ParseTool(root, ref request, out error);
+            }
+
+            if (op.GetString() is { } declared && MapFeedExtensions.IsDeclared(declared))
+            {
+                request.Op = FeedOp.Extension;
+                request.ExtensionOp = declared;
+                request.ExtensionLine = line;
+                return true;
             }
 
             error = new FeedError(UnknownOp, "unknown op; the ops are hello, subscribe, unsubscribe and query (and console, inject, send, tap and untap with the packet tools)");
@@ -418,7 +471,7 @@ internal static class MapFeedProtocol
 
         if (!root.TryGetProperty("kind"u8, out JsonElement kind) || kind.ValueKind != JsonValueKind.String)
         {
-            error = new FeedError(BadArgs, "a query needs a \"kind\": los, height, path or undermap");
+            error = new FeedError(BadArgs, "a query needs a \"kind\": los, height, path, undermap, inspect or anomalies");
             return false;
         }
 
@@ -438,15 +491,33 @@ internal static class MapFeedProtocol
         {
             request.Kind = QueryKind.UnderMap;
         }
+        else if (kind.ValueEquals("inspect"u8))
+        {
+            request.Kind = QueryKind.Inspect;
+        }
+        else if (kind.ValueEquals("anomalies"u8))
+        {
+            request.Kind = QueryKind.Anomalies;
+        }
         else
         {
-            error = new FeedError(BadArgs, "unknown query kind; the kinds are los, height, path and undermap");
+            error = new FeedError(BadArgs, "unknown query kind; the kinds are los, height, path, undermap, inspect and anomalies");
             return false;
+        }
+
+        if (request.Kind == QueryKind.Anomalies)
+        {
+            return TryAnomalyArgs(root, ref request, out error);
         }
 
         if (!TryMap(root, ref request, out error))
         {
             return false;
+        }
+
+        if (request.Kind == QueryKind.Inspect)
+        {
+            return TryGuid(root, out request.InspectGuid, out error);
         }
 
         if (!TryPoint(root, "a"u8, "a", out request.A, out error))
@@ -460,6 +531,62 @@ internal static class MapFeedProtocol
         }
 
         return true;
+    }
+
+    /// <summary><c>since</c> (a sequence number, default 0) and <c>max</c> (1 to <see cref="MaxAnomalyResults"/>, default <see cref="DefaultAnomalyResults"/>) of an anomalies query.</summary>
+    private static bool TryAnomalyArgs(JsonElement root, ref FeedRequest request, out FeedError error)
+    {
+        error = default;
+        request.Since = 0;
+        request.MaxResults = DefaultAnomalyResults;
+        if (root.TryGetProperty("since"u8, out JsonElement since))
+        {
+            if (since.ValueKind != JsonValueKind.Number || !since.TryGetInt64(out long sinceValue) || sinceValue < 0)
+            {
+                error = new FeedError(BadArgs, "\"since\" must be a sequence number (a non-negative integer)");
+                return false;
+            }
+
+            request.Since = sinceValue;
+        }
+
+        if (root.TryGetProperty("max"u8, out JsonElement max))
+        {
+            if (max.ValueKind != JsonValueKind.Number || !max.TryGetInt32(out int maxValue) || maxValue < 1 || maxValue > MaxAnomalyResults)
+            {
+                error = new FeedError(BadArgs, string.Create(CultureInfo.InvariantCulture, $"\"max\" must be 1 to {MaxAnomalyResults}"));
+                return false;
+            }
+
+            request.MaxResults = maxValue;
+        }
+
+        return true;
+    }
+
+    /// <summary>A <c>guid</c> of an inspect query: 1 to 16 hex digits (an optional 0x), not zero.</summary>
+    private static bool TryGuid(JsonElement root, out ulong guid, out FeedError error)
+    {
+        guid = 0;
+        error = default;
+        if (root.TryGetProperty("guid"u8, out JsonElement element) && element.ValueKind == JsonValueKind.String)
+        {
+            string? text = element.GetString();
+            if (text is not null && text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text[2..];
+            }
+
+            if (!string.IsNullOrEmpty(text) && text.Length <= 16
+                && ulong.TryParse(text, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out guid) && guid != 0)
+            {
+                return true;
+            }
+        }
+
+        guid = 0;
+        error = new FeedError(BadArgs, "\"guid\" must be a non-zero GUID as 1 to 16 hex digits");
+        return false;
     }
 
     private static bool TryToolOp(JsonElement op, out FeedOp toolOp)

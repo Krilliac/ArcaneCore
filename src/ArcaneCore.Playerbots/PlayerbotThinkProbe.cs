@@ -42,7 +42,26 @@ internal sealed class PlayerbotThinkProbe
         _time = time;
     }
 
-    private const int MaxPhases = 32;
+    /// <summary>
+    /// A test seam to synthesize a finished think probe with deterministic elapsed time, GC pause, and optional phase,
+    /// isolating unit tests from wall-clock preemption and process-wide garbage-collection pauses.
+    /// </summary>
+    internal static PlayerbotThinkProbe SpentForTest(double elapsedMs, double gcPauseMs = 0, string slowestPhase = "start")
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(elapsedMs);
+        ArgumentOutOfRangeException.ThrowIfNegative(gcPauseMs);
+        ArgumentNullException.ThrowIfNull(slowestPhase);
+        var probe = new PlayerbotThinkProbe();
+        probe._elapsed = (long)Math.Round(elapsedMs * Stopwatch.Frequency / 1000);
+        probe.GcPauseMs = gcPauseMs;
+        probe._phase = slowestPhase;
+        probe._names[0] = slowestPhase;
+        probe._ticks[0] = probe._elapsed;
+        probe._phases = 1;
+        return probe;
+    }
+
+    private const int MaxPhases = 48;
     private readonly string[] _names = new string[MaxPhases];
     private readonly long[] _ticks = new long[MaxPhases];
     private int _phases;
@@ -51,6 +70,8 @@ internal sealed class PlayerbotThinkProbe
     private long _started;
     private long _elapsed;
     private PathSearchTotals _searchBefore;
+    private TimeSpan _gcPauseBefore;
+    private int _gc0Before, _gc1Before, _gc2Before;
 
     /// <summary>The probe of the think running on this thread, if any.</summary>
     internal static PlayerbotThinkProbe? Active => t_active;
@@ -101,6 +122,33 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>Navigation queries made through <see cref="Find"/> in this think.</summary>
     internal int Queries { get; private set; }
 
+    /// <summary>
+    /// The longest wall time in milliseconds a navigation search of this think may take on the world thread (0 = no bound;
+    /// <see cref="PlayerbotOptions.SyncPathQueryMaxMs"/>). A query that asks for no bound of its own gets it. Set before <see cref="Begin"/>.
+    /// </summary>
+    internal double SyncQueryMaxMs { get; set; }
+
+    /// <summary>Path jobs queued by this think (<see cref="PlayerbotPathJobs"/>).</summary>
+    internal int JobsSubmitted { get; private set; }
+
+    /// <summary>Queries of this think answered pending while their job was under way (or a tile read of it was).</summary>
+    internal int JobsWaiting { get; private set; }
+
+    /// <summary>Finished job answers applied by this think.</summary>
+    internal int JobsApplied { get; private set; }
+
+    /// <summary>Queries of this think held back by the path-job budget.</summary>
+    internal int JobsBudgetRefused { get; private set; }
+
+    /// <summary>Waits that ended in one synchronous search in this think.</summary>
+    internal int Escalations { get; private set; }
+
+    /// <summary>The worker time (Stopwatch ticks) of the job answers applied by this think: off the world thread, kept apart from <see cref="QueryTicks"/>.</summary>
+    internal long JobWorkerTicks { get; private set; }
+
+    /// <summary>The applied job that created the most nodes: nodes, worker ticks, queue ticks, phase, ends.</summary>
+    internal (long Nodes, long WorkerTicks, long QueueTicks, string Phase, Vector3 From, Vector3 To) LargestJob { get; private set; }
+
     /// <summary>Total A* nodes created on this thread since <see cref="Begin"/>.</summary>
     internal long TotalNodes => PathSearchCounters.NodesCreated - _searchBefore.Nodes;
 
@@ -132,6 +180,27 @@ internal sealed class PlayerbotThinkProbe
     /// <summary>The think's time in milliseconds (after <see cref="End"/>).</summary>
     internal double ElapsedMs => _elapsed * 1000.0 / Stopwatch.Frequency;
 
+    /// <summary>
+    /// The process-wide garbage-collector pause time in milliseconds between <see cref="Begin"/> and <see cref="End"/>
+    /// (<see cref="GC.GetTotalPauseDuration"/>): time the world thread may have been suspended without the think doing anything.
+    /// </summary>
+    internal double GcPauseMs { get; private set; }
+
+    /// <summary>Gen 0, gen 1 and gen 2 collections between <see cref="Begin"/> and <see cref="End"/> (process-wide).</summary>
+    internal (int Gen0, int Gen1, int Gen2) GcCollections { get; private set; }
+
+    /// <summary>
+    /// The time in milliseconds the running think has taken so far (<see cref="ElapsedMs"/> is only set by <see cref="End"/>, so it reads 0
+    /// during the think: the budget checks that read it never fired).
+    /// </summary>
+    internal double RunningMs => (_time.GetTimestamp() - _started) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>The clock of the running think (its probe's, so a test's manual clock holds), else <see cref="Stopwatch.GetTimestamp"/>.</summary>
+    internal static long Timestamp() => t_active is { } probe ? probe._time.GetTimestamp() : Stopwatch.GetTimestamp();
+
+    /// <summary>Milliseconds since <paramref name="timestamp"/> (<see cref="Timestamp"/>) on the clock of the running think.</summary>
+    internal static double MsSince(long timestamp) => (Timestamp() - timestamp) * 1000.0 / Stopwatch.Frequency;
+
     /// <summary>Start a think on this thread.</summary>
     internal void Begin()
     {
@@ -146,11 +215,20 @@ internal sealed class PlayerbotThinkProbe
         _fallbackDepth = 0;
         _fallbackNodes = 0;
         Largest = default;
+        JobsSubmitted = JobsWaiting = JobsApplied = JobsBudgetRefused = Escalations = 0;
+        JobWorkerTicks = 0;
+        LargestJob = default;
         Search = default;
         SlowestTile = default;
         Player = null;
         SlowAnomalyReported = false;
         _elapsed = 0;
+        GcPauseMs = 0;
+        GcCollections = default;
+        _gcPauseBefore = GC.GetTotalPauseDuration();
+        _gc0Before = GC.CollectionCount(0);
+        _gc1Before = GC.CollectionCount(1);
+        _gc2Before = GC.CollectionCount(2);
         _searchBefore = PathSearchCounters.Current;
         PathSearchCounters.BeginTileCapture();
         _started = _phaseStarted = _time.GetTimestamp();
@@ -163,6 +241,8 @@ internal sealed class PlayerbotThinkProbe
         long now = _time.GetTimestamp();
         Close(now);
         _elapsed = now - _started;
+        GcPauseMs = (GC.GetTotalPauseDuration() - _gcPauseBefore).TotalMilliseconds;
+        GcCollections = (GC.CollectionCount(0) - _gc0Before, GC.CollectionCount(1) - _gc1Before, GC.CollectionCount(2) - _gc2Before);
         Search = PathSearchCounters.Current - _searchBefore;
         SlowestTile = PathSearchCounters.SlowestTile;
         PathSearchCounters.EndTileCapture();
@@ -174,6 +254,27 @@ internal sealed class PlayerbotThinkProbe
     internal static void Phase(string name)
     {
         if (t_active is { } probe) probe.Mark(name);
+    }
+
+    /// <summary>
+    /// The running think is in phase <paramref name="name"/> (a constant string) until the returned token is disposed, which restores
+    /// the phase that was current when the scope began (nested scopes nest). Nothing off a think. A struct: <c>using</c> allocates nothing.
+    /// </summary>
+    internal static ScopeToken Scope(string name)
+    {
+        if (t_active is not { } probe) return default;
+        string previous = probe._phase;
+        probe.Mark(name);
+        return new ScopeToken(probe, previous);
+    }
+
+    /// <summary>The scope of <see cref="Scope"/>.</summary>
+    internal readonly struct ScopeToken(PlayerbotThinkProbe? probe, string? previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (probe is not null && previous is not null && ReferenceEquals(t_active, probe)) probe.Mark(previous);
+        }
     }
 
     /// <summary>The current phase of the running think (null off one).</summary>
@@ -271,6 +372,29 @@ internal sealed class PlayerbotThinkProbe
             return PathResult.None(from);
         }
 
+        // A far query of a planning wrapper runs on the path-job pool; the bot answers pending until a later think finds it done.
+        PlayerbotPathJobs? escalatedJobs = null;
+        if (PlayerbotPathJobs.Bound is { } jobs && jobs.Eligible(collision, options, out ISharedTiledPathSearch shared))
+        {
+            // An escalated search of this pair came back "no path" a moment ago: the same answer, with no job and no world-thread search.
+            if (jobs.KnownNoPath(from, to, options)) return PathResult.None(from);
+            PathResult answer = jobs.Resolve(shared, collision.Map, from, to, options, out JobAnswer how, out NavJob? job);
+            if (how != JobAnswer.Escalated)
+            {
+                probe.RecordJob(how, job, fallback, from, to, options.MaxSearchNodes);
+                t_lastCachedCapped = how == JobAnswer.Applied && job!.Search.Capped > 0;
+                return answer;
+            }
+
+            probe.Escalations++;
+            escalatedJobs = jobs;
+        }
+
+        // The search runs here, on the world thread: held to a wall-time deadline so that one pathological search cannot stall the tick.
+        bool deadline = probe.SyncQueryMaxMs > 0 && options.MaxSearchMs <= 0;
+        if (deadline) options = options with { MaxSearchMs = probe.SyncQueryMaxMs };
+        long deadlinesBefore = PathSearchCounters.DeadlineHits;
+        long cappedBefore = PathSearchCounters.CappedSearches;
         long started = probe._time.GetTimestamp();
         PathResult path = collision.FindPath(from, to, options);
         long ticks = probe._time.GetTimestamp() - started;
@@ -280,7 +404,45 @@ internal sealed class PlayerbotThinkProbe
         if (fallback) probe._fallbackNodes += nodes;
         if (nodes > probe.Largest.Nodes || (nodes == probe.Largest.Nodes && ticks > probe.Largest.Ticks))
             probe.Largest = (nodes, ticks, probe._phase, from, to, options.MaxSearchNodes);
+        if ((path.Type & PathType.TilesPending) != 0) PlayerbotPathJobs.NoteTilePending();
+        // The escalated search is the whole answer, so a complete "no path" (not capped, not waiting for a tile) holds for the pair for a
+        // while: the next episode of failed jobs does not escalate to another search on this thread (PlayerbotPathJobs.NoteNoPath).
+        if (escalatedJobs is not null && (path.Type & PathType.NoPath) != 0 && (path.Type & PathType.TilesPending) == 0
+            && PathSearchCounters.CappedSearches == cappedBefore)
+            escalatedJobs.NoteNoPath(from, to, options);
+        if (PathSearchCounters.DeadlineHits != deadlinesBefore)
+        {
+            t_lastCachedCapped = true;
+            // No retry would do anything different (a job was not possible, or its wait was spent): the capped corridor stands as the answer.
+            PlayerbotPathJobs.Bound?.ReportSyncDeadline(probe._phase, from, to, nodes);
+        }
+
         return path;
+    }
+
+    private void RecordJob(JobAnswer how, NavJob? job, bool fallback, Vector3 from, Vector3 to, int maxNodes)
+    {
+        Queries++;
+        switch (how)
+        {
+            case JobAnswer.Applied when job is not null:
+                JobsApplied++;
+                JobWorkerTicks += job.ComputeTicks;
+                if (fallback) _fallbackNodes += job.Search.Nodes;
+                if (job.Search.Capped > 0) Search = Search with { Capped = Search.Capped + 1 };
+                if (job.Search.Nodes > LargestJob.Nodes)
+                    LargestJob = (job.Search.Nodes, job.ComputeTicks, job.QueueTicks, _phase, from, to);
+                break;
+            case JobAnswer.Submitted:
+                JobsSubmitted++;
+                break;
+            case JobAnswer.BudgetRefused:
+                JobsBudgetRefused++;
+                break;
+            default:
+                JobsWaiting++;
+                break;
+        }
     }
 
     internal static bool ConsumeLastQueryCapped()
@@ -357,6 +519,8 @@ internal sealed class PlayerbotThinkProbe
             any = true;
         }
 
+        if (GcPauseMs > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; gc={GcPauseMs:F1} ms ({GcCollections.Gen0}/{GcCollections.Gen1}/{GcCollections.Gen2})");
         text.Append(CultureInfo.InvariantCulture,
             $"; path {Queries} queries {Ms(QueryTicks):F1} ms, {Search.Searches} searches, {Search.Nodes} nodes, {Search.Expansions} expanded, {Search.Capped} at the node cap");
         if (Largest.Nodes > 0)
@@ -366,6 +530,20 @@ internal sealed class PlayerbotThinkProbe
                 $"; largest {nodes}/{max} nodes {Ms(ticks):F1} ms in {phase} from ({from.X:F1}, {from.Y:F1}, {from.Z:F1}) to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}), {Vector3.Distance(from, to):F0} yd");
         }
 
+        if (JobsSubmitted + JobsWaiting + JobsApplied + JobsBudgetRefused + Escalations > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"; off-thread: {JobsSubmitted} jobs submitted, {JobsWaiting} waiting, {JobsApplied} applied ({Ms(JobWorkerTicks):F1} ms on workers), {JobsBudgetRefused} held by the budget, {Escalations} escalated");
+            if (LargestJob.Nodes > 0)
+            {
+                (long jobNodes, long workerTicks, long queueTicks, string jobPhase, Vector3 jobFrom, Vector3 jobTo) = LargestJob;
+                text.Append(CultureInfo.InvariantCulture,
+                    $"; largest job {jobNodes} nodes {Ms(workerTicks):F1} ms worker, {Ms(queueTicks):F1} ms queued, in {jobPhase} from ({jobFrom.X:F1}, {jobFrom.Y:F1}, {jobFrom.Z:F1}) to ({jobTo.X:F1}, {jobTo.Y:F1}, {jobTo.Z:F1})");
+            }
+        }
+
+        if (Search.DeadlineHits > 0)
+            text.Append(CultureInfo.InvariantCulture, $"; {Search.DeadlineHits} searches cut at the {SyncQueryMaxMs:F0} ms deadline");
         if (Clamped > 0 || Refused > 0)
             text.Append(CultureInfo.InvariantCulture, $"; node budget {NodeBudget}: {Clamped} fallback queries cut short, {Refused} refused");
         if (Search.TilesPending > 0)

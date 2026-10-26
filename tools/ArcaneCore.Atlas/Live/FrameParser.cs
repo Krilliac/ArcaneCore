@@ -35,7 +35,7 @@ internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyL
 /// </summary>
 internal static class FrameParser
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:216-219 (frame and entity field list)
+    // ref: ATLAS-2026-10-18.md:216-219 (frame and entity field list)
 
     /// <summary>
     /// Largest accepted absolute coordinate. A map spans +-17066.666 yd (Core/WorldGrid.cs, vmap MapMid) and the server's no-height
@@ -398,7 +398,10 @@ internal static class FrameParser
             return false;
         }
 
-        entity = new LiveEntity(id, kind, (uint)entry, name, map, instance, new WorldPoint(x, y, z), orientation, hp, motion, target, home, spline, route);
+        // r and cl are optional and lenient: a missing, mistyped or out-of-range value reads as unknown (0) rather than refusing the entity.
+        byte race = o["r"] is JsonValue raceNode && raceNode.TryGetValue(out int raceId) && raceId is > 0 and <= byte.MaxValue ? (byte)raceId : (byte)0;
+        byte playerClass = o["cl"] is JsonValue classNode && classNode.TryGetValue(out int classId) && classId is > 0 and <= byte.MaxValue ? (byte)classId : (byte)0;
+        entity = new LiveEntity(id, kind, (uint)entry, name, map, instance, new WorldPoint(x, y, z), orientation, hp, motion, target, home, spline, route, race, playerClass);
         problem = null;
         return true;
     }

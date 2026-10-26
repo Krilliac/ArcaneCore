@@ -2,7 +2,7 @@ namespace ArcaneCore.Game.Conditions;
 
 /// <summary>
 /// The condition type ids of the <c>conditions</c> table. The numbering is cmangos's
-/// (D:\refs\mangos-classic\src\game\Globals\Conditions.h:30-82), which is the numbering classic-db
+/// (mangos-classic src/game/Globals/Conditions.h:30-82), which is the numbering classic-db
 /// data is written in. It is NOT vmangos's Conditions.h numbering: vmangos reuses ids 11, 13, 27, 28,
 /// 31, 35 and 40 for different meanings (11 SAVED_VARIABLE, 13 CANT_PATH_TO_VICTIM, 27 GENDER,
 /// 35 MAP_EVENT_DATA, 40 HAS_PET), so reading gender or area-flag rows with the vmangos table would

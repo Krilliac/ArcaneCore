@@ -124,7 +124,7 @@ public sealed partial class CreatureMapSystem
         bool notifySummoner = true)
     {
         ArgumentNullException.ThrowIfNull(template);
-        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates);
+        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates, itemResolver: EquipmentItemResolver);
         if (summoner is not null)
         {
             RecordSummoner(summoner, creature);
@@ -257,7 +257,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates);
+            var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver, statRates: _options.Rates, itemResolver: EquipmentItemResolver);
             ApplyEventData(creature); // a running game event may change its entry or model (game_event_creature_data)
             if (_options.Respawn.DrawDelayAtLoad)
             {

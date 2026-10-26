@@ -359,3 +359,86 @@ void main() {
     outColor = vec4(rgb, vColor.a * coverage);
 }`,
 };
+
+/**
+ * Textured triangles of an ATG1 version 2 chunk (the `generic` material, design section 4): one 2D texture at uv0, optionally
+ * multiplied by the vertex colour, lit with the same sun/hemisphere terms as FILL so a textured layer sits next to an untextured
+ * one in a split or diff view. Vertices are expanded per triangle: position (offset from the chunk origin), uv0, colour0 (RGBA8).
+ */
+export const MATERIAL = {
+    vertex: `${HEADER}
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUv;
+layout(location = 2) in vec4 aColor;
+${COMMON_UNIFORMS}
+out vec3 vRelPos;
+out vec3 vView;
+out vec2 vUv;
+out vec4 vColor;
+void main() {
+    vec3 relPos = aPos + uRel;
+    vec4 v = uView * vec4(relPos, 1.0);
+    vRelPos = relPos;
+    vView = v.xyz;
+    vUv = aUv;
+    vColor = aColor;
+    gl_Position = uProj * v;
+}`,
+    fragment: `${HEADER}
+in vec3 vRelPos;
+in vec3 vView;
+in vec2 vUv;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform vec3 uLight;
+uniform vec3 uSunDir;
+uniform vec3 uFlat;
+uniform float uAlpha;
+uniform float uAlphaRef;
+uniform bool uTextured;
+uniform bool uUnlit;
+uniform bool uAlphaKey;
+uniform bool uIgnoreAlpha;
+uniform bool uUseColor0;
+uniform bool uFogOn;
+uniform int uMode;
+out vec4 outColor;
+
+void main() {
+    vec4 texel = uTextured ? texture(uTexture, vUv) : vec4(uFlat, 1.0);
+    if (uUseColor0) {
+        texel *= vColor;
+    }
+    if (uAlphaKey && texel.a < uAlphaRef) {
+        discard;
+    }
+    float alpha = (uIgnoreAlpha ? 1.0 : texel.a) * uAlpha;
+    vec3 rgb = texel.rgb;
+    if (!uUnlit) {
+        vec3 n = cross(dFdx(vView), dFdy(vView));
+        float l = length(n);
+        n = l > 0.0 ? n / l : vec3(0.0, 0.0, 1.0);
+        if (n.z < 0.0) {
+            n = -n;
+        }
+        vec3 worldN = cross(dFdx(vRelPos), dFdy(vRelPos));
+        float wl = length(worldN);
+        worldN = wl > 0.0 ? worldN / wl : vec3(0.0, 0.0, 1.0);
+        if (worldN.z < 0.0) {
+            worldN = -worldN;
+        }
+        vec3 sunDir = length(uSunDir) > 1e-4 ? normalize(uSunDir) : normalize(vec3(-0.45, -0.35, 0.82));
+        float ndotl = max(dot(worldN, sunDir), 0.0);
+        float hemi = 0.5 + 0.5 * clamp(worldN.z, -1.0, 1.0);
+        float amb = mix(0.28, 0.46, hemi);
+        float diff = 0.42 * ndotl + 0.18 * abs(dot(n, uLight));
+        rgb *= amb + diff;
+    }
+    if (uFogOn && uMode == 1) {
+        float dist = length(vView);
+        float fogFactor = clamp(1.0 - exp(-max(dist - 120.0, 0.0) * 0.00055), 0.0, 0.52);
+        rgb = mix(rgb, vec3(0.09, 0.14, 0.18), fogFactor);
+    }
+    outColor = vec4(clamp(rgb, 0.0, 1.0), alpha);
+}`,
+};
