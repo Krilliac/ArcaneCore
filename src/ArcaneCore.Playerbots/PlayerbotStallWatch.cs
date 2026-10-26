@@ -272,7 +272,7 @@ internal sealed partial class PlayerbotStallWatch
     /// (<see cref="PlayerbotNavigation.IsCutRegion"/>, <see cref="PlayerbotOptions.CutRegionMaxPolygons"/>) tells nothing.
     /// </summary>
     internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs,
-        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons)
         => ReportDeadEndPin(bot, mapId, instanceId, x, y, nowMs, PlayerbotNavigation.IsCutRegion(graph, region, maxCutRegionPolygons));
 
     /// <summary>

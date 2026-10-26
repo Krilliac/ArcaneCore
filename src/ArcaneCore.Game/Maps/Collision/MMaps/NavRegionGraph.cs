@@ -409,7 +409,7 @@ public sealed class NavRegionGraph
         && _articulations.Value.Parts[region] >= 2 && _articulations.Value.SecondPolygons[region] >= minPolygons;
 
     /// <summary>
-    /// How many polygons <paramref name="region"/> itself holds (0 for no region): the size of a cut region (<see cref="JoinsLargeParts"/>),
+    /// How many polygons <paramref name="region"/> itself holds (0 for -1 or out of range): the size of a cut region (<see cref="JoinsLargeParts"/>),
     /// which a caller bounds before it treats the whole region as a corridor. Computed with the cut regions; then an array read.
     /// </summary>
     public int RegionPolygons(int region) => (uint)region < (uint)RegionCount ? _articulations.Value.Polygons[region] : 0;

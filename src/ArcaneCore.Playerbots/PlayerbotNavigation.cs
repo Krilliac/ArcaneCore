@@ -297,7 +297,7 @@ internal static class PlayerbotNavigation
     /// bots are in each other's way and the ground is not at fault. False when the graph is not built yet or the point is on no region. A
     /// region lookup (tiles read without blocking) and two array reads; world thread.
     /// </summary>
-    internal static bool IsCutRegionAt(Player player, Vector3 point, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+    internal static bool IsCutRegionAt(Player player, Vector3 point, int maxRegionPolygons)
     {
         TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
         return IsCutRegion(graph, region, maxRegionPolygons);
@@ -324,7 +324,7 @@ internal static class PlayerbotNavigation
     /// polygons each and holds at most <paramref name="maxRegionPolygons"/> polygons itself (<see cref="PlayerbotOptions.CutRegionMaxPolygons"/>):
     /// the exemption judges the whole region, so a large one is judged as any other region.
     /// </summary>
-    internal static bool IsCutRegion(NavRegionGraph? graph, int region, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+    internal static bool IsCutRegion(NavRegionGraph? graph, int region, int maxRegionPolygons)
         => graph is not null && region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons) && graph.RegionPolygons(region) <= maxRegionPolygons;
 
     /// <summary>
@@ -343,7 +343,7 @@ internal static class PlayerbotNavigation
     /// The decision of <see cref="PinRefuses(Player, Vector3, PlayerbotOptions)"/> on its inputs: a pin of the bot (<paramref name="deadEndPin"/>) refuses
     /// unless the point's <paramref name="region"/> of <paramref name="graph"/> is a cut region (<see cref="IsCutRegion"/>).
     /// </summary>
-    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region, int maxRegionPolygons = PlayerbotOptions.DefaultCutRegionMaxPolygons)
+    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region, int maxRegionPolygons)
         => deadEndPin && !IsCutRegion(graph, region, maxRegionPolygons);
 
     /// <summary>

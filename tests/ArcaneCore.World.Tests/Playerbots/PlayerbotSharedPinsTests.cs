@@ -165,29 +165,29 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     {
         NavRegionGraph graph = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 1, PlayerbotNavigation.CutRegionPartPolygons + 200],
             [(0, 1), (1, 2)]);
-        Assert.True(PlayerbotNavigation.IsCutRegion(graph, 1));
-        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 0));
-        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 2));
-        Assert.False(PlayerbotNavigation.IsCutRegion(graph, -1));
+        Assert.True(PlayerbotNavigation.IsCutRegion(graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, 2, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.False(PlayerbotNavigation.IsCutRegion(graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
 
         var pins = new PlayerbotSharedPins();
         var botA = new PlayerbotStallWatch { SharedPins = pins };
         var botB = new PlayerbotStallWatch { SharedPins = pins };
         // The overload the brain reports through (PlayerbotBrain.ReportWorldPin): the region of the stalled bot in the graph decides.
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, graph, 1));
-        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, graph, 1));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
         Assert.Equal(0, pins.Count);
         Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
         Assert.False(botA.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
 
         // The same two reports from a region of one of the parts, or with no graph built, or from no region: the second bot makes the cell a world pin.
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, graph, 0));
-        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 6628f, -2025f, 2_000, graph, 0));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 6628f, -2025f, 2_000, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons));
         Assert.True(pins.IsWorldPin(1, 0, 6627f, -2024f, 2_000));
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 100f, 100f, 1_000, null, 1));
-        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 101f, 101f, 2_000, null, 1));
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 300f, 300f, 1_000, graph, -1));
-        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 301f, 301f, 2_000, graph, -1));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 100f, 100f, 1_000, null, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 101f, 101f, 2_000, null, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 300f, 300f, 1_000, graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 301f, 301f, 2_000, graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
     }
 
     /// <summary>
@@ -200,18 +200,17 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         NavRegionGraph graph = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 1, PlayerbotNavigation.CutRegionPartPolygons + 200],
             [(0, 1), (1, 2)]);
 
-        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 1), "a pinned cell in the tunnel is the way through");
-        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 0), "a pinned cell of a part still refuses");
-        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, null, -1), "no graph, no exception");
-        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, -1), "on no region");
-        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 0), "no pin, no refusal");
-        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 1));
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "a pinned cell in the tunnel is the way through");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons), "a pinned cell of a part still refuses");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, null, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "no graph, no exception");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "on no region");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons), "no pin, no refusal");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
     }
 
     /// <summary>
     /// The size bound of the cut-region exemption (<c>PlayerbotOptions.CutRegionMaxPolygons</c>, default 5000): a cut region larger than it
-    /// is judged as any other region, so a stall there is shared as a world pin and the bot's own pin there refuses a plan end. A cut region
-    /// at the bound (the Timbermaw Hold tunnel's largest region holds 4882 polygons) is still exempt.
+    /// (e.g. 5001 polygons) is judged as any other region, so a stall there is shared as a world pin and the bot's own pin there refuses a plan end.
     /// </summary>
     [Fact]
     public void ACutRegionAboveTheSizeBound_StillSharesTheWorldPin_AndStillRefuses()
@@ -219,21 +218,46 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         NavRegionGraph large = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 5001, PlayerbotNavigation.CutRegionPartPolygons + 200],
             [(0, 1), (1, 2)]);
         Assert.True(large.JoinsLargeParts(1, PlayerbotNavigation.CutRegionPartPolygons), "the middle region is a cut region by shape");
-        Assert.False(PlayerbotNavigation.IsCutRegion(large, 1), "a cut region of 5001 polygons is above the default bound");
-        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, large, 1), "a pin in a large cut region refuses");
+        Assert.False(PlayerbotNavigation.IsCutRegion(large, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "a cut region of 5001 polygons is above the default bound");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, large, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "a pin in a large cut region refuses");
 
         var pins = new PlayerbotSharedPins();
         var botA = new PlayerbotStallWatch { SharedPins = pins };
         var botB = new PlayerbotStallWatch { SharedPins = pins };
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7022f, -2092f, 1_000, large, 1));
-        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 7023f, -2093f, 2_000, large, 1)); // one pin cell with the report above
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7022f, -2092f, 1_000, large, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 7023f, -2093f, 2_000, large, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons)); // one pin cell with the report above
         Assert.True(pins.IsWorldPin(1, 0, 7022f, -2092f, 2_000));
+    }
 
+    /// <summary>
+    /// A cut region at the size bound (<c>PlayerbotOptions.CutRegionMaxPolygons</c>, default 5000; the Timbermaw Hold tunnel's largest
+    /// region holds 4882 polygons) is still exempt from shared world pins and from refusing a plan end.
+    /// </summary>
+    [Fact]
+    public void ACutRegionAtTheSizeBound_IsStillExemptFromWorldPinsAndRefusals()
+    {
         NavRegionGraph atBound = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 5000, PlayerbotNavigation.CutRegionPartPolygons + 200],
             [(0, 1), (1, 2)]);
-        Assert.True(PlayerbotNavigation.IsCutRegion(atBound, 1), "a cut region at the bound is exempt");
-        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, atBound, 1));
+        Assert.True(atBound.JoinsLargeParts(1, PlayerbotNavigation.CutRegionPartPolygons), "the middle region is a cut region by shape");
+        Assert.True(PlayerbotNavigation.IsCutRegion(atBound, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons), "a cut region at the bound is exempt");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, atBound, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+
+        var pins = new PlayerbotSharedPins();
+        var botA = new PlayerbotStallWatch { SharedPins = pins };
+        var botB = new PlayerbotStallWatch { SharedPins = pins };
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7022f, -2092f, 1_000, atBound, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7023f, -2093f, 2_000, atBound, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.False(pins.IsWorldPin(1, 0, 7022f, -2092f, 2_000));
     }
+
+    [Fact]
+    public void DefaultCutRegionMaxPolygons_MatchesTunnelCutRegionBound()
+    {
+        // NavRegionGraphRealTerrainTests.TunnelCutRegionBound in ArcaneCore.Game.Tests duplicates this default (5000)
+        // because Game.Tests cannot reference World.Contracts.
+        Assert.Equal(5000, PlayerbotOptions.DefaultCutRegionMaxPolygons);
+    }
+
     // --- the brains ---------------------------------------------------------------------------------------------------------
 
     private static (int X, int Y, CellTile Tile)[] Pocket() =>
@@ -528,8 +552,9 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     {
         await using SyntheticNavWorld world = await TunnelWorldAsync();
         (bool a, bool b, bool c) = await world.Host.OnWorldAsync(() => (
-            PlayerbotNavigation.IsCutRegionAt(world.Player, InA), PlayerbotNavigation.IsCutRegionAt(world.Player, InB),
-            PlayerbotNavigation.IsCutRegionAt(world.Player, new Vector3(150, 57.5f, 0))));
+            PlayerbotNavigation.IsCutRegionAt(world.Player, InA, PlayerbotOptions.DefaultCutRegionMaxPolygons),
+            PlayerbotNavigation.IsCutRegionAt(world.Player, InB, PlayerbotOptions.DefaultCutRegionMaxPolygons),
+            PlayerbotNavigation.IsCutRegionAt(world.Player, new Vector3(150, 57.5f, 0), PlayerbotOptions.DefaultCutRegionMaxPolygons)));
         Assert.False(a);
         Assert.True(b);
         Assert.False(c);
@@ -684,6 +709,77 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         (bool pinnedA, PlayerbotRoute? otherA) = await TowardAsync(pinned, AboveA);
         Assert.False(pinnedA && await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, otherA!.Points[^1])),
             "no route towards the island ends in the pinned cell of a large part");
+    }
+
+    /// <summary>
+    /// With <c>PlayerbotOptions.CutRegionMaxPolygons = 0</c>, the cut-region exemption is disabled, so stalls in tunnel region B
+    /// are reported to shared pins (ReportWorldPin), an own dead-end pin refuses an exact plan destination in B (PlanDirectCore),
+    /// and a partial route ending in B is refused (Usable).
+    /// </summary>
+    [Fact]
+    public async Task WithZeroCutRegionMaxPolygons_CutRegionPinsAndRefusesEndToEnd()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true, CutRegionMaxPolygons = 0 };
+        var pins = new PlayerbotSharedPins { World = world.Host.World };
+        var bot = new PlayerbotBrain(world.Session, options) { SharedPins = pins };
+
+        // 1. ReportWorldPin (~:1912): stalling twice in cut region B reports to shared pins when bound is 0;
+        // a report from a second bot then escalates it to a world pin.
+        await world.PlaceAsync(InB);
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+            for (int i = 0; i < 2; i++)
+            {
+                bot.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+                bot.GiveUpStalledGoal(world.Player, shareable: false);
+            }
+
+            Assert.True(bot.StallWatch.IsDeadEndPin(0, InB.X, InB.Y, now), "the bot made its own pin in B");
+            pins.Report(0, 0, InB.X, InB.Y, world.Player.Guid.Value + 1, now); // second bot reports
+            Assert.True(pins.IsWorldPin(0, 0, InB.X, InB.Y, now), "two reports in B create a shared world pin when CutRegionMaxPolygons is 0");
+            return true;
+        });
+
+        // 2. PlanDirectCore (~:1013): an exact plan from InA to InB refuses when InB is a dead-end pin and bound is 0.
+        await world.PlaceAsync(InA);
+        Assert.Equal(PlanOutcome.Refused, await SettledAsync(world, () => PlanExactTo(world, bot, InB, options)));
+
+        // 3. Usable (~:1136): a partial route towards AboveB that would end at InBNorth is refused when InBNorth is a dead-end pin and bound is 0.
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            bot.StallWatch.RecordPinStall(0, InBNorth.X, InBNorth.Y, now);
+            bot.StallWatch.RecordPinStall(0, InBNorth.X, InBNorth.Y, now);
+            PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, InBNorth));
+            return true;
+        });
+
+        async Task<(bool Planned, PlayerbotRoute? Route)> TowardAsync(PlayerbotBrain brain, Vector3 goal)
+        {
+            for (int think = 0; think < 40; think++)
+            {
+                (bool planned, PlayerbotRoute? route, bool pending) = await world.Host.OnWorldAsync(() =>
+                {
+                    PlayerbotNavigation.SetStallWatch(world.Player, brain.StallWatch);
+                    long mark = PlayerbotNavigation.PendingMark;
+                    bool ok = PlayerbotNavigation.TryPlanToward(world.Player, goal, options, out PlayerbotRoute? r);
+                    return (ok, r, PlayerbotNavigation.PendingSince(mark));
+                });
+                if (!pending) return (planned, route);
+                await world.Host.World.AdvanceClockAsync(50);
+            }
+
+            Assert.Fail("the plan stays pending");
+            return default;
+        }
+
+        (bool plannedB, PlayerbotRoute? routeB) = await TowardAsync(bot, AboveB);
+        Assert.False(plannedB && await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, routeB!.Points[^1])),
+            "no route towards the island ends in the pinned cell of cut region B when CutRegionMaxPolygons is 0");
     }
 
     // --- explore ------------------------------------------------------------------------------------------------------------
