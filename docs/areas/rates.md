@@ -62,8 +62,18 @@ How it works: the rates are copied onto each player (`LocomotionState.Configured
 speed by them, so the aura recomputation, every `SMSG_FORCE_*_SPEED_CHANGE`, the create block and the server's own idea of the speed all
 carry the effective value. A loading character gets them before the world sees it (no force packets at login); `.reload config` and
 `.movement set` re-send the speeds of every online player (only the types that change). The turn rate is sent as
-`SMSG_FORCE_TURN_RATE_CHANGE` and taken by the server at once (it is not in the pending-change ledger); its ack relays
-`MSG_MOVE_SET_TURN_RATE` to the observers.
+`SMSG_FORCE_TURN_RATE_CHANGE` and taken by the server at once. The order is also recorded in the pending-change ledger as type
+`TurnRate`. If the client does not ack in time, the entry is dropped, counted as a failed ack, and everyone is told the rate with
+`SMSG_SPLINE_SET_TURN_RATE` (the rate itself was already taken, so nothing is re-applied). An ack is stored and relayed as
+`MSG_MOVE_SET_TURN_RATE` to the observers only when it matches a ledger entry by counter and rate (within 0.01) and the player is the
+confirmed mover. A ledger mismatch is ignored; it is counted as a wrong ack only when the ack counter is 0 or above the current counter (the next one to be sent; a counter equal to it is not counted; vmangos
+`OnWrongAckData`), so a late ack of an order that already timed out is not counted. An ack during a teleport, one naming another
+GUID, or one that fails the movement checks is ignored without being counted, and a matching ack from a charmed or possessed player
+consumes the entry and is dropped, also uncounted.
+
+Known deviation: only the turn rate ack uses the vmangos wrong ack gate (`OnWrongAckData` only for counter 0 or above the current counter,
+`MovementHandler.cpp:468` and `:481`). The speed, movement flag and knock back acks still count every ledger mismatch as a wrong ack, so a late
+ack of a timed-out order is counted there as well as the failed ack. The counters are diagnostic only (nothing kicks on them).
 
 GM commands (Administrator, written to the GM command audit, a set also logged with old and new value):
 

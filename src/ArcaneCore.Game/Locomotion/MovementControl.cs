@@ -100,7 +100,30 @@ public static class MovementControl
     }
 
     /// <summary>
-    /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6745): a root also stops
+    /// The client's ack for a turn rate order (vmangos HandleForceSpeedChangeAckOpcodes, MOVE_TURN_RATE, MovementHandler.cpp:464-476): it must match a
+    /// pending turn rate change by counter and, within 0.01, rate (a NaN never matches). False when nothing matches; the mismatch is a counted wrong ack
+    /// only when the counter is 0 or above the current counter, the next one to be sent (a counter equal to it is not counted; vmangos OnWrongAckData, MovementHandler.cpp:468-469 and :481-482), so a late ack of an order that
+    /// already timed out is not counted (the timeout counted it as a failed ack).
+    /// </summary>
+    public static bool AcknowledgeTurnRate(Player player, uint counter, float rate)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        LocomotionState state = player.Locomotion;
+        if (!state.Pending.TryAcknowledgeSpeed(counter, MovementChangeType.TurnRate, rate))
+        {
+            if (counter == 0 || counter > player.MovementCounter)
+            {
+                state.NoteWrongAck();
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6719): a root also stops
     /// motion (the moving flags are cleared), and with <paramref name="sendToClient"/> everyone is told with the
     /// SMSG_SPLINE_MOVE_* packet (SendMovementFlagChangeToAll).
     /// </summary>
@@ -108,9 +131,21 @@ public static class MovementControl
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(change);
+        if (change.Type == MovementChangeType.TurnRate)
+        {
+            // The rate was applied when the order was sent (UnitSpeed.SetTurnRate; vmangos applies it on the ack), so only the
+            // announcement of SendSpeedChangeToAll is left (ResolvePendingMovementChange, Unit.cpp:6772-6774).
+            if (sendToClient)
+            {
+                CombatPackets.SendToSet(unit, TurnRatePackets.Spline, SpeedPackets.BuildSpline(unit.Guid.Value, change.NewValue));
+            }
+
+            return;
+        }
+
         if (change.Type == MovementChangeType.KnockBack)
         {
-            // "Not resendable change": the knock back is dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
+            // "Not resendable change", dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6670-6675);
             // the resolve switch has no knock back case either.
             return;
         }
