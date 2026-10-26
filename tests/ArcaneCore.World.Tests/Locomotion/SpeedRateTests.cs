@@ -198,9 +198,10 @@ public sealed class SpeedRateTests
     }
 
     [Theory]
-    [InlineData(1u, 0f)]   // wrong counter, right rate
+    [InlineData(2u, 0f)]   // a counter that was never sent, right rate
+    [InlineData(1u, 0f)]   // the next counter (not sent), right rate
     [InlineData(0u, 1.0f)] // right counter, wrong rate
-    public async Task ATurnRateAck_WithTheWrongCounterOrRate_IsIgnored_AndCounted(uint counterOffset, float rateOffset)
+    public async Task ATurnRateAck_WithTheWrongCounterOrRate_IsIgnored_AndCountedOnlyWhenTheCounterWasNeverSent(uint counterOffset, float rateOffset)
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient mover = await host.EnterWorldAsync("MOVER", "Mover");
@@ -233,7 +234,10 @@ public sealed class SpeedRateTests
         List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat);
 
         Assert.DoesNotContain(seen, p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
-        Assert.Equal(1, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
+        // vmangos counts a wrong ack only for counter 0 or one above the last sent (MovementHandler.cpp:468-469); one order was sent, so the next counter is counter + 1.
+        uint acked = counter + counterOffset;
+        int expectedWrong = acked == 0 || acked > counter + 1 ? 1 : 0;
+        Assert.Equal(expectedWrong, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
         Assert.True(await host.OnWorldAsync(() => player.Locomotion.Pending.HasPending)); // the real order is still waiting
     }
 

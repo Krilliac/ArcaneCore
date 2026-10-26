@@ -63,10 +63,13 @@ speed by them, so the aura recomputation, every `SMSG_FORCE_*_SPEED_CHANGE`, the
 carry the effective value. A loading character gets them before the world sees it (no force packets at login); `.reload config` and
 `.movement set` re-send the speeds of every online player (only the types that change). The turn rate is sent as
 `SMSG_FORCE_TURN_RATE_CHANGE` and taken by the server at once. The order is also recorded in the pending-change ledger as type
-`TurnRate`, which is never enforced on a timeout because the rate is already taken. Only an ack that matches the counter and the rate
-(within 0.01) and comes from the confirmed mover is stored and relayed as `MSG_MOVE_SET_TURN_RATE` to the observers; anything else is
-counted as a wrong ack. Limit: vmangos also applies and broadcasts a timed-out turn rate, and here observers get no
-`SMSG_SPLINE_SET_TURN_RATE` on a timeout.
+`TurnRate`. If the client does not ack in time, the entry is dropped, counted as a failed ack, and everyone is told the rate with
+`SMSG_SPLINE_SET_TURN_RATE` (the rate itself was already taken, so nothing is re-applied). An ack is stored and relayed as
+`MSG_MOVE_SET_TURN_RATE` to the observers only when it matches a ledger entry by counter and rate (within 0.01) and the player is the
+confirmed mover. A ledger mismatch is ignored; it is counted as a wrong ack only when the ack counter is 0 or was never sent (vmangos
+`OnWrongAckData`), so a late ack of an order that already timed out is not counted. An ack during a teleport, one naming another
+GUID, or one that fails the movement checks is ignored without being counted, and a matching ack from a charmed or possessed player
+consumes the entry and is dropped, also uncounted.
 
 GM commands (Administrator, written to the GM command audit, a set also logged with old and new value):
 

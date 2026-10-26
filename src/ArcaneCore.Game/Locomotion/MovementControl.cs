@@ -101,7 +101,9 @@ public static class MovementControl
 
     /// <summary>
     /// The client's ack for a turn rate order (vmangos HandleForceSpeedChangeAckOpcodes, MOVE_TURN_RATE, MovementHandler.cpp:464-476): it must match a
-    /// pending turn rate change by counter and, within 0.01, rate (a NaN never matches). False, and a counted wrong ack, when nothing matches.
+    /// pending turn rate change by counter and, within 0.01, rate (a NaN never matches). False when nothing matches; the mismatch is a counted wrong ack
+    /// only when the counter is 0 or was never sent (vmangos OnWrongAckData, MovementHandler.cpp:468-469 and :481-482), so a late ack of an order that
+    /// already timed out is not counted (the timeout counted it as a failed ack).
     /// </summary>
     public static bool AcknowledgeTurnRate(Player player, uint counter, float rate)
     {
@@ -109,7 +111,11 @@ public static class MovementControl
         LocomotionState state = player.Locomotion;
         if (!state.Pending.TryAcknowledgeSpeed(counter, MovementChangeType.TurnRate, rate))
         {
-            state.NoteWrongAck();
+            if (counter == 0 || counter > player.MovementCounter)
+            {
+                state.NoteWrongAck();
+            }
+
             return false;
         }
 
@@ -117,7 +123,7 @@ public static class MovementControl
     }
 
     /// <summary>
-    /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6745): a root also stops
+    /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6719): a root also stops
     /// motion (the moving flags are cleared), and with <paramref name="sendToClient"/> everyone is told with the
     /// SMSG_SPLINE_MOVE_* packet (SendMovementFlagChangeToAll).
     /// </summary>
@@ -125,13 +131,22 @@ public static class MovementControl
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(change);
-        if (change.Type is MovementChangeType.KnockBack or MovementChangeType.TurnRate)
+        if (change.Type == MovementChangeType.TurnRate)
         {
-            // Knock back: "Not resendable change", dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
+            // The rate was applied when the order was sent (UnitSpeed.SetTurnRate; vmangos applies it on the ack), so only the
+            // announcement of SendSpeedChangeToAll is left (ResolvePendingMovementChange, Unit.cpp:6772-6774).
+            if (sendToClient)
+            {
+                CombatPackets.SendToSet(unit, TurnRatePackets.Spline, SpeedPackets.BuildSpline(unit.Guid.Value, change.NewValue));
+            }
+
+            return;
+        }
+
+        if (change.Type == MovementChangeType.KnockBack)
+        {
+            // "Not resendable change", dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6670-6675);
             // the resolve switch has no knock back case either.
-            // Turn rate: applied when the order was sent (UnitSpeed.SetTurnRate), so there is nothing left to enforce.
-            // Deviation from vmangos, which resolves a timed-out turn rate with SetSpeedRateReal + SendSpeedChangeToAll
-            // (ResolvePendingMovementChange, Unit.cpp:6772-6774): observers get no SMSG_SPLINE_SET_TURN_RATE on a timeout.
             return;
         }
 
