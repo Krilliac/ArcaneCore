@@ -8,7 +8,12 @@
 # build; Dependabot (.github/dependabot.yml, docker ecosystem) proposes tag and digest bumps together. When global.json moves to a
 # new SDK, move these tags with it: .github/workflows/docker-smoke.yml builds every target so a mismatch fails CI.
 
-FROM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:bfabf51e74c5a7cf2fc4eac852145db86f4867d475257d809518d6a2b0fe71e1 AS build
+# --platform=$BUILDPLATFORM: the build stage always runs natively on the builder. The published output is framework-dependent (no
+# RuntimeIdentifier, no ReadyToRun), so it is architecture-neutral and a linux/arm64 image (docker-publish.yml) needs no emulation
+# of the compile; only the small runtime stages below are per-platform. The apphost the publish also writes is never used (the
+# entrypoints are `dotnet X.dll`).
+# CONFIGURATION: Release by default; pass --build-arg CONFIGURATION=Debug for a Debug image (docs/guide/docker.md, "Debug or Release").
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:bfabf51e74c5a7cf2fc4eac852145db86f4867d475257d809518d6a2b0fe71e1 AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
@@ -20,13 +25,15 @@ COPY tools/ tools/
 RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode && dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode \
  && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj --locked-mode \
  && dotnet restore tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj --locked-mode \
- && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode
+ && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode \
+ && dotnet restore tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj --locked-mode
 # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) references World, so World cannot reference it: it is published on its
 # own and its assembly placed beside the world executable, where Program.cs loads it (its packages are all World's).
 RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world && dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c $CONFIGURATION --no-restore -o /out/playerbots && cp /out/playerbots/ArcaneCore.Playerbots.dll /out/playerbots/ArcaneCore.Playerbots.pdb /out/world/ \
  && dotnet publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj -c $CONFIGURATION --no-restore -o /out/realm \
  && dotnet publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj -c $CONFIGURATION --no-restore -o /out/tools \
- && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade
+ && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade \
+ && dotnet publish tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj -c $CONFIGURATION --no-restore -o /out/account
 
 # Shared runtime skeleton (AzerothCore "skeleton"/"runtime"): non-root user, data and log directories.
 FROM mcr.microsoft.com/dotnet/runtime:11.0.0-rc.2@sha256:48e6be84d7f413a619590e999d8e03c9d8d99be2e4646b93a28a93f2eba4da05 AS runtime
@@ -60,11 +67,14 @@ EXPOSE 3724 9465
 VOLUME ["/arcanecore/logs"]
 ENTRYPOINT ["dotnet", "ArcaneCore.Realm.dll"]
 
-# AzerothCore "db-import"/"tools": one-shot helpers, run with `docker compose run --rm tools ...`.
+# AzerothCore "db-import"/"tools": one-shot helpers, run with `docker compose run --rm tools ...`. The entrypoint is the content importer;
+# the database upgrade tool (/arcanecore/dbupgrade/arcane-db.dll) and the account tool (/arcanecore/account/arcane-account.dll) are run
+# with `--entrypoint dotnet`.
 FROM runtime AS tools
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 WORKDIR /arcanecore/tools
 COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/tools/ ./
 COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/dbupgrade/ /arcanecore/dbupgrade/
+COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/account/ /arcanecore/account/
 ENTRYPOINT ["dotnet", "arcane-content-importer.dll"]

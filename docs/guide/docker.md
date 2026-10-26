@@ -24,9 +24,107 @@ docker compose up -d --build
 - **Configuration**: any key as an environment variable with `__` for `:` (docs/reference/configuration.md), in
   `docker-compose.override.yml`. The heartbeat is set to `Stdout`; `docker compose stop` gives the world 90 s to drain saves.
 - **Client data**: nothing ships. `env/data` is mounted read-only at `/arcanecore/data`.
-- **Accounts**: `ArcaneCore.AccountTool` is not in an image yet; create accounts from a host build or a GM command.
+- **Accounts**: the tools image carries the account tool (`arcane-account`) and `arcane-db` beside the content importer. Both read
+  the auth schema from `Database__ConnectionString`, which compose sets. Run them with `--entrypoint dotnet`:
+  `docker compose --profile tools run --rm --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll create NAME`
+  (it prompts for the password; or pass `-e ARCANE_ACCOUNT_PASSWORD`), and `... /arcanecore/dbupgrade/arcane-db.dll status`.
 - **Monitoring**: `ARCANE_METRICS_ENABLED=true docker compose --profile monitoring up -d` starts Prometheus (:9090)
   and Grafana (:3000) with the sample dashboard (docs/ops/metrics.md) provisioned. Prometheus scrapes two targets
   (`apps/docker/prometheus.yml`): `arcane-world:9464` (`Ops__Metrics__PrometheusPrefix`) and `arcane-realm:9465`
   (`Ops__Metrics__RealmPrometheusPrefix`; the Realm daemon reads only its own key). These ports stay on the compose
   network and are not published.
+
+## Debug or Release
+
+The `CONFIGURATION` build argument of `apps/docker/Dockerfile` defaults to `Release`. The live server runs the Debug configuration, and
+the images follow that when asked: `docker build -f apps/docker/Dockerfile --target world --build-arg CONFIGURATION=Debug -t arcanecore/world:debug .`
+(compose: `args: CONFIGURATION: Debug` under `build:` in `docker-compose.override.yml`). The published images are Release for a `v*`
+tag and Debug for `edge` (see below).
+
+## Image tags and the registry
+
+[`.github/workflows/docker-publish.yml`](../../.github/workflows/docker-publish.yml) builds `world`, `realm` and `tools` for `linux/amd64`
+and `linux/arm64` and pushes them to `ghcr.io/krilliac/arcanecore-world`, `arcanecore-realm` and `arcanecore-tools`. It runs on a push to
+`main` (tag `edge`, Debug), on a `v*` tag (that tag, Release) and by hand; every run also pushes `sha-<7 hex>`. The images are public.
+Pick a version and pull it: set `ARCANE_IMAGE_TAG` in `.env` (for example to `edge`, or to a release tag), then
+`docker compose -f docker-compose.prod.yml pull`.
+
+## Deploying to a VPS
+
+The production file [`docker-compose.prod.yml`](../../docker-compose.prod.yml) runs the same services as the development file but pulls
+`ghcr.io/krilliac/arcanecore-{realm,world,tools}:${ARCANE_IMAGE_TAG}` (nothing is built on the VPS; `ARCANE_IMAGE_REPO` points it at a
+fork's images), rotates every service's `json-file` log (5 files of 10 MB), restarts everything `unless-stopped` and keeps the daemon
+logs in a named volume. Each daemon has a healthcheck that opens a TCP connection to its own port from inside the container: the
+runtime image has no `curl`, and neither daemon serves an HTTP health endpoint (the Prometheus listeners are off unless
+`Ops:Metrics:Enabled` is set). The realm opens 3724 after its auth schema is current, the world opens 8085 after all three schemas are.
+
+1. **Host**: any Linux host with Docker Engine and the compose plugin. The images are multi-arch, so x86-64 and arm64 hosts both work.
+   Check the repository out at the release tag (the compose file mounts `apps/docker/db-init` and the monitoring files from it).
+2. **Sizing**: the repository holds no measured RAM or CPU figures, so measure on your own load. Start the stack, let players or the
+   playerbots run, and read `docker stats`; the world and realm export tick, packet and memory series through `Ops:Metrics`
+   (docs/ops/metrics.md), which the monitoring profile graphs. The MariaDB buffer pool is the other large consumer. Size the VPS from
+   the peak you see, plus headroom for the 90 s shutdown save drain and for `mariadb-dump`.
+3. **Configure**: `cp apps/docker/.env.example .env`; set the two passwords, `ARCANE_IMAGE_TAG` and
+   `ARCANE_REALM_ADDRESS=<public IP>:8085` (the address the realm list hands to clients, so it must be reachable from players).
+4. **Firewall**: expose only **3724** (logon) and **8085** (world). MariaDB, Prometheus and Grafana already bind `127.0.0.1` on the
+   host; reach them from your machine through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 user@vps`), and leave
+   `DOCKER_*_EXTERNAL_BIND` alone. Docker publishes ports by editing iptables ahead of host firewalls such as ufw, so a ufw deny
+   rule does not close a published port: do not publish what must stay private, and filter at the provider's firewall too.
+5. **Client data**: nothing ships. Extract `dbc/`, `maps/`, `vmaps/` and `mmaps/` from your own 1.12.1 client and upload them to the
+   directory `DOCKER_VOL_DATA` names (default `./env/data`, mounted read-only at `/arcanecore/data`), for example
+   `rsync -a data/ user@vps:/path/to/checkout/env/data/`. The world sets `ClientData:DbcDirectory` to `/arcanecore/data/dbc` and
+   `World:Maps:DataDirectory` to `/arcanecore/data`. Without the files it still starts and warns once per missing DBC;
+   `ClientData:Strict` (`ClientData__Strict=true`) makes that fatal.
+6. **Start**: `docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`, then
+   `docker compose -f docker-compose.prod.yml ps` until the three services are `healthy`. Create the first account with the tools
+   image (see Accounts above, with `-f docker-compose.prod.yml`).
+
+### Moving an existing MariaDB
+
+Dump the three schemas on the old host, then restore them into the container **before the realm and world first start**:
+
+```sh
+mariadb-dump -u USER -p --single-transaction --routines --events --databases arcanecore_auth arcanecore_characters arcanecore_world > arcanecore.sql
+docker compose -f docker-compose.prod.yml up -d arcane-database
+docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"' < arcanecore.sql
+docker compose -f docker-compose.prod.yml up -d
+```
+
+The first start of the empty volume creates the schemas and the application user's grants (`apps/docker/db-init`); the restore then
+replaces their contents. On start the daemons bring the schema to the image's version under `Database:Upgrade` (the default
+policy upgrades); for a deliberate, reviewed upgrade run `arcane-db plan` first, as in the [upgrade runbook](../ops/database-upgrade.md).
+
+### Updating
+
+Set the new `ARCANE_IMAGE_TAG`, check the repository out at the same tag, take a backup (below), then
+`docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`. Compose recreates only the
+containers whose image changed; the world gets 90 s to save. To go back, set the old tag and run `up -d` again (a schema upgrade the
+new version already applied is not undone: restore the backup for that).
+
+### Backups
+
+[`tools/ops/deploy/backup-database.sh`](../../tools/ops/deploy/backup-database.sh) dumps the three schemas into
+`arcanecore-<UTC time>.sql.gz` under `BACKUP_DIR` and deletes dumps older than `KEEP_DAYS` (default 14). It runs `mariadb-dump`
+inside the database container with `--single-transaction`, so the realm and world keep running and no password is on a command line:
+
+```sh
+COMPOSE_FILE=docker-compose.prod.yml BACKUP_DIR=/srv/backups tools/ops/deploy/backup-database.sh
+# cron, daily 04:17:   17 4 * * *  cd /path/to/checkout && COMPOSE_FILE=docker-compose.prod.yml BACKUP_DIR=/srv/backups tools/ops/deploy/backup-database.sh
+```
+
+By hand:
+
+```sh
+docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction --databases arcanecore_auth arcanecore_characters arcanecore_world' | gzip > backup.sql.gz
+gunzip -c backup.sql.gz | docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"'   # restore, with the realm and world stopped
+```
+
+Copy the dumps off the VPS; a backup on the same disk is not one.
+
+## Not in an image
+
+- **Gateway** (`src/ArcaneCore.Gateway`): not an image. It is documented as built and mock-client tested but not accepted with a real
+  client, needs a world in `Cluster:Worker` mode with a shared link secret and matching revision and schema versions, and loses its
+  clients on any restart (docs/areas/gateway.md).
+- **Atlas** (`tools/ArcaneCore.Atlas`): not an image. It references `tests/ThirdParty` (DotRecast), which `.dockerignore` excludes, so an
+  image would need that folder in the build context and a restore of the Atlas project.

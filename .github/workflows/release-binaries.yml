@@ -1,0 +1,146 @@
+name: Release binaries
+
+# Builds the runnable, self-contained server binaries (world with the Playerbots pack, realm, content importer, arcane-db, arcane-account)
+# for Windows and Linux and attaches one archive per platform to a GitHub release, with a SHA-256 file:
+#
+#   nightly   rolling pre-release, rebuilt on every push to main, Debug configuration (the live server runs Debug)
+#   v*        a release per version tag, Release configuration
+#
+# Asset names never change, so a link such as .../releases/download/nightly/arcanecore-win-x64.zip stays valid:
+#   arcanecore-win-x64.zip  arcanecore-linux-x64.tar.gz  arcanecore-win-arm64.zip  arcanecore-linux-arm64.tar.gz  SHA256SUMS
+# A pull request that changes this workflow or the publish script only builds and smoke-checks (no release); a manual run does the same.
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release-binaries.yml"
+      - "tools/ops/deploy/publish-binaries.sh"
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Build configuration for a manual run (artifacts only, no release)"
+        type: choice
+        options: [Debug, Release]
+        default: Debug
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64, runner: windows-latest, archive: zip, experimental: false }
+          - { rid: linux-x64, runner: ubuntu-latest, archive: tar.gz, experimental: false }
+          # Native arm64 runners, so the --help start check runs on the real architecture. A failure here does not block the release.
+          - { rid: linux-arm64, runner: ubuntu-24.04-arm, archive: tar.gz, experimental: true }
+          - { rid: win-arm64, runner: windows-11-arm, archive: zip, experimental: true }
+    env:
+      CONFIGURATION: ${{ inputs.configuration || (github.ref_type == 'tag' && 'Release' || 'Debug') }}
+      RID: ${{ matrix.rid }}
+      ARCHIVE: ${{ matrix.archive }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: "11.0.x"
+          dotnet-quality: "preview"
+
+      - name: Publish
+        run: bash tools/ops/deploy/publish-binaries.sh "$RID" "$CONFIGURATION" "$RUNNER_TEMP/publish"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$env:RUNNER_TEMP/publish/arcanecore-$env:RID" -DestinationPath "dist/arcanecore-$env:RID.zip" -CompressionLevel Optimal
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          tar -C "$RUNNER_TEMP/publish" -czf "dist/arcanecore-$RID.tar.gz" "arcanecore-$RID"
+
+      - name: Archive size
+        run: ls -l dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arcanecore-${{ matrix.rid }}
+          path: dist/arcanecore-${{ matrix.rid }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: attach to the release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF_NAME: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: arcanecore-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          ls -l
+          sha256sum arcanecore-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Nightly pre-release (push to main)
+        if: github.ref_type == 'branch'
+        run: |
+          # Move the nightly tag to this commit (create it the first time), keep the release (and so its URL), replace the assets.
+          if gh api "repos/$GH_REPO/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" > /dev/null
+          fi
+          notes="Rolling pre-release of the Debug configuration, rebuilt on every push to main. Built from commit $SHA. Not a stable release: use a v* release for Release builds. Verify downloads against SHA256SUMS."
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "Nightly (Debug)" --notes "$notes"
+          else
+            gh release create nightly --prerelease --verify-tag --title "Nightly (Debug)" --notes "$notes"
+          fi
+          gh release upload nightly dist/* --clobber
+
+      - name: Versioned release (v* tag)
+        if: github.ref_type == 'tag'
+        run: |
+          if gh release view "$REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$REF_NAME" dist/* --clobber
+          else
+            gh release create "$REF_NAME" dist/* --verify-tag --title "$REF_NAME" --generate-notes
+          fi

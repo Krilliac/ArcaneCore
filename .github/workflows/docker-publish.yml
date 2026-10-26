@@ -1,0 +1,90 @@
+name: Docker publish
+
+# Builds the world, realm and tools images of apps/docker/Dockerfile for linux/amd64 and linux/arm64 and pushes them to the GitHub
+# Container Registry, so a Docker VPS pulls them (docker-compose.prod.yml, docs/guide/docker.md) instead of building from source.
+# It runs on a push to main (the rolling `edge` tag, Debug configuration like the live server and the nightly binaries), when a version
+# tag v* is pushed (Release), and by hand (workflow_dispatch).
+# Tags pushed per image: edge (push to main), the git tag (tag runs) and sha-<7 hex> (every run). A hand-run Debug build gets a
+# -debug suffix on its tags.
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Build configuration baked into the images (tag runs are always Release, pushes to main always Debug)"
+        type: choice
+        options: [Release, Debug]
+        default: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [world, realm, tools]
+    env:
+      CONFIGURATION: ${{ inputs.configuration || (github.ref_type == 'tag' && 'Release' || 'Debug') }}
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The registry path must be lower case; the owner of this repository is not.
+      - name: Image name
+        id: image
+        env:
+          TARGET: ${{ matrix.target }}
+        run: echo "name=ghcr.io/${OWNER,,}/arcanecore-${TARGET}" >> "$GITHUB_OUTPUT"
+
+      # arm64 runtime stages are tiny (a base image and a COPY); the compile runs natively (Dockerfile, --platform=$BUILDPLATFORM).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: |
+            latest=false
+            suffix=${{ inputs.configuration == 'Debug' && '-debug' || '' }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=sha
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            CONFIGURATION=${{ env.CONFIGURATION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

@@ -11,7 +11,7 @@ Related pages: [configuration reference](../reference/configuration.md) (every k
 
 ## 1. Prerequisites
 
-- The .NET SDK named in `global.json` (10.0.301; a newer 10.0 feature band is accepted).
+- The .NET SDK named in `global.json` (11.0.100-rc.2; a newer 11.0 feature band is accepted).
 - A database server for the three databases below, or nothing at all if you use SQLite (zero setup, development and tests).
   MariaDB is the primary engine; `MySql`, `PostgreSql` and `Sqlite` are the other `Database:*:Provider` values.
 - A WoW 1.12.1 (build 5875) client on a machine that can reach the daemons. No client data is part of this repository, and none
