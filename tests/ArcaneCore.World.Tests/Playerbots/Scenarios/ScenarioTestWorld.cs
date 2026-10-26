@@ -207,24 +207,30 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // A test that threw between PrepareCharacterAsync and EnterWorldAsync leaves its prepared client here.
-        foreach (string account in _prepared.Keys)
-        {
-            if (_prepared.TryRemove(account, out WorldTestClient? prepared))
-            {
-                await prepared.DisposeAsync();
-            }
-        }
-
-        await Bots.ShutdownBeforeWorldStopAsync();
-        await Host.DisposeAsync();
         try
         {
-            File.Delete(_database);
+            // A test that threw between PrepareCharacterAsync and EnterWorldAsync leaves its prepared client here.
+            foreach (string account in _prepared.Keys)
+            {
+                if (_prepared.TryRemove(account, out WorldTestClient? prepared))
+                {
+                    await prepared.DisposeAsync();
+                }
+            }
         }
-        catch (IOException)
+        finally
         {
-            // A pooled handle may still be closing; the temp file is harmless.
+            // One throwing client dispose must not skip the bot and host teardown.
+            await Bots.ShutdownBeforeWorldStopAsync();
+            await Host.DisposeAsync();
+            try
+            {
+                File.Delete(_database);
+            }
+            catch (IOException)
+            {
+                // A pooled handle may still be closing; the temp file is harmless.
+            }
         }
     }
 
