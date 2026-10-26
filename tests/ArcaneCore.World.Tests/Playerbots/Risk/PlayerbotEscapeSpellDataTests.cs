@@ -146,7 +146,7 @@ public sealed class PlayerbotEscapeSpellDataTests
 
     /// <summary>
     /// Every slow the kite model lists for a class (<see cref="PlayerbotKiteModel.SlowsOf"/>) is in Spell.dbc and, for some rank, holds
-    /// or slows by its own data (a root, stun or fear with a duration, or a negative speed aura), so no class lists a name that never
+    /// slows by its own data (a negative speed aura), so no class lists a name that never
     /// derives an effect. Which classes the model covers is the model's table; what each spell does is only ever read from the rows.
     /// </summary>
     [RealClientDbcFact]
@@ -165,7 +165,7 @@ public sealed class PlayerbotEscapeSpellDataTests
             }
         }
 
-        Assert.True(checkedNames >= 10, $"only {checkedNames} slow names were checked");
+        Assert.True(checkedNames >= 7, $"only {checkedNames} slow names were checked");
     }
 
     private static readonly Lazy<SpellDbcContent> Content = new(() => SpellDbcImporter.ReadDirectory(RealClientDbcFactAttribute.DbcDirectory));

@@ -65,7 +65,6 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     internal const uint FightGapMs = 10_000;
 
     private PlayerbotAbilities? _book;
-    private SpellInfo? _nova;
     private SpellInfo[] _slows = [];
     private SpellInfo? _ready;
 
@@ -74,9 +73,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     private float _nearestYards;
     private bool _anyEvading;
     private float _scanStart;
-
-    // Read by the cached slow filter (Frost Nova needs the pursuer within its radius).
-    private float _slowTargetYards;
+    private int _inRange;
 
     /// <summary>Steps taken in the current fight (inspection and tests).</summary>
     internal int Steps => _steps;
@@ -198,10 +195,10 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         if (PlayerbotWater.Submerged(player) || feature.System.IsRooted(player)) return false;
 
         ResolveSlows(player);
-        _slowTargetYards = _nearestYards;
-        bool slowReady = pursuers <= PlayerbotKiteModel.MaxPursuers && SlowReady(player, nearest);
-        bool caster = CastsSpells(nearest, feature);
-        var facts = new KiteFacts(healthPct, kite.HealthPct, pursuers, caster, feature.System.IsRooted(nearest), nearest.RunSpeed,
+        int attackers = _pursuers.Count;
+        bool slowReady = attackers <= PlayerbotKiteModel.MaxPursuers && SlowReady(player, nearest);
+        bool caster = AnyCasts(feature);
+        var facts = new KiteFacts(healthPct, kite.HealthPct, attackers, caster, feature.System.IsRooted(nearest), nearest.RunSpeed,
             player.RunSpeed, slowReady, _hasStepped ? unchecked(now - _stepEndedMs) : uint.MaxValue, _steps, kite.MaxStepsPerFight,
             _kiteStartMs == 0 ? 0u : unchecked(now - _kiteStartMs), _failedSpots);
         switch (PlayerbotKiteModel.Decide(facts))
@@ -219,7 +216,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
                 return BeginStep(player, map, victim, hunter, preferredRange, leashCentre, leashYards, risk, interval, kite);
             default:
                 // Too many pursuers or a caster: kiting cannot work here, so the bot fights as its rotation says (melee for a warrior).
-                if (pursuers > PlayerbotKiteModel.MaxPursuers || facts.NearestCaster) _holding = false;
+                if (attackers > PlayerbotKiteModel.MaxPursuers || facts.AnyCaster) _holding = false;
                 return false;
         }
     }
@@ -257,8 +254,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         // The walk is over: arrived (the route is complete) or refused (the motion would not take it).
         bool arrived = route.Complete;
         EndStep(player, stop: true);
-        if (arrived) _failedSpots = 0;
-        else _failedSpots = PlayerbotKiteModel.MaxFailedSpots;
+        _failedSpots = PlayerbotKiteModel.NextFailedSpots(_failedSpots, arrived);
         Face(player, victim);
         return false;
     }
@@ -298,7 +294,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
         // Refused at once: the walk cannot start from here.
         _route = null;
-        _failedSpots = PlayerbotKiteModel.MaxFailedSpots;
+        _failedSpots++;
         _stepEndedMs = now;
         _hasStepped = true;
         return false;
@@ -307,13 +303,15 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     // --- the attackers ---------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// The living, non-evading creatures attacking the bot within the kite start distance, into <see cref="_pursuers"/>; the nearest
-    /// in <see cref="_nearest"/> and <see cref="_nearestYards"/>. Any attacker creature in evade mode sets <see cref="_anyEvading"/>.
-    /// O(attackers) and allocation-free (the set is enumerated through its struct enumerator).
+    /// The living, non-evading creatures attacking the bot, at any distance, into <see cref="_pursuers"/> (the cap, the caster check, the
+    /// centroid and the leash zones read them all); the nearest of those within the kite start distance in <see cref="_nearest"/> and
+    /// <see cref="_nearestYards"/>. Returns how many are within that distance. Any attacker creature in evade mode sets
+    /// <see cref="_anyEvading"/>. O(attackers) and allocation-free (the set is enumerated through its struct enumerator).
     /// </summary>
     private int Scan(Player player, bool hunter)
     {
         _pursuers.Clear();
+        _inRange = 0;
         _nearest = null;
         _nearestYards = float.MaxValue;
         _anyEvading = false;
@@ -327,7 +325,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
             foreach (Unit attacker in player.Combat.Attackers) Consider(player, attacker);
         }
 
-        return _pursuers.Count;
+        return _inRange;
     }
 
     private void Consider(Player player, Unit attacker)
@@ -339,9 +337,10 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
             return;
         }
 
+        _pursuers.Add(creature);
         float yards = Distance(player, creature);
         if (yards > _scanStart) return;
-        _pursuers.Add(creature);
+        _inRange++;
         if (yards < _nearestYards)
         {
             _nearest = creature;
@@ -349,10 +348,15 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         }
     }
 
-    private static bool CastsSpells(Creature creature, SpellFeature feature)
+    private bool AnyCasts(SpellFeature feature)
     {
-        CreatureSpellThreat threat = PlayerbotCreatureSpells.Of(creature, feature.System.Store);
-        return threat.Dps > 0f || threat.MaxHit > 0 || threat.Instakill;
+        foreach (Creature creature in _pursuers)
+        {
+            CreatureSpellThreat threat = PlayerbotCreatureSpells.Of(creature, feature.System.Store);
+            if (threat.Dps > 0f || threat.MaxHit > 0 || threat.Instakill) return true;
+        }
+
+        return false;
     }
 
     // --- who may kite ------------------------------------------------------------------------------------------------------
@@ -395,28 +399,19 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         PlayerbotAbilities book = spells.Escapes(player);
         if (ReferenceEquals(book, _book)) return;
         _book = book;
-        _nova = null;
         var found = new List<SpellInfo>(3);
         foreach (string name in PlayerbotKiteModel.SlowsOf(player.Class))
         {
-            if (book[name] is not { } spell || !PlayerbotKiteModel.IsSlow(name, spell)) continue;
-            if (name == PlayerbotEscapes.FrostNova) _nova = spell;
-            else found.Add(spell);
+            if (book[name] is { } spell && PlayerbotKiteModel.IsSlow(name, spell)) found.Add(spell);
         }
 
         _slows = [.. found];
     }
 
-    /// <summary>Whether a slow can be cast now; the one to cast is kept in <see cref="_ready"/> (Frost Nova at the bot itself, the rest at the pursuer).</summary>
+    /// <summary>Whether a slow can be cast at the nearest pursuer now; the one to cast is kept in <see cref="_ready"/>.</summary>
     private bool SlowReady(Player player, Creature nearest)
     {
         _ready = null;
-        if (_nova is { } nova && _slowTargetYards <= PlayerbotKiteModel.FrostNovaYards && spells.CanCastNow(player, nova, player))
-        {
-            _ready = nova;
-            return true;
-        }
-
         if (_slows.Length > 0 && spells.FirstCastable(player, _slows, nearest) is { } slow)
         {
             _ready = slow;
@@ -427,7 +422,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     }
 
     private bool CastSlow(Player player, Creature nearest)
-        => _ready is { } slow && CastIfStill(player, slow, slow.Name == PlayerbotEscapes.FrostNova ? player : nearest);
+        => _ready is { } slow && CastIfStill(player, slow, nearest);
 
     private bool CastIfStill(Player player, SpellInfo spell, Unit target)
     {

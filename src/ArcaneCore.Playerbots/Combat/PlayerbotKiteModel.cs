@@ -25,8 +25,8 @@ internal enum KiteDecision : byte
 /// </summary>
 /// <param name="HealthPct">The bot's health percentage.</param>
 /// <param name="HealthLimitPct"><c>World:Playerbots:Combat:Kite:HealthPct</c>: kite at or below it.</param>
-/// <param name="Pursuers">Live creatures attacking the bot within the kite start distance.</param>
-/// <param name="NearestCaster">The nearest pursuer casts spells of its own (it hurts from range, so backing away buys nothing).</param>
+/// <param name="Pursuers">Every live, non-evading creature attacking the bot, at any distance (the nearest is within the kite start distance).</param>
+/// <param name="AnyCaster">Some attacker casts spells of its own (it hurts from range, so backing away buys nothing).</param>
 /// <param name="NearestImmobile">The nearest pursuer is rooted or stunned.</param>
 /// <param name="NearestSpeed">The nearest pursuer's run speed (auras included).</param>
 /// <param name="BotSpeed">The bot's run speed (auras included).</param>
@@ -36,7 +36,7 @@ internal enum KiteDecision : byte
 /// <param name="MaxSteps"><c>World:Playerbots:Combat:Kite:MaxStepsPerFight</c>.</param>
 /// <param name="KiteMs">Milliseconds since the first kite action of this fight (0: none yet).</param>
 /// <param name="FailedSpots">Steps in a row for which no spot was found or the walk was refused.</param>
-internal readonly record struct KiteFacts(float HealthPct, float HealthLimitPct, int Pursuers, bool NearestCaster, bool NearestImmobile,
+internal readonly record struct KiteFacts(float HealthPct, float HealthLimitPct, int Pursuers, bool AnyCaster, bool NearestImmobile,
     float NearestSpeed, float BotSpeed, bool SlowReady, uint MsSinceStep, int Steps, int MaxSteps, uint KiteMs, int FailedSpots);
 
 /// <summary>
@@ -52,9 +52,6 @@ internal static class PlayerbotKiteModel
 
     /// <summary>The 8-yard minimum of Auto Shot.</summary>
     internal const float HunterDeadZone = PlayerbotClassRotation.HunterDeadZone;
-
-    /// <summary>Frost Nova only freezes what stands within this many yards of the mage.</summary>
-    internal const float FrostNovaYards = 10f;
 
     /// <summary>More pursuers than this and kiting cannot hold them all: the bot fights on.</summary>
     internal const int MaxPursuers = 2;
@@ -86,38 +83,42 @@ internal static class PlayerbotKiteModel
     /// <summary>Spacing of the samples along a candidate leg (yards).</summary>
     internal const float SampleYards = 2f;
 
-    private static readonly string[] MageSlows = [PlayerbotEscapes.FrostNova, PlayerbotEscapes.ConeOfCold, PlayerbotEscapes.Frostbolt];
+    private static readonly string[] MageSlows = [PlayerbotEscapes.ConeOfCold, PlayerbotEscapes.Frostbolt];
     private static readonly string[] HunterSlows = [PlayerbotEscapes.ConcussiveShot, PlayerbotEscapes.WingClip];
-    private static readonly string[] WarlockSlows = [PlayerbotEscapes.CurseOfExhaustion, PlayerbotEscapes.DeathCoil];
+    private static readonly string[] WarlockSlows = [PlayerbotEscapes.CurseOfExhaustion];
     private static readonly string[] ShamanSlows = [PlayerbotEscapes.FrostShock];
-    private static readonly string[] DruidSlows = [PlayerbotEscapes.EntanglingRoots];
     private static readonly string[] WarriorSlows = [PlayerbotEscapes.Hamstring];
-    private static readonly string[] RogueSlows = [PlayerbotEscapes.Gouge];
     private static readonly string[] NoSlows = [];
 
-    /// <summary>The slows of a class in the order they are tried (names resolved from the bot's book; empty for a class with none). Shared arrays: do not write.</summary>
+    /// <summary>
+    /// The slows of a class in the order they are tried (names resolved from the bot's book; empty for a class with none). Only
+    /// victim snares (<see cref="PlayerbotEscapes.EscapeKind.VictimSnare"/>): Frost Nova, Death Coil, Entangling Roots and Gouge hold
+    /// the creature off the bot, which is what the retreat spends them on, so the kite leaves them to it (a druid and a rogue have no
+    /// kite slow). Shared arrays: do not write.
+    /// </summary>
     internal static string[] SlowsOf(Class playerClass) => playerClass switch
     {
         Class.Mage => MageSlows,
         Class.Hunter => HunterSlows,
         Class.Warlock => WarlockSlows,
         Class.Shaman => ShamanSlows,
-        Class.Druid => DruidSlows,
         Class.Warrior => WarriorSlows,
-        Class.Rogue => RogueSlows,
         _ => NoSlows,
     };
 
     /// <summary>
-    /// Whether <paramref name="spell"/>, as the escape named <paramref name="name"/>, holds or slows its target: a root, stun or fear
-    /// with a duration, or a negative movement-speed aura (<see cref="PlayerbotEscapes.EffectOf"/>, from the spell's own data). A spell
-    /// that did not resolve, or lacks the data, is not a slow.
+    /// Whether <paramref name="spell"/>, as the escape named <paramref name="name"/>, slows its target: a negative movement-speed aura
+    /// (<see cref="PlayerbotEscapes.EffectOf"/>, from the spell's own data). A root, stun or fear is a hold, not a slow (the retreat's
+    /// to spend), and a spell that did not resolve, or lacks the data, is not a slow either.
     /// </summary>
     internal static bool IsSlow(string name, SpellInfo? spell)
-    {
-        PlayerbotEscapes.EscapeEffect effect = PlayerbotEscapes.EffectOf(name, spell);
-        return effect.FreeSeconds > 0f || effect.VictimSpeed < 1f;
-    }
+        => PlayerbotEscapes.EffectOf(name, spell).VictimSpeed < 1f;
+
+    /// <summary>
+    /// The failed-spot count after a walk ended: an arrival clears it, a refused walk adds one (so a single transient refusal costs one
+    /// of the <see cref="MaxFailedSpots"/>, not the whole fight's kite).
+    /// </summary>
+    internal static int NextFailedSpots(int failedSpots, bool arrived) => arrived ? 0 : failedSpots + 1;
 
     /// <summary>How near a pursuer must be for the bot to kite: 8 yards, a hunter's dead zone plus 2.</summary>
     internal static float StartYards(bool hunter) => hunter ? HunterDeadZone + 2f : KiteStartYards;
@@ -151,7 +152,7 @@ internal static class PlayerbotKiteModel
     /// </summary>
     internal static KiteDecision Decide(in KiteFacts facts)
     {
-        if (facts.Pursuers <= 0 || facts.Pursuers > MaxPursuers || facts.NearestCaster) return KiteDecision.None;
+        if (facts.Pursuers <= 0 || facts.Pursuers > MaxPursuers || facts.AnyCaster) return KiteDecision.None;
         if (!(facts.HealthPct <= facts.HealthLimitPct)) return KiteDecision.None;
         if (facts.Steps >= facts.MaxSteps || facts.KiteMs >= MaxKiteMs || facts.FailedSpots >= MaxFailedSpots) return KiteDecision.GiveUp;
 

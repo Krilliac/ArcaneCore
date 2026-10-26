@@ -110,6 +110,40 @@ public sealed class PlayerbotKiteWorldTests
         }
     }
 
+    /// <summary>
+    /// K7: the creature on the mage is the only one within 8 yards, but two more are attacking it from 14 yards out. Every live attacker
+    /// counts toward the two-pursuer cap, so the mage does not kite (the rotation still casts the snare); with no far attacker (the control)
+    /// the same setup kites. (The far ones start past the scan, so the old scan saw only the near one; the old code kited here.)
+    /// </summary>
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(0, true)]
+    public async Task AttackersBeyondTheScan_CountTowardThePursuerCap(int farAttackers, bool slows)
+    {
+        (RiskTestWorld world, Creature mob) = await HurtMageVsAsync(snare: true);
+        await using (world)
+        {
+            Creature[] far = await world.OnWorldAsync(() =>
+            {
+                var made = new Creature[farAttackers];
+                for (int i = 0; i < farAttackers; i++) made[i] = world.Spawn(RiskTestWorld.Template(MobEntry + 10 + (uint)i, health: 400, minDamage: 1, maxDamage: 2), 14, i * 3 - 1);
+                return made;
+            });
+            await world.SeeAsync(far);
+            Assert.True(await world.OnWorldAsync(() => far.All(c => Gap(world, c) > PlayerbotKiteModel.StartYards(hunter: false))),
+                "a far attacker was already within the scan, so the test proves nothing: " + await world.OnWorldAsync(() => Describe(world, mob)));
+            await world.OnWorldAsync(() =>
+            {
+                foreach (Creature creature in far) world.Engage(creature);
+                return true;
+            });
+
+            // The rotation casts the snare either way; what the cap decides is whether the mage then walks away.
+            bool kited = await world.ThinkUntilAsync(2_500, () => world.Brain.Kite.Steps >= 1);
+            Assert.True(slows == kited, $"kited {kited}, expected {slows}: " + await world.OnWorldAsync(() => Describe(world, mob) + " far " + string.Join(",", far.Select(c => $"{Gap(world, c):F1} evade {c.IsInEvadeMode} combat {c.Combat.IsInCombat}"))));
+        }
+    }
+
     /// <summary>K3: an idle hostile creature lies on the away line: the mage side-steps round its aggro and that creature never enters combat.</summary>
     [Fact]
     public async Task AKitingMage_SideStepsAnIdleCreature_AndNeverWakesIt()

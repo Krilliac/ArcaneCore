@@ -149,17 +149,38 @@ public sealed class PlayerbotKiteModelTests
     }
 
     [Theory]
-    [InlineData(Class.Mage, "Frost Nova,Cone of Cold,Frostbolt")]
+    [InlineData(Class.Mage, "Cone of Cold,Frostbolt")]
     [InlineData(Class.Hunter, "Concussive Shot,Wing Clip")]
-    [InlineData(Class.Warlock, "Curse of Exhaustion,Death Coil")]
+    [InlineData(Class.Warlock, "Curse of Exhaustion")]
     [InlineData(Class.Shaman, "Frost Shock")]
-    [InlineData(Class.Druid, "Entangling Roots")]
+    [InlineData(Class.Druid, "")]
     [InlineData(Class.Warrior, "Hamstring")]
-    [InlineData(Class.Rogue, "Gouge")]
+    [InlineData(Class.Rogue, "")]
     [InlineData(Class.Priest, "")]
     [InlineData(Class.Paladin, "")]
     public void EachClass_HasItsSlowsInOrder(Class playerClass, string expected)
         => Assert.Equal(expected, string.Join(',', PlayerbotKiteModel.SlowsOf(playerClass)));
+
+    [Fact]
+    public void TheKite_NeverSpendsAnEscapeTheRetreatHoldsWith()
+    {
+        // Frost Nova, Death Coil, Entangling Roots and Gouge hold the creature off the bot: the retreat's, not a kite slow.
+        foreach (Class playerClass in Enum.GetValues<Class>())
+        {
+            foreach (string name in PlayerbotKiteModel.SlowsOf(playerClass))
+                Assert.Equal(PlayerbotEscapes.EscapeKind.VictimSnare, PlayerbotEscapes.KindOf(name));
+        }
+    }
+
+    [Fact]
+    public void AFailedWalk_CostsOneFailedSpot_NotTheWholeKite()
+    {
+        int after = PlayerbotKiteModel.NextFailedSpots(0, arrived: false);
+        Assert.Equal(1, after);
+        Assert.Equal(KiteDecision.Step, PlayerbotKiteModel.Decide(Facts(immobile: true, failedSpots: after)));
+        Assert.Equal(KiteDecision.GiveUp, PlayerbotKiteModel.Decide(Facts(immobile: true, failedSpots: PlayerbotKiteModel.NextFailedSpots(after, arrived: false))));
+        Assert.Equal(0, PlayerbotKiteModel.NextFailedSpots(1, arrived: true));
+    }
 
     [Fact]
     public void EverySlowName_IsOneTheBotResolvesFromItsBook()
@@ -191,11 +212,16 @@ public sealed class PlayerbotKiteModelTests
     }
 
     [Fact]
-    public void ARootWithADuration_IsASlow_AndOneWithoutIsNot()
+    public void ARootStunOrFear_IsAHold_NotASlow()
     {
-        var root = new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModRoot, TargetA = SpellImplicitTarget.UnitEnemy };
-        SpellInfo timed = Spell("Entangling Roots", root);
-        Assert.True(PlayerbotKiteModel.IsSlow(PlayerbotEscapes.EntanglingRoots, timed));
-        Assert.False(PlayerbotKiteModel.IsSlow(PlayerbotEscapes.EntanglingRoots, timed with { Duration = new SpellDuration(0, 0, 0) }));
+        // A held victim is the retreat's to buy; the kite casts only speed snares.
+        AuraType[] holds = [AuraType.ModRoot, AuraType.ModStun, AuraType.ModFear];
+        string[] names = [PlayerbotEscapes.EntanglingRoots, PlayerbotEscapes.Gouge, PlayerbotEscapes.DeathCoil, PlayerbotEscapes.FrostNova];
+        foreach (AuraType aura in holds)
+        {
+            var effect = new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = aura, TargetA = SpellImplicitTarget.UnitEnemy };
+            foreach (string name in names)
+                Assert.False(PlayerbotKiteModel.IsSlow(name, Spell(name, effect)), $"{name} with {aura} counted as a kite slow");
+        }
     }
 }

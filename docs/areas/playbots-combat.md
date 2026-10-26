@@ -133,12 +133,14 @@ kiting is the fight-on branch.
 * **Who.** The bot's preferred range is past melee (a caster, a healer, a hunter with Auto Shot), or it is a warrior or rogue with a
   ranged weapon, its ammunition (a bow, gun or crossbow needs arrows or bullets; a thrown weapon none) and a known shot. Alive, in
   combat, not casting, not rooted, not stunned, feared or confused, not swimming; health at or below `HealthPct`.
-* **Pursuers.** Live creatures that are attacking the bot within 8 yards (a hunter: its 8-yard dead zone plus 2) and are not evading.
-  None, more than two, or a nearest one that casts spells of its own (an EventAI CAST action, `PlayerbotCreatureSpells`): fight on.
-* **Slow first.** The class's slows, in order: mage Frost Nova (pursuer within 10 yards), Cone of Cold, Frostbolt; hunter Concussive
-  Shot, Wing Clip; warlock Curse of Exhaustion, Death Coil; shaman Frost Shock; druid Entangling Roots; warrior Hamstring; rogue
-  Gouge. A spell counts as a slow only if its own data says so (`PlayerbotEscapes.EffectOf`: a root, stun or fear with a duration, or a
-  negative movement-speed aura); no number is assumed. Earthbind Totem is left out until a test shows its pulse landing.
+* **Pursuers.** The kite starts only when a live, non-evading creature that is attacking the bot is within 8 yards (a hunter: its
+  8-yard dead zone plus 2). Every such attacker at any distance counts: more than two, or any that casts spells of its own (an
+  EventAI CAST action, `PlayerbotCreatureSpells`): fight on. The step direction (away from their centroid) and the leash zones use all of them.
+* **Slow first.** The class's slows, in order: mage Cone of Cold, Frostbolt; hunter Concussive Shot, Wing Clip; warlock Curse of
+  Exhaustion; shaman Frost Shock; warrior Hamstring. A druid and a rogue have none. Only speed snares: Frost Nova, Death Coil,
+  Entangling Roots and Gouge hold the creature off the bot, which is what the retreat spends them on, so the kite never casts them.
+  A spell counts as a slow only if its own data says so (`PlayerbotEscapes.EffectOf`: a negative movement-speed aura); no number is
+  assumed. Earthbind Totem is left out until a test shows its pulse landing.
 * **Then step.** When the nearest pursuer is rooted, stunned or at most 80% of the bot's run speed (the slow landed, or it is slow by
   nature), the bot walks one leg away, at most once every 1.5 s. At the same speed with no slow ready it fights on.
 * **The spot** (no path search; at most seven directions: away from the pursuers, then 35, 70 and 105 degrees either side). The leg is
@@ -160,11 +162,9 @@ kiting is the fight-on branch.
   is cleared when the victim changes (unless the bot switched to another of its pursuers). Party AI (`Party/PlayerbotPartyAI.cs`) and group AI
   (`Groups/PlayerbotGroupAI.cs`) also call the kite with player targets; the brain fights only creatures through the kite. For a player victim `Update` answers false, ends a step under way and clears the hold, so
   positioning and the rotation agree and a hurt warrior fights a hostile player in melee even while a creature is on it.
-* **Design limit.** A rogue that Gouges the creature does not shoot at it (the damage would break the Gouge), so after a Gouge it
-  stands at range until the Gouge ends.
 * **Not the tank.** A party or group bot whose role is Tank (`PlayerbotCombatSpells.RoleOf`: the group role, else its talents) does not
   kite: it holds its ground so the creature stays on it.
-* **Giving up.** After `MaxStepsPerFight` steps, 30 s of kiting in one fight, or two steps in a row with no spot (or a refused walk),
+* **Giving up.** After `MaxStepsPerFight` steps, 30 s of kiting in one fight, or two steps in a row with no spot or a refused walk (one refusal counts once),
   the bot fights on for the rest of the fight and reports `combat/kite-gave-up` once (Info). A pursuer starting to evade ends the kite
   silently. The counters reset when the bot leaves combat.
 
