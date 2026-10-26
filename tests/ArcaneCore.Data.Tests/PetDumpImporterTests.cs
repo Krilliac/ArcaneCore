@@ -116,7 +116,7 @@ public sealed class PetDumpImporterTests : IAsyncLifetime
         await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
         {
             var smaller = new PetDumpImporter();
-            smaller.Read(new StringReader("INSERT INTO `petcreateinfo_spell` VALUES (1860,3716,0,0,0);"));
+            smaller.Read(new StringReader("INSERT INTO `petcreateinfo_spell` (`entry`,`Spell1`,`Spell2`,`Spell3`,`Spell4`) VALUES (1860,3716,0,0,0);"));
             await smaller.WriteAsync(db, replace: true);
         }
 

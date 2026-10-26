@@ -6,6 +6,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
@@ -391,7 +392,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     /// </summary>
     private void EnablePetAutocast(Player player, SpellFeature feature)
     {
-        if (player.GetPet() is not { IsAlive: true, Summon.Charm: { } charm } pet)
+        if (player.GetPet() is not { IsAlive: true } pet || pet.GetCharmInfo() is not { } charm)
         {
             return;
         }
