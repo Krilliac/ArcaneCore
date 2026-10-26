@@ -100,7 +100,7 @@ public sealed class SpellModChargeTests
     {
         SpellTestKit kit = Kit();
         (Player caster, _) = CasterWithRage(kit, 1, 100);
-        (Player target, _) = kit.AddPlayer(2, 3, 0);
+        (Player target, _) = kit.AddHostilePlayer(2, 3, 0);
         kit.Spellbook.Teach(caster, Bolt, Instant, OtherBolt, Channel);
         foreach (uint spell in learn)
         {

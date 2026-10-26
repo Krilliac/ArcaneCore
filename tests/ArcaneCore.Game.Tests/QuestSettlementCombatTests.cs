@@ -81,7 +81,8 @@ public sealed class QuestSettlementCombatTests
     {
         using var kit = new SpellTestKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));
@@ -106,7 +107,8 @@ public sealed class QuestSettlementCombatTests
     {
         using var kit = new SpellTestKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
@@ -29,7 +30,7 @@ internal sealed class SpellTestKit : IDisposable
             [(1, 1, Passive), (1, 1, InstantHeal)],
             [(DatabaseTeleport, new SpellTargetPosition(0, 40, 50, 83.5f, 1.5f))]);
         Spellbook = new MemorySpellbook();
-        System = new SpellSystem(Store, () => Now, spellbook: Spellbook, random: new Random(1)) { MapUpdateIntervalMs = 0, Relations = new KitRelations() };
+        System = new SpellSystem(Store, () => Now, spellbook: Spellbook, random: new Random(1)) { MapUpdateIntervalMs = 0 };
     }
 
     public uint Now { get; set; } = 10_000;
@@ -52,6 +53,21 @@ internal sealed class SpellTestKit : IDisposable
         session.Clear();
         return (player, session);
     }
+
+    /// <summary>
+    /// A player the default relations let <see cref="AddPlayer"/>'s Human players attack: the opposing team (an Orc) and PvP-flagged. A test that
+    /// aims a hostile spell at a player names it with this, because the explicit-target gate (vmangos Spell.cpp:5604-5610) is closed by default.
+    /// </summary>
+    public (Player Player, FakeSession Session) AddHostilePlayer(uint guid, float x = 0, float y = 0,
+        ArcaneCore.Kernel.Accounts.AccountSecurity security = ArcaneCore.Kernel.Accounts.AccountSecurity.Player)
+    {
+        (Player Player, FakeSession Session) added = AddPlayer(guid, x, y, security, Race.Orc);
+        FlagForPvp(added.Player);
+        return added;
+    }
+
+    /// <summary>PvP-flag a player (the 5-minute timer a real flag carries), so the opposing team may attack it.</summary>
+    public static void FlagForPvp(Player player) => MapCombat.UpdatePvp(player, true);
 
     /// <summary>Advance the clock and the spell system.</summary>
     public void Advance(uint ms, uint step = 100)

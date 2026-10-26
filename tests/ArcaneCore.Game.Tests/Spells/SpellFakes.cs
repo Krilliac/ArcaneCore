@@ -13,24 +13,6 @@ internal sealed class FakeRelations : ISpellTargetRelations
     public bool IsHostile(Unit caster, Unit target) => !ReferenceEquals(caster, target) && Hostile.Contains(target.Guid) != Hostile.Contains(caster.Guid);
 
     public bool IsFriendly(Unit caster, Unit target) => ReferenceEquals(caster, target) || !IsHostile(caster, target);
-
-    /// <summary>Existing tests aim hostile spells at units outside <see cref="Hostile"/>; the explicit-target gate is exercised by <c>ExplicitHostileTargetTests</c>.</summary>
-    public bool CanAttackExplicitTarget(Unit caster, Unit target) => true;
-}
-
-/// <summary>
-/// The default combat-hook relations with the explicit-target attackability gate (vmangos Spell.cpp:5604-5610) opened:
-/// <see cref="SpellTestKit"/> players share a team, and many spell tests cast hostile spells between them.
-/// </summary>
-internal sealed class KitRelations : ISpellTargetRelations
-{
-    public bool IsHostile(Unit caster, Unit target) => CombatHookRelations.Instance.IsHostile(caster, target);
-
-    public bool IsFriendly(Unit caster, Unit target) => CombatHookRelations.Instance.IsFriendly(caster, target);
-
-    public bool CanAssist(Unit caster, Unit target) => CombatHookRelations.Instance.CanAssist(caster, target);
-
-    public bool CanAttackExplicitTarget(Unit caster, Unit target) => true;
 }
 
 /// <summary>

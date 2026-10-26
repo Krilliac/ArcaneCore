@@ -244,9 +244,10 @@ public sealed class SpellTargetingTests
     [Fact]
     public void CheckCast_ExplicitTargetBehindAWall_IsLineOfSight_UnlessTheSpellIgnoresIt()
     {
-        using var kit = Kit(out _, out FakeLineOfSight los, out _);
+        using var kit = Kit(out FakeRelations relations, out FakeLineOfSight los, out _);
         (Player caster, FakeSession session) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 10);
+        relations.Hostile.Add(target.Guid); // the fake relations decide attackability here
         kit.Spellbook.Teach(caster, CastBolt, DotSpell);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         los.WallX = 5;

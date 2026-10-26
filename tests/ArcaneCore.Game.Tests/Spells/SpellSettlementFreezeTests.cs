@@ -190,7 +190,8 @@ public sealed class SpellSettlementFreezeTests
     {
         using var kit = Kit();
         (Player oldCaster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 5);
+        SpellTestKit.FlagForPvp(oldCaster);
+        (Player target, _) = kit.AddHostilePlayer(2, 5);
         (Player attacker, _) = kit.AddPlayer(3, 10);
         kit.Spellbook.Teach(oldCaster, HostileChannel);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(oldCaster, HostileChannel, SpellCastTargets.ForUnit(target.Guid)));

@@ -133,7 +133,8 @@ public sealed class SpellCastPipelineCharacterisationTests
         };
         using var kit = new SpellTestKit(spell);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.World.RunTick(0);
         kit.Spellbook.Teach(caster, FaultEnemySpell);
         var thrown = new CastProbeFault("cast-pipeline-probe-2");

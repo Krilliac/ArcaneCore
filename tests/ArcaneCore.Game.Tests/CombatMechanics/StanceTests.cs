@@ -104,7 +104,8 @@ public sealed class StanceTests
         {
             Kit = new SpellTestKit([.. Spells()]);
             (Player, _) = Kit.AddPlayer(1);
-            (Enemy, _) = Kit.AddPlayer(2, 3, 0);
+            SpellTestKit.FlagForPvp(Player);
+            (Enemy, _) = Kit.AddHostilePlayer(2, 3, 0);
             Player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + 1, 1000);
             Service = new ShapeshiftService(Kit.System, forms ?? ShapeshiftFormCatalog.WarriorStances, options ?? new CombatOptions(),
                 p => KnownSpells.TryGetValue(p.Guid, out List<uint>? list) ? list : []);

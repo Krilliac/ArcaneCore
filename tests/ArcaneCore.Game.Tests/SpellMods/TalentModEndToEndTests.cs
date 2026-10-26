@@ -58,7 +58,7 @@ public sealed class TalentModEndToEndTests
             Player.Level = 20;
             Kit.World.AddPlayer(Player);
             Kit.World.RunTick(0);
-            (Target, _) = Kit.AddPlayer(2, 3, 0);
+            (Target, _) = Kit.AddHostilePlayer(2, 3, 0);
             Kit.Spellbook.Teach(Player, Strike, Bolt);
             Service = new TalentService(Catalog, Kit.System, new TalentOptions(), () => 1_800_000_000)
             {

@@ -104,7 +104,7 @@ public sealed class PvpAssistAndTamingRodTests
 
         (Player hunter1, _) = kit.AddPlayer(1, 0, 0);
         (Player hunter2, _) = kit.AddPlayer(2, 2, 0);
-        (Player beastTarget, _) = kit.AddPlayer(3, 5, 0, race: Race.Orc);
+        (Player beastTarget, _) = kit.AddHostilePlayer(3, 5, 0);
         kit.Spellbook.Teach(hunter2, 19548);
 
         // Give hunter1 an expendable 1-charge Taming Rod item so ConsumeItemUse destroys it on cast start

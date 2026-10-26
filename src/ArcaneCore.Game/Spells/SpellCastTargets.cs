@@ -41,12 +41,14 @@ public sealed class SpellCastTargets
 
     /// <summary>
     /// True for a block parsed from a client packet (<see cref="Read"/>) and false for one the server built (<see cref="ForSelf"/>,
-    /// <see cref="ForUnit"/>). The cast's own copy of the block (<c>SpellCast</c>) carries it, so the landing re-check sees it too.
-    /// A triggered cast with a client-named target (an item's second and later on-use spells) gets the explicit-hostile-target check
-    /// (<c>SpellSystem.CheckCast</c>); a triggered cast with a server-built block does not (a documented deviation: vmangos checks every cast,
-    /// Spell.cpp:5577-5612 has no triggered gate; see docs/areas/spells.md).
+    /// <see cref="ForUnit(ObjectGuid)"/>). The cast's own copy of the block (<c>SpellCast</c>) carries it, so the landing re-check sees it too.
+    /// A triggered cast whose target the client named gets the explicit-hostile-target check (<c>SpellSystem.CheckCast</c>), as vmangos does
+    /// for every cast (Spell.cpp:5577-5612 has no triggered gate): an item's second and later on-use spells carry the client block itself, and a
+    /// script or trigger effect that re-aims at the parent's client-chosen unit builds its block with <see cref="ForUnit(ObjectGuid, SpellCast)"/>,
+    /// which inherits the flag. A block the server chose on its own (a proc, an aura trigger, a boss script) is not checked (documented limit in
+    /// docs/areas/spells.md).
     /// </summary>
-    public bool FromClient { get; internal set; }
+    public bool FromClient { get; internal init; }
 
     public bool IsRawNonTradedTradeTarget
         => Mask == SpellCastTargetFlags.TradeItem && Item.Value == 6;
@@ -64,6 +66,17 @@ public sealed class SpellCastTargets
 
     /// <summary>A single-unit target block.</summary>
     public static SpellCastTargets ForUnit(ObjectGuid unit) => new() { Mask = SpellCastTargetFlags.Unit, Unit = unit };
+
+    /// <summary>
+    /// A single-unit block for a cast triggered by <paramref name="parent"/>. When <paramref name="unit"/> is the unit the parent's own block named
+    /// and that block came from a client packet, the new block is still client-named (<see cref="FromClient"/>), so the explicit-hostile-target check
+    /// applies to the triggered cast as it would to the parent (vmangos checks triggered casts too). Any other unit is a server choice.
+    /// </summary>
+    public static SpellCastTargets ForUnit(ObjectGuid unit, SpellCast parent)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        return new() { Mask = SpellCastTargetFlags.Unit, Unit = unit, FromClient = parent.Targets.FromClient && parent.Targets.Unit == unit };
+    }
 
     public static SpellCastTargets Read(ref PacketReader reader)
     {

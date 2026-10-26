@@ -64,7 +64,7 @@ public sealed class WandThrownTests
                 Row(AutoShot, 0x50012, 0x20, 0x8000, 0, SpellInterruptFlags.Movement, SpellEffectName.WeaponDamage, SpellDamageClass.Ranged),
                 Row(Throw, 0x410012, 0, 0x8000, 76, (SpellInterruptFlags)15, SpellEffectName.WeaponDamage, SpellDamageClass.Ranged));
             Player = TestPlayers.Add(Kit, 1, cls, cls == Class.Warrior ? PowerType.Rage : PowerType.Mana);
-            Target = TestPlayers.Add(Kit, 2, Class.Warrior, PowerType.Rage, x: 15, y: 1);
+            Target = TestPlayers.Add(Kit, 2, Class.Warrior, PowerType.Rage, x: 15, y: 1, race: Race.Orc, pvpFlagged: true);
             Target.Health = 100_000;
             Target.MaxHealth = 100_000;
             Player.Inventory.Templates = new ItemTemplateStore([.. ItemTestData.Templates, .. Templates]);

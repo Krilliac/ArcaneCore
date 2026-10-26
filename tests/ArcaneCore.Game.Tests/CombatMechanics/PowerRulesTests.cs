@@ -290,7 +290,8 @@ public sealed class PowerRulesTests
             Strike(EnergyAbility, PowerType.Energy, discount: true),
             Strike(PlainAbility, PowerType.Rage, discount: false));
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 3, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 3, 0);
         caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + RageIndex, 1000);
         caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + EnergyIndex, 1000);
         SpellSystem.SetPower(caster, PowerType.Rage, 400);

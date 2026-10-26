@@ -67,7 +67,8 @@ public sealed class AuraAndProcCompletenessTests
 
         using var kit = new SpellTestKit(hasteAura, slowAura);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, x: 5);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, x: 5);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, 30010, SpellCastTargets.ForSelf(), triggered: true));
         Assert.Equal(0.8f, caster.GetFloat(UpdateFields.UnitModCastSpeed), 4);

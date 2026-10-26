@@ -25,18 +25,21 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// Explicit negative unit selectors (vmangos IsExplicitNegativeTarget, Spell.cpp:5604-5610) must name a unit the
-    /// caster may attack; a crafted cast request cannot aim a hostile spell at a friendly or unflagged target.
-    /// A self-aimed cast is left to the existing self-target rules.
+    /// Explicit negative unit selectors (vmangos IsExplicitNegativeTarget, SpellEntry.h:258-270: TARGET_UNIT_ENEMY and
+    /// TARGET_LOCATION_CASTER_TARGET_POSITION; the loop reads EffectImplicitTargetA only, Spell.cpp:5592-5612) must name a unit the
+    /// caster may attack (<see cref="ISpellTargetRelations.IsHostile"/>, the relation IsValidAttackTarget maps to); a crafted cast
+    /// request cannot aim a hostile spell at a friendly or unflagged target. A self-aimed cast is left to the existing self-target rules.
+    /// vmangos passes checkAlive=false while IsHostile also requires a live target, so a dead explicit target is refused here
+    /// (documented limit, docs/areas/spells.md).
     /// </summary>
     private SpellCastResult CheckExplicitHostileTargetRules(Unit caster, SpellInfo spell, Unit target)
     {
         if (ReferenceEquals(caster, target) || !spell.Effects.Any(effect => !effect.IsEmpty
-            && effect.TargetA == SpellImplicitTarget.UnitEnemy))
+            && effect.TargetA is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.LocationCasterTargetPosition))
         {
             return SpellCastResult.CastOk;
         }
 
-        return Relations.CanAttackExplicitTarget(caster, target) ? SpellCastResult.CastOk : SpellCastResult.BadTargets;
+        return Relations.IsHostile(caster, target) ? SpellCastResult.CastOk : SpellCastResult.BadTargets;
     }
 }

@@ -10,6 +10,7 @@ namespace ArcaneCore.Game.Tests.Spells;
 public sealed class ExplicitHostileTargetTests
 {
     private const uint Bolt = 900420;
+    private const uint Relay = 900421;
 
     [Fact]
     public void HostileSpellAtUnflaggedSameTeamPlayer_IsBadTargets_AndDealsNoDamage()
@@ -18,7 +19,7 @@ public sealed class ExplicitHostileTargetTests
         (Player caster, _) = kit.AddPlayer(1);
         (Player ally, _) = kit.AddPlayer(2, 3);
         kit.Spellbook.Teach(caster, Bolt);
-        kit.System.Relations = CombatHookRelations.Instance;   // the production relations; the kit default opens the gate
+        kit.System.Relations = CombatHookRelations.Instance;   // the production relations (also the kit default)
         uint before = ally.Health;
 
         // RED on origin/main: this assertion fails (CastOk) because CheckCast never tests hostility for a UnitEnemy selector.
@@ -106,6 +107,55 @@ public sealed class ExplicitHostileTargetTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid), triggered: true));
     }
 
+    [Fact]
+    public void ClientCast_WhoseTriggerEffectFiresAHarmfulSpellAtTheClientsTarget_IsRefused()
+    {
+        // The exploit: a client-castable spell whose own selector is not a hostile one (here any unit) names an unattackable unit and its
+        // TriggerSpell effect re-aims a harmful spell at that same unit with a server-built block. The block must inherit the client origin.
+        using var kit = new SpellTestKit(
+            BoltSpell(),
+            Spell(Relay, Effect(SpellEffectName.TriggerSpell, 0, SpellImplicitTarget.Unit, trigger: Bolt)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, 3);
+        kit.Spellbook.Teach(caster, Relay);
+        kit.System.Relations = CombatHookRelations.Instance;
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(ally.Guid.Value);
+        var reader = new PacketReader(wire.ToArray());
+        SpellCastTargets fromClient = SpellCastTargets.Read(ref reader);
+        uint before = ally.Health;
+
+        // RED without the inheritance (ForUnit(guid) in EffectTriggerSpell): the triggered Bolt lands and the ally loses health.
+        kit.System.HandleCastRequest(caster, Relay, fromClient);
+
+        Assert.Equal(before, ally.Health);
+    }
+
+    [Fact]
+    public void ForUnit_WithAParentCast_InheritsClientOriginOnlyForTheParentsOwnUnit()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player named, _) = kit.AddPlayer(2, 3);
+        (Player other, _) = kit.AddPlayer(3, 4);
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(named.Guid.Value);
+        var reader = new PacketReader(wire.ToArray());
+        var parent = new SpellCast(kit.Store.Get(Bolt)!, caster, SpellCastTargets.Read(ref reader), false, 0, 0, 0);
+
+        Assert.True(SpellCastTargets.ForUnit(named.Guid, parent).FromClient);
+        Assert.False(SpellCastTargets.ForUnit(other.Guid, parent).FromClient);
+        Assert.False(SpellCastTargets.ForUnit(named.Guid).FromClient);
+    }
+
     private sealed class SwitchRelations : ISpellTargetRelations
     {
         public bool Attackable { get; set; } = true;
@@ -128,12 +178,14 @@ public sealed class ExplicitHostileTargetTests
         public bool IsFriendly(Unit caster, Unit target) => !IsHostile(caster, target);
     }
 
-    private static SpellTestKit NewKit() => new(
+    private static SpellTestKit NewKit() => new(BoltSpell());
+
+    private static SpellInfo BoltSpell() =>
         Spell(Bolt, Effect(SpellEffectName.SchoolDamage, 15, SpellImplicitTarget.UnitEnemy)) with
         {
             RangeIndex = 4,
             Range = new SpellRange(0, 30),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
-        });
+        };
 }

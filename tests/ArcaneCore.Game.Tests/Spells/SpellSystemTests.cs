@@ -96,7 +96,8 @@ public sealed class SpellSystemTests
     {
         using var kit = new SpellTestKit();
         (Player caster, FakeSession casterSession) = kit.AddPlayer(1);
-        (Player target, FakeSession targetSession) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, FakeSession targetSession) = kit.AddHostilePlayer(2, 10, 0);
         kit.World.RunTick(0);
         casterSession.Clear();
         targetSession.Clear();
@@ -126,7 +127,8 @@ public sealed class SpellSystemTests
     {
         using var kit = new SpellTestKit();
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, distance, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, distance, 0);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, rage);
         session.Clear();
@@ -155,7 +157,8 @@ public sealed class SpellSystemTests
     {
         using var kit = new SpellTestKit();
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid));
@@ -180,7 +183,8 @@ public sealed class SpellSystemTests
         // still passenger is not movement. Walking the deck (offset change > 0.5 yd) still cancels.
         using var kit = new SpellTestKit();
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         ShipTransport ferry = TransportTestKit.Install(kit.World, TransportTestKit.Ferry).FindByEntry(TransportTestKit.Ferry)!;
@@ -216,7 +220,8 @@ public sealed class SpellSystemTests
     {
         using var kit = new SpellTestKit();
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, CastBolt, InstantHeal);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid));
@@ -239,7 +244,8 @@ public sealed class SpellSystemTests
     {
         using var kit = new SpellTestKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, FakeSession targetSession) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, FakeSession targetSession) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, DotSpell);
         targetSession.Clear();
 
