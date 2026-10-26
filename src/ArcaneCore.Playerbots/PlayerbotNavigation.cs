@@ -1366,6 +1366,125 @@ internal static class PlayerbotNavigation
         return true;
     }
 
+    /// <summary>The answer of a deferred diagnosis (<see cref="DiagnoseSteepAscent"/>, <see cref="DiagnoseReturnHazard"/>).</summary>
+    internal enum DiagnosisState : byte
+    {
+        /// <summary>A search of the diagnosis is still a path job (or a tile read): no verdict, ask again on a later think.</summary>
+        Pending,
+
+        /// <summary>The verdict: not the case.</summary>
+        Clear,
+
+        /// <summary>The verdict: the case.</summary>
+        Found,
+    }
+
+    /// <summary>The bot may stand this far from where a diagnosis was made and still get its cached verdict (<see cref="PlayerbotWorldDestinations"/>'s spot).</summary>
+    internal const float DiagnosisSpotYards = 3f;
+
+    /// <summary>How long a diagnosis verdict stands (ms): a hazard or the bot's neighbourhood may change.</summary>
+    internal const uint DiagnosisTtlMs = 120_000;
+
+    /// <summary>The verdicts one bot keeps (oldest dropped first).</summary>
+    internal const int MaxDiagnoses = 8;
+
+    private sealed class DiagnosisBook
+    {
+        internal readonly List<DiagnosisEntry> Entries = [];
+    }
+
+    private sealed class DiagnosisEntry(bool steep, uint questId, Vector3 spot, Vector3 goal, bool friendlyTownEnder, uint madeMs)
+    {
+        internal readonly bool Steep = steep;
+        internal readonly uint QuestId = questId;
+        internal readonly Vector3 Spot = spot;
+        internal readonly Vector3 Goal = goal;
+        internal readonly bool FriendlyTownEnder = friendlyTownEnder;
+        internal readonly uint MadeMs = madeMs;
+        internal bool Found;
+        internal float Ascent;
+        internal PlayerbotHazard Hazard;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, DiagnosisBook> Diagnoses = [];
+
+    private static DiagnosisEntry? CachedDiagnosis(Player player, bool steep, uint questId, Vector3 spot, Vector3 goal, bool friendlyTownEnder, uint now)
+    {
+        if (!Diagnoses.TryGetValue(player, out DiagnosisBook? book)) return null;
+        foreach (DiagnosisEntry entry in book.Entries)
+        {
+            if (entry.Steep == steep && entry.QuestId == questId && entry.FriendlyTownEnder == friendlyTownEnder
+                && unchecked(now - entry.MadeMs) <= DiagnosisTtlMs
+                && Vector3.DistanceSquared(entry.Goal, goal) <= 1f
+                && Vector3.DistanceSquared(entry.Spot, spot) <= DiagnosisSpotYards * DiagnosisSpotYards)
+                return entry;
+        }
+
+        return null;
+    }
+
+    private static void RememberDiagnosis(Player player, DiagnosisEntry entry)
+    {
+        DiagnosisBook book = Diagnoses.GetOrCreateValue(player);
+        if (book.Entries.Count >= MaxDiagnoses) book.Entries.RemoveAt(0);
+        book.Entries.Add(entry);
+    }
+
+    /// <summary>
+    /// <see cref="RequiresSteepAscent"/> as a deferrable diagnosis: its two searches of <see cref="DiagnosisSearchNodes"/> nodes run as path
+    /// jobs (<see cref="PlayerbotPathJobs"/>) and the verdict is <see cref="DiagnosisState.Pending"/> until they are answered; the caller asks
+    /// again on a later think. The verdict is kept per bot, quest and spot (<see cref="DiagnosisSpotYards"/>, <see cref="DiagnosisTtlMs"/>), so
+    /// asking again once decided runs no search.
+    /// </summary>
+    internal static DiagnosisState DiagnoseSteepAscent(Player player, Vector3 goal, PlayerbotOptions options, uint questId, uint now, out float ascent)
+    {
+        Vector3 spot = PlayerbotMotion.CurrentPosition(player);
+        if (CachedDiagnosis(player, steep: true, questId, spot, goal, friendlyTownEnder: false, now) is { } known)
+        {
+            ascent = known.Ascent;
+            return known.Found ? DiagnosisState.Found : DiagnosisState.Clear;
+        }
+
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool found = RequiresSteepAscent(player, goal, options, out ascent);
+        if (PendingSince(mark))
+        {
+            ascent = 0;
+            return DiagnosisState.Pending;
+        }
+
+        RememberDiagnosis(player, new DiagnosisEntry(steep: true, questId, spot, goal, false, now) { Found = found, Ascent = ascent });
+        return found ? DiagnosisState.Found : DiagnosisState.Clear;
+    }
+
+    /// <summary>
+    /// <see cref="HasBlockingReturnHazard"/> as a deferrable diagnosis, as <see cref="DiagnoseSteepAscent"/>: its route search is a path job
+    /// and the verdict is kept per bot, quest and spot.
+    /// </summary>
+    internal static DiagnosisState DiagnoseReturnHazard(Player player, Vector3 goal, PlayerbotOptions options, uint questId, uint now,
+        out PlayerbotHazard hazard, bool friendlyTownEnder = false)
+    {
+        Vector3 spot = PlayerbotMotion.CurrentPosition(player);
+        if (CachedDiagnosis(player, steep: false, questId, spot, goal, friendlyTownEnder, now) is { } known)
+        {
+            hazard = known.Hazard;
+            return known.Found ? DiagnosisState.Found : DiagnosisState.Clear;
+        }
+
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool found = HasBlockingReturnHazard(player, goal, options, out hazard, friendlyTownEnder);
+        if (PendingSince(mark))
+        {
+            hazard = default;
+            return DiagnosisState.Pending;
+        }
+
+        RememberDiagnosis(player, new DiagnosisEntry(steep: false, questId, spot, goal, friendlyTownEnder, now) { Found = found, Hazard = hazard });
+        return found ? DiagnosisState.Found : DiagnosisState.Clear;
+    }
+
     /// <summary>
     /// A connected ordinary route still crosses a hazard the completed-return rule keeps in force. A death or retreat mark
     /// beside the road is not one of those when <paramref name="friendlyTownEnder"/> (the only walk to a friendly quest ender

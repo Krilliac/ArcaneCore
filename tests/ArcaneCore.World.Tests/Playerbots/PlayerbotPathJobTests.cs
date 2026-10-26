@@ -791,6 +791,43 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    /// <summary>
+    /// The steep-ascent diagnosis (a quest's confirmation of an unreachable ender) is a path job: pending at first with no search on the world
+    /// thread, decided once the job is done, and the verdict is kept per quest and spot, so asking again runs no query at all.
+    /// </summary>
+    [Fact]
+    public async Task ASteepAscentDiagnosis_IsAJob_AndItsVerdictIsCachedPerQuestAndSpot()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            const uint quest = 4242;
+
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Pending,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_000, out _)));
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Single(h.Runner.Submitted);
+
+            h.Runner.CompleteAll();
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_500, out _)));
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+
+            // Asked again at the same spot: the kept verdict answers, no query of any kind is made.
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_000, out _)));
+            Assert.Equal(0, h.Probe.Queries);
+            Assert.Equal(0, h.Probe.JobsSubmitted + h.Probe.JobsWaiting + h.Probe.JobsApplied);
+            Assert.Single(h.Runner.Submitted);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+
+            return true;
+        });
+    }
+
     // ---- 10. telemetry ------------------------------------------------------------------------------------------------------------
 
     [Fact]
