@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Threading.Channels;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Net;
 
@@ -18,14 +20,27 @@ public sealed class PacketCaptureOptions
     public long MaxBytes { get; set; } = 64 * 1024 * 1024;
 }
 
-/// <summary>PKT 3.1 writer, using the fields read by WPP BinaryPacketReader.ReadHeader/Read.</summary>
+/// <summary>
+/// PKT 3.1 writer, using the fields read by WPP BinaryPacketReader.ReadHeader/Read. <see cref="Write"/> only copies the record into a bounded
+/// queue (it is called from the session's send and receive paths under the session send lock); one background writer per file appends the
+/// records in the order they were queued. A trace whose queue is full (the disk cannot keep up) stops like one that reached its size limit.
+/// <see cref="Dispose"/> waits until everything queued is on disk.
+/// </summary>
 public sealed class PacketCapture : IDisposable
 {
     private const int HeaderLength = 66;
+    private const int QueueCapacity = 8192;
     private readonly object _gate = new();
     private readonly FileStream _stream;
-    private readonly BinaryWriter _writer;
+    private readonly Channel<byte[]> _queue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(QueueCapacity)
+    {
+        SingleReader = true,
+        SingleWriter = true, // every Write holds _gate
+        FullMode = BoundedChannelFullMode.Wait,
+    });
+    private readonly Task _writer;
     private readonly long _maxBytes;
+    private long _position = HeaderLength;
     private bool _closed;
 
     public string Path { get; }
@@ -36,51 +51,103 @@ public sealed class PacketCapture : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxBytes));
         Directory.CreateDirectory(directory);
         Path = System.IO.Path.Combine(directory, $"arcane-{DateTimeOffset.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}.pkt");
-        _stream = new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        _writer = new BinaryWriter(_stream, Encoding.ASCII, leaveOpen: false);
+        _stream = new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, bufferSize: 64 * 1024, FileOptions.Asynchronous);
         _maxBytes = maxBytes;
-        _writer.Write(Encoding.ASCII.GetBytes("PKT"));
-        _writer.Write((ushort)0x301);
-        _writer.Write((byte)'A'); // ArcaneCore; WPP treats this as a generic sniffer.
-        _writer.Write((uint)5875);
-        _writer.Write(Encoding.ASCII.GetBytes("enUS"));
-        _writer.Write(new byte[40]); // no session key is recorded
-        _writer.Write((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        _writer.Write(unchecked((uint)Environment.TickCount));
-        _writer.Write(0); // optional header data
+        using var header = new MemoryStream(HeaderLength);
+        using (var writer = new BinaryWriter(header, Encoding.ASCII, leaveOpen: true))
+        {
+            writer.Write(Encoding.ASCII.GetBytes("PKT"));
+            writer.Write((ushort)0x301);
+            writer.Write((byte)'A'); // ArcaneCore; WPP treats this as a generic sniffer.
+            writer.Write((uint)5875);
+            writer.Write(Encoding.ASCII.GetBytes("enUS"));
+            writer.Write(new byte[40]); // no session key is recorded
+            writer.Write((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            writer.Write(unchecked((uint)Environment.TickCount));
+            writer.Write(0); // optional header data
+        }
+
+        _stream.Write(header.GetBuffer(), 0, (int)header.Length);
+        _stream.Flush();
+        _writer = Task.Run(WriteLoopAsync);
     }
 
     public bool IsOpen { get { lock (_gate) return !_closed; } }
 
     public void Write(bool fromClient, ushort opcode, ReadOnlySpan<byte> payload)
     {
+        bool drain = false;
         lock (_gate)
         {
             if (_closed) return;
             long recordLength = 24L + payload.Length;
-            if (_stream.Position + recordLength > _maxBytes)
+            if (_position + recordLength > _maxBytes)
             {
-                Close();
-                return;
+                Complete();
+                drain = true; // the size limit is reached: the file is complete when this returns
             }
+            else
+            {
+                byte[] record = new byte[recordLength];
+                Span<byte> span = record;
+                Encoding.ASCII.GetBytes(fromClient ? "CMSG" : "SMSG", span);
+                // bytes 4..7: one world connection per file (0)
+                BinaryPrimitives.WriteUInt32LittleEndian(span[8..], unchecked((uint)Environment.TickCount));
+                // bytes 12..15: no optional record data (0)
+                BinaryPrimitives.WriteInt32LittleEndian(span[16..], checked(payload.Length + 4));
+                BinaryPrimitives.WriteInt32LittleEndian(span[20..], opcode);
+                payload.CopyTo(span[24..]);
+                if (_queue.Writer.TryWrite(record))
+                {
+                    _position += recordLength;
+                }
+                else
+                {
+                    Complete(); // the writer is far behind: stop the trace rather than block the session
+                }
+            }
+        }
 
-            _writer.Write(Encoding.ASCII.GetBytes(fromClient ? "CMSG" : "SMSG"));
-            _writer.Write(0); // one world connection per file
-            _writer.Write(unchecked((uint)Environment.TickCount));
-            _writer.Write(0); // no optional record data
-            _writer.Write(checked(payload.Length + 4));
-            _writer.Write((int)opcode);
-            _writer.Write(payload);
-            _writer.Flush();
+        if (drain) _writer.Wait();
+    }
+
+    /// <summary>Under <see cref="_gate"/>: accept no more records; the writer closes the file once the queue is empty.</summary>
+    private void Complete()
+    {
+        _closed = true;
+        _queue.Writer.TryComplete();
+    }
+
+    private async Task WriteLoopAsync()
+    {
+        try
+        {
+            ChannelReader<byte[]> reader = _queue.Reader;
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                while (reader.TryRead(out byte[]? record))
+                {
+                    await _stream.WriteAsync(record).ConfigureAwait(false);
+                }
+
+                await _stream.FlushAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The capture stops here; the connection must not.
+            FaultLedger.Shared.Record("net.packet-capture", ex);
+            lock (_gate) Complete();
+        }
+        finally
+        {
+            await _stream.DisposeAsync().ConfigureAwait(false);
         }
     }
 
-    private void Close()
+    public void Dispose()
     {
-        if (_closed) return;
-        _closed = true;
-        _writer.Dispose();
+        lock (_gate) Complete();
+        _writer.Wait();
     }
-
-    public void Dispose() { lock (_gate) Close(); }
 }
