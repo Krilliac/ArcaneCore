@@ -615,38 +615,51 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     }
 
     /// <summary>
-    /// The teleport that followed a <see cref="GmBattlegroundGo.Bound"/> was accepted: a subject that was bound to another match leaves it now
-    /// (vmangos only overwrites the id; the match must not keep a participant that moved on). No Deserter debuff: a game master's move is not a
-    /// desertion. The new binding stays.
+    /// The subject of a <see cref="GmBattlegroundGo.Bound"/> arrived in the match (called from <see cref="OnPlayerEnteredMap"/>; the commands
+    /// no longer commit at <c>TeleportTo</c>, because a far teleport can still be refused at map entry): a subject that was bound to another
+    /// match leaves it now (vmangos only overwrites the id; the match must not keep a participant that moved on). No Deserter debuff: a game
+    /// master's move is not a desertion. The new binding stays.
     /// </summary>
     public void CommitGmBinding(Player subject)
     {
         ArgumentNullException.ThrowIfNull(subject);
-        if (_manager is not { } manager || !_gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
+        if (_manager is not null && _gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
         {
-            return;
-        }
-
-        if (change.PreviousMatch is { } old)
-        {
-            old.RemovePlayerAtLeave(subject.Guid, teleportToEntryPoint: false, sendStatus: true);
-            manager.BindPlayer(subject.Guid, change.NewMatch, change.NewTeam);
+            CommitChange(subject.Guid, change);
         }
     }
 
+    private void CommitChange(ObjectGuid guid, GmBindChange change)
+    {
+        BattlegroundManager manager = Manager;
+        if (change.PreviousMatch is { } old && manager.GetBattleground(old.InstanceId, old.Type) is not null)
+        {
+            // The leave frees the queue slot and invitation of the LEAVING match (ClearBinding reads the current binding), so the old
+            // binding is put back for it and the new one set again after.
+            manager.BindPlayer(guid, old, change.PreviousTeam ?? change.NewTeam);
+            old.RemovePlayerAtLeave(guid, teleportToEntryPoint: false, sendStatus: true);
+        }
+
+        manager.BindPlayer(guid, change.NewMatch, change.NewTeam);
+    }
+
     /// <summary>
-    /// The teleport that followed a <see cref="GmBattlegroundGo.Bound"/> was refused: exactly what <see cref="BindToMatchOf"/> changed is
-    /// undone (the old binding comes back, or none; the entry point it stored is dropped or put back), so no battleground id stays on a player
-    /// that never went. A subject that was not Bound (<see cref="GmBattlegroundGo.AlreadyBound"/>) is not touched.
+    /// The teleport that followed <see cref="BindToMatchOf"/> was refused (or the subject logged out, or arrived somewhere else): exactly what
+    /// <see cref="BindToMatchOf"/> changed is undone (the old binding comes back, or none; the entry point it stored is dropped or put back), so
+    /// no battleground id stays on a player that never went. A subject that was not Bound (<see cref="GmBattlegroundGo.AlreadyBound"/>) is not touched.
     /// </summary>
     public void RevertGmBinding(Player subject)
     {
         ArgumentNullException.ThrowIfNull(subject);
-        if (_manager is not { } manager || !_gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
+        if (_manager is not null && _gmBindChanges.Remove(subject.Guid, out GmBindChange? change))
         {
-            return;
+            RevertChange(subject, change);
         }
+    }
 
+    private void RevertChange(Player subject, GmBindChange change)
+    {
+        BattlegroundManager manager = Manager;
         if (change.PreviousMatch is { } old && manager.GetBattleground(old.InstanceId, old.Type) is not null)
         {
             manager.BindPlayer(subject.Guid, old, change.PreviousTeam ?? subject.Team);
@@ -681,6 +694,19 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// </summary>
     internal void OnPlayerEnteredMap(Player player, Map map)
     {
+        // A GM move waiting for its arrival: in the new match's map it is committed (the old match is left), anywhere else it is undone.
+        if (_gmBindChanges.Remove(player.Guid, out GmBindChange? pending))
+        {
+            if (map.MapId == pending.NewMatch.MapId && map.InstanceId == pending.NewMatch.InstanceId)
+            {
+                CommitChange(player.Guid, pending);
+            }
+            else
+            {
+                RevertChange(player, pending);
+            }
+        }
+
         _manager?.ClearStaleBinding(player.Guid);
         if (BattlegroundOf(player.Guid) is not { } bg)
         {
@@ -714,8 +740,9 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         SpellSystem? spells = services.GetService<SpellFeature>()?.System;
         spells?.RemoveAuras(player, BattlegroundConstants.SpellWaitingToResurrect);
-        // Only a participant deserts: a player that a GM command bound to the match is on its map but never joined it.
-        if (!player.IsGameMaster && Options.CastDeserter && bg.PlayerTeam(player.Guid) is not null && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
+        // vmangos casts Deserter for any non-GM bound to a running match. ArcaneCore deviation: only an invitee does (it holds the queue
+        // invitation to this instance, accepted or not yet arrived); a player a GM command bound to the match was never invited and is no deserter.
+        if (!player.IsGameMaster && Options.CastDeserter && Manager.StateOf(player.Guid).InvitedInstance(bg.Template.QueueType) == bg.InstanceId && bg.Status is BattlegroundStatus.InProgress or BattlegroundStatus.WaitJoin)
         {
             spells?.CastSpell(player, BattlegroundConstants.SpellDeserter, SpellCastTargets.ForSelf(), triggered: true);
         }
@@ -760,6 +787,12 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         if (_manager is not { } manager)
         {
             return;
+        }
+
+        // A GM move still waiting for its arrival is undone first, so the logout leaves the match the player was really in.
+        if (_gmBindChanges.Remove(player.Guid, out GmBindChange? pendingMove))
+        {
+            RevertChange(player, pendingMove);
         }
 
         // vmangos keeps an offline participant for MAX_OFFLINE_TIME; this removes it at once (offline: nothing of it is touched).

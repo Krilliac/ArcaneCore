@@ -458,6 +458,10 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 Battleground old = CreateSecondMatch(context, match);
                 feature.Manager.BindPlayer(vic.Guid, old, vic.Team);
                 ScenarioContext.Expect(old.AddPlayer(vic.Guid, vic.Team), "the victim could not be added to its own match");
+                // What JoinQueue -> invite -> HandlePort leaves behind: the queue entry is gone, the slot holds the invitation to the old match.
+                BattlegroundPlayerState queueState = feature.Manager.StateOf(vic.Guid);
+                queueState.AddSlot(BattlegroundQueueType.WarsongGulch);
+                queueState.SetInvite(BattlegroundQueueType.WarsongGulch, old.InstanceId);
 
                 // The teleport is refused: the victim is still bound to, and a player of, its own match; no Deserter.
                 ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "bind outcome");
@@ -466,15 +470,27 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == old, "the victim lost its own match when the teleport was refused");
                 ScenarioContext.ExpectEqual(1, old.PlayerCount, "players of the old match after the refused move");
                 ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "the victim got Deserter from a refused GM move");
+                ScenarioContext.ExpectEqual(old.InstanceId, queueState.InvitedInstance(BattlegroundQueueType.WarsongGulch), "the invitation after the refused move");
 
                 // The teleport is accepted: it left the old match, no Deserter, and is bound (not a player) of the new one.
                 ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BindToMatchOf(vic, gmPlayer, leaveOtherMatch: true), "second bind outcome");
                 feature.CommitGmBinding(vic);
                 ScenarioContext.ExpectEqual(0, old.PlayerCount, "players of the old match after the accepted move");
+                ScenarioContext.ExpectEqual(-1, queueState.SlotOf(BattlegroundQueueType.WarsongGulch), "the queue slot of the match the victim was taken out of");
+                ScenarioContext.ExpectEqual(0u, queueState.InvitedInstance(BattlegroundQueueType.WarsongGulch), "the invitation to the match the victim was taken out of");
                 ScenarioContext.Expect(feature.BattlegroundOf(vic.Guid) == match, "the victim is not bound to the new match");
                 ScenarioContext.Expect(match.PlayerTeam(vic.Guid) is null, "the victim became a player of the new match");
                 ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "the victim got Deserter from a GM move");
-                feature.Manager.UnbindPlayer(vic.Guid);
+
+                // Deserter on a leave is for an invitee only: a player a command bound to the running match was never invited.
+                feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
+                feature.LeaveBattleground(vic, teleportToEntryPoint: false);
+                ScenarioContext.Expect(!spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "a non-invitee got Deserter");
+                feature.Manager.BindPlayer(vic.Guid, match, vic.Team);
+                feature.Manager.StateOf(vic.Guid).AddSlot(BattlegroundQueueType.WarsongGulch);
+                feature.Manager.StateOf(vic.Guid).SetInvite(BattlegroundQueueType.WarsongGulch, match.InstanceId);
+                feature.LeaveBattleground(vic, teleportToEntryPoint: false);
+                ScenarioContext.Expect(spells.System.HasAura(vic, BattlegroundConstants.SpellDeserter), "an invitee who left a running match got no Deserter");
                 return true;
             });
         });

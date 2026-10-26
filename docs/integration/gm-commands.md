@@ -141,11 +141,15 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   over-invited. To a player in a dungeon instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an
   unbound GM to that instance; this bind is made before the teleport, as vmangos does, so a teleport refused afterwards leaves it
   (only the battleground bind is reverted). `.namego` from inside a battleground binds the summoned player to the caller's match the
-  same way; a player in another match leaves that match, without the Deserter debuff, only once the teleport was accepted (a refused
-  teleport restores the old binding). A battleground bind that the command made is undone when the teleport is refused; one the
+  same way; a player in another match leaves that match, without the Deserter debuff, once it arrived in the new match's map (a refused
+  teleport, a refused map entry, or a logout before the arrival restores the old binding and its queue slot). A battleground bind that the command made is undone when the teleport is refused; one the
   player already had (a player loading in) is left alone. The bind is cleared by the ordinary leave paths (a far teleport off the
   map, the match removing the player, logout). Not ported: the smart-instance-binding mode. A refused teleport answers the
   invalid-coordinates text (vmangos is silent).
+  Deviations from vmangos: (1) Deserter on leaving a running battleground is cast only for a player that holds the queue invitation to
+  that match (accepted, or accepted and not yet arrived); vmangos casts it for any non-GM bound to the match, so a player that `.namego`
+  summoned in without an invitation gets none here. (2) `.goname` to a dungeon whose map is flagged to reset when it unloads does not bind
+  the GM to that instance (it would bind to a save about to be deleted); the GM enters like any unbound visitor.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

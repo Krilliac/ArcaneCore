@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Battlegrounds;
@@ -90,21 +91,46 @@ public sealed class GmTeleportCommands : ICommandGroup
         target.SendSystemMessage(GmStrings.SummonedBy(GmStrings.PlayerLink(caller.Name)));
 
         GmTeleports.BeginCommandTeleport(context, target);
-        if (!feature.Teleports.TeleportTo(target, caller.MapId, caller.X, caller.Y, caller.Z, caller.Orientation))
+        if (!MoveBound(feature.Teleports, battlegrounds, bound, target, caller, caller.X, caller.Y, caller.Z, caller.Orientation))
         {
-            if (bound == GmBattlegroundGo.Bound)
-            {
-                battlegrounds!.RevertGmBinding(target);
-            }
-
             TeleportCommands.ReplyInvalid(context, caller.X, caller.Y, caller.MapId);
-        }
-        else if (bound == GmBattlegroundGo.Bound)
-        {
-            battlegrounds!.CommitGmBinding(target);
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Teleport <paramref name="subject"/> to the position on <paramref name="anchor"/>'s map. A battleground bind that
+    /// <see cref="BattlegroundFeature.BindToMatchOf"/> made (<see cref="GmBattlegroundGo.Bound"/>) is resolved by the arrival
+    /// (<c>BattlegroundFeature.OnPlayerEnteredMap</c> commits it in the match's map, undoes it anywhere else, since a far teleport can still be
+    /// refused at map entry); it is undone here when the teleport is refused or throws. A teleport onto another instance of the subject's own map id
+    /// is forced far (it would otherwise be a near teleport, which has no arrival); one inside the subject's own map object has no arrival either, so
+    /// it is committed at once.
+    /// </summary>
+    private static bool MoveBound(TeleportService teleports, BattlegroundFeature? battlegrounds, GmBattlegroundGo bound, Player subject, Player anchor, float x, float y, float z, float o)
+    {
+        bool binds = bound == GmBattlegroundGo.Bound && battlegrounds is not null;
+        bool sameMap = ReferenceEquals(subject.Map, anchor.Map);
+        TeleportOptions options = binds && !sameMap ? TeleportOptions.ForceFar : TeleportOptions.None;
+        bool moved = false;
+        try
+        {
+            moved = teleports.TeleportTo(subject, anchor.MapId, x, y, z, o, options);
+        }
+        finally
+        {
+            if (binds && !moved)
+            {
+                battlegrounds!.RevertGmBinding(subject);
+            }
+        }
+
+        if (binds && moved && sameMap)
+        {
+            battlegrounds!.CommitGmBinding(subject);
+        }
+
+        return moved;
     }
 
     private static bool Goname(CommandContext context, string text)
@@ -150,18 +176,9 @@ public sealed class GmTeleportCommands : ICommandGroup
         }
 
         GmTeleports.BeginCommandTeleport(context, caller);
-        if (!TeleportCommands.Feature(context).Teleports.TeleportTo(caller, target.MapId, target.X, target.Y, target.Z + 5.0f, angle))
+        if (!MoveBound(TeleportCommands.Feature(context).Teleports, battlegrounds, bound, caller, target, target.X, target.Y, target.Z + 5.0f, angle))
         {
-            if (bound == GmBattlegroundGo.Bound)
-            {
-                battlegrounds!.RevertGmBinding(caller);
-            }
-
             TeleportCommands.ReplyInvalid(context, target.X, target.Y, target.MapId);
-        }
-        else if (bound == GmBattlegroundGo.Bound)
-        {
-            battlegrounds!.CommitGmBinding(caller);
         }
 
         return true;
