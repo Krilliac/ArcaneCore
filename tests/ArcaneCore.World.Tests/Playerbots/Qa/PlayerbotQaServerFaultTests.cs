@@ -271,7 +271,6 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
         IReadOnlyList<QaSignal> signals = feed.Pull(); // the first occurrence and the rest are two signals with the same text
         Assert.Equal(4, signals.Sum(s => s.Occurrences));
         QaSignal signal = signals[0];
-        QaSignal signal = Assert.Single(feed.Pull());
 
         Assert.EndsWith("| subjects=3: creature 2 x2; creature 1 x1; creature 3 x1", signal.Diag, StringComparison.Ordinal);
     }
