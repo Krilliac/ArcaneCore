@@ -563,18 +563,52 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
-        int pendingTransfers;
-        try
+        if (services.GetService<ITransferDecisionStore>() is not { } transfers)
         {
-            pendingTransfers = CountUnresolvedTransfers(services);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
-            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
+            ReplyDiag(context, 0, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev);
             return true;
         }
 
+        // The decision store's COUNT would run inline on the world thread (the SQLite provider runs its async calls synchronously):
+        // count on the pool and send the report from the world thread.
+        WorldRuntime world = context.World;
+        _ = Task.Run(async () =>
+        {
+            int pendingTransfers;
+            try
+            {
+                pendingTransfers = await transfers.CountUnresolvedAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                world.Post(() =>
+                {
+                    services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
+                    context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
+                });
+                return;
+            }
+
+            world.Post(() => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
+        });
+        return true;
+    }
+
+    /// <summary>World thread: build and send the <c>.cluster diag</c> report once the unresolved transfer count is known.</summary>
+    private static void ReplyDiag(
+        CommandContext context,
+        int pendingTransfers,
+        int pendingWrites,
+        int retainedFailures,
+        CharacterFencingOptions fencing,
+        CharacterOwnershipToken? worldToken,
+        string nodeId,
+        string role,
+        Guid incarnation,
+        int realmId,
+        string contentRev)
+    {
+        IServiceProvider services = context.Session.Services;
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
         {
@@ -638,7 +672,6 @@ public sealed class ClusterCommands : ICommandGroup
             });
 
         context.Reply(report.FormatDeterministicSummary());
-        return true;
     }
 
     /// <summary>
@@ -764,12 +797,6 @@ public sealed class ClusterCommands : ICommandGroup
     // The core bot registry (logged in and running), not the playerbot pack's feature: World does not reference the pack (tier 2b).
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command; the EF store's query is a COUNT over the indexed state column); a store failure propagates to the caller.</summary>
-    private static int CountUnresolvedTransfers(IServiceProvider services)
-        => services.GetService<ITransferDecisionStore>() is { } store
-            ? store.CountUnresolvedAsync().GetAwaiter().GetResult()
-            : 0;
 
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {
