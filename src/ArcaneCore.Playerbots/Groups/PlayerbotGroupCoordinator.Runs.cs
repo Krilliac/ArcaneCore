@@ -481,9 +481,16 @@ public sealed partial class PlayerbotGroupCoordinator
             $"group {groupId} state={state} leader-step={leaderStep} approach={approach.X:F1},{approach.Y:F1},{approach.Z:F1} leader-distance={leaderToApproach:F0}yd; {timeout}");
 
     /// <summary>The diagnostic <see cref="DescribeGroupStall"/> made for the stall report of the group led by <paramref name="botId"/> (once; null: none).</summary>
-    internal string? TakeStallDiagnostic(Guid botId) => _stallDiags.Remove(botId, out string? diag) ? diag : null;
+    internal string? TakeStallDiagnostic(Guid botId)
+    {
+        if (!_stallDiags.TryGetValue(botId, out Queue<string>? queue) || queue.Count == 0) return null;
+        string diag = queue.Dequeue();
+        if (queue.Count == 0) _stallDiags.Remove(botId);
+        return diag;
+    }
 
-    private readonly Dictionary<Guid, string> _stallDiags = [];
+    /// <summary>A leader's stall diagnostics in the order of its stall reports (<see cref="TakeStalls"/>), so a second stall before the feature drains the first keeps its own.</summary>
+    private readonly Dictionary<Guid, Queue<string>> _stallDiags = [];
 
     /// <summary>The Engaging state of a run: bosses die, a boss may be absent, the group wipes or finishes and loots.</summary>
     internal void AdvanceRun(BotGroup group, Player leader, PlayerbotRunMachine run, uint now)

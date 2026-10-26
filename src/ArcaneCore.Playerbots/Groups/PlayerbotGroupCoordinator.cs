@@ -371,7 +371,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return false;
     }
 
-    /// <summary>Whether <paramref name="botId"/> set aside the goal with <paramref name="key"/>, or every bot did (<see cref="IsGoalBroken"/>; tests and status).</summary>
+    /// <summary>Whether the goal with <paramref name="key"/> is out of play for <paramref name="botId"/>: the bot set it aside itself, or the circuit breaker set it aside for every bot (<see cref="IsGoalBroken"/>). Goal choice, recruiting and the waiting scan read this.</summary>
     internal bool IsSetAside(Guid botId, (PlayerbotGroupGoalKind, uint) key)
         => (_setAside.TryGetValue((botId, key), out uint until) && unchecked((int)(until - Now)) > 0) || IsGoalBroken(key);
 
@@ -1110,7 +1110,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         return total;
     }
 
-    private BotGroup Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null)
+    private BotGroup Form(PlayerbotGroupGoal goal, PlayerbotGroupPlan plan, PlayerbotRunMachine? run = null, bool plainApproach = false)
     {
         var group = new BotGroup(_nextId++, goal, plan.Leader.BotId, new ObjectGuid(plan.Leader.Guid), Now) { Run = run };
         foreach ((PlayerbotGroupCandidate bot, PlayerbotGroupRole role, byte subGroup) in plan.Members)
@@ -1136,7 +1136,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             && QuestFor(p, goal.ObjectiveEntry) != 0));
         IPathfinder? pathfinder = _world is not null ? WorldCollision.Of(_world).Pathfinder : null;
         // A leader on another map has no path to ask about: the usual point (the walk there starts after the map change).
-        group.Approach = plan.Leader.MapId == goal.MeetingMap
+        group.Approach = !plainApproach && plan.Leader.MapId == goal.MeetingMap
             ? ReachableApproach(pathfinder, goal, plan.Leader.Position)
             : SnapToMesh(pathfinder, goal.MeetingMap, plan.Leader.Position, ApproachPoint(goal, plan.Leader.Position));
         _groups.Add(group);
@@ -1590,7 +1590,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (flat > ApproachCheckYards) return usual;
         // A leader already at the usual point's level, standing inside the ring, is as near as the point is.
         if (usual == leader && MathF.Abs(leader.Z - goal.Meeting.Z) <= ApproachHeightYards) return usual;
-        if (ApproachReachable(pathfinder, goal, leader, usual)) return usual;
+        ApproachReach reach = ApproachReachable(pathfinder, goal, leader, usual);
+        if (reach == ApproachReach.Yes || reach == ApproachReach.Unknown) return usual;
 
         Vector2 away = flat > 0.001f ? new Vector2(leader.X - goal.Meeting.X, leader.Y - goal.Meeting.Y) / flat : Vector2.UnitX;
         foreach (float degrees in ApproachBearings)
@@ -1600,21 +1601,44 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             var direction = new Vector2((away.X * cos) - (away.Y * sin), (away.X * sin) + (away.Y * cos));
             var ring = new Vector3(goal.Meeting.X + (direction.X * yards), goal.Meeting.Y + (direction.Y * yards), goal.Meeting.Z);
             Vector3 candidate = SnapToMesh(pathfinder, goal.MeetingMap, leader, ring);
-            if (ApproachReachable(pathfinder, goal, leader, candidate)) return candidate;
+            reach = ApproachReachable(pathfinder, goal, leader, candidate);
+            if (reach == ApproachReach.Yes) return candidate;
+            if (reach == ApproachReach.Unknown) return usual;
         }
 
         return goal.Meeting;
     }
 
-    /// <summary>The pathfinder takes <paramref name="from"/> to <paramref name="point"/> (its end within <see cref="ApproachReachYards"/> flat, at a height within <see cref="ApproachHeightYards"/> of the meeting point).</summary>
-    private static bool ApproachReachable(IPathfinder pathfinder, PlayerbotGroupGoal goal, Vector3 from, Vector3 point)
+    private enum ApproachReach : byte
     {
-        if (MathF.Abs(point.Z - goal.Meeting.Z) > ApproachHeightYards) return false;
-        PathResult path = pathfinder.FindPath(goal.MeetingMap, from, point);
-        if (!path.HasPath) return false;
+        No,
+        Yes,
+
+        /// <summary>The answer is not in yet (a navigation tile is still being read): no verdict, the usual point stands.</summary>
+        Unknown,
+    }
+
+    /// <summary>
+    /// Whether the leader's own planner would take <paramref name="from"/> to <paramref name="point"/>: the same query options as its walk
+    /// (<c>PlayerbotNavigation.QueryOnce</c>: a player mover, steep slopes excluded, tiles loaded without blocking), and the same refusals. A path
+    /// that is a straight line because no mesh answered (<see cref="PathType.NotUsingPath"/>) is no proof, one that ends short of the point
+    /// (<see cref="PathType.Incomplete"/>) counts only when its end is within <see cref="ApproachReachYards"/> flat, and the end must lie
+    /// within <see cref="ApproachHeightYards"/> of the meeting point's height.
+    /// </summary>
+    private static ApproachReach ApproachReachable(IPathfinder pathfinder, PlayerbotGroupGoal goal, Vector3 from, Vector3 point)
+    {
+        if (MathF.Abs(point.Z - goal.Meeting.Z) > ApproachHeightYards) return ApproachReach.No;
+        PathResult path = pathfinder.FindPath(goal.MeetingMap, from, point, new PathOptions
+        {
+            MaxPoints = PathOptions.DefaultMaxPoints, Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes,
+            MaxSearchNodes = PlayerbotNavigation.SearchNodes(from, point), LoadTiles = true, NonBlockingTiles = true,
+        });
+        if ((path.Type & PathType.TilesPending) != 0) return ApproachReach.Unknown;
+        if ((path.Type & PathType.NotUsingPath) != 0 || !path.HasPath) return ApproachReach.No;
         Vector3 end = path.End;
         float dx = end.X - point.X, dy = end.Y - point.Y;
-        return (dx * dx) + (dy * dy) <= ApproachReachYards * ApproachReachYards && MathF.Abs(end.Z - goal.Meeting.Z) <= ApproachHeightYards;
+        return (dx * dx) + (dy * dy) <= ApproachReachYards * ApproachReachYards && MathF.Abs(end.Z - goal.Meeting.Z) <= ApproachHeightYards
+            ? ApproachReach.Yes : ApproachReach.No;
     }
 
     /// <summary>The sides of the meeting point, as angles from the leader's side, the approach point is looked for on when the usual one cannot be reached.</summary>
@@ -1795,8 +1819,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             uint entry = group.State == PlayerbotGroupState.Engaging ? (targetEntry != 0 ? targetEntry : group.ObjectiveEntry) : 0;
             _stalls.Add((group.LeaderBotId, leader.Name, string.Create(CultureInfo.InvariantCulture,
                 $"stalled {seconds}s: goal={PlayerbotGoalKind.Group} target={entry} quest={group.Goal.QuestId} at {leader.X:F1},{leader.Y:F1},{leader.Z:F1} map {leader.MapId}")));
-            _stallDiags[group.LeaderBotId] = DescribeGroupStall(group.Id, state, step, group.Approach, Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Approach),
-                DescribeTimeout("stalled", seconds, (uint)Math.Max(1, _options.StallSeconds), group.Goal.ToString(), state, TimeoutMembers(group, leader)));
+            if (!_stallDiags.TryGetValue(group.LeaderBotId, out Queue<string>? diags)) _stallDiags[group.LeaderBotId] = diags = new Queue<string>();
+            diags.Enqueue(DescribeGroupStall(group.Id, state, step, group.Approach, Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Approach),
+                DescribeTimeout("stalled", seconds, (uint)Math.Max(1, _options.StallSeconds), group.Goal.ToString(), state, TimeoutMembers(group, leader))));
             if (!targetGuid.IsEmpty) group.Shun(targetGuid, unchecked(now + SetAsideMs));
             leaderAI?.Retarget(leader);
             string what = targetEntry != 0 ? string.Create(CultureInfo.InvariantCulture, $"gives up target {targetEntry} and re-targets") : "re-targets";
@@ -2038,14 +2063,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     // --- the goal circuit breaker (live #1470: 473 groups formed in a day for one dungeon goal, 451 of them timed out the same way) ---------
 
-    /// <summary>How many groups must fail the same way for one goal, inside <see cref="BreakerWindowMs"/>, for the goal to be set aside for every bot.</summary>
+    /// <summary>How many groups must fail (for a counted reason) for one goal, inside <see cref="BreakerWindowMs"/>, for the goal to be set aside for every bot.</summary>
     internal const int BreakerFailures = 3;
 
     /// <summary>The window the <see cref="BreakerFailures"/> failures must fall in (30 minutes, from the first of them).</summary>
     internal const uint BreakerWindowMs = 1_800_000;
 
-    /// <summary>Failures per goal key and fault (the group's reason): how many, and when the first of the window was.</summary>
-    private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Key, string Fault), (int Count, uint FirstMs)> _goalFaults = [];
+    /// <summary>Failures per goal key over every counted reason (<see cref="CountsForBreaker"/>, so a goal that alternates its ways to fail still trips): how many, and when the first of the window was.</summary>
+    private readonly Dictionary<(PlayerbotGroupGoalKind, uint), (int Count, uint FirstMs)> _goalFaults = [];
 
     /// <summary>Goals set aside for every bot: until when, how many times the breaker tripped for the goal in a row and when it last did (the set-aside doubles with each, <see cref="EscalatedSetAsideMs"/>).</summary>
     private readonly Dictionary<(PlayerbotGroupGoalKind, uint), (uint UntilMs, int Trips, uint LastTripMs)> _goalBreaks = [];
@@ -2061,14 +2086,14 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
     /// <summary>
     /// A quest or dungeon group (not a run, a siege, a world-boss raid or a handed-over group, which have bounds of their own) gave up for
-    /// <paramref name="reason"/>. The <see cref="BreakerFailures"/>th group to fail the same way for the same goal within <see cref="BreakerWindowMs"/>
+    /// <paramref name="reason"/>. The <see cref="BreakerFailures"/>th group to fail for the same goal, whichever counted reason, within <see cref="BreakerWindowMs"/>
     /// sets the goal aside for every bot, for <see cref="EscalatedSetAsideMs"/> of the number of times in a row it tripped (10, 20, 40 ... minutes).
     /// </summary>
     private void NoteGoalFault(BotGroup group, string reason)
     {
         if (group.Run is not null || group.Solo || group.Handoff is not null || group.Siege is not null || group.WorldBoss is not null || !CountsForBreaker(reason)) return;
         uint now = Now;
-        var key = (group.Goal.Key, reason);
+        var key = group.Goal.Key;
         (int count, uint first) = _goalFaults.TryGetValue(key, out var seen) && unchecked(now - seen.FirstMs) < BreakerWindowMs ? (seen.Count + 1, seen.FirstMs) : (1, now);
         if (count < BreakerFailures)
         {
@@ -2076,7 +2101,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             return;
         }
 
-        foreach (var faultKey in _goalFaults.Keys.Where(k => k.Key == group.Goal.Key).ToArray()) _goalFaults.Remove(faultKey);
+        _goalFaults.Remove(key);
         int trips = _goalBreaks.TryGetValue(group.Goal.Key, out var last) && unchecked(now - last.LastTripMs) < FailStreakMemoryMs ? last.Trips + 1 : 1;
         uint ms = EscalatedSetAsideMs(trips);
         _goalBreaks[group.Goal.Key] = (unchecked(now + ms), trips, now);

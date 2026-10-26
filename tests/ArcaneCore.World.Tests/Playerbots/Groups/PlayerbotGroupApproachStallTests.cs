@@ -74,7 +74,7 @@ public sealed class PlayerbotGroupApproachStallTests
     }
 
     [Fact]
-    public async Task ALeaderWhoseWalkIsRefused_WhileItAlternatesWithHolds_GivesUpWithNoPathToApproachWithinAboutThirtyFiveSeconds()
+    public async Task ALeaderWhoseWalkIsRefused_WhileItAlternatesWithHolds_GivesUpWithNoPathToApproachOnceThirtySecondsOfRefusalsAreCounted()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options =>
         {
@@ -93,11 +93,11 @@ public sealed class PlayerbotGroupApproachStallTests
             return true;
         });
 
-        // Ten-second cycles: 3 s with the whole group at the leader (it tries to walk and is refused), then 7 s with a member 60 yards behind
-        // (it holds for the member): every pause is longer than the gap that used to start a new stretch.
+        // Ten-second cycles: 5 s with the whole group at the leader (it tries to walk and is refused), then 5 s with a member 60 yards behind
+        // (it holds for the member): the holds are not counted, so the bound (30 s of refusals) comes after about 60 s.
         uint started = await world.OnWorldAsync(() => NowMs(world));
         bool gaveUp = false;
-        for (int cycle = 0; cycle < 6 && !gaveUp; cycle++)
+        for (int cycle = 0; cycle < 10 && !gaveUp; cycle++)
         {
             await world.OnWorldAsync(() =>
             {
@@ -105,7 +105,7 @@ public sealed class PlayerbotGroupApproachStallTests
                 world.Player(laggardId).Relocate(leader.X, leader.Y, leader.Z, 0, NowMs(world));
                 return true;
             });
-            gaveUp = await world.RunUntilAsync(3_000, () => group.Reason is not null);
+            gaveUp = await world.RunUntilAsync(5_000, () => group.Reason is not null);
             if (gaveUp) break;
             await world.OnWorldAsync(() =>
             {
@@ -113,12 +113,135 @@ public sealed class PlayerbotGroupApproachStallTests
                 world.Player(laggardId).Relocate(leader.X, leader.Y - 60f, leader.Z, 0, NowMs(world));
                 return true;
             });
-            gaveUp = await world.RunUntilAsync(7_000, () => group.Reason is not null);
+            gaveUp = await world.RunUntilAsync(5_000, () => group.Reason is not null);
         }
 
         Assert.True(gaveUp, await world.TraceAsync());
         Assert.Equal("no-path-to-approach", group.Reason);
-        Assert.InRange(unchecked(await world.OnWorldAsync(() => NowMs(world)) - started), 25_000u, 45_000u);
+        Assert.InRange(unchecked(await world.OnWorldAsync(() => NowMs(world)) - started), 45_000u, 85_000u);
+    }
+
+    /// <summary>Plans a straight line of the given type to every point <c>reaches</c> accepts, else no path; keeps the options of its queries.</summary>
+    private sealed class Probe(Func<Vector3, bool> reaches, PathType type = PathType.Normal) : IPathfinder
+    {
+        public List<PathOptions?> Options { get; } = [];
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Options.Add(options);
+            return reaches(end) ? PathResult.StraightLine(start, end, type) : PathResult.None(start);
+        }
+    }
+
+    private static readonly PlayerbotGroupGoal QuestGoal = new(PlayerbotGroupGoalKind.Quest, 0, 1, 0, 0, Vector3.Zero, 0, Vector3.Zero, 2, 1, "test");
+
+    private static readonly Vector3 FarLeader = new(100f, 0f, 0f);
+
+    [Fact]
+    public void ANonFirstBearing_IsChosen_WhenTheUsualPointAndTheFirstBearingsAreUnreachable()
+    {
+        // Reachable: only the points north or south of the meeting point, 30 yards out (the third bearing, 90 degrees either way).
+        var probe = new Probe(end => MathF.Abs(end.X) < 2f && MathF.Abs(MathF.Abs(end.Y) - PlayerbotGroupCoordinator.QuestApproachYards) < 2f);
+
+        Vector3 approach = PlayerbotGroupCoordinator.ReachableApproach(probe, QuestGoal, FarLeader);
+
+        Assert.NotEqual(QuestGoal.Meeting, approach);
+        Assert.InRange(MathF.Abs(approach.X), 0f, 2f);
+        Assert.InRange(MathF.Abs(approach.Y), PlayerbotGroupCoordinator.QuestApproachYards - 2f, PlayerbotGroupCoordinator.QuestApproachYards + 2f);
+        Assert.True(probe.Options.Count >= 3, "the usual point and the two nearer bearings were asked first");
+    }
+
+    [Fact]
+    public void WhenNoBearingIsReachable_TheMeetingPointItselfIsTheApproach()
+    {
+        Assert.Equal(QuestGoal.Meeting, PlayerbotGroupCoordinator.ReachableApproach(new Probe(_ => false), QuestGoal, FarLeader));
+    }
+
+    [Fact]
+    public void AStraightLineWithNoMeshBehindIt_IsNoProofOfAWay_AndTheMeetingPointIsTheApproach()
+    {
+        var probe = new Probe(_ => true, PathType.NotUsingPath);
+
+        Assert.Equal(QuestGoal.Meeting, PlayerbotGroupCoordinator.ReachableApproach(probe, QuestGoal, FarLeader));
+    }
+
+    [Fact]
+    public void ANavigationTileStillPending_GivesNoVerdict_TheUsualPointStands()
+    {
+        var probe = new Probe(_ => true, PathType.TilesPending);
+
+        Vector3 approach = PlayerbotGroupCoordinator.ReachableApproach(probe, QuestGoal, FarLeader);
+
+        Assert.Equal(PlayerbotGroupCoordinator.ApproachPoint(QuestGoal, FarLeader), approach);
+    }
+
+    [Fact]
+    public void TheReachabilityProbe_AsksWithTheWalkersOwnOptions()
+    {
+        var probe = new Probe(_ => true);
+
+        PlayerbotGroupCoordinator.ReachableApproach(probe, QuestGoal, FarLeader);
+
+        PathOptions options = Assert.Single(probe.Options)!;
+        Assert.Equal(PathMover.Player, options.Mover);
+        Assert.True((options.ExcludeFlags & NavTerrain.SteepSlopes) != 0);
+        Assert.True(options.LoadTiles);
+        Assert.True(options.NonBlockingTiles);
+    }
+
+    [Fact]
+    public void TheRefusedWalkStretch_CountsOnlyRefusedThinks_SoPausesBetweenThemAreLeftOut()
+    {
+        long refused = 0;
+        // 29 s of refusals at 200 ms thinks; a long pause makes no call at all; the next refusals go on from 29 s.
+        for (int i = 0; i < 145; i++) Assert.False(PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: false, 200));
+        Assert.Equal(29_000, refused);
+        for (int i = 0; i < 5; i++) Assert.False(PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: false, 200));
+        Assert.Equal(PlayerbotGroupAI.RunStuckMs, refused);
+        Assert.True(PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: false, 200));
+    }
+
+    [Fact]
+    public void APlannedWalk_EndsTheRefusedStretch()
+    {
+        long refused = 0;
+        for (int i = 0; i < 100; i++) PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: false, 200);
+        Assert.False(PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: true, 200));
+        Assert.Equal(0, refused);
+        Assert.False(PlayerbotGroupAI.NoteStuckRefused(ref refused, planned: false, 200));
+        Assert.Equal(200, refused);
+    }
+
+    [Fact]
+    public async Task ALeaderInsideTheRingWhoseWalkIsRefused_ChoosesTheApproachPointAgainOnce()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([BruteQuest], options =>
+        {
+            options.Risk.Tolerance = 0.25f;
+            options.StallSeconds = 600;
+            options.Party.TeleportToLeader = false;
+        });
+        var first = await world.AddBotAsync("Ringwar", Human, Warrior, 1, []);
+        var second = await world.AddBotAsync("Ringmage", Human, Mage, 1, [Fireball]);
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Travelling)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Guid leaderId = group.LeaderBotId, otherId = leaderId == first.Id ? second.Id : first.Id;
+        Assert.NotEqual(group.Goal.Meeting, group.Approach);
+
+        // Only the meeting point itself can be reached; the group stands 20 yards (flat) from it and 40 yards above its height: inside the ring, off its level.
+        await world.OnWorldAsync(() =>
+        {
+            WorldCollision.Of(world.World.Host.World).Install(pathfinder: new ReachesOnly(group.Goal.Meeting));
+            foreach (Guid id in new[] { leaderId, otherId })
+                world.Player(id).Relocate(group.Goal.Meeting.X, group.Goal.Meeting.Y - 20f, group.Goal.Meeting.Z + 40f, 0, NowMs(world));
+            return true;
+        });
+
+        Assert.True(await world.RunUntilAsync(30_000, () => group.ApproachRetried || group.State != PlayerbotGroupState.Travelling), await world.TraceAsync());
+        Assert.True(group.ApproachRetried, await world.TraceAsync());
+        Assert.Equal(group.Goal.Meeting, group.Approach);
     }
 
     [Fact]
