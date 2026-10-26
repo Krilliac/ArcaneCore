@@ -500,16 +500,51 @@ public sealed partial class EconomyFeature
     /// <summary>CMSG_ITEM_TEXT_QUERY: the text of a cached letter or a carried letter item.</summary>
     public void QueryItemText(WorldSession session, Player player, uint textId)
     {
-        bool owned = textId != 0 && ((_mailboxes.TryGetValue(IdOf(player), out Mailbox? box) && box.Mails.Any(m => m.Mail.ItemTextId == textId))
-            || player.Inventory.AllItems.Any(i => i.ToData().TextId == textId));
+        if (textId == 0)
+        {
+            return;
+        }
+
+        // Only a letter FindOwnMail would show (delivered, not expired) or a carried letter item; the field is read in place, not through ToData().
+        int receiver = IdOf(player);
+        long now = Now;
+        bool owned = (_mailboxes.TryGetValue(receiver, out Mailbox? box) && box.Mails.Any(m => m.Mail.ItemTextId == textId && IsVisibleTo(m.Mail, receiver, now)))
+            || player.Inventory.AllItems.Any(i => i.GetUInt32(UpdateFields.ItemFieldItemTextId) == textId);
         if (!owned)
         {
             return;
         }
 
-        Read((store, ct) => store.GetItemTextAsync(textId, ct),
-            text => session.Send(WorldOpcode.SmsgItemTextQueryResponse, EconomyPackets.ItemTextResponse(textId, text ?? string.Empty)));
+        if (_itemTextCache.TryGetValue(textId, out string? cached))
+        {
+            session.Send(WorldOpcode.SmsgItemTextQueryResponse, EconomyPackets.ItemTextResponse(textId, cached));
+            return;
+        }
+
+        Read((store, ct) => store.GetItemTextAsync(textId, ct), text =>
+        {
+            if (text is not null)
+            {
+                if (_itemTextCache.Count >= ItemTextCacheLimit)
+                {
+                    _itemTextCache.Clear();
+                }
+
+                _itemTextCache[textId] = text;
+            }
+
+            session.Send(WorldOpcode.SmsgItemTextQueryResponse, EconomyPackets.ItemTextResponse(textId, text ?? string.Empty));
+        });
     }
+
+    /// <summary>Item texts already read, per id (world thread). A text row never changes once written; the cache is dropped when full.</summary>
+    private readonly Dictionary<uint, string> _itemTextCache = [];
+
+    private const int ItemTextCacheLimit = 4096;
+
+    /// <summary>The letter is the receiver's and visible now: delivered and not yet expired (shared by FindOwnMail and the item text query).</summary>
+    private static bool IsVisibleTo(MailRecord mail, int receiverId, long now)
+        => mail.ReceiverId == receiverId && mail.DeliverTime <= now && mail.ExpireTime > now;
 
     private void RunMailOperation(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, IReadOnlyList<uint> mailIds,
         Action<EconomyOutcome> finished, Action? refused)
@@ -549,8 +584,7 @@ public sealed partial class EconomyFeature
     {
         long now = Now;
         return Enabled && _mailboxes.TryGetValue(IdOf(player), out Mailbox? box) && box.Loaded
-            ? box.Mails.FirstOrDefault(m => m.Mail.Id == mailId && m.Mail.ReceiverId == IdOf(player)
-                && m.Mail.DeliverTime <= now && m.Mail.ExpireTime > now)
+            ? box.Mails.FirstOrDefault(m => m.Mail.Id == mailId && IsVisibleTo(m.Mail, IdOf(player), now))
             : null;
     }
 

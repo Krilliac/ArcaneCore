@@ -162,16 +162,22 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
 
             int id = Id(player);
             byte slots = (byte)(state.PurchasedSlots + 1);
-            player.Money -= price;
-            MoneyChanged?.Invoke(player);
+            // Charged only once the slot is saved, so a failed write has nothing to refund and a save taken while the write is in
+            // flight never holds the deducted money. If the player can no longer pay at commit (spent it, logged out, or a quest
+            // settlement holds the character), the saved slot is taken back instead.
             Write(player, id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; },
-                _ => { SetState(id, state with { PurchasedSlots = slots }); Send(player, StableResult.SuccessBuySlot); },
-                () =>
+                _ =>
                 {
-                    // The slot was not saved: give the money back.
-                    player.Money += price;
-                    MoneyChanged?.Invoke(player);
-                });
+                    if (!TryCharge(player, price))
+                    {
+                        TakeSlotBack(player, id, store, state.PurchasedSlots);
+                        return;
+                    }
+
+                    SetState(id, state with { PurchasedSlots = slots });
+                    Send(player, StableResult.SuccessBuySlot);
+                },
+                static () => { });
         });
     }
 
@@ -279,6 +285,58 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
                     Send(player, StableResult.SuccessUnstable);
                 },
                 () => summons.ReplaceCachedPet(id, active));
+        });
+    }
+
+    /// <summary>Deduct <paramref name="price"/> through the settlement-guarded setter, clamped to 0..MaxMoney; false (untouched) when the player cannot pay now.</summary>
+    private bool TryCharge(Player player, uint price)
+    {
+        if (!player.IsInWorld || !player.CanMutateQuestSettlementState || player.Money < price)
+        {
+            return false;
+        }
+
+        player.Money = (uint)Math.Clamp((long)player.Money - price, 0, ArcaneCore.Game.Economy.EconomyOptions.MaxMoney);
+        MoneyChanged?.Invoke(player);
+        return true;
+    }
+
+    /// <summary>Undo a saved slot purchase that could not be charged; the cached stable is reloaded on next use.</summary>
+    private void TakeSlotBack(Player player, int id, IPetStableStore store, byte before)
+    {
+        _entries.TryGetValue(id, out Entry? entry);
+        if (entry is not null)
+        {
+            entry.Busy = true;
+            entry.State = null;
+        }
+
+        if (player.IsInWorld)
+        {
+            Send(player, StableResult.ErrMoney);
+        }
+
+        _ = RevertSlotsAsync(id, entry, store, before);
+    }
+
+    private async Task RevertSlotsAsync(int id, Entry? entry, IPetStableStore store, byte slots)
+    {
+        try
+        {
+            await summons.QueueSerializedWriteAsync(id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; }).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("pet.stable", ex);
+            _logger.LogFault("pet-stable", ex, "pet stable slot rollback failed for character {CharacterId}", id);
+        }
+
+        Post(() =>
+        {
+            if (entry is not null)
+            {
+                entry.Busy = false;
+            }
         });
     }
 
