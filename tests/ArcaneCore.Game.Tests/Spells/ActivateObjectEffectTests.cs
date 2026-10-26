@@ -86,6 +86,35 @@ public sealed class ActivateObjectEffectTests
         Assert.False(near.Flags.HasFlag(GameObjectFlags.Locked));
     }
 
+    [Theory]
+    [InlineData(-9f, false)]   // 34 yards at completion: past the strict 30 + 1.25, inside the landing 30 + 6.25
+    [InlineData(-15f, true)]   // 40 yards at completion: past the landing reach too
+    public void AClientNamedObject_AtCastCompletion_UsesTheLandingLeeway(float casterXAtCompletion, bool refused)
+    {
+        // vmangos Spell::CheckRange at completion runs with the wider landing leeway (strict only at the start); the game-object branch
+        // (Spell.cpp:6922-6927) follows the same leeway. A 2 s cast starts with the door 25 yards away and the caster backs off meanwhile.
+        const uint slowUnlock = 990150;
+        SpellInfo spell = Spell(slowUnlock, Effect(SpellEffectName.ActivateObject, 0, SpellImplicitTarget.GameObject, misc: 6)) with
+        {
+            RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0, CastTime = new SpellCastTime(2000, 0, 0),
+        };
+        using var kit = new SpellTestKit(spell);
+        var map = kit.World.GetMap(0);
+        var objects = new GameObjectMapSystem(map, new GameObjectContent([GameObjectTestKit.GoTemplate(Door, GameObjectType.Door)], [], [], [], []));
+        map.AddUpdater(objects);
+        (Player caster, _) = kit.AddPlayer(1);
+        GameObject door = objects.Summon(Door, 25, 0, caster.Z, 0)!;
+        door.Flags |= GameObjectFlags.Locked;
+
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = door.Guid };
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, slowUnlock, targets, triggered: false));
+        caster.Relocate(casterXAtCompletion, 0, caster.Z, 0, kit.Now);
+        kit.Advance(2100);
+
+        // RED on main for the refused row: no game-object range check, so the door 40 yards away is unlocked.
+        Assert.Equal(refused, door.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
     [Fact]
     public void ScriptNearCaster_UsesTheNearestListedObject_OrTheExplicitListedObject()
     {
