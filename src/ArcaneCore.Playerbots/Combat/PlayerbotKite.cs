@@ -287,8 +287,8 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
     /// <summary>
     /// The bot fights from range (its rotation's preferred range is past melee), or is a warrior or rogue with a ranged weapon, its
-    /// ammunition and a known shot. <paramref name="preferredRange"/> is where it wants to stand (a melee bot with a shot: the casting
-    /// range of a hunter-less bot, <see cref="PlayerbotClassRotation.CasterRange"/>).
+    /// ammunition and a known shot. <paramref name="preferredRange"/> is where it wants to stand: its rotation's, or for a melee bot with a
+    /// shot <see cref="PlayerbotClassRotation.CasterRange"/>.
     /// </summary>
     private bool Qualifies(Player player, out float preferredRange)
     {

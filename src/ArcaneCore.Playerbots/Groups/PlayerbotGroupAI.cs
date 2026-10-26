@@ -1222,8 +1222,9 @@ internal sealed class PlayerbotGroupAI
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
 
         // A hurt ranged bot kites within the leash of the siege waypoint or rally point, else of its leader.
-        Vector3? kiteCentre = leashCentre ?? (leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map)
-            ? new Vector3(leader.X, leader.Y, leader.Z) : null);
+        Vector3? kiteCentre = leashCentre;
+        if (kiteCentre is null && leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map))
+            kiteCentre = new Vector3(leader.X, leader.Y, leader.Z);
         if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk))
         {
             _route = null;
