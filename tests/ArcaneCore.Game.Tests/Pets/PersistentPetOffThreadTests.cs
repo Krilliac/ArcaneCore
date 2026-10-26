@@ -52,18 +52,22 @@ public sealed class PersistentPetOffThreadTests
     public async Task QueueSerializedWriteAsync_DoesNotRunTheWriteOnTheCallingThread()
     {
         using PetTestKit kit = new();
-        int callerThread = Environment.CurrentManagedThreadId;
-        int writeThread = -1;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim(false);
 
-        int result = await kit.Service.QueueSerializedWriteAsync(1, _ =>
+        // A blocked store call must not hold the caller. (Comparing thread ids would be flaky: the test itself runs on a pool thread.)
+        // Inline on an idle queue, the call below would not return until the 5 s wait ends, and the task would already be complete.
+        Task<int> write = kit.Service.QueueSerializedWriteAsync(1, _ =>
         {
-            writeThread = Environment.CurrentManagedThreadId;
+            entered.SetResult();
+            release.Wait(TimeSpan.FromSeconds(5));
             return Task.FromResult(7);
-        }).WaitAsync(HangBound);
+        });
 
-        Assert.Equal(7, result);
-        Assert.NotEqual(-1, writeThread);
-        Assert.NotEqual(callerThread, writeThread); // an idle queue used to run the stable's store call inline on the world thread
+        Assert.False(write.IsCompleted);
+        await entered.Task.WaitAsync(HangBound);
+        release.Set();
+        Assert.Equal(7, await write.WaitAsync(HangBound));
     }
 
     [Fact]
