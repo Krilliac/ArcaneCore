@@ -75,6 +75,7 @@ public sealed class FaultLedger
     private volatile int _logLimit;
     private volatile bool _beepOnException;
     private volatile string? _crashJournalPath;
+    private volatile string? _crashJournalOwner;
     private long _total;
     private long _epoch;
     private long _lastTicks;
@@ -106,9 +107,16 @@ public sealed class FaultLedger
         => exception is not null
             && (RecordedExceptions.TryGetValue(exception, out _) || RecordedExceptions.TryGetValue(Unwrap(exception), out _));
 
-    /// <summary>Configure the file path where terminating faults (<c>unhandled</c>, <c>unobserved-task</c>) are appended so the next startup can replay them into QA.</summary>
-    public void ConfigureCrashJournal(string? path)
-        => _crashJournalPath = string.IsNullOrWhiteSpace(path) ? null : path;
+    /// <summary>
+    /// Configure the file path where terminating faults (<c>unhandled</c>, <c>unobserved-task</c>) are appended so the next startup can replay them into QA.
+    /// <paramref name="owner"/> names this process (see <see cref="CrashJournalPaths.ProcessName"/>): it is written into every record, and a replay leaves
+    /// records another owner wrote in the file. Without an owner the ledger writes unattributed records and replays every record.
+    /// </summary>
+    public void ConfigureCrashJournal(string? path, string? owner = null)
+    {
+        _crashJournalPath = string.IsNullOrWhiteSpace(path) ? null : path;
+        _crashJournalOwner = string.IsNullOrWhiteSpace(owner) ? null : owner;
+    }
 
     /// <summary>
     /// Raised on the recording thread, after the counts are updated, for each fault whose recording says the caller should log it (so a fault
@@ -442,53 +450,92 @@ public sealed class FaultLedger
 
     /// <summary>
     /// Replay and remove any terminating crash faults previously written to <paramref name="path"/> (or the configured crash journal path).
+    /// With a configured owner, records another owner wrote stay in the file for that owner.
     /// Returns the number of replayed crash records.
     /// </summary>
     public int ReplayCrashJournal(string? path = null)
     {
         string? journal = string.IsNullOrWhiteSpace(path) ? _crashJournalPath : path;
-        if (string.IsNullOrWhiteSpace(journal) || !File.Exists(journal))
+        return string.IsNullOrWhiteSpace(journal) ? 0 : ConsumeJournal(journal, _crashJournalOwner, discardUnattributed: false).Replayed;
+    }
+
+    /// <summary>
+    /// One-time migration of the shared journal older builds wrote (every daemon appended to one file and the records name no writer).
+    /// Records written by <paramref name="owner"/> are replayed, records another owner wrote stay, and unattributed records are discarded:
+    /// no process can show they are its own, and replaying them would report another daemon's crash as this one's. The file is deleted
+    /// when nothing is left. <c>Dropped</c> counts the unattributed records discarded.
+    /// </summary>
+    public (int Replayed, int Dropped) MigrateLegacyCrashJournal(string legacyPath, string owner)
+        => string.IsNullOrWhiteSpace(legacyPath) || string.IsNullOrWhiteSpace(owner) ? (0, 0) : ConsumeJournal(legacyPath, owner, discardUnattributed: true);
+
+    private (int Replayed, int Dropped) ConsumeJournal(string journal, string? owner, bool discardUnattributed)
+    {
+        if (!File.Exists(journal))
         {
-            return 0;
+            return (0, 0);
         }
 
-        int replayed = 0;
+        int dropped = 0;
+        var mine = new List<PersistedCrashFault>();
         try
         {
-            string[] lines;
             lock (_addGate)
             {
                 if (!File.Exists(journal))
                 {
-                    return 0;
+                    return (0, 0);
                 }
 
-                lines = File.ReadAllLines(journal);
-                File.Delete(journal);
-            }
-
-            foreach (string line in lines)
-            {
-                if (string.IsNullOrWhiteSpace(line))
+                var keep = new List<string>();
+                foreach (string line in File.ReadAllLines(journal))
                 {
-                    continue;
-                }
+                    if (string.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
 
-                try
-                {
-                    PersistedCrashFault? crash = JsonSerializer.Deserialize<PersistedCrashFault>(line);
+                    PersistedCrashFault? crash;
+                    try
+                    {
+                        crash = JsonSerializer.Deserialize<PersistedCrashFault>(line);
+                    }
+                    catch (JsonException)
+                    {
+                        continue; // malformed line: skipped, as before
+                    }
+
                     if (crash is null || string.IsNullOrWhiteSpace(crash.Id))
                     {
                         continue;
                     }
 
-                    RecordPersistedCrash(crash);
-                    replayed++;
+                    if (owner is not null && crash.Process is { Length: > 0 } writer && !string.Equals(writer, owner, StringComparison.Ordinal))
+                    {
+                        keep.Add(line); // another process wrote it: only that process consumes it
+                    }
+                    else if (owner is not null && string.IsNullOrEmpty(crash.Process) && discardUnattributed)
+                    {
+                        dropped++;
+                    }
+                    else
+                    {
+                        mine.Add(crash);
+                    }
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
+
+                if (keep.Count == 0)
                 {
-                    // Skip malformed crash journal lines.
+                    File.Delete(journal);
                 }
+                else
+                {
+                    File.WriteAllLines(journal, keep);
+                }
+            }
+
+            foreach (PersistedCrashFault crash in mine)
+            {
+                RecordPersistedCrash(crash);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -496,7 +543,7 @@ public sealed class FaultLedger
             // Never fail startup because the crash journal could not be read or removed.
         }
 
-        return replayed;
+        return (mine.Count, dropped);
     }
 
     private void RecordPersistedCrash(PersistedCrashFault crash)
@@ -548,7 +595,8 @@ public sealed class FaultLedger
                 Truncate(exception.Message),
                 FormatCondensedStack(exception),
                 FormatExceptionChain(exception),
-                now);
+                now,
+                _crashJournalOwner);
             string json = JsonSerializer.Serialize(record) + "\n";
             lock (_addGate)
             {
@@ -575,7 +623,8 @@ public sealed class FaultLedger
         string Message,
         string SampleStack,
         string SampleChain,
-        DateTimeOffset AtUtc);
+        DateTimeOffset AtUtc,
+        string? Process = null);
 
     private FaultRecording RecordCore(string site, Exception exception, bool terminating)
     {

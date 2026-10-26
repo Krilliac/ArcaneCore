@@ -68,9 +68,16 @@ internal sealed class DiagnosticsHostedService(
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
         FaultLedger.Shared.Configure(value);
-        string crashJournal = Path.Combine(AppContext.BaseDirectory, "crash-faults.jsonl");
-        FaultLedger.Shared.ConfigureCrashJournal(crashJournal);
-        int replayedCrashes = FaultLedger.Shared.ReplayCrashJournal(crashJournal);
+        string processName = CrashJournalPaths.ProcessName();
+        string crashJournal = CrashJournalPaths.PathFor(AppContext.BaseDirectory, processName);
+        FaultLedger.Shared.ConfigureCrashJournal(crashJournal, processName);
+        (int legacyReplayed, int legacyDropped) = FaultLedger.Shared.MigrateLegacyCrashJournal(CrashJournalPaths.LegacyPath(AppContext.BaseDirectory), processName);
+        if (legacyDropped > 0)
+        {
+            crashLogger.LogWarning("Diagnostics: discarded {Count} unattributed record(s) from the legacy shared crash journal; it named no writing process", legacyDropped);
+        }
+
+        int replayedCrashes = FaultLedger.Shared.ReplayCrashJournal(crashJournal) + legacyReplayed;
         if (replayedCrashes > 0)
         {
             crashLogger.LogWarning("Diagnostics: replayed {Count} prior terminating crash fault(s) from {Path} into FaultLedger", replayedCrashes, crashJournal);
