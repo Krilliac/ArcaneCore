@@ -57,10 +57,12 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     /// test's fights play out the same every run instead of on <see cref="Random.Shared"/>, where a lucky streak kept a losing bot
     /// above its retreat threshold now and then.
     /// </param>
+    /// <param name="dataDirectory">A map data directory (its <c>maps</c> folder holds terrain tiles the test wrote); null: no terrain data.</param>
     public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null,
-        bool aggroOnSight = false, ICombatRandom? dice = null)
+        bool aggroOnSight = false, ICombatRandom? dice = null, string? dataDirectory = null)
     {
-        WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        WorldTestHost host = WorldTestHost.Start(configure: dataDirectory is null ? null : options => options.Maps.DataDirectory = dataDirectory,
+            configureServices: services =>
         {
             if (ai is not null) services.AddSingleton<ICreatureDataStore>(new AiStore(ai));
             services.AddSingleton<IWorldFeature, ManualClock>();

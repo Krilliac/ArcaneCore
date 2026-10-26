@@ -48,7 +48,7 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
         BattleStance, DefensiveStance, BerserkerStance, BattleShout, Bloodrage, Charge, Intercept, Pummel, ShieldBash, Execute,
         Overpower, LastStand, ConcussionBlow, ShieldBlock, ShieldWall, ShieldSlam, ThunderClap, SunderArmor, Hamstring, Rend,
         IntimidatingShout, Retaliation, SweepingStrikes, Recklessness, DeathWish, MortalStrike, Bloodthirst, Whirlwind,
-        DemoralizingShout, Cleave, HeroicStrike, Taunt, MockingBlow, Revenge,
+        DemoralizingShout, Cleave, HeroicStrike, Taunt, MockingBlow, Revenge, ShootBow, ShootGun, ShootCrossbow, Throw,
     ];
 
     protected override RotationAction? Upkeep(RotationState s)
@@ -97,16 +97,17 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
             ?? Do(s, MortalStrike, v)
             ?? Do(s, Bloodthirst, v)
             ?? Stance(s, v)
-            ?? Do(s, Intercept, v)
+            ?? Do(s, Intercept, v, !s.KiteHolding) // a kiting warrior holds its range: Intercept would charge it back into melee
             ?? Do(s, Whirlwind, s.Self, v.InMeleeRange)
             ?? Do(s, DemoralizingShout, s.Self, tank && !v.HasAura(DemoralizingShout))
             // Rage dump on the next swing above 30 rage (vmangos :2645-2663).
-            ?? (s.Power > 300 ? Do(s, Cleave, v, close > 1) ?? Do(s, HeroicStrike, v) : null);
+            ?? (s.Power > 300 ? Do(s, Cleave, v, close > 1) ?? Do(s, HeroicStrike, v) : null)
+            ?? RangedShot(s, v); // only while the kite holds the range, never at a crowd-controlled target
     }
 
     /// <summary>Defensive Stance when low or tanking an equal-level enemy, Berserker Stance otherwise (vmangos :2583-2600).</summary>
     private static RotationAction? Stance(RotationState s, RotationUnit v)
         => s.Self.HealthPercent < 20f || s.Role == PlayerbotRole.Tank && v.Level >= s.Self.Level
             ? Do(s, DefensiveStance, s.Self, s.Form != Form.DefensiveStance)
-            : Do(s, BerserkerStance, s.Self, s.Form != Form.BerserkerStance);
+            : Do(s, BerserkerStance, s.Self, s.Form != Form.BerserkerStance && !s.KiteHolding); // Berserker is for Intercept, which a kite does not use
 }
