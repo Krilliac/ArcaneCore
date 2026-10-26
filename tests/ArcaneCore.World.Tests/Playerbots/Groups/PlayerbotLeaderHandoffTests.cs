@@ -237,6 +237,35 @@ public sealed class PlayerbotLeaderHandoffWorldTests
     }
 
     [Fact]
+    public async Task WithoutACatalogueRoute_WhileEveryCreatureLeftIsShunned_TheClearWaits_AndIsNeitherDoneNorRebuilt()
+    {
+        await using GroupTestWorld world = await StartAsync(rfc: false, dungeon: true);
+        await using WorldTestClient master = await world.World.EnterWorldAsync("HANDMASTER", Master, AccountSecurity.Player);
+        (Guid Id, string Name)[] bots = await AddBots(world, 3, level: 16);
+        await FormGroup(world, bots, raid: false);
+        await EnterInstance(world, bots, 36, new Vector3(-16.4f, -383.07f, DeadminesTestContent.InsideFloor));
+        await PassLead(world, bots[0]);
+        PlayerbotGroupCoordinator.BotGroup group = await Adopted(world);
+        PlayerbotClearList sweep = group.Handoff!.Sweep ?? throw new Xunit.Sdk.XunitException("the map has no catalogue route: a sweep was expected");
+
+        // The group gives up the only creature left for ten minutes (as a stalled fight or an unplanned path does).
+        await world.OnWorldAsync(() =>
+        {
+            Creature boss = world.Player(bots[0].Id).Map!.FindUpdater<CreatureMapSystem>()!.Creatures.Single(c => c.Entry == GroupTestWorld.BossEntry && c.IsAlive);
+            group.Shun(boss.Guid, world.World.Host.World.NowMs + 600_000u);
+            return true;
+        });
+        await world.RunAsync(10_000);
+
+        Assert.False(group.Succeeded, await world.TraceAsync());
+        Assert.NotEqual("completed", group.Reason);
+        Assert.Equal(0, world.Coordinator.HandoffTotals.Completed);
+        Assert.Contains(group, world.Coordinator.Groups);
+        Assert.False(sweep.Rebuilt); // the one rebuild is kept for grids loaded later
+        Assert.Equal(1, sweep.Remaining);
+    }
+
+    [Fact]
     public async Task ARaidOfTen_InTwoSubgroups_IsAdoptedWhole_AndKeepsItsSubgroups()
     {
         await using GroupTestWorld world = await StartAsync(rfc: true);
