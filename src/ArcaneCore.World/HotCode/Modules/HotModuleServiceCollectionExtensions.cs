@@ -68,7 +68,7 @@ public static class HotModuleServiceCollectionExtensions
 
     public static IServiceCollection AddHotModules(this IServiceCollection services)
     {
-        services.TryAddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath));
+        services.TryAddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath, logger: sp.GetService<ILogger<HotCodeAudit>>()));
         services.TryAddSingleton<IHotCodeWorld>(sp => new WorldRuntimeHotCodeWorld(sp.GetRequiredService<WorldRuntime>()));
         services.AddSingleton(sp => new ModuleHost(
             sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.Modules,

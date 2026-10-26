@@ -6,7 +6,7 @@ using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.Game.Spells.Interrupts;
 
 /// <summary>
-/// Per-map edge detector for vmangos ENVIRONMENT_FLAG_HIGH_LIQUID (D:\refs\vmangos\src\game\Objects\Player.cpp:
+/// Per-map edge detector for vmangos ENVIRONMENT_FLAG_HIGH_LIQUID (vmangos@0e3ff01 src/game/Objects/Player.cpp:
 /// 848-855, 20353-20419). Whenever a player's position changed since the last probe, ask the
 /// <see cref="ILiquidProbe"/>; on a change of the flag, entering deep liquid removes auras and stops channels
 /// carrying UNDER_WATER_CANCELS (0x80), leaving removes those carrying ABOVE_WATER_CANCELS (0x100). On the first

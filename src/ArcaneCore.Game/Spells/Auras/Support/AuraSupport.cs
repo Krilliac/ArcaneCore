@@ -23,7 +23,7 @@ public enum AuraSupportLevel
 /// <param name="Type">The aura type.</param>
 /// <param name="Level">How far it is implemented.</param>
 /// <param name="VmangosHandler">The Aura:: member vmangos dispatches the type to (SpellAuras.cpp AuraHandler[] table).</param>
-/// <param name="VmangosLine">The line of that table row in SpellAuras.cpp (D:\refs\vmangos at the pinned reference).</param>
+/// <param name="VmangosLine">The line of that table row in SpellAuras.cpp (vmangos@0e3ff01 at the pinned reference).</param>
 /// <param name="Consumers">Source files that reference the type, up to three (a hint, not an inventory).</param>
 /// <param name="Owner">The lane or slice that owns the missing part, empty when none is scheduled.</param>
 public sealed record AuraSupportEntry(AuraType Type, AuraSupportLevel Level, string VmangosHandler, int VmangosLine, string Consumers, string Owner);

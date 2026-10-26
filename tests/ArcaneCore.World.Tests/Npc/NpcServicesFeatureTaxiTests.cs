@@ -213,6 +213,29 @@ public sealed class NpcServicesFeatureTaxiTests
         Assert.Equal((0f, 0f), (stored.X, stored.Y));
     }
 
+    [Fact]
+    public async Task StopWorldFeatures_WhenTheStopDrainIsExhausted_KeepsTheRoute_AndNeverReturnsTheCharacterToDeparture()
+    {
+        var drain = new ShutdownDrain { Features = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(100) } };
+        await using var rig = await Rig.CreateAsync(drain);
+        rig.Store.Busy = true;
+        rig.Store.DelayMs = 150;
+        Player flyer = await rig.LoginAsync();
+        Assert.True(rig.Npcs.Flights!.StartFlight(flyer, [1, 2], [10], Gryphon));
+        rig.World.RunTick(1000);
+        rig.World.RemovePlayer(flyer);
+
+        AggregateException failed = await Assert.ThrowsAsync<AggregateException>(rig.Services.StopWorldFeaturesAsync);
+
+        InvalidOperationException inner = Assert.IsType<InvalidOperationException>(Assert.Single(failed.InnerExceptions));
+        Assert.Contains(rig.CharacterId.ToString(), inner.Message);
+        Assert.True(rig.Npcs.RouteWrites!.HasRetainedFailure(rig.CharacterId)); // the route stays retained: not abandoned, not converted into a delete
+        await rig.Saves.FlushCharacterAsync(rig.CharacterId);
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        Assert.InRange(stored.X, 20f, 44f); // the logout snapshot (mid-flight) stands: no departure-node snapshot was written over it
+        Assert.Equal(0, rig.Saves.Pending);
+    }
+
     /// <summary>
     /// The feature attached to a world whose character save queue is the one the feature resolves (as in the daemon), with
     /// a controllable route store, an in-memory character store, and the creature content that gives the gryphon a display.
@@ -243,7 +266,7 @@ public sealed class NpcServicesFeatureTaxiTests
         public NpcServicesFeature Npcs { get; }
         public int CharacterId { get; }
 
-        public static async Task<Rig> CreateAsync()
+        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null)
         {
             var store = new FakeTaxiStore();
             var characters = new InMemoryCharacterStore();
@@ -252,7 +275,13 @@ public sealed class NpcServicesFeatureTaxiTests
                 AccountId = 1, Name = "Flyer", Race = (byte)Race.Human, Class = (byte)Class.Warrior, Gender = (byte)Gender.Male,
                 Level = 1, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = Z,
             });
-            ServiceProvider services = new ServiceCollection()
+            var collection = new ServiceCollection();
+            if (drain is not null)
+            {
+                collection.AddSingleton(drain);
+            }
+
+            ServiceProvider services = collection
                 .AddSingleton<ICharacterTaxiFlightStore>(store)
                 .AddSingleton<ICharacterStore>(characters)
                 .AddSingleton(PathNodes)
@@ -314,6 +343,7 @@ public sealed class NpcServicesFeatureTaxiTests
         public async ValueTask DisposeAsync()
         {
             Store.FailWrites = false;
+            Store.Busy = false;
             Store.Release.TrySetResult();
             try
             {
@@ -355,6 +385,12 @@ public sealed class NpcServicesFeatureTaxiTests
         private int _hold;
 
         public volatile bool FailWrites;
+
+        /// <summary>Every write fails as SQLite reports a file another writer holds.</summary>
+        public volatile bool Busy;
+
+        /// <summary>Every write waits this long before its verdict.</summary>
+        public volatile int DelayMs;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -421,6 +457,16 @@ public sealed class NpcServicesFeatureTaxiTests
             {
                 Entered.TrySetResult();
                 await Release.Task.ConfigureAwait(false);
+            }
+
+            if (DelayMs > 0)
+            {
+                await Task.Delay(DelayMs).ConfigureAwait(false);
+            }
+
+            if (Busy)
+            {
+                throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
             }
 
             if (FailWrites)

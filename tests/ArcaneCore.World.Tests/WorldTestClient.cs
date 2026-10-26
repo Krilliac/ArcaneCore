@@ -168,8 +168,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// follows it until <paramref name="quiet"/> passes with nothing new. Every packet read is returned, including
     /// those that arrived before <paramref name="first"/>. Use this, not <see cref="CollectAsync"/>, right after
     /// sending a request: a loaded machine can take longer than the quiet window to answer at all.
+    /// <paramref name="readTimeout"/> bounds each read until <paramref name="first"/> (default: the read timeout); pass
+    /// <see cref="HandshakeTimeout"/> when the awaited reply is setup work such as a login.
     /// </summary>
-    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectFromAsync(WorldOpcode first, TimeSpan? quiet = null)
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectFromAsync(WorldOpcode first, TimeSpan? quiet = null, TimeSpan? readTimeout = null)
     {
         var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
         while (true)
@@ -177,7 +179,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
             (WorldOpcode Opcode, byte[] Payload) packet;
             try
             {
-                packet = await ReadAsync();
+                packet = await ReadAsync(readTimeout);
             }
             catch (OperationCanceledException ex)
             {

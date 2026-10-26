@@ -393,7 +393,7 @@ public sealed class ServerEngine : IDisposable
         TerrainTile tile = context.Map.Terrain.GetTile(index.X, index.Y);
 
         // The squares the lookup picks: GridMap::getHeightFromFloat's integer part of MAP_RESOLUTION * (32 - x / SIZE_OF_GRIDS), wrapped to the tile.
-        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:483-500 square index; D:/refs/vmangos/src/game/Maps/GridMap.cpp:291-299 x = MAP_RESOLUTION * (32 - x / SIZE_OF_GRIDS), masked to 0..127
+        // ref: src/ArcaneCore.Game/Maps/Terrain/TerrainTile.cs:483-500 square index; vmangos@0e3ff01 src/game/Maps/GridMap.cpp:291-299 x = MAP_RESOLUTION * (32 - x / SIZE_OF_GRIDS), masked to 0..127
         int row = (int)(GridDefines.MapResolution * (32 - (x / GridDefines.SizeOfGrids))) & (GridDefines.MapResolution - 1);
         int col = (int)(GridDefines.MapResolution * (32 - (y / GridDefines.SizeOfGrids))) & (GridDefines.MapResolution - 1);
         float z = tile.GetHeight(x, y);

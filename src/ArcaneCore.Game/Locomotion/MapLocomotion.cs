@@ -55,12 +55,12 @@ internal sealed class MapLocomotion : IMapUpdater
                 PendingMovementChange? enforce = state.Pending.CheckTimeout(environment.Options.PendingAckResponseTimeMs, teleporting, out _);
                 if (enforce is not null)
                 {
-                    // "Enforce the change": the client never acknowledged it (vmangos OnFailedToAckChange, then resolve).
+                    // The client never acknowledged it (vmangos OnFailedToAckChange, then resolve). A turn rate was already taken at send, so Enforce does not re-apply it but still announces it to everyone.
                     state.NoteFailedAck();
                     if (player.Session.WantsUpdateObjects)
                     {
                         map.Logger.LogWarning(
-                            "client did not acknowledge movement change {Type} (apply={Apply}, value={Value}, counter={Counter}) for player {Player} (guid={Guid}) on map {MapId} in {DeathState}; enforcing (failedAcks={FailedAcks})",
+                            "client did not acknowledge movement change {Type} (apply={Apply}, value={Value}, counter={Counter}) for player {Player} (guid={Guid}) on map {MapId} in {DeathState}; resolving (failedAcks={FailedAcks})",
                             enforce.Type, enforce.Apply, enforce.NewValue, enforce.Counter, player.Name, player.Guid.Low, map.MapId, player.Combat.DeathState, state.FailedAckCount);
                     }
 

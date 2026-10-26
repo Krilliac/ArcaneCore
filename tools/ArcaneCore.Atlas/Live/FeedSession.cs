@@ -482,7 +482,7 @@ internal sealed class FeedSession : IDisposable
 
         if (_expectedPid is { } expected)
         {
-            // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:214 (the hello reply carries "pid"), so a reply without it cannot be checked.
+            // ref: ATLAS-2026-10-18.md:214 (the hello reply carries "pid"), so a reply without it cannot be checked.
             if (hello.Pid is not { } actual)
             {
                 _hello.TrySetException(new CommandException(

@@ -57,6 +57,10 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         _host = new OutdoorPvPWorldHost(this);
+        // Attach runs before the world thread starts (WorldHost attaches every feature through FeatureHost.AttachAll before world.Start; the
+        // console "feature attach" only re-attaches an IDetachableWorldFeature, which this is not): read the saved Silithyst limit here, so that map creation on the world thread
+        // never waits on the database.
+        _silithystMax = LoadSilithystMax();
         WorldStateHooks.For(world).WorldStates.Add(this);
         world.Post(Install);
         world.WorldTick += OnWorldTick;
@@ -95,7 +99,7 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         OutdoorPvPZoneScript? script = map.MapId switch
         {
             EasternPlaguelandsCatalog.MapId => new EasternPlaguelandsZone(_host),
-            SilithusCatalog.MapId => new SilithusZone(_host, LoadSilithystMax()) { AreaTriggerPosition = TriggerPosition, Saved = SaveSilithyst },
+            SilithusCatalog.MapId => new SilithusZone(_host, _silithystMax) { AreaTriggerPosition = TriggerPosition, Saved = SaveSilithyst },
             _ => null,
         };
         if (script is null)
@@ -144,7 +148,7 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
 
     internal Map? MapOf(OutdoorPvPZoneScript script) => _scripts.FirstOrDefault(p => ReferenceEquals(p.Value, script)).Key;
 
-    /// <summary>vmangos SetupZoneScript: <c>GetSavedVariable(WS_OPVP_SI_SILITHYST_MAX, SI_MAX_RESOURCES_DEFAULT)</c>.</summary>
+    /// <summary>vmangos SetupZoneScript: <c>GetSavedVariable(WS_OPVP_SI_SILITHYST_MAX, SI_MAX_RESOURCES_DEFAULT)</c>. Blocks on the store: Attach time only.</summary>
     private uint LoadSilithystMax()
     {
         try
@@ -165,6 +169,8 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         return SilithusCatalog.DefaultMaxResources;
     }
 
+    private uint _silithystMax = SilithusCatalog.DefaultMaxResources;
+
     private StateSaveQueue<int, SilithystState>? _silithystSaves;
 
     /// <summary>The Silithyst counters' writer: off the world thread (a turn-in saved on it).</summary>
@@ -174,7 +180,11 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         if (scope.ServiceProvider.GetService<ISilithystStore>() is { } store) await store.SaveAsync(state).ConfigureAwait(false);
     }, logger, "Silithyst");
 
-    private void SaveSilithyst(uint alliance, uint horde, uint max) => SilithystSaves.Save(0, new SilithystState(alliance, horde, max));
+    private void SaveSilithyst(uint alliance, uint horde, uint max)
+    {
+        _silithystMax = max > 0 ? max : _silithystMax;
+        SilithystSaves.Save(0, new SilithystState(alliance, horde, max));
+    }
 
     /// <summary>Writes every queued Silithyst state before shutdown completes.</summary>
     public Task StopAsync() => _silithystSaves?.FlushAsync() ?? Task.CompletedTask;

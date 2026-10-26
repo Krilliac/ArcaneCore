@@ -1,7 +1,7 @@
 namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
-/// Furor on a shift into cat or bear (D:\refs\vmangos\src\game\Spells\SpellAuras.cpp:2512-2548, build
+/// Furor on a shift into cat or bear (vmangos@0e3ff01 src/game/Spells/SpellAuras.cpp:2512-2548, build
 /// branch after 1.11.2 where cat falls into the shared bear block). The chance is the amount of the player's
 /// Dummy aura with SpellIconID 238; the roll is irand(1,100) &lt;= chance. Cat then casts 17099 (energy 40),
 /// bear casts 17057 (rage 100 stored, i.e. 10 rage). Rank ids and amounts verified against classic-db:
