@@ -97,6 +97,9 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         return MathF.Max(rotationRange, _holdRange);
     }
 
+    /// <summary>Whether the kite is holding the bot at a range past melee now (what <see cref="RotationState.KiteHolding"/> reports).</summary>
+    private bool HoldsRange(Player player) => HoldRange(player, 0f) > PlayerbotClassRotation.MeleeRange;
+
     /// <summary>Whether a step is being walked.</summary>
     internal bool Walking => _routeSlot is { Complete: false };
 
@@ -124,6 +127,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     internal bool Update(Player player, Unit victim, uint interval, Vector3? leashCentre, float leashYards, PlayerbotRisk? risk,
         bool grouped = false)
     {
+        spells.KiteHolds ??= HoldsRange;
         PlayerbotKiteOptions kite = options.Combat.Kite;
         uint now = session.World.NowMs;
         if (!kite.Enabled || !player.IsAlive || !player.Combat.IsInCombat)

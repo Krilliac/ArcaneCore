@@ -313,11 +313,13 @@ internal abstract class PlayerbotClassRotation
     /// <summary>
     /// The ranged shot of a class that fights in melee: out of melee reach, standing still, with a ranged weapon equipped, the first
     /// of Shoot Bow, Shoot Gun, Shoot Crossbow and Throw the bot knows and can cast now (<see cref="RotationState.CanCast"/> judges the
-    /// weapon type, ammunition and range). An ordinary ability, not Auto Shot: one cast per use.
+    /// weapon type, ammunition and range). An ordinary ability, not Auto Shot: one cast per use. Only while the kite holds the bot at
+    /// range (<see cref="RotationState.KiteHolding"/>): otherwise the bot closes to melee instead of standing to shoot. Never at a
+    /// crowd-controlled victim, whose crowd control the damage would break.
     /// </summary>
     protected static RotationAction? RangedShot(RotationState s, RotationUnit victim)
     {
-        bool when = !victim.InMeleeRange && s.HasRangedWeapon && !s.IsMoving;
+        bool when = s.KiteHolding && !victim.IsCrowdControlled && !victim.InMeleeRange && s.HasRangedWeapon && !s.IsMoving;
         return Do(s, ShootBow, victim, when) ?? Do(s, ShootGun, victim, when) ?? Do(s, ShootCrossbow, victim, when) ?? Do(s, Throw, victim, when);
     }
 

@@ -82,12 +82,14 @@ nothing is hitting the bot in melee and Recently Bandaged has worn off; friendly
   Demoralizing Roar / Swipe, Maul; caster: Entangling Roots in a group, Insect Swarm, Moonfire, Starfire above 50%, Wrath.
   Abolish / Cure Poison, Remove Curse.
 
-Warriors and rogues with a ranged weapon equipped use it on a creature out of melee reach, standing still, in a fight: Shoot Bow, Shoot
+Warriors and rogues with a ranged weapon equipped use it, while the kite holds them at range (`RotationState.KiteHolding`, from
+`PlayerbotKite.HoldRange`; a bot that is not kiting closes to melee instead), on a creature out of melee reach, standing still, in a
+fight: Shoot Bow, Shoot
 Gun, Shoot Crossbow, Throw, in that order, the first known and castable (`RotationState.CanCast` judges the weapon type, ammunition
 and range). They are ordinary abilities, not Auto Shot, and come last in the warrior's list and after Sprint in the rogue's. The
-cast is made at a creature the bot is closing in on, so the bot stops for it; a pull out of combat is not changed. A rogue does not
-shoot or throw at a target whose crowd control breaks on damage (a Gouged creature: `RotationUnit.IsCrowdControlled`), so the shot
-does not undo the Gouge.
+cast is made at a creature the bot is closing in on, so the bot stops for it; a pull out of combat is not changed. Neither
+class shoots or throws at a target whose crowd control breaks on damage (a Gouged or polymorphed creature:
+`RotationUnit.IsCrowdControlled`), so the shot does not undo it.
 
 Deliberate differences from the party bots, for a bot that also grinds alone: a healer with nobody to heal fights with its damage
 spells instead of idling; tanks taunt a victim that turned to a group mate; rogues and cats finish early on a nearly dead victim;

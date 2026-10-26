@@ -102,7 +102,7 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
             ?? Do(s, DemoralizingShout, s.Self, tank && !v.HasAura(DemoralizingShout))
             // Rage dump on the next swing above 30 rage (vmangos :2645-2663).
             ?? (s.Power > 300 ? Do(s, Cleave, v, close > 1) ?? Do(s, HeroicStrike, v) : null)
-            ?? RangedShot(s, v);
+            ?? RangedShot(s, v); // only while the kite holds the range, never at a crowd-controlled target
     }
 
     /// <summary>Defensive Stance when low or tanking an equal-level enemy, Berserker Stance otherwise (vmangos :2583-2600).</summary>

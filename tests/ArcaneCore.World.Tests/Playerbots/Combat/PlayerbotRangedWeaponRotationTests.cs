@@ -19,7 +19,9 @@ public sealed class PlayerbotRangedWeaponRotationTests
         Hostile("Shoot Bow", 0), Hostile("Shoot Gun", 0), Hostile("Shoot Crossbow", 0), Hostile("Throw", 0),
     ];
 
-    private static void WithRangedWeapon(RotationStateBuilder s) => s.HasRangedWeapon = true;
+    private static void WithRangedWeapon(RotationStateBuilder s) { s.HasRangedWeapon = true; s.KiteHolding = true; }
+
+    private static void WithRangedWeaponNoKite(RotationStateBuilder s) => s.HasRangedWeapon = true;
 
     [Fact]
     public void AWarriorAtTwentyYardsWithABow_ShootsIt()
@@ -101,6 +103,33 @@ public sealed class PlayerbotRangedWeaponRotationTests
         Assert.Null(Next(Rogue.InCombat(gouged)));
         RotationState free = State(Rogue, [Hostile("Throw", 0)], Self(4), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
         Assert.Equal("Throw", Next(Rogue.InCombat(free)));
+    }
+
+    [Fact]
+    public void AHealthyWarriorOutOfMelee_WhoseKiteIsNotHolding_DoesNotShoot_ItClosesToMelee()
+    {
+        // Review finding: the shot used to fire for any stationary warrior out of melee, so the brain (which runs the rotation before
+        // positioning) never walked it in to its melee rotation.
+        RotationState idle = State(Warrior, Shots, Self(1), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeaponNoKite);
+        Assert.Null(Next(Warrior.InCombat(idle)));
+        RotationState holding = State(Warrior, Shots, Self(1), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Equal("Shoot Bow", Next(Warrior.InCombat(holding)));
+    }
+
+    [Fact]
+    public void AHealthyRogueOutOfMelee_WhoseKiteIsNotHolding_DoesNotThrow()
+    {
+        RotationState idle = State(Rogue, [Hostile("Throw", 0)], Self(4), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeaponNoKite);
+        Assert.Null(Next(Rogue.InCombat(idle)));
+    }
+
+    [Fact]
+    public void AWarriorDoesNotShoot_AtACrowdControlledTarget_WhoseCrowdControlBreaksOnDamage()
+    {
+        RotationState polymorphed = State(Warrior, Shots, Self(1), Victim(20f, crowdControlled: true), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Null(Next(Warrior.InCombat(polymorphed)));
+        RotationState free = State(Warrior, Shots, Self(1), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Equal("Shoot Bow", Next(Warrior.InCombat(free)));
     }
 
     [Fact]
