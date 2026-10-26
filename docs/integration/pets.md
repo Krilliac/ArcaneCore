@@ -2,7 +2,7 @@
 
 Standing directive: everything as close to vanilla 1.12.1 as the real references allow, mechanics and
 data. References (GPL, read-only; nothing is copied into the repo): vmangos
-(`D:\refs\vmangos`, primary), wow_messages (`D:\refs\wow_messages`, wire layouts), mangos-classic,
+(`<refs-root>\vmangos`, primary), wow_messages (`<refs-root>\wow_messages`, wire layouts), mangos-classic,
 classic-db. Every behaviour below cites the vmangos file and line it was checked against.
 
 ## Delivered scope

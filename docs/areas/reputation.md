@@ -5,8 +5,8 @@ the lane delivered on top of the round-2 core, every deviation from retail with 
 The round-2 core (catalog, per-player state, packets, storage, write durability) is documented in
 [../integration/reputation.md](../integration/reputation.md); where that page and this one disagree, this one is current.
 
-Retail 1.12.1 is the target for mechanics and data. References are read-only: `D:\refs\vmangos` (primary, HEAD `0e3ff01`; line numbers
-below are for that checkout), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db` (Full_DB z2815), no code or data copied.
+Retail 1.12.1 is the target for mechanics and data. References are read-only: `<refs-root>\vmangos` (primary, HEAD `0e3ff01`; line numbers
+below are for that checkout), `<refs-root>\mangos-classic`, `<refs-root>\wow_messages`, `<refs-root>\classic-db` (Full_DB z2815), no code or data copied.
 
 ## Delivered
 
@@ -80,7 +80,7 @@ so the step is exactly one `CreateTableChange` per table; PostgreSQL has no unsi
 mapping. `ReputationTemplatesStoreTests` are provider theories over `TestDatabases.AvailableProviders` (round trip, duplicate keys,
 re-ensuring, an interrupted step). On this machine only SQLite ran; MariaDB and PostgreSQL run on hosted CI.
 
-## Real-client acceptance checklist (Nathan clicks, Claude reads logs and rows)
+## Real-client acceptance checklist (the maintainer clicks, Claude reads logs and rows)
 
 1. Open the reputation pane: factions and scrolling; toggle at war and relog (persists).
 2. Kill a Booty Bay pirate: Booty Bay rises and spills to Gadgetzan, Ratchet and Everlook.

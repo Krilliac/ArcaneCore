@@ -2,7 +2,7 @@
 
 Branch `claude/vw5-battlegrounds` (wave 4, lane `battlegrounds`, based on `claude/vw4-integration` 7313b9e). Merge notes are in
 [docs/integration/battlegrounds.md](../integration/battlegrounds.md). Directive: everything as close to retail 1.12.1 as possible,
-mechanics and data, verified against the vmangos reference (`D:\refs\vmangos`, primary), mangos-classic, wow_messages and
+mechanics and data, verified against the vmangos reference (`<refs-root>\vmangos`, primary), mangos-classic, wow_messages and
 classic-db. Nothing from those trees is copied: the code is a re-implementation, the tests carry hand-written wire bytes and a few
 quoted constants, and every rule cites `file:line` in its doc comment.
 
@@ -158,7 +158,7 @@ inert default.
   `spell_script_target`), which classic-db has no rows for (the core resolves TARGET 38 from those rows since world 45): a live summoner does not take control of its
   shredder, so the one-shredder rule only holds against a summoner who controls it some other way. Snivvle yells 70 s in and the captains
   yell with their buffs (mangos_string 791-793; these rows are not in the string table here, so those yells are logged once and not sent).
-  classic-db z2815 has row 790 but not 791-793; vmangos' Language.h:831 marks 791-799 as unused, and vmangos' own sql (D:/refs/vmangos/sql,
+  classic-db z2815 has row 790 but not 791-793; vmangos' Language.h:831 marks 791-799 as unused, and vmangos' own sql (`<refs-root>/vmangos/sql`,
   every migration and old migration searched) has no mangos_string row 791-793 either (the only rows with those ids belong to other tables),
   so the text exists in neither local reference: the yells stay silent, a content gap, not a code one.
 - **Alterac Valley assault scripts** (`Battlegrounds/AlteracValleyScripts`, vmangos battleground_alterac.cpp:1230-4500; `AlteracValleyScripts`

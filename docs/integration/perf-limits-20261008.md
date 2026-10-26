@@ -1,7 +1,7 @@
 # Limiters and tick timing after the live stress test (2026-10-08)
 
 Base: `45ee84af` (origin/main), branch `claude/perf-limits`. Input: the live stress test of 2026-10-08 16:04-16:37
-(`D:/ArcaneCore-lanes/_plan/live-stress-20261008.md`), which stopped at 21 players because two configured caps refused
+(`<lanes-root>/_plan/live-stress-20261008.md`), which stopped at 21 players because two configured caps refused
 the ramp long before the tick budget was under pressure, and which recorded a jittery tick cadence and 400-850 ms stalls.
 Nothing here was measured on the live server: every number below comes from a test harness in this repository, on the
 shared development machine (other agents were building and testing; machine CPU and memory load were not controlled).
@@ -19,7 +19,7 @@ Why running bots only: the option's own documentation always said "the most mana
 (10 slots: 5 running, 5 stopped) could neither create nor (without stopping something) usefully start a bot. vmangos bounds bots
 that are online, not stored characters: `RandomBot.MaxBots` (`PlayerBotMgr.cpp:55`) is the upper end of "Between %u and %u
 bots online" (`:143`), kept as `confMaxOnline` beside a separate `totalBots` count of registered bots (`:134-136`). That is
-the convention followed here (read in `D:/refs/vmangos`, nothing copied). Lowering `MaxBots` below the running count **stops nobody**:
+the convention followed here (read in `<refs-root>/vmangos`, nothing copied). Lowering `MaxBots` below the running count **stops nobody**:
 new starts, startup restores and quarantine retries are refused (`playerbot-capacity`; a retry waits for a slot) until
 enough bots are stopped. Stopping the newest bots automatically was rejected: it would turn a configuration reload into
 character logouts nobody asked for.
@@ -176,11 +176,11 @@ it is.
 
 ## 6. Stress script
 
-`D:/ArcaneCore-lanes/_deploy/stress-20261008-1604/stress.py bots` (outside the repository): `.playerbot create Stressbot<xx>
+`<deploy-root>/stress-20261008-1604/stress.py bots` (outside the repository): `.playerbot create Stressbot<xx>
 <race> <class>` (ten valid race/class pairs, both factions) and `.playerbot start` up to each of `STRESS_BOT_STEPS` (default
 10,25,50,100,200,300,400) with the same `.server info` sampling and stop rules as the client ramp (commit and World private-bytes
 headroom projected from the per-bot growth of the previous step, p95 over budget for a whole step, >10 % overruns, >50
-ERROR/FATAL lines, Nathan's running bots not running, >10 % of the stress bots not running, `playerbot-capacity` /
+ERROR/FATAL lines, the maintainer's running bots not running, >10 % of the stress bots not running, `playerbot-capacity` /
 `playerbot-registry-full`), then stops (never deletes) the stress bots and samples recovery. `STRESS_BIN`,
 `STRESS_WORLD_PID`, `STRESS_WORLD_LOG` point it at a redeployed World. It needs a World with this branch and `MaxBots` above the
 last step plus the bots already running (raise it live with `.reload config`). It has not been run.

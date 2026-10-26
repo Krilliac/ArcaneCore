@@ -227,7 +227,7 @@ Another process on the same file (the realm daemon on a shared auth file, a DB t
 
 `SqliteWriteGateTests.ManyConcurrentWriteTransactions_AllCommit_WithoutABusyFailure` runs 16 concurrent EF writers x 25 transactions, each
 holding the lock about 8 ms, against one file with a 300 ms busy timeout (the test runs with the live 5 s write bound). With a 1 s write bound
-**33 of 400 transactions failed as locked with the gate off, none with it on** (Debug build, Nate's PC, 2026-10-17).
+**33 of 400 transactions failed as locked with the gate off, none with it on** (Debug build, the maintainer's PC, 2026-10-17).
 
 Live (enabled at redeploy #4, 8:31 PM CT 2026-10-17): the previous 24 h log had 246 "database is locked" entries (33 writer failures,
 the rest crash-ledger copies), 37 save-backlog warnings (peak 1000 characters, oldest 130 s) and 34 slow transactions. The first minutes with

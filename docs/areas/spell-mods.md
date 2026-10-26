@@ -6,9 +6,9 @@ charged modifiers (Clearcasting, Nature's Grace, Nature's Swiftness, Shadow Tran
 vmangos, and the client is told. Talents become **data**: a talent rank spell is a passive with aura 107 or 108, so learning it
 through the talents area (`docs/areas/talents.md`) is all it takes; there is no per-talent code.
 
-References (read-only, never copied): **vmangos** `D:\refs\vmangos` (primary), **mangos-classic** `D:\refs\mangos-classic` (where it
-differs), **wow_messages** `D:\refs\wow_messages` (`wowm/world/spell/smsg_set_flat_spell_modifier.wowm`,
-`smsg_set_pct_spell_modifier.wowm`), **classic-db** `D:\refs\classic-db` (`spell_affect`). Every formula below cites its source line.
+References (read-only, never copied): **vmangos** `<refs-root>\vmangos` (primary), **mangos-classic** `<refs-root>\mangos-classic` (where it
+differs), **wow_messages** `<refs-root>\wow_messages` (`wowm/world/spell/smsg_set_flat_spell_modifier.wowm`,
+`smsg_set_pct_spell_modifier.wowm`), **classic-db** `<refs-root>\classic-db` (`spell_affect`). Every formula below cites its source line.
 No retail data is copied: every spell in the tests is a synthetic talent shape.
 
 ## Delivered
