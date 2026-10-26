@@ -67,6 +67,13 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
                 Service.Content = store.LoadAsync().GetAwaiter().GetResult();
                 _logger.LogInformation("Loaded {Stats} pet level stat sets and {Spells} pet spell lists",
                     Service.Content.LevelStatsEntryCount, Service.Content.CreateSpellEntryCount);
+                if (Service.Content.LevelStatsEntryCount == 0 || Service.Content.CreateSpellEntryCount == 0)
+                {
+                    _logger.LogWarning(
+                        "Pet data is incomplete ({Stats} level stat sets, {Spells} spell lists): summoned pets keep template stats and start without spells. "
+                        + "Import pet_levelstats and petcreateinfo_spell with arcane-content-importer from a classic-db dump and apply sql/content/world/<provider>/0002_pet_create_spells.sql",
+                        Service.Content.LevelStatsEntryCount, Service.Content.CreateSpellEntryCount);
+                }
             }
         }
 

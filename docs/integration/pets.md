@@ -333,3 +333,12 @@ fields. The limits above that mention totem spells, placement radii and `ITotemS
 lane; see `docs/areas/class-shaman-paladin.md` for the totem limits. The lane's `TotemTests` were deleted with the code;
 the same behaviours (placement, slots, duration, ownership) are covered by `tests/ArcaneCore.Game.Tests/ClassSpells/Totems`.
 `pet_levelstats` / `petcreateinfo_spell` is World schema 16.
+
+## Pet data import and shipped create spells
+
+`arcane-content-importer import` fills `pet_levelstats` and `petcreateinfo_spell` from a classic-db dump (`PetDumpImporter`; the
+sibling `pet_levelstats_copy` table is ignored, levels outside 1..60 and creatures without a level 1 row are dropped with a warning).
+`sql/content/world/<provider>/0002_pet_create_spells.sql` seeds the seven `petcreateinfo_spell` rows on a database that never ran the
+importer (Imp 416 learns Firebolt 3110, and so on); it deletes and re-inserts only those seven entries. `pet_levelstats` is not shipped
+as SQL (about 1,560 rows of GPL classic-db data): run the importer for it. With either table empty `PetsFeature` logs a warning at
+start-up. Hunter Growl is not in `petcreateinfo_spell`: a freshly tamed pet learns it through Beast Training.

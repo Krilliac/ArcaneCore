@@ -253,6 +253,10 @@ public static class ContentTableSpecs
         new("player_xp_for_level", [new KeyColumn("lvl")], ["xp_for_next_level"], []),
         new("player_crit_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
         new("player_dodge_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
+        // PetDumpImporter: classic-db names pet_levelstats' entry creature_entry and has no damage columns (docs/integration/pets.md).
+        new("pet_levelstats", [new KeyColumn("creature_entry", "entry"), new KeyColumn("level")],
+            ["hp", "health", "mana", "armor", "str", "strength", "agi", "agility", "sta", "stamina", "inte", "intellect", "spi", "spirit", "dmg_min", "dmg_max"], []),
+        new("petcreateinfo_spell", [new KeyColumn("entry")], ["Spell1", "Spell2", "Spell3", "Spell4"], []),
         new("npc_gossip", [new KeyColumn("npc_guid")], [], [], c => NpcDumpImporter.ReadsColumn("npc_gossip", c)),
         new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
         new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),

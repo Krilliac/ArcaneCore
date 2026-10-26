@@ -18,6 +18,7 @@ using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Data.World.PlayerStats;
+using ArcaneCore.Data.World.Pets;
 using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -375,6 +376,7 @@ public static partial class ContentImporterCli
         var graveyards = new GraveyardDumpImporter();
         var totems = new TotemSpellDumpImporter();
         var playerStats = new PlayerStatsDumpImporter();
+        var pets = new PetDumpImporter();
         var startingSkills = new StartingSkillDumpImporter();
         var npc = new NpcDumpImporter();
         var conditions = new ConditionsDumpImporter();
@@ -438,6 +440,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             totems.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pets.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -544,6 +551,7 @@ public static partial class ContentImporterCli
         GraveyardImportReport graveyardReport = graveyards.BuildReport();
         TotemSpellImportReport totemReport = totems.Resolve().Report;
         PlayerStatsImportReport statsReport = playerStats.BuildReport();
+        PetImportReport petReport = pets.BuildReport();
         StartingSkillImportReport startingSkillReport = startingSkills.BuildReport();
         NpcImportReport npcReport = npc.BuildReport();
         ConditionsImportReport conditionsReport = conditions.BuildReport();
@@ -571,6 +579,7 @@ public static partial class ContentImporterCli
                     graveyardReport = await graveyards.WriteAsync(db, replace, token).ConfigureAwait(false);
                     totemReport = await totems.WriteAsync(db, replace, token).ConfigureAwait(false);
                     statsReport = await playerStats.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    petReport = await pets.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startingSkillReport = await startingSkills.WriteAsync(db, replace, token).ConfigureAwait(false);
                     npcReport = await npc.WriteAsync(db, replace, token).ConfigureAwait(false);
                     conditionsReport = await conditions.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -594,6 +603,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(locationReport.Warnings);
         warnings.AddRange(graveyardReport.Warnings);
         warnings.AddRange(statsReport.Warnings);
+        warnings.AddRange(petReport.Warnings);
         warnings.AddRange(startingSkillReport.Warnings);
         warnings.AddRange(npcReport.Diagnostics);
         warnings.AddRange(battlegroundReport.Warnings);
@@ -641,6 +651,9 @@ public static partial class ContentImporterCli
         imported["player_crit_per_agility"] = statsReport.CritRows;
         imported["player_dodge_per_agility"] = statsReport.DodgeRows;
         skipped["player_stats_rows"] = statsReport.SkippedRows;
+        imported["pet_levelstats"] = petReport.LevelStats;
+        imported["petcreateinfo_spell"] = petReport.CreateSpells;
+        skipped["pet_rows"] = petReport.SkippedRows;
         imported["playercreateinfo_skills"] = startingSkillReport.Rows;
         skipped["playercreateinfo_skills_rows"] = startingSkillReport.SkippedRows;
         imported["npc_gossip"] = npcReport.NpcGossips;
