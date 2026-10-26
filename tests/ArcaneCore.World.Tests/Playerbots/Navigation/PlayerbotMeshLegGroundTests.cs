@@ -100,8 +100,124 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
         Assert.Equal("NoGroundSupport", reason);
     }
 
+    // ---- Review F1-F4 and the shared floor rule ----
+
+    /// <summary>Blocks the sight line from the start's chest to any chest lower than <paramref name="minChestZ"/> (a ramp lip).</summary>
+    private static Func<Vector3, Vector3, bool> SightAbove(float minChestZ) => (_, to) => to.Z >= minChestZ;
+
+    /// <summary>
+    /// F1: the leg's mesh floor is 8.1 yd under the chord and behind a lip, the chord itself in clear sight over the drop. Before, the
+    /// line-of-sight fallback put the bot back on the chord (28 yd over the model floor: convicted as airwalk). Now refused.
+    /// </summary>
+    [Fact]
+    public async Task F1_MeshFloorBehindLip_FallbackToChord_IsRefused()
+    {
+        Vector3 from = new(X, Y, 1339.6f);
+        Vector3 to = new(X + 4.7f, Y - 3.5f, 1316.6f);
+        Vector3 half = Vector3.Lerp(from, to, 0.5f);
+        (Vector3? walked, string? reason) = await ValidateAsync(from, to, half, modelFloor: 1300f, meshFloor: (_, _) => half.Z - 8.1f,
+            lineOfSight: SightAbove(half.Z + PlayerbotMoveCheck.ChestYards - 0.5f));
+        Assert.Null(walked);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    /// <summary>
+    /// F2: inside a model below the terrain the mesh floor is 7 yd above the chord but behind the tunnel roof (no sight line, no mesh
+    /// walk). Before, the bot was raised onto it with no check. Now refused.
+    /// </summary>
+    [Fact]
+    public async Task F2_UnderMapRaise_WithoutSightOrMeshWalk_IsRefused()
+    {
+        Vector3 from = new(X, Y, 1312.6f);
+        Vector3 to = new(X + 6f, Y, 1340f);
+        Vector3 candidate = Vector3.Lerp(from, to, 0.1f);
+        (Vector3? walked, string? reason) = await ValidateAsync(from, to, candidate, modelFloor: null,
+            meshFloor: (x, _) => x < X + 0.1f ? 1312.6f : candidate.Z + 7f, terrainHeight: 1330.6f + 4f,
+            lineOfSight: (_, t) => t.Z < candidate.Z + 7f);
+        Assert.Null(walked);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    /// <summary>
+    /// F3: stacked floors under a steep leg's chord, a ramp 4.3 yd over it and the cliff floor 30.7 yd under it. The search is centred
+    /// on the chord's height, so the ramp wins. Before, centred on the leg window's midpoint, the bot snapped 30 yd down.
+    /// </summary>
+    [Fact]
+    public async Task F3_StackedFloors_NearestToTheChordWins()
+    {
+        Vector3 from = new(X, Y, 195.6f);
+        Vector3 to = new(X + 11f, Y + 2.8f, 135.9f);
+        Vector3 quarter = Vector3.Lerp(from, to, 0.25f);
+        (Vector3? walked, string? reason, PlayerbotMotionAnomalies.GroundVerdict verdict) = await ValidateAsync(from, to, quarter,
+            modelFloor: 160f, meshFloors: (_, _) => [150f, 185f], terrainHeight: null, lineOfSight: null, judge: true);
+        Assert.True(walked is not null, $"refused: {reason}");
+        Assert.Equal(185.05f, walked!.Value.Z, 0.01f);
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Ok, verdict);
+    }
+
+    /// <summary>
+    /// F4 and the real cliff: a leg that ends at the bottom of a drop whose only polygon is that bottom (inside the leg window, 44.7 yd
+    /// under the chord, no mesh walk to it). Before, the bot dropped onto it. Now refused by the step limit.
+    /// </summary>
+    [Fact]
+    public async Task F4_SinglePolygonAtTheBottomOfADrop_InsideTheLegWindow_IsRefused()
+    {
+        Vector3 from = new(X, Y, 195.6f);
+        Vector3 to = new(X + 11f, Y + 2.8f, 135.9f);
+        Vector3 quarter = Vector3.Lerp(from, to, 0.25f);
+        (Vector3? walked, string? reason) = await ValidateAsync(from, to, quarter, modelFloor: 160f, meshFloor: (_, _) => 136f);
+        Assert.Null(walked);
+        Assert.Equal("NoGroundSupport", reason);
+    }
+
+    /// <summary>
+    /// The shared floor rule: whatever the mover returns on a steep leg is not convicted by the airwalk judge, across sight-line and
+    /// mesh-floor cases (F1's lip included, where it used to return the chord and the judge convicted it).
+    /// </summary>
+    [Theory]
+    [InlineData(4.5f, false)]
+    [InlineData(6f, false)]
+    [InlineData(8.1f, false)]
+    [InlineData(8.1f, true)]
+    [InlineData(10.5f, true)]
+    [InlineData(-3f, true)]
+    public async Task SharedFloor_AnyPointTheMoverReturns_IsNotAirwalk(float underChord, bool lip)
+    {
+        Vector3 from = new(X, Y, 1339.6f);
+        Vector3 to = new(X + 4.7f, Y - 3.5f, 1316.6f);
+        Vector3 half = Vector3.Lerp(from, to, 0.5f);
+        (Vector3? walked, string? reason, PlayerbotMotionAnomalies.GroundVerdict verdict) = await ValidateAsync(from, to, half,
+            modelFloor: 1300f, meshFloors: (_, _) => [half.Z - underChord], terrainHeight: null,
+            lineOfSight: lip ? SightAbove(half.Z + PlayerbotMoveCheck.ChestYards - 0.5f) : null, judge: true);
+        Assert.True(walked is null || verdict == PlayerbotMotionAnomalies.GroundVerdict.Ok,
+            $"returned {walked} ({reason}) but the judge says {verdict}");
+    }
+
+    /// <summary>A real airwalk is still convicted: 28 yd over the model floor with no mesh floor in the judge's window.</summary>
+    [Theory]
+    [InlineData(8.1f)]   // a polygon 8.1 yd down: under the judge's 6 yd window
+    [InlineData(-3f)]    // a polygon 3 yd up: over its 2 yd cap (never higher)
+    [InlineData(float.NaN)] // no polygon at all
+    public async Task RealAirwalk_IsStillConvicted(float meshUnder)
+    {
+        Vector3 at = new(X, Y, 1328.1f);
+        (_, _, PlayerbotMotionAnomalies.GroundVerdict verdict) = await ValidateAsync(at, at, at, modelFloor: 1300f,
+            meshFloors: (_, _) => float.IsNaN(meshUnder) ? [] : [at.Z - meshUnder], terrainHeight: null, lineOfSight: null,
+            judge: true, judgeAt: at);
+        Assert.Equal(PlayerbotMotionAnomalies.GroundVerdict.Airwalk, verdict);
+    }
+
     private async Task<(Vector3? Walked, string? Reason)> ValidateAsync(Vector3 from, Vector3 to, Vector3 candidate, float? modelFloor,
-        Func<float, float, float?> meshFloor, float? terrainHeight = null)
+        Func<float, float, float?> meshFloor, float? terrainHeight = null, Func<Vector3, Vector3, bool>? lineOfSight = null)
+    {
+        (Vector3? walked, string? reason, _) = await ValidateAsync(from, to, candidate, modelFloor,
+            (x, y) => meshFloor(x, y) is { } f ? [f] : [], terrainHeight, lineOfSight, judge: false);
+        return (walked, reason);
+    }
+
+    private async Task<(Vector3? Walked, string? Reason, PlayerbotMotionAnomalies.GroundVerdict Verdict)> ValidateAsync(Vector3 from,
+        Vector3 to, Vector3 candidate, float? modelFloor, Func<float, float, float[]> meshFloors, float? terrainHeight,
+        Func<Vector3, Vector3, bool>? lineOfSight, bool judge, Vector3? judgeAt = null)
     {
         if (terrainHeight is { } terrain)
         {
@@ -120,11 +236,16 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
         {
             return await host.OnWorldAsync(() =>
             {
-                WorldCollision.Of(host.World).Install(lineOfSight: new ModelFloor(modelFloor), pathfinder: new MeshFloors(meshFloor));
+                WorldCollision.Of(host.World).Install(lineOfSight: new ModelFloor(modelFloor, lineOfSight), pathfinder: new MeshFloors(meshFloors));
                 Map map = session.Player!.Map!;
+                if (judgeAt is { } point)
+                    return ((Vector3?)null, (string?)null, PlayerbotMotionAnomalies.JudgeFloor(map.Collision, point, out _, out _));
                 var route = new PlayerbotRoute([from, to], Vector3.Distance(from, to), navigated: true) { MeshPoints = [from, to] };
                 Vector3? walked = PlayerbotMotion.Validate(map, route, 1, 1, from, candidate, out string? reason);
-                return (walked, reason);
+                PlayerbotMotionAnomalies.GroundVerdict verdict = walked is { } w
+                    ? PlayerbotMotionAnomalies.JudgeFloor(map.Collision, w, out _, out _)
+                    : PlayerbotMotionAnomalies.GroundVerdict.Ok;
+                return (walked, reason, verdict);
             });
         }
         finally
@@ -135,11 +256,11 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
     }
 
     /// <summary>One model floor at a fixed height everywhere (or none), and a clear line of sight.</summary>
-    private sealed class ModelFloor(float? floor) : ILineOfSight
+    private sealed class ModelFloor(float? floor, Func<Vector3, Vector3, bool>? lineOfSight = null) : ILineOfSight
     {
         public bool Enabled => true;
 
-        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => lineOfSight?.Invoke(from, to) ?? true;
 
         public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
         {
@@ -157,8 +278,11 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
         }
     }
 
-    /// <summary>A mesh whose walk along the surface is unavailable (no detail surface under the chord) and whose floor query answers per X/Y.</summary>
-    private sealed class MeshFloors(Func<float, float, float?> surfaceAt) : IPathfinder, IMeshPointQuery, IMeshFloorQuery
+    /// <summary>
+    /// A mesh whose walk along the surface is unavailable (no detail surface under the chord) and whose floor query answers per X/Y
+    /// with the stacked surface nearest the query box's centre (z + (above - below) / 2), as Detour's nearest-polygon query ranks them.
+    /// </summary>
+    private sealed class MeshFloors(Func<float, float, float[]> surfacesAt) : IPathfinder, IMeshPointQuery, IMeshFloorQuery
     {
         public bool Enabled => true;
 
@@ -175,9 +299,16 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
         public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
         {
             height = 0f;
-            if (surfaceAt(x, y) is not { } surface || surface < z - below || surface > z + above) return false;
-            height = surface;
-            return true;
+            float centre = z + (above - below) / 2f;
+            bool found = false;
+            foreach (float surface in surfacesAt(x, y))
+            {
+                if (surface < z - below || surface > z + above) continue;
+                if (!found || MathF.Abs(surface - centre) < MathF.Abs(height - centre)) height = surface;
+                found = true;
+            }
+
+            return found;
         }
     }
 }

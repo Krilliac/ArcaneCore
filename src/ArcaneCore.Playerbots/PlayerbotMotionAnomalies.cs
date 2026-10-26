@@ -390,12 +390,27 @@ internal static class PlayerbotMotionAnomalies
         return floor;
     }
 
+    /// <summary>
+    /// The one floor rule shared by the airwalk judge (<see cref="CheckGround"/>), the login floor fix and the mover's mesh-floor
+    /// paths (<see cref="PlayerbotMotion.Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3, out string?)"/>): the floor under
+    /// <paramref name="at"/> (<see cref="FloorUnder"/>) and the verdict on it (<see cref="JudgeGround"/>). A point the mover returns
+    /// from a mesh floor passes this, so the judge never convicts it.
+    /// </summary>
+    internal static GroundVerdict JudgeFloor(MapCollision collision, Vector3 at, out float floor, out UnderMapVerdict underMap)
+    {
+        floor = FloorUnder(collision, at);
+        return JudgeGround(at, floor, collision.LineOfSight.Enabled, collision, out underMap);
+    }
+
+    /// <summary>Whether <paramref name="at"/> passes the shared floor rule (<see cref="JudgeFloor"/> is <see cref="GroundVerdict.Ok"/>).</summary>
+    internal static bool StandsOnFloor(MapCollision collision, Vector3 at)
+        => JudgeFloor(collision, at, out _, out _) == GroundVerdict.Ok;
+
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !at.IsFinite()) return;
-        float floor = FloorUnder(map.Collision, at);
-        GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
+        GroundVerdict verdict = JudgeFloor(map.Collision, at, out float floor, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok)
         {
             watch.EndPlace(Code.UnderMap);

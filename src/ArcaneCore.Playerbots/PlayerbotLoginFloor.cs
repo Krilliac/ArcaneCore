@@ -120,10 +120,7 @@ internal static class PlayerbotLoginFloor
         float height = player.Locomotion.CollisionHeight;
         bool StandsOk(Vector3 point)
         {
-            float floor = PlayerbotMotionAnomalies.FloorUnder(collision, point);
-            PlayerbotMotionAnomalies.GroundVerdict verdict = PlayerbotMotionAnomalies.JudgeGround(
-                point, floor, collision.LineOfSight.Enabled, collision, out _);
-            return verdict == PlayerbotMotionAnomalies.GroundVerdict.Ok || PlayerbotWater.Submerged(map, point, height);
+            return PlayerbotMotionAnomalies.StandsOnFloor(collision, point) || PlayerbotWater.Submerged(map, point, height);
         }
 
         HomeBindOnMap(player, map, out Vector3? home);
