@@ -7,7 +7,8 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// <summary>
 /// GossipHello/GossipSelect_npc_reginald_windsor (stormwind_city.cpp at 3e8597afe7): once he waits outside the keep, a player with 6402
 /// rewarded and 6403 not complete may tell him to go in (text 5633, option script_gossip -3000107 from classic-db z2815). Otherwise his
-/// own gossip.
+/// own gossip. Difference (deliberate port choice): SelectReply checks the Hello conditions again, which the reference select does not,
+/// because a cached menu outlives the Gossip flag.
 /// </summary>
 public sealed class ReginaldWindsorGossip(Func<Player, PlayerQuestLog?> quests) : INpcGossipScript
 {

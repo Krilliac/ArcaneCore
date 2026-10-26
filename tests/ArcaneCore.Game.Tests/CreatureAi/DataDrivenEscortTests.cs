@@ -1200,6 +1200,8 @@ public sealed class DataDrivenEscortTests
             system.NearTeleport(throneGuards[0], throne.X + 8, throne.Y + 4, throne.Z, 0f);
             system.NearTeleport(throneGuards[1], throne.X + 8, throne.Y, throne.Z, 0f);
             ai.StartKeepEvent();
+            int sceneStart = ai.DialogueStep; // an absolute index into the dialogue table: where the keep scene begins
+            Assert.True(sceneStart >= 0);
             for (int elapsed = 0; elapsed < 30_000 && ai.HasEscortState(EscortAI.EscortState.Paused); elapsed += 100)
             {
                 world.RunTick(100);
@@ -1210,17 +1212,21 @@ public sealed class DataDrivenEscortTests
             if (replayStart)
             {
                 // The cached menu outlives the Gossip flag: replay the start by the method and by the gossip select packet's script.
-                for (int elapsed = 0; elapsed < 30_000 && ai.DialogueStep < 2; elapsed += 100)
+                for (int elapsed = 0; elapsed < 30_000 && ai.DialogueStep <= sceneStart; elapsed += 100)
                 {
                     world.RunTick(100);
                 }
 
                 int step = ai.DialogueStep;
-                Assert.True(step >= 2, $"the keep scene never advanced (step {step})");
+                Assert.True(step > sceneStart, $"the keep scene never advanced past its first step (start {sceneStart}, step {step})");
                 ai.StartKeepEvent();
                 Assert.Equal(step, ai.DialogueStep);
                 NpcInfo info = new(windsor.Guid, entry, 1, NpcFlags.Gossip, windsor.MapId, windsor.X, windsor.Y, windsor.Z, 0f, true, false, false, false, 0);
-                ScriptedGossipReply reply = new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(_ => null)
+                // An eligible player (6402 rewarded, 6403 incomplete): only the spent keep word can reject the select.
+                var eligible = new ArcaneCore.Game.Quests.PlayerQuestLog(player);
+                eligible.GetOrAdd(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestStormwindRendezvous).Rewarded = true;
+                eligible.GetOrAdd(ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade).Status = ArcaneCore.Game.Quests.QuestStatus.Incomplete;
+                ScriptedGossipReply reply = new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(_ => eligible)
                     .SelectReply(player, info, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.SenderMain, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.ActionStart);
                 Assert.Equal(default, reply);
                 Assert.Equal(step, ai.DialogueStep);
