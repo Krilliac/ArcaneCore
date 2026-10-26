@@ -2,6 +2,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
@@ -21,7 +22,7 @@ namespace ArcaneCore.World.Tests.GameObjects;
 /// The Hallow's End Apple Bob against the imported world (a copy of <c>ARCANECORE_TEST_WORLD_DB</c>; the fixture is never written) and the
 /// client DBCs (<c>ARCANECORE_TEST_DBC_DIR</c>), configured as the live realm is (skills Retail): the real spawn 39851 (entry 180523, map 1,
 /// listed in game_event_gameobject for event 12), the real lock 93, loot 17378 and spell 6477 rows, with the real spell data going through
-/// the application rules of the cast. Event 12 is started the way <c>.event start</c> does, an orc rogue (whose create spells include 6477)
+/// the application rules of the cast. Event 12 is started the way <c>.event start</c> does, a night elf rogue (an Alliance race, so the Darnassus guards leave it alone; whose create spells include 6477)
 /// teleports to the apple and sends CMSG_CAST_SPELL of 6477 with target mask 0x0800, as the 5875 client does
 /// (D:/WoW-RE-Research/protocol/gameobject-interaction.md). Skipped, with a message saying so, unless both variables are set.
 /// </summary>
@@ -56,6 +57,16 @@ public sealed class AppleBobRealContentTests(ITestOutputHelper output)
         });
     }
 
+    /// <summary>SMSG_CAST_RESULT: u32 spell, u8 status (0 success, 2 failure), and for a failure u8 SpellCastResult reason.</summary>
+    private static string DescribeCastResult(byte[] payload)
+    {
+        var reader = new PacketReader(payload);
+        uint spell = reader.ReadUInt32();
+        var status = (SpellCastResultStatus)reader.ReadByte();
+        string reason = status == SpellCastResultStatus.Failure ? ((SpellCastResult)reader.ReadByte()).ToString() : "none";
+        return $"SMSG_CAST_RESULT spell {spell} status {status} reason {reason} ({Convert.ToHexString(payload)})";
+    }
+
     [CactusRealContentFact]
     public async Task WithHallowsEndRunning_CastingOpeningOnTheRealAppleBob_ShowsTheLootWindowWithFiveApples()
     {
@@ -85,30 +96,30 @@ public sealed class AppleBobRealContentTests(ITestOutputHelper output)
             await using WorldTestClient client = await host.ConnectAsync();
             byte[] key = await host.AddAccountAsync("APPLEBOB");
             await client.AuthenticateAsync("APPLEBOB", key);
-            await client.CreateCharacterAsync("Bobberorc", race: 2, cls: 4);
+            await client.CreateCharacterAsync("Bobberelf", race: 4, cls: 4);
             var account = (await host.Accounts.FindByUsernameAsync("APPLEBOB"))!;
             CharacterRecord character = (await host.Characters.GetByAccountAsync(account.Id)).Single();
             await client.LoginAsync((ulong)character.Id).WaitAsync(TimeSpan.FromSeconds(20));
-            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Bobberorc") is not null, "the orc to be in the world");
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Bobberelf") is not null, "the night elf to be in the world");
 
             (bool knowsOpening, bool skills, bool started) = await host.OnWorldAsync(() =>
             {
-                Player p = host.World.FindOnlinePlayer("Bobberorc")!;
+                Player p = host.World.FindOnlinePlayer("Bobberelf")!;
                 bool known = host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Spellbook?.HasSpell(p, AppleBobOpeningWorldTests.Opening) == true;
                 bool active = host.WorldServices.GetRequiredService<SkillsFeature>().IsActive;
                 bool ok = host.WorldServices.GetRequiredService<GameEventFeature>().Service?.StartEvent(HallowsEndEvent, overwrite: true) == true;
                 return (known, active, ok);
             });
             Assert.True(skills, "the skills feature is active, as on the live realm");
-            Assert.True(knowsOpening, "the orc rogue's create spells include 6477 Opening");
+            Assert.True(knowsOpening, "the night elf rogue's create spells include 6477 Opening");
             Assert.True(started, "game event 12 (Hallow's End) exists in the world database and started");
             Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<GameEventFeature>().IsActiveEvent(HallowsEndEvent)));
 
             // Walk the player to the apple (a near teleport on map 1) and acknowledge it, so the apple's grid loads with the event active.
-            ulong playerGuid = await host.PlayerStateAsync("Bobberorc", p => p.Guid.Value);
+            ulong playerGuid = await host.PlayerStateAsync("Bobberelf", p => p.Guid.Value);
             await host.OnWorldAsync(() =>
             {
-                Player p = host.World.FindOnlinePlayer("Bobberorc")!;
+                Player p = host.World.FindOnlinePlayer("Bobberelf")!;
                 return host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.TeleportTo(p, 1, x + 1.5f, y, z, p.Orientation);
             });
             await client.ReadUntilAsync(WorldOpcode.MsgMoveTeleportAck);
@@ -120,7 +131,7 @@ public sealed class AppleBobRealContentTests(ITestOutputHelper output)
 
             ulong bob = ObjectGuid.WithEntry(HighGuid.GameObject, entry, BobSpawn).Value;
             await host.WaitForWorldAsync(() =>
-                host.World.FindOnlinePlayer("Bobberorc")!.Map?.FindUpdater<GameObjectMapSystem>()?.Find(new ObjectGuid(bob)) is { IsSpawned: true },
+                host.World.FindOnlinePlayer("Bobberelf")!.Map?.FindUpdater<GameObjectMapSystem>()?.Find(new ObjectGuid(bob)) is { IsSpawned: true },
                 "the event's Apple Bob to be spawned beside the player");
             await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, bob);
 
@@ -145,7 +156,7 @@ public sealed class AppleBobRealContentTests(ITestOutputHelper output)
                 seen.Add(op);
                 if (op == WorldOpcode.SmsgCastResult)
                 {
-                    output.WriteLine($"SMSG_CAST_RESULT {Convert.ToHexString(payload)}");
+                    output.WriteLine(DescribeCastResult(payload));
                 }
 
                 if (op == WorldOpcode.SmsgLootResponse)
