@@ -1470,7 +1470,7 @@ public sealed partial class LootService : IViewerFieldFilter
     }
 
     /// <summary>
-    /// The player is moving (vmangos HandleMoverRelocation, MovementHandler.cpp:1106-1110: a block with MOVEFLAG_MASK_MOVING closes a loot
+    /// The player is moving (vmangos@0e3ff01 HandleMoverRelocation, MovementHandler.cpp:1106-1110: a block with MOVEFLAG_MASK_MOVING closes a loot
     /// window that is not an item's): a walking looter leaves the corpse or node, so its window must not keep the source "in use".
     /// An item's window (a lockbox or a prospected stack) stays open while the owner moves.
     /// </summary>

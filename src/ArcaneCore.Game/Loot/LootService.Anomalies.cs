@@ -176,7 +176,8 @@ public sealed partial class LootService
     }
 
     /// <summary>
-    /// The looter is dead, or further from the source than <see cref="Options"/>.LootDistance plus <see cref="WindowAuditDistanceMargin"/>.
+    /// Cleanup, not parity (vmangos releases a dying player's window in Player::SetDeathState, vmangos@0e3ff01 Player.cpp:1534, but has no
+    /// distance rule). The looter is dead, or further from the source than <see cref="Options"/>.LootDistance plus <see cref="WindowAuditDistanceMargin"/>.
     /// A live looter holding a window open past that is one whose client lost it (vmangos releases it on movement, on a cast and on a
     /// stun); left open it keeps a node "in use" for everyone else. Sources that ignore distance (a bobber's window) skip the distance test.
     /// </summary>

@@ -303,6 +303,9 @@ public sealed class PlayerbotGatherLootWaitTests
         await rig.Host.World.AdvanceClockAsync(8_000);
         await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
 
+        // The timeout really ran (the wait ended and the other target is backed off), and it left the node's window alone.
+        Assert.False(await rig.Host.OnWorldAsync(() => Field<bool>(rig.Crafting, "_waitingForGatherLoot")));
+        Assert.True(await rig.Host.OnWorldAsync(() => Field<Dictionary<ulong, uint>>(rig.Crafting, "_refusedUntil").ContainsKey(ChestGuid(Node) + 1)));
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
         Assert.NotNull(await rig.Host.OnWorldAsync(() => OpenLootOf(rig)));
     }
@@ -319,6 +322,9 @@ public sealed class PlayerbotGatherLootWaitTests
 
         await rig.Host.World.AdvanceClockAsync(8_000);
         await rig.Host.OnWorldAsync(() => rig.Crafting.UpdateGatherLoot(rig.Player));
+        // The timeout really ran (the wait ended, the node is backed off) and the release was skipped.
+        Assert.False(await rig.Host.OnWorldAsync(() => Field<bool>(rig.Crafting, "_waitingForGatherLoot")));
+        Assert.True(await rig.Host.OnWorldAsync(() => Field<Dictionary<ulong, uint>>(rig.Crafting, "_refusedUntil").ContainsKey(ChestGuid(Node))));
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
 
         await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
@@ -339,6 +345,10 @@ public sealed class PlayerbotGatherLootWaitTests
 
         Assert.Equal(1, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
         await rig.Host.OnWorldAsync(() => rig.Player.EndQuestSettlement(operation));
+
+        // The settlement skipped the flag clear too: once it ends, the next mount step closes the window.
+        await rig.Host.OnWorldAsync(() => { MountStep(rig); return true; });
+        Assert.Equal(0, await rig.Host.OnWorldAsync(() => ViewersOf(rig)));
     }
 
     private static readonly System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;

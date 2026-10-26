@@ -80,11 +80,13 @@ internal sealed class PlayerbotMount
         if ((player.UnitFlags & UnitFlags.Looting) != 0)
         {
             // Close the window for real (the cast path's release), not just the flag: the movement and cast release triggers gate on the
-            // flag, so a bare clear would leave the bag listing the bot and its node in use. The flag clear stays for a flag with no window.
+            // flag, so a bare clear would leave the bag listing the bot and its node in use. During a quest settlement neither the release
+            // nor the flag clear runs (the client path drops requests then): the flag stays so a later step closes the window.
             if (!player.IsQuestSettlementPending)
+            {
                 session.Services.GetService<SpellFeature>()?.System.ReleaseLoot?.Invoke(player);
-
-            player.UnitFlags &= ~UnitFlags.Looting;
+                player.UnitFlags &= ~UnitFlags.Looting; // for a flag with no window
+            }
         }
 
         // Nothing to ride on, scanned a moment ago: no lookup, no route walk, nothing, until the next scan is due.
