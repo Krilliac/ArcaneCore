@@ -842,14 +842,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     continue;
                 if (status.Status == QuestStatus.Complete && !status.Rewarded)
                 {
-                    if (!services.MeetsTurnInRequirements(player, quest, Offered(player)))
+                    IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                    if (!services.MeetsTurnInRequirements(player, quest, offered))
                     {
                         if (_stage != Stage.None && _stageQuest == id)
                             ClearStage();
                         continue;
                     }
 
-                    bool fits = RewardItemsFit(player, quest, services, Offered(player));
+                    bool fits = RewardItemsFit(player, quest, services, offered);
                     if (_stage == Stage.None && !fits)
                     {
                         NeedsBagSpaceForTurnIn = true;

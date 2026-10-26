@@ -82,6 +82,18 @@ after the partner accepted would change what the partner receives. `QuestNpcFeat
 `IItemService.GetItemCount(..., exclude)` when a service is injected. Tests: `QuestInteractionWorldTests` (settles with no trade, refused with the
 stack offered; the completable flag of the request-items window follows the same rule).
 
+**Deviation from vmangos (retail-safe).** vmangos (pinned commit `0e3ff01`, `src/game/Objects/Player.cpp`) accepts such a turn-in:
+
+* `Player::CanRewardQuest` (line 12682) checks a delivery quest's items with `GetItemCount(ReqItemId)` (line 12713), and `Player::GetItemCount`
+  (line 8391) only skips `skipItem`; it has no `IsInTrade()` test. (`CanCompleteRepeatableQuest`, line 12663, does use `HasItemCount`,
+  line 12673, which skips `IsInTrade()` items, line 8681.)
+* `RewardQuest` then calls `DestroyItemCount(ReqItemId, ReqItemCount, true)` (line 13088), and `Player::DestroyItemCount` (line 10672) skips
+  `IsInTrade()` items (line 10682).
+
+So vmangos grants the reward and leaves the traded stack in the trade for the partner, which duplicates the delivery item. ArcaneCore refuses
+the turn-in instead (ITEM_NOT_FOUND, offer window re-sent) and has no option to restore the vmangos behaviour: a duplication path does not
+belong behind a retail-default switch.
+
 ### Known gaps
 
 * `LiveItemTemplateStore` does not forward `QuestStartingItem` (the interface default answers 0), so the item-started check of

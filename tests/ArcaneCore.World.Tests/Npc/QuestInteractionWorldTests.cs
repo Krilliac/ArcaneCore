@@ -310,8 +310,9 @@ public sealed class QuestInteractionWorldTests
         {
             RepeatableItem = cloth,
             RepeatableItemCount = 2,
-            // A delivery quest: the turn-in itself checks the items (RewardRequirements, with the offered set) before staging, so the
-            // refusal while the trade is open comes from that check and not only from the staging's keep-for-removals rule.
+            // A delivery quest: RewardRequirements sees the delivery item. Both RewardRequirements (with the offered set) and the staging's
+            // keep-for-removals rule refuse the offered stack with the same packets, so this case cannot tell them apart; the
+            // ChooseReward_OutOfRangeChoiceWithDeliveryItemOffered test covers the requirement-order check.
             DeliverItems = true,
             CommitRewardsToMemory = true,
         };
@@ -363,6 +364,8 @@ public sealed class QuestInteractionWorldTests
                 Assert.Equal(2u, countAfter);
                 Assert.Equal(2u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
                 Assert.Null(feature.PendingOperationId(id));
+                // The trade is untouched by the refusal: the offered stack is still in its traded slot.
+                Assert.Single(await host.PlayerStateAsync("Crafter", p => feature.OfferedInTrade(p)!));
             }
             else
             {
@@ -370,10 +373,69 @@ public sealed class QuestInteractionWorldTests
                 // The settlement outcome, not just its start: the delivery stack is consumed and the quest is rewarded.
                 Assert.Equal(0u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
                 Assert.True(fixture.Characters.Stored(id, QuestInteractionFixture.QuestId).Rewarded);
+                // The persisted After snapshot holds no cloth either.
+                CharacterQuestRewardRequest commit = Assert.Single(fixture.RewardCommits);
+                Assert.DoesNotContain(commit.After.Inventory!.Items, i => i.Item.Entry == cloth);
             }
         }
     }
 
+    /// <summary>
+    /// Requirement order (vmangos ChooseReward runs CanRewardQuest(quest, msg) before the reward-storage checks): with the delivery stack in an open
+    /// trade, a turn-in whose reward choice is also out of range is refused for the missing item (ITEM_NOT_FOUND) with the offer re-sent. Without the
+    /// offered set at the RewardRequirements call, that check passes and the out-of-range choice refuses silently, so the client hears nothing.
+    /// </summary>
+    [Fact]
+    public async Task ChooseReward_OutOfRangeChoiceWithDeliveryItemOffered_ReportsTheMissingItem()
+    {
+        const uint cloth = 2589, choiceItem = 2592;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = cloth, Class = 7, Name = "Linen Cloth", DisplayId = 1, Stackable = 20, Quality = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = choiceItem, Class = 7, Name = "Wool Cloth", DisplayId = 1, Stackable = 20, Quality = 1 });
+        items.Templates.StartingItems.Add(new StartingItem(1, 1, cloth, 2));
+
+        var fixture = new QuestInteractionFixture
+        {
+            RepeatableItem = cloth,
+            RepeatableItemCount = 2,
+            DeliverItems = true,
+            ChoiceRewardItem = choiceItem,
+        };
+
+        WorldTestHost host;
+        using (items.Use())
+        {
+            host = Start(fixture);
+        }
+
+        await using (host)
+        await using (WorldTestClient crafter = await host.EnterWorldAsync("CRAFTER", "Crafter"))
+        await using (WorldTestClient partner = await host.EnterWorldAsync("PARTNER", "Partner"))
+        {
+            await VisibleAsync(host, "Crafter");
+            await VisibleAsync(host, "Partner");
+            await crafter.SendAsync(WorldOpcode.CmsgQuestgiverAcceptQuest, QuestBody());
+            await crafter.ReadUntilAsync(WorldOpcode.SmsgGossipComplete);
+            QuestNpcFeature feature = await FeatureAsync(host, "Crafter");
+
+            await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Crafter")!;
+                Player other = host.World.FindOnlinePlayer("Partner")!;
+                Assert.Equal(QuestStatus.Complete, feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Status);
+                OfferInOpenTrade(host, player, other, Assert.Single(player.Inventory.AllItems, i => i.Entry == cloth));
+
+                // Choice 5 is out of range for the single choice reward.
+                feature.ChooseReward((WorldSession)player.Session, player, QuestInteractionFixture.Guid, QuestInteractionFixture.QuestId, 5);
+                Assert.False(player.IsQuestSettlementPending);
+            });
+
+            byte[] failure = await crafter.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+            Assert.Equal((byte)ArcaneCore.Game.Items.InventoryResult.ItemNotFound, failure[0]);
+            await crafter.ReadUntilAsync(WorldOpcode.SmsgQuestgiverOfferReward);
+            Assert.Equal(2u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
+        }
+    }
     /// <summary>
     /// CMSG_QUESTGIVER_COMPLETE_QUEST previews the turn-in: the "completable" flag of the request-items window must follow the same offered-item
     /// rule as the settlement (<c>QuestNpcInteractionHandlers.Complete</c> passes the open trade's items), or the client is told it may hand in a stack
@@ -483,7 +545,7 @@ internal sealed class QuestInteractionTestServices : IWorldTestServices
         services.AddSingleton<ICharacterQuestStore>(fixture.Characters);
         if (fixture.CommitRewardsToMemory)
         {
-            services.AddScoped<ICharacterQuestRewardStore>(_ => new MemoryQuestRewardStore(fixture.Characters));
+            services.AddScoped<ICharacterQuestRewardStore>(_ => new MemoryQuestRewardStore(fixture.Characters, fixture.RewardCommits));
         }
         services.AddSingleton<TimeProvider>(fixture.Clock);
         services.AddSingleton(new FactionTemplateCatalog([
@@ -491,15 +553,33 @@ internal sealed class QuestInteractionTestServices : IWorldTestServices
     }
 }
 
-internal sealed class MemoryQuestRewardStore(MemoryQuestStore quests) : ICharacterQuestRewardStore
+/// <summary>
+/// Stands in for the EF reward store, which has no row for the quest the in-memory journal accepted. It keeps the contract's checks
+/// (ICharacterQuestRewardStore): an already-rewarded row answers AlreadyRewarded, a stored row that differs from ExpectedQuest answers Conflict,
+/// and every accepted request is recorded so a test can inspect the persisted After snapshot.
+/// </summary>
+internal sealed class MemoryQuestRewardStore(MemoryQuestStore quests, System.Collections.Concurrent.ConcurrentQueue<CharacterQuestRewardRequest> commits) : ICharacterQuestRewardStore
 {
     public Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
     {
+        if (quests.TryGetStored(request.ExpectedQuest.CharacterId, request.ExpectedQuest.Quest, out CharacterQuestStatus? stored))
+        {
+            if (stored.Rewarded)
+            {
+                return Task.FromResult(QuestRewardCommitResult.AlreadyRewarded);
+            }
+
+            if (stored != request.ExpectedQuest)
+            {
+                return Task.FromResult(QuestRewardCommitResult.Conflict);
+            }
+        }
+
         quests.Seed(request.RewardedQuest);
+        commits.Enqueue(request);
         return Task.FromResult(QuestRewardCommitResult.Committed);
     }
 }
-
 internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDataStore
 {
     public const uint QuestId = 900001;
@@ -522,6 +602,12 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
 
     /// <summary>Settles reward turn-ins against the in-memory quest store instead of the EF reward store, whose database never saw the accepted quest row (the journal lives in <see cref="Characters"/>).</summary>
     public bool CommitRewardsToMemory { get; init; }
+
+    /// <summary>A choice reward (RewChoiceItemId1, count 1), none by default.</summary>
+    public uint ChoiceRewardItem { get; init; }
+
+    /// <summary>Every reward commit the memory reward store accepted, in order.</summary>
+    public System.Collections.Concurrent.ConcurrentQueue<CharacterQuestRewardRequest> RewardCommits { get; } = new();
     public bool EnderOnOtherMap { get; init; }
     public bool DistantEnder { get; init; }
 
@@ -534,7 +620,7 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
         [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30, SrcItemId = SourceItem, SrcItemCount = (byte)(SourceItem == 0 ? 0 : 1),
             Title = "Synthetic quest", Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
-            SpecialFlags = (byte)((RepeatableItem == 0 ? 0 : 1) | (DeliverItems ? 8 : 0)), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount,
+            SpecialFlags = (byte)((RepeatableItem == 0 ? 0 : 1) | (DeliverItems ? 8 : 0)), ReqItemId1 = RepeatableItem, ReqItemCount1 = RepeatableItemCount, RewChoiceItemId1 = ChoiceRewardItem, RewChoiceItemCount1 = ChoiceRewardItem == 0 ? 0u : 1u,
             ReqCreatureOrGOId1 = RepeatableItem == 0 && !NoObjectives ? 90 : 0, ReqCreatureOrGOCount1 = RepeatableItem == 0 && !NoObjectives ? 1u : 0u },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],
         [new CreatureQuestRelation { Id = Entry, Quest = QuestId }],

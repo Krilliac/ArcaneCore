@@ -72,6 +72,10 @@ public sealed partial class QuestNpcServices
         // items, money or bag space tells the client why and re-sends the offer window so the player can retry
         // (QuestHandler.cpp:262-271); the live state stays untouched.
         QuestStatusData? data = state.Quests.Get(questId);
+        // The requirement-order check, as vmangos ChooseReward runs CanRewardQuest(quest, msg) before the reward-storage checks: a delivery item
+        // sitting in the open trade is reported (ITEM_NOT_FOUND, offer re-sent) before the silent refusals below (invalid choice, money, spell,
+        // reputation). It also keeps this path consistent with the previews that pass offered (CompleteQuest, MeetsTurnInRequirements,
+        // DiagnoseTurnInRefusal). The keepForRemovals in TryStageQuestRewards is the economic backstop.
         if (!RewardRequirements(player, quest, msg: true, offered))
         {
             ResendOfferReward(player, guid, quest);
