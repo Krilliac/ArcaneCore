@@ -209,9 +209,13 @@ internal sealed class ElevatorNetwork
         ArgumentNullException.ThrowIfNull(templateOf);
         ArgumentNullException.ThrowIfNull(animations);
         var groups = new List<List<ElevatorCar>>();
-        foreach (GameObjectSpawn spawn in spawns.OrderBy(s => s.MapId).ThenBy(s => s.Guid))
+        // The cars first, then the order: the first call runs on the world thread (ElevatorNetwork.Of caches it) and the world has hundreds
+        // of thousands of game object spawns, of which a handful are lifts; sorting all of them first cost the first bot to ask a long tick.
+        var cars = new List<ElevatorCar>();
+        foreach (GameObjectSpawn spawn in spawns)
+            if (CarOf(spawn, templateOf(spawn.Entry), animations) is { } found) cars.Add(found);
+        foreach (ElevatorCar car in cars.OrderBy(c => c.MapId).ThenBy(c => c.SpawnGuid))
         {
-            if (CarOf(spawn, templateOf(spawn.Entry), animations) is not { } car) continue;
             List<ElevatorCar>? lift = groups.FirstOrDefault(g => g[0].MapId == car.MapId
                 && Vector2.Distance(Flat(g[0].Low), Flat(car.Low)) <= PairYards
                 && MathF.Abs(g[0].Low.Z - car.Low.Z) <= PairLevelYards && MathF.Abs(g[0].High.Z - car.High.Z) <= PairLevelYards);
