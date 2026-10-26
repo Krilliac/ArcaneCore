@@ -106,7 +106,7 @@ public sealed class ChannelManagerTests
         f.Context.Channels.Join(b, "GuildRecruitment - City", string.Empty);
 
         Assert.Equal([ChatNotify.InvalidName, ChatNotify.WrongPassword], Notifies(f, b));
-        Assert.False(f.Context.Channels.Find(Team.Alliance, "GuildRecruitment - City")!.IsOn(b.Guid));
+        Assert.False(f.Context.Channels.Find(Team.Alliance, "GuildRecruitment - City")?.IsOn(b.Guid) ?? false); // the rejected join leaves an empty built-in, which is deleted
         Assert.Empty(f.Context.Channels.JoinedBy(b));
 
         f.Context.Channels.Join(b, "Club", "pw");
