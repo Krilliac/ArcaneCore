@@ -13544,11 +13544,12 @@ World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 #                     hold and still be exempt from shared world pins and from refusing a bot's
 #                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
 #                     whole region, so a larger bound lets more real snags go unshared. The default,
-#                     5000, keeps the tunnel's largest region (4882 polygons on the walking graph of
-#                     map 1) inside it. Bots only; no retail behaviour depends on it.
+#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
+#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
+#                     retail behaviour depends on it.
 #        Type: int
 #        Default: 5000
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #

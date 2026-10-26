@@ -16734,8 +16734,8 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the tunnel's largest region (4882 polygons on the walking graph of map 1) inside it. Bots only; no retail behaviour depends on it.",
-      "allowed": "a whole number, -2147483648 to 2147483647",
+      "meaning": "The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps. Bots only; no retail behaviour depends on it.",
+      "allowed": "a whole number from 0 to 1000000 (0: no region is exempt)",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },
