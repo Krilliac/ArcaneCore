@@ -102,7 +102,7 @@ public static class MovementControl
     /// <summary>
     /// The client's ack for a turn rate order (vmangos HandleForceSpeedChangeAckOpcodes, MOVE_TURN_RATE, MovementHandler.cpp:464-476): it must match a
     /// pending turn rate change by counter and, within 0.01, rate (a NaN never matches). False when nothing matches; the mismatch is a counted wrong ack
-    /// only when the counter is 0 or was never sent (vmangos OnWrongAckData, MovementHandler.cpp:468-469 and :481-482), so a late ack of an order that
+    /// only when the counter is 0 or above the current counter, the next one to be sent (a counter equal to it is not counted; vmangos OnWrongAckData, MovementHandler.cpp:468-469 and :481-482), so a late ack of an order that
     /// already timed out is not counted (the timeout counted it as a failed ack).
     /// </summary>
     public static bool AcknowledgeTurnRate(Player player, uint counter, float rate)

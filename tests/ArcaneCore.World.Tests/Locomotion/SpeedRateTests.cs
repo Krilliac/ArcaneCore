@@ -198,10 +198,10 @@ public sealed class SpeedRateTests
     }
 
     [Theory]
-    [InlineData(2u, 0f)]   // a counter that was never sent, right rate
-    [InlineData(1u, 0f)]   // the next counter (not sent), right rate
-    [InlineData(0u, 1.0f)] // right counter, wrong rate
-    public async Task ATurnRateAck_WithTheWrongCounterOrRate_IsIgnored_AndCountedOnlyWhenTheCounterWasNeverSent(uint counterOffset, float rateOffset)
+    [InlineData(2u, 0f, 1)]   // above the current counter (the first order is 0, the next is 1), right rate: counted
+    [InlineData(1u, 0f, 0)]   // equal to the current (next) counter, right rate: not counted
+    [InlineData(0u, 1.0f, 1)] // the real counter 0, wrong rate: vmangos always counts counter 0
+    public async Task ATurnRateAck_WithTheWrongCounterOrRate_IsIgnored_AndCountedOnlyForCounterZeroOrAboveTheCurrentCounter(uint counterOffset, float rateOffset, int expectedWrong)
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient mover = await host.EnterWorldAsync("MOVER", "Mover");
@@ -220,6 +220,7 @@ public sealed class SpeedRateTests
         var orderReader = new PacketReader(order);
         orderReader.ReadPackedGuid();
         uint counter = orderReader.ReadUInt32();
+        Assert.Equal(0u, counter); // the player's first forced change: the expected counts below are literals that depend on it
 
         var info = new MovementInfo { Flags = MovementFlags.None, Time = 500, X = -8949.95f, Y = -132.493f, Z = 83.5312f };
         var ack = new PacketWriter(56);
@@ -234,9 +235,7 @@ public sealed class SpeedRateTests
         List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat);
 
         Assert.DoesNotContain(seen, p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
-        // vmangos counts a wrong ack only for counter 0 or one above the last sent (MovementHandler.cpp:468-469); one order was sent, so the next counter is counter + 1.
-        uint acked = counter + counterOffset;
-        int expectedWrong = acked == 0 || acked > counter + 1 ? 1 : 0;
+        // vmangos counts a wrong ack only for counter 0 or one above the current (next) counter (MovementHandler.cpp:468-469); one order was sent, so the next counter is 1.
         Assert.Equal(expectedWrong, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
         Assert.True(await host.OnWorldAsync(() => player.Locomotion.Pending.HasPending)); // the real order is still waiting
     }

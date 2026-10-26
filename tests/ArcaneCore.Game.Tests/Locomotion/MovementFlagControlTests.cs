@@ -137,12 +137,12 @@ public sealed class MovementFlagControlTests
             player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _); // the older order is dropped as superseded, the newer one times out
         }
 
-        // vmangos counts a wrong ack only for counter 0 or one never sent (MovementHandler.cpp:468-469, :481-482).
+        // vmangos counts a wrong ack only for counter 0 or one above the current (next) counter (MovementHandler.cpp:468-469, :481-482).
         Assert.False(MovementControl.AcknowledgeTurnRate(player, 1, second));
         Assert.Equal(0, player.Locomotion.WrongAckCount);
         Assert.False(MovementControl.AcknowledgeTurnRate(player, 2, second));  // the next counter: not above the current one, so not counted
         Assert.Equal(0, player.Locomotion.WrongAckCount);
-        Assert.False(MovementControl.AcknowledgeTurnRate(player, 3, second));  // above the current counter: never sent
+        Assert.False(MovementControl.AcknowledgeTurnRate(player, 3, second));  // above the current counter: counted
         Assert.Equal(1, player.Locomotion.WrongAckCount);
         Assert.False(MovementControl.AcknowledgeTurnRate(player, 0, first));  // counter 0 is always counted
         Assert.Equal(2, player.Locomotion.WrongAckCount);
