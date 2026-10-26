@@ -87,6 +87,17 @@ public sealed class FallObserver : IClientMovementObserver
         Player player = context.Player;
         LocomotionState state = player.Locomotion;
 
+        // .cheat fly / .cheat fixedz: the client swims or glides in the air and never falls; nothing is tracked, nothing hurts.
+        if (player.HasMovementCheat)
+        {
+            if (state.IsFalling || state.FallStartedAtMs is not null)
+            {
+                state.ResetFall();
+            }
+
+            return;
+        }
+
         // "ignore in flight case that can be triggered also at lags in moment teleportation to another map"
         if (context.Opcode == WorldOpcode.MsgMoveFallLand && (player.UnitFlags & UnitFlags.TaxiFlight) == 0)
         {
@@ -133,6 +144,8 @@ public sealed class FallObserver : IClientMovementObserver
     {
         if (state.SuppressAnomalies
             || player.IsGameMaster
+            || player.HasMovementCheat
+            || player.HasCheat(PlayerCheats.FeatherFall)
             || player.Transport is not null
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
             || (flags & (MovementFlags.OnTransport | MovementFlags.Swimming | MovementFlags.Flying | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating)) != 0
@@ -188,6 +201,7 @@ public sealed class FallObserver : IClientMovementObserver
         float zDiff = state.FallStartZ - currentZ;
         AuraLedger auras = player.Locomotion.Auras;
         if (zDiff < FallDamageCalculator.MinFallDistance || !player.IsAlive || player.IsGameMaster
+            || player.HasCheat(PlayerCheats.FeatherFall)
             || auras.Has(AuraType.Hover) || auras.Has(AuraType.FeatherFall))
         {
             return;

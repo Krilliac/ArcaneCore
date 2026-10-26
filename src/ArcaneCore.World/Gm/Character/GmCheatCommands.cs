@@ -4,22 +4,33 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Spells;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.Character;
 
 /// <summary>
 /// vmangos <c>.cheat</c> (CharacterCommands.cpp, HandleCheat*Command; every entry SEC_GAMEMASTER in Chat.cpp): god, cooldown, casttime,
-/// powercost, waterwalk, immunepc, immunenpc, untargetable and status, plus <c>.hover</c> (SEC_TICKETMASTER, HandleHoverCommand). The
-/// cooldown/cast time/power options live in <see cref="Player.Cheats"/> (the spell side is <c>GmCheatSpellModule</c>); god is
-/// <c>InvincibilityHpThreshold</c> 1 (Player::SetCheatGod). Fly and the other movement hacks are not ported: the anticheat would
-/// flag a server-forced fly flag. None of it is saved (vmangos does not save the cheat options either).
+/// powercost, waterwalk, immunepc, immunenpc, untargetable, status, and the movement cheats fly, fixedz and wallclimb (plus
+/// <c>.featherfall</c>, which vmangos does not have), <c>.hover</c> (SEC_TICKETMASTER, HandleHoverCommand) and <c>.knockback</c>
+/// (SEC_GAMEMASTER, HandleKnockBackCommand, UnitCommands.cpp:2761). The cooldown/cast time/power options live in
+/// <see cref="Player.Cheats"/> (the spell side is <c>GmCheatSpellModule</c>); god is <c>InvincibilityHpThreshold</c> 1
+/// (Player::SetCheatGod). Fly and fixed Z port vmangos <c>Player::SetCheatFly</c> / <c>SetCheatFixedZ</c> (see
+/// <see cref="MovementCheats"/>), and the movement anticheat and the fall, void and speed observers stand down while either is on.
+/// Wallclimb is UNIT_FLAG_SERVER_CONTROLLED on the target (HandleCheatWallclimbCommand, CharacterCommands.cpp:509-541). Feather fall has no
+/// vmangos command: it sends SMSG_MOVE_FEATHER_FALL / SMSG_MOVE_NORMAL_FALL (mangoszero <c>Player::SetFeatherFall</c>,
+/// PlayerMovement.cpp:157) through the existing movement-change path, as <c>.cheat waterwalk</c> does for water walking. The dev cheat
+/// opcodes (toggle gravity, toggle collision, start swim) are never sent: there is no evidence a 1.12.1 client handles them from the
+/// server, and <c>StrippedDevOpcodes</c> keeps them out. None of it is saved (vmangos does not save the cheat options either).
 /// </summary>
 public sealed class GmCheatCommands : ICommandGroup
 {
@@ -35,10 +46,17 @@ public sealed class GmCheatCommands : ICommandGroup
             new ChatCommand("immunepc", AccountSecurity.GameMaster, "Syntax: .cheat immunepc on|off [$name]\nPlayers cannot attack the player.", ImmuneToPlayers, RetailLevel: 3),
             new ChatCommand("immunenpc", AccountSecurity.GameMaster, "Syntax: .cheat immunenpc on|off [$name]\nCreatures cannot attack the player.", ImmuneToCreatures, RetailLevel: 3),
             new ChatCommand("untargetable", AccountSecurity.GameMaster, "Syntax: .cheat untargetable on|off [$name]\nNobody can select the player.", Untargetable, RetailLevel: 3),
+            new ChatCommand("fly", AccountSecurity.GameMaster, FlySyntax, Fly, RetailLevel: 3),
+            new ChatCommand("fixedz", AccountSecurity.GameMaster, "Syntax: .cheat fixedz on|off\nThe selected player or you get a fixed height: a jump glides across the map (MOVEFLAG_FIXED_Z).", FixedZ, RetailLevel: 3),
+            new ChatCommand("wallclimb", AccountSecurity.GameMaster, "Syntax: .cheat wallclimb on|off\nThe selected player or you climb walls (UNIT_FLAG_SERVER_CONTROLLED).", WallClimb, RetailLevel: 3),
+            new ChatCommand("featherfall", AccountSecurity.GameMaster, "Syntax: .cheat featherfall on|off [$name]\nFalls never hurt (not a vmangos command).", FeatherFall, RetailLevel: 3),
             new ChatCommand("status", AccountSecurity.GameMaster, "Syntax: .cheat status [$name]\nList the cheats active on the player.", Status, RetailLevel: 3),
         ]),
         new ChatCommand("hover", AccountSecurity.GameMaster, "Syntax: .hover [0|1]\nEnable (default) or disable hover mode on yourself.", Hover, RetailLevel: 2),
+        new ChatCommand("knockback", AccountSecurity.GameMaster, "Syntax: .knockback [#horizontal_speed [#vertical_speed]]\nKnock the selected player or yourself back from you (10 and 10 by default); a creature is not moved.", KnockBack, RetailLevel: 3),
     ];
+
+    internal const string FlySyntax = "Syntax: .cheat fly on|off\nThe selected player or you swim in the air. Do not jump or flying mode will be removed.";
 
     // LANG_CHEAT_* (vmangos mangos_string 349-354, 370-371, 621-622) and the LANG_YOU_SET_* / LANG_YOUR_*_SET pairs (355-356, 368-369,
     // 619-620, 623-624, 338-339, 688-693).
@@ -112,7 +130,124 @@ public sealed class GmCheatCommands : ICommandGroup
         return true;
     }
 
-    // HandleCheatStatusCommand: the vmangos lines for the cheats this core has.
+    /// <summary>
+    /// HandleCheatFlyCommand (CharacterCommands.cpp:95-119), also <c>.gm fly</c> (Chat.cpp:387): ExtractOnOff, the selected player or you,
+    /// Player::SetCheatFly (which notifies "FLY MODE cheat is ON|OFF"), "You set fly mode to %s for %s.", the report to anyone else and,
+    /// when turned on, the warning that a jump removes fly mode. vmangos has no security check here; this core refuses a target of
+    /// higher security, like every other cheat.
+    /// </summary>
+    internal static bool Fly(CommandContext context, string text)
+    {
+        if (!TryOnOffTarget(context, text, out bool on, out Player target))
+        {
+            return true;
+        }
+
+        MovementCheats.SetFly(target, on);
+        BaselineAntiCheat(context, target);
+        Notify(target, on ? GmStrings.CheatFlyOn : GmStrings.CheatFlyOff);
+        ReportMovementCheat(context, target, on, GmStrings.YouSetFly, GmStrings.YourFlySet);
+        if (on)
+        {
+            target.SendSystemMessage(GmStrings.FlyWarning);
+        }
+
+        return true;
+    }
+
+    // HandleCheatFixedZCommand (CharacterCommands.cpp:121-142) over Player::SetCheatFixedZ (Player.cpp:2744-2760).
+    private static bool FixedZ(CommandContext context, string text)
+    {
+        if (!TryOnOffTarget(context, text, out bool on, out Player target))
+        {
+            return true;
+        }
+
+        MovementCheats.SetFixedZ(target, on);
+        BaselineAntiCheat(context, target);
+        Notify(target, on ? GmStrings.CheatFixedZOn : GmStrings.CheatFixedZOff);
+        ReportMovementCheat(context, target, on, GmStrings.YouSetFixedZ, GmStrings.YourFixedZSet);
+        return true;
+    }
+
+    // HandleCheatWallclimbCommand (CharacterCommands.cpp:509-541): the selected player (or you), the security check, UNIT_FLAG_SERVER_CONTROLLED.
+    private static bool WallClimb(CommandContext context, string text)
+    {
+        if (!TryOnOffTarget(context, text, out bool on, out Player target))
+        {
+            return true;
+        }
+
+        SetFlag(target, UnitFlags.ServerControlled, on);
+        ReportMovementCheat(context, target, on, GmStrings.YouSetWallClimb, GmStrings.YourWallClimbSet);
+        return true;
+    }
+
+    // Not a vmangos command (mangoszero Player::SetFeatherFall is the packet source): the Toggle shape of the other cheats, with a name argument.
+    private static bool FeatherFall(CommandContext context, string text)
+        => Toggle(context, text, "feather fall mode", (target, on) => MovementCheats.SetFeatherFall(target, on));
+
+    // HandleKnockBackCommand (UnitCommands.cpp:2761-2778): GetSelectedUnit (the selection, else you), two optional floats (10 each; a word that
+    // is not a number leaves the default), Unit::KnockBackFrom(player, horizontal, vertical). Only a player is actually moved
+    // (Knockback.cs); the invoker's own knockback runs away from where it faces. Extra arguments are ignored, as vmangos does.
+    private static bool KnockBack(CommandContext context, string text)
+    {
+        Unit? target = GmSelectedUnit.Require(context);
+        if (target is null || target is Player other && !context.CanActOn(other))
+        {
+            return true;
+        }
+
+        var args = new CommandArgs(text);
+        float horizontalSpeed = args.ExtractFloat(out float h) ? h : 10.0f;
+        float verticalSpeed = args.ExtractFloat(out float v) ? v : 10.0f;
+        SpellSystem system = context.Session.Services.GetRequiredService<SpellFeature>().System;
+        KnockbackService.KnockBackFrom(system, target, context.Player, horizontalSpeed, verticalSpeed);
+        return true;
+    }
+
+    // ExtractOnOff then the selected player or you; replies and returns false when there is no usable target or the invoker is outranked.
+    private static bool TryOnOffTarget(CommandContext context, string text, out bool on, out Player target)
+    {
+        target = null!;
+        if (!new CommandArgs(text).ExtractOnOff(out on))
+        {
+            context.Reply(GmStrings.UseOnOff);
+            return false;
+        }
+
+        Player? selected = context.SelectedPlayerOrSelf();
+        if (selected is null)
+        {
+            context.Reply(GmStrings.NoCharSelected);
+            return false;
+        }
+
+        if (!context.CanActOn(selected))
+        {
+            return false;
+        }
+
+        target = selected;
+        return true;
+    }
+
+    // "You set X mode to %s for %s." and, to anyone else, "Your X mode has been turned %s by %s." (needReportToTarget).
+    private static void ReportMovementCheat(CommandContext context, Player target, bool on, Func<string, string, string> you, Func<string, string, string> your)
+    {
+        string state = on ? "on" : "off";
+        context.Reply(you(state, GmStrings.PlayerLink(target.Name)));
+        if (!context.IsInvoker(target))
+        {
+            target.SendSystemMessage(your(state, GmStrings.PlayerLink(context.InvokerName)));
+        }
+    }
+
+    // The server changed the player's movement flags: the next block the anticheat judges is a new baseline, not a step from before the cheat.
+    private static void BaselineAntiCheat(CommandContext context, Player target)
+        => context.Session.Services.GetService<AntiCheatFeature>()?.OnServerRelocation(target);
+
+    // HandleCheatStatusCommand (CharacterCommands.cpp:566-613): the vmangos lines for the cheats this core has, in its order; "- Feather fall" is ours.
     private static bool Status(CommandContext context, string text)
     {
         if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player target))
@@ -122,6 +257,11 @@ public sealed class GmCheatCommands : ICommandGroup
 
         context.Reply($"Cheats active on {target.Name}:");
         UnitFlags flags = target.UnitFlags;
+        if (target.HasCheat(PlayerCheats.Fly))
+        {
+            context.Reply("- Fly");
+        }
+
         if (target.InvincibilityHpThreshold != 0)
         {
             context.Reply("- God");
@@ -160,6 +300,21 @@ public sealed class GmCheatCommands : ICommandGroup
         if (target.HasCheat(PlayerCheats.WaterWalk))
         {
             context.Reply("- Water walking");
+        }
+
+        if ((flags & UnitFlags.ServerControlled) != 0)
+        {
+            context.Reply("- Wall climbing");
+        }
+
+        if (target.HasCheat(PlayerCheats.FixedZ))
+        {
+            context.Reply("- Fixed Z");
+        }
+
+        if (target.HasCheat(PlayerCheats.FeatherFall))
+        {
+            context.Reply("- Feather fall");
         }
 
         return true;
@@ -221,7 +376,8 @@ public sealed class GmCheatCommands : ICommandGroup
 
 /// <summary>
 /// vmangos <c>.gm visible [on/off]</c> (HandleGMVisibleCommand, MiscCommands.cpp; SEC_GAMEMASTER): no argument answers "You are: visible|invisible";
-/// off hides you from every player of a lower account security (<see cref="GmInvisibilityRule"/>), on shows you again.
+/// off hides you from every player of a lower account security (<see cref="GmInvisibilityRule"/>), on shows you again. <c>.gm fly</c> is
+/// <c>.cheat fly</c> under another name (Chat.cpp:387, the same HandleCheatFlyCommand).
 /// </summary>
 public sealed class GmVisibleExtension : ICommandExtension
 {
@@ -234,6 +390,7 @@ public sealed class GmVisibleExtension : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("visible", AccountSecurity.GameMaster, "Syntax: .gm visible [on/off]\nShow or hide yourself from players of a lower security level, or show the current state.", Visible, RetailLevel: 3),
+        new ChatCommand("fly", AccountSecurity.GameMaster, GmCheatCommands.FlySyntax.Replace(".cheat fly", ".gm fly", StringComparison.Ordinal), GmCheatCommands.Fly, RetailLevel: 3),
     ];
 
     private static bool Visible(CommandContext context, string text)

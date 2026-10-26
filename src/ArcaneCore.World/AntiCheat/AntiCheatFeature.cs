@@ -133,6 +133,15 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             || (options.ExemptManagedBots && session.IsManaged);
     }
 
+    /// <summary>
+    /// <see cref="IsExempt"/>, or a player a GM gave <c>.cheat fly</c> or <c>.cheat fixedz</c>: such a client swims, levitates and flies
+    /// in the air, never falls, and may cross terrain at will, so no movement, acknowledgement or time-skip check applies while the
+    /// cheat is on (vmangos exempts the same flags, MovementAnticheat.cpp:789-806, 1090; here the speed, teleport, jump, fall and
+    /// geometry checks stand down too). The rejection points (<see cref="OnRejected"/>) are not movement and keep <see cref="IsExempt"/>.
+    /// The first block judged after the cheat ends starts a new baseline: the next movement packet is trusted (<see cref="OnServerRelocation"/>).
+    /// </summary>
+    private bool IsMovementExempt(WorldSession session, Player player) => IsExempt(session, player) || player.HasMovementCheat;
+
     /// <summary>Let a player assert movement flags no aura grants (a GM tool flying or water-walking someone); <paramref name="on"/> false takes it back.</summary>
     public void Grant(Player player, MovementFlags flags, bool on)
     {
@@ -146,7 +155,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// <summary>A client movement block of the player's own unit, before it is stored.</summary>
     public void BeforeMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement)
     {
-        if (IsExempt(session, player))
+        if (IsMovementExempt(session, player))
         {
             return;
         }
@@ -184,7 +193,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// <summary>An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline.</summary>
     public void OnAcknowledgement(WorldSession session, Player player, uint clientTime, bool knockback)
     {
-        if (IsExempt(session, player))
+        if (IsMovementExempt(session, player))
         {
             return;
         }
@@ -203,7 +212,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// <summary>CMSG_MOVE_TIME_SKIPPED for the player's own unit.</summary>
     public void OnTimeSkipped(WorldSession session, Player player, uint skippedMs)
     {
-        if (IsExempt(session, player))
+        if (IsMovementExempt(session, player))
         {
             return;
         }
@@ -640,7 +649,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// </summary>
     private static MovementFlags GrantedFlags(Player player, PlayerState state)
     {
-        MovementFlags granted = state.ExplicitGrants;
+        MovementFlags granted = state.ExplicitGrants | MovementCheats.GrantedFlags(player);
         LocomotionState locomotion = player.Locomotion;
         if (locomotion.Auras.Has(AuraType.WaterWalk) || locomotion.Pending.HasPendingOfType(MovementChangeType.WaterWalk))
         {

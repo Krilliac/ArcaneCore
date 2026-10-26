@@ -64,7 +64,8 @@ public sealed class UndermapObserver : IClientMovementObserver
     public void AfterApply(MovementObserverContext context, in MovementInfo previous)
     {
         Player player = context.Player;
-        if (player.IsGameMaster || player.Map is not { } map)
+        // .cheat fly / fixedz: a flier or glider can leave the terrain (or the world) on purpose; no void kill, no under-map recovery or report.
+        if (player.IsGameMaster || player.HasMovementCheat || player.Map is not { } map)
         {
             return;
         }
