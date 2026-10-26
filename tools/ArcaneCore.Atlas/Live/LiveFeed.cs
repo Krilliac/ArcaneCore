@@ -606,10 +606,10 @@ public sealed class LiveFeed : IDisposable
         origin ??= ViewOrigin;
         if (guid is null)
         {
-            _view.Patch(new JsonObject { ["follow"] = null }, origin);
+            ViewState after = _view.Patch(new JsonObject { ["follow"] = null }, origin);
 
             // The view store ignores a clear from a UI while another UI owns the follow: report what the view really holds.
-            if (_view.Current.FollowGuid is { } kept)
+            if (after.FollowGuid is { } kept)
             {
                 return new JsonObject
                 {

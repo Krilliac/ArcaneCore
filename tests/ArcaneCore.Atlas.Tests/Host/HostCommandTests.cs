@@ -98,7 +98,9 @@ public sealed class HostCommandTests
     public async Task ViewGet_IsTheDefaultView_AndViewSet_AppliesAMergePatch_AndPublishesTheViewEvent()
     {
         await using HostRig rig = HostRig.Create();
-        Assert.Equal(ViewState.Default.ToJson().ToJsonString(), (await rig.DataAsync("view.get")).ToJsonString());
+        JsonObject expected = ViewState.Default.ToJson();
+        expected["version"] = 0;
+        Assert.Equal(expected.ToJsonString(), (await rig.DataAsync("view.get")).ToJsonString());
 
         JsonNode set = await rig.DataAsync("view.set", Args("""{"camera":{"yaw":90,"mode":"fly"},"layers":{"terrain":{"opacity":0.5}}}"""));
 
@@ -110,6 +112,31 @@ public sealed class HostCommandTests
         Assert.Equal(1, viewEvent.Num("version"));
         Assert.Equal("http", viewEvent.Str("origin"));
         Assert.Equal(90, viewEvent.Num("view.camera.yaw"));
+    }
+
+    [Fact]
+    public async Task ViewGet_IncludesFollowOriginWhileFollowing_AndOmitsItWhenNothingFollowed()
+    {
+        await using HostRig rig = HostRig.Create();
+
+        // When nothing is followed, followOrigin is omitted and version is emitted.
+        JsonNode initial = await rig.DataAsync("view.get");
+        Assert.Null(initial.At("followOrigin"));
+        Assert.Equal(0, initial.Num("version"));
+
+        // While something is followed, followOrigin reflects the owner.
+        await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = "0x1234" }, CommandOrigin.Cli);
+        JsonNode following = await rig.DataAsync("view.get");
+        Assert.Equal("0x1234", following.Str("follow"));
+        Assert.Equal("cli", following.Str("followOrigin"));
+        Assert.Equal(1, following.Num("version"));
+
+        // When follow is cleared, followOrigin is omitted again.
+        await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = null }, CommandOrigin.Cli);
+        JsonNode cleared = await rig.DataAsync("view.get");
+        Assert.Null(cleared.At("follow"));
+        Assert.Null(cleared.At("followOrigin"));
+        Assert.Equal(2, cleared.Num("version"));
     }
 
     [Fact]

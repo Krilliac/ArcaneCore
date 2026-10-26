@@ -133,16 +133,17 @@ public sealed partial class AtlasServer
                 _hub.Remove(connection);
 
                 // The follower left: the host stops moving the shared camera for it.
-                _context.View.ReleaseFollow($"ui:{connection.Id}");
+                _context.View.ReleaseFollow($"{UiHub.OriginPrefix}{connection.Id}");
             }
 
             await Task.WhenAll(commands.Append(pump)).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
-            // A command that was still running may have set a follow before the connection was removed from the hub (later ones are
-            // refused by the view store); release once more now that the commands have ended or the wait ran out.
+            // Defence in depth: any follow set before the connection was removed from the hub was cleared by the first release
+            // above, and later sets are refused by the view store's OriginConnected check. This second release ensures no follow
+            // lingers if OriginConnected was unset or bypassed.
             if (connection is not null)
             {
-                _context.View.ReleaseFollow($"ui:{connection.Id}");
+                _context.View.ReleaseFollow($"{UiHub.OriginPrefix}{connection.Id}");
             }
 
             await TryCloseAsync(socket, WebSocketCloseStatus.NormalClosure, "bye").ConfigureAwait(false);
@@ -332,7 +333,7 @@ public sealed partial class AtlasServer
 
     private async Task RunCommandAsync(UiConnection connection, JsonNode? id, string name, JsonObject? args, CancellationToken ct)
     {
-        using IDisposable scope = HostOrigin.With($"ui:{connection.Id}");
+        using IDisposable scope = HostOrigin.With($"{UiHub.OriginPrefix}{connection.Id}");
         CommandResult result;
         try
         {

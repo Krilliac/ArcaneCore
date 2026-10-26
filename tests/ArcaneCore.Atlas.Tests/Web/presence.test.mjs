@@ -600,6 +600,27 @@ test('app: a live.follow result that beats its view event keeps the follow, beca
     assert.equal(app._peerFollow, false);
 });
 
+test('app: a stale view.get, older than an applied event, does not change _peerFollow', async () => {
+    const other = 'ui:other0000000';
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, camera: camera(111) };
+
+    // At version 6, another UI takes the follow; the view event arrives and sets _peerFollow = true, clearing the local follow.
+    socket.emit('event', 'view', { version: 6, origin: other, cameraChanged: true, followOrigin: other, view: hostView(app, { follow: '0xBB' }) });
+    assert.equal(app.viewVersion, 6);
+    assert.equal(app._peerFollow, true);
+    assert.equal(app.view.follow, null);
+
+    // A stale view.get response from version 5 (when this UI still held the follow) arrives afterwards.
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: { ...hostView(app, { follow: '0xAA' }), version: 5, followOrigin: socket.origin }, elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+
+    await app.refreshView({ takeCamera: true });
+    assert.equal(app._peerFollow, true, 'stale view.get does not clear peer follow ownership');
+    assert.equal(app.view.follow, null, 'local follow is not restored by stale snapshot');
+});
+
 test('app: a first hello whose follow belongs to another UI starts at the shared camera but adopts no follow, and ignores its live frames', () => {
     const other = 'ui:other0000000';
     const { app, socket } = makeApp();

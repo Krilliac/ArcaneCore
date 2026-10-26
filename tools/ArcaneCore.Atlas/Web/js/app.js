@@ -494,18 +494,23 @@ export class App {
         const result = await this.runCommand('view.get', {}, { quiet: true, noRefresh: true });
         if (result.ok) {
             const body = result.data?.view ?? result.data;
-            if (Number.isFinite(result.data?.version)) {
-                this.viewVersion = Math.max(this.viewVersion, result.data.version);
+            const version = Number(result.data?.version);
+            const isStale = Number.isFinite(version) && version < this.viewVersion;
+            if (Number.isFinite(version)) {
+                this.viewVersion = Math.max(this.viewVersion, version);
             }
             // The host says who owns the follow it holds (`followOrigin`, present when something is followed), so a command result that
             // beats the view event cannot leave a stale peer-ownership flag that would drop this UI's own follow. A host that sends
-            // no owner for a held follow (an older one) leaves the flag as the last event set it.
-            const held = typeof body?.follow === 'string' && body.follow.length > 0;
-            const owner = result.data?.followOrigin;
-            if (!held) {
-                this._peerFollow = false;
-            } else if (typeof owner === 'string' || owner === null) {
-                this._peerFollow = typeof owner === 'string' && owner.startsWith('ui:') && owner !== this.socket.origin;
+            // no owner for a held follow (an older one) leaves the flag as the last event set it. A result older than the last view
+            // event applied is ignored for ownership so it cannot undo a peer follow that arrived in the meantime.
+            if (!isStale) {
+                const held = typeof body?.follow === 'string' && body.follow.length > 0;
+                const owner = result.data?.followOrigin;
+                if (!held) {
+                    this._peerFollow = false;
+                } else if (typeof owner === 'string' || owner === null) {
+                    this._peerFollow = typeof owner === 'string' && owner.startsWith('ui:') && owner !== this.socket.origin;
+                }
             }
             this.#replaceView(this.#mergeRemote(normalizeView(body, this.view), takeCamera), 'refresh');
         }

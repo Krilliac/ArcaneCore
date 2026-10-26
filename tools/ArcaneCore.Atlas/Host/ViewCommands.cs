@@ -98,10 +98,10 @@ internal static class ViewCommands
 
     private static Task<JsonNode?> ViewGet(CommandInvocation invocation, CancellationToken cancellationToken)
     {
-        // The view and the follow owner come from one snapshot. `followOrigin` is added only while something is followed, so a
-        // view that follows nothing stays exactly the ViewState JSON.
-        (ViewState view, _, string? followOrigin) = invocation.Service<AtlasContext>().View.Snapshot();
+        // The view, version, and the follow owner come from one snapshot. `followOrigin` is added only while something is followed.
+        (ViewState view, long version, string? followOrigin) = invocation.Service<AtlasContext>().View.Snapshot();
         JsonObject json = view.ToJson();
+        json["version"] = version;
         if (view.FollowGuid is not null)
         {
             json["followOrigin"] = followOrigin;

@@ -581,13 +581,13 @@ public sealed class HostPresenceTests
         // A follows through its own socket, so the follow belongs to ui:<A>.
         await a.SendAsync(Raw("""{"op":"command","id":1,"name":"view.set","args":{"follow":"AB"}}"""));
         JsonNode followed = await b.ReceiveEventAsync("view", d => d.At("view.follow") is not null);
-        Assert.Equal($"ui:{a.ConnectionId}", followed.Str("data.origin"));
-        Assert.Equal($"ui:{a.ConnectionId}", followed.Str("data.followOrigin"));
+        Assert.Equal($"{UiHub.OriginPrefix}{a.ConnectionId}", followed.Str("data.origin"));
+        Assert.Equal($"{UiHub.OriginPrefix}{a.ConnectionId}", followed.Str("data.followOrigin"));
 
         // A later patch by another origin that leaves the follow alone keeps the owner (a per-frame 'live' patch looks like this).
         await rig.InvokeAsync("view.set", new JsonObject { ["camera"] = new JsonObject { ["yaw"] = 33 } }, CommandOrigin.Mcp);
         JsonNode moved = await b.ReceiveEventAsync("view", d => d.Str("origin") == "mcp");
-        Assert.Equal($"ui:{a.ConnectionId}", moved.Str("data.followOrigin"));
+        Assert.Equal($"{UiHub.OriginPrefix}{a.ConnectionId}", moved.Str("data.followOrigin"));
 
         // Following another entity from the CLI takes the follow over.
         await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = "CD" }, CommandOrigin.Cli);
@@ -608,7 +608,7 @@ public sealed class HostPresenceTests
         await using UiClient b = await UiClient.ConnectAsync(rig);
 
         await a.SendAsync(Raw("""{"op":"command","id":1,"name":"view.set","args":{"follow":"AB"}}"""));
-        await b.ReceiveEventAsync("view", d => d.Str("followOrigin") == $"ui:{a.ConnectionId}");
+        await b.ReceiveEventAsync("view", d => d.Str("followOrigin") == $"{UiHub.OriginPrefix}{a.ConnectionId}");
 
         await rig.InvokeAsync("view.set", new JsonObject { ["follow"] = "AB" }, CommandOrigin.Cli);
 
