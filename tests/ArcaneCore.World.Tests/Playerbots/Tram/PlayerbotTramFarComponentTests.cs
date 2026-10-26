@@ -48,4 +48,30 @@ public sealed class PlayerbotTramFarComponentTests : IDisposable
         Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.InOtherWalkingComponent(world.Player, JoinedApproach)));
         Assert.True(await world.Host.OnWorldAsync(() => PlayerbotTram.CanReachEntranceApproach(world.Player, JoinedApproach)));
     }
+
+    /// <summary>The fragment exemption of IsUnreachableOnFoot is kept: a start in a pocket no walk leaves says nothing about the world.</summary>
+    [Fact]
+    public async Task AStartOnAFragment_IsNotCalledInAnotherComponent()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Pocket, new FloorLineOfSight());
+        await world.PlaceAsync(new Vector3(5, 5, 0));
+        bool onFragment = false;
+        for (int think = 0; think < 80 && !onFragment; think++)
+        {
+            onFragment = await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsOnMeshFragment(world.Player));
+            if (!onFragment) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.True(onFragment, "the pocket is not read as a fragment");
+        Assert.False(await world.Host.OnWorldAsync(() => PlayerbotNavigation.InOtherWalkingComponent(world.Player, new Vector3(30, 5, 0))));
+    }
+
+    // PlayerbotMeshFragmentTests.Fragment(4): the pocket (X 0-10, Y 0-30) is one region touching no tile border; the rest joins four tiles.
+    private static readonly (int X, int Y, CellTile Tile)[] Pocket =
+    [
+        (10, 10, new CellTile(0, 0, 0, 0, 8, 8, Size: 5) { LinkedSides = [0, 2], Walkable = (i, j) => i <= 1 && j <= 5 || i >= 4 }),
+        (10, 11, new CellTile(0, 1, 40, 0, 8, 8, Size: 5) { LinkedSides = [0, 6] }),
+        (11, 10, new CellTile(1, 0, 0, 40, 8, 8, Size: 5) { LinkedSides = [2, 4] }),
+        (11, 11, new CellTile(1, 1, 40, 40, 8, 8, Size: 5) { LinkedSides = [4, 6] }),
+    ];
 }

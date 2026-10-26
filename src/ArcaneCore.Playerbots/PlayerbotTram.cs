@@ -343,6 +343,11 @@ internal static partial class PlayerbotTram
     /// 143,333 ms cycle), the walk to the exit. That is up to <see cref="SlowTramCycles"/> cycles plus
     /// <see cref="SlowTramWalkAllowanceMs"/>. (The old fixed 180 s assumed a 120 s cycle; the real one is 143.3 s, so it fired on trips that were fine, #1499.)
     /// </summary>
+    /// <remarks>
+    /// Note the order of the bounds: a bot that never gets aboard fails first (<c>no-car-stopped</c> after 2 cycles + 30 s in
+    /// <see cref="AtPlatform"/>), before this bound (2 cycles + 60 s). In practice trip-slow means a trip that boarded and then took
+    /// too long (a slow ride, a slow walk out); a bot stuck waiting is reported as a failed trip.
+    /// </remarks>
     internal const uint SlowTramCycles = 2;
 
     /// <summary>The walks to the dock and to the exit, and a think's slack, on top of <see cref="SlowTramCycles"/> cycles.</summary>
@@ -452,7 +457,7 @@ internal static partial class PlayerbotTram
     /// </summary>
     internal static bool CanReachEntranceApproach(Player player, Vector3 approach)
     {
-        Vector3 at = new(player.X, player.Y, player.Z);
+        Vector3 at = PlayerbotMotion.CurrentPosition(player);
         if (Vector2.Distance(Flat(at), Flat(approach)) > 150f)
             return !PlayerbotNavigation.InOtherWalkingComponent(player, approach);
         var options = new PlayerbotOptions();
@@ -516,7 +521,16 @@ internal static partial class PlayerbotTram
         {
             TramPlatform platform = trip.Network.Other(trip.To);
             ReportBoardMissed(player, trip, missedCar, platform, new Vector3(player.X, player.Y, player.Z), now, CanReport(session, player));
-            ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _);
+            PlayerbotThinkProbe.Phase("tram choose car");
+            bool chosen = ChooseCar(player, map, carSystem, trip, platform, thinkOptions, now, out _, out _, out _);
+            // The pump cannot walk (no TryAdvance without the think's elapsed time), and the choice assumed the walk starts now: a car
+            // whose spot needs a walk is dropped, and the next think chooses and walks in one step. Only a bot already beside its
+            // new spot keeps the choice (the pump boards it while the stop window is open).
+            if (!chosen || trip.Route is not null)
+            {
+                trip.Car = null;
+                trip.Route = null;
+            }
         }
 
         switch (trip.Stage)

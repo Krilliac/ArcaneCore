@@ -265,14 +265,14 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
             return world.Host.World.NowMs;
         });
 
-        (uint rechosenMs, GameObject? car) = await world.OnWorldAsync(() =>
+        (uint rechosenMs, bool walkPending) = await world.OnWorldAsync(() =>
         {
             TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
-            return (trip.DockChosenMs, trip.Car);
+            return (trip.DockChosenMs, trip.Car is not null && trip.Route is not null);
         });
         Assert.NotEqual(chosenMs, rechosenMs);
         Assert.Equal(now, rechosenMs);
-        Assert.NotNull(car);
+        Assert.False(walkPending, "the pump keeps a car only if no walk is needed (it cannot start one)");
         Assert.Equal(1, capture.Count(Key("board-missed")));
     }
 
@@ -553,5 +553,70 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         Assert.NotEqual(TramStep.Failed, step);
         Assert.NotEqual(TramStage.ToEntrance, await world.OnWorldAsync(() => Stage(world)));
         Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
+    }
+
+    /// <summary>Open on the continent, nothing on the tram map: a trip that reaches the tram finds no way to a car (<c>no-way-to-platform</c>).</summary>
+    private sealed class OpenExceptOnTheTram : IPathfinder
+    {
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => mapId == TramTestData.Tram ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
+    }
+
+    /// <summary>
+    /// #1499 with a running car (cycle 120 s, so the slow bound is live): a trip that failed at the platform (no way to a car) and then
+    /// takes longer than the bound to get out is reported as failed, never as slow.
+    /// </summary>
+    [Fact]
+    public async Task FailedTrip_WithARunningCar_PastTheSlowBound_IsReportedAsFailed_NotSlow()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync(new OpenExceptOnTheTram());
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => world.Player.MapId == TramTestData.Tram && Stage(world) is TramStage.ToExit && PlayerbotTram.TripOf(world.Player)!.Failure is not null);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        Assert.NotNull(await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.FailureCategory));
+
+        await world.AdvanceAsync(SlowBoundMs + 30_000);
+        await DriveUntilAsync(world, options, () => Stage(world) is TramStage.Done or TramStage.Failed);
+
+        Assert.True(capture.Any(Key("trip-failed")), capture.Describe());
+        Assert.False(capture.Any(Key("trip-slow")), capture.Describe());
+    }
+
+    /// <summary>
+    /// A car missed with thinks 12 s apart: the pump chooses again at once but cannot walk, so a car whose spot needs a walk is left
+    /// to the next think (route and car never both set after a pump-only tick), and the bot still boards a car and arrives, with the
+    /// miss reported once.
+    /// </summary>
+    [Fact]
+    public async Task MissedCar_WithThinksTwelveSecondsApart_IsNeverLeftWithAWalkOnlyAThinkCanStart()
+    {
+        await using TramTestWorld world = await StartAtStormwindWithTripAsync();
+        PlayerbotOptions options = Options();
+        await DriveUntilAsync(world, options, () => OnTramWaiting(world));
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        uint departMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Dock.DepartMs);
+        await world.AdvanceAsync(departMs + 5_000);
+
+        const int ThinkEveryTicks = 120;
+        bool walkLeftToThePump = false;
+        TramStage? stage = null;
+        uint lastChosenMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.DockChosenMs);
+        for (int tick = 1; tick < 12_000 && stage is not (TramStage.Done or TramStage.Failed); tick++)
+        {
+            bool think = tick % ThinkEveryTicks == 0;
+            uint before = lastChosenMs;
+            (stage, lastChosenMs, bool chosenByPumpWithWalk) = await world.TickAsync(() =>
+            {
+                if (think) Drive(world, options);
+                TramTrip? trip = PlayerbotTram.TripOf(world.Player);
+                return (trip?.Stage, trip?.DockChosenMs ?? before, !think && trip is { Car: not null, Route: not null } && trip.DockChosenMs != before);
+            });
+            walkLeftToThePump |= chosenByPumpWithWalk;
+        }
+
+        Assert.False(walkLeftToThePump, "the pump chose a car whose walk only a think can start");
+        Assert.Equal(TramStage.Done, stage);
+        Assert.Equal(1, capture.Count(Key("board-missed")));
     }
 }
