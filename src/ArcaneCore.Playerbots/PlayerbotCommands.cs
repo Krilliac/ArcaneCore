@@ -239,8 +239,10 @@ public sealed class PlayerbotCommands : ICommandGroup
         else
         {
             context.Reply("Split brain clear accepted (re-reading the stored rows).");
+            IDisposable hold = context.Defer(); // the replies below come from the background: the command is not settled before them
             _ = Task.Run(async () =>
             {
+                using IDisposable release = hold;
                 try
                 {
                     ManagedPlayerbotFeature.SplitBrainClear cleared = await feature.ClearSplitBrainAsync().ConfigureAwait(false);
@@ -271,7 +273,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         if (!TryRequiredId(text, out string id)) return false;
         ManagedPlayerbotFeature? service = context.Session.Services.GetService<ManagedPlayerbotFeature>();
         if (service is null) { context.Reply("Playerbot inspection is unavailable."); return true; }
-        _ = InspectAndReplyAsync(context, service, id);
+        _ = InspectAndReplyAsync(context, service, id, context.Defer());
         return true;
     }
 
@@ -406,8 +408,10 @@ public sealed class PlayerbotCommands : ICommandGroup
         {
             Guid[] ids = [.. matches.Select(match => match.BotId)];
             context.Reply("Playerbot home accepted.");
+            IDisposable clearHold = context.Defer();
             _ = Task.Run(async () =>
             {
+                using IDisposable release = clearHold;
                 try { context.Reply($"Playerbot home: {await service.ClearHomesAsync(ids).ConfigureAwait(false)} cleared."); }
                 catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException error) { context.Reply($"Playerbot home refused: split brain is latched (see .playerbot splitbrain); {error.Done} cleared before it."); }
                 catch (Exception error) when (error is not OutOfMemoryException)
@@ -515,8 +519,10 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
 
         context.Reply("Playerbot home accepted.");
+        IDisposable setHold = context.Defer();
         _ = Task.Run(async () =>
         {
+            using IDisposable release = setHold;
             try
             {
                 ManagedPlayerbotFeature.HomeOutcome outcome = await service.SetHomesAsync(targets, radius, placeName, default, zoneClipped)
@@ -552,8 +558,9 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
-    private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id)
+    private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id, IDisposable hold)
     {
+        using IDisposable release = hold;
         try
         {
             await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false);
@@ -627,13 +634,15 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
 
         context.Reply($"Playerbot {verb} accepted.");
-        _ = Task.Run(() => CompleteAsync(context, service, operation));
+        IDisposable hold = context.Defer();
+        _ = Task.Run(() => CompleteAsync(context, service, operation, hold));
         return true;
     }
 
     private static async Task CompleteAsync(CommandContext context, IPlayerbotService service,
-        Func<IPlayerbotService, Task<PlayerbotOperationResult>> operation)
+        Func<IPlayerbotService, Task<PlayerbotOperationResult>> operation, IDisposable hold)
     {
+        using IDisposable release = hold;
         try
         {
             PlayerbotOperationResult result = await operation(service).ConfigureAwait(false);
