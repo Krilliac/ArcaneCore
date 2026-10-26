@@ -159,6 +159,16 @@ internal sealed class PlayerbotPathJobs
 
     internal static void NoteTilePending() => t_lastPendingWasJob = false;
 
+    /// <summary>
+    /// A background job other than a path search (a region route, <see cref="PlayerbotRegionRoutes"/>) is under way for the running query:
+    /// counted as a pending answer (<see cref="PendingAnswers"/>), so the planning wrappers answer <see cref="PlanOutcome.Pending"/>.
+    /// </summary>
+    internal static void NoteExternalPending()
+    {
+        t_pendingAnswers++;
+        t_lastPendingWasJob = true;
+    }
+
     /// <summary>Whether the running query may be answered pending (a <see cref="Deferrable"/> scope, not inside <see cref="NoDefer"/>).</summary>
     internal static bool InDeferrableScope => t_deferDepth > 0 && t_noDeferDepth == 0;
 

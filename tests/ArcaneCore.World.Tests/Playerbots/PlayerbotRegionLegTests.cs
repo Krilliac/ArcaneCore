@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
@@ -99,6 +100,73 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.True(route is not null, "the region graph joins the two sides but the plan was refused");
         Vector3 end = route!.Points[^1];
         Assert.True(end.Y > start.Y + 30f, $"the route ends at {end}, against the wall instead of toward the door");
+    }
+
+    /// <summary>
+    /// A far goal planned through a waiting wrapper: the region search is a miss, runs off the think (the plan is pending), and the leg is
+    /// planned on a later think from the finished answer. The next leg between the same regions is a cache hit: no search.
+    /// </summary>
+    [Fact]
+    public async Task ARegionRouteMiss_RunsOffTheThink_AndTheNextLegIsACacheHit()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        await world.PlaceAsync(Start);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes))!;
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        Assert.Equal(0, cache.Searches);
+
+        var wait = new TileWait();
+        uint now = 1_000;
+        PlayerbotRoute? route = null;
+        PlanOutcome outcome = await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now, out route));
+        Assert.Equal(PlanOutcome.Pending, outcome);
+        Assert.Null(route);
+
+        for (int tries = 0; tries < 400 && outcome == PlanOutcome.Pending; tries++)
+        {
+            await Task.Delay(25);
+            now += 25;
+            outcome = await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now, out route));
+        }
+
+        Assert.Equal(PlanOutcome.Route, outcome);
+        Assert.NotNull(route);
+        Assert.Equal(1, cache.Searches);
+        Assert.Equal(1, cache.Count);
+
+        // The same pair again: a hit, answered on the first ask.
+        Assert.Equal(PlanOutcome.Route, await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now + 25, out route)));
+        Assert.Equal(1, cache.Searches);
+    }
+
+    /// <summary>A rebuilt graph is a new instance: it starts with an empty cache, and the old graph's routes never answer for it.</summary>
+    [Fact]
+    public async Task ARebuiltGraph_DoesNotSeeTheOldGraphsRoutes_AndTheCacheIsBounded()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph first = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes))!;
+        NavRegionGraph rebuilt = NavRegionGraph.Build(_fixture.Directory, 0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotSame(first, rebuilt);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(first, Start, locate), to = world.Nav.RegionAt(first, Goal, locate);
+        Assert.NotEqual(from, to);
+
+        Assert.True(PlayerbotRegionRoutes.TryRoute(first, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus status, out List<Vector3> portals));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(first).Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(first, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus again, out List<Vector3> hit));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(first).Searches);
+        Assert.Equal(status, again);
+        Assert.Equal(portals, hit);
+
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(rebuilt).Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(rebuilt, from, Start, to, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(rebuilt).Searches);
+
+        // Bounded: more pairs than MaxEntries keep MaxEntries.
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(rebuilt);
+        for (int extra = 0; extra < PlayerbotRegionRoutes.MaxEntries + 20; extra++)
+            cache.Search(from, Start, extra + 1000, Goal);
+        Assert.True(cache.Count <= PlayerbotRegionRoutes.MaxEntries);
     }
 
     // The layout of NavRegionGraphTests: Detour tile (x, y) covers world Y from 40x and world X from 40y.

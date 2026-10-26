@@ -749,7 +749,15 @@ internal static class PlayerbotNavigation
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
-        NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
+        // The region search is cached per graph and region pair (PlayerbotRegionRoutes). A miss under a planning wrapper (its callers handle
+        // PlanOutcome.Pending) runs on the pool and the bot answers pending, like a path job; elsewhere it searches here once and keeps the answer.
+        bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
+        if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals))
+        {
+            PlayerbotPathJobs.NoteExternalPending();
+            return null;
+        }
+
         bool unreachable = status == NavRegionRouteStatus.Unreachable && from != to && !IsFragment(graph, from)
             && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f);
         if (portals.Count == 0) return unreachable ? false : null;
