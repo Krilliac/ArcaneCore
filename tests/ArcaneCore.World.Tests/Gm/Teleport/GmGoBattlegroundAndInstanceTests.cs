@@ -229,7 +229,11 @@ public sealed class GmGoBattlegroundAndInstanceTests
                 Battleground second = manager.CreateNewBattleground(BattlegroundType.WarsongGulch, match.Bracket)
                     ?? throw new ScenarioAssertionException("could not create a second match");
                 manager.StartBattleground(second);
-                manager.BindPlayer(GuidOf(context, gm.Name), second, ally.RequirePlayer().Team);
+                var team = ally.RequirePlayer().Team;
+                manager.BindPlayer(GuidOf(context, gm.Name), second, team);
+                // An empty match nobody is invited to is deleted by its first update tick (Battleground.Update returns false), which
+                // would unbind nothing but leave BattlegroundOf null; the bound GM is the invited player that keeps the match alive.
+                second.IncreaseInvitedCount(team);
                 return second.InstanceId;
             });
             ScenarioContext.Expect(other != match.InstanceId, "the second match reuses the first instance id");
