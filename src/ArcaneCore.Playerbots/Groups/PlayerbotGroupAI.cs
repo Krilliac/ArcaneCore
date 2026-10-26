@@ -70,6 +70,7 @@ internal sealed class PlayerbotGroupAI
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
+    private readonly PlayerbotKite _kite;
     private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
@@ -159,6 +160,7 @@ internal sealed class PlayerbotGroupAI
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
+        _kite = new PlayerbotKite(session, options, _spells);
         _equipment = equipment ?? new PlayerbotEquipment(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _spells) { AvoidsStrongCreatures = false };
@@ -247,6 +249,7 @@ internal sealed class PlayerbotGroupAI
         _lootOpened = ObjectGuid.Empty;
         _spells.GroupRole = null;
         _spells.Reset();
+        _kite.Reset(_session.Player);
         _recovery.Reset();
         ForgetFight();
         _unreachable.Clear();
@@ -302,6 +305,7 @@ internal sealed class PlayerbotGroupAI
             _restUntilMs = 0;
             _lootActions.Clear();
             _spells.Reset();
+            _kite.Reset(_session.Player);
             ForgetFight();
             _wipeExitFails = 0; // revived, it stands somewhere else (the landing): a give-up on the exit from where it died does not hold there
             _deathRetired = true;
@@ -441,8 +445,8 @@ internal sealed class PlayerbotGroupAI
             // the point (the commander's own "at the rally point"), or the chase takes it off the point and the raid flaps back into a retreat.
             // A rally where the leader stands only because it found no path (RetreatNoPath) has no point to hold.
             PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
-            if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards);
-            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+            if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards, leader);
+            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards, leader);
             if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
@@ -1197,7 +1201,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <param name="leashCentre">The waypoint of a waiting siege leader, or the retreat point of a rallying one: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent; <see cref="PlayerbotSiegeCommander.RallyYards"/> at a rally.</param>
-    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
+    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards,
+        Player? leader = null)
     {
         _noPathToTarget = false;
         if (!ReferenceEquals(_target, target))
@@ -1215,6 +1220,18 @@ internal sealed class PlayerbotGroupAI
         LastTargetGuid = target.Guid;
         LastTargetEntry = targetEntry;
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
+
+        // A hurt ranged bot kites within the leash of the siege waypoint or rally point, else of its leader.
+        Vector3? kiteCentre = leashCentre ?? (leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map)
+            ? new Vector3(leader.X, leader.Y, leader.Z) : null);
+        if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk))
+        {
+            _route = null;
+            _rangedIdleMs = 0;
+            Step = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:kite");
+            return;
+        }
+
         if (_spells.Update(player, target, interval))
         {
             _rangedIdleMs = 0;

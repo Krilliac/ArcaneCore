@@ -178,6 +178,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options, navigationExecutor);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
+    private PlayerbotKite? _kite;
+
+    /// <summary>The kite of this brain's fights (<see cref="PlayerbotKite"/>; <c>World:Playerbots:Combat:Kite</c>).</summary>
+    private PlayerbotKite Kite => _kite ??= new PlayerbotKite(_session, _options, _combatSpells);
     private readonly Combat.PlayerbotInvincibleWatch _invincibleWatch = new();
     private PlayerbotPvpFight? _pvpFight;
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
@@ -480,6 +484,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _satToWait = false;
         _thinkElapsed = 0;
         _combatSpells.Reset();
+        _kite?.Reset(_session.Player);
         _stall.Reset();
         _homeReturn.Reset();
         _goal = PlayerbotGoalKind.Explore;
@@ -1437,6 +1442,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return;
             }
 
+            // A hurt bot that can attack from range slows the creature on it and backs away to its casting range (PlayerbotKite). The risk
+            // judge above ran first and a retreat always wins; kiting is the fight-on branch, also after a cornered retreat.
+            if (Kite.Update(player, target, interval, null, 0f, Risk))
+            {
+                _route = null; // a chase route in hand is stale once the kite moved the bot (not AbandonRoute: the host would stop the kite's walk)
+                _rangedIdleMs = 0;
+                _goal = PlayerbotGoalKind.Combat;
+                return;
+            }
+
             if (_combatSpells.Update(player, target, interval))
             {
                 if (player.Locomotion.ActiveSpline is not null || (_route is not null && !PlayerbotMotion.IsActive(player)))
@@ -2143,6 +2158,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _satToWait = false;
         _thinkElapsed = 0;
         _combatSpells.Reset();
+        _kite?.Reset(_session.Player);
     }
 
     private void RetireIdleCombatRoute()
