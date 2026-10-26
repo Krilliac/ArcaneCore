@@ -446,8 +446,10 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private readonly HashSet<uint> _blockedRepairSpawns = [];
     private (uint MapId, CreatureContent? Content, int Version, int Events, uint Faction, int Ranks) _repairIndex;
 
-    /// <summary>The reputation factions of the service NPCs the index was built from: the bot's ranks with them are part of its cache key (<see cref="RankStamp"/>).</summary>
-    private uint[] _repairRankFactions = [];
+    /// <summary>The faction templates of this map's service NPCs the index was built from: whether the bot may use each is part of its cache key (<see cref="RankStamp"/>).</summary>
+    private uint[] _repairStampTemplates = [];
+
+    private FactionTemplateCatalog? _repairStampFactions;
 
     /// <summary>The vendor spawns the last <see cref="RefreshRepairSpawns"/> found usable (a test's view of the index).</summary>
     internal IReadOnlyList<(uint Entry, CreatureSpawn Spawn)> VendorServiceSpawns => _vendorServiceSpawns;
@@ -790,19 +792,22 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             ClearRepairTrip();
             FactionTemplateCatalog? factions = session.Services.GetService<QuestNpcFeature>()?.FactionTemplates;
             Vector3 here = new(player.X, player.Y, player.Z);
-            var rankFactions = new SortedSet<uint>();
+            var stampTemplates = new SortedSet<uint>();
             foreach (CreatureTemplate template in content.Templates)
             {
                 NpcFlags flags = (NpcFlags)template.NpcFlags;
                 bool isRepair = (flags & NpcFlags.Repair) != 0;
                 bool isVendor = (flags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(template.Entry).Count > 0;
                 if (!isRepair && !isVendor) continue;
-                if (factions?.Find(template.Faction) is { Faction: not 0 } templateFaction) rankFactions.Add(templateFaction.Faction);
+                IReadOnlyList<CreatureSpawn> spawns = content.GetSpawns(mapId, template.Entry);
+                if (spawns.Count == 0) continue;
+                // Whether the bot may use this template's NPCs is part of the cache key, usable or not (RankStamp).
+                stampTemplates.Add(template.Faction);
                 // The NPC must be one the bot can use, not only one that does not attack it: an Unfriendly one refuses the interaction
                 // (CanApproachTrainer, above Unfriendly).
                 if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, services, factions, template.Faction, ArcaneCore.Game.Reputation.ReputationRank.Unfriendly))
                     continue;
-                foreach (CreatureSpawn spawn in content.GetSpawns(mapId, template.Entry))
+                foreach (CreatureSpawn spawn in spawns)
                 {
                     if (!float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z) || !SpawnPresent(player, spawn))
                         continue;
@@ -813,7 +818,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
 
             TrimServiceSpawns(_repairServiceSpawns, here);
             TrimServiceSpawns(_vendorServiceSpawns, here);
-            _repairRankFactions = [.. rankFactions];
+            _repairStampTemplates = [.. stampTemplates];
+            _repairStampFactions = factions;
             _repairIndex = (mapId, content, content.DefinitionsVersion, events, player.FactionTemplate, RankStamp(player, services));
         }
 
@@ -823,16 +829,18 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     }
 
     /// <summary>
-    /// A stamp of the bot's reputation ranks with the factions of the service NPCs the index holds (<see cref="_repairRankFactions"/>): the
-    /// index leaves out NPCs the bot's rank refuses, so it is rebuilt when a rank changes (a bot that turned Unfriendly with Timbermaw
-    /// Hold, or earned its way back to Neutral). 0 while no index is built or without a reputation owner. A dictionary lookup per faction.
+    /// A stamp of which of this map's service NPC faction templates (<see cref="_repairStampTemplates"/>) the bot may use, by the very
+    /// test that filters the index (<see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/> above Unfriendly): the index is rebuilt
+    /// exactly when an answer changes (a bot that turned Unfriendly with Timbermaw Hold, or earned its way back to Neutral), not on every
+    /// rank change. 0 while no index is built. A reaction lookup per distinct template of the map's vendors.
     /// </summary>
     private int RankStamp(Player player, QuestNpcServices services)
     {
-        if (_repairRankFactions.Length == 0 || services.Deps.Reputation is not { } reputation) return 0;
+        if (_repairStampTemplates.Length == 0) return 0;
         int stamp = 17;
-        foreach (uint faction in _repairRankFactions)
-            stamp = unchecked((stamp * 31) + reputation.GetReputationRank(player, faction));
+        foreach (uint template in _repairStampTemplates)
+            stamp = unchecked((stamp * 31) + (PlayerbotTrainerDestinations.CanApproachTrainer(player, services, _repairStampFactions, template,
+                ArcaneCore.Game.Reputation.ReputationRank.Unfriendly) ? 2 : 1));
         return stamp;
     }
 

@@ -358,7 +358,7 @@ internal sealed class PlayerbotThinkProbe
         if (PlayerbotPathJobs.Bound is { } jobs && jobs.Eligible(collision, options, out ISharedTiledPathSearch shared))
         {
             // An escalated search of this pair came back "no path" a moment ago: the same answer, with no job and no world-thread search.
-            if (jobs.KnownNoPath(from, to)) return PathResult.None(from);
+            if (jobs.KnownNoPath(from, to, options)) return PathResult.None(from);
             PathResult answer = jobs.Resolve(shared, collision.Map, from, to, options, out JobAnswer how, out NavJob? job);
             if (how != JobAnswer.Escalated)
             {
@@ -390,7 +390,7 @@ internal sealed class PlayerbotThinkProbe
         // while: the next episode of failed jobs does not escalate to another search on this thread (PlayerbotPathJobs.NoteNoPath).
         if (escalatedJobs is not null && (path.Type & PathType.NoPath) != 0 && (path.Type & PathType.TilesPending) == 0
             && PathSearchCounters.CappedSearches == cappedBefore)
-            escalatedJobs.NoteNoPath(from, to);
+            escalatedJobs.NoteNoPath(from, to, options);
         if (PathSearchCounters.DeadlineHits != deadlinesBefore)
         {
             t_lastCachedCapped = true;

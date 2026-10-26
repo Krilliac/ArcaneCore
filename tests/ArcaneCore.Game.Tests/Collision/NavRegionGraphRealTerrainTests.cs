@@ -114,8 +114,10 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
     /// Issues #1478 and #1479: the Timbermaw Hold tunnel is not cut on the walking graph (steep slopes excluded). The through-route samples
     /// share one component (12764 in the 2026-10-25 gate run), so the pile-up is not a data cut. 6957.6,-2044.4 and 6940,-2090 are not in
     /// it: they sit in small components of their own (ledges or pockets only steep polygons may join), which is why a goal there is
-    /// unreachable on foot. The graph with steep slopes allowed is printed for those two, not asserted (not known when written). Whether the
-    /// route's regions are cut regions (<see cref="NavRegionGraph.JoinsLargeParts"/>) is printed too.
+    /// unreachable on foot. With steep slopes allowed, 6957.6,-2044.4 joins the Felwood mouth's component and 6940,-2090 does not (asserted, from
+    /// the same gate run). The route's regions are cut regions (<see cref="NavRegionGraph.JoinsLargeParts"/>, the rule of
+    /// <c>PlayerbotNavigation.IsCutRegion</c>): every through-route sample point lies in one, asserted, and the number of such regions on maps
+    /// 0 and 1 is printed.
     /// </summary>
     [RealTerrainFact]
     public void Kalimdor_TimbermawHoldTunnel_ThroughRouteIsOneWalkingComponent_AndTheOffRoutePointsAreNotInIt()
@@ -146,6 +148,22 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         // The gate run of e7254494a: three route regions are articulation regions joining large parts, which the L2 cut-region rule relies on.
         Assert.True(cutRegion, "no region on the through route is an articulation region joining large parts");
 
+        // The IsCutRegion rule on the real graph: the region under a through-route point is one that joins large parts.
+        int routeCutPoints = 0;
+        foreach ((float x, float y) in TimbermawRoute)
+        {
+            List<int> here = [];
+            ComponentsAt(walking, finder, Walking, x, y, here);
+            bool cutHere = here.Any(r => walking.ComponentOf(r) == main && walking.JoinsLargeParts(r, 500));
+            output.WriteLine($"walking: route {x},{y}: a region joins large parts {cutHere}");
+            if (cutHere) routeCutPoints++;
+        }
+
+        Assert.True(routeCutPoints > 0, "no through-route sample point lies in a region that joins large parts");
+        output.WriteLine($"map 1: {CountJoiningLargeParts(walking)} of {walking.RegionCount} regions join large parts");
+        NavRegionGraph easternKingdoms = NavRegionGraph.Build(Mmaps, 0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        output.WriteLine($"map 0: {CountJoiningLargeParts(easternKingdoms)} of {easternKingdoms.RegionCount} regions join large parts");
+
         foreach ((float x, float y) in TimbermawOffRoute)
         {
             HashSet<int> components = ComponentsAt(walking, finder, Walking, x, y, []);
@@ -166,6 +184,14 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         }
     }
 
+
+    private static int CountJoiningLargeParts(NavRegionGraph graph)
+    {
+        int count = 0;
+        for (int region = 0; region < graph.RegionCount; region++)
+            if (graph.JoinsLargeParts(region, 500)) count++;
+        return count;
+    }
 
     private (NavRegionGraph Graph, NavMeshPathfinder Finder) Build(uint map)
     {

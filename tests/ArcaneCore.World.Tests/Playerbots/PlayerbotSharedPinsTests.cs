@@ -173,18 +173,39 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         var pins = new PlayerbotSharedPins();
         var botA = new PlayerbotStallWatch { SharedPins = pins };
         var botB = new PlayerbotStallWatch { SharedPins = pins };
-        bool inB = PlayerbotNavigation.IsCutRegion(graph, 1);
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, inB));
-        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, inB));
+        // The overload the brain reports through (PlayerbotBrain.ReportWorldPin): the region of the stalled bot in the graph decides.
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, graph, 1));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, graph, 1));
         Assert.Equal(0, pins.Count);
         Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
         Assert.False(botA.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
 
-        // The same two reports from a region of one of the parts: the second bot makes the cell a world pin.
-        bool inA = PlayerbotNavigation.IsCutRegion(graph, 0);
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, inA));
-        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 6628f, -2025f, 2_000, inA));
+        // The same two reports from a region of one of the parts, or with no graph built, or from no region: the second bot makes the cell a world pin.
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, graph, 0));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 6628f, -2025f, 2_000, graph, 0));
         Assert.True(pins.IsWorldPin(1, 0, 6627f, -2024f, 2_000));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 100f, 100f, 1_000, null, 1));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 101f, 101f, 2_000, null, 1));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 300f, 300f, 1_000, graph, -1));
+        Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 301f, 301f, 2_000, graph, -1));
+    }
+
+    /// <summary>
+    /// The plan side of the same rule (<c>PlayerbotNavigation.PinRefuses</c>, asked for a plan's destination and for a partial route's end):
+    /// a cell that is a dead-end pin of the bot refuses, except when it lies in a cut region, where it is the way through.
+    /// </summary>
+    [Fact]
+    public void ADeadEndPinRefusesAPlanEnd_ExceptInACutRegion()
+    {
+        NavRegionGraph graph = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 1, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 1), "a pinned cell in the tunnel is the way through");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, 0), "a pinned cell of a part still refuses");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, null, -1), "no graph, no exception");
+        Assert.True(PlayerbotNavigation.PinRefuses(deadEndPin: true, graph, -1), "on no region");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 0), "no pin, no refusal");
+        Assert.False(PlayerbotNavigation.PinRefuses(deadEndPin: false, graph, 1));
     }
 
     // --- the brains ---------------------------------------------------------------------------------------------------------

@@ -1,6 +1,9 @@
+using System.Reflection;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Xunit;
@@ -67,4 +70,54 @@ public sealed class PlayerbotExploreReputationTests
     [InlineData(NpcFlags.None, false)]
     public void IsExploreServiceNpc_IsTrueForVendorQuestGiverAndGossipFlags(NpcFlags flags, bool service)
         => Assert.Equal(service, PlayerbotBrain.IsExploreServiceNpc((uint)flags));
+
+    private static void Set(PlayerbotBrain brain, string field, object? value)
+        => typeof(PlayerbotBrain).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(brain, value);
+
+    /// <summary>
+    /// The brain's own filters, with the state a search sets (the fields are private; the search itself needs a full atlas): a vendor spawn is
+    /// not an eligible explore candidate (<c>IsExploreServiceNpc</c> in <c>ExploreEligible</c>) while an ordinary spawn of the same faction
+    /// is, and the faction filter follows the reputation source the search holds (<c>_exploreSearchReactions</c>). The assignment of that
+    /// field from the quest feature at the start of a search is not covered here.
+    /// </summary>
+    [Fact]
+    public async Task TheBrainsExploreFilters_SkipAVendorSpawn_AndAskTheReputationSource()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                var vendor = new CreatureTemplate { Entry = 11557, Name = "vendor", Faction = 900012, NpcFlags = (uint)NpcFlags.Vendor, MinLevel = 8, MaxLevel = 8 };
+                var beast = new CreatureTemplate { Entry = 11558, Name = "beast", Faction = 900012, MinLevel = 8, MaxLevel = 8 };
+                CreatureSpawn At(uint guid, uint entry, float dx) => new() { Guid = guid, Entry = entry, MapId = player.MapId, X = player.X + dx, Y = player.Y, Z = player.Z };
+                var content = new CreatureContent([vendor, beast], [At(1, 11557, 30f), At(2, 11558, 40f)], [], [], []);
+                var atlas = new PlayerbotExploreAtlas(content);
+                var catalog = new FactionTemplateCatalog([Self, Timbermaw]);
+                var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+                Set(brain, "_exploreSearchPlayer", player);
+                Set(brain, "_exploreSearchContent", content);
+                Set(brain, "_exploreSearchAtlas", atlas);
+                Set(brain, "_exploreThreatFilter", (Func<uint, bool>)(_ => false));
+                Set(brain, "_exploreSearchFactions", catalog);
+                Set(brain, "_exploreSearchSelf", Self);
+                MethodInfo eligible = typeof(PlayerbotBrain).GetMethod("ExploreEligible", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                MethodInfo attackable = typeof(PlayerbotBrain).GetMethod("ExploreAttackableFaction", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                bool Eligible(CreatureSpawn spawn) => (bool)eligible.Invoke(brain, [new PlayerbotExploreAtlas.Candidate(spawn, 0, 0)])!;
+                bool Attackable() => (bool)attackable.Invoke(brain, [900012u])!;
+
+                Assert.False(Eligible(At(1, 11557, 30f)), "a vendor spawn is not an explore candidate");
+                Assert.True(Eligible(At(2, 11558, 40f)), "an ordinary spawn of the same faction is");
+
+                Set(brain, "_exploreSearchReactions", new TrainerReactions { Rank = ReputationRank.Honored });
+                Assert.False(Attackable(), "Honored with the faction: not a target");
+                Set(brain, "_exploreSearchReactions", new TrainerReactions { Rank = ReputationRank.Neutral });
+                Assert.True(Attackable());
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
 }

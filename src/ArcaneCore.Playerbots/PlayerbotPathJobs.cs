@@ -124,7 +124,7 @@ internal sealed class PlayerbotPathJobs
     /// </summary>
     internal const long NoPathMs = 30_000;
 
-    /// <summary>The side (yards) of the cells a negative answer is keyed by: a bot that shifts a few yards between thinks asks the same pair.</summary>
+    /// <summary>The side (yards) of the cells, and the height of the bands, a negative answer is keyed by: a bot that shifts a few yards between thinks asks the same pair.</summary>
     internal const float NoPathCellYards = 8f;
 
     /// <summary>The most negative answers one bot keeps (the oldest is dropped).</summary>
@@ -313,19 +313,25 @@ internal sealed class PlayerbotPathJobs
 
     // ---- negative answers -----------------------------------------------------------------------------------------------------
 
-    private static (int X, int Y) Cell(Vector3 point)
-        => ((int)MathF.Floor(point.X / NoPathCellYards), (int)MathF.Floor(point.Y / NoPathCellYards));
+    /// <summary>The cell of a point: <see cref="NoPathCellYards"/> square, and a band of the same height (a tunnel under a ridge is not the ground above it).</summary>
+    private static (int X, int Y, int Z) Cell(Vector3 point)
+        => ((int)MathF.Floor(point.X / NoPathCellYards), (int)MathF.Floor(point.Y / NoPathCellYards), (int)MathF.Floor(point.Z / NoPathCellYards));
+
+    /// <summary>What a negative answer is for besides the cells: the mover and the terrain it may use, and whether a partial answer was allowed (a different query has a different answer).</summary>
+    private static int Kind(PathOptions options)
+        => HashCode.Combine(options.Mover, (int)options.EffectiveIncludeFlags, (int)options.ExcludeFlags, options.AllowPartial);
 
     /// <summary>
     /// Whether the bound bot was told "no path" for the pair of cells holding <paramref name="from"/> and <paramref name="to"/> by a
     /// synchronous search less than <see cref="NoPathMs"/> ago (<see cref="NoteNoPath"/>). Expired answers are dropped here. World thread;
     /// a dictionary lookup and at most <see cref="MaxNoPathsPerBot"/> comparisons under the lock.
     /// </summary>
-    internal bool KnownNoPath(Vector3 from, Vector3 to)
+    internal bool KnownNoPath(Vector3 from, Vector3 to, PathOptions options)
     {
         Guid botId = t_botId;
         long wallMs = WallMs();
-        (int X, int Y) fromCell = Cell(from), toCell = Cell(to);
+        (int X, int Y, int Z) fromCell = Cell(from), toCell = Cell(to);
+        int kind = Kind(options);
         lock (_gate)
         {
             if (!_bots.TryGetValue(botId, out BotState? state) || state.NoPaths is not { Count: > 0 } known) return false;
@@ -336,7 +342,7 @@ internal sealed class PlayerbotPathJobs
                 {
                     known.RemoveAt(i);
                 }
-                else if (answer.From == fromCell && answer.To == toCell)
+                else if (answer.Kind == kind && answer.From == fromCell && answer.To == toCell)
                 {
                     _totals = _totals with { NoPathCached = _totals.NoPathCached + 1 };
                     return true;
@@ -352,18 +358,19 @@ internal sealed class PlayerbotPathJobs
     /// to <paramref name="to"/> (a complete answer: not capped, not pending) for <see cref="NoPathMs"/> for the bound bot, so that
     /// <see cref="KnownNoPath"/> answers the same pair without a job or another world-thread search.
     /// </summary>
-    internal void NoteNoPath(Vector3 from, Vector3 to)
+    internal void NoteNoPath(Vector3 from, Vector3 to, PathOptions options)
     {
         Guid botId = t_botId;
         long until = WallMs() + NoPathMs;
-        (int X, int Y) fromCell = Cell(from), toCell = Cell(to);
+        (int X, int Y, int Z) fromCell = Cell(from), toCell = Cell(to);
+        int kind = Kind(options);
         lock (_gate)
         {
             if (!_bots.TryGetValue(botId, out BotState? state)) _bots[botId] = state = new BotState();
             List<NoPathAnswer> known = state.NoPaths ??= new List<NoPathAnswer>(MaxNoPathsPerBot);
             for (int i = 0; i < known.Count; i++)
             {
-                if (known[i].From == fromCell && known[i].To == toCell)
+                if (known[i].Kind == kind && known[i].From == fromCell && known[i].To == toCell)
                 {
                     known.RemoveAt(i);
                     break;
@@ -371,11 +378,11 @@ internal sealed class PlayerbotPathJobs
             }
 
             if (known.Count >= MaxNoPathsPerBot) known.RemoveAt(0);
-            known.Add(new NoPathAnswer(fromCell, toCell, until));
+            known.Add(new NoPathAnswer(fromCell, toCell, kind, until));
         }
     }
 
-    private readonly record struct NoPathAnswer((int X, int Y) From, (int X, int Y) To, long UntilWallMs);
+    private readonly record struct NoPathAnswer((int X, int Y, int Z) From, (int X, int Y, int Z) To, int Kind, long UntilWallMs);
 
     // ---- the query ------------------------------------------------------------------------------------------------------------
 

@@ -309,7 +309,8 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     /// <summary>
     /// Whether the bot may walk to a creature of faction template <paramref name="templateId"/>: its reputation reaction is above
     /// <paramref name="above"/> (<see cref="ReputationRank.Hostile"/> by default: only a creature that attacks on sight is refused), or
-    /// without a reaction source its templates are not hostile. A service the bot will use (vendor, repair) passes
+    /// without a reaction source its templates are not hostile (<paramref name="above"/> is ignored then: the templates cannot tell Unfriendly
+    /// from Neutral). A service the bot will use (vendor, repair) passes
     /// <see cref="ReputationRank.Unfriendly"/>: vmangos <c>Player::CanInteractWithNPC</c> also refuses ranks up to Unfriendly
     /// (<see cref="QuestNpcServices.InteractableNpc(Player, ObjectGuid, NpcFlags)"/>), so an Unfriendly creature is walked to and then
     /// cannot be used (Timbermaw Hold vendors, issues #1478 and #1479).

@@ -1766,9 +1766,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
-            if (CanShareDeadEndPin(player)
-                && _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now,
-                    PlayerbotNavigation.IsCutRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z))) is { } newPin)
+            if (CanShareDeadEndPin(player) && ReportWorldPin(player, now) is { } newPin)
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
         }
         else if (worldPin)
@@ -1896,6 +1894,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
         uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
         return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+    }
+
+    /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
+    private string? ReportWorldPin(Player player, uint now)
+    {
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
+        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region);
     }
 
     /// <summary>
@@ -4004,7 +4009,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal static System.Numerics.Vector3 InwardLeg(PlayerbotHomeArea home, System.Numerics.Vector3 from, int refusals, Map? map)
     {
         Func<System.Numerics.Vector3, System.Numerics.Vector3>? ground = null;
-        if (map is not null) ground = end => PlayerbotNavigation.GroundNear(map, from, end);
+        if (map is not null) ground = new PlayerbotNavigation.FloorProbe(map, from).Near;
         return InwardLeg(home, from, refusals, ground);
     }
 

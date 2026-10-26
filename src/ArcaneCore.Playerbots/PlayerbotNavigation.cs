@@ -299,21 +299,46 @@ internal static class PlayerbotNavigation
     /// </summary>
     internal static bool IsCutRegionAt(Player player, Vector3 point)
     {
-        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
-            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
-            return false;
-        return IsCutRegion(graph, nav.RegionAt(graph, point, WalkingLocate));
+        TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
+        return IsCutRegion(graph, region);
     }
 
-    /// <summary><paramref name="region"/> (-1: none) of <paramref name="graph"/> joins two parts of at least <see cref="CutRegionPartPolygons"/> polygons each.</summary>
-    internal static bool IsCutRegion(NavRegionGraph graph, int region) => region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons);
+    /// <summary>
+    /// The walking region graph of the player's map and the region of it under <paramref name="point"/> (-1: none). False, and a null graph,
+    /// when the graph is not built yet or the map has no navigation mesh. The lookup reads tiles without blocking; world thread.
+    /// </summary>
+    internal static bool TryRegionAt(Player player, Vector3 point, out NavRegionGraph? graph, out int region)
+    {
+        graph = null;
+        region = -1;
+        if (player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } built)
+            return false;
+        graph = built;
+        region = nav.RegionAt(built, point, WalkingLocate);
+        return true;
+    }
+
+    /// <summary><paramref name="region"/> (-1: none) of <paramref name="graph"/> (null: not built) joins two parts of at least <see cref="CutRegionPartPolygons"/> polygons each.</summary>
+    internal static bool IsCutRegion(NavRegionGraph? graph, int region) => graph is not null && region >= 0 && graph.JoinsLargeParts(region, CutRegionPartPolygons);
 
     /// <summary>
     /// Whether a plan must refuse a destination or leg end at <paramref name="point"/> for a dead-end pin of this bot (<see cref="IsDeadEndPin"/>):
     /// not when the pinned cell is a cut region (<see cref="IsCutRegionAt"/>). A bot's way through a tunnel ends in its cells; refusing them
     /// refused the only route (Timbermaw Hold, issues #1478 and #1479).
     /// </summary>
-    private static bool PinRefuses(Player player, Vector3 point) => IsDeadEndPin(player, point) && !IsCutRegionAt(player, point);
+    private static bool PinRefuses(Player player, Vector3 point)
+    {
+        if (!IsDeadEndPin(player, point)) return false; // the region is looked up only for a pinned cell
+        TryRegionAt(player, point, out NavRegionGraph? graph, out int region);
+        return PinRefuses(deadEndPin: true, graph, region);
+    }
+
+    /// <summary>
+    /// The decision of <see cref="PinRefuses(Player, Vector3)"/> on its inputs: a pin of the bot (<paramref name="deadEndPin"/>) refuses
+    /// unless the point's <paramref name="region"/> of <paramref name="graph"/> is a cut region (<see cref="IsCutRegion"/>).
+    /// </summary>
+    internal static bool PinRefuses(bool deadEndPin, NavRegionGraph? graph, int region) => deadEndPin && !IsCutRegion(graph, region);
 
     /// <summary>
     /// Whether <paramref name="point"/> lies in a cell the bots of the world found a dead end (<see cref="PlayerbotSharedPins"/>). Asked by the
@@ -1791,15 +1816,42 @@ internal static class PlayerbotNavigation
     /// with the bot on no region, the floor is not filtered. World thread (the region lookups read tiles without blocking: a tile
     /// still being read drops its floor, which leaves the point as it was).
     /// </summary>
-    internal static Vector3 GroundNear(Map map, Vector3 bot, Vector3 point)
+    internal static Vector3 GroundNear(Map map, Vector3 bot, Vector3 point) => new FloorProbe(map, bot).Near(point);
+
+    /// <summary>
+    /// The floor lookups for the goal points of one bot standing at one place (<see cref="GroundNear(Map, Vector3, Vector3)"/>): the
+    /// bot's own region and component are looked up once, and the two delegates are made once, so each <see cref="Near"/> costs its
+    /// floor probes and region lookups only. Not thread-safe; a probe lives for the planning of one think.
+    /// </summary>
+    internal sealed class FloorProbe
     {
-        Func<float, float, float, float> height = (x, y, z) => map.Collision.GetHeight(x, y, z);
-        if (map.Collision.Pathfinder is not NavMeshPathfinder nav
-            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
-            return GroundNear(height, null, bot.Z, point);
-        int own = nav.RegionAt(graph, bot, WalkingLocate);
-        if (own < 0) return GroundNear(height, null, bot.Z, point);
-        int component = graph.ComponentOf(own);
-        return GroundNear(height, floor => graph.ComponentOf(nav.RegionAt(graph, floor, WalkingLocate)) == component, bot.Z, point);
+        private readonly Map _map;
+        private readonly Vector3 _bot;
+        private readonly NavMeshPathfinder? _nav;
+        private readonly NavRegionGraph? _graph;
+        private readonly int _component = -1;
+        private readonly Func<float, float, float, float> _height;
+        private readonly Func<Vector3, bool>? _usable;
+
+        internal FloorProbe(Map map, Vector3 bot)
+        {
+            _map = map;
+            _bot = bot;
+            _height = Height;
+            if (map.Collision.Pathfinder is NavMeshPathfinder nav
+                && nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph
+                && nav.RegionAt(graph, bot, WalkingLocate) is >= 0 and var own)
+            {
+                (_nav, _graph, _component) = (nav, graph, graph.ComponentOf(own));
+                _usable = Usable;
+            }
+        }
+
+        /// <summary><paramref name="point"/> on the floor nearest the bot's height, as <see cref="GroundNear(Map, Vector3, Vector3)"/>.</summary>
+        internal Vector3 Near(Vector3 point) => GroundNear(_height, _usable, _bot.Z, point);
+
+        private float Height(float x, float y, float z) => _map.Collision.GetHeight(x, y, z);
+
+        private bool Usable(Vector3 floor) => _graph!.ComponentOf(_nav!.RegionAt(_graph, floor, WalkingLocate)) == _component;
     }
 }
