@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -33,6 +34,7 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly object _backgroundLoadGate = new();
     private Task? _backgroundLoad;
+    private long _backgroundRetryAtTick;
     private readonly LiveItemTemplateStore _live = new();
     private volatile IItemTemplateStore? _templates;
 
@@ -137,39 +139,80 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         }
     }
 
+    /// <summary>How long after a failed background load <see cref="StartLoadInBackground"/> waits before it tries again.</summary>
+    internal static readonly TimeSpan BackgroundRetryDelay = TimeSpan.FromSeconds(30);
+
     /// <summary>
-    /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: a load already running is not
-    /// started again). The SQLite provider runs its async calls synchronously, so the world thread must never start the load itself.
-    /// <paramref name="whenDone"/> runs on the pool when the load ends, whether it loaded or failed.
+    /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: every caller shares the one running
+    /// load, and a failed load is not started again until <see cref="BackgroundRetryDelay"/> has passed). The SQLite provider runs its
+    /// async calls synchronously, so the world thread must never start the load itself.
+    /// <paramref name="whenDone"/> always runs on the pool: when the shared load ends (loaded or failed), or at once when the content is
+    /// already loaded or the load is backing off after a failure.
     /// </summary>
     public void StartLoadInBackground(Action? whenDone = null)
     {
         if (_templates is not null)
         {
-            whenDone?.Invoke();
+            RunOnPool(whenDone);
             return;
         }
 
+        Task load;
         lock (_backgroundLoadGate)
         {
-            if (_backgroundLoad is { IsCompleted: false })
+            if (_backgroundLoad is not { IsCompleted: false })
             {
-                return;
+                if (Environment.TickCount64 < Volatile.Read(ref _backgroundRetryAtTick))
+                {
+                    RunOnPool(whenDone);
+                    return;
+                }
+
+                _backgroundLoad = Task.Run(LoadInBackgroundAsync);
             }
 
-            _backgroundLoad = Task.Run(async () =>
-            {
-                try
-                {
-                    await EnsureLoadedAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    logger.LogError(ex, "Loading item content in the background failed; the next request retries");
-                }
+            load = _backgroundLoad;
+        }
 
-                whenDone?.Invoke();
-            });
+        if (whenDone is not null)
+        {
+            // LoadInBackgroundAsync never faults, so the continuation always runs.
+            _ = load.ContinueWith(_ => RunCallback(whenDone), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+    }
+
+    private async Task LoadInBackgroundAsync()
+    {
+        try
+        {
+            await EnsureLoadedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Volatile.Write(ref _backgroundRetryAtTick, Environment.TickCount64 + (long)BackgroundRetryDelay.TotalMilliseconds);
+            FaultLedger.Shared.Record("items.background-load", ex);
+            logger.LogFault("items-background-load", ex, "Loading item content in the background failed; retrying in {Seconds} s", BackgroundRetryDelay.TotalSeconds);
+        }
+    }
+
+    private void RunOnPool(Action? callback)
+    {
+        if (callback is not null)
+        {
+            _ = Task.Run(() => RunCallback(callback));
+        }
+    }
+
+    private void RunCallback(Action callback)
+    {
+        try
+        {
+            callback();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("items.background-load-callback", ex);
+            logger.LogFault("items-background-load-callback", ex, "An item-load completion callback faulted");
         }
     }
 
