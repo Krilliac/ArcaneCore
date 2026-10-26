@@ -257,7 +257,7 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   10 yards of progress and hide the stall; the walk's timeout (10 to 60 minutes) is the backstop. (2) The best distance is clamped at zero when
   the goal moves far toward the bot's old position; after that the watch can no longer register progress (it would need the distance to fall
   below zero), so only arrival or the stall ends that walk. The same holds after a fight pulls the bot far off the road. Both need a bot far
-  from a master that moved a long way, and neither makes a walk end that would otherwise succeed.
+  from a master that moved a long way.
 * No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
 * **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues
   the party bot with it (the server's rule). That bot is not free, so the coordinator neither follows nor ports it: its invitation lapses after
