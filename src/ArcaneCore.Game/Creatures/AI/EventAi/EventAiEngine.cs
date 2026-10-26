@@ -369,14 +369,26 @@ public sealed class EventAiEngine
             return;
         }
 
+        // An action that throws must not leave the depth raised or the queued holders InProgress: CheckEvent rejects an
+        // InProgress holder for good, and the caller swallows the exception. (cmangos has no exceptions to unwind.)
         _depth++;
-        for (int i = 0; i < ready.Count; i++)
+        try
         {
-            ProcessEvent(ready[i], invoker, sender);
+            for (int i = 0; i < ready.Count; i++)
+            {
+                ProcessEvent(ready[i], invoker, sender);
+            }
         }
+        finally
+        {
+            foreach (EventAiHolder holder in ready)
+            {
+                holder.InProgress = false;
+            }
 
-        ready.Clear();
-        _depth--;
+            ready.Clear();
+            _depth--;
+        }
     }
 
     private void CheckAndReady(EventAiHolder holder, Unit? invoker, Unit? sender)

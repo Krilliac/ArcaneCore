@@ -236,6 +236,10 @@ public sealed partial class Map
     /// <summary>Zone and area at a position (<see cref="TerrainInfo.GetZoneAndAreaId"/>); (0, 0) when unknown.</summary>
     public (uint ZoneId, uint AreaId) GetZoneAndAreaId(float x, float y, float z) => _terrain.GetZoneAndAreaId(x, y, z);
 
+    /// <summary>Zone and area at a position without reading a terrain file on this thread (<see cref="TerrainInfo.TryGetZoneAndAreaIdWithoutLoading"/>).</summary>
+    public bool TryGetZoneAndAreaIdWithoutLoading(float x, float y, float z, out (uint ZoneId, uint AreaId) zoneAndArea)
+        => _terrain.TryGetZoneAndAreaIdWithoutLoading(x, y, z, out zoneAndArea);
+
     /// <summary>Position relative to liquid (<see cref="TerrainInfo.GetLiquidStatus"/>).</summary>
     public LiquidStatus GetLiquidStatus(float x, float y, float z, LiquidTypeFlags requiredType, out LiquidData data)
         => _terrain.GetLiquidStatus(x, y, z, requiredType, out data);

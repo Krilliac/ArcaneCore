@@ -8,7 +8,7 @@ how map work leaves the world's serial gate so the map threads really overlap, i
 to use more than one thread per busy continent.
 
 Source pin: `origin/main` at `2c266618` (2026-10-24). Every file:line below is from that commit. Live evidence comes from the
-world logs on the maintainer's PC (read-only): the current log (2026-10-24, from 00:00 UTC) and the 2026-10-20/21 logs, which are the last
+world logs on the developer's PC (read-only): the current log (2026-10-24, from 00:00 UTC) and the 2026-10-20/21 logs, which are the last
 ones with parallel-phase lines. Log timestamps are UTC.
 
 Proposed configuration keys appear in **bold**, not as code: none of them exist yet, and the docs key audit
@@ -593,7 +593,7 @@ with LazyHeartbeatGate). The purpose of wave 1 is the mechanism and the P11a fix
   same pattern for `StealthRegistry` (world or per map), the `GroupManager` aura and stats marks (X5: the global set, or marks
   on `Player`), and wave 3's loot registries. With the switch off, every walk is today's walk in today's order; the old
   implementation is deleted when the switch defaults on. The alternative, one structure with a global sequence number per state
-  to keep today's order, is rejected: it costs a sort per tick. If the maintainer prefers to declare these as unconditional order changes
+  to keep today's order, is rejected: it costs a sort per tick. If the owner prefers to declare these as unconditional order changes
   instead, that is decision 4.
 - A per-map `SpellMapUpdater` (an `IMapUpdater`) runs the cast, aura and cooldown update of that map's states when the switch
   is on; `SpellFeature` stops updating them (`SpellFeature.cs:284`). That is an order change (auras tick during the map's
@@ -742,7 +742,7 @@ subscriber stays Gated until the reader moves as well.
 
 ---
 
-## 7. Open decisions
+## 7. Decisions for the owner
 
 0. **Optimized build A/B.** Release/Optimize (plan W0) multiplies every gain here, and the multiplier on this server is unknown.
    One A/B hour per arm would size it before any wave is measured.
@@ -848,6 +848,6 @@ review figure was re-checked for this revision, it says so.
 | Live serial as fact | Stated (§0.3), with the Information-level check |
 | Simpler option first | Adopted. Wave 0 plus N=4 restored (decision 1), wave 4-lite second (§5.2, decision 2), hangs attributed to the in-flight lanes (§1.2), decision 0 for the optimized build |
 | Verifiable checks | Adopted: the 70 % / 25 % check after wave 0 (§5.1); gate entries must not rise (§5.3); the `SpellMapUpdater` gate counter (§5.4) |
-| U: where live's `World:Parallel:*` values are set | Still unknown; decision 1 asks the maintainer |
+| U: where live's `World:Parallel:*` values are set | Still unknown; decision 1 asks the owner |
 | U: Release multiplier | Decision 0 |
 | U: `SendToSet` through the outbox | Marked unverified in H4; it does not affect wave 1 safety |
