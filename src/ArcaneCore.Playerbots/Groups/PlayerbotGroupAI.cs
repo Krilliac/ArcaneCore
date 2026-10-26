@@ -508,10 +508,12 @@ internal sealed class PlayerbotGroupAI
                 // The leader keeps out of known hazards. Not on the way back after a world-boss wipe: the hazard at the spot the raid died on lies between the leader and the rally, and the raid is going back to that fight on purpose (a refusal there ended the raid as no-path-to-approach).
                 PlayerbotNavigation.Guard(player, _options.Risk.Enabled && group.WorldBoss is not { Wipes: > 0 } ? _risk : null);
                 Vector3 approach = TravelPoint(group);
+                long tileMark = PlayerbotNavigation.PendingMark;
                 bool approaching = WalkTo(player, approach, interval, toward: true);
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
                 NoteRunProgress(group, approaching, interval);
-                if (!approaching && !group.ApproachRetried && PlayerbotGroupCoordinator.WithinApproachRingFlat(player, group))
+                // A refusal that waited for a navigation tile is no verdict, and does not use up the one retry.
+                if (!approaching && !group.ApproachRetried && !PlayerbotNavigation.PendingSince(tileMark) && PlayerbotGroupCoordinator.WithinApproachRingFlat(player, group))
                 {
                     // Inside the ring flat but refused at its own position (the hill above the entrance): it cannot get nearer on foot. The approach point is chosen again once from here, a point it can reach or the meeting point itself.
                     group.ApproachRetried = true;
@@ -666,7 +668,7 @@ internal sealed class PlayerbotGroupAI
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned, uint interval = 0)
     {
         if (group.Run is null && (group.Handoff is not null || group.Members.Any(m => m.Real))) return;
-bool stuck = group.State == PlayerbotGroupState.Travelling
+        bool stuck = group.State == PlayerbotGroupState.Travelling
             ? NoteStuckRefused(ref _stuckRefusedMs, planned, interval)
             : NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now);
         if (!stuck) return;
@@ -678,7 +680,7 @@ bool stuck = group.State == PlayerbotGroupState.Travelling
 
     /// <summary>
     /// The leader's walk to the approach point: the point counts as reached (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) when
-    /// the leader plans a way and walks it but gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
+    /// the leader walks (or is refused) and gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
     /// <see cref="ApproachNoProgressMs"/> (a root, a wall the mesh does not show, a route that circles): the group goes on to the content instead of
     /// waiting at a point nobody reaches. A way that cannot be planned is <see cref="NoteRunProgress"/>'s. A pause of more than
     /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) is not counted towards the bound.

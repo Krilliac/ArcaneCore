@@ -150,7 +150,7 @@ public sealed class PlayerbotGroupApproachStallTests
         Assert.NotEqual(QuestGoal.Meeting, approach);
         Assert.InRange(MathF.Abs(approach.X), 0f, 2f);
         Assert.InRange(MathF.Abs(approach.Y), PlayerbotGroupCoordinator.QuestApproachYards - 2f, PlayerbotGroupCoordinator.QuestApproachYards + 2f);
-        Assert.True(probe.Options.Count >= 3, "the usual point and the two nearer bearings were asked first");
+        Assert.True(probe.Options.Count == 4, "the usual point, +45, -45 and +90 degrees were asked, in that order");
     }
 
     [Fact]
