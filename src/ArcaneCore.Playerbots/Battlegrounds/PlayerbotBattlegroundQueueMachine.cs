@@ -151,6 +151,30 @@ internal static class PlayerbotBattlegroundQueueMachine
         return (uint)Math.Clamp(ms, TravelTimeoutMs, MaxTravelTimeoutMs);
     }
 
+    /// <summary>How much closer to the battlemaster a walk has to get to count as progress.</summary>
+    internal const float TravelProgressYards = 10f;
+
+    /// <summary>How long a walk may go without that progress before it is given up (a long timeout, <see cref="TravelTimeoutFor"/>, is no licence to stand still).</summary>
+    internal const uint TravelStallMs = 180_000;
+
+    /// <summary>
+    /// The walk's progress watch. <paramref name="yardsLeft"/> is the straight distance to the battlemaster now; <paramref name="bestYards"/>
+    /// (negative: not seen yet) and <paramref name="bestAtMs"/> are the closest it came and when, updated here. True when the bot has not come
+    /// <see cref="TravelProgressYards"/> closer than that in <see cref="TravelStallMs"/>.
+    /// </summary>
+    internal static bool TravelStalled(float yardsLeft, ref float bestYards, ref uint bestAtMs, uint nowMs)
+    {
+        if (!float.IsFinite(yardsLeft)) return false;
+        if (bestYards < 0f || yardsLeft < bestYards - TravelProgressYards)
+        {
+            bestYards = yardsLeft;
+            bestAtMs = nowMs;
+            return false;
+        }
+
+        return unchecked(nowMs - bestAtMs) > TravelStallMs;
+    }
+
     /// <summary>The longest the server takes to put the bot in a queue after the join.</summary>
     internal const uint JoinReplyTimeoutMs = 15_000;
 

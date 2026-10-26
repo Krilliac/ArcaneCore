@@ -187,6 +187,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         /// <summary>The walk to the battlemaster as planned: its straight distance from where the bot started, scaled for the way round (<see cref="PlayerbotBattlegroundQueueMachine.TravelTimeoutFor"/>).</summary>
         public float TravelYards { get; set; }
+
+        /// <summary>The least distance to the battlemaster so far (negative: none seen yet) and when it was reached: the walk's progress watch (<see cref="PlayerbotBattlegroundQueueMachine.TravelStalled"/>).</summary>
+        public float BestYardsToMaster { get; set; } = -1f;
+        public uint BestYardsAtMs { get; set; }
         public bool HelloSent { get; set; }
         public bool JoinSent { get; set; }
         public uint QueuedSinceMs { get; set; }
@@ -290,6 +294,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         switch (t.Phase)
         {
             case PlayerbotBattlegroundPhase.Travel:
+                // The master is met where it stands now: a waypoint walker (the Darnassus emissary 14991 of game event 20) leaves its spawn point.
+                // The goal follows the live creature once it moved more than a few yards, so the walk is not replanned at every step.
+                if (player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } live
+                    && Vector3.Distance(new Vector3(live.X, live.Y, live.Z), t.MasterAt) > MasterMovedYards)
+                    t.MasterAt = new Vector3(live.X, live.Y, live.Z);
                 ai.Travel(player, t.MasterAt, elapsedMs);
                 break;
             case PlayerbotBattlegroundPhase.InMatch when Feature()?.BattlegroundOf(player.Guid) is { } match && match.PlayerTeam(player.Guid) is { } team:
@@ -391,6 +400,17 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             && map.MapId == match.MapId && map.InstanceId == match.InstanceId;
         bool reach = t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join && player.IsInWorld
             && player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } master && Distance(player, master) <= PlayerbotBattlegroundAI.InteractYards;
+        // A walk that does not close on the master for minutes is refused like one the navigation refused (the existing refusal path).
+        bool stalled = false;
+        if (t.Phase == PlayerbotBattlegroundPhase.Travel && player.IsInWorld)
+        {
+            float best = t.BestYardsToMaster;
+            uint bestAt = t.BestYardsAtMs;
+            stalled = PlayerbotBattlegroundQueueMachine.TravelStalled(Vector3.Distance(new Vector3(player.X, player.Y, player.Z), t.MasterAt), ref best, ref bestAt, Now);
+            t.BestYardsToMaster = best;
+            t.BestYardsAtMs = bestAt;
+        }
+
         return new PlayerbotBattlegroundFacts
         {
             InReach = reach,
@@ -410,7 +430,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             BackInWorld = player.IsInWorld && !teleporting && !state.InBattleground && player.Map?.Template is not { IsBattleground: true },
             InPhaseMs = unchecked(Now - t.PhaseSinceMs),
             MatchGone = bound && match is null,
-            TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && t.AI?.TravelRefused == true,
+            TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && (t.AI?.TravelRefused == true || stalled),
             TravelYards = t.TravelYards,
         };
     }
@@ -1051,71 +1071,75 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     // --- content ----------------------------------------------------------------------------------------------------
 
     /// <summary>A battlemaster spawn: its guid, where it stands, its name and its faction template.</summary>
-    private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
+    private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction, bool Walks);
 
     /// <summary>The distance within which a battlemaster's absence from the map is trusted (well inside the visibility range).</summary>
     internal const float MasterPresenceYards = 60f;
+
+    /// <summary>The spawn movement type of a creature that walks a waypoint path (<see cref="CreatureSpawn.MovementType"/> 2).</summary>
+    private const byte WaypointMovementType = 2;
+
+    /// <summary>How far the live battlemaster has to be from the goal of the walk before the goal moves to it.</summary>
+    private const float MasterMovedYards = 3f;
 
     /// <summary>
     /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
     /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>)
     /// and can walk to. The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
     /// <para>
-    /// Nearest is by straight line, but a master is only taken when the walk is possible: not in a walking region the bot's own does not join
-    /// (<see cref="PlayerbotNavigation.IsInOtherWalkingRegion"/>: Teldrassil's island against the mainland, which <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>
-    /// lets through when the bot's region is much the smaller or the master stands indoors) and, within one route's reach
-    /// (<see cref="PlayerbotOptions.MaxRouteYards"/>), with an exact route (<see cref="PlayerbotNavigation.PlanExact"/>; a plan still waiting for a tile is no refusal).
+    /// Nearest is by straight line (ties by spawn guid, so the answer does not depend on the spawn order), but a master that stands still
+    /// (spawn movement type not waypoint) is taken over a nearer one that walks its waypoints (the Darnassus emissary 14991 under game event
+    /// 20 walks away from its spawn, and the bot has to be within reach of the creature itself). A master is only taken when the walk is
+    /// possible by the region graph alone (<see cref="PlayerbotNavigation.IsInOtherWalkingRegion"/>: Teldrassil's island against the mainland;
+    /// a master or a bot indoors is let through, the indoor climb has its escapes). No path search: the walk itself is planned in legs
+    /// (<see cref="PlayerbotNavigation.PlanToward"/>) and a route that fails there refuses the master for the zone (<see cref="RefuseMaster"/>).
     /// </para>
     /// </summary>
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
         if (player.Map is not { } map || services.GetService<QuestNpcFeature>() is not { } npcs) return null;
         float reach = Math.Clamp(_options.Battlegrounds.MaxTravelYards, 100, 20_000);
-        Battlemaster? best = null;
-        float nearest = reach;
+        Battlemaster? still = null, walking = null;
+        float stillAt = reach, walkingAt = reach;
         // A spawn a game event holds back is not in the world while its event is off (the Warsong Emissary, 15105, of game event 19 "Call
         // to Arms: Warsong Gulch"; vmangos GameEventMgr GameEventSpawn/GameEventUnspawn): walking to it finds nobody.
         ArcaneCore.Game.WorldState.Events.ISpawnGate? gate = map.FindUpdater<CreatureMapSystem>()?.SpawnGate;
-        var candidates = new List<(Battlemaster Master, float Distance)>();
+        var here = new Vector3(player.X, player.Y, player.Z);
         foreach (Battlemaster master in MastersOn(player.MapId))
         {
             if (master.Type != type) continue;
             if (gate is not null && !gate.AllowsCreature(master.SpawnGuid)) continue;
             if (IsMasterRefused(master.Guid, player.ZoneId)) continue;
-            float distance = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At);
+            float distance = Vector3.Distance(here, master.At);
             // Within sight of the spawn point the map says whether the master is there: an emissary whose event the gate still allows but
             // that is not in the world (or is dead) had bots walk up, hold 5 s and report 'no living battlemaster' (live: 15105 Undercity, 15102 Ironforge).
             if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
-            if (distance > nearest
-                || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
-                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
+            float limit = master.Walks ? walkingAt : stillAt;
+            Battlemaster? held = master.Walks ? walking : still;
+            // Strictly nearer, or as near with the lower spawn guid.
+            if (distance > limit || (distance == limit && held is not null && master.SpawnGuid >= held.SpawnGuid)) continue;
+            if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
+                || PlayerbotNavigation.IsInOtherWalkingRegion(player, master.At))
                 continue;
-            candidates.Add((master, distance));
+            if (master.Walks)
+            {
+                walking = master;
+                walkingAt = distance;
+            }
+            else
+            {
+                still = master;
+                stillAt = distance;
+            }
         }
 
-        candidates.Sort(static (a, b) => a.Distance.CompareTo(b.Distance));
-        foreach ((Battlemaster master, float distance) in candidates)
-        {
-            if (PlayerbotNavigation.IsInOtherWalkingRegion(player, master.At) || !CanPlanTo(player, master.At, distance)) continue;
-            best = master;
-            break;
-        }
-
-        return best;
+        return still ?? walking;
     }
 
-    /// <summary>
-    /// Whether an exact route to <paramref name="at"/> (<paramref name="distance"/> yards away in a straight line) is not refused. Beyond one
-    /// route's reach the walk goes by legs (<see cref="PlayerbotNavigation.PlanToward"/>) and no exact plan decides; a plan waiting for a tile
-    /// is not a refusal. A trial plan: its refusal is no evidence that the bot is boxed in.
-    /// </summary>
-    private bool CanPlanTo(Player player, Vector3 at, float distance)
-    {
-        if (distance > _options.MaxRouteYards) return true;
-        var wait = default(TileWait);
-        PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, at, _options, ref wait, Now, out _, trial: true);
-        return outcome != PlanOutcome.Refused;
-    }
+    /// <summary>Test hook, not for production code: the battlemaster <see cref="FindMaster"/> picks (spawn guid and spawn point).</summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    internal (uint SpawnGuid, Vector3 At)? FindMasterForTests(Player player, BattlegroundType type)
+        => FindMaster(player, type) is { } master ? (master.SpawnGuid, master.At) : null;
 
     private List<Battlemaster> MastersOn(uint mapId)
     {
@@ -1134,7 +1158,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (!feature.Battlemasters.TryGetValue(spawn.Entry, out BattlegroundType type) || content.FindTemplate(spawn.Entry) is not { } template) continue;
             if (!float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z)) continue;
             list.Add(new Battlemaster(ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid), spawn.Guid, type, new Vector3(spawn.X, spawn.Y, spawn.Z),
-                template.Name, template.Faction));
+                template.Name, template.Faction, spawn.MovementType == WaypointMovementType));
         }
 
         _masters[mapId] = list;

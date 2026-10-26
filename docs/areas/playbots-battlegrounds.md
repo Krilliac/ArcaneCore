@@ -51,7 +51,7 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
-| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
+| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
 template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
@@ -72,7 +72,7 @@ client opcode through its world handler and never waits for the shared action bu
 
 | Phase | Driven by | What happens |
 |---|---|---|
-| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards (a fight on the way is answered first); 10 minutes at most |
+| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most `TravelTimeoutFor` of the walk (10 minutes, longer by the walk's estimated length up to 60), and given up (the master refused for the zone) when the bot gets no 10 yards closer in 3 minutes |
 | `join` | the coordinator | CMSG_BATTLEMASTER_HELLO (the server answers SMSG_BATTLEFIELD_LIST), then CMSG_BATTLEMASTER_JOIN (map, instance 0, not as a group); no queue slot within 15 seconds sets the type aside for this bot for 10 minutes |
 | `queued` | the brain | the bot carries on with what it was doing; after `MaxQueueWaitMinutes` it leaves the queue (CMSG_BATTLEFIELD_PORT action 0) and sets the type aside for 10 minutes |
 | `invited` | the brain | an invitation the bot cannot answer yet (dead, between maps); answered when it can |
