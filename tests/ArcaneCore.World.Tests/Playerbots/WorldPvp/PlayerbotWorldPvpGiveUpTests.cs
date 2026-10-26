@@ -1,3 +1,4 @@
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.World.Playerbots.Combat;
 using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.World.Spells;
@@ -41,6 +42,50 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         PlayerbotWorldPvpObjectives run = await world.OnWorldAsync(() =>
             new PlayerbotWorldPvpObjectives(world.World.Bots.FindSession(bot)!, world.Options, null) { Clock = () => clock });
         return (run, () => clock, ms => clock += ms);
+    }
+
+    /// <summary>Only the Horde turn-in trigger (4168) stays: an Alliance carrier has no trigger and gives up, a Horde one delivers.</summary>
+    private static Task KeepOnlyHordeTriggerAsync(SilithystWorld world) => world.OnWorldAsync(() =>
+    {
+        Game.Maps.Templates.WorldMaps maps = Game.Maps.Templates.WorldMaps.Of(world.World.Host.World);
+        maps.ReplaceAreaTriggerTables(maps.BuildAreaTriggerTables(GridTerrain.InMemoryMapDataStore.Content with
+        {
+            AreaTriggers = [new ArcaneCore.Kernel.WorldData.AreaTriggerTemplate(SilithusCatalog.AreaTriggerHorde, 1, HordeTrigger.X, HordeTrigger.Y, HordeTrigger.Z, 4f, 0, 0, 0, 0, "Silithyst Horde")],
+            AreaTriggerTeleports = [],
+        }));
+        return true;
+    });
+
+    /// <summary>
+    /// The real give-up of the brain's own controller (the option may be off: a held flag is taken up anyway): no trigger, one report, CMSG_CANCEL_AURA,
+    /// and the server's drop (29533) puts a Silithyst Mound at the bot's feet. Returns that mound.
+    /// </summary>
+    private static async Task<GameObject> GiveUpAndDropAsync(SilithystWorld world, Guid bot, AnomalyCapture capture)
+    {
+        Assert.True(await world.CastOnSelfAsync(bot, Flag));
+        Assert.True(await world.RunUntilAsync(10_000, () => world.BrainOf(bot).WorldPvp.LastOutcome == "no-trigger"),
+            "the carry was not given up; " + await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Description));
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
+        GameObject mound = await world.OnWorldAsync(() =>
+            world.PlayerOf(bot).Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects.Single(g => g.Entry == Mound));
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(mound.IsSpawned && mound.LootState == GameObjectLootState.Ready && (mound.Flags & GameObjectFlags.InUse) == 0, "the dropped mound is not ready");
+            Assert.True(Vector3.Distance(new Vector3(mound.X, mound.Y, mound.Z), Start) <= 2.5f, $"the mound is not at the bot's feet: {mound.X},{mound.Y},{mound.Z}");
+            return true;
+        });
+        return mound;
+    }
+
+    private static async Task<(GameObject Mound, AnomalyCapture Capture, uint T0)> DroppedMoundSetupAsync(SilithystWorld world, Guid bot)
+    {
+        await KeepOnlyHordeTriggerAsync(world);
+        AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.PlayerOf(bot)));
+        GameObject mound = await GiveUpAndDropAsync(world, bot, capture);
+        await world.OnWorldAsync(() => { world.Options.WorldPvp.Silithyst.Enabled = true; return true; });
+        uint t0 = await world.OnWorldAsync(() => world.World.Host.World.NowMs);
+        return (mound, capture, t0);
     }
 
     private static Task RemoveTriggersAsync(SilithystWorld world) => world.OnWorldAsync(() =>
@@ -97,7 +142,7 @@ public sealed class PlayerbotWorldPvpGiveUpTests
     }
 
     [Fact]
-    public async Task AFlagThatCannotBeCancelled_IsTakenUpAgainAfterTheBackoff_WithoutReportingTheSameFaultAgain()
+    public async Task AFlagThatCannotBeCancelled_IsTakenUpAgainAfterTheBackoff_AndReportsAtMostOncePerBackoff()
     {
         await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
         Guid bot = await world.AddBotAsync("Dustbackoff", 1);
@@ -108,12 +153,26 @@ public sealed class PlayerbotWorldPvpGiveUpTests
 
         await world.OnWorldAsync(() => Step(world, bot, run, budget: 0));
         Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
-        advance(PlayerbotWorldPvpObjectives.GiveUpBackoffMs + 1);
 
-        // The same flag is carried again (nothing took it off), the trigger is still missing: the fault was reported already.
+        // Inside the back-off the flag is not taken up; just after it the same flag is carried again (nothing took it off) and the fault is a new one.
+        advance(PlayerbotWorldPvpObjectives.GiveUpBackoffMs - 1);
         await world.OnWorldAsync(() => Step(world, bot, run, budget: 0));
         Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
         Assert.False(run.Active);
+        advance(2);
+        await world.OnWorldAsync(() => Step(world, bot, run, budget: 0));
+        Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(run.Active);
+
+        for (int think = 0; think < 20; think++)
+        {
+            advance(200);
+            WorldPvpStep again = await world.OnWorldAsync(() => Step(world, bot, run, budget: 0));
+            Assert.False(again.Busy, $"think {think}: the bot took the flag up again");
+            Assert.False(run.Active, $"think {think}: a new episode opened");
+        }
+
+        Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
     }
 
     // --- a pickup inside the trigger volume ------------------------------------------------------------------------
@@ -458,7 +517,7 @@ public sealed class PlayerbotWorldPvpGiveUpTests
     }
 
     [Fact]
-    public async Task AFlagPickedUpAgainAfterAGiveUp_DoesNotReportTheSameUnreachableTriggerAgain()
+    public async Task ANewFlagAfterAGiveUp_IsNotTakenUpInsideTheBackoff_AndReportsAtMostOnceMoreAfterIt()
     {
         await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
         Guid bot = await world.AddBotAsync("Dustagain", 1);
@@ -471,11 +530,76 @@ public sealed class PlayerbotWorldPvpGiveUpTests
         Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
         Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
 
-        // The flag is gone, then a new one is picked up (a mound the give-up dropped, taken up again after the cooldown): the same fault is not reported again.
-        advance(PlayerbotWorldPvpObjectives.GiveUpBackoffMs + 1);
+        // A new flag after the run cool-down (a mound the give-up dropped): still inside the back-off, so it is not taken up and nothing is reported.
+        advance(PlayerbotWorldPvpObjectives.RunCooldownMs + 1);
         await world.OnWorldAsync(() => Step(world, bot, run));
         Assert.True(await world.CastOnSelfAsync(bot, Flag));
         await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(run.Active);
+
+        // After the back-off the flag is carried again, and the fault is reported once more.
+        advance(PlayerbotWorldPvpObjectives.GiveUpBackoffMs);
+        await world.OnWorldAsync(() => Step(world, bot, run));
+        Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.False(run.Active);
+        Assert.False(await world.OnWorldAsync(() => world.HasAura(world.PlayerOf(bot), Flag)), "the flag was not cancelled");
+    }
+
+    // --- the mound a give-up drops -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AGiveUpThatDroppedAMound_DoesNotTakeItUpAgain_WithinTheBackoff()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustleaver", 1);
+        (GameObject mound, AnomalyCapture capture, _) = await DroppedMoundSetupAsync(world, bot);
+        using AnomalyCapture owned = capture;
+
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
+            () => world.BrainOf(bot).WorldPvp.Active || world.BrainOf(bot).WorldPvp.Pickups > 0), "the bot took its own mound up again");
+        Assert.True(await world.OnWorldAsync(() => mound.IsSpawned && mound.LootState == GameObjectLootState.Ready), "the mound was gone before the cool-down ended");
+        Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.Equal(1UL, await world.OnWorldAsync(() => world.Zone.PickupsTotal));
+    }
+
+    [Fact]
+    public async Task AfterTheBackoff_ACarryFaultIsReportedAtMostOnceMore()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustwaiter", 1);
+        (_, AnomalyCapture capture, uint t0) = await DroppedMoundSetupAsync(world, bot);
+        using AnomalyCapture owned = capture;
+
+        Assert.True(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.GiveUpBackoffMs + 60_000,
+            () => capture.Count(Key("silithyst-unreachable-trigger")) >= 2), "no second report after the back-off; " + capture.Describe());
+        uint t1 = await world.OnWorldAsync(() => world.World.Host.World.NowMs);
+        Assert.True(unchecked(t1 - t0) >= PlayerbotWorldPvpObjectives.GiveUpBackoffMs, $"the second report came {t1 - t0} ms after the give-up, inside the back-off");
+        Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
+        Assert.Equal("no-trigger", await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.LastOutcome));
+        Assert.Equal(1, await world.OnWorldAsync(() => world.BrainOf(bot).WorldPvp.Pickups));
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
+            () => world.BrainOf(bot).WorldPvp.Active || capture.Count(Key("silithyst-unreachable-trigger")) > 2), "a third carry inside the new back-off");
+        Assert.Equal(2, capture.Count(Key("silithyst-unreachable-trigger")));
+    }
+
+    [Fact]
+    public async Task AnotherBot_MayTakeTheMoundADroppedCarryLeft()
+    {
+        await using SilithystWorld world = await StartAsync(o => o.WorldPvp.Silithyst.Enabled = false);
+        Guid bot = await world.AddBotAsync("Dustleaver", 1);
+        (GameObject mound, AnomalyCapture capture, _) = await DroppedMoundSetupAsync(world, bot);
+        using AnomalyCapture owned = capture;
+
+        Guid taker = await world.AddBotAsync("Dusttaker", 2, at: Start + new Vector3(-20f, 0f, 0f));
+        Assert.True(await world.RunUntilAsync(30_000, () => world.BrainOf(taker).WorldPvp.ActiveKey == mound.Guid.Value || world.BrainOf(taker).WorldPvp.Pickups > 0),
+            "the other bot never went for the dropped mound");
+        Assert.True(await world.RunUntilAsync(180_000, () => world.BrainOf(taker).WorldPvp.Deliveries > 0),
+            "the other bot never delivered; " + await world.OnWorldAsync(() => world.BrainOf(taker).WorldPvp.Description));
+        Assert.Equal(1UL, await world.OnWorldAsync(() => world.Zone.TurnInsTotal));
+        Assert.Equal(1u, await world.OnWorldAsync(() => world.Zone.GatheredHorde));
+        Assert.False(await world.RunUntilAsync(PlayerbotWorldPvpObjectives.RunCooldownMs + 20_000,
+            () => world.BrainOf(bot).WorldPvp.Active || world.BrainOf(bot).WorldPvp.Pickups > 0), "the dropper started a run inside its back-off");
         Assert.Equal(1, capture.Count(Key("silithyst-unreachable-trigger")));
     }
 

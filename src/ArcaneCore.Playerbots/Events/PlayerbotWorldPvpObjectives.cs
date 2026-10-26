@@ -50,17 +50,18 @@ internal readonly record struct SilithystAuras(bool Carries, SpellAuraHolder? Tr
 /// is gone near the trigger and Traces of Silithyst was newly put on by this turn-in (an older one still running does not count).</item>
 /// <item><b>Give-up</b>: a taken geyser, a lost flag away from the trigger, a death, no route, a refused turn-in or a timeout ends the episode;
 /// the geyser is set aside in the ledger (60 s, doubling to 5 min for faults); a death while carrying only ends the run (the flag dies with
-/// the bot and the geyser is spent anyway). A carry given up while the flag is still held cancels the
-/// flag (CMSG_CANCEL_AURA, <see cref="MaxDropAttempts"/> tries) and does not take it up again for <see cref="GiveUpBackoffMs"/>: the aura never
-/// expires, so without that the next think would open the same failing carry again. The fault is reported once per held flag. After a
-/// delivery or any give-up no new run starts for <see cref="RunCooldownMs"/>.</item>
+/// the bot and the geyser is spent anyway). A carry given up while the flag is still held cancels the flag (CMSG_CANCEL_AURA,
+/// <see cref="MaxDropAttempts"/> tries; the server then puts a Silithyst Mound down at the bot's feet) and holds the bot off for
+/// <see cref="GiveUpBackoffMs"/>: no seek, so it does not take its own mound up again, and no take-up of a flag it still holds (the aura never
+/// expires). Another bot or a player may take the mound. After a delivery or any other give-up no new run starts for <see cref="RunCooldownMs"/>.</item>
 /// </list>
 /// The brain calls <see cref="Update"/> twice per think: high on the ladder with <c>mayBegin: false</c> (an episode already running, or a
 /// bot found carrying the flag) and low with <c>mayBegin: true</c> (the seek).
 /// <para>
-/// Anomalies (area <c>world-pvp</c>): <c>silithyst-use-no-aura</c> (the use gave no flag within <see cref="AwaitAuraMs"/>),
-/// <c>silithyst-carry-timeout</c> (the carry ran past <see cref="CarryMaxMs"/>), <c>silithyst-unreachable-trigger</c> (no route or no trigger),
-/// once per episode; nothing on success or on an early loss of the flag.
+/// Anomalies (area <c>world-pvp</c>; nothing on success or on an early loss of the flag): <c>silithyst-use-no-aura</c> (the use gave no flag
+/// within <see cref="AwaitAuraMs"/>), once per episode; <c>silithyst-carry-timeout</c> (the carry ran past <see cref="CarryMaxMs"/>) and
+/// <c>silithyst-unreachable-trigger</c> (no route or no trigger), together at most once per bot per <see cref="GiveUpBackoffMs"/> whatever flag or
+/// mound the carry came from, a delivery clearing the window.
 /// </para>
 /// Thread affinity: world thread only, owned by one brain. Cost: per think, a bot outside zone 1377 with no run, no pending flag drop and no
 /// flag seen at its last scan does one zone compare per rung and no aura walk; a bot in zone 1377 (any level, option on or off) walks its aura
@@ -137,7 +138,10 @@ internal sealed class PlayerbotWorldPvpObjectives
     /// <summary>After a delivery or a give-up the bot starts no new run for this long (one participation window).</summary>
     internal const uint RunCooldownMs = ParticipationWindowMs;
 
-    /// <summary>After a give-up with the flag in hand the bot does not take up the same flag again for this long (the flag never expires).</summary>
+    /// <summary>
+    /// After a give-up with the flag in hand the bot neither seeks nor takes a held flag up for this long (longer than the 3 minutes a dropped
+    /// mound stands, so it does not take its own drop up again), and reports at most one carry fault in it.
+    /// </summary>
     internal const uint GiveUpBackoffMs = 600_000;
 
     /// <summary>Times the bot tries to cancel a flag it gave up carrying, one per <see cref="DropRetryMs"/>.</summary>
@@ -171,6 +175,7 @@ internal sealed class PlayerbotWorldPvpObjectives
     private uint _dropNextMs;
     private bool _offMapDrop;
     private bool _carryFaultReported;
+    private uint _carryFaultUntilMs;
     private bool _sawFlag;
 
     /// <summary>The geyser and mound objects of each map (their guids), found by one scan and looked up by guid afterwards.</summary>
@@ -323,7 +328,7 @@ internal sealed class PlayerbotWorldPvpObjectives
 
                 if (_noAdopt && !Past(_noAdoptUntilMs, now)) return WorldPvpStep.None;
                 _noAdopt = false;
-                _episode = new Episode { StartedMs = now, LastStepMs = now, Phase = Phase.Carry, Reported = _carryFaultReported };
+                _episode = new Episode { StartedMs = now, LastStepMs = now, Phase = Phase.Carry };
                 NoteCarryStart(_episode, tracesBefore);
             }
             else if (mayBegin && options.Enabled)
@@ -630,7 +635,7 @@ internal sealed class PlayerbotWorldPvpObjectives
             if (TurnedIn(episode, traces))
             {
                 Deliveries++;
-                _carryFaultReported = false; // only a delivery clears it: a mound dropped by a give-up is a new object, not a new fault
+                _carryFaultReported = false; // a delivery clears the carry-fault window: the next fault is a new one, not the same carry again
                 if (episode.Key != 0) _ledger.Complete(episode.Key, now, DeliveredRecheckMs);
                 return Quit(episode, "delivered", cooldown: true);
             }
@@ -726,15 +731,17 @@ internal sealed class PlayerbotWorldPvpObjectives
     }
 
     /// <summary>
-    /// The bot holds a flag it can no longer carry. The aura never expires, so the next think would take it up and start the same run again:
-    /// cancel it (CMSG_CANCEL_AURA, retried by <see cref="Update"/> for <see cref="MaxDropAttempts"/> tries) and do not take the flag up again
-    /// for <see cref="GiveUpBackoffMs"/> whether or not it went.
+    /// The bot holds a flag it can no longer carry. Cancel it (CMSG_CANCEL_AURA, retried by <see cref="Update"/> for <see cref="MaxDropAttempts"/>
+    /// tries; the server then puts a Silithyst Mound down at the bot's feet) and hold the bot off for <see cref="GiveUpBackoffMs"/>: no seek, so it
+    /// does not take its own mound up again, and no take-up of the flag if the cancel did not go (the aura never expires, so the next think would
+    /// open the same failing carry). The hold-off is this bot's own: another bot or a player may take the mound.
     /// </summary>
     private void GiveUpCarry(Player player, uint now, bool carries)
     {
         if (!carries) return;
         _noAdopt = true;
         _noAdoptUntilMs = unchecked(now + GiveUpBackoffMs);
+        StartCooldown(now, GiveUpBackoffMs);
         _dropFlag = true;
         _dropAttempts = 0;
         _dropNextMs = now;
@@ -755,10 +762,12 @@ internal sealed class PlayerbotWorldPvpObjectives
         _dropNextMs = unchecked(now + DropRetryMs);
     }
 
-    private void StartCooldown(uint now)
+    /// <summary>No new run for <paramref name="ms"/> from <paramref name="now"/>; a longer hold-off already running is kept (a carry give-up's).</summary>
+    private void StartCooldown(uint now, uint ms = RunCooldownMs)
     {
+        uint until = unchecked(now + ms);
+        if (!_cooling || Past(_coolUntilMs, now) || unchecked((int)(until - _coolUntilMs)) > 0) _coolUntilMs = until;
         _cooling = true;
-        _coolUntilMs = unchecked(now + RunCooldownMs);
     }
 
     // --- walking ----------------------------------------------------------------------------------------------------
@@ -799,7 +808,16 @@ internal sealed class PlayerbotWorldPvpObjectives
     {
         if (episode.Reported || _session.IsInChaosProbe) return;
         episode.Reported = true;
-        if (episode.Phase == Phase.Carry) _carryFaultReported = true; // the same flag taken up again later does not report the same fault again
+        if (episode.Phase == Phase.Carry)
+        {
+            // One carry fault per bot per GiveUpBackoffMs, whatever flag or mound the carry came from (a give-up drops a mound at the bot's
+            // feet: a new object, not a new fault); a delivery clears it. The same gate for every way into the carry (a held flag taken up, a use).
+            uint now = Now;
+            if (_carryFaultReported && !Past(_carryFaultUntilMs, now)) return;
+            _carryFaultReported = true;
+            _carryFaultUntilMs = unchecked(now + GiveUpBackoffMs);
+        }
+
         PlayerbotAnomalies.Report(player, "world-pvp", code, detail);
     }
 
