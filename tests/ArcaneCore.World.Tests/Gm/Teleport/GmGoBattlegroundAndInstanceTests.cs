@@ -7,6 +7,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Tests.GridTerrain;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
