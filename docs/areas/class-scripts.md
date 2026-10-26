@@ -15,7 +15,7 @@ checks), the proc engine's `RegisterProcScript` (docs/areas/procs.md), value mod
 | Piece | What it does | Code | vmangos |
 |---|---|---|---|
 | Seal bookkeeping | A seal on a unit sets AURA_STATE_JUDGEMENT (Judgement's CasterAuraState); the last seal leaving clears it. Both go through `SpellSystem.ModifyAuraState`, so the world's `AuraStateService` adds vmangos' side effects (an aura that needs the state goes with it). | `Paladin/PaladinAuraRules.cs` | SpellAuras.cpp:6815-6893, Unit.cpp:4682-4745 |
-| Spell specific stacking | Seal: one per unit from any caster. Blessing, paladin aura, judgement: one per unit per caster; one rank of a chain per unit; a weaker rank never replaces a stronger one: it is refused before it is added (`SpellSystem.HolderAddRefusals`), and nothing it would have replaced goes. | `Paladin/PaladinAuraRules.cs`, `PaladinSpells.cs` | Unit.cpp:3216-3224, :3355-3560, SpellEntry.cpp:100-122, :177-195 |
+| Spell specific stacking | Seal: one per unit from any caster. Blessing, paladin aura, judgement: one per unit per caster; one rank of a chain per unit; a weaker rank never replaces a stronger one. These are values of the general spell specific rules, [below](#spell-specific-stacking-every-class). | `Spells/SpellSpecificAuraRules.cs`, `Paladin/PaladinSpells.cs` | Unit.cpp:3216-3224, :3355-3560, SpellEntry.cpp:100-122, :177-195 |
 | Seal of Righteousness | The dummy aura's melee proc: weapon-speed scaled damage between `amount/87` (1.5 s) and `amount/25` (4.0 s), Improved SoR percent mods on the base, the seal's spell bonuses, the rank's damage spell (25742 ... 25713) dithered, and one more weapon-enchant proc. | `Paladin/PaladinProcScripts.cs` | UnitAuraProcHandler.cpp:979-1053 |
 | Judgement (20271) | Cancels the caster's seal and casts the judgement its third effect names (simple value). | `Paladin/PaladinSpellScripts.cs` | SpellEffects.cpp:4502-4529 |
 | Judgement of Light / Wisdom | The judged unit's PROC_TRIGGER_SPELL debuff: whoever strikes it casts the rank's heal (20267 ...) or mana (20268 ...) on itself. | `PaladinProcScripts.cs` | UnitAuraProcHandler.cpp:1428-1466 |
@@ -31,6 +31,37 @@ checks), the proc engine's `RegisterProcScript` (docs/areas/procs.md), value mod
 The other seals (Command, Justice, Light, Wisdom, the Crusader), the blessings (Might, Wisdom, Kings, Salvation, Freedom, Sanctuary) and the auras
 (Devotion, Retribution, Concentration, Sanctity) are data-driven auras the aura engine and the proc engine already run; Seal of Command's PPM, Blessing of
 Sanctuary's block-only proc and the 50% judgement procs need their `spell_proc_event` rows (procs.md).
+
+## Spell specific stacking (every class)
+
+`SpellSpecificAuraRules` (`Spells/SpellSpecificAuraRules.cs`, installed by a discovered `ISpellHandlerModule`) ports the spell specific rules of
+vmangos' `Unit::RemoveNoStackAurasDueToAuraHolder` (Unit.cpp:3355-3573) for every `SpellSpecific`. `SpellSpecifics.Of` (`Spells/SpellSpecific.cs`)
+is `Spells::GetSpellSpecific` (SpellEntry.cpp:14-175); `IsSinglePerTarget`, `IsSinglePerTargetPerCaster` and `IsSingleRanksPerTarget` are the three
+predicates (SpellEntry.h:107-180). A new holder is compared with each holder on its target: a match per target (any caster), or per target and the
+same caster, removes the other holder; a weaker rank of one chain, or a weaker snare or attack speed reduction, is refused before it is added
+(`SpellSystem.HolderAddRefusals`); a match per rank from another caster removes a weaker rank of the same chain. Auras that login restores go through
+`SpellSystem.AddAuraHolder` too, so they settle by the same rules (the later saved one wins).
+
+| Specific | Classified by (SpellEntry.cpp) | Rule (SpellEntry.h) |
+|---|---|---|
+| Aspect | hunter family with active icon 122 except Auto Shot (75), and Aspect of the Beast (13161): :24-26, :107-109 | one per target per caster; one rank per target (:109-140) |
+| Sting | hunter family, dispel POISON: :103-105 | one per target per caster (:109-124) |
+| Curse | warlock family, dispel CURSE: :87-89 | one per target per caster; one rank per target (:109-140) |
+| Blessing, Aura, Judgement | paladin family masks (`PaladinSpells.Specific`): :113-135 | one per target per caster; one rank per target (:109-140) |
+| Positive shout | warrior family flags 0x8000010000: :78-82 | one per target per caster (:109-124) |
+| Seal | paladin seal flags: :115-116 | one per target, any caster (:143-156) |
+| Mage armor | mage family flags 0x12000000: :67-71 | one per target, any caster (:143-156) |
+| Mage polymorph | mage family, MOD_CONFUSE on effect 0, silence prevention: :73-74 | one per target, any caster |
+| Warlock armor | spell visual 130 and icon 89: :148-150 | one per target, any caster |
+| Elemental shield | shaman Lightning Shield flag (bit 10) or spell 23552: :136-139, SpellEntry.h:903-907 | one per target, any caster |
+| Tracker | a tracking aura with NO_AUTOCAST_AI or ALLOW_WHILE_MOUNTED: :152-157 | one per target, any caster |
+| Well Fed, Food, Drink, Food and drink | generic family (standing cancels, regeneration auras; RETAIN_ITEM_CAST) and the priest sunfruit rows: :28-64, :92-100 | Well Fed one per target; food and drink pair as :157-176 |
+| Snare, Negative haste | a lone MOD_DECREASE_SPEED (not a daze) or a negative lone MOD_MELEE_HASTE: :163-172 | one per target, any caster; a weaker one is refused (Unit.cpp:3504-3507, SpellEntry.cpp:197-220) |
+
+LIMITS: the elixir specifics (battle, guardian, flask: vmangos reads the `spell_elixir` table) are not classified, so elixirs stack as before; the heal
+over time first-in-chain rule (Unit.cpp:3498-3500), the database `spell_group` rules and the `IsNoStackSpellDueToSpell` fallback are not modelled;
+passive spells are skipped; the rank chain is the spell family and name (no `SkillLineAbility` rank table). The tracker rule also exists in
+`Ranged/TrackingAuras.cs` and `Spells/Auras/VisualAuras.cs` (applies first, the general rule finds nothing left to remove).
 
 ## Talent scripts (lane `tb-t3-talent-class-scripts-pets`)
 
