@@ -85,7 +85,11 @@ public sealed class AuctionBotCommands : ICommandGroup
         }
 
         // The ahbot_items read runs off the world thread; the reply is sent from the world thread when it is applied.
-        bot.Reload(fixes => context.Reply(fixes.Count == 0 ? "AHBot config reloaded." : $"AHBot config reloaded with {fixes.Count} corrections: {string.Join(" ", fixes)}"));
+        bot.Reload((fixes, applied) =>
+        {
+            string text = fixes.Count == 0 ? "AHBot config reloaded." : $"AHBot config reloaded with {fixes.Count} corrections: {string.Join(" ", fixes)}";
+            context.Reply(applied ? text : text + " The ahbot_items rows were not applied: an item change superseded this reload; run .ahbot reload again.");
+        });
         return true;
     }
 

@@ -221,6 +221,7 @@ public sealed class RefreshCoreTests : IDisposable
     public void Dispose()
     {
         _world.Dispose();
+        HotCodeAudit.FlushAll(); // the background audit appender must be done with audit.log before the directory goes
         if (Directory.Exists(_dir))
         {
             Directory.Delete(_dir, recursive: true);

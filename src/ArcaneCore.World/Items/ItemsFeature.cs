@@ -48,6 +48,9 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// <summary>The immutable store lookups currently go to (empty until loaded).</summary>
     public IItemTemplateStore LoadedStore => _templates ?? ItemTemplateStore.Empty;
 
+    /// <summary>True once the item content has been loaded (an empty store is still loaded).</summary>
+    public bool IsLoaded => _templates is not null;
+
     /// <summary>Built SMSG_ITEM_QUERY_SINGLE_RESPONSE replies (cleared when the templates are loaded or replaced).</summary>
     public Packets.QueryResponseCache<ItemTemplate> QueryCache { get; } = new();
 
@@ -146,38 +149,20 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// Start <see cref="EnsureLoadedAsync"/> on the thread pool without waiting (single flight: every caller shares the one running
     /// load, and a failed load is not started again until <see cref="BackgroundRetryDelay"/> has passed). The SQLite provider runs its
     /// async calls synchronously, so the world thread must never start the load itself.
-    /// <paramref name="whenDone"/> always runs on the pool: when the shared load ends (loaded or failed), or at once when the content is
-    /// already loaded or the load is backing off after a failure.
     /// </summary>
-    public void StartLoadInBackground(Action? whenDone = null)
+    public void StartLoadInBackground()
     {
         if (_templates is not null)
         {
-            RunOnPool(whenDone);
             return;
         }
 
-        Task load;
         lock (_backgroundLoadGate)
         {
-            if (_backgroundLoad is not { IsCompleted: false })
+            if (_backgroundLoad is not { IsCompleted: false } && Environment.TickCount64 >= Volatile.Read(ref _backgroundRetryAtTick))
             {
-                if (Environment.TickCount64 < Volatile.Read(ref _backgroundRetryAtTick))
-                {
-                    RunOnPool(whenDone);
-                    return;
-                }
-
                 _backgroundLoad = Task.Run(LoadInBackgroundAsync);
             }
-
-            load = _backgroundLoad;
-        }
-
-        if (whenDone is not null)
-        {
-            // LoadInBackgroundAsync never faults, so the continuation always runs.
-            _ = load.ContinueWith(_ => RunCallback(whenDone), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
     }
 
@@ -192,27 +177,6 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
             Volatile.Write(ref _backgroundRetryAtTick, Environment.TickCount64 + (long)BackgroundRetryDelay.TotalMilliseconds);
             FaultLedger.Shared.Record("items.background-load", ex);
             logger.LogFault("items-background-load", ex, "Loading item content in the background failed; retrying in {Seconds} s", BackgroundRetryDelay.TotalSeconds);
-        }
-    }
-
-    private void RunOnPool(Action? callback)
-    {
-        if (callback is not null)
-        {
-            _ = Task.Run(() => RunCallback(callback));
-        }
-    }
-
-    private void RunCallback(Action callback)
-    {
-        try
-        {
-            callback();
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record("items.background-load-callback", ex);
-            logger.LogFault("items-background-load-callback", ex, "An item-load completion callback faulted");
         }
     }
 

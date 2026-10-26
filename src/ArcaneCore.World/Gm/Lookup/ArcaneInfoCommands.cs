@@ -41,10 +41,9 @@ public sealed class ArcaneInfoCommands : ICommandExtension
         CultureInfo c = CultureInfo.InvariantCulture;
         WorldMaps maps = WorldMaps.Of(context.World);
         context.Reply(Line("maps", string.Create(c, $"{maps.Registry.Count} maps, {maps.Areas.Count} areas, {maps.GameTeles.Count} tele locations, {maps.AreaTriggers.Count} area triggers")));
-        int itemCount = context.IsConsole
-            ? (services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items ? items.Templates.Count : 0)
-            : context.Player.Inventory.Templates.Count;
-        if (itemCount == 0 && context.IsConsole && services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } unloaded)
+        ArcaneCore.World.Items.ItemsFeature? itemsFeature = context.IsConsole ? services.GetService<ArcaneCore.World.Items.ItemsFeature>() : null;
+        int itemCount = context.IsConsole ? itemsFeature?.Templates.Count ?? 0 : context.Player.Inventory.Templates.Count;
+        if (itemsFeature is { IsLoaded: false } unloaded)
         {
             // This runs on the world thread: start the load on the pool instead of waiting for it here.
             unloaded.StartLoadInBackground();

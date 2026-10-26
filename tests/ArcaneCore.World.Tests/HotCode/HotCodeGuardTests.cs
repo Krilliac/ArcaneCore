@@ -162,7 +162,7 @@ public sealed class HotCodeGuardTests : IDisposable
         Assert.Equal(500, lines.Length);
         for (int i = 0; i < lines.Length; i++)
         {
-            Assert.EndsWith($"	probe	line {i}", lines[i], StringComparison.Ordinal);
+            Assert.EndsWith($"\tprobe\tline {i}", lines[i], StringComparison.Ordinal);
         }
     }
 
@@ -189,8 +189,10 @@ public sealed class HotCodeGuardTests : IDisposable
     {
         // The audit path is an existing directory, so appending fails with an I/O error.
         Directory.CreateDirectory(_dir);
+        long faultsBefore = AuditWriteFaults();
         Assert.Throws<HotCodeRefusedException>(
             () => HotCodeGuard.Enforce(new HotCodeOptions(), new FakeProbe(supported: true), new HotCodeAudit(_dir)));
+        Assert.True(AuditWriteFaults() > faultsBefore, "the failed audit write must be counted in the fault ledger");
     }
 
     [Fact]
@@ -204,6 +206,9 @@ public sealed class HotCodeGuardTests : IDisposable
         Assert.True(guard < build, "the guard must run before the host is built");
         Assert.True(guard < firstInitializer, "the guard must run before any schema initializer");
     }
+
+    private static long AuditWriteFaults()
+        => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "hotcode.audit-write").Sum(s => s.Count);
 
     private static string FindUp(string relative)
     {

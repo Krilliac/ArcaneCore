@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Kernel.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.HotCode;
 
@@ -17,7 +18,7 @@ namespace ArcaneCore.World.HotCode;
 /// <c>hotcode.audit-flush</c>.
 /// </para>
 /// </summary>
-public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null)
+public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null, ILogger? logger = null)
 {
     private static readonly ConcurrentDictionary<string, Appender> Appenders = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(10);
@@ -36,8 +37,8 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
             return;
         }
 
-        string line = $"{_clock():O}	{kind}	{detail.ReplaceLineEndings(" ")}{Environment.NewLine}";
-        Appenders.GetOrAdd(Path.GetFullPath(path!), static full => new Appender(full)).Enqueue(line);
+        string line = $"{_clock():O}\t{kind}\t{detail.ReplaceLineEndings(" ")}{Environment.NewLine}";
+        Appenders.GetOrAdd(Path.GetFullPath(path!), static full => new Appender(full)).Enqueue(line, logger);
     }
 
     /// <summary>Wait until every line queued so far (by any instance on this path) is written. Not for the world thread.</summary>
@@ -79,8 +80,17 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         });
 
         private int _started;
+        private ILogger? _logger; // the latest instance that has one supplies it (every instance on the path shares this writer)
 
-        public void Enqueue(string line) => Write(new Entry(line, null));
+        public void Enqueue(string line, ILogger? logger)
+        {
+            if (logger is not null)
+            {
+                Volatile.Write(ref _logger, logger);
+            }
+
+            Write(new Entry(line, null));
+        }
 
         public Task FlushAsync()
         {
@@ -142,6 +152,14 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
                         FaultLedger.Shared.Record("hotcode.audit-write", ex);
+                        if (Volatile.Read(ref _logger) is { } log)
+                        {
+                            log.LogFault("hotcode-audit-write", ex, "hot-code audit write to {Path} failed; its queued lines are lost", fullPath);
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine($"hot-code audit write to {fullPath} failed; its queued lines are lost: {ex.Message}");
+                        }
                     }
                 }
 

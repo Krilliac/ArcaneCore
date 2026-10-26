@@ -64,7 +64,7 @@ public sealed class AuctionBotFeatureTests
 
         await fixture.OnWorld(() =>
         {
-            fixture.Bot.Reload(_ => replied.TrySetResult((Environment.CurrentManagedThreadId, fixture.Bot.Overrides.Count)));
+            fixture.Bot.Reload((_, _) => replied.TrySetResult((Environment.CurrentManagedThreadId, fixture.Bot.Overrides.Count)));
             return true;
         });
 
@@ -72,6 +72,58 @@ public sealed class AuctionBotFeatureTests
         Assert.Equal(worldThread, thread);
         Assert.Equal(1, overrides);
         Assert.NotEqual(worldThread, itemStore.LastLoadThread);
+    }
+
+    [Fact]
+    public async Task Reload_that_read_its_rows_before_a_SetItemData_does_not_overwrite_the_change()
+    {
+        var itemStore = new GatedItemStore();
+        await using var fixture = await Fixture.CreateAsync(itemStore: itemStore);
+        itemStore.Hold = true;
+        ItemTemplate template = fixture.Items.Templates.Find(Fixture.Entry)!;
+        var reloaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => reloaded.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(0).Started.WaitAsync(Fixture.Budget);
+        await fixture.OnWorld(() => fixture.Bot.SetItemData(template, new AuctionBotItemOverride(Fixture.Entry, 999, 50, 1, 1)));
+        itemStore.Read(0).Release([new AuctionBotItemOverride(Fixture.Entry, 7, 100, 1, 1)]);
+
+        Assert.False(await reloaded.Task.WaitAsync(Fixture.Budget)); // superseded: reported, not silently applied
+        Assert.Equal(999u, await fixture.OnWorld(() => fixture.Bot.Overrides[Fixture.Entry].Value));
+    }
+
+    [Fact]
+    public async Task Two_reloads_finishing_in_reverse_order_apply_only_the_later_started_one()
+    {
+        var itemStore = new GatedItemStore();
+        await using var fixture = await Fixture.CreateAsync(itemStore: itemStore);
+        itemStore.Hold = true;
+        var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => first.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(0).Started.WaitAsync(Fixture.Budget);
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => second.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(1).Started.WaitAsync(Fixture.Budget);
+
+        itemStore.Read(1).Release([new AuctionBotItemOverride(Fixture.Entry, 22, 100, 1, 1)]);
+        Assert.True(await second.Task.WaitAsync(Fixture.Budget));
+        itemStore.Read(0).Release([new AuctionBotItemOverride(Fixture.Entry, 11, 100, 1, 1)]);
+        Assert.False(await first.Task.WaitAsync(Fixture.Budget));
+
+        Assert.Equal(22u, await fixture.OnWorld(() => fixture.Bot.Overrides[Fixture.Entry].Value));
     }
 
     [Fact]
@@ -478,6 +530,59 @@ public sealed class AuctionBotFeatureTests
         public Task SaveAsync(AuctionBotItemOverride value, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<bool> DeleteAsync(uint item, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// An <c>ahbot_items</c> store whose loads are answered at once until <see cref="Hold"/> is set, then each load waits for the
+    /// test to release it with the rows to return (so a test chooses the order the reads finish in).
+    /// </summary>
+    private sealed class GatedItemStore : IAuctionBotItemStore
+    {
+        private readonly object _gate = new();
+        private readonly List<HeldRead> _reads = [];
+
+        public volatile bool Hold;
+
+        /// <summary>The held read number <paramref name="index"/> (created on first use, so the test can wait for a read that has not started).</summary>
+        public HeldRead Read(int index)
+        {
+            lock (_gate)
+            {
+                while (_reads.Count <= index)
+                {
+                    _reads.Add(new HeldRead());
+                }
+
+                return _reads[index];
+            }
+        }
+
+        private int _next;
+
+        public async Task<IReadOnlyList<AuctionBotItemOverride>> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            if (!Hold)
+            {
+                return [new AuctionBotItemOverride(Fixture.Entry, 7, 100, 1, 1)];
+            }
+
+            HeldRead read = Read(Interlocked.Increment(ref _next) - 1);
+            read.StartedSource.TrySetResult();
+            return await read.Rows.Task.ConfigureAwait(false);
+        }
+
+        public Task SaveAsync(AuctionBotItemOverride value, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> DeleteAsync(uint item, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public sealed class HeldRead
+        {
+            public TaskCompletionSource StartedSource { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource<IReadOnlyList<AuctionBotItemOverride>> Rows { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Task Started => StartedSource.Task;
+
+            public void Release(IReadOnlyList<AuctionBotItemOverride> rows) => Rows.TrySetResult(rows);
+        }
     }
 
     private sealed class Templates(IReadOnlyList<ItemTemplate> templates) : IItemTemplateSource

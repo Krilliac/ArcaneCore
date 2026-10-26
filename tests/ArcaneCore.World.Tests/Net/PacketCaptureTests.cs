@@ -81,6 +81,7 @@ public sealed class PacketCaptureTests
     [Fact]
     public async Task WriterDiskError_FaultsAndClosesTheCapture()
     {
+        long faultsBefore = CaptureFaults();
         var stream = new GatedStream { Fail = true };
         var capture = new PacketCapture(stream, "failing.pkt", 1024 * 1024);
         capture.Write(false, 0x01EC, new byte[16]);
@@ -89,7 +90,28 @@ public sealed class PacketCaptureTests
 
         Assert.True(capture.Faulted);
         Assert.False(capture.IsOpen);
+        Assert.Equal(1, CaptureFaults() - faultsBefore);
     }
+
+    [Fact]
+    public async Task WriterThatCannotCloseItsStream_RecordsTheFaultAndDisposeDoesNotThrow()
+    {
+        long faultsBefore = CaptureFaults();
+        var stream = new GatedStream { Fail = true, FailDispose = true };
+        var capture = new PacketCapture(stream, "failing-close.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        stream.Release.SetResult();
+        await stream.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Exception? thrown = Record.Exception(capture.Dispose); // waits for the writer task
+
+        Assert.Null(thrown);
+        Assert.True(capture.Faulted);
+        Assert.Equal(2, CaptureFaults() - faultsBefore); // the failed write and the failed close
+    }
+
+    private static long CaptureFaults()
+        => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "net.packet-capture").Sum(s => s.Count);
 
     /// <summary>Header bytes pass through; the first asynchronous write waits for <see cref="Release"/> and then fails or completes.</summary>
     private sealed class GatedStream : MemoryStream
@@ -98,6 +120,7 @@ public sealed class PacketCaptureTests
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Fail { get; init; }
+        public bool FailDispose { get; init; }
 
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
@@ -110,6 +133,7 @@ public sealed class PacketCaptureTests
         public override ValueTask DisposeAsync()
         {
             Disposed.TrySetResult();
+            if (FailDispose) throw new IOException("close failed");
             return base.DisposeAsync();
         }
     }

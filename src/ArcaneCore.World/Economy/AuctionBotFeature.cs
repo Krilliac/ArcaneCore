@@ -263,9 +263,11 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// item pool. <c>Enabled</c> and the update interval only change on restart. The options are re-bound at once; the
     /// <c>ahbot_items</c> read runs on the thread pool (the SQLite provider runs its async calls synchronously, so it must not
     /// run on the tick), and the overrides are applied, the pool rebuilt and <paramref name="done"/> called with the option
-    /// corrections back on the world thread.
+    /// corrections back on the world thread. <paramref name="done"/> also gets whether the rows read were applied: false when a
+    /// <see cref="SetItemData"/> or a newer reload ran since this one started (its rows are then stale and are dropped). Not attached to a world, the
+    /// read and the apply run inline.
     /// </summary>
-    public void Reload(Action<IReadOnlyList<string>> done)
+    public void Reload(Action<IReadOnlyList<string>, bool> done)
     {
         ArgumentNullException.ThrowIfNull(done);
         bool enabled = Options.Enabled;
@@ -275,29 +277,36 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         Options.UpdateIntervalSeconds = interval;
         WorldRuntime? world = _world;
         int generation = Interlocked.Increment(ref _overrideGeneration);
-        _ = Task.Run(async () =>
+
+        void Apply(Dictionary<uint, AuctionBotItemOverride>? loaded)
         {
-            Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
-            void Apply()
+            bool applied = true;
+            if (loaded is not null)
             {
-                if (loaded is not null && generation == Volatile.Read(ref _overrideGeneration))
+                // A SetItemData (or a newer reload) since this reload started changed the overrides: the rows read are stale.
+                applied = generation == Volatile.Read(ref _overrideGeneration);
+                if (applied)
                 {
                     _overrides = loaded;
                 }
-
-                _planner = null;
-                _loot = null;
-                done(fixes);
             }
 
-            if (world is null)
-            {
-                Apply();
-            }
-            else
-            {
-                world.Post(Apply);
-            }
+            _planner = null;
+            _loot = null;
+            done(fixes, applied);
+        }
+
+        if (world is null)
+        {
+            // Not attached: no world thread to protect, so read and apply here.
+            Apply(ReadOverridesAsync().GetAwaiter().GetResult());
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            Dictionary<uint, AuctionBotItemOverride>? loaded = await ReadOverridesAsync().ConfigureAwait(false);
+            world.Post(() => Apply(loaded));
         });
     }
 
@@ -432,14 +441,14 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// <summary>Read the <c>ahbot_items</c> rows: null when there is no store (keep what is held), empty when the read failed.</summary>
     private async Task<Dictionary<uint, AuctionBotItemOverride>?> ReadOverridesAsync()
     {
-        using IServiceScope scope = services.CreateScope();
-        if (scope.ServiceProvider.GetService<IAuctionBotItemStore>() is not { } store)
-        {
-            return null;
-        }
-
         try
         {
+            using IServiceScope scope = services.CreateScope();
+            if (scope.ServiceProvider.GetService<IAuctionBotItemStore>() is not { } store)
+            {
+                return null;
+            }
+
             IReadOnlyList<AuctionBotItemOverride> rows = await store.LoadAsync().ConfigureAwait(false);
             Dictionary<uint, AuctionBotItemOverride> loaded = rows.Where(o => o.Item != 0).GroupBy(o => o.Item).ToDictionary(g => g.Key, g => g.Last());
             logger.LogInformation("AHBot: {Count} ahbot_items rows", loaded.Count);

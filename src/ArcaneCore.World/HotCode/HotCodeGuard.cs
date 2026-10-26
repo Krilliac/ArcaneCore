@@ -108,16 +108,8 @@ public static class HotCodeGuard
         if (!verdict.Allowed)
         {
             string message = string.Join(" ", verdict.Refusals);
-            try
-            {
-                audit.Record("start-refused", message);
-                audit.Flush(); // startup, not the world thread: the process ends right after the throw, so the refusal is on disk first
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // The refusal itself is what matters; an unwritable audit file must not mask it, but it is counted.
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("hotcode.audit-write", ex);
-            }
+            audit.Record("start-refused", message);
+            audit.Flush(); // startup, not the world thread: the process ends right after the throw, so the refusal is on disk first; a write failure is recorded and logged by the audit writer and cannot mask the refusal
 
             throw new HotCodeRefusedException(message);
         }

@@ -166,7 +166,17 @@ public sealed class PacketCapture : IDisposable
         }
         finally
         {
-            await _stream.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await _stream.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // Closing the file failed: the trace may be incomplete, but the writer task must not fault (Dispose waits on it).
+                _faulted = true;
+                FaultLedger.Shared.Record("net.packet-capture", ex);
+                _logger?.LogFault("net-packet-capture", ex, "packet capture {Path} could not be closed", Path);
+            }
         }
     }
 

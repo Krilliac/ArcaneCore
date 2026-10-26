@@ -86,7 +86,7 @@ public sealed class LookupCommands : ICommandGroup
         IItemTemplateStore? templates = caller?.Inventory.Templates;
         if (templates is null && context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items)
         {
-            if (items.Templates.Count == 0)
+            if (!items.IsLoaded)
             {
                 // Console commands run on the world thread: load on the pool and ask for a retry instead of waiting here.
                 items.StartLoadInBackground();
