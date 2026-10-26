@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -118,8 +119,20 @@ public sealed partial class SummonService
             return;
         }
 
-        float factor = pet.Map is { } map ? CombatEnvironment.For(map.World).GetPowerRegenFactor(pet, PowerType.Focus) : 1.0f;
-        int add = (int)(FocusPerTick * factor);
+        // Pet::RegenerateFocus scales the 25 by each aura in turn (not by their product), so the float rounding matches.
+        float amount = FocusPerTick;
+        if (pet.Map is { } map && CombatEnvironment.For(map.World).Auras is { } source)
+        {
+            foreach (SpellAura aura in source.GetAuras(pet, AuraType.ModPowerRegenPercent))
+            {
+                if (aura.MiscValue == (int)PowerType.Focus)
+                {
+                    amount *= (aura.Amount + 100) / 100.0f;
+                }
+            }
+        }
+
+        int add = (int)amount;
         pet.SetUInt32(UpdateFields.UnitFieldPower3, (uint)Math.Clamp((long)current + add, 0L, max));
     }
 
