@@ -97,7 +97,7 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
             ?? Do(s, MortalStrike, v)
             ?? Do(s, Bloodthirst, v)
             ?? Stance(s, v)
-            ?? Do(s, Intercept, v)
+            ?? Do(s, Intercept, v, !s.KiteHolding) // a kiting warrior holds its range: Intercept would charge it back into melee
             ?? Do(s, Whirlwind, s.Self, v.InMeleeRange)
             ?? Do(s, DemoralizingShout, s.Self, tank && !v.HasAura(DemoralizingShout))
             // Rage dump on the next swing above 30 rage (vmangos :2645-2663).
@@ -109,5 +109,5 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
     private static RotationAction? Stance(RotationState s, RotationUnit v)
         => s.Self.HealthPercent < 20f || s.Role == PlayerbotRole.Tank && v.Level >= s.Self.Level
             ? Do(s, DefensiveStance, s.Self, s.Form != Form.DefensiveStance)
-            : Do(s, BerserkerStance, s.Self, s.Form != Form.BerserkerStance);
+            : Do(s, BerserkerStance, s.Self, s.Form != Form.BerserkerStance && !s.KiteHolding); // Berserker is for Intercept, which a kite does not use
 }

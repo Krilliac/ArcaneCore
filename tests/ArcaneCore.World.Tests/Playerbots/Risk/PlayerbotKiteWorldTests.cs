@@ -2,7 +2,10 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
@@ -43,9 +46,9 @@ public sealed class PlayerbotKiteWorldTests
 
     /// <summary>A mage at 45% health with one creature of its own speed on it (400 health, 1 to 2 damage), two yards away.</summary>
     private static async Task<(RiskTestWorld World, Creature Mob)> HurtMageVsAsync(bool snare, Action<PlayerbotOptions>? configure = null,
-        bool aggroOnSight = false, Action<RiskTestWorld>? prepare = null)
+        bool aggroOnSight = false, Action<RiskTestWorld>? prepare = null, string? dataDirectory = null)
     {
-        RiskTestWorld world = await RiskTestWorld.StartAsync(configure, aggroOnSight: aggroOnSight);
+        RiskTestWorld world = await RiskTestWorld.StartAsync(configure, aggroOnSight: aggroOnSight, dataDirectory: dataDirectory);
         Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 2, 0));
         await world.SeeAsync(mob);
         await world.OnWorldAsync(() =>
@@ -145,6 +148,87 @@ public sealed class PlayerbotKiteWorldTests
             Assert.True(lowest >= startZ - 2f, $"the mage fell {startZ - lowest:F1} yards");
             Assert.NotNull(ground);
         }
+    }
+
+    /// <summary>
+    /// K6: a strip of water one cell (about 4 yards) wide lies across the away line, about four yards behind the mage, with dry ground beyond
+    /// it. A leg straight away (or 35 degrees off) ends dry on the far side, so a water check at the leg's end alone takes it and the
+    /// mage wades through; sampled along the leg, every such leg is refused and the mage steps round (sideways or toward the creature).
+    /// </summary>
+    [Fact]
+    public async Task AKitingMage_NeverWadesThroughAStripOfWaterAcrossTheLeg()
+    {
+        // The human start is (-8949.95, -132.493, 83.5312), tile (48, 32). A terrain cell is 533.33 / 128 yards; the cell index grows as x falls.
+        const float startX = -8949.95f;
+        const float ground = 83.5312f;
+        int startCell = CellOf(startX);
+        string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-kite-water-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
+        try
+        {
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 48, 32)), StripTile(ground, waterLevel: 90f, firstCell: startCell + 2, cells: 1));
+            (RiskTestWorld world, Creature mob) = await HurtMageVsAsync(snare: true, configure: options => options.Combat.Kite.StepYards = 12f, dataDirectory: dataDir);
+            await using (world)
+            {
+                Assert.True(await world.OnWorldAsync(() =>
+                {
+                    float height = world.Player.Locomotion.CollisionHeight;
+                    float wetX = XOfCell(startCell + 2.5f), dryX = XOfCell(startCell + 4.5f);
+                    return Math.Abs(world.Player.X - startX) < 0.01f && PlayerbotWater.Submerged(world.Player.Map!, new Vector3(wetX, world.Player.Y, ground), height)
+                        && !PlayerbotWater.Submerged(world.Player.Map!, new Vector3(dryX, world.Player.Y, ground), height)
+                        && !PlayerbotWater.Submerged(world.Player.Map!, new Vector3(world.Player.X, world.Player.Y, ground), height);
+                }), "the strip is not where the test thinks it is, so it proves nothing: " + await world.OnWorldAsync(() =>
+                {
+                    Player p = world.Player;
+                    Vector3 wet = new(XOfCell(startCell + 2.5f), p.Y, ground), dry = new(XOfCell(startCell + 4.5f), p.Y, ground);
+                    return $"player {p.X},{p.Y},{p.Z} cell {startCell} wet {PlayerbotWater.Submerged(p.Map!, wet, 2f)} dry {PlayerbotWater.Submerged(p.Map!, dry, 2f)} here {PlayerbotWater.Submerged(p.Map!, new Vector3(p.X, p.Y, ground), 2f)} terrainZ {p.Map!.Terrain.GetHeight(p.X, p.Y, p.Z)}";
+                }));
+
+                int wet = 0;
+                await world.ThinkUntilAsync(6_000, () => false, each: () =>
+                {
+                    if (PlayerbotWater.Submerged(world.Player.Map!, new Vector3(world.Player.X, world.Player.Y, world.Player.Z), world.Player.Locomotion.CollisionHeight)) wet++;
+                });
+
+                Assert.Equal(0, wet);
+                Assert.True(await world.OnWorldAsync(() => world.Brain.Kite.Steps) >= 1, "the mage never stepped, so the wading check proves nothing: " + await world.OnWorldAsync(() => Describe(world, mob)));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    private static int CellOf(float x) => (int)(128f * (32f - (x / GridDefines.SizeOfGrids))) & 127;
+
+    private static float XOfCell(float cell) => GridDefines.SizeOfGrids * (32f - (((48f * 128f) + cell) / 128f)); // tile 48
+
+    /// <summary>A z1.4 map tile of flat ground with flat water (level <paramref name="waterLevel"/>) over <paramref name="cells"/> cells across the x axis from cell <paramref name="firstCell"/>, all along y.</summary>
+    private static byte[] StripTile(float groundHeight, float waterLevel, int firstCell, int cells)
+    {
+        byte[] bytes = new byte[73];
+        Span<byte> span = bytes;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[0..], TerrainTile.MapMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[4..], TerrainTile.MapVersionMagic);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[16..], 40u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[20..], 16u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[24..], 56u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[28..], 17u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[40..], 0x5447484Du); // "MHGT"
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[44..], 1u); // MapHeightNoHeight
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[48..], groundHeight);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[52..], groundHeight);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[56..], 0x51494C4Du); // "MLIQ"
+        span[60] = 0x03; // MapLiquidNoType | MapLiquidNoHeight
+        span[61] = (byte)LiquidTypeFlags.Water;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span[62..], 1);
+        span[64] = 0;                // offset along y
+        span[65] = (byte)firstCell;  // offset along x (the cell index)
+        span[66] = 128;              // width along y
+        span[67] = (byte)cells;      // height along x
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[68..], waterLevel);
+        return bytes;
     }
 
     /// <summary>K5: with <c>World:Playerbots:Combat:Kite:Enabled</c> off the mage casts the same snare and stays where it stands: K1's "before".</summary>

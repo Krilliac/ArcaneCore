@@ -154,6 +154,53 @@ public sealed class PlayerbotKiteRangedWorldTests
         }
     }
 
+    /// <summary>
+    /// W2: the real wiring <c>PlayerbotKite.HoldsRange</c> to <c>PlayerbotCombatSpells.KiteHolds</c> to <c>PlayerbotCombatView.Build</c>. A
+    /// warrior at full health with a bow, arrows and Shoot Bow, 20 yards from a creature that is on it, is not kiting, so it walks in toward it (inside 8 yards within three seconds) and
+    /// fires no shot on the way (before, any stationary warrior out of melee reach shot, and the brain, which runs the
+    /// rotation before positioning, never walked it in).
+    /// </summary>
+    [Fact]
+    public async Task AHealthyWarriorWithABow_WalksIn_AndFiresNoShotOnTheWay()
+    {
+        ItemTestContent items = Content();
+        using IDisposable scope = items.Use();
+        RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await using (world)
+        {
+            Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 20, 0));
+            await world.SeeAsync(mob);
+            await world.OnWorldAsync(() =>
+            {
+                Player player = world.Player;
+                player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
+                SpellFeature feature = world.Session.Services.GetRequiredService<SpellFeature>();
+                SpellInfo[] added = [ShootBow()];
+                feature.System.Store = new SpellStore([.. feature.System.Store.All, .. added], [], []);
+                foreach (SpellInfo spell in added) Assert.True(feature.Spellbook.LearnSpell(player, spell.Id));
+                EquipRanged(player, BowEntry, 100);
+                Assert.True(PlayerbotKite.HasUsableRangedWeapon(player), "the bow is not usable, so the test proves nothing");
+                world.Engage(mob);
+                Assert.True(Gap(world, mob) > 15f, "the creature is not 20 yards away, so the test proves nothing");
+                return true;
+            });
+
+            uint lastHealth = await world.OnWorldAsync(() => mob.Health);
+            int shotsFromRange = 0;
+            bool closed = await world.ThinkUntilAsync(3_000, () => Gap(world, mob) <= 8f, each: () =>
+            {
+                if (Gap(world, mob) > 6f && mob.Health < lastHealth) shotsFromRange++;
+                lastHealth = mob.Health;
+            });
+
+            string why = await world.OnWorldAsync(() => Describe(world, mob));
+            Assert.True(closed, "the warrior never closed in on the creature: " + why);
+            Assert.Equal(0, shotsFromRange);
+            Assert.Equal(0, await world.OnWorldAsync(() => world.Brain.Kite.Steps));
+            Assert.False(await world.OnWorldAsync(() => world.Brain.CombatSpells.KiteHolds?.Invoke(world.Player, mob) ?? false), "the kite holds a full-health warrior: " + why);
+        }
+    }
+
     /// <summary>A bow with no arrows selected shoots nothing, so the warrior does not count as a ranged fighter.</summary>
     [Fact]
     public async Task ABowWithNoAmmunition_IsNotUsable()

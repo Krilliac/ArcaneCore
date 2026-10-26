@@ -60,10 +60,10 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     internal PlayerbotRole? GroupRole { get; set; }
 
     /// <summary>
-    /// Whether the bot's kite is holding it at range now (set by <see cref="Combat.PlayerbotKite"/> on its first think; null before). The
+    /// Whether the bot's kite is holding it at range now (set by <see cref="Combat.PlayerbotKite"/> on its first think; null before), for the victim of the think: false for a victim the kite is not kiting, such as a player in a PvP fight. The
     /// rotation reads it through <see cref="RotationState.KiteHolding"/>, so a warrior or rogue shoots only while the kite keeps it out of melee.
     /// </summary>
-    internal Func<Player, bool>? KiteHolds { get; set; }
+    internal Func<Player, Unit?, bool>? KiteHolds { get; set; }
 
     /// <summary>Retire retry state when the player leaves a combat lifetime (death/reclaim).</summary>
     internal void Reset()
@@ -497,7 +497,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
 
     private RotationState View(Player player, SpellFeature feature, Unit? victim)
         => PlayerbotCombatView.Build(session, feature, player, victim, Refresh(player, feature), GroupRole ?? _role, spell => IsRefused(spell) || IsWithheldForManaRecovery(player, spell),
-            KiteHolds?.Invoke(player) ?? false);
+            KiteHolds?.Invoke(player, victim) ?? false);
 
     /// <summary>
     /// vmangos PartyBotAI::OnPacketReceived (PartyBotAI.cpp:544-553): a learned, superseded or removed spell marks the spell

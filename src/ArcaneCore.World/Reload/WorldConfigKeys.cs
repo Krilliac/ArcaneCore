@@ -202,8 +202,8 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
 
-        // Not vmangos keys: kiting (docs/areas/playbots-combat.md). PlayerbotKite and the rotations read the
-        // shared PlayerbotOptions.Combat at every decision.
+        // Not vmangos keys: kiting (docs/areas/playbots-combat.md). PlayerbotKite reads the shared PlayerbotOptions.Combat at every
+        // decision; the rotations never read it, they see only RotationState.KiteHolding.
         LivePlayerbots("Combat:Kite:Enabled", o => o.Combat.Kite.Enabled, (o, v) => o.Combat.Kite.Enabled = v),
         LivePlayerbotsValue("Combat:Kite:HealthPct", o => o.Combat.Kite.HealthPct, (o, v) => o.Combat.Kite.HealthPct = v, v => PlayerbotRiskOptions.Check(v, 10, 95)),
         LivePlayerbotsValue("Combat:Kite:StepYards", o => o.Combat.Kite.StepYards, (o, v) => o.Combat.Kite.StepYards = v, v => PlayerbotRiskOptions.Check(v, 4, 20)),

@@ -58,6 +58,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
     // The kite holds the bot at its casting range once it has slowed or stepped (see HoldRange); cleared when it ends or cannot work.
     private bool _holding;
+    private ObjectGuid _victimGuid;
     private float _holdRange;
 
     /// <summary>A gap this long between two kite thinks (the bot was elsewhere) starts a new fight's counters.</summary>
@@ -97,8 +98,13 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         return MathF.Max(rotationRange, _holdRange);
     }
 
-    /// <summary>Whether the kite is holding the bot at a range past melee now (what <see cref="RotationState.KiteHolding"/> reports).</summary>
-    private bool HoldsRange(Player player) => HoldRange(player, 0f) > PlayerbotClassRotation.MeleeRange;
+    /// <summary>
+    /// Whether the kite is holding the bot at a range past melee against <paramref name="victim"/> now (what
+    /// <see cref="RotationState.KiteHolding"/> reports): only for the creature the kite last thought about, so a PvP fight that shares
+    /// the spell object (the kite is not updated there) never reads a stale hold.
+    /// </summary>
+    private bool HoldsRange(Player player, Unit? victim)
+        => victim is Creature && victim.Guid == _victimGuid && HoldRange(player, 0f) > PlayerbotClassRotation.MeleeRange;
 
     /// <summary>Whether a step is being walked.</summary>
     internal bool Walking => _routeSlot is { Complete: false };
@@ -138,6 +144,12 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
         if (_lastUpdateMs != 0 && unchecked(now - _lastUpdateMs) > FightGapMs) EndFight(player, stop: true);
         _lastUpdateMs = Math.Max(1u, now);
+        if (victim.Guid != _victimGuid)
+        {
+            // A new victim: the hold was made against the old one.
+            _victimGuid = victim.Guid;
+            _holding = false;
+        }
 
         if (_over) return false;
         if (risk is { Retreat.Active: true })
@@ -452,8 +464,8 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
             if (!PlayerbotMoveCheck.TryClip(map, here, end, out Vector3 clipped)
                 || Vector2.Distance(Flat(here), Flat(clipped)) < length * PlayerbotKiteModel.MinClipFraction) continue;
 
-            // (c) dry.
-            if (PlayerbotWater.Submerged(map, clipped, player.Locomotion.CollisionHeight)) continue;
+            // (c) dry along the leg and at its end.
+            if (LegSubmerged(player, map, here, clipped)) continue;
 
             // (d) nothing outside the fight wakes up along the leg or at its end.
             if (LegReachesThreat(player, here, clipped)) continue;
@@ -490,6 +502,18 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         bool highValid = !PlayerbotNavigation.InvalidHeight(high), lowValid = !PlayerbotNavigation.InvalidHeight(low);
         if (highValid && lowValid) return MathF.Abs(high - z) <= MathF.Abs(low - z) ? high : low;
         return highValid ? high : lowValid ? low : high;
+    }
+
+    private static bool LegSubmerged(Player player, Map map, Vector3 from, Vector3 to)
+    {
+        int samples = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(from, to) / PlayerbotKiteModel.SampleYards));
+        float height = player.Locomotion.CollisionHeight;
+        for (int sample = 1; sample <= samples; sample++)
+        {
+            if (PlayerbotWater.Submerged(map, Vector3.Lerp(from, to, (float)sample / samples), height)) return true;
+        }
+
+        return false;
     }
 
     private bool LegReachesThreat(Player player, Vector3 from, Vector3 to)
@@ -548,5 +572,6 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         _kiteStartMs = 0;
         _over = false;
         _holding = false;
+        _victimGuid = default;
     }
 }

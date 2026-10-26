@@ -117,6 +117,19 @@ public sealed class PlayerbotRangedWeaponRotationTests
     }
 
     [Fact]
+    public void AKitingWarrior_WhoseKiteHolds_ShootsInsteadOfInterceptingOrTakingBerserkerStance()
+    {
+        // Review finding: Intercept (and the Berserker Stance switch made for it) took a kiting warrior straight back into melee.
+        SpellInfo[] book = [Hostile("Intercept"), Hostile("Berserker Stance", 0), .. Shots];
+        RotationState holding = State(Warrior, book, Self(1, 45f), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeapon);
+        Assert.Equal("Shoot Bow", Next(Warrior.InCombat(holding)));
+
+        // The control: the same book and state with the kite not holding reaches for the stance or Intercept, so the test is not vacuous.
+        RotationState idle = State(Warrior, book, Self(1, 45f), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeaponNoKite);
+        Assert.True(Next(Warrior.InCombat(idle)) is "Berserker Stance" or "Intercept");
+    }
+
+    [Fact]
     public void AHealthyRogueOutOfMelee_WhoseKiteIsNotHolding_DoesNotThrow()
     {
         RotationState idle = State(Rogue, [Hostile("Throw", 0)], Self(4), Victim(20f), PlayerbotRole.MeleeDps, more: WithRangedWeaponNoKite);
