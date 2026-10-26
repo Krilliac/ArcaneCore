@@ -498,6 +498,29 @@ public sealed class PlayerbotCombatAnomalyTests
     }
 
     [Fact]
+    public async Task ACombatFlagClearedAndSetAgainBetweenLooks_IsNotReportedAsPhantomCombat()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            // The flag is cleared and set again by the same setter between every look for 60 s, with no attacker.
+            for (uint nowMs = 1000; nowMs <= 60_000; nowMs += 3000)
+            {
+                MapCombat.ClearInCombat(player);
+                player.Map!.Combat.SetInCombatState(player, 3_600_000, caller: "SameSetter", via: "SameVia");
+                watch.Look(player, nowMs);
+            }
+
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), cap.Describe());
+            return true;
+        });
+    }
+
+    [Fact]
     public async Task ASingleCombatSet_PastThresholdWithNoAttacker_IsReportedAndNamesSetter()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();

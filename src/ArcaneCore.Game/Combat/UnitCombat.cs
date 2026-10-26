@@ -100,6 +100,13 @@ public sealed partial class UnitCombat
 
     public uint CombatSetsSinceClear { get; internal set; }
 
+    /// <summary>
+    /// Monotonically increasing counter of times this unit has entered combat or had its combat state refreshed.
+    /// Unlike <see cref="CombatSetsSinceClear"/>, this serial is never reset when leaving combat, allowing watches
+    /// to detect flicker (clear-then-set) episodes where <see cref="CombatSetsSinceClear"/> returns to 1.
+    /// </summary>
+    public uint CombatSetSerial { get; internal set; }
+
     /// <summary>The helper <see cref="LastCombatSetBy"/> went through (SetInCombatWithAggressor / SetInCombatWithVictim), or null for a direct call; a constant string.</summary>
     public string? LastCombatSetVia { get; internal set; }
 

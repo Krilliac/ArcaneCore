@@ -150,7 +150,7 @@ internal sealed class PlayerbotPhantomCombatWatch
     internal const uint PhantomMs = 45_000;
 
     private uint _sinceMs;
-    private uint _combatSets;
+    private uint _combatSetSerial;
     private bool _reported;
 
     internal void Look(Player player, uint nowMs)
@@ -159,15 +159,15 @@ internal sealed class PlayerbotPhantomCombatWatch
         {
             _sinceMs = 0;
             _reported = false;
-            _combatSets = 0;
+            _combatSetSerial = 0;
             return;
         }
 
-        uint currentSets = player.Combat.CombatSetsSinceClear;
-        if (_sinceMs == 0 || currentSets != _combatSets)
+        uint currentSerial = player.Combat.CombatSetSerial;
+        if (_sinceMs == 0 || currentSerial != _combatSetSerial)
         {
             _sinceMs = Math.Max(1u, nowMs);
-            _combatSets = currentSets;
+            _combatSetSerial = currentSerial;
             _reported = false;
             return;
         }
