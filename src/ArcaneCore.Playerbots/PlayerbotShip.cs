@@ -678,9 +678,10 @@ internal static partial class PlayerbotShip
             if (unchecked((int)(trip.NextPlanMs - now)) > 0) return;
             long dockMark = PathSearchCounters.TilesPending;
             Vector3 dockTarget = ResolveDockTarget(map, at.Position, Position(player));
-            if (PathSearchCounters.TilesPending != dockMark && trip.Tiles.Hold(now))
+            if (dockTarget == at.Position && PathSearchCounters.TilesPending != dockMark && trip.Tiles.Hold(now))
             {
-                // The dock's tile is still being read: no verdict on the pier, and no refused plan to count. Ask again shortly.
+                // No dry pier point found and a tile of the search is still being read: no verdict on the pier, and no refused plan to count.
+                // (A pier point found stands even when a probe beside it met an unread tile.) Ask again shortly.
                 trip.NextPlanMs = unchecked(now + PlanRetryMs);
                 return;
             }

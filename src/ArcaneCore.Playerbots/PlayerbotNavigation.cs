@@ -516,6 +516,13 @@ internal static class PlayerbotNavigation
         if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
         if (!goal.IsFinite() || !origin.IsFinite()) return false;
+        // A goal in a remembered dead-end pin cell is refused at once, near or far: no region search or path job is worth starting for it.
+        if (IsDeadEndPin(player, goal))
+        {
+            t_nonPathRefusal = true;
+            return false;
+        }
+
         float distance = Vector3.Distance(origin, goal);
         long pending = PendingMark;
         // The way to the goal itself first: the search reads the navigation tiles it crosses (PathOptions.LoadTiles), so a road
@@ -752,7 +759,10 @@ internal static class PlayerbotNavigation
         // The region search is cached per graph and region pair (PlayerbotRegionRoutes). A miss under a planning wrapper (its callers handle
         // PlanOutcome.Pending) runs on the pool and the bot answers pending, like a path job; elsewhere it searches here once and keeps the answer.
         bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
-        if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals))
+        PlayerbotPathJobs? jobs = PlayerbotPathJobs.Bound;
+        long wallMs = jobs?.WallMs() ?? System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
+        if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals,
+            jobs?.Logger, wallMs, options.PathJobWaitMaxMs))
         {
             PlayerbotPathJobs.NoteExternalPending();
             return null;
@@ -1382,6 +1392,9 @@ internal static class PlayerbotNavigation
     /// <summary>The bot may stand this far from where a diagnosis was made and still get its cached verdict (<see cref="PlayerbotWorldDestinations"/>'s spot).</summary>
     internal const float DiagnosisSpotYards = 3f;
 
+    /// <summary>...and within this height (yards): a floor above or below the spot is another place (a verdict made under a mezzanine is not the one above it).</summary>
+    internal const float DiagnosisSpotHeightYards = 1.5f;
+
     /// <summary>How long a diagnosis verdict stands (ms): a hazard or the bot's neighbourhood may change.</summary>
     internal const uint DiagnosisTtlMs = 120_000;
 
@@ -1416,7 +1429,8 @@ internal static class PlayerbotNavigation
             if (entry.Steep == steep && entry.QuestId == questId && entry.FriendlyTownEnder == friendlyTownEnder
                 && unchecked(now - entry.MadeMs) <= DiagnosisTtlMs
                 && Vector3.DistanceSquared(entry.Goal, goal) <= 1f
-                && Vector3.DistanceSquared(entry.Spot, spot) <= DiagnosisSpotYards * DiagnosisSpotYards)
+                && Vector2.DistanceSquared(new Vector2(entry.Spot.X, entry.Spot.Y), new Vector2(spot.X, spot.Y)) <= DiagnosisSpotYards * DiagnosisSpotYards
+                && MathF.Abs(entry.Spot.Z - spot.Z) <= DiagnosisSpotHeightYards)
                 return entry;
         }
 

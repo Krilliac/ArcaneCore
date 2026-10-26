@@ -828,6 +828,36 @@ public sealed class PlayerbotPathJobTests
         });
     }
 
+    /// <summary>A verdict made on one floor is not the verdict of the floor 2.5 yards above it (within the flat spot radius), while a step of a yard is the same spot.</summary>
+    [Fact]
+    public async Task ADiagnosisVerdict_DoesNotAnswerForAnotherFloorAboveTheSpot()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            const uint quest = 4243;
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Pending,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_000, out _)));
+            h.Runner.CompleteAll();
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_500, out _)));
+            Assert.Single(h.Runner.Submitted);
+
+            Vector3 here = new(h.Player.X, h.Player.Y, h.Player.Z);
+            h.Player.Relocate(here.X, here.Y, here.Z + 1f);
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_000, out _)));
+            Assert.Equal(0, h.Probe.Queries); // the kept verdict answered
+
+            h.Player.Relocate(here.X, here.Y, here.Z + 2.5f);
+            h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_500, out _));
+            Assert.True(h.Probe.Queries > 0, "the verdict of the floor below answered for the floor above");
+            return true;
+        });
+    }
+
     // ---- 10. telemetry ------------------------------------------------------------------------------------------------------------
 
     [Fact]

@@ -1215,6 +1215,19 @@ public sealed class PlayerbotOpportunityTests
         Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(far), rig.Clock));
     }
 
+    /// <summary>A trial plan that answers pending is no refusal: the chest is neither rejected nor accepted yet, whichever step answered it.</summary>
+    [Theory]
+    [InlineData("Pending", "Refused", "Refused", "Pending")]
+    [InlineData("Refused", "Refused", "Pending", "Pending")]
+    [InlineData("Pending", "Refused", "Route", "Route")]
+    [InlineData("Pending", "Route", "Refused", "Route")]
+    [InlineData("Route", "Refused", "Refused", "Route")]
+    [InlineData("Refused", "Refused", "Refused", "Refused")]
+    [InlineData("Refused", "Pending", "Refused", "Pending")]
+    public void TheChestVerdict_KeepsAPendingTrialFromBecomingARefusal(string exact, string graph, string nearest, string expected)
+        => Assert.Equal(Enum.Parse<PlanOutcome>(expected),
+            PlayerbotOpportunities.ChestVerdict(() => Enum.Parse<PlanOutcome>(exact), () => Enum.Parse<PlanOutcome>(graph), () => Enum.Parse<PlanOutcome>(nearest)));
+
     [Fact]
     public async Task AChestBeyondTheNavMesh_IsRefusedInBegin_WithoutStartingAnEpisodeOrReportingUnreachable()
     {

@@ -315,12 +315,16 @@ internal sealed partial class PlayerbotOpportunities
                 continue;
             }
 
-            if (find.Kind != OpportunityKind.Rare && find.Distance > InteractYards && map.Collision.Pathfinder is NavMeshPathfinder
-                && !CanPlanChestOnNavMesh(player, find.At, now))
+            if (find.Kind != OpportunityKind.Rare && find.Distance > InteractYards && map.Collision.Pathfinder is NavMeshPathfinder)
             {
-                _ledger.SetAside(find.Key, now, RefusedRecheckMs);
-                ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
-                continue;
+                PlanOutcome onMesh = ChestNavMeshVerdict(player, find.At, now);
+                if (onMesh == PlanOutcome.Pending) continue; // a trial search is under way: no verdict, not set aside, asked again at the next scan
+                if (onMesh == PlanOutcome.Refused)
+                {
+                    _ledger.SetAside(find.Key, now, RefusedRecheckMs);
+                    ReportDecision(player, find, verdict with { Decision = OpportunityDecision.Refuse, Reason = "untakeable" }, guards, engaged: false, now);
+                    continue;
+                }
             }
 
             if (_claims.OwnerOf(find.Key, now) is var owner and not 0 && owner != player.Guid.Value) continue; // another bot is on it
@@ -873,26 +877,56 @@ internal sealed partial class PlayerbotOpportunities
     /// toward the chest across a cliff, not a missing walk: one wide search inside the same region, otherwise a leg to a portal of the
     /// graph's way. Pending while the graph is still being built. Refused when the graph does not join them, so the caller reports it.
     /// </summary>
-    private bool CanPlanChestOnNavMesh(Player player, Vector3 goal, uint now)
+    private PlanOutcome ChestNavMeshVerdict(Player player, Vector3 goal, uint now)
     {
-        if (!(PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)) return true;
+        if (!(PlayerbotThinkProbe.Active?.HasOptionalPlanBudget ?? true)) return PlanOutcome.Route;
         TileWait wait = _tileWait;
-        PlanOutcome planned = PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out PlayerbotRoute? route, trial: true);
-        if (planned == PlanOutcome.Refused || route is null)
+        return ChestVerdict(
+            () =>
+            {
+                PlanOutcome exact = PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out PlayerbotRoute? route, trial: true);
+                return exact == PlanOutcome.Route && route is null ? PlanOutcome.Refused : exact;
+            },
+            () =>
+            {
+                PlayerbotRoute? saved = _route;
+                PlanOutcome graph = PlanChestTheGraphReaches(player, goal, now);
+                PlayerbotRoute? found = _route;
+                _route = saved;
+                return graph == PlanOutcome.Route && found is null ? PlanOutcome.Refused : graph;
+            },
+            () =>
+            {
+                PlanOutcome nearest = PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out PlayerbotRoute? end, trial: true, nearestEnd: true);
+                return nearest == PlanOutcome.Route && end is { Points.Count: > 0 } && Vector3.Distance(end.Points[^1], goal) <= InteractYards
+                    ? PlanOutcome.Route : nearest == PlanOutcome.Pending ? PlanOutcome.Pending : PlanOutcome.Refused;
+            });
+    }
+
+    /// <summary>
+    /// The verdict on a chest from its three trial plans, each asked only when the ones before did not find a route: the exact search, the
+    /// region graph's way, the nearest end of the mesh within reach. Route when one found a way. Otherwise Pending when any of them answered
+    /// pending (a deferred trial search or a tile still being read: no verdict yet, the caller asks again on a later scan and does not set the
+    /// find aside), and Refused only when every one of them refused.
+    /// </summary>
+    internal static PlanOutcome ChestVerdict(Func<PlanOutcome> exact, Func<PlanOutcome> graph, Func<PlanOutcome> nearest)
+    {
+        bool pending = false;
+        PlanOutcome planned = exact();
+        pending |= planned == PlanOutcome.Pending;
+        if (planned != PlanOutcome.Route)
         {
-            PlayerbotRoute? saved = _route;
-            planned = PlanChestTheGraphReaches(player, goal, now);
-            route = _route;
-            _route = saved;
-        }
-        if ((planned == PlanOutcome.Refused || route is null)
-            && PlayerbotNavigation.PlanExact(player, goal, _options, ref wait, now, out route, trial: true, nearestEnd: true) == PlanOutcome.Route
-            && route is { Points.Count: > 0 } && Vector3.Distance(route.Points[^1], goal) <= InteractYards)
-        {
-            planned = PlanOutcome.Route;
+            planned = graph();
+            pending |= planned == PlanOutcome.Pending;
         }
 
-        return planned != PlanOutcome.Refused;
+        if (planned != PlanOutcome.Route)
+        {
+            planned = nearest();
+            pending |= planned == PlanOutcome.Pending;
+        }
+
+        return planned == PlanOutcome.Route ? PlanOutcome.Route : pending ? PlanOutcome.Pending : PlanOutcome.Refused;
     }
 
     private PlanOutcome PlanChestTheGraphReaches(Player player, Vector3 goal, uint now)

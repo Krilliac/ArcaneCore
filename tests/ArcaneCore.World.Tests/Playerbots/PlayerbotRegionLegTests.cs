@@ -139,6 +139,28 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.Equal(1, cache.Searches);
     }
 
+    /// <summary>
+    /// A region route that stays unanswered (here: marked in flight by a search that was lost) is not waited for for ever: past the caller's
+    /// wait bound the ask is searched on the asking thread and answered.
+    /// </summary>
+    [Fact]
+    public async Task AnUnansweredRegionRoute_IsSearchedOnTheAskingThread_PastTheWaitBound()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        Assert.True(cache.MarkInFlight(from, to)); // the pool never answers
+
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 1_000, maxWaitMs: 30_000));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 30_999, maxWaitMs: 30_000));
+        Assert.Equal(0, cache.Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus status, out _, wallMs: 31_001, maxWaitMs: 30_000));
+        Assert.NotEqual(NavRegionRouteStatus.Exhausted, status);
+        Assert.Equal(1, cache.Searches);
+    }
+
     /// <summary>A rebuilt graph is a new instance: it starts with an empty cache, and the old graph's routes never answer for it.</summary>
     [Fact]
     public async Task ARebuiltGraph_DoesNotSeeTheOldGraphsRoutes_AndTheCacheIsBounded()

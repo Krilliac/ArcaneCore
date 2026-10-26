@@ -148,6 +148,9 @@ internal sealed class PlayerbotPathJobs
     /// <summary>Test seam: the wall clock in milliseconds (the wait bounds are wall time; the game clock may run faster).</summary>
     internal Func<long> WallMs { get; init; } = static () => Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency;
 
+    /// <summary>The logger of this service (faults of work done for it on other threads are logged here).</summary>
+    internal ILogger Logger => _logger;
+
     /// <summary>The service the running think is bound to (<see cref="Bind"/>), if any.</summary>
     internal static PlayerbotPathJobs? Bound => t_bound;
 

@@ -49,6 +49,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.Playerbots.Groups.PlayerbotWorldBossMeters._active"] = "gauge value, Volatile.Write by the coordinator and Volatile.Read by the meter callback",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam, set by tests before the world runs",
+        ["ArcaneCore.World.Playerbots.PlayerbotRegionRoutes.s_inFlight"] = "in-flight search count, Interlocked.Increment and Interlocked.Decrement only",
         ["ArcaneCore.World.Playerbots.PlayerbotTravel.s_staticRoutes"] = "Volatile reference to an immutable route list",
         ["ArcaneCore.World.Playerbots.Scenarios.PlayerbotScenarioCommands.s_running"] = "Interlocked.CompareExchange flag",
         ["ArcaneCore.World.Playerbots.Scenarios.ScenarioPacketLog.s_sequence"] = "sequence, Interlocked.Increment",
