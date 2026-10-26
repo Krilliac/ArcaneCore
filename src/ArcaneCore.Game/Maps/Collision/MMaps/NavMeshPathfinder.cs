@@ -680,11 +680,11 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         => RegionAt(graph, at, options, out _);
 
     /// <summary>
-    /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the polygon is <paramref name="far"/> from <paramref name="at"/>
-    /// (a vertical miss: the polygon's nearest point lies more than <c>NearExtents.Y</c> (5) above or below <paramref name="at"/>, so the near box
-    /// found nothing and the far box snapped to the floor under or over it). A point merely outside a polygon's footprint but within the near box
-    /// is not far, whatever its horizontal distance. A far polygon is the floor beside a point in the air or on excluded ground, not the place
-    /// itself. Meaningful only when the result is not -1.
+    /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the located point is <paramref name="far"/> from <paramref name="at"/>
+    /// (more than <c>NearExtents.Y</c> (5) vertically: the near box found nothing and the far box snapped to the floor under or over it; with
+    /// <c>EndTolerance</c> above 0 the single-box branch is taken and there is no far box, so it is never far). A point merely outside a polygon's
+    /// footprint but within the near box is not far, whatever its horizontal distance. A far point is the floor beside a point in the air or on
+    /// excluded ground, not the place itself. Meaningful only when the result is not -1.
     /// </summary>
     public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options, out bool far)
     {

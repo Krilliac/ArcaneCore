@@ -237,8 +237,8 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
     }
 
     /// <summary>
-    /// Issue #1497 review: a goal inside the near box but past the edge of the walkable cells of the unjoined tile (the mesh is eroded
-    /// by the agent radius, so spawns lie there) is still told unreachable, and its component is the tile's own.
+    /// Issue #1497 review: a goal inside the near box but past the edge of the walkable cells of the unjoined tile is still told unreachable, and its
+    /// component is the tile's own (on the real mesh, eroded by the agent radius, spawns lie just past the walkable cells; this synthetic mesh is not eroded).
     /// </summary>
     [Fact]
     public async Task AGoalJustOutsideAWalkableCellOfTheUnjoinedTile_IsStillToldUnreachable_WithItsOwnComponent()
@@ -254,6 +254,28 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             return (answer, fromComponent, toComponent, spawn);
         });
         Assert.True(unreachable, "a goal 0.5 yd past the walkable cells is still on the unjoined tile");
+        Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
+        Assert.Equal(spawnComponent, to);
+    }
+
+    /// <summary>
+    /// Issue #1497: a far goal (6.5 yd above the walkable cells) that snaps into ANOTHER component than the bot's keeps its verdict: it is
+    /// told unreachable, and its component is the unjoined tile's, not -1.
+    /// </summary>
+    [Fact]
+    public async Task AFarGoalSnappingIntoAnotherComponent_IsStillToldUnreachable_WithThatComponent()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 aboveTheTile = new(75, 5, 6.5f);
+        (bool unreachable, int from, int to, int spawnComponent) = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out int spawn), "the control");
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, aboveTheTile, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent, spawn);
+        });
+        Assert.True(unreachable, "a far goal over the unjoined tile is unreachable from the bot's component");
         Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
         Assert.Equal(spawnComponent, to);
     }
