@@ -20,6 +20,13 @@ public interface ISpellTargetRelations
     /// </summary>
     bool CanAssist(Unit caster, Unit target)
         => !IsHostile(caster, target) && !IsHostile(target, caster);
+
+    /// <summary>
+    /// Whether a client-named explicit target of a negative unit selector may be attacked (vmangos Spell::CheckCast,
+    /// Spell.cpp:5604-5610, IsValidAttackTarget). Defaults to <see cref="IsHostile"/>; a decorator forwards it to
+    /// the relation it wraps.
+    /// </summary>
+    bool CanAttackExplicitTarget(Unit caster, Unit target) => IsHostile(caster, target);
 }
 
 /// <summary>Default <see cref="ISpellTargetRelations"/>: the map's <see cref="CombatHooks"/> (factions arrive through them).</summary>

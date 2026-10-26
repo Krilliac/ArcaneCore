@@ -20,6 +20,8 @@ public sealed class ReputationSpellTargetRelations(
 
     public bool IsFriendly(Unit caster, Unit target) => fallback.IsFriendly(caster, target);
 
+    public bool CanAttackExplicitTarget(Unit caster, Unit target) => fallback.CanAttackExplicitTarget(caster, target);
+
     public bool CanAssist(Unit caster, Unit target)
     {
         if (ReferenceEquals(caster, target) || caster is not Player && target is not Player)

@@ -217,6 +217,9 @@ public sealed partial class SpellSystem
         public bool IsFriendly(Unit caster, Unit target)
             => ReferenceEquals(caster, standIn) ? GameObjectReactions.IsFriendlyTo(source, target, HooksOf(target)) : inner.IsFriendly(caster, target);
 
+        public bool CanAttackExplicitTarget(Unit caster, Unit target)
+            => ReferenceEquals(caster, standIn) ? IsHostile(caster, target) : inner.CanAttackExplicitTarget(caster, target);
+
         public bool CanAssist(Unit caster, Unit target)
             => ReferenceEquals(caster, standIn) ? GameObjectReactions.CanHelp(source, target, HooksOf(target)) : inner.CanAssist(caster, target);
 

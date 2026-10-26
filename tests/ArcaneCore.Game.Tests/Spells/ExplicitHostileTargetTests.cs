@@ -17,6 +17,7 @@ public sealed class ExplicitHostileTargetTests
         (Player caster, _) = kit.AddPlayer(1);
         (Player ally, _) = kit.AddPlayer(2, 3);
         kit.Spellbook.Teach(caster, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;   // the production relations; the kit default opens the gate
         uint before = ally.Health;
 
         // RED on origin/main: this assertion fails (CastOk) because CheckCast never tests hostility for a UnitEnemy selector.
@@ -31,11 +32,17 @@ public sealed class ExplicitHostileTargetTests
         (Player caster, _) = kit.AddPlayer(1);
         (Player foe, _) = kit.AddPlayer(2, 3);
         kit.Spellbook.Teach(caster, Bolt);
-        var relations = new FakeRelations();
-        relations.Hostile.Add(foe.Guid);
-        kit.System.Relations = relations;
+        kit.System.Relations = new HostileSetRelations(foe.Guid);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid)));
+    }
+
+    /// <summary>Only the listed units are attackable; the explicit-target gate takes its default (<see cref="ISpellTargetRelations.IsHostile"/>).</summary>
+    private sealed class HostileSetRelations(ObjectGuid hostile) : ISpellTargetRelations
+    {
+        public bool IsHostile(Unit caster, Unit target) => target.Guid == hostile;
+
+        public bool IsFriendly(Unit caster, Unit target) => !IsHostile(caster, target);
     }
 
     private static SpellTestKit NewKit() => new(

@@ -37,6 +37,6 @@ public sealed partial class SpellSystem
             return SpellCastResult.CastOk;
         }
 
-        return Relations.IsHostile(caster, target) ? SpellCastResult.CastOk : SpellCastResult.BadTargets;
+        return Relations.CanAttackExplicitTarget(caster, target) ? SpellCastResult.CastOk : SpellCastResult.BadTargets;
     }
 }
