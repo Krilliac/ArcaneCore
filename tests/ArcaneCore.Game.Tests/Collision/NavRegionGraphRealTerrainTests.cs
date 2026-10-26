@@ -85,6 +85,55 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         Assert.Equal(1, graph.ReachableCount(finder.RegionAt(graph, Neeka, Walking), int.MaxValue));
     }
 
+    // Timbermaw Hold, the tunnel between Felwood and Winterspring (map 1): the points the bots' stall, dead-end-pin and goal-unreachable
+    // lines name (bot QA, issues #1478 and #1479), from the Felwood mouth at 6627,-2024 through 6901,-2020, 6957.6,-2044.4, 6940,-2090
+    // and 7020,-2090 to the Winterspring exit at 7020,-2140. Only x and y are known from those lines.
+    private static readonly (float X, float Y)[] TimbermawPath =
+    [
+        (6627f, -2024f), (6901f, -2020f), (6957.6f, -2044.4f), (6940f, -2090f), (7020f, -2090f), (7010f, -2140f), (7020f, -2140f),
+    ];
+
+    /// <summary>
+    /// Probe for issues #1478 and #1479: is the walking region graph really cut inside the Timbermaw Hold tunnel? Each sample's x and y
+    /// are looked up at every height from <see cref="ProbeTopZ"/> down to <see cref="ProbeBottomZ"/> (the lines carry no Z), collecting
+    /// the components of every region found; the tunnel is walkable end to end when one component has a region at every sample. Checked
+    /// on the graph with steep slopes excluded (what a walking bot plans on) and on the one with them allowed. A failure of the walking
+    /// graph is the finding (the mesh is cut there, the pile-up has a data cause as well as the bot logic); the test prints each sample's
+    /// components either way.
+    /// </summary>
+    [RealTerrainFact]
+    public void Kalimdor_TimbermawHoldTunnel_SamplePoints_ShareOneComponent_WithAndWithoutTheSteepSlopeExclusion()
+    {
+        NavMeshPathfinder finder = new(Mmaps);
+        var steepAllowed = Walking with { ExcludeFlags = NavTerrain.Empty };
+        foreach ((string name, NavTerrain exclude, PathOptions options) in new (string, NavTerrain, PathOptions)[]
+            {("walking (steep slopes excluded)", NavTerrain.SteepSlopes, Walking), ("steep slopes allowed", NavTerrain.Empty, steepAllowed)})
+        {
+            NavRegionGraph graph = NavRegionGraph.Build(Mmaps, 1, PathMover.Player.IncludeFlags, exclude);
+            HashSet<int>? shared = null;
+            foreach ((float x, float y) in TimbermawPath)
+            {
+                HashSet<int> components = [];
+                (int tx, int ty) = TerrainTile.TileOf(x, y)!.Value;
+                Assert.True(finder.LoadTile(graph.MapId, tx, ty), $"no navigation tile at {x},{y}");
+                for (float z = ProbeTopZ; z >= ProbeBottomZ; z -= ProbeStepZ)
+                {
+                    int region = finder.RegionAt(graph, new Vector3(x, y, z), options);
+                    if (region >= 0) components.Add(graph.ComponentOf(region));
+                }
+
+                output.WriteLine($"{name}: {x},{y}: components [{string.Join(", ", components.Order())}]");
+                Assert.NotEmpty(components);
+                if (shared is null) shared = components;
+                else shared.IntersectWith(components);
+            }
+
+            Assert.True(shared is { Count: > 0 }, $"{name}: no one component has a region at every tunnel sample point, so the graph is cut inside Timbermaw Hold");
+        }
+    }
+
+    private const float ProbeTopZ = 500f, ProbeBottomZ = -100f, ProbeStepZ = 5f;
+
     private (NavRegionGraph Graph, NavMeshPathfinder Finder) Build(uint map)
     {
         var watch = Stopwatch.StartNew();
