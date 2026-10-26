@@ -356,7 +356,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             if (StackCapture is { } capture && _stackCapturedForStart != last)
             {
                 _stackCapturedForStart = last;
-                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)");
+                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)", nowMicros - last, GcPauseMicros(nowMicros - last));
             }
         }
 
@@ -364,7 +364,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         if (!_stopped && last != NoTick && nowMicros - last > _actionHangMicros && _actionFiredForStart != last)
         {
             HostLoadVerdict verdict = HostVerdict(nowMicros - last);
-            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled))
+            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled or HostLoadVerdict.MemoryStarved))
             {
                 _actionFiredForStart = last;
                 _actionCounter.Increment();
@@ -544,6 +544,19 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return HostLoadVerdict.Unknown;
+        }
+    }
+
+    /// <summary>The GC pause inside the window of a slow tick (watchdog thread), or 0 without a sampler or a baseline.</summary>
+    private long GcPauseMicros(long windowMicros)
+    {
+        try
+        {
+            return HostLoad?.Report(windowMicros)?.GcPauseMicros ?? 0;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return 0;
         }
     }
 
