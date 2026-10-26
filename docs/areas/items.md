@@ -179,7 +179,7 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 `refresh-world-content.ps1 ... -AppSettings <appsettings.json>`, which runs it after the content refresh) checks every file (WDBC header and
 build-5875 field count, the directory's `SHA256SUMS`, both tables present in the dump), keeps the old `appsettings.json` as a `.bak` and sets:
 
-| Key | File (<refs-root>\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
+| Key | File (`<refs-root>`\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
 |---|---|---|---|
 | `ItemSets:DbcPath` | ItemSet.dbc (patch-2) | 172 sets | item set bonuses |
 | `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc (patch) | 2012 suffixes | random suffixes |

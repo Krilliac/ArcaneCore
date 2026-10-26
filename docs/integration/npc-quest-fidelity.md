@@ -1,6 +1,6 @@
 # NPC services and quest fidelity (lane `npc-services-quests`)
 
-Standing directive: vanilla 1.12.1 behaviour, mechanics and data, verified against <refs-root>
+Standing directive: vanilla 1.12.1 behaviour, mechanics and data, verified against `<refs-root>`
 (`vmangos` primary, `mangos-classic` = cmangos, `wow_messages`, `classic-db`). Nothing here copies
 reference code or data; every rule cites `file:line`. A deliberate deviation is listed in "Deviations" at the end;
 each says whether it is behind a config switch (defaulting to retail) or is a stated limit with no switch.

@@ -1,7 +1,7 @@
 # Local source recovery and Soulstone requests, 2026-10-04
 
 Development resumes on `codex/server-continue-20261004` in
-`<continue-checkout>`, based on current GitHub `main` at
+`<continuation-checkout>`, based on current GitHub `main` at
 `7313b9eb089197b253dc51bd8bb5ceb803adcc6b`. The older local acceptance
 checkout remains pinned to `f8ae6e8` and was preserved.
 

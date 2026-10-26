@@ -1,6 +1,6 @@
 # Class scripts
 
-Status: wave 2, lane `class-scripts` (branch `claude/w2-class-scripts`, built on the proc-engine tip `988c27a1`). Reference: <refs-root>\vmangos
+Status: wave 2, lane `class-scripts` (branch `claude/w2-class-scripts`, built on the proc-engine tip `988c27a1`). Reference: `<refs-root>`\vmangos
 (primary; scripts/spells/*.cpp, Spells/SpellEffects.cpp, Spells/SpellAuras.cpp, UnitAuraProcHandler.cpp, Objects/DynamicObject.cpp), mangos-classic
 where the build 5875 data needs it (Holy Light), the build 5875 `spell_template` rows of the world database for ids, families, flags and effects.
 Every formula cites its vmangos file and line in the code.

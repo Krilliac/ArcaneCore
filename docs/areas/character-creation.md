@@ -136,7 +136,7 @@ Each of these needs data or a primitive this lane does not have; none is stubbed
 ## Verification
 
 * No real 1.12.1 client was run against these rules. The appearance check was proven against the client's own CharSections.dbc and
-  CharacterFacialHairStyles.dbc (<refs-root>\client-dbc-5875-effective) in `OptionalClientDataRealTests`.
+  CharacterFacialHairStyles.dbc (`<refs-root>`\client-dbc-5875-effective) in `OptionalClientDataRealTests`.
 * MariaDB and PostgreSQL are not available locally. `CharacterNameUniqueTests` and
   `PlayerCreateActionImporterTests` are theories over `TestDatabases.AvailableProviders` written against the
   real provider semantics (error codes above; the `playercreateinfo_action` table is a plain `CreateTableChange`,

@@ -1,6 +1,6 @@
 # Procs
 
-Status: wave 2, lane `proc-engine`. Reference: <refs-root>\vmangos (primary), checked against the build 5875 Spell.dbc rows in the world database.
+Status: wave 2, lane `proc-engine`. Reference: `<refs-root>`\vmangos (primary), checked against the build 5875 Spell.dbc rows in the world database.
 The engine is a port of vmangos' proc system; every deliberate difference is listed under "Deviations".
 
 ## What happens on an event

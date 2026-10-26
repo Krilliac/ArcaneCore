@@ -80,7 +80,7 @@ spawned event with the zone condition (6). They stay in the per-entry warning.
 3. `powershell -NoProfile -File <worktree or deploy>\tools\content\refresh-world-content.ps1 -WorldDatabase
    <work-dir>\playable-content-20261005\complete-r5\world.db -DbcDirectory
    <refs-root>\client-dbc-5875-effective -Importer <deploy>\bin\ArcaneCore.ContentImporter\release\arcane-content-importer.dll`
-   (default dump `<refs-root>\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`; the backup, database and `-wal`, goes to
+   (the dump defaults to a `classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` file at a fixed host path set inside the script, not read from `ARCANECORE_REFS_ROOT`; pass `-Dump` for another location; the backup, database and `-wal`, goes to
    `complete-r5\content-refresh-backups\`). The DBC directory is a durable copy of the files extracted from the client's patch-2.MPQ,
    with `SHA256SUMS` and a provenance `README.txt` beside them; the script checks the hashes. Without it, `-MpqTool
    <work-dir>\playable-content-20261005\mpqcli-v0.11.0-windows-amd64.exe` extracts them again.
