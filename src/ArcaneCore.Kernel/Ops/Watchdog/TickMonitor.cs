@@ -373,7 +373,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             if (memoryDeferred && _deferralLoggedForStart != last)
             {
                 _deferralLoggedForStart = last; // once per hung tick, not once per check
-                _logger.LogWarning(WatchdogEvents.TickActionDeferred, "world tick has been hung for {RunningMs} ms (action threshold {ActionHangMs} ms): action {Action} deferred while this process is memory-starved; it fires anyway at {GraceMs} ms",
+                _logger.LogWarning(WatchdogEvents.TickActionDeferred, "world tick has been hung for {RunningMs} ms (action threshold {ActionHangMs} ms): action {Action} deferred while this process is memory-starved; it fires anyway past {GraceMs} ms",
                     Micros.ToMillis(nowMicros - last), Micros.ToMillis(_actionHangMicros), _options.Action, Micros.ToMillis(_actionHangMicros * MemoryStarvedGraceFactor));
             }
 
