@@ -176,14 +176,22 @@ public sealed class RetryPolicyTests
             _ = policy.ExecuteAsync(op, i);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        // A bare before/after window failed once on Linux CI ("Expected 0, Actual 5016") with nothing allocated by the code under test
+        // (cross-thread GC noise while test classes run in parallel; same class as the LogGate and PacketReader flakes). The probe asserts
+        // every GC-free window at exactly 0 bytes, so a real per-call allocation still fails.
+        Action window = () =>
         {
-            ValueTask<int> vt = policy.ExecuteAsync(op, i);
-            Assert.True(vt.IsCompletedSuccessfully);
-        }
+            for (int i = 0; i < 10_000; i++)
+            {
+                ValueTask<int> vt = policy.ExecuteAsync(op, i);
+                if (!vt.IsCompletedSuccessfully)
+                {
+                    throw new InvalidOperationException("The first-attempt success did not complete synchronously.");
+                }
+            }
+        };
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "RetryPolicy.ExecuteAsync first-attempt success x10000");
     }
 
     [Fact]
