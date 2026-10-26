@@ -254,12 +254,12 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        PauseInteractionMovement(player, npc);
         if (s.Menu.SourceGuid != npc.Guid)
         {
             return; // the menu was built for another source (vmangos does not check, NPCHandler.cpp:370-414)
         }
 
-        PauseInteractionMovement(player, npc);
         OnGossipSelect(s, npc, listId);
         Flush(s);
     }
