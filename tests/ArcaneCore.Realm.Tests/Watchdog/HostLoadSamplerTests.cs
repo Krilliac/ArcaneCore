@@ -211,4 +211,32 @@ public sealed class HostLoadSamplerTests
         Assert.Equal(HostLoadVerdict.GcPauses, Pause(processCpuSeconds: 3, memoryLoad: 95).Verdict); // 0.7 cores
         Assert.Equal(HostLoadVerdict.GcPaging, Pause(processCpuSeconds: 2, memoryLoad: 95).Verdict); // 0.48 cores: under half a core
     }
+
+    [Fact]
+    public void IdleProcess_UnderMemoryPressure_IsMemoryStarved_NotHostQuiet()
+    {
+        // 4 s window on 24 cpus, 0.24 cores used by the process, machine memory 97% against a 97% threshold, small GC pause, machine cpu 68%.
+        HostLoadReading end = Reading(1, 65, 96, pauseMs: 400) with
+        {
+            MemoryLoadBytes = (long)(32 * GiB * 0.97),
+            HighMemoryLoadThresholdBytes = (long)(32 * GiB * 0.97),
+            TotalAvailableMemoryBytes = 32 * GiB,
+        };
+        HostLoadReport r = HostLoadSampler.Compute(0, Reading(0, 0, 0), 4 * Second, end);
+
+        Assert.Equal(HostLoadVerdict.MemoryStarved, r.Verdict);
+        Assert.Contains("verdict memory-starved", r.Format());
+        Assert.DoesNotContain("host-quiet", r.Format());
+    }
+
+    [Fact]
+    public void IdleProcess_WithoutMemoryPressure_IsProcessBlocked_AndABusyCoreStaysQuiet()
+    {
+        HostLoadReport idle = HostLoadSampler.Compute(0, Reading(0, 0, 0), 4 * Second, Reading(1, 9, 96));
+        Assert.Equal(HostLoadVerdict.ProcessBlocked, idle.Verdict);
+        Assert.Contains("verdict process-blocked", idle.Format());
+
+        HostLoadReport oneCore = HostLoadSampler.Compute(0, Reading(0, 0, 0), 4 * Second, Reading(4, 9, 96));
+        Assert.Equal(HostLoadVerdict.Quiet, oneCore.Verdict);
+    }
 }
