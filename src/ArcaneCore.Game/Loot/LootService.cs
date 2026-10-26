@@ -609,6 +609,7 @@ public sealed partial class LootService : IViewerFieldFilter
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
                 LootTableKind.GameObject, lootId, recipients);
             fresh.Gold = Math.Min(LootMoneyRules.GenerateForGameObject(go.Template, lootId, Options.MoneyRate, _random), MaxMoneyAmount);
+            CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
             Group? looterGroup = UsesGroupLootRules(go) ? group : null;
             ApplyLooterPlan(fresh, looterGroup, PlanLooter(looterGroup, recipients, fresh.Recipients));
             ConfigureDistribution(fresh, looterGroup, recipients);
@@ -701,6 +702,7 @@ public sealed partial class LootService : IViewerFieldFilter
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
+        CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
         LooterPlan plan = PlanLooter(looterGroup, recipients, fresh.Recipients, durable: true);
         fresh.Owner = plan.Owner;
@@ -1466,6 +1468,20 @@ public sealed partial class LootService : IViewerFieldFilter
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The player is moving (vmangos@0e3ff01 HandleMoverRelocation, MovementHandler.cpp:1106-1110: a block with MOVEFLAG_MASK_MOVING closes a loot
+    /// window that is not an item's): a walking looter leaves the corpse or node, so its window must not keep the source "in use".
+    /// An item's window (a lockbox or a prospected stack) stays open while the owner moves.
+    /// </summary>
+    public void ReleaseOnMovement(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_open.TryGetValue(player, out LootBag? bag) && bag.Kind != LootSourceKind.Item)
+        {
+            Release(player, bag.Source);
         }
     }
 

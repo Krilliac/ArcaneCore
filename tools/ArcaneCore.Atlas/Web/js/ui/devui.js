@@ -6,6 +6,7 @@
 
 import { ndcToScreen, project } from '../camera.js';
 import { pickEntity } from '../live.js';
+import { cameraPatch } from '../view.js';
 import { Emitter, fill, h } from '../util.js';
 import { confirmDialog, promptArgs, targetLines } from './devui-confirm.js';
 import { installKeys } from './devui-keys.js';
@@ -620,7 +621,7 @@ export class DevUi {
                 }
                 return { ok: true };
             case 'follow':
-                return (await app.runCommand('live.follow', { guid: run.guid }, { noRefresh: true })).data ?? null;
+                return (await app.runCommand('live.follow', { guid: run.guid })).data ?? null;
             case 'inspect':
                 app.events.emit('focus-tab', 'live');
                 return (await app.runCommand('live.inspect', { guid: run.guid }, { noRefresh: true })).data ?? null;
@@ -634,8 +635,9 @@ export class DevUi {
                 if (!values) {
                     return null;
                 }
-                const moved = await app.runCommand('camera.goto', { map: app.view.map, at: run.point }, { noRefresh: true });
-                return moved.ok ? ((await app.runCommand('bookmark.add', { name: values.name }, { noRefresh: true })).data ?? null) : null;
+                // The bookmark carries its own camera: this UI's, aimed at the point. Nothing moves, neither here nor on the host.
+                const where = { map: app.view.map, camera: cameraPatch({ ...app.view.camera, target: run.point }).camera };
+                return (await app.runCommand('bookmark.add', { name: values.name, ...where }, { noRefresh: true })).data ?? null;
             }
             default:
                 return null;
