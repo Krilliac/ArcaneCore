@@ -11,7 +11,8 @@ public sealed partial class SpellSystem
     /// (GameObject::IsAtInteractDistance, GameObject.cpp:2512-2534). A named object that is not on the map or not spawned is left to the
     /// effect, as in vmangos (getGOTarget is then null). Limit: the oriented display-bounds box of IsAtInteractDistance needs model bounds
     /// this codebase does not load, so the centre distance is compared with the larger of the spell reach and the object's own interaction
-    /// distance (the no-bounds branch, <see cref="GameObjectMapSystem.InteractionDistanceFor"/>). Line of sight is not checked: vmangos has none for this branch.
+    /// distance (<see cref="GameObjectMapSystem.InteractionDistanceFor"/>). vmangos' no-bounds path is only GetDistance3dToCenter <= maxRange
+    /// (GameObject.cpp:2525-2526, 2608); taking the max is a deliberate leniency that stands in for the missing bounds box and is wider than vmangos. Line of sight is not checked: vmangos has none for this branch.
     /// </summary>
     private SpellCastResult CheckGameObjectTargetRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool strict)
     {

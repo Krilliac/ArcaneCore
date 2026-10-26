@@ -368,6 +368,9 @@ public sealed partial class SpellSystem
     }
 
     internal const uint MaxReasonableCooldownMs = 7u * 24u * 60u * 60u * 1000u;
+
+    /// <summary>The longest cooldown span stored on the wrapping uint clock: the signed difference in <see cref="IsCooldownRunning"/> is only valid up to 2^31 - 1 ms.</summary>
+    internal const uint MaxStoredCooldownMs = int.MaxValue;
     internal const long CastStuckMarginMs = 10_000L;
 
     internal static string FormatSpellSubject(uint spellId) => $"spell {spellId}";

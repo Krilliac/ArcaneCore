@@ -70,7 +70,7 @@ public sealed partial class SpellSystem
         uint recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)EquipCooldownMs), 0);
         if (recovery > 0)
         {
-            state.SpellCooldowns[spell.Id] = now + recovery;
+            state.SpellCooldowns[spell.Id] = now + ClampCooldownSpan(recovery);
         }
 
         uint category = spell.Category;
@@ -82,7 +82,7 @@ public sealed partial class SpellSystem
                 state.CategoryOwners[category] = spell.Id;
             }
 
-            state.CategoryCooldowns[category] = now + spell.CategoryRecoveryTime;
+            state.CategoryCooldowns[category] = now + ClampCooldownSpan(spell.CategoryRecoveryTime);
         }
 
         state.CooldownOwners.Remove(spell.Id);

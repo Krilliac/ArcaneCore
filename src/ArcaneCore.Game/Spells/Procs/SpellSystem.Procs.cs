@@ -812,7 +812,7 @@ public sealed partial class SpellSystem
     internal void AddProcCooldown(Unit unit, SpellInfo spell, uint cooldownMs)
     {
         UnitSpellState state = GetOrCreateState(unit);
-        uint until = NowMs + cooldownMs;
+        uint until = NowMs + ClampCooldownSpan(cooldownMs);
         if (!state.SpellCooldowns.TryGetValue(spell.Id, out uint current) || unchecked((int)(until - current)) > 0)
         {
             state.SpellCooldowns[spell.Id] = until;

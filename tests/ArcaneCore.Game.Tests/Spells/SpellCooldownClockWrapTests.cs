@@ -13,6 +13,7 @@ public sealed class SpellCooldownClockWrapTests : IDisposable
 {
     private const uint LongSpell = 947001;
     private const uint GcdSpell = 947002;
+    private const uint HugeSpell = 947003;
 
     private readonly SpellTestKit _kit;
     private readonly Player _player;
@@ -21,9 +22,10 @@ public sealed class SpellCooldownClockWrapTests : IDisposable
     {
         _kit = new SpellTestKit(
             Spell(LongSpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster)) with { RecoveryTime = 60_000, StartRecoveryCategory = 0, StartRecoveryTime = 0 },
-            Spell(GcdSpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster)) with { RecoveryTime = 0, StartRecoveryCategory = 133, StartRecoveryTime = 1500 });
+            Spell(GcdSpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster)) with { RecoveryTime = 0, StartRecoveryCategory = 133, StartRecoveryTime = 1500 },
+            Spell(HugeSpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster)) with { RecoveryTime = 3_000_000_000u, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (_player, _) = _kit.AddPlayer(1);
-        _kit.Spellbook.Teach(_player, LongSpell, GcdSpell);
+        _kit.Spellbook.Teach(_player, LongSpell, GcdSpell, HugeSpell);
     }
 
     public void Dispose() => _kit.Dispose();
@@ -58,5 +60,17 @@ public sealed class SpellCooldownClockWrapTests : IDisposable
         _kit.Advance(3_000);
         Assert.True(_kit.Now < 5_000u, "the clock wrapped");
         Assert.True(_kit.System.IsSpellReady(_player, spell)); // RED on main: the stored end is near uint.MaxValue so it stays > now
+    }
+
+    [Fact]
+    public void ARecoveryTimeBeyondTheSignedSpan_StillRunsAfterTheCast_InsteadOfReadingAsExpired()
+    {
+        _kit.Now = 1000;
+        Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_player, HugeSpell, SpellCastTargets.ForSelf(), triggered: false));
+        SpellInfo spell = _kit.Store.Get(HugeSpell)!;
+
+        // RED on main-with-wrap-fix: 3e9 ms does not fit the signed difference, so the end read as already past and the spell was ready at once.
+        Assert.False(_kit.System.IsSpellReady(_player, spell));
+        Assert.Equal(SpellSystem.MaxStoredCooldownMs, _kit.System.GetState(_player.Guid)!.SpellCooldowns[HugeSpell] - 1000u);
     }
 }

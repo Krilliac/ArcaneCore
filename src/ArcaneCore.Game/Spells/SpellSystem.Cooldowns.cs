@@ -10,9 +10,12 @@ public sealed partial class SpellSystem
 {
     /// <summary>
     /// Whether a cooldown end stored on the wrapping uint millisecond clock (<see cref="NowMs"/>, 49.7 days) is still ahead of <paramref name="now"/>.
-    /// The signed difference stays correct across the wrap while every stored span is below 2^31 ms (<see cref="MaxReasonableCooldownMs"/> is 7 days).
+    /// The signed difference stays correct across the wrap while every stored span is at most <see cref="MaxStoredCooldownMs"/> (2^31 - 1 ms, 24.8 days);
+    /// every writer clamps its span with <see cref="ClampCooldownSpan"/>.
     /// vmangos keeps 64-bit time points (SpellCaster.h:56-60) and never wraps.
     /// </summary>
+    internal static uint ClampCooldownSpan(uint spanMs) => Math.Min(spanMs, MaxStoredCooldownMs);
+
     internal static bool IsCooldownRunning(uint until, uint now) => unchecked((int)(until - now)) > 0;
 
     /// <summary>
@@ -155,18 +158,21 @@ public sealed partial class SpellSystem
                 FormatSpellSubject(spell.Id),
                 $"unit={FormatUnitSubject(state.Unit)} recoveryMs={recovery} categoryRecoveryMs={categoryRecovery}",
                 AnomalySeverity.Warning);
-            // Report-only: the cooldown is applied unchanged (see the Math.Max clamps below).
+            // Reported, not capped at MaxReasonableCooldownMs: only the wrap-safety bound MaxStoredCooldownMs is enforced below.
         }
+
+        recovery = ClampCooldownSpan(recovery);
+        categoryRecovery = ClampCooldownSpan(categoryRecovery);
 
         // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
         // has one, otherwise to the category time ("blizzlike code for choosing which is recTime > categoryRecTime").
         if (recovery > 0)
         {
-            recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0);
+            recovery = ClampCooldownSpan((uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0));
         }
         else if (category != 0 && categoryRecovery > 0)
         {
-            categoryRecovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0);
+            categoryRecovery = ClampCooldownSpan((uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0));
         }
 
         uint now = NowMs;
