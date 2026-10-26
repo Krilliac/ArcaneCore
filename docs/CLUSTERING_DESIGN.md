@@ -2,7 +2,7 @@
 
 Status: researched design and implementation plan, requested 2026-10-03;
 module/process direction approved by the developer on 2026-10-03.
-Implementation tracking belongs to the single [roadmap worklist](ROADMAP.md#m15-clustering-worklist).
+The delivered state is tracked in the [roadmap](ROADMAP.md#delivered).
 This tranche changes documentation; no cluster processes or transport are shipped.
 The inventory below was checked against integration source
 `e06d4e468118454d906c1d4be8914a3522106d1b`. The constraint bullets on sessions,
