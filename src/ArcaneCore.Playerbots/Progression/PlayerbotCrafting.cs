@@ -338,12 +338,34 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                         continue;
                     if (Home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && !home.HasSpawnInside(content, dropper))
                         continue;
+                    // A dropper whose every spawn lies where no walk reaches from the bot (another landmass, an island) is a hunt that cannot start
+                    // (GitHub #1441); the next dropper of the reagent is tried instead.
+                    if (AllSpawnsUnreachable(content.GetSpawns(player.MapId, dropper), at => PlayerbotNavigation.IsUnreachableOnFoot(player, at, out _, out _)))
+                        continue;
                     return dropper;
                 }
             }
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Whether there is at least one spawn and <paramref name="unreachable"/> holds for every one of them (stops at the first reachable one).
+    /// False for no spawn: the caller has its own test for a creature that is not spawned. Pure; world thread when the predicate reads a map.
+    /// </summary>
+    internal static bool AllSpawnsUnreachable(IReadOnlyList<CreatureSpawn> spawns, Func<Vector3, bool> unreachable)
+    {
+        if (spawns.Count == 0)
+            return false;
+        for (int i = 0; i < spawns.Count; i++)
+        {
+            CreatureSpawn spawn = spawns[i];
+            if (!unreachable(new Vector3(spawn.X, spawn.Y, spawn.Z)))
+                return false;
+        }
+
+        return true;
     }
 
     private bool TryCraft(Player player, SpellStore store, SpellbookCache spellbook, uint elapsedMs, uint now)
@@ -1333,7 +1355,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (bestNode is null || bestGatherSpell is null)
             return false;
 
-        Goal = PlayerbotGoalKind.Vendor;
+        // Its own kind: TargetEntry is a gameobject entry, which a Vendor goal (a creature entry) made bot QA read as "creature N has no spawn" (GitHub #1487).
+        Goal = PlayerbotGoalKind.Gather;
         TargetEntry = bestNode.Entry;
 
         if (bestDistSq > GatherInteractYards * GatherInteractYards)

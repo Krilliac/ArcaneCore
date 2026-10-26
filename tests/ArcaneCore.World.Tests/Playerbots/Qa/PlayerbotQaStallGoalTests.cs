@@ -44,6 +44,49 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         return Assert.Single(aggregator.Snapshot());
     }
 
+    /// <summary>
+    /// An Explore stall carries the entry the brain still remembered from an earlier goal; it is not a creature the bot was walking to, so a
+    /// missing spawn for it is no cause (GitHub #1481: "3502 has no spawn" on 2,077 Explore stalls).
+    /// </summary>
+    [Fact]
+    public void ExploreStall_WithARememberedEntryThatHasNoSpawn_IsNotBlamedOnMissingData()
+    {
+        QaFindingView f = IngestOne("stalled 120s: goal=Explore target=3502 quest=0 at -10301.6,1431.5,39.4 map 0", new FakeFacts());
+
+        Assert.NotEqual(QaCause.MissingData, f.Cause);
+        Assert.DoesNotContain("has no spawn", f.CauseDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain("no spawn", PlayerbotQaClassifier.Classify(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", "stalled 120s: goal=Explore target=3502 quest=0 at -10301.6,1431.5,39.4 map 0")), new FakeFacts()).Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A later Explore stall of a finding re-classifies it: a cause the first signal set does not outlive the classifier that set it.</summary>
+    [Fact]
+    public void ALaterSignalOfTheSameFinding_RefreshesItsCause()
+    {
+        var aggregator = new PlayerbotQaAggregator(100, 5, Salt);
+        string line = QaData.BotLine(QaData.Bot1, "Ironwander", "stalled 120s: goal=Vendor target=3502 quest=0 at -10301.6,1431.5,39.4 map 0");
+        Assert.NotNull(aggregator.Ingest(QaData.Parse(line), new FakeFacts(), QaData.T0));
+        Assert.Equal(QaCause.MissingData, Assert.Single(aggregator.Snapshot()).Cause);
+
+        var facts = new FakeFacts();
+        facts.Spawns[(0, 3502)] = 4;
+        facts.Templates[3502] = new QaTemplateFacts(0, 1, 60, string.Empty);
+        Assert.NotNull(aggregator.Ingest(QaData.Parse(line), facts, QaData.T0.AddMinutes(1)));
+
+        Assert.NotEqual(QaCause.MissingData, Assert.Single(aggregator.Snapshot()).Cause);
+    }
+
+    /// <summary>A gathering trip names a game object node, never a creature (GitHub #1487: "creature 1617 has no spawn" for a herb node).</summary>
+    [Fact]
+    public void GatherStall_NamingANode_IsNotReadAsAMissingCreature()
+    {
+        QaSignal s = QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", "stalled 120s: goal=Gather target=1617 quest=0 at -10301.6,1431.5,39.4 map 0"));
+
+        QaClassification c = PlayerbotQaClassifier.Classify(s, new FakeFacts());
+
+        Assert.NotEqual(QaCause.MissingData, c.Cause);
+        Assert.DoesNotContain("creature", c.Detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ExploreStall_WithAStaleQuest_IsTitledByItsGoal_NotTheQuest()
     {
