@@ -166,9 +166,9 @@ public sealed partial class LootService
     /// </summary>
     private void CheckGameObjectLootEmpty(Player opener, GameObject go, uint lootId, LootBag bag, IReadOnlyList<Player> recipients)
     {
-        if (lootId == 0 || !bag.IsEmpty || bag.Gold != 0)
+        if (lootId == 0 || !bag.IsEmpty || bag.Gold != 0 || Items is null)
         {
-            return;
+            return; // without item templates every row is an unknown item, which would report every chest
         }
 
         IReadOnlyList<LootStoreRow> rows = Content.GetRows(LootTableKind.GameObject, lootId);
@@ -178,7 +178,7 @@ public sealed partial class LootService
         {
             reason = "no-rows";
         }
-        else if (!rows.Any(r => r.MinCountOrRef < 0) && rows.All(r => Items?.Find(r.Item) is null))
+        else if (!rows.Any(r => r.MinCountOrRef < 0) && rows.All(r => Items.Find(r.Item) is null))
         {
             reason = "all-unknown";
         }

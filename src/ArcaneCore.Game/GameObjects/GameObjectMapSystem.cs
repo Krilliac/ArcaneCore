@@ -756,19 +756,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// its generation committed (later than this call returning <see cref="GameObjectUseResult.Ok"/>),
     /// and at once when the chest's script takes the open over (vmangos Spell::EffectOpenLock rolls the
     /// gathering skill after SendLoot whatever the object did with it, SpellEffects.cpp:2163-2207).
+    /// <paramref name="onScriptTookOpen"/> runs (after <paramref name="onChestOpened"/>) only in that script case, so a caller can tell an
+    /// <see cref="GameObjectUseResult.Ok"/> that left no loot window on purpose from one that did not.
     /// </summary>
     public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0,
-        Action<GameObject>? onChestOpened = null)
+        Action<GameObject>? onChestOpened = null, Action<GameObject>? onScriptTookOpen = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
-        GameObjectUseResult result = OpenLockCore(player, go, lockType, keyItemId, skillBonus, onChestOpened);
+        GameObjectUseResult result = OpenLockCore(player, go, lockType, keyItemId, skillBonus, onChestOpened, onScriptTookOpen);
         RecordUseAttemptOutcome(player, guid, go, result);
         return result;
     }
 
     private GameObjectUseResult OpenLockCore(Player player, GameObject? go, LockType lockType, uint keyItemId, uint skillBonus,
-        Action<GameObject>? onChestOpened)
+        Action<GameObject>? onChestOpened, Action<GameObject>? onScriptTookOpen)
     {
         GameObjectUseResult result = CheckUsable(player, go);
         if (result != GameObjectUseResult.Ok || go is null)
@@ -808,14 +810,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // A script whose plain click is refused but whose validated opening acts (a Molten Core rune) answers OnUnlockedUse first.
         if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
         {
-            return ScriptTookOpen(go, onChestOpened);
+            return ScriptTookOpen(go, onChestOpened, onScriptTookOpen);
         }
 
         // Spell::SendLoot hands the other types to GameObject::Use (mangos-classic GameObject.cpp:1488-1493, vmangos :1405-1407), so the
         // object's script runs on the spell path too - as for CMSG_GAMEOBJ_USE in Use: a script that takes the use over ends it.
         if (AiOf(go)?.OnUse(this, go, player) == true)
         {
-            return ScriptTookOpen(go, onChestOpened);
+            return ScriptTookOpen(go, onChestOpened, onScriptTookOpen);
         }
 
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
@@ -1192,11 +1194,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     /// <summary>A script took the open over: a chest never reaches its loot window, so its open callback runs now.</summary>
-    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened)
+    private static GameObjectUseResult ScriptTookOpen(GameObject go, Action<GameObject>? onChestOpened, Action<GameObject>? onScriptTookOpen)
     {
         if (go.Type == GameObjectType.Chest)
         {
             onChestOpened?.Invoke(go);
+            onScriptTookOpen?.Invoke(go);
         }
 
         return GameObjectUseResult.Ok;

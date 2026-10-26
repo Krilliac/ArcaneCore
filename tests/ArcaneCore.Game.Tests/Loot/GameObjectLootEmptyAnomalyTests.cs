@@ -88,6 +88,19 @@ public sealed class GameObjectLootEmptyAnomalyTests
     }
 
     [Fact]
+    public void ChestOpenedWithoutAnItemTemplateStore_DoesNotReportAllUnknown()
+    {
+        Rig rig = CreateRig(7_101_007, 9008, Row(9008, UnknownItem, 100));
+        rig.Loot.Items = null;
+        Player player = rig.Join(7107);
+        using AnomalyCapture cap = CaptureFor(7_101_007);
+
+        rig.System.Use(player, rig.Single(7_101_007).Guid);
+
+        Assert.Empty(cap.Notices);
+    }
+
+    [Fact]
     public void ChestWithLootIdZero_NeverReports()
     {
         Rig rig = CreateRig(7_101_003, 0);

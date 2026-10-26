@@ -170,6 +170,38 @@ public sealed class AppleBobOpeningWorldTests
         Assert.Empty(cap.Notices);
     }
 
+    /// <summary>
+    /// The counterpart of the script test: no script takes the open, the chest opens normally (the open returns Ok) but the player is left with no
+    /// loot window on it (a Used handler releases it, standing in for any bug that loses the window). That must be reported, so the exemption
+    /// for a script-taken open cannot have silenced the check for every open.
+    /// </summary>
+    [Fact]
+    public async Task OpeningAppleBobWhenTheChestReturnsOkWithoutALootWindow_ReportsOpenNoEffect()
+    {
+        await using WorldTestHost host = Start(out GameObjectTestContext context);
+        await using WorldTestClient client = await host.EnterWorldAsync("BOBLOST", "Boblost");
+        ulong bob = BobGuid();
+        await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, bob);
+        int released = 0;
+        await host.OnWorldAsync(() =>
+        {
+            GameObjectMapSystem system = context.Feature!.FindSystem(0)!;
+            system.Used += (player, go) =>
+            {
+                system.Loot!.Release(player, go.Guid);
+                released++;
+            };
+        });
+        using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Key == "gameobject/open-no-effect" && n.Subject == $"gameobject entry {BobEntry} spell {Opening}");
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAt(Opening, bob));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await host.OnWorldAsync(() => 0); // the cast's effects run on the world thread; this call is queued behind them
+
+        Assert.Equal(1, released);
+        Assert.Single(cap.Notices);
+    }
+
     /// <summary>The control: the same chest through CMSG_GAMEOBJ_USE (what the client sends for objects it does not open by a spell).</summary>
     [Fact]
     public async Task UsingAppleBobDirectly_ShowsTheLootWindowWithFiveApples()
