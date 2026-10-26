@@ -41,10 +41,12 @@ public sealed class SpellCastTargets
 
     /// <summary>
     /// True for a block parsed from a client packet (<see cref="Read"/>) and false for one the server built (<see cref="ForSelf"/>,
-    /// <see cref="ForUnit"/>). A triggered cast that carries a client-named target (an item's second and later on-use spells) is still checked
-    /// for an attackable explicit target, as vmangos checks every cast (Spell.cpp:5577-5612 has no triggered gate).
+    /// <see cref="ForUnit"/>). The cast's own copy of the block (<c>SpellCast</c>) carries it, so the landing re-check sees it too.
+    /// A triggered cast with a client-named target (an item's second and later on-use spells) gets the explicit-hostile-target check
+    /// (<c>SpellSystem.CheckCast</c>); a triggered cast with a server-built block does not (a documented deviation: vmangos checks every cast,
+    /// Spell.cpp:5577-5612 has no triggered gate; see docs/areas/spells.md).
     /// </summary>
-    public bool FromClient { get; private set; }
+    public bool FromClient { get; internal set; }
 
     public bool IsRawNonTradedTradeTarget
         => Mask == SpellCastTargetFlags.TradeItem && Item.Value == 6;

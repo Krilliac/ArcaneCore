@@ -71,6 +71,55 @@ public sealed class ExplicitHostileTargetTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(ally.Guid), triggered: true));
     }
 
+    [Fact]
+    public void TriggeredClientCast_WhoseTargetStopsBeingAttackable_IsRefusedWhenItLands()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddPlayer(2, 3);
+        var relations = new SwitchRelations();
+        kit.System.Relations = relations;
+        // The target is attackable when the cast is prepared and not when it lands (a triggered cast has no cast time: it lands inside
+        // the same call, after the prepared notification). SpellCast's copy of the block must keep FromClient for the landing re-check.
+        kit.System.RegisterObserver(new Switcher(relations));
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(foe.Guid.Value);
+        var reader = new PacketReader(wire.ToArray());
+        SpellCastTargets fromClient = SpellCastTargets.Read(ref reader);
+        uint before = foe.Health;
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.CastSpell(caster, Bolt, fromClient, triggered: true));
+        Assert.Equal(before, foe.Health);
+    }
+
+    [Fact]
+    public void TriggeredServerCast_WhoseTargetStopsBeingAttackable_StillLands_ADocumentedLimit()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddPlayer(2, 3);
+        var relations = new SwitchRelations();
+        kit.System.Relations = relations;
+        kit.System.RegisterObserver(new Switcher(relations));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid), triggered: true));
+    }
+
+    private sealed class SwitchRelations : ISpellTargetRelations
+    {
+        public bool Attackable { get; set; } = true;
+
+        public bool IsHostile(Unit caster, Unit target) => Attackable;
+
+        public bool IsFriendly(Unit caster, Unit target) => !Attackable;
+    }
+
+    private sealed class Switcher(SwitchRelations relations) : ISpellCastObserver
+    {
+        public void OnPrepared(SpellCast cast) => relations.Attackable = false;
+    }
+
     /// <summary>Only the listed units are attackable; the explicit-target gate takes its default (<see cref="ISpellTargetRelations.IsHostile"/>).</summary>
     private sealed class HostileSetRelations(ObjectGuid hostile) : ISpellTargetRelations
     {

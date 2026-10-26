@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,7 +21,13 @@ internal sealed class SpellTestServices : IWorldTestServices
     /// </summary>
     public static Task FlagForPvpAsync(WorldTestHost host, string character) => host.OnWorldAsync(() =>
     {
-        MapCombat.UpdatePvp(host.World.FindOnlinePlayer(character) ?? throw new InvalidOperationException($"{character} is not online"), true);
+        Player player = host.World.FindOnlinePlayer(character) ?? throw new InvalidOperationException($"{character} is not online");
+        if (player.Team != Team.Horde)
+        {
+            throw new InvalidOperationException($"{character} is not Horde: create it with race: 2 so a human caster may attack it");
+        }
+
+        MapCombat.UpdatePvp(player, true);
         return true;
     });
 
