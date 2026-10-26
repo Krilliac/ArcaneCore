@@ -127,9 +127,9 @@ public static class MovementControl
         ArgumentNullException.ThrowIfNull(change);
         if (change.Type is MovementChangeType.KnockBack or MovementChangeType.TurnRate)
         {
-            // A turn rate was applied when the order was sent (UnitSpeed.SetTurnRate), so there is nothing left to enforce.
-            // "Not resendable change": the knock back is dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
+            // Knock back: "Not resendable change", dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
             // the resolve switch has no knock back case either.
+            // Turn rate: applied when the order was sent (UnitSpeed.SetTurnRate), so there is nothing left to enforce.
             return;
         }
 

@@ -213,11 +213,13 @@ public sealed class SpeedRateTests
         await mover.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, ack.ToArray());
         var beat = new PacketWriter(48);
         new MovementInfo { Flags = MovementFlags.None, Time = 600, X = x, Y = y, Z = z }.Write(beat);
-        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, beat.ToArray()); // flush: the world thread has handled the ack before this
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, beat.ToArray());
+        // Sync on the heartbeat relayed to the watcher (as SpeedAckTests does): the world thread handled the ack before it, and every packet the watcher got up to then is kept.
+        List<(WorldOpcode Opcode, byte[] Payload)> seen = await watcher.CollectFromAsync(WorldOpcode.MsgMoveHeartbeat);
 
-        // RED on origin/main: the ack was applied, so X moved by 40 and the observers were sent MSG_MOVE_SET_TURN_RATE.
+        // RED on origin/main: the unsolicited ack was relayed to the observers as MSG_MOVE_SET_TURN_RATE and was not counted as a wrong ack (the X jump is undone by the heartbeat either way).
+        Assert.DoesNotContain(seen, p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
         Assert.Equal(x, await host.OnWorldAsync(() => player.Movement.X));
-        Assert.DoesNotContain(await watcher.CollectAsync(), p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
         Assert.Equal(1, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
     }
 }
