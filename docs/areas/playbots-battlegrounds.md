@@ -72,7 +72,7 @@ client opcode through its world handler and never waits for the shared action bu
 
 | Phase | Driven by | What happens |
 |---|---|---|
-| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most `TravelTimeoutFor` of the walk (10 minutes, longer by the walk's estimated length up to 60), and given up (the master refused for the zone) when the bot gets no 10 yards closer in 3 minutes |
+| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most `TravelTimeoutFor` of the walk (10 minutes, longer by the walk's estimated length up to 60), and given up (the master refused for the zones the walk started and failed in) when the bot gets no 10 yards closer in 3 minutes (longer for a long way; the clock stands still while the bot fights; the goal follows the live master, and a goal that moves away restarts it) |
 | `join` | the coordinator | CMSG_BATTLEMASTER_HELLO (the server answers SMSG_BATTLEFIELD_LIST), then CMSG_BATTLEMASTER_JOIN (map, instance 0, not as a group); no queue slot within 15 seconds sets the type aside for this bot for 10 minutes |
 | `queued` | the brain | the bot carries on with what it was doing; after `MaxQueueWaitMinutes` it leaves the queue (CMSG_BATTLEFIELD_PORT action 0) and sets the type aside for 10 minutes |
 | `invited` | the brain | an invitation the bot cannot answer yet (dead, between maps); answered when it can |

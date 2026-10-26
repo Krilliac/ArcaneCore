@@ -710,6 +710,9 @@ internal sealed partial class PlayerbotBattlegroundAI
             // A civilian (a villager, a vendor) is not picked from a scan; one that attacks the bot (requireHostile false) is fought back.
             && (deliberate || !requireHostile || !PlayerbotTargetFilter.IsCivilian(creature));
 
+    /// <summary>Whether the bot is in combat or attacked by a unit it may hit back: the walk to a battlemaster answers it first (<see cref="Travel"/>).</summary>
+    internal static bool IsFighting(Player player) => player.Combat.IsInCombat || FirstAttacker(player) is not null;
+
     /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
     private static Unit? FirstAttacker(Player player)
         => player.Combat.Attackers.FirstOrDefault(u => u.IsAlive && u.IsInWorld && ReferenceEquals(u.Map, player.Map)

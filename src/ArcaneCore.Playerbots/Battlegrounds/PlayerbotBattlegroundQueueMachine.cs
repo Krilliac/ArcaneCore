@@ -154,15 +154,28 @@ internal static class PlayerbotBattlegroundQueueMachine
     /// <summary>How much closer to the battlemaster a walk has to get to count as progress.</summary>
     internal const float TravelProgressYards = 10f;
 
-    /// <summary>How long a walk may go without that progress before it is given up (a long timeout, <see cref="TravelTimeoutFor"/>, is no licence to stand still).</summary>
+    /// <summary>The least time a walk may go without that progress before it is given up (a long timeout, <see cref="TravelTimeoutFor"/>, is no licence to stand still).</summary>
     internal const uint TravelStallMs = 180_000;
+
+    /// <summary>
+    /// The time without progress a walk of <paramref name="travelYards"/> (its estimated way) is given: <see cref="TravelStallMs"/> and half the
+    /// time the way takes at the walk's pace. The watch measures the straight line to the master, and a road that winds away from it for a
+    /// long stretch (round a ridge or a river) gains nothing on that line while it is walked.
+    /// </summary>
+    internal static uint TravelStallFor(float travelYards)
+    {
+        if (!float.IsFinite(travelYards) || travelYards <= 0f) return TravelStallMs;
+        double ms = TravelStallMs + (travelYards / (double)TravelYardsPerSecond * 500.0);
+        return (uint)Math.Min(ms, MaxTravelTimeoutMs);
+    }
 
     /// <summary>
     /// The walk's progress watch. <paramref name="yardsLeft"/> is the straight distance to the battlemaster now; <paramref name="bestYards"/>
     /// (negative: not seen yet) and <paramref name="bestAtMs"/> are the closest it came and when, updated here. True when the bot has not come
-    /// <see cref="TravelProgressYards"/> closer than that in <see cref="TravelStallMs"/>.
+    /// <see cref="TravelProgressYards"/> closer than that in <paramref name="stallMs"/>. While <paramref name="fighting"/> (a fight on the road
+    /// is answered before the walk goes on) the clock does not run: it restarts at <paramref name="nowMs"/>, so a fight is never a stall.
     /// </summary>
-    internal static bool TravelStalled(float yardsLeft, ref float bestYards, ref uint bestAtMs, uint nowMs)
+    internal static bool TravelStalled(float yardsLeft, bool fighting, uint stallMs, ref float bestYards, ref uint bestAtMs, uint nowMs)
     {
         if (!float.IsFinite(yardsLeft)) return false;
         if (bestYards < 0f || yardsLeft < bestYards - TravelProgressYards)
@@ -172,7 +185,13 @@ internal static class PlayerbotBattlegroundQueueMachine
             return false;
         }
 
-        return unchecked(nowMs - bestAtMs) > TravelStallMs;
+        if (fighting)
+        {
+            bestAtMs = nowMs;
+            return false;
+        }
+
+        return unchecked(nowMs - bestAtMs) > stallMs;
     }
 
     /// <summary>The longest the server takes to put the bot in a queue after the join.</summary>
