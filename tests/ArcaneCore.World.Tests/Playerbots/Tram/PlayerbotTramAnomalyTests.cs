@@ -252,23 +252,15 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
         PlayerbotOptions options = Options();
         await DriveUntilAsync(world, options, () => OnTramWaiting(world));
         using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
-        (uint departMs, uint chosenMs) = await world.OnWorldAsync(() =>
-        {
-            TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
-            return (trip.Dock.DepartMs, trip.DockChosenMs);
-        });
+        uint departMs = await world.OnWorldAsync(() => PlayerbotTram.TripOf(world.Player)!.Dock.DepartMs);
 
         await world.AdvanceAsync(departMs + 5_000);
-        uint now = await world.OnWorldAsync(() =>
-        {
-            PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs);
-            return world.Host.World.NowMs;
-        });
+        await world.OnWorldAsync(() => PlayerbotMotion.Pump(world.Session, world.Player, world.Host.World.NowMs));
 
-        (uint rechosenMs, bool hasCar, bool hasRoute, TramStage stage) = await world.OnWorldAsync(() =>
+        (bool hasCar, bool hasRoute, TramStage stage) = await world.OnWorldAsync(() =>
         {
             TramTrip trip = PlayerbotTram.TripOf(world.Player)!;
-            return (trip.DockChosenMs, trip.Car is not null, trip.Route is not null, trip.Stage);
+            return (trip.Car is not null, trip.Route is not null, trip.Stage);
         });
         output.WriteLine($"hasCar={hasCar} hasRoute={hasRoute} stage={stage}");
         Assert.False(hasCar, "the bot is not beside the new spot (it was still walking): the choice is dropped for the next think");
@@ -318,7 +310,8 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
     /// <summary>
     /// #1499 (review B1): with both trains running, a bot beside its missed car's spot must not have the pump lock in that car's next
     /// stop (a full cycle later) over the other train's, which stops sooner on the other track. The pump keeps the soonest stop or none,
-    /// so a kept car's arrival equals the one a full choice (the think) makes.
+    /// so here (the other train stops sooner on the other track, and the bot is not beside it) the pump keeps nothing and the next think
+    /// chooses the other train's car.
     /// </summary>
     [Fact]
     public async Task MissedCar_PumpNeverKeepsALaterStop_ThanAFullChoice()
@@ -345,7 +338,7 @@ public sealed class PlayerbotTramAnomalyTests(ITestOutputHelper output)
 
         output.WriteLine($"missed={missedGuid} keptArrive={keptArrive} fullArrive={fullArrive} fullCar={fullEntry}");
         Assert.NotEqual(missedGuid, fullEntry);
-        if (keptArrive is { } arrive) Assert.Equal(fullArrive, arrive);
+        Assert.Null(keptArrive);
     }
 
     /// <summary>
