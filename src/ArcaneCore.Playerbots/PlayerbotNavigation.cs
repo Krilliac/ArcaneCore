@@ -674,7 +674,7 @@ internal static class PlayerbotNavigation
     /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
     /// when the graph is not built yet or either place is on no region. <paramref name="fromComponent"/> and <paramref name="toComponent"/>
     /// are each place's component whatever the answer, -1 for a place on no region (or with no graph), and -1 for a goal that only a vertical
-    /// miss placed (it hung in the air or lay on excluded ground and snapped to the floor of the bot's own component). Transport (tram, lift, taxi) is the
+    /// miss placed (it hung in the air or lay on excluded ground and snapped to a floor). Transport (tram, lift, taxi) is the
     /// caller's to try first.
     /// Live case: Chief Hawkwind's platform from the Valley of Trials ridge, 4,900 yards away, drew an 847-yard leg and a 3,349-yard
     /// walk toward a goal no walk reaches.
@@ -688,10 +688,11 @@ internal static class PlayerbotNavigation
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
         int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate, out bool goalFar);
         // A goal the lookup reached only by a vertical miss (in the air, or on excluded steep ground: the far box snapped it to the floor under
-        // or over it) that lands in the bot's own component has no region of its own: no verdict (issue #1497: every refused plan toward it
-        // read as no-path-connected). A far snap into another component keeps its answer, and so does a goal merely off a polygon's edge.
+        // or over it, up to 200 yd off) has no region of its own, whichever component that floor is in: no verdict, and the path search decides
+        // (issue #1497: every refused plan toward it read as no-path-connected). A goal merely off a polygon's edge keeps its answer.
         // RegionLeg and the other plain RegionAt callers (e.g. PlayerbotOpportunities, PlayerbotNavigationExecutor, PlayerbotTravel) still take the snap.
-        if (goalFar && to >= 0 && graph.ComponentOf(to) == graph.ComponentOf(from)) to = -1;
+        // The bot's own lookup (from) is not checked for far: a bot falling, swimming or on excluded ground is judged from the region it snaps to.
+        if (goalFar) to = -1;
         // Each side's component is given whether or not the other has one (ComponentOf answers -1 for no region): a goal off the walking
         // mesh (a retreat point in a hillside or in the air) once also read as "bot -1" in nav/goal-unreachable, as if the bot were off it too
         // (bot QA #807: on the real mesh the bot stood in its continent's component in ten of the eleven live cases probed).

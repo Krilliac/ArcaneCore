@@ -25,9 +25,9 @@ public sealed class PlayerbotFarSnapTerrainTests : RealTerrainNavigationTestBase
     ];
 
     /// <summary>
-    /// Four of the five goals are far, in the bot's own component, and give no verdict (goal component -1), so no refused plan toward them reads
-    /// as no-path-connected. The third (6783.5,-4429.1,737.3) is only 4.5 yd above its polygon: a near-box hit, not far, so it is logged, not
-    /// asserted, and still reads as no-path-connected (issue #1497 stays open for it).
+    /// All five goals are far, in the bot's own component, and give no verdict (goal component -1), so no refused plan toward them reads
+    /// as no-path-connected. Four are a vertical miss; the third (6783.5,-4429.1,737.3) lies on a steep slope beside the walkable polygon the bot
+    /// stands on, so its walking hit is 3.2 yd off horizontally while a lookup with nothing excluded finds the slope 0.17 yd away.
     /// </summary>
     [RealTerrainBotFact]
     public async Task TheLiveGoals_OfIssue1497_AreReportedFar_AndGiveNoVerdict()
@@ -51,7 +51,6 @@ public sealed class PlayerbotFarSnapTerrainTests : RealTerrainNavigationTestBase
             });
             output.WriteLine($"goal {goal} (bot {bot}): bot region {seen.from} comp {seen.own}, goal region {seen.to} comp {seen.goalComponent} far={seen.far}; "
                 + $"IsUnreachableOnFoot={seen.unreachable} (components {seen.fromComponent}, {seen.toComponent})");
-            if (sample == 2) continue;
             Assert.True(seen.far, $"sample {sample} is a vertical miss");
             Assert.Equal(seen.own, seen.goalComponent);
             Assert.False(seen.unreachable);

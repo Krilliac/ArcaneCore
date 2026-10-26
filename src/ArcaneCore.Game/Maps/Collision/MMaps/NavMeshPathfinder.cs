@@ -680,11 +680,18 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         => RegionAt(graph, at, options, out _);
 
     /// <summary>
+    /// How much nearer (yards, 3D) an unfiltered polygon must be to a point than the walking filter's hit for the point to count as lying on
+    /// excluded ground (a steep slope): the walking hit is then a neighbour's floor, not the point's own place. Well past a footprint edge's few tenths.
+    /// </summary>
+    private const float ExcludedGroundMarginYards = 1.0f;
+
+    /// <summary>
     /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the located point is <paramref name="far"/> from <paramref name="at"/>
     /// (a vertical miss: it lies more than <c>NearExtents.Y</c> (5) above or below <paramref name="at"/>, whether the far box snapped to the floor
     /// under or over it or a near-box hit on a slope was that far off). With <c>EndTolerance</c> above 0 the single {5, 10, 5} box is taken and
     /// <paramref name="far"/> is never set. A point merely outside a polygon's footprint but within the near box is not far, whatever its
-    /// horizontal distance. A far point is the floor beside a point in the air or on excluded ground, not the place itself. Meaningful only when the result is not -1.
+    /// horizontal distance. Also far, with no <c>EndTolerance</c> and steep slopes excluded by the filter: a walking hit more than 0.1 yd off horizontally while a lookup with nothing excluded
+    /// finds a polygon over <see cref="ExcludedGroundMarginYards"/> nearer (the point lies on a steep slope and the hit is the walkable floor beside it). A far point is the floor beside a point in the air or on excluded ground, not the place itself. Meaningful only when the result is not -1.
     /// </summary>
     public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options, out bool far)
     {
@@ -712,6 +719,14 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         // Not TryLocate's own flag, which also counts a near-box hit past a tenth of a yard horizontally (a spawn beside an eroded edge).
         far = options.EndTolerance <= 0 && MathF.Abs(onMesh.Y - recast.Y) > NearExtents.Y;
+        if (!far && options.EndTolerance <= 0 && !options.ExcludeOnlyInSearch && (options.ExcludeFlags & NavTerrain.SteepSlopes) != 0
+            && NavMeshTile.DistanceXzSquared(onMesh, recast) > 0.01f
+            && mesh.TryFindNearestPoly(recast, NearExtents, options.EffectiveIncludeFlags | NavTerrain.SteepSlopes, NavTerrain.Empty, out _, out Vector3 unfiltered)
+            && Vector3.Distance(onMesh, recast) - Vector3.Distance(unfiltered, recast) > ExcludedGroundMarginYards)
+        {
+            far = true;
+        }
+
         return graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly);
     }
 

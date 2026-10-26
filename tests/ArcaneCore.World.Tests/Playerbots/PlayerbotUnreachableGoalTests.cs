@@ -292,25 +292,26 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
     }
 
     /// <summary>
-    /// Issue #1497: a far goal (6.5 yd above the walkable cells) that snaps into ANOTHER component than the bot's keeps its verdict: it is
-    /// told unreachable, and its component is the unjoined tile's, not -1.
+    /// Issue #1497: a far goal (6.5 yd above the walkable cells) that snaps into ANOTHER component than the bot's gets no verdict either: a snap
+    /// to the floor under or over the goal says nothing about the goal's own place (it may be walkable on excluded or upper ground), so the path
+    /// search decides. The control, a goal on the unjoined tile itself, is still told unreachable.
     /// </summary>
     [Fact]
-    public async Task AFarGoalSnappingIntoAnotherComponent_IsStillToldUnreachable_WithThatComponent()
+    public async Task AFarGoalSnappingIntoAnotherComponent_GivesNoVerdict()
     {
         await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
         await world.PlaceAsync(Start);
         await WaitUntilUnreachableAsync(world);
         Vector3 aboveTheTile = new(75, 5, 6.5f);
-        (bool unreachable, int from, int to, int spawnComponent) = await world.Host.OnWorldAsync(() =>
+        (bool unreachable, int from, int to) = await world.Host.OnWorldAsync(() =>
         {
-            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out int spawn), "the control");
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out _), "the control");
             bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, aboveTheTile, out int fromComponent, out int toComponent);
-            return (answer, fromComponent, toComponent, spawn);
+            return (answer, fromComponent, toComponent);
         });
-        Assert.True(unreachable, "a far goal over the unjoined tile is unreachable from the bot's component");
-        Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
-        Assert.Equal(spawnComponent, to);
+        Assert.False(unreachable, "a far goal over the unjoined tile gives no verdict");
+        Assert.True(from >= 0, $"bot {from}");
+        Assert.Equal(-1, to);
     }
 
     [Fact]
