@@ -5,11 +5,14 @@ name: Docker publish
 # It runs on a push to main (the rolling `edge` tag, Debug configuration like the live server and the nightly binaries), when a version
 # tag v* is pushed (Release), and by hand (workflow_dispatch). A push that changes only docs/** or Markdown files is skipped (path
 # filters are not evaluated for tag pushes, so a v* tag always builds).
-# A pull request that changes what the image build depends on runs the same multi-arch build with push: false, so a linux/arm64
-# failure shows before the merge.
+# A pull request that changes the Dockerfile, the build props, a project file or a lock file (the inputs that decide what the image
+# contains; C# source changes alone do not start it, docker-smoke builds the amd64 image from those) runs the same multi-arch build with
+# push: false, so a linux/arm64 failure shows before the merge.
 # Tags pushed per image: edge (push to main), sha-<7 hex> (push to main, Debug), the git tag (tag runs: only that tag, since the commit
-# usually has its sha tag from the push to main already and a second Release push would overwrite it) and, for a hand run,
-# sha-<7 hex>-debug or sha-<7 hex>-release. A hand-run Debug build also gets a -debug suffix on its other tags.
+# usually has its sha tag from the push to main already and a second Release push would overwrite it) and, for a hand run on a branch,
+# only sha-<7 hex>-debug or sha-<7 hex>-release (an explicit suffix on that tag: an empty tag-level suffix would override the flavor
+# suffix of docker/metadata-action and give the plain sha-<7 hex> of a push). A hand run on a v* tag is refused: it would re-push the
+# release tag itself.
 on:
   push:
     branches: ["main"]
@@ -49,6 +52,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # packages: write is static on purpose (GitHub does not evaluate expressions in permissions). A pull request run still holds it, but
+    # no step uses it there: the login is skipped, push is false and nothing writes the cache; a fork's token is read-only anyway.
     permissions:
       contents: read
       packages: write
@@ -60,6 +65,12 @@ jobs:
       CONFIGURATION: ${{ inputs.configuration || (github.ref_type == 'tag' && 'Release' || 'Debug') }}
       OWNER: ${{ github.repository_owner }}
     steps:
+      - name: Refuse a hand run on a version tag
+        if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+        run: |
+          echo "::error::Run this workflow on a branch. A hand run on a v* tag would re-push that release tag."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -96,7 +107,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=sha,enable=${{ github.event_name == 'push' && github.ref_type == 'branch' }}
-            type=sha,suffix=${{ inputs.configuration == 'Release' && '-release' || '' }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+            type=sha,suffix=${{ inputs.configuration == 'Release' && '-release' || '-debug' }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
 
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

@@ -90,7 +90,9 @@ configuration. Tagged `v*` releases are built in Release configuration.
 
 The same file names exist under every release tag, for example `.../releases/download/<tag>/arcanecore-linux-x64.tar.gz`. The arm64
 archives are built on a best-effort basis: when an arm64 build fails, the release has no arm64 archive for that run (assets of earlier
-runs are removed, never left behind next to newer x64 ones), so check `SHA256SUMS` for what the release carries.
+runs are removed, never left behind next to newer x64 ones), so check `SHA256SUMS` for what the release carries. The two arm64 links above 404 for a run whose arm64 build failed. The assets are
+swapped in place after the `nightly` tag moves, so a download during the few minutes of an upload can mix files of two builds; compare
+against `SHA256SUMS` (and its commit in the release notes).
 
 Each archive unpacks to `arcanecore-<platform>/`, self-contained and laid out like the Docker images, plus the `*.conf.dist` files of every key
 (the images do not carry those):

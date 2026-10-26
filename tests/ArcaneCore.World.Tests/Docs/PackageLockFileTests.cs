@@ -66,6 +66,42 @@ public sealed class PackageLockFileTests
         Assert.DoesNotContain("NuGetAudit=false", script, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The release rids live in the release-binaries matrix, in the RuntimeIdentifiers of every published executable (which is what puts the
+    /// runtime targets into its lock file, so the locked restore of publish-binaries.sh works) and in the asset names the workflow header and
+    /// the README promise. A rid added in one place and not the others fails the locked restore only in the release workflow, after the merge.
+    /// </summary>
+    [Fact]
+    public void TheReleaseRids_AreTheSameInTheMatrixTheProjectsAndTheDocumentedAssets()
+    {
+        string workflow = RepoRoot.ReadText(".github/workflows/release-binaries.yml");
+        string[] matrix = [.. Regex.Matches(workflow, @"\{ rid: (?<rid>[a-z0-9-]+),").Select(m => m.Groups["rid"].Value).Order(StringComparer.Ordinal)];
+        Assert.Equal(["linux-arm64", "linux-x64", "win-arm64", "win-x64"], matrix);
+
+        string[] exes =
+        [
+            "src/ArcaneCore.Realm/ArcaneCore.Realm.csproj",
+            "src/ArcaneCore.World/ArcaneCore.World.csproj",
+            "tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj",
+            "tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj",
+            "tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj",
+        ];
+        foreach (string exe in exes)
+        {
+            Match declared = Regex.Match(RepoRoot.ReadText(exe), @"<RuntimeIdentifiers>(?<rids>[^<]*)</RuntimeIdentifiers>");
+            Assert.True(declared.Success, exe + " declares no RuntimeIdentifiers");
+            string[] rids = [.. declared.Groups["rids"].Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Order(StringComparer.Ordinal)];
+            Assert.True(matrix.SequenceEqual(rids), exe + " RuntimeIdentifiers (" + string.Join(';', rids) + ") differ from the release matrix (" + string.Join(';', matrix) + ")");
+        }
+
+        string readme = RepoRoot.ReadText("README.md");
+        foreach (string rid in matrix)
+        {
+            Assert.Contains("arcanecore-" + rid + ".", workflow, StringComparison.Ordinal);
+            Assert.Contains("arcanecore-" + rid + ".", readme, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void TheContributingGuide_SaysHowToUpdateTheLockFiles()
     {

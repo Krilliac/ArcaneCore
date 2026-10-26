@@ -131,11 +131,11 @@ jobs:
       - name: World listens on 8085
         run: timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8085' && echo "8085 open"
 
-      - name: The auth schema was created
+      - name: The three schemas were created and hold tables
         # The daemons create the tables at start (Database:Upgrade); db-init only creates the empty schemas.
         run: |
           for db in arcanecore_auth arcanecore_characters arcanecore_world; do
-            n=$(docker compose exec -T arcane-database sh -c "mariadb -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -N -B -e \"select count(*) from information_schema.tables where table_schema='$db'\"")
+            n=$(docker compose exec -T arcane-database sh -c "MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" mariadb -uroot -N -B -e \"select count(*) from information_schema.tables where table_schema='$db'\"")
             echo "$db: $n tables"
             if [ "$n" -lt 1 ]; then echo "no tables in $db"; exit 1; fi
           done

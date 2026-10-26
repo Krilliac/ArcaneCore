@@ -47,9 +47,9 @@ tag and Debug for `edge` (see below).
 [`.github/workflows/docker-publish.yml`](../../.github/workflows/docker-publish.yml) builds `world`, `realm` and `tools` for `linux/amd64`
 and `linux/arm64` and pushes them to `ghcr.io/krilliac/arcanecore-world`, `arcanecore-realm` and `arcanecore-tools`. It runs on a push to
 `main` (tag `edge`, Debug, plus `sha-<7 hex>` of the pushed commit), on a `v*` tag (only that tag, Release; no `sha-` tag, because the
-commit usually has one from its push to `main` already) and by hand (`sha-<7 hex>-debug` or `sha-<7 hex>-release`, so a hand-run build
-never overwrites the tag of a push). Pushes that change only `docs/**` or `*.md` files do not run it. A pull request that touches the
-Dockerfile or anything the build depends on runs the same multi-arch build without pushing, so a `linux/arm64` failure shows before
+commit usually has one from its push to `main` already) and by hand on a branch (only `sha-<7 hex>-debug` or `sha-<7 hex>-release`, so a hand-run build
+never overwrites the tag of a push; a hand run on a `v*` tag is refused, because it would re-push the release tag). Pushes that change only `docs/**` or `*.md` files do not run it. A pull request that touches the
+Dockerfile, the build props, a project file or a lock file (not C# sources alone; `docker-smoke` builds the amd64 image from those) runs the same multi-arch build without pushing, so a `linux/arm64` failure shows before
 the merge.
 
 GHCR packages start **private**. After the first push, the repository owner makes each of the three packages public once (GitHub:
@@ -96,7 +96,7 @@ Dump the three schemas on the old host, then restore them into the container **b
 ```sh
 mariadb-dump -u USER -p --single-transaction --routines --events --databases arcanecore_auth arcanecore_characters arcanecore_world > arcanecore.sql
 docker compose -f docker-compose.prod.yml up -d arcane-database
-docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"' < arcanecore.sql
+docker compose -f docker-compose.prod.yml exec -T arcane-database sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -uroot' < arcanecore.sql
 docker compose -f docker-compose.prod.yml up -d
 ```
 

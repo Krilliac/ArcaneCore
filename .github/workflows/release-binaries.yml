@@ -11,7 +11,8 @@ name: Release binaries
 # A pull request that changes this workflow or the publish script only builds and smoke-checks (no release); a manual run does the same.
 # A push that changes only docs/** or Markdown files is skipped (path filters are not evaluated for tag pushes, so a v* tag always builds).
 # The arm64 builds are best effort: when one fails the release gets no arm64 archive for that run, and the release step deletes the assets
-# an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one.
+# an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one. The nightly tag moves to the new commit before
+# the upload and stale assets go after it, so a download during that window can get files of two builds (acceptable for a rolling pre-release).
 on:
   push:
     branches: ["main"]
