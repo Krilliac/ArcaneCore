@@ -457,6 +457,14 @@ public sealed class PlayerbotCombatSpellsTests
         }
     }
 
+    /// <summary>The rotation's first think leaves a cast pending (the clock never advances here), and a pending cast returns Update before the pet command; cancel it so the next think reaches the pet.</summary>
+    private static void ClearCast(WorldSession session)
+    {
+        SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+        feature.System.CancelCast(session.Player!, 0);
+        Assert.False(feature.System.GetState(session.Player!.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting });
+    }
+
     /// <summary>
     /// A pet's spells start with autocast off and nothing ever turned it on for a bot, so a bot warlock's Imp never fired its bolt. The
     /// bot sends CMSG_PET_SPELL_AUTOCAST for each harmful spell its pet knows, once.
@@ -510,6 +518,7 @@ public sealed class PlayerbotCombatSpellsTests
                 await host.World.InvokeAsync(() =>
                 {
                     session.ManagedBudget = new ManagedActionBudget(8);
+                    ClearCast(session);
                     helper.Update(session.Player!, target, 0);
                     return true;
                 });
@@ -523,6 +532,7 @@ public sealed class PlayerbotCombatSpellsTests
                     Assert.True(charm.LearnSpell(9101, ArcaneCore.Game.Pets.ActionType.Disabled));
                     Assert.Single(charm.SpellStates);
                     session.ManagedBudget = new ManagedActionBudget(8);
+                    ClearCast(session);
                     helper.Update(session.Player!, target, 0);
                     return true;
                 });
