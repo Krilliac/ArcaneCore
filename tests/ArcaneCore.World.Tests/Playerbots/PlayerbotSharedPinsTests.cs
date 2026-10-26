@@ -469,6 +469,197 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         Assert.Equal(PlanOutcome.Route, outcome);
     }
 
+    // --- a cut region on a real mesh ----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A - B - C in a row along world X: A and C are 23 x 23 cells (529 polygons, one per cell, at least <see cref="PlayerbotNavigation.CutRegionPartPolygons"/>),
+    /// B is a strip one cell wide, so B is the only way between two large parts (the Timbermaw Hold tunnel in small).
+    /// </summary>
+    private static (int X, int Y, CellTile Tile)[] Tunnel() =>
+    [
+        (10, 10, new CellTile(0, 0, 0, 0, 23, 23, Size: 5) { LinkedSides = [2] }),
+        (10, 11, new CellTile(0, 1, 115, 0, 1, 23, Size: 5) { LinkedSides = [6, 2] }),
+        (10, 12, new CellTile(0, 2, 120, 0, 23, 23, Size: 5) { LinkedSides = [6] }),
+        // Two one-cell islands no walk reaches, north of B and of A: a goal on one is a goal the mesh cannot end at, so a route towards it is partial.
+        (11, 11, new CellTile(1, 1, 115, 125, 1, 1, Size: 5)),
+        (11, 10, new CellTile(1, 0, 60, 125, 1, 1, Size: 5)),
+    ];
+
+    private static readonly Vector3 InA = new(30.5f, 57.5f, 0), InAFar = new(60.5f, 57.5f, 0), InB = new(117.5f, 57.5f, 0), InBNorth = new(117.5f, 112.5f, 0),
+        InANorth = new(60.5f, 112.5f, 0), AboveB = new(117.5f, 127.5f, 0), AboveA = new(62.5f, 127.5f, 0);
+
+    private async Task<SyntheticNavWorld> TunnelWorldAsync()
+    {
+        SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Tunnel(), new FloorLineOfSight());
+        await InstallAreasAsync(world);
+        await world.PlaceAsync(InA);
+        await world.Host.OnWorldAsync(() => { world.Player.ZoneId = OpenZone; return true; });
+        return world;
+    }
+
+    [Fact]
+    public async Task TheTunnelFixture_IsACutRegionBetweenTwoLargeParts()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        (bool a, bool b, bool c) = await world.Host.OnWorldAsync(() => (
+            PlayerbotNavigation.IsCutRegionAt(world.Player, InA), PlayerbotNavigation.IsCutRegionAt(world.Player, InB),
+            PlayerbotNavigation.IsCutRegionAt(world.Player, new Vector3(150, 57.5f, 0))));
+        Assert.False(a);
+        Assert.True(b);
+        Assert.False(c);
+    }
+
+    /// <summary>
+    /// Through the brain (<c>ReportWorldPin</c>): a bot that stalls twice in a cut region reports nothing to the ledger, so a second bot reporting
+    /// there makes no world pin. The control is the same stalls in a cell of a large part, which do.
+    /// </summary>
+    [Fact]
+    public async Task ABotStallingTwiceInACutRegion_ReportsNoWorldPin_ButInAPartItDoes()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true };
+        var pins = new PlayerbotSharedPins { World = world.Host.World };
+
+        async Task<(bool Own, bool World)> StallTwiceThenAnotherBotReportsAsync(Vector3 at)
+        {
+            await world.PlaceAsync(at);
+            var bot = new PlayerbotBrain(world.Session, options) { SharedPins = pins };
+            return await world.Host.OnWorldAsync(() =>
+            {
+                uint now = world.Host.World.NowMs;
+                PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+                for (int i = 0; i < 2; i++)
+                {
+                    bot.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+                    bot.GiveUpStalledGoal(world.Player, shareable: false);
+                }
+
+                bool own = bot.StallWatch.IsDeadEndPin(0, at.X, at.Y, now);
+                pins.Report(0, 0, at.X, at.Y, world.Player.Guid.Value + 1, now); // a second, different bot
+                return (own, pins.IsWorldPin(0, 0, at.X, at.Y, now));
+            });
+        }
+
+        (bool ownInB, bool worldInB) = await StallTwiceThenAnotherBotReportsAsync(InB);
+        Assert.True(ownInB, "the bot's own pin is made all the same");
+        Assert.False(worldInB, "a stall in the tunnel is no world pin");
+        Assert.Equal(1, pins.Count); // only the second bot's own report, from which no pin follows
+
+        (bool ownInA, bool worldInA) = await StallTwiceThenAnotherBotReportsAsync(InAFar);
+        Assert.True(ownInA);
+        Assert.True(worldInA, "the control: the same stalls in a large part are shared");
+    }
+
+    private static PlanOutcome PlanExactTo(SyntheticNavWorld world, PlayerbotBrain brain, Vector3 destination, PlayerbotOptions options)
+    {
+        TileWait wait = default;
+        PlayerbotNavigation.SetStallWatch(world.Player, brain.StallWatch);
+        return PlayerbotNavigation.PlanExact(world.Player, destination, options, ref wait, world.Host.World.NowMs, out _);
+    }
+
+    private static async Task<PlanOutcome> SettledAsync(SyntheticNavWorld world, Func<PlanOutcome> plan)
+    {
+        PlanOutcome outcome = PlanOutcome.Pending;
+        for (int think = 0; think < 40 && outcome == PlanOutcome.Pending; think++)
+        {
+            outcome = await world.Host.OnWorldAsync(plan);
+            if (outcome == PlanOutcome.Pending) await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        return outcome;
+    }
+
+    /// <summary>The destination side (<c>PlanDirectCore</c>): an own dead-end pin in a cut region does not refuse a plan to it; in a large part it does.</summary>
+    [Fact]
+    public async Task AnOwnPinInTheTunnel_DoesNotRefuseAPlanToIt_ButAPinInAPartDoes()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true };
+        var bot = new PlayerbotBrain(world.Session, options);
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            foreach (Vector3 at in new[] { InB, InAFar })
+            {
+                bot.StallWatch.RecordPinStall(0, at.X, at.Y, now);
+                bot.StallWatch.RecordPinStall(0, at.X, at.Y, now);
+            }
+
+            PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, InB));
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, InAFar));
+            return true;
+        });
+
+        Assert.Equal(PlanOutcome.Refused, await SettledAsync(world, () => PlanExactTo(world, bot, InAFar, options)));
+        Assert.Equal(PlanOutcome.Route, await SettledAsync(world, () => PlanExactTo(world, bot, InB, options)));
+    }
+
+    /// <summary>
+    /// The partial side (<c>Usable</c>): a route towards a goal on an island that ends in a pinned cell is refused in a large part and kept in
+    /// the tunnel. The goal lies outside the pinned cell, so only the end of the route is asked.
+    /// </summary>
+    [Fact]
+    public async Task APartialRouteEndingInAPinnedTunnelCell_IsKept_ButNotInAPinnedPartCell()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true };
+        var free = new PlayerbotBrain(world.Session, options);
+        var pinned = new PlayerbotBrain(world.Session, options);
+
+        async Task<(bool Planned, PlayerbotRoute? Route)> TowardAsync(PlayerbotBrain brain, Vector3 goal)
+        {
+            for (int think = 0; think < 40; think++)
+            {
+                (bool planned, PlayerbotRoute? route, bool pending) = await world.Host.OnWorldAsync(() =>
+                {
+                    PlayerbotNavigation.SetStallWatch(world.Player, brain.StallWatch);
+                    long mark = PlayerbotNavigation.PendingMark;
+                    bool ok = PlayerbotNavigation.TryPlanToward(world.Player, goal, options, out PlayerbotRoute? r);
+                    return (ok, r, PlayerbotNavigation.PendingSince(mark));
+                });
+                if (!pending) return (planned, route);
+                await world.Host.World.AdvanceClockAsync(50);
+            }
+
+            Assert.Fail("the plan stays pending");
+            return default;
+        }
+
+        // The setup: with no pin, a route towards each goal is a partial one that ends in the last cell before the mesh does.
+        (bool freeB, PlayerbotRoute? routeB) = await TowardAsync(free, AboveB);
+        Assert.True(freeB, "without a pin the partial route towards a goal on the island north of the tunnel is taken");
+        Assert.True(routeB!.MeshEndedShort, "and it is a partial one");
+        (bool freeA, PlayerbotRoute? routeA) = await TowardAsync(free, AboveA);
+        Assert.True(freeA);
+        Assert.True(routeA!.MeshEndedShort);
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            foreach (Vector3 at in new[] { InBNorth, InANorth })
+            {
+                pinned.StallWatch.RecordPinStall(0, at.X, at.Y, now);
+                pinned.StallWatch.RecordPinStall(0, at.X, at.Y, now);
+            }
+
+            PlayerbotNavigation.SetStallWatch(world.Player, pinned.StallWatch);
+            Assert.False(PlayerbotNavigation.IsDeadEndPin(world.Player, AboveB), "the goal is not in a pinned cell");
+            Assert.False(PlayerbotNavigation.IsDeadEndPin(world.Player, AboveA));
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, routeB.Points[^1]), "the end of the route towards the tunnel is a pinned cell");
+            Assert.True(PlayerbotNavigation.IsDeadEndPin(world.Player, routeA.Points[^1]));
+            return true;
+        });
+
+        (bool pinnedB, PlayerbotRoute? keptB) = await TowardAsync(pinned, AboveB);
+        Assert.True(pinnedB, "the pinned cell is a cut region: the way through is not refused");
+        Assert.True(await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, keptB!.Points[^1])), "and the route still ends in it");
+        // A route that ends in the pinned cell of a large part is refused; the plan may still find another, shorter one that ends elsewhere.
+        (bool pinnedA, PlayerbotRoute? otherA) = await TowardAsync(pinned, AboveA);
+        Assert.False(pinnedA && await world.Host.OnWorldAsync(() => PlayerbotNavigation.IsDeadEndPin(world.Player, otherA!.Points[^1])),
+            "no route towards the island ends in the pinned cell of a large part");
+    }
+
     // --- explore ------------------------------------------------------------------------------------------------------------
 
     private static readonly Vector3 Start = new(5, 5, 0), FarSpawn = new(75, 5, 0), NearSpawn = new(20, 115, 0);
