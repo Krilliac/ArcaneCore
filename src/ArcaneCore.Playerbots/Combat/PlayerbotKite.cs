@@ -514,7 +514,10 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         return false;
     }
 
-    /// <summary>The floor at (x, y) nearest the bot's height among the probe from 20 yards above it and the one from the height itself (a cave's floor).</summary>
+    /// <summary>
+    /// The floor at (x, y) nearest the bot's height z, from two floor reads: one at z + 20 and one at z (a cave's floor). Each
+    /// <c>MapCollision.GetHeight(x, y, z)</c> read probes <c>FloorProbeOffset</c> (2 yards) higher, so from z + 22 and z + 2.
+    /// </summary>
     private static float FloorNear(Map map, float x, float y, float z)
     {
         float high = map.Collision.GetHeight(x, y, z + 20f);

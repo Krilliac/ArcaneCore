@@ -142,7 +142,7 @@ class rotation, so a retreat always wins and kiting is the fight-on branch.
   nature), the bot walks one leg away, at most once every 1.5 s. At the same speed with no slow ready it fights on.
 * **The spot** (no path search; at most seven directions: away from the pursuers, then 35, 70 and 105 degrees either side). The leg is
   the yards still wanted to reach the casting range less 3 (10..22 yards; a hunter 14..28), between 4 yards and `StepYards`. A
-  candidate is taken only if the ground under its end is within 3 yards of the bot's height (probed from 20 yards above and from 2,
+  candidate is taken only if the ground under its end is within 3 yards of the bot's height (floor reads at 20 yards above and at the bot's height, each probing 2 yards higher,
   nearest the bot's height), the clipped walk reaches 75% of the leg, the end is not under water, no creature outside the fight would
   aggro along the leg or at its end (`PlayerbotRecovery.Threats`, margin 2 yards, sampled every 2 yards), no hazard lies on it (the
   bot's own risk object, which the brain, party AI and group AI all pass), it stays inside every pursuer's leash zone less 8 yards (or no farther from the anchor than the bot is), the spell line of

@@ -283,6 +283,8 @@ public sealed class PlayerbotKiteRangedWorldTests
                     Assert.Same(player.Map, other.Map);
                     Assert.False(mob.IsInEvadeMode, "the creature is evading, so the test proves nothing");
                     Assert.True(mob.IsAlive && mob.Combat.Victim?.Guid == player.Guid, "the creature is no longer pursuing the warrior, so the test proves nothing");
+                    // Inside the scan radius, so without the player guard Update would get past "no pursuers" and own the think.
+                    Assert.True(Gap(world, mob) <= PlayerbotKiteModel.StartYards(hunter: false), "the creature is outside the kite's scan, so the test proves nothing: " + Describe(world, mob));
                     bool kiteOwns = world.Brain.Kite.Update(player, other, RiskTestWorld.ThinkMs, null, 0f, world.Brain.Risk, grouped: true);
                     return (kiteOwns, world.Brain.Kite.HoldRange(player, 0f), world.Brain.CombatSpells.KiteHolds!.Invoke(player, other));
                 });
