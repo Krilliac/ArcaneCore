@@ -298,7 +298,10 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         if (CheckWipe(group, leader)) return;
         if (leader.MapId != group.Goal.MapId || leader.Map is null) return; // outside (a corpse run): the leader walks back in first
-        if (SweepTarget(group, leader, now) is not null || !sweep.Rebuilt && sweep.Rebuild(ClearTargets(leader)))
+        // Next drops the dead and the gone as it meets them, so a creature still on the list after a null target was skipped, not
+        // finished: every one left is shunned for now (no path, a stalled fight). Wait for the shun to lapse; neither spend the one
+        // rebuild (it would hold the same creatures) nor call the clear done while hostiles live.
+        if (SweepTarget(group, leader, now) is not null || sweep.Remaining > 0 || !sweep.Rebuilt && sweep.Rebuild(ClearTargets(leader)))
         {
             group.RunDoneMs = 0;
             return;
