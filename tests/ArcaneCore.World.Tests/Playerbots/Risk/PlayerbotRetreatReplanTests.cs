@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -65,6 +66,34 @@ public sealed class PlayerbotRetreatReplanTests
 
         Assert.True(await world.ThinkUntilAsync(5_000, () => world.Brain.Risk.Retreat.Outcome == "cornered"),
             await world.OnWorldAsync(() => $"{world.Brain.Risk.Retreat.Trace} | {world.Brain.RiskReport}"));
+    }
+
+    /// <summary>
+    /// Issue #1492 (bot-nav/goal-unreachable, "5 plans in a row toward" a point 30 yards out): a cornered retreat replans toward the
+    /// same goal, the retreat distance itself, on each of its failed thinks. Those plans now go through the route plan watch, which
+    /// suppresses the pair after its own refusal limit, so a retreat that ends cornered (the expected outcome here) is no navigation
+    /// anomaly.
+    /// </summary>
+    [Fact]
+    public async Task ARetreatWithNoWayOut_IsNoGoalUnreachableAnomaly()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(992103, health: 5000, minDamage: 1, maxDamage: 1), -3, 0));
+        await world.SeeAsync(mob);
+        using AnomalyCapture capture = await world.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(world.Player));
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            WorldCollision.Of(world.Host.World).Install(pathfinder: new NoWayEast(float.NegativeInfinity));
+            world.Engage(mob);
+            world.Brain.Risk.Track(player);
+            world.Brain.Risk.StartRetreat(player, [mob], "losing");
+            return true;
+        });
+
+        Assert.True(await world.ThinkUntilAsync(5_000, () => world.Brain.Risk.Retreat.Outcome == "cornered"),
+            await world.OnWorldAsync(() => $"{world.Brain.Risk.Retreat.Trace} | {world.Brain.RiskReport}"));
+        Assert.False(capture.Any(PlayerbotAnomalies.Key("nav", "goal-unreachable")), capture.Describe());
     }
 
     /// <summary>No path to anything east of <paramref name="limitX"/>; straight lines elsewhere (a cliff edge east of the bot).</summary>
