@@ -16,9 +16,7 @@ public sealed class ReginaldWindsorGossip(Func<Player, PlayerQuestLog?> quests) 
 
     public ScriptedGossipMenu? Hello(Player player, NpcInfo npc)
     {
-        if (Find(player, npc) is not { KeepEventReady: true } || quests(player) is not { } log
-            || log.GetStatus(ReginaldWindsorAI.QuestTheGreatMasquerade) == QuestStatus.Complete
-            || log.Get(ReginaldWindsorAI.QuestStormwindRendezvous) is not { Rewarded: true })
+        if (!Eligible(player, Find(player, npc)))
         {
             return null;
         }
@@ -31,7 +29,8 @@ public sealed class ReginaldWindsorGossip(Func<Player, PlayerQuestLog?> quests) 
 
     public ScriptedGossipReply SelectReply(Player player, NpcInfo npc, uint sender, uint action)
     {
-        if (action != ActionStart || Find(player, npc) is not { } windsor)
+        // Hello's conditions again: the option can be selected from a menu that was cached earlier.
+        if (action != ActionStart || Find(player, npc) is not { } windsor || !Eligible(player, windsor))
         {
             return default;
         }
@@ -39,6 +38,11 @@ public sealed class ReginaldWindsorGossip(Func<Player, PlayerQuestLog?> quests) 
         windsor.StartKeepEvent();
         return new ScriptedGossipReply(0, Close: true);
     }
+
+    private bool Eligible(Player player, ReginaldWindsorAI? windsor)
+        => windsor is { KeepEventReady: true } && quests(player) is { } log
+            && log.GetStatus(ReginaldWindsorAI.QuestTheGreatMasquerade) != QuestStatus.Complete
+            && log.Get(ReginaldWindsorAI.QuestStormwindRendezvous) is { Rewarded: true };
 
     private static ReginaldWindsorAI? Find(Player player, NpcInfo npc)
         => player.Map?.FindUpdater<CreatureMapSystem>()?.Creatures.FirstOrDefault(c => c.Guid == npc.Guid)?.AI as ReginaldWindsorAI;

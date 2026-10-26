@@ -116,6 +116,13 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
     /// <summary>GossipSelect: DoStartKeepEvent.</summary>
     public void StartKeepEvent()
     {
+        // A cached gossip menu outlives the Gossip flag and the packet can be replayed: a second start would rewind the running scene.
+        if (!_keepReady)
+        {
+            return;
+        }
+
+        _keepReady = false;
         StartDialogue(Array.FindIndex(s_dialogue, d => d.Entry == -1000850));
         Me.NpcFlags &= ~(uint)NpcFlags.Gossip;
     }

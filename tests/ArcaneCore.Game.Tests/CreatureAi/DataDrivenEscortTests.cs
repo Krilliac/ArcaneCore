@@ -1078,6 +1078,25 @@ public sealed class DataDrivenEscortTests
     [Fact]
     public void Windsor_AnEvadeMidScene_KeepsTheKeepWord_AndTheGuardCheckThatCompletesTheQuest() => RunWindsorMasquerade(evadeMidScene: true);
 
+    [Fact]
+    public void Windsor_StartKeepEvent_IsIgnoredUnlessHeWaitsForTheWord()
+    {
+        // A replayed gossip select (the cached menu outlives the flag) must not start or rewind the keep scene.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            Creature windsor = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI>(windsor.AI);
+            Assert.False(ai.KeepEventReady);
+
+            ai.StartKeepEvent();
+
+            Assert.Equal(-1, ai.DialogueStep); // RED on main: the dialogue starts at once
+        }
+    }
+
     private static void RunWindsorMasquerade(bool evadeMidScene)
     {
         // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
