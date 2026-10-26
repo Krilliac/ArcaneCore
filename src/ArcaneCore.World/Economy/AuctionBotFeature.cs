@@ -313,6 +313,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // world.Post can throw once the world has shut down; the reload is dropped, but not silently.
+                FaultLedger.Shared.Record("economy.ahbot-reload-post", ex);
                 logger.LogFault("ahbot.reload-post", ex, "AHBot reload could not be applied");
             }
         });
