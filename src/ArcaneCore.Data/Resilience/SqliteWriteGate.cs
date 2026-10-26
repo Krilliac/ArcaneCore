@@ -12,8 +12,10 @@ namespace ArcaneCore.Data.Resilience;
 /// first takes this gate, so writers inside the process, blocking and async alike, queue in one arrival-order queue and are handed the lock the moment the previous one ends,
 /// instead of racing for it (a waiter keeps its place across its periodic wake-ups). Readers never take it (WAL readers do not block the writer).
 /// <para>
-/// Bounded like the lock it replaces: a waiter gives up after its connection's write bound and fails with SQLite's own busy error (code 5), so callers that retain
-/// and retry a locked write behave exactly as before, but the message names the holder. A hold that outlives <see cref="SqliteSingleWriterOptions.MaxHoldMs"/> (a leaked transaction) is
+/// Bounded by progress, not by total elapsed time: a waiter gives up when the gate has handed off to no one for its connection's write bound (every hand-off, to any
+/// waiter, restarts that countdown) or, as a hard cap, after <see cref="HardCapFactor"/> times the bound of active waiting. Time the whole process was suspended (a GC pause,
+/// <see cref="IWriteGateClock.PausedMs"/>) counts toward neither. It then fails with SQLite's own busy error (code 5), so callers that retain
+/// and retry a locked write behave exactly as before, but the message names the holder and the real wait. A hold that outlives <see cref="SqliteSingleWriterOptions.MaxHoldMs"/> (a leaked transaction) is
 /// released by the next waiter that finds it and logged; that only lets the next writer try SQLite itself, as it would without the gate.
 /// </para>
 /// One instance per normalized file path, shared process-wide (<see cref="For"/>). Thread-safe.
@@ -46,7 +48,21 @@ public sealed class SqliteWriteGate
     private long _timeoutsTotal;
     private long _forcedTotal;
 
-    private SqliteWriteGate(string path) => Path = path;
+    /// <summary>A waiter never waits longer than this multiple of its bound of active (non-suspended) time, however many hand-offs it watches go by.</summary>
+    internal const int HardCapFactor = 4;
+
+    private readonly IWriteGateClock _clock;
+    private long _handoffs; // written under _queueLock; counts every hand-off, so a waiter can tell that the queue moved
+    private double _pendingGrantSinceMs = double.NaN; // clock time of the last hand-off to a waiter that has not resumed yet; NaN: none
+
+    private SqliteWriteGate(string path, IWriteGateClock clock)
+    {
+        Path = path;
+        _clock = clock;
+    }
+
+    /// <summary>A gate that is not shared through <see cref="For"/> and runs on <paramref name="clock"/> (tests).</summary>
+    internal static SqliteWriteGate CreateIsolated(string path, IWriteGateClock clock) => new(path, clock);
 
     /// <summary>The database file this gate serializes.</summary>
     public string Path { get; }
@@ -89,32 +105,40 @@ public sealed class SqliteWriteGate
                 return null;
             }
         });
-        return key is null ? null : Gates.GetOrAdd(key, static path => new SqliteWriteGate(path));
+        return key is null ? null : Gates.GetOrAdd(key, static path => new SqliteWriteGate(path, SystemWriteGateClock.Instance));
     }
 
     /// <summary>Every gate created in this process (diagnostics).</summary>
     public static IReadOnlyCollection<SqliteWriteGate> All => Gates.Values.ToArray();
 
-    /// <summary>Takes the gate, waiting at most <paramref name="timeoutMs"/>; null on timeout. Blocks the calling thread.</summary>
-    public Hold? Enter(int timeoutMs, string owner, int maxHoldMs)
+    /// <summary>Takes the gate, waiting until it has made no progress for <paramref name="timeoutMs"/>; null on timeout. Blocks the calling thread.</summary>
+    public Hold? Enter(int timeoutMs, string owner, int maxHoldMs) => TryEnter(timeoutMs, owner, maxHoldMs).Hold;
+
+    /// <summary>Takes the gate, waiting until it has made no progress for <paramref name="timeoutMs"/>; null on timeout.</summary>
+    public async ValueTask<Hold?> EnterAsync(int timeoutMs, string owner, int maxHoldMs, CancellationToken cancellationToken)
+        => (await TryEnterAsync(timeoutMs, owner, maxHoldMs, cancellationToken).ConfigureAwait(false)).Hold;
+
+    /// <summary>Like <see cref="Enter"/>, but also reports the wall time the wait really took (for the busy message). Blocks the calling thread.</summary>
+    internal GateEntry TryEnter(int timeoutMs, string owner, int maxHoldMs)
     {
-        long start = Stopwatch.GetTimestamp();
-        if (TryTakeOrQueue(runContinuationsAsynchronously: false, out Waiter? waiter)) return Granted(start, owner, contended: false);
+        double start = _clock.NowMs;
+        if (TryTakeOrQueue(runContinuationsAsynchronously: false, out Waiter? waiter)) return Entered(Granted(start, owner, contended: false));
         try
         {
             ReleaseIfStuck(maxHoldMs);
-            int remaining = Remaining(start, timeoutMs);
-            while (remaining > 0)
+            WaitProgress progress = new(start, _clock.PausedMs, Volatile.Read(ref _handoffs));
+            double left = Advance(ref progress, timeoutMs);
+            while (left > 0)
             {
-                // Wake at least every second to release a stuck hold, so a leaked transaction cannot block for longer than max hold plus a second.
+                // Wake at least every poll (1 s) to release a stuck hold, so a leaked transaction cannot block for longer than max hold plus a poll.
                 // The waiter keeps its place in the queue across wake-ups.
-                if (waiter!.Task.Wait(Math.Min(remaining, 1000))) return Granted(start, owner, contended: true);
+                if (waiter!.Task.Wait(SliceMs(left))) return Entered(Granted(start, owner, contended: true));
                 ReleaseIfStuck(maxHoldMs);
-                remaining = Remaining(start, timeoutMs);
+                left = Advance(ref progress, timeoutMs);
             }
 
-            // Time is up: leave the queue, unless the hand-off got there first.
-            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
+            // Out of patience: leave the queue, unless the hand-off got there first.
+            return Withdraw(waiter!) == WaiterState.Granted ? Entered(Granted(start, owner, contended: true)) : TimedOut(start);
         }
         catch
         {
@@ -123,32 +147,30 @@ public sealed class SqliteWriteGate
         }
     }
 
-    /// <summary>Takes the gate, waiting at most <paramref name="timeoutMs"/>; null on timeout.</summary>
-    public async ValueTask<Hold?> EnterAsync(int timeoutMs, string owner, int maxHoldMs, CancellationToken cancellationToken)
+    /// <summary>Like <see cref="EnterAsync"/>, but also reports the wall time the wait really took (for the busy message).</summary>
+    internal async ValueTask<GateEntry> TryEnterAsync(int timeoutMs, string owner, int maxHoldMs, CancellationToken cancellationToken)
     {
-        long start = Stopwatch.GetTimestamp();
-        if (TryTakeOrQueue(runContinuationsAsynchronously: true, out Waiter? waiter)) return Granted(start, owner, contended: false);
+        double start = _clock.NowMs;
+        if (TryTakeOrQueue(runContinuationsAsynchronously: true, out Waiter? waiter)) return Entered(Granted(start, owner, contended: false));
         try
         {
             ReleaseIfStuck(maxHoldMs);
-            int remaining = Remaining(start, timeoutMs);
-            while (remaining > 0)
+            WaitProgress progress = new(start, _clock.PausedMs, Volatile.Read(ref _handoffs));
+            double left = Advance(ref progress, timeoutMs);
+            while (left > 0)
             {
-                try
-                {
-                    await waiter!.Task.WaitAsync(TimeSpan.FromMilliseconds(Math.Min(remaining, 1000)), cancellationToken).ConfigureAwait(false);
-                    return Granted(start, owner, contended: true);
-                }
-                catch (TimeoutException)
-                {
-                    // Still queued, in the same place: only the wait was bounded, not the position.
-                }
+                // The slice ends without an exception: SuppressThrowing swallows the TimeoutException the bounded wait completes with (and a cancellation, which is
+                // rethrown below), so an expected wake-up is not a first-chance exception per waiter per second.
+                Task slice = waiter!.Task.WaitAsync(TimeSpan.FromMilliseconds(SliceMs(left)), cancellationToken);
+                await slice.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                if (waiter.Task.IsCompleted) return Entered(Granted(start, owner, contended: true)); // only ever completed by a hand-off
+                cancellationToken.ThrowIfCancellationRequested();
 
                 ReleaseIfStuck(maxHoldMs);
-                remaining = Remaining(start, timeoutMs);
+                left = Advance(ref progress, timeoutMs);
             }
 
-            return Withdraw(waiter!) == WaiterState.Granted ? Granted(start, owner, contended: true) : TimedOut();
+            return Withdraw(waiter!) == WaiterState.Granted ? Entered(Granted(start, owner, contended: true)) : TimedOut(start);
         }
         catch
         {
@@ -156,6 +178,49 @@ public sealed class SqliteWriteGate
             if (Withdraw(waiter!) == WaiterState.Granted) HandOff();
             throw;
         }
+    }
+
+    /// <summary>The result of an entry attempt: the hold (null when the wait gave up) and the wall milliseconds it took, suspensions included.</summary>
+    internal readonly record struct GateEntry(Hold? Hold, double WaitedMs);
+
+    private static GateEntry Entered(Hold hold) => new(hold, hold.WaitedMs);
+
+    private int SliceMs(double left) => (int)Math.Max(1, Math.Ceiling(Math.Min(left, _clock.PollMs)));
+
+    /// <summary>One waiter's patience accounting (see <see cref="Advance"/>). Local to the waiting call; never shared.</summary>
+    private struct WaitProgress(double now, double paused, long handoffs)
+    {
+        public double LastNow = now;
+        public double LastPaused = paused;
+        public long LastHandoffs = handoffs;
+        public double IdleMs; // active time since the gate last handed off to anyone
+        public double ActiveMs; // active time since the wait began
+    }
+
+    /// <summary>
+    /// Moves the waiter's clocks to now and returns how many more active milliseconds it may wait (0 or less: give up). Elapsed time minus the process-wide suspension
+    /// (GC pause) over the same interval is active time. A hand-off since the last look restarts the idle countdown; the active total never restarts, which is the hard cap.
+    /// </summary>
+    private double Advance(ref WaitProgress progress, int timeoutMs)
+    {
+        double now = _clock.NowMs;
+        double paused = _clock.PausedMs;
+        long handoffs = Volatile.Read(ref _handoffs);
+        double active = Math.Max(0, now - progress.LastNow - (paused - progress.LastPaused));
+        progress.LastNow = now;
+        progress.LastPaused = paused;
+        progress.ActiveMs += active;
+        if (handoffs != progress.LastHandoffs)
+        {
+            progress.LastHandoffs = handoffs;
+            progress.IdleMs = 0;
+        }
+        else
+        {
+            progress.IdleMs += active;
+        }
+
+        return Math.Min(timeoutMs - progress.IdleMs, (double)timeoutMs * HardCapFactor - progress.ActiveMs);
     }
 
     /// <summary>
@@ -184,10 +249,12 @@ public sealed class SqliteWriteGate
     {
         lock (_queueLock)
         {
+            _handoffs++;
             LinkedListNode<Waiter>? head = _queue.First;
             if (head is null)
             {
                 _held = false;
+                Volatile.Write(ref _pendingGrantSinceMs, double.NaN);
                 return;
             }
 
@@ -196,6 +263,7 @@ public sealed class SqliteWriteGate
             next.Node = null;
             next.State = WaiterState.Granted;
             Interlocked.Decrement(ref _waiting);
+            Volatile.Write(ref _pendingGrantSinceMs, _clock.NowMs); // the gate is held by a waiter that has not resumed yet: Current stays null until it does
             next.TrySetResult(true);
         }
     }
@@ -243,14 +311,28 @@ public sealed class SqliteWriteGate
         public WaiterState State; // guarded by _queueLock
     }
 
-    /// <summary>The busy error a timed-out waiter reports: SQLITE_BUSY (5), so every existing "locked: retain and retry" path treats it as before.</summary>
-    public SqliteException Busy(int waitedMs)
+    /// <summary>
+    /// The busy error a timed-out waiter reports: SQLITE_BUSY (5), so every existing "locked: retain and retry" path treats it as before.
+    /// <paramref name="waitedMs"/> is the wall time the wait really took.
+    /// </summary>
+    public SqliteException Busy(double waitedMs)
     {
         Hold? holder = Current;
-        string held = holder is null
-            ? "no current holder"
-            : $"held {holder.HeldMs:0} ms by {holder.Owner}";
-        return new SqliteException($"SQLite Error 5: 'database is locked' (in-process write gate: waited {waitedMs} ms for {System.IO.Path.GetFileName(Path)}; {held}; {Waiting} waiting)", 5);
+        string held;
+        if (holder is not null)
+        {
+            held = $"held {holder.HeldMs:0} ms by {holder.Owner}";
+        }
+        else
+        {
+            // The gate was handed to a waiter whose continuation has not run yet (a stalled process or a starved pool): held, though nobody is published as the holder.
+            double since = Volatile.Read(ref _pendingGrantSinceMs);
+            held = double.IsNaN(since)
+                ? "no current holder"
+                : $"handed to a waiter {Math.Max(0, _clock.NowMs - since):0} ms ago, not yet resumed";
+        }
+
+        return new SqliteException($"SQLite Error 5: 'database is locked' (in-process write gate: waited {waitedMs:0} ms for {System.IO.Path.GetFileName(Path)}; {held}; {Waiting} waiting)", 5);
     }
 
     /// <summary>Returns and resets the interval statistics.</summary>
@@ -267,12 +349,9 @@ public sealed class SqliteWriteGate
         }
     }
 
-    private static int Remaining(long start, int timeoutMs)
-        => timeoutMs - (int)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-
-    private Hold Granted(long start, string owner, bool contended)
+    private Hold Granted(double start, string owner, bool contended)
     {
-        double waited = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        double waited = Math.Max(0, _clock.NowMs - start);
         var hold = new Hold(this, owner);
         Interlocked.Increment(ref _acquiredTotal);
         lock (_stats)
@@ -284,15 +363,16 @@ public sealed class SqliteWriteGate
         }
 
         hold.WaitedMs = waited;
-        Volatile.Write(ref _current, hold); // last: nothing after this can throw and leave an orphan hold published
+        Volatile.Write(ref _current, hold); // last of the hold's own state: nothing after this can throw and leave an orphan hold published
+        if (contended) Volatile.Write(ref _pendingGrantSinceMs, double.NaN); // published: the grant is taken up (a next hand-off racing this may be cleared early; cosmetic)
         return hold;
     }
 
-    private Hold? TimedOut()
+    private GateEntry TimedOut(double start)
     {
         Interlocked.Increment(ref _timeoutsTotal);
         lock (_stats) _timeouts++;
-        return null;
+        return new GateEntry(null, Math.Max(0, _clock.NowMs - start));
     }
 
     /// <summary>
@@ -445,3 +525,28 @@ public sealed class SqliteWriteGate
 public readonly record struct GateStats(
     string Path, long Acquired, long Contended, double WaitMsMean, double WaitMsMax, double HoldMsMax, string? HoldMaxOwner, long Timeouts, long Forced, int Waiting,
     long AcquiredTotal, long TimeoutsTotal, long ForcedTotal, long HandlerFaultsTotal, string? FirstHandlerFault);
+
+/// <summary>The time sources of <see cref="SqliteWriteGate"/> waits; replaced in tests so a wait can be driven without real time.</summary>
+internal interface IWriteGateClock
+{
+    /// <summary>Monotonic wall-clock milliseconds.</summary>
+    double NowMs { get; }
+
+    /// <summary>Cumulative milliseconds the whole process has been suspended (GC pauses). Time that advances here does not count against a waiter.</summary>
+    double PausedMs { get; }
+
+    /// <summary>The longest a waiter sleeps before it looks at the clocks and for a stuck hold.</summary>
+    int PollMs { get; }
+}
+
+/// <summary>Stopwatch time, <see cref="GC.GetTotalPauseDuration"/> as the suspension total, a 1 s poll.</summary>
+internal sealed class SystemWriteGateClock : IWriteGateClock
+{
+    public static readonly SystemWriteGateClock Instance = new();
+
+    public double NowMs => Stopwatch.GetElapsedTime(0).TotalMilliseconds;
+
+    public double PausedMs => GC.GetTotalPauseDuration().TotalMilliseconds;
+
+    public int PollMs => 1000;
+}
