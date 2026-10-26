@@ -194,10 +194,12 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                 if (occurrences <= 0) return;
             }
 
-            if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled or HostLoadVerdict.MemoryStarved || facts.GcDominated
+            if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled || facts.GcDominated
                 || _clock.NowMicros - _attachedMicros < (long)qa.Warmup.TotalMicroseconds) return;
             string detail = alert.Detail.Length <= 400 ? alert.Detail : alert.Detail[..400];
-            qa.ReportHang(facts.Phase, facts.Item, alert.Text + ": " + detail, occurrences);
+            // A memory-starved hang is still reported (every fault is), but under its own work token so it groups apart from code hangs.
+            string work = alert.HostVerdict == HostLoadVerdict.MemoryStarved ? facts.Item + "|memory-starved" : facts.Item;
+            qa.ReportHang(facts.Phase, work, alert.Text + ": " + detail, occurrences);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
