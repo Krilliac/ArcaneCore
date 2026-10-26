@@ -676,12 +676,28 @@ public sealed partial class TeleportService
             TeleportDestination origin = pending.Origin;
             if (!TryEnterMap(player, origin))
             {
-                _logger.LogError("{Player} could not enter map {MapId} nor return to map {Origin}; disconnecting", player.Name, dest.MapId, origin.MapId);
+                // Neither the destination nor the origin takes the player (the origin match ended while it loaded): the bind point
+                // before the kick (vmangos HandleReturnOnTeleportFail; its body is not verified against the reference, this is the
+                // documented ArcaneCore deviation in docs/integration/gm-commands.md).
+                var home = new TeleportDestination(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
+                if (maps.Registry.Contains(home.MapId) && GridDefines.IsValidMapCoord(home.X, home.Y, home.Z, home.Orientation) && TryEnterMap(player, home))
+                {
+                    _logger.LogWarning("{Player} could not enter map {MapId} nor return to map {Origin}; sent to the bind point on map {HomeMapId}", player.Name, dest.MapId, origin.MapId, home.MapId);
+                    ServerAnomalies.Report(
+                        player,
+                        ServerAnomalies.Teleport,
+                        "return-failed",
+                        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; sent to the bind point on map {home.MapId}"),
+                        AnomalySeverity.Warning);
+                    return;
+                }
+
+                _logger.LogError("{Player} could not enter map {MapId} nor return to map {Origin} nor reach the bind point; disconnecting", player.Name, dest.MapId, origin.MapId);
                 ServerAnomalies.Report(
                     player,
                     ServerAnomalies.Teleport,
                     "return-failed",
-                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; the session is kicked"),
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId} nor the bind point; the session is kicked"),
                     AnomalySeverity.Error);
                 player.Session.Kick();
             }

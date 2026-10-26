@@ -157,6 +157,10 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   5. A GM-bound player is not a participant of the match.
   6. `.goname` to a dungeon whose map is flagged to reset when it unloads does not bind the GM to that instance (it would bind to a
      save about to be deleted); the GM enters like any unbound visitor.
+  7. A far teleport that neither the destination nor the origin accepts (for example the origin match ended while the player was in the
+     loading screen) sends the player to its bind point instead of kicking it; it is kicked only when the bind point refuses it too. The
+     body of vmangos `HandleReturnOnTeleportFail` is not verified against the reference. The entry point of a leaving participant is
+     forgotten only once the teleport back to it was accepted.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

@@ -39,6 +39,22 @@ public sealed class TeleportAnomalyTests
         }
     }
 
+    /// <summary>Refuses the first <c>refusals</c> entries, then lets the player into the requested map (the destination and the origin refuse, the bind point does not).</summary>
+    private sealed class RefusingFirst(WorldRuntime world, int refusals) : IMapResolver
+    {
+        private int _calls;
+
+        public Map ResolveLoginMap(Player player) => throw new NotSupportedException();
+
+        public bool CanEnter(Player player, uint mapId) => true;
+
+        public Map? ResolveEntry(Player player, uint mapId) => ++_calls <= refusals ? null : world.GetMap(mapId);
+
+        public void OnEntered(Player player, Map map)
+        {
+        }
+    }
+
     private sealed class Fixture : IDisposable
     {
         public Fixture(Action<Player>? beforeAdd = null)
@@ -210,6 +226,26 @@ public sealed class TeleportAnomalyTests
         Assert.True(f.Teleports.HandleWorldportAck(a));
         f.World.RunTick(50);
 
+        Assert.Equal(1, cap.Count(EntryFailed));
+        Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
+    }
+
+    [Fact]
+    public void FarTeleport_ThatCannotEnterTheDestinationNorTheOrigin_GoesToTheBindPoint_AndIsNotKicked()
+    {
+        using var f = new Fixture();
+        Player a = f.Add(9111);
+        using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
+
+        Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
+        f.World.RunTick(50);
+        f.World.MapResolver = new RefusingFirst(f.World, refusals: 2); // the destination and the way back refuse, the bind point does not
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.NotNull(a.Map);
+        Assert.Equal(a.Home.MapId, a.Map!.MapId);
         Assert.Equal(1, cap.Count(EntryFailed));
         Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
     }
