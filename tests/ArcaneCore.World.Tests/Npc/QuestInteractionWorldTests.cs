@@ -436,6 +436,7 @@ public sealed class QuestInteractionWorldTests
             Assert.Equal(2u, await host.PlayerStateAsync("Crafter", p => p.Inventory.GetItemCount(cloth)));
         }
     }
+
     /// <summary>
     /// CMSG_QUESTGIVER_COMPLETE_QUEST previews the turn-in: the "completable" flag of the request-items window must follow the same offered-item
     /// rule as the settlement (<c>QuestNpcInteractionHandlers.Complete</c> passes the open trade's items), or the client is told it may hand in a stack
@@ -580,6 +581,7 @@ internal sealed class MemoryQuestRewardStore(MemoryQuestStore quests, System.Col
         return Task.FromResult(QuestRewardCommitResult.Committed);
     }
 }
+
 internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDataStore
 {
     public const uint QuestId = 900001;
