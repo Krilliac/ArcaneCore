@@ -191,4 +191,33 @@ public sealed class SpeedRateTests
         byte[] relayed = await watcher.ReadUntilAsync(WorldOpcode.MsgMoveSetTurnRate);
         Assert.Equal(turn, ForcedSpeed(relayed));
     }
+
+    [Fact]
+    public async Task AnUnsolicitedTurnRateAck_IsIgnored_AndMovesNothing()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient mover = await host.EnterWorldAsync("MOVER", "Mover");
+        await using WorldTestClient watcher = await host.EnterWorldAsync("WATCHER", "Watcher");
+        await mover.CollectAsync();
+        await watcher.CollectAsync();
+        Player player = await host.PlayerAsync("Mover");
+        float rate = await host.OnWorldAsync(() => player.TurnRate); // no turn rate order was ever sent
+        (float x, float y, float z) = await host.OnWorldAsync(() => (player.Movement.X, player.Movement.Y, player.Movement.Z));
+
+        var info = new MovementInfo { Flags = MovementFlags.None, Time = 500, X = x + 40f, Y = y + 40f, Z = z };
+        var ack = new PacketWriter(56);
+        ack.WriteUInt64(player.Guid.Value);
+        ack.WriteUInt32(0);
+        info.Write(ack);
+        ack.WriteSingle(rate);
+        await mover.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, ack.ToArray());
+        var beat = new PacketWriter(48);
+        new MovementInfo { Flags = MovementFlags.None, Time = 600, X = x, Y = y, Z = z }.Write(beat);
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, beat.ToArray()); // flush: the world thread has handled the ack before this
+
+        // RED on origin/main: the ack was applied, so X moved by 40 and the observers were sent MSG_MOVE_SET_TURN_RATE.
+        Assert.Equal(x, await host.OnWorldAsync(() => player.Movement.X));
+        Assert.DoesNotContain(await watcher.CollectAsync(), p => p.Opcode == WorldOpcode.MsgMoveSetTurnRate);
+        Assert.Equal(1, await host.OnWorldAsync(() => player.Locomotion.WrongAckCount));
+    }
 }

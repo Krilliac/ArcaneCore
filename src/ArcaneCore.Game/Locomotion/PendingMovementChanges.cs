@@ -22,6 +22,12 @@ public enum MovementChangeType
 
     /// <summary>A knock back order (vmangos KNOCK_BACK); it carries <see cref="PendingMovementChange.Knockback"/> and is never enforced.</summary>
     KnockBack,
+
+    /// <summary>
+    /// A new turn rate (vmangos MOVE_TURN_RATE in SPEED_CHANGE_*); it carries <see cref="PendingMovementChange.NewValue"/>. The server took the rate when it sent the
+    /// order, so the ledger entry only gates the ack and is never enforced. It sits after the five speeds, outside <see cref="UnitSpeed.IsSpeedChange"/>.
+    /// </summary>
+    TurnRate,
 }
 
 /// <summary>The four numbers of SMSG_MOVE_KNOCK_BACK that the client must echo in its ack (vmangos knockbackInfo): direction cosine and sine, horizontal speed and vertical speed (sent negated).</summary>

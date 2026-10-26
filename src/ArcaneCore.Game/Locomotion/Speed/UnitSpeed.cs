@@ -300,7 +300,7 @@ public static class UnitSpeed
     /// Change the turn rate (vmangos Unit::SetSpeedRate(MOVE_TURN_RATE, rate), Unit.cpp:7152-7183; base 3.141594 rad/s, times a player's
     /// <c>Locomotion:PlayerTurnRate</c>). No 1.12 aura changes it, so only the configured rate does. A change that leaves the rate as it is is
     /// dropped. A player in a map is sent SMSG_FORCE_TURN_RATE_CHANGE (packed GUID, counter, rate) and the server takes the new rate at once:
-    /// unlike the five speeds it is not held in the pending-change ledger, whose enforcement knows only those (deviation: vmangos applies it on the
+    /// the order is held in the pending-change ledger (type TurnRate, never enforced because the rate is already taken) so only a matching ack is accepted (deviation: vmangos applies it on the
     /// ack, MovementHandler.cpp:415-534; the ack, CMSG_FORCE_TURN_RATE_CHANGE_ACK, only relays MSG_MOVE_SET_TURN_RATE to the observers). A player
     /// not in a map has it set for its create block; any other unit changes at once and everyone is told with SMSG_SPLINE_SET_TURN_RATE.
     /// </summary>
@@ -323,7 +323,10 @@ public static class UnitSpeed
         {
             if (player.Map is not null)
             {
-                player.Session.Send(TurnRatePackets.Force, SpeedPackets.BuildForceChange(player.Guid.Value, player.NextMovementCounter(), turn));
+                // The order is recorded so that only an ack of it is accepted (vmangos PushPendingMovementChange + FindPendingMovementSpeedChange).
+                uint counter = player.NextMovementCounter();
+                player.Locomotion.Pending.Push(counter, MovementChangeType.TurnRate, apply: true, newValue: turn);
+                player.Session.Send(TurnRatePackets.Force, SpeedPackets.BuildForceChange(player.Guid.Value, counter, turn));
             }
 
             return;

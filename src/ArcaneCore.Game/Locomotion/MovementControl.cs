@@ -100,6 +100,23 @@ public static class MovementControl
     }
 
     /// <summary>
+    /// The client's ack for a turn rate order (vmangos HandleForceSpeedChangeAckOpcodes, MOVE_TURN_RATE, MovementHandler.cpp:464-476): it must match a
+    /// pending turn rate change by counter and, within 0.01, rate (a NaN never matches). False, and a counted wrong ack, when nothing matches.
+    /// </summary>
+    public static bool AcknowledgeTurnRate(Player player, uint counter, float rate)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        LocomotionState state = player.Locomotion;
+        if (!state.Pending.TryAcknowledgeSpeed(counter, MovementChangeType.TurnRate, rate))
+        {
+            state.NoteWrongAck();
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6745): a root also stops
     /// motion (the moving flags are cleared), and with <paramref name="sendToClient"/> everyone is told with the
     /// SMSG_SPLINE_MOVE_* packet (SendMovementFlagChangeToAll).
@@ -108,8 +125,9 @@ public static class MovementControl
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(change);
-        if (change.Type == MovementChangeType.KnockBack)
+        if (change.Type is MovementChangeType.KnockBack or MovementChangeType.TurnRate)
         {
+            // A turn rate was applied when the order was sent (UnitSpeed.SetTurnRate), so there is nothing left to enforce.
             // "Not resendable change": the knock back is dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
             // the resolve switch has no knock back case either.
             return;
