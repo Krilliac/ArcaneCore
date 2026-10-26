@@ -313,6 +313,7 @@ public sealed class QuestInteractionWorldTests
             // A delivery quest: the turn-in itself checks the items (RewardRequirements, with the offered set) before staging, so the
             // refusal while the trade is open comes from that check and not only from the staging's keep-for-removals rule.
             DeliverItems = true,
+            CommitRewardsToMemory = true,
         };
 
         WorldTestHost host;
@@ -480,9 +481,22 @@ internal sealed class QuestInteractionTestServices : IWorldTestServices
         services.AddSingleton<IQuestContentStore>(fixture);
         services.AddSingleton<ICreatureDataStore>(fixture);
         services.AddSingleton<ICharacterQuestStore>(fixture.Characters);
+        if (fixture.CommitRewardsToMemory)
+        {
+            services.AddScoped<ICharacterQuestRewardStore>(_ => new MemoryQuestRewardStore(fixture.Characters));
+        }
         services.AddSingleton<TimeProvider>(fixture.Clock);
         services.AddSingleton(new FactionTemplateCatalog([
             new(1, 1, 0, 1, 0, 0), new(900011, 0, 0, 8, 0, 0), new(900012, 0, 0, 8, 0, 1)]));
+    }
+}
+
+internal sealed class MemoryQuestRewardStore(MemoryQuestStore quests) : ICharacterQuestRewardStore
+{
+    public Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
+    {
+        quests.Seed(request.RewardedQuest);
+        return Task.FromResult(QuestRewardCommitResult.Committed);
     }
 }
 
@@ -505,6 +519,9 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
 
     /// <summary>Marks the item-only starter as a delivery quest (QUEST_SPECIAL_FLAG_DELIVER), so the turn-in checks the items before staging.</summary>
     public bool DeliverItems { get; init; }
+
+    /// <summary>Settles reward turn-ins against the in-memory quest store instead of the EF reward store, whose database never saw the accepted quest row (the journal lives in <see cref="Characters"/>).</summary>
+    public bool CommitRewardsToMemory { get; init; }
     public bool EnderOnOtherMap { get; init; }
     public bool DistantEnder { get; init; }
 
