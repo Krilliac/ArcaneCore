@@ -17,7 +17,8 @@ namespace ArcaneCore.Game.Spells;
 /// LIMITS: the elixir specifics (the <c>spell_elixir</c> table), the database <c>spell_group</c> stack rules, the heal-over-time first-in-chain
 /// rule (:3498-3500) and the generic <c>IsNoStackSpellDueToSpell</c> fallback (:3554-3572) are not modelled; passive spells are skipped (vmangos
 /// lets them stack with other ranks only, :3366-3371 and :3433-3453); the rank chain is the spell family and name
-/// (<see cref="SpellSpecifics.IsSameChain"/>). Thread affinity: the map thread that owns the target, like every holder event.
+/// (<see cref="SpellSpecifics.IsSameChain"/>). Only the passive attribute (0x40) is tested here; vmangos also skips SPELL_ATTR_DO_NOT_DISPLAY (0x80),
+/// Unit.cpp:3367 and :3434, which is not modelled. Thread affinity: the map thread that owns the target, like every holder event.
 /// </summary>
 public sealed class SpellSpecificAuraRules
 {
@@ -35,14 +36,23 @@ public sealed class SpellSpecificAuraRules
         return rules;
     }
 
-    private bool Refuses(SpellAuraHolder holder) => Evaluate(holder, null);
+    private bool Refuses(SpellAuraHolder holder)
+    {
+        List<SpellAuraHolder>? none = null;
+        return Evaluate(holder, ref none, collect: false);
+    }
 
     private void OnHolderAdded(SpellAuraHolder holder)
     {
-        var losers = new List<SpellAuraHolder>();
-        if (Evaluate(holder, losers))
+        List<SpellAuraHolder>? losers = null;
+        if (Evaluate(holder, ref losers))
         {
             return; // refused holders never get here; a later change of the target's auras is not this rule's to undo
+        }
+
+        if (losers is null)
+        {
+            return;
         }
 
         foreach (SpellAuraHolder loser in losers)
@@ -53,9 +63,9 @@ public sealed class SpellSpecificAuraRules
 
     /// <summary>
     /// Whether <paramref name="holder"/> is refused by a holder it would have to replace. When it is not, the holders it replaces are added to
-    /// <paramref name="losers"/> (when given).
+    /// <paramref name="losers"/> (created on the first one, when <paramref name="collect"/>).
     /// </summary>
-    private bool Evaluate(SpellAuraHolder holder, List<SpellAuraHolder>? losers)
+    private bool Evaluate(SpellAuraHolder holder, ref List<SpellAuraHolder>? losers, bool collect = true)
     {
         SpellInfo spell = holder.Spell;
         if (spell.IsPassive)
@@ -95,7 +105,7 @@ public sealed class SpellSpecificAuraRules
                     return true; // cannot remove higher rank
                 }
 
-                losers?.Add(other);
+                AddLoser(ref losers, other, collect);
                 continue;
             }
 
@@ -106,11 +116,19 @@ public sealed class SpellSpecificAuraRules
                     return true;
                 }
 
-                losers?.Add(other);
+                AddLoser(ref losers, other, collect);
             }
         }
 
         return false;
+    }
+
+    private static void AddLoser(ref List<SpellAuraHolder>? losers, SpellAuraHolder other, bool collect)
+    {
+        if (collect)
+        {
+            (losers ??= []).Add(other);
+        }
     }
 
     /// <summary>Whether an effect of <paramref name="spell"/> triggers <paramref name="spellId"/> (vmangos EffectTriggerSpell).</summary>

@@ -367,11 +367,13 @@ public static class SpellSpecifics
     }
 
     /// <summary>
-    /// Whether two spells are ranks of one chain (vmangos SpellMgr::IsRankSpellDueToSpell, from SkillLineAbility.dbc and a generic check on the
-    /// family, flags, icon and visual). The spell system has no rank table, so the same family and the same name stand for the chain (every
-    /// paladin blessing, aura, seal and judgement, hunter aspect and sting, mage armor, warlock curse and armor rank shares its chain's name; the
-    /// greater blessings have their own).
+    /// Whether two spells are ranks of one chain (vmangos SpellMgr::IsRankSpellDueToSpell, SpellMgr.cpp:877-905: SkillLineAbility.dbc chains, and a
+    /// generic check on the family, flags, icon and visual that excludes SPELLFAMILY_GENERIC at :887). The spell system has no rank table, so the
+    /// same non generic family and the same name stand for the chain (every paladin blessing, aura, seal and judgement, hunter aspect and sting,
+    /// mage armor, warlock curse and armor rank shares its chain's name; the greater blessings have their own). A generic spell (food, drink, Well
+    /// Fed, a plain slow) is in no chain, so it is never the same chain as another and one is replaced whatever the amounts.
     /// </summary>
     public static bool IsSameChain(SpellInfo first, SpellInfo second)
-        => first.SpellFamilyName == second.SpellFamilyName && string.Equals(first.Name, second.Name, StringComparison.Ordinal);
+        => first.SpellFamilyName != FamilyGeneric
+        && first.SpellFamilyName == second.SpellFamilyName && string.Equals(first.Name, second.Name, StringComparison.Ordinal);
 }
