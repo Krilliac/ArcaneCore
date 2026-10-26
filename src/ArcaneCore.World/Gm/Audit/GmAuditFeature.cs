@@ -8,6 +8,7 @@ using ArcaneCore.World.Chat;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,7 +29,7 @@ public sealed record GmAuditEntry(long Unix, int AccountId, string Player, strin
 /// deletion hook does not.
 /// </summary>
 public sealed partial class GmAuditFeature(
-    IServiceScopeFactory scopes, ILoggerFactory loggers, IConfiguration? configuration = null, TimeProvider? clock = null)
+    IServiceScopeFactory scopes, ILoggerFactory loggers, IConfiguration? configuration = null, TimeProvider? clock = null, ShutdownDrain? drain = null)
     : IWorldFeature, IChatMuteSource, ICharacterDeleteHook
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
@@ -39,7 +40,7 @@ public sealed partial class GmAuditFeature(
     private long _lastMuteSweepUnixSeconds = long.MinValue;
 
     /// <summary>The write-through queue (exposed for health reporting and tests).</summary>
-    public GmAuditWriteQueue Writes { get; } = new(scopes, loggers.CreateLogger<GmAuditWriteQueue>());
+    public GmAuditWriteQueue Writes { get; } = new(scopes, loggers.CreateLogger<GmAuditWriteQueue>(), drain?.Features);
 
     /// <summary>Whole seconds since the Unix epoch.</summary>
     public long NowUnixSeconds => _clock.GetUtcNow().ToUnixTimeSeconds();

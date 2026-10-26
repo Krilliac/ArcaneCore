@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Honor;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -277,10 +278,12 @@ public sealed class HonorWriteQueueTests
         const int characters = 10;
         var store = new MemoryHonorStore { FailWrites = true };
         await using ServiceProvider provider = new ServiceCollection().AddSingleton<IHonorStore>(store).BuildServiceProvider();
-        var queue = new HonorWriteQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+        var queue = new HonorWriteQueue(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger.Instance,
+            new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) })
         {
             RetainedRetryInterval = Timeout.InfiniteTimeSpan,
-            StopBudget = TimeSpan.FromMilliseconds(300),
         };
         queue.Start();
         for (int id = 1; id <= characters; id++)

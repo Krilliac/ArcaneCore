@@ -33,7 +33,7 @@ namespace ArcaneCore.World.Npc;
 /// only: a crash, or a store that is still down at exit, loses what is retained (loudly).
 /// </para>
 /// </summary>
-public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger logger)
+public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null)
 {
     private const int MaxAttempts = 3;
 
@@ -49,9 +49,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
-    private readonly StopDrainBudget _drain = new();
-    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
-    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private int _pending;
 
     private enum Kind
@@ -229,8 +227,20 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 "persist",
                 "write-dropped-on-shutdown",
                 "queue TaxiFlightWriteQueue",
-                $"queue=TaxiFlightWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                $"queue=TaxiFlightWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.taxi-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-taxi-stop-drain",
+                    refusal,
+                    "taxi route write queue shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    _drain.Refused,
+                    failed.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"taxi route writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -497,9 +507,10 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
         while (true)
         {
+            var made = new WriteAttemptCount();
             try
             {
-                await WriteAsync(characterId, operation, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
+                await WriteAsync(characterId, operation, sweep || _stopped ? 1 : MaxAttempts, made).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -511,10 +522,11 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     // Only the request that failed is retained; a newer one replaced it and is queued itself.
                     if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
                     {
-                        if (!sweep && abandonAction is not null && !DatabaseTransience.IsBusy(ex) && ex is not CharacterOwnershipRejectedException)
+                        if (!sweep && abandonAction is not null && !StopDrainBudget.IsNoVerdict(ex))
                         {
-                            // Give the route up rather than keep it: the owner relocates the character and the row goes. Not when the database is merely locked by
-                            // another writer: that says nothing about the route, so it is kept and retried. A retry sweep never abandons: it only leaves the entry retained.
+                            // Give the route up rather than keep it: the owner relocates the character and the row goes. Only on a failure a real store attempt returned
+                            // and that says something about the route: not when the database is merely locked by another writer, and not when the stop drain refused the
+                            // attempt (nothing was tried; abandoning then would write a departure-node snapshot over the logout snapshot). A retry sweep never abandons.
                             replacement = unsaved.Operation = new Operation(null, ++unsaved.Generation, null);
                         }
                         else
@@ -527,6 +539,11 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
                 if (replacement is null || !Invariant.Check(abandonAction is not null, "taxi route abandonment selected without an abandon callback") || abandonAction is not { } validAbandon)
                 {
+                    if (ex is StopDrainExhaustedException)
+                    {
+                        return ex; // refused by the stop drain: nothing was attempted, so no anomaly or fault here; the queue reports the refusal once, and the write stays retained
+                    }
+
                     if (!sweep)
                     {
                         if (newEpisode && ex is not CharacterOwnershipRejectedException)
@@ -535,7 +552,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                                 "persist",
                                 "write-retry-exhausted",
                                 $"character {characterId}",
-                                $"queue=TaxiFlightWriteQueue character={characterId} action={(operation.Route is null ? "delete" : "save")} attempts={MaxAttempts} error={ex.GetType().Name}",
+                                $"queue=TaxiFlightWriteQueue character={characterId} action={(operation.Route is null ? "delete" : "save")} attempts={made.Made} error={ex.GetType().Name}",
                                 AnomalySeverity.Error);
                         }
 
@@ -553,7 +570,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     "persist",
                     "write-retry-exhausted",
                     $"character {characterId}",
-                    $"queue=TaxiFlightWriteQueue character={characterId} action=save-abandoned attempts={MaxAttempts} error={ex.GetType().Name}",
+                    $"queue=TaxiFlightWriteQueue character={characterId} action=save-abandoned attempts={made.Made} error={ex.GetType().Name}",
                     AnomalySeverity.Error);
                 logger.LogFault("writequeue.taxi", ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
                 Abandon(characterId, validAbandon);
@@ -602,16 +619,23 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    private async Task WriteAsync(int characterId, Operation operation, int attempts)
+    private async Task WriteAsync(int characterId, Operation operation, int attempts, WriteAttemptCount made)
     {
         for (int attempt = 1; ; attempt++)
         {
-            _drain.ThrowIfExhausted(); // shutdown drain only: past its budget no further attempt starts, the write stays retained
+            if (_stopped && _drain.Refuse() is { } refused)
+            {
+                throw refused; // retained by the caller; never a verdict (see StopDrainBudget.IsNoVerdict)
+            }
+
+            made.Made = attempt;
+            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
                 if (scope.ServiceProvider.GetService<ICharacterTaxiFlightStore>() is not { } store)
                 {
+                    progress.Succeeded(); // no store: nothing to land, and not a stall
                     return; // hosts without persistence keep nothing
                 }
 
@@ -625,6 +649,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     await store.DeleteAsync(characterId).ConfigureAwait(false);
                 }
 
+                progress.Succeeded();
                 return;
             }
             catch (CharacterOwnershipRejectedException ex)
@@ -633,7 +658,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 FailTerminal(ex, scope.ServiceProvider);
                 throw;
             }
-            catch (Exception ex) when (attempt < attempts && !_drain.Started && ex is not OutOfMemoryException)
+            catch (Exception ex) when (attempt < attempts && ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("writequeue.taxi-attempt", ex);
                 logger.LogWarning(ex, "taxi route write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);

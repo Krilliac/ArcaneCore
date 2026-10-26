@@ -24,7 +24,8 @@ namespace ArcaneCore.World.Persistence;
 /// <param name="scopes">Creates the scope each attempt resolves <typeparamref name="TStore"/> from.</param>
 /// <param name="logger">Failures and retention.</param>
 /// <param name="name">The queue's name in log lines and error messages ("GM audit", "group", …).</param>
-public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger logger, string name)
+/// <param name="drain">The shutdown stall lane (see <see cref="ShutdownDrain"/>); null: a private lane, so a queue stopped outside the world host is still bounded.</param>
+public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger logger, string name, StopDrainBudget? drain = null)
     where TStore : class
 {
     private const int MaxAttempts = 3;
@@ -43,9 +44,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
     private Task? _timer;
     private Task? _stop;
     private volatile bool _stopped;
-    private readonly StopDrainBudget _drain = new();
-    /// <summary>Tests: how long after <see cref="StopAsync"/> a new write attempt may still start (default 5 s; see <see cref="StopDrainBudget"/>).</summary>
-    internal TimeSpan StopBudget { get => _drain.Budget; init => _drain.Budget = value; }
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private int _pending;
 
     private enum Kind
@@ -212,8 +211,21 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                 "persist",
                 "write-dropped-on-shutdown",
                 $"queue {name}",
-                $"queue={name} undrainedKeys={failed.Length} firstKey={failed[0]}",
+                $"queue={name} undrainedKeys={failed.Length} firstKey={failed[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.keyed-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-keyed-stop-drain",
+                    refusal,
+                    "{Queue} shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    name,
+                    _drain.Refused,
+                    failed.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"{name} writes did not drain for {string.Join(", ", failed)}", first);
         }
     }
@@ -354,15 +366,19 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
         Exception? failure = null;
         int attemptsMade = 0;
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        bool refused = false;
+        int attempts = _stopped ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
+        for (int attempt = 1; attempt <= attempts; attempt++)
         {
-            if (_drain.ExhaustedFailure() is { } exhausted)
+            if (_stopped && _drain.Refuse() is { } exhausted)
             {
-                failure = exhausted; // shutdown drain only: past its budget no further attempt starts, the write stays retained
+                failure = exhausted; // shutdown drain only: nothing is attempted, the write stays retained
+                refused = true;
                 break;
             }
 
             attemptsMade = attempt;
+            using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
             try
             {
                 using IServiceScope scope = scopes.CreateScope();
@@ -371,6 +387,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                     await write(store).ConfigureAwait(false);
                 }
 
+                progress.Succeeded();
                 failure = null;
                 break;
             }
@@ -378,13 +395,13 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             {
                 failure = ex;
                 FaultLedger.Shared.Record("writequeue.keyed-attempt", ex);
-                logger.LogWarning(ex, "{Queue} write {Key} failed (attempt {Attempt} of {Max})", name, key, attempt, MaxAttempts);
+                logger.LogWarning(ex, "{Queue} write {Key} failed (attempt {Attempt} of {Max})", name, key, attempt, attempts);
                 if (DatabaseTransience.IsBusy(ex))
                 {
                     break; // another connection holds the database: keep the write retained, never wait out the lock again inline
                 }
 
-                if (attempt < MaxAttempts && !_drain.Started)
+                if (attempt < attempts)
                 {
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
@@ -404,7 +421,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             {
                 unsaved.Reported = false; // the episode is over: a later failure of this key is a new one
             }
-            else if (!unsaved.Reported)
+            else if (!unsaved.Reported && !refused)
             {
                 unsaved.Reported = true;
                 report = true;
@@ -416,7 +433,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
             }
         }
 
-        if (failure is not null)
+        if (failure is not null && !refused)
         {
             if (report)
             {
@@ -428,7 +445,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                     AnomalySeverity.Error);
             }
 
-            logger.LogFault("writequeue.keyed", failure, "{Queue} write {Key} is retained after {Max} failed attempts", name, key, MaxAttempts);
+            logger.LogFault("writequeue.keyed", failure, "{Queue} write {Key} is retained after {Max} failed attempts", name, key, attemptsMade);
         }
     }
 }

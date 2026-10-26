@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -99,6 +100,49 @@ public sealed class TaxiFlightWriteQueueTests
         Assert.Null(fixture.Store.Saved(7));
         Assert.Equal(["delete 7"], fixture.Store.Calls);
         Assert.Equal(1, abandoned);
+    }
+
+    [Fact]
+    public async Task AbandonFallback_IsNotRunWhenTheStopDrainRefusesTheWrite()
+    {
+        await using var fixture = Fixture.Create(drain: new StopDrainBudget { StallBudget = TimeSpan.Zero });
+        fixture.Store.HoldNextWrite();
+        fixture.Queue.Save(8, Route); // keeps the consumer busy while the stop begins
+        await fixture.Store.Entered.Task.WaitAsync(Budget);
+        bool abandoned = false;
+        fixture.Queue.Save(7, Route, () => abandoned = true);
+
+        Task stopping = fixture.Queue.StopAsync(); // begins the lane at once: with no stall budget, nothing more may be attempted
+        fixture.Store.Release.TrySetResult();
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => stopping.WaitAsync(Budget));
+
+        Assert.Contains("7", stopped.Message, StringComparison.Ordinal);
+        Assert.False(abandoned); // the refusal is not a verdict on the route: no departure-node snapshot is written over the logout snapshot
+        Assert.Equal(0, fixture.Store.Attempts(7));
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        InvalidOperationException retained = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Queue.FlushCharacterAsync(7));
+        Assert.IsType<StopDrainExhaustedException>(retained.InnerException);
+        Assert.Null(fixture.Store.Saved(7));
+        Assert.DoesNotContain(fixture.Store.Calls, c => c.EndsWith(" 7", StringComparison.Ordinal)); // neither a save nor a delete
+    }
+
+    [Fact]
+    public async Task ARealNonBusyFailureAtStop_StillAbandonsAfterItsSingleAttempt()
+    {
+        await using var fixture = Fixture.Create(drain: new StopDrainBudget());
+        fixture.Store.HoldNextWrite();
+        fixture.Queue.Save(8, Route);
+        await fixture.Store.Entered.Task.WaitAsync(Budget);
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        fixture.Store.FailWrites = true;
+
+        Task stopping = fixture.Queue.StopAsync();
+        fixture.Store.Release.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => stopping.WaitAsync(Budget));
+
+        Assert.Equal(1, abandoned); // an attempt the store really failed, not busy: the verdict stands
+        Assert.Equal(3, fixture.Store.Attempts(7)); // the save, the delete that replaced it, and the delete once more in the final pass: one attempt each, no inline retry
     }
 
     [Fact]
@@ -305,11 +349,11 @@ public sealed class TaxiFlightWriteQueueTests
     {
         private readonly ServiceProvider _services;
 
-        private Fixture(ServiceProvider services, FakeStore store, TimeSpan? retryInterval)
+        private Fixture(ServiceProvider services, FakeStore store, TimeSpan? retryInterval, StopDrainBudget? drain)
         {
             _services = services;
             Store = store;
-            Queue = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+            Queue = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain)
             {
                 RetainedRetryInterval = retryInterval ?? TimeSpan.FromSeconds(30),
             };
@@ -319,10 +363,10 @@ public sealed class TaxiFlightWriteQueueTests
         public FakeStore Store { get; }
         public TaxiFlightWriteQueue Queue { get; }
 
-        public static Fixture Create(TimeSpan? retryInterval = null)
+        public static Fixture Create(TimeSpan? retryInterval = null, StopDrainBudget? drain = null)
         {
             var store = new FakeStore();
-            return new Fixture(new ServiceCollection().AddSingleton<ICharacterTaxiFlightStore>(store).BuildServiceProvider(), store, retryInterval);
+            return new Fixture(new ServiceCollection().AddSingleton<ICharacterTaxiFlightStore>(store).BuildServiceProvider(), store, retryInterval, drain);
         }
 
         public async ValueTask DisposeAsync()

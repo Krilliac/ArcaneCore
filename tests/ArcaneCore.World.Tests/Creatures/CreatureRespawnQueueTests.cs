@@ -48,6 +48,9 @@ public sealed class CreatureRespawnQueueTests
         /// <summary>While set, every write fails as SQLite reports a file another connection holds.</summary>
         public volatile bool Locked;
 
+        /// <summary>Every save waits this long before its verdict (a slow or contended database).</summary>
+        public volatile int DelayMs;
+
         public int Attempts;
 
         /// <summary>When set, a save waits for it before it lands (a write still in flight).</summary>
@@ -65,6 +68,11 @@ public sealed class CreatureRespawnQueueTests
             {
                 SaveHeld.TrySetResult();
                 await hold.Task.ConfigureAwait(false);
+            }
+
+            if (DelayMs > 0)
+            {
+                await Task.Delay(DelayMs).ConfigureAwait(false);
             }
 
             Interlocked.Increment(ref Attempts);
@@ -521,5 +529,77 @@ public sealed class CreatureRespawnQueueTests
         disabled.Attach(world2);
         Assert.Null(disabled.Persistence);
         Assert.Equal(0, store.LoadedAt); // the store was not even read
+    }
+
+    private static CreatureRespawnQueue NewLaneQueue(ServiceProvider sp, StopDrainBudget lane)
+        => new(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance, lane) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+
+    [Fact]
+    public async Task Stop_HealthySlowDrain_IsNeverCut()
+    {
+        var store = new FakeStore { DelayMs = 40 };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewLaneQueue(sp, new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) });
+        queue.Start();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        for (uint guid = 1; guid <= 30; guid++)
+        {
+            queue.Save(0, 0, guid, Now + 100);
+        }
+
+        await queue.StopAsync().WaitAsync(HangGuard); // 30 landed writes cost more than the stall budget in wall time, and none is cut
+        elapsed.Stop();
+
+        Assert.Equal(30, store.Attempts);
+        Assert.Equal(30, store.Rows.Count);
+        Assert.Equal(0, queue.RetainedCount);
+        Assert.True(elapsed.Elapsed >= TimeSpan.FromSeconds(1), $"the drain took {elapsed.Elapsed}");
+    }
+
+    [Fact]
+    public async Task Stop_WithALockedDatabase_StopsAttemptingOnceStalled_AndNamesEverySpawn()
+    {
+        const uint spawns = 10;
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewLaneQueue(sp, new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) });
+        queue.Start();
+        for (uint guid = 1; guid <= spawns; guid++)
+        {
+            queue.Save(0, 0, guid, Now + 100);
+        }
+
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal((int)spawns, queue.RetainedCount);
+        int before = store.Attempts;
+        store.Down = false;
+        store.Locked = true;
+        store.DelayMs = 200;
+
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        for (uint guid = 1; guid <= spawns; guid++)
+        {
+            Assert.Contains($"spawn {guid} (instance 0)", stopped.Message, StringComparison.Ordinal); // nothing is dropped: every spawn is named
+        }
+
+        Assert.InRange(store.Attempts - before, 1, 3); // ten unbounded attempts of 200 ms each would be ten
+        Assert.Equal((int)spawns, queue.RetainedCount);
+    }
+
+    [Fact]
+    public async Task Stop_MakesOneAttemptPerRetainedWrite_NoInlineRetry()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewLaneQueue(sp, new StopDrainBudget());
+        queue.Start();
+        queue.Save(0, 0, 1, Now + 100);
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal(3, store.Attempts); // the ordinary write used all its inline attempts
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Equal(4, store.Attempts);
     }
 }

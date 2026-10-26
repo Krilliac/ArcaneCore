@@ -88,8 +88,7 @@ per-address connection caps were reworked. Measurements and limits: [lane report
 - On expiry `ExitCodes.Current` is set and `IHostApplicationLifetime.StopApplication()` is
   called; the existing `WorldHost.StopAsync` order (world stop and final save, features, save
   queue) runs, so no second shutdown path exists. `Program.cs` returns `ExitCodes.Current`.
-- `HostOptions` is now bound from configuration; the shipped `HostOptions:ShutdownTimeout` is one
-  minute so a large save drain is not cut short by the host default. The write queues' own shutdown drain is bounded inside it (no inline retry once `StopAsync` starts, no new attempt after a 5 s budget per queue); see docs/areas/persistence.md, "Other queues".
+- `HostOptions` is bound from configuration. The shipped `HostOptions:ShutdownTimeout` (one minute) is a signal, not a cut-off: `Host.StopAsync` cancels the token it hands to each hosted service after that time and then keeps awaiting the service, and `WorldHost` does not forward the token to the write queues, so a large save drain is never cut short by the host. What bounds the stop is the write queues' own stall budget (`ShutdownDrain`, 5 s of attempts that land nothing per lane, one lane for the feature queues and one for the character save queue); a healthy drain runs to its end, a stalled one ends within the budget plus one in-flight attempt per lane (at most 25 s each, 50 s together). See docs/areas/persistence.md, "Other queues".
 - Timer lifetime: the one second timer runs only while a countdown is pending. Start and end
   are decided on the world thread alone (`AfterChange`; `Cancel` also ends the timer), each run
   has an id and a tick from an ended or replaced run is ignored, so cancel followed at once by a
