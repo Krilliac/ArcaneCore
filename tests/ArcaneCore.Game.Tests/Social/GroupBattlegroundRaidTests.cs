@@ -118,4 +118,29 @@ public sealed class GroupBattlegroundRaidTests
         groups.AddToBattlegroundRaid(b, raid);
         Assert.Equal(b.Guid, raid.LeaderGuid);
     }
+
+    [Fact]
+    public void LootMethod_FromABattlegroundRaid_NeverChangesTheRaid_ButReachesTheOriginalParty()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Player c = f.AddPlayer(3);
+        GroupManager groups = f.Context.Groups;
+
+        // c has no original party: the raid leader's request is dropped
+        Group raid = groups.AddToBattlegroundRaid(c, null)!;
+        groups.SetLootMethod(c, (uint)LootMethod.MasterLoot, c.Guid, 2);
+        Assert.Equal(LootMethod.GroupLoot, raid.LootMethod); // RED on main: MasterLoot
+        Assert.True(raid.LooterGuid.IsEmpty);
+
+        // a leads a parked party: the change lands on the party, not on the raid
+        groups.Invite(a, b.Name);
+        groups.Accept(b);
+        Group party = groups.GetGroup(a.Guid)!;
+        groups.AddToBattlegroundRaid(a, raid);
+        groups.SetLootMethod(a, (uint)LootMethod.FreeForAll, ObjectGuid.Empty, 3);
+        Assert.Equal(LootMethod.FreeForAll, party.LootMethod);
+        Assert.Equal(LootMethod.GroupLoot, raid.LootMethod);
+    }
 }
