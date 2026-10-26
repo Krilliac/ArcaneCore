@@ -45,6 +45,38 @@ public sealed class PlayerbotMovementControlTests
     }
 
     [Fact]
+    public async Task ATurnRateChange_IsAcknowledgedByTheBot_ThroughThePendingLedger_AndTheBotKeepsWorking()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await EnterAsync(host);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                int wrongBefore = player.Locomotion.WrongAckCount;
+                UnitSpeed.SetTurnRate(player, 0.5f);
+                float turn = player.TurnRate;
+                Assert.Equal(Unit.BaseTurnRate * 0.5f, turn, 3);
+                Assert.True(player.Locomotion.Pending.HasPendingOfType(MovementChangeType.TurnRate));
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(PlayerbotMovementControl.Update(session, player));
+                Assert.False(player.Locomotion.Pending.HasPending);
+                Assert.Equal(wrongBefore, player.Locomotion.WrongAckCount);
+                Assert.Equal(turn, player.TurnRate);
+                // A later order of another kind is still acknowledged: the turn rate entry did not wedge the ledger.
+                UnitSpeed.SetRate(player, MoveType.Run, 0.5f);
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(PlayerbotMovementControl.Update(session, player));
+                Assert.False(player.Locomotion.Pending.HasPending);
+                Assert.Equal(wrongBefore, player.Locomotion.WrongAckCount);
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task SelectivePacketDrain_PreservesOtherFamiliesAndMovementStopUsesNormalHandler()
     {
         await using WorldTestHost host = BotFidelity.Start(PlayerbotClientFidelity.Full);
