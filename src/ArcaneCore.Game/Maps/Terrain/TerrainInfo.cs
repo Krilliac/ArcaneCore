@@ -217,6 +217,37 @@ public sealed class TerrainInfo
         => _manager.Areas.GetZoneAndAreaId(GetAreaFlag(x, y, z), MapId);
 
     /// <summary>
+    /// <see cref="GetZoneAndAreaId"/> for a caller that must not read a file on its thread (bot planning over far positions, which used to
+    /// read whole tiles inside the world tick). On a tile in memory, outside the map or without terrain data the answer is
+    /// <see cref="GetZoneAndAreaId"/>'s. On a tile not in memory it is the tile's own cell value (<see cref="TerrainManager.TryGetBackgroundAreaFlag"/>,
+    /// the area section read once on the thread pool and kept; no WMO group's area, which needs the tile's heights), and false until that read
+    /// is done: ask again on a later think. The tile cache is never touched, so no tile is loaded or pinned. World thread.
+    /// </summary>
+    public bool TryGetZoneAndAreaIdWithoutLoading(float x, float y, float z, out (uint ZoneId, uint AreaId) zoneAndArea)
+    {
+        if (TerrainTile.TileOf(x, y) is not { } index || !_manager.Enabled || _tiles[(index.X * Size) + index.Y] is not null)
+        {
+            zoneAndArea = GetZoneAndAreaId(x, y, z);
+            return true;
+        }
+
+        if (_manager.TryGetBackgroundAreaFlag(MapId, index.X, index.Y, x, y, out ushort flag))
+        {
+            zoneAndArea = _manager.Areas.GetZoneAndAreaId(flag, MapId);
+            return true;
+        }
+
+        zoneAndArea = (0, 0);
+        return false;
+    }
+
+    /// <summary>
+    /// Read the area flags of all this map's tiles on the thread pool now (<see cref="TerrainManager.WarmBackgroundAreas"/>), for a caller
+    /// that will ask <see cref="TryGetZoneAndAreaIdWithoutLoading"/> about far positions; once per map id. World thread.
+    /// </summary>
+    public void WarmAreasInBackground() => _manager.WarmBackgroundAreas(MapId);
+
+    /// <summary>
     /// Where a position is relative to liquid (vmangos <c>TerrainInfo::getLiquidStatus</c> without
     /// vmaps): the tile's answer, kept only when the surface is above the ground height.
     /// </summary>

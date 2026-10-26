@@ -181,6 +181,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             long occurrences = 1;
             if (alert.InProgress)
             {
+                // Deliberately without the "|memory-starved" suffix: one hung tick is one in-progress report, whichever verdict it carried when the report went out.
                 string seen = facts.Phase + "|" + facts.Item;
                 if (string.Equals(_lastInProgress, seen, StringComparison.Ordinal)) return;
                 _lastInProgress = seen;
@@ -197,7 +198,9 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
             if (_stopping || alert.HostVerdict is HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled || facts.GcDominated
                 || _clock.NowMicros - _attachedMicros < (long)qa.Warmup.TotalMicroseconds) return;
             string detail = alert.Detail.Length <= 400 ? alert.Detail : alert.Detail[..400];
-            qa.ReportHang(facts.Phase, facts.Item, alert.Text + ": " + detail, occurrences);
+            // A memory-starved hang is still reported (every fault is), but under its own work token so it groups apart from code hangs.
+            string work = alert.HostVerdict == HostLoadVerdict.MemoryStarved ? facts.Item + "|memory-starved" : facts.Item;
+            qa.ReportHang(facts.Phase, work, alert.Text + ": " + detail, occurrences);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

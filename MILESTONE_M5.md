@@ -4,7 +4,7 @@ Status: **implemented** (automated loopback + multi-engine tests, CI); **client 
 pending** (`docs/M5_ACCEPTANCE.md`).
 
 M5 replaces the M2–M4 "handle everything on the socket task under a map lock" design with
-the architecture every later milestone builds on (ROADMAP § Architecture decisions).
+the architecture every later milestone builds on ([ROADMAP](docs/ROADMAP.md#decisions-that-still-hold), threading and slow-client rows).
 
 ## What was built
 
