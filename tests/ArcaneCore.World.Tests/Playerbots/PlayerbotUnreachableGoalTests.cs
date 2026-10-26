@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Characters;
@@ -192,6 +193,47 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         string key = PlayerbotAnomalies.Key("nav", "goal-unreachable");
         Assert.Equal(1, cap.Count(key));
         Assert.Contains($"(region components bot {own}, goal -1)", cap.Notices.Single(n => n.Key == key).Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #1497: a goal 6.5 yards above the floor, within three yards of it flat, is found only by the far box and snaps to the floor
+    /// beside the bot. It is far, has no component of its own (no verdict), and five refused plans toward it report no
+    /// <c>bot-nav/no-path-connected</c>.
+    /// </summary>
+    [Fact]
+    public async Task AGoalAboveTheFloor_FoundOnlyByTheFarBox_HasNoComponent_AndReportsNoPathConnected()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 floor = new(20, 20, 0), inTheAir = new(20, 20, 6.5f);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        (int floorRegion, bool floorFar, int airRegion, bool airFar, int airPlain, int own, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int onFloor = nav.RegionAt(graph, floor, locate, out bool onFloorFar);
+            int inAir = nav.RegionAt(graph, inTheAir, locate, out bool inAirFar);
+            PlayerbotNavigation.IsUnreachableOnFoot(world.Player, inTheAir, out int fromComponent, out int toComponent);
+            return (onFloor, onFloorFar, inAir, inAirFar, nav.RegionAt(graph, inTheAir, locate), fromComponent, toComponent);
+        });
+        Assert.True(floorRegion >= 0, "the control: the floor is on a region");
+        Assert.False(floorFar, "the control: a point on the floor is not far");
+        Assert.True(airRegion >= 0, "the far box snaps the goal to the floor polygon");
+        Assert.True(airFar);
+        Assert.Equal(airRegion, airPlain);
+        Assert.True(own >= 0, $"the bot's component {own}");
+        Assert.Equal(-1, to);
+
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < PlayerbotNavigationAnomalies.RepeatedRefusals; i++)
+                PlayerbotNavigationAnomalies.ObservePlan(world.Player, inTheAir, PlayerbotMotion.CurrentPosition(world.Player), routed: false, inconclusive: false);
+            return true;
+        });
+        Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("nav", "goal-unreachable")));
+        Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "no-path-connected")));
     }
 
     [Fact]

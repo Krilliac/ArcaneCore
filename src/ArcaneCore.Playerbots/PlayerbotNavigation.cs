@@ -685,7 +685,10 @@ internal static class PlayerbotNavigation
             || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
             return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
-        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate, out bool goalFar);
+        // A goal the lookup reached only past its near box (in the air, or on excluded steep ground) snapped to the floor beside the bot, whose
+        // component is the bot's: it has no region of its own, so no verdict (issue #1497: every refused plan toward it read as no-path-connected).
+        if (goalFar) to = -1;
         // Each side's component is given whether or not the other has one (ComponentOf answers -1 for no region): a goal off the walking
         // mesh (a retreat point in a hillside or in the air) once also read as "bot -1" in nav/goal-unreachable, as if the bot were off it too
         // (bot QA #807: on the real mesh the bot stood in its continent's component in ten of the eleven live cases probed).
