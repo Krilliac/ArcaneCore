@@ -311,6 +311,37 @@ public sealed class PlayerbotBattlegroundObjectiveReachTests : IDisposable
     }
 
     /// <summary>
+    /// The call site of the fight wiring: a bot in combat that nobody attacks (it is in combat state only) is not on a fight the walk answers, so
+    /// its old mark still trips and the walk is set aside. Pins the facts pass to the attacker test, not to the combat flag.
+    /// </summary>
+    [Fact]
+    public async Task ABotInCombatWithNoAttacker_WithAnOldMark_IsSetAside()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await PlayerbotBattlegroundWorldTests.RunAsync(world, "bg-master-combat-only", async context =>
+        {
+            ScenarioBot ally = await context.LoginAsync("Bgmcombat", 1, characterClass: 1);
+            Vector3 start = await ally.ReadAsync(p => new Vector3(p.X, p.Y, p.Z));
+            await context.PlaceAsync(ally, 0, start.X + 40f, start.Y, start.Z);
+            await context.AutonomousAsync(ally);
+            PlayerbotBattlegroundCoordinator coordinator = PlayerbotBattlegroundWorldTests.Coordinator(context);
+            await context.WaitUntilAsync("the bot walks to the battlemaster", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.Travel, TimeSpan.FromSeconds(60));
+            await context.ReadAsync(() =>
+            {
+                Player player = ally.RequirePlayer();
+                PlayerbotBattlegroundCoordinator.Tracked t = coordinator.Find(ally.BotId)!;
+                t.BestYardsToMaster = 0.1f;
+                t.BestYardsAtMs = unchecked(t.PhaseSinceMs - PlayerbotBattlegroundQueueMachine.TravelStallFor(t.TravelYards) - 10_000);
+                player.Map!.Combat.SetInCombatState(player, 600_000);
+                ScenarioContext.Expect(player.Combat.IsInCombat && !PlayerbotBattlegroundAI.IsAttacked(player), "control: in combat with nobody attacking");
+                return true;
+            });
+            await context.WaitUntilAsync("the walk is set aside although the bot is in combat", () => coordinator.Events.Any(e => e.Contains("could not walk to the WarsongGulch battlemaster", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(30));
+        });
+    }
+
+    /// <summary>
     /// The settled midfield of a Warsong Gulch match is kept, an unsettled one is asked again (<c>_wsgMidfields</c>): through the coordinator's own
     /// picture, with three meshes in turn on the world thread (no tick between them) - an unwalkable disc over the middle (a fallback, unsettled),
     /// open ground (the middle itself, settled and kept), the disc again (the kept middle is still the answer).

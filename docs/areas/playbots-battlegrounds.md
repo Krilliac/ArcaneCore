@@ -251,6 +251,13 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   walks. In the imported content (classic-db z2815, world DB of 2026-10-25) only 2 of the 34 spawns of the Warsong emissary 14991 (game event 20) carry
   spawn movement type 2 (waypoint): spawn 190500 (map 1, 9952 / 2089) and spawn 190516 (map 0, -5007 / -1180); the other 32 do not walk. 15 of the 228
   battlemaster spawns walk waypoints. The preference and the follow cover those spawns and any other that walks.
+* **The walk's progress watch is approximate in two corners.** (1) The watch moves its best distance by the change in the goal's distance from
+  the bot's current position, not from the position where the best was recorded. A bot stuck and bouncing between two points while a
+  waypoint-walking master moves in step can in theory gain up to about twice the bounce width per cycle, enough over many cycles to count as
+  10 yards of progress and hide the stall; the walk's timeout (10 to 60 minutes) is the backstop. (2) The best distance is clamped at zero when
+  the goal moves far toward the bot's old position; after that the watch can no longer register progress (it would need the distance to fall
+  below zero), so only arrival or the stall ends that walk. The same holds after a fight pulls the bot far off the road. Both need a bot far
+  from a master that moved a long way, and neither makes a walk end that would otherwise succeed.
 * No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
 * **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues
   the party bot with it (the server's rule). That bot is not free, so the coordinator neither follows nor ports it: its invitation lapses after
