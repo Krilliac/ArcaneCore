@@ -540,11 +540,19 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
 
+    /// <summary>Whether a prefetch of the tile was asked for, is finished and has not been taken (diagnostics and tests).</summary>
+    internal bool IsPrefetchFinished(uint mapId, int tileX, int tileY) => _prefetch.Contains(mapId, tileX, tileY) && !_prefetch.IsRunning(mapId, tileX, tileY);
+
     /// <summary>
     /// Read and parse a tile's <c>.mmtile</c> on the thread pool (<see cref="TilePrefetchCache{T}"/>) so <see cref="LoadTile"/> only
     /// adds it. Nothing happens for a map without a navmesh or a tile already loaded. World thread.
     /// </summary>
-    public void Prefetch(uint mapId, int tileX, int tileY)
+    public void Prefetch(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: false);
+
+    /// <summary><see cref="Prefetch(uint, int, int)"/> for a teleport's destination, against the arrival budget (<see cref="TilePrefetchCache{T}.MaxArrivalEntries"/>). World thread.</summary>
+    public void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: true);
+
+    private void Prefetch(uint mapId, int tileX, int tileY, bool arrival)
     {
         if (GetNavMesh(mapId) is not { } mesh || mesh.IsTerrainTileLoaded(tileX, tileY))
         {
@@ -567,7 +575,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                 logger.LogFault("mmaps.prefetch", ex, "MMaps: prefetch of {Path} for map {MapId} tile ({TileX}, {TileY}) failed", path, mapId, tileX, tileY);
                 return null;
             }
-        });
+        }, arrival);
     }
 
     private readonly Dictionary<(uint Map, NavTerrain Include, NavTerrain Exclude), Task<NavRegionGraph?>> _regionGraphs = [];
