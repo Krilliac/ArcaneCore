@@ -197,6 +197,22 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     return TravelToRepair(player, services, elapsedMs);
                 }
                 _routeTarget = npc.Guid;
+                _visitAnchor = new(player.X, player.Y, player.Z);
+                _visitStuckMs = 0;
+            }
+            // A route that was planned but is not walked (the bot never leaves its place) is given up like a refused plan; before, only the
+            // stall watch ended it, 120 s later (GitHub #1476).
+            if (VisitStuck(player, elapsedMs))
+            {
+                uint now = session.World.NowMs;
+                _visitRefused = npc.Guid;
+                _visitRefusedUntil = unchecked(now + VisitRefusedMs);
+                Suspensions?.SuspendEntryEscalating(npc.Entry, now);
+                _route = null;
+                _routeTarget = default;
+                _visitStuckMs = 0;
+                PlayerbotMovementControl.Stop(session, player);
+                return TravelToRepair(player, services, elapsedMs);
             }
             ClearRepairTrip();
             return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
@@ -381,6 +397,35 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// </summary>
     internal const int MaxRepairPlansPerThink = 3;
 
+    /// <summary>
+    /// The longest a visit leg (the walk to a service NPC in sight) goes without the bot leaving its place before the NPC is set aside.
+    /// Longer than <see cref="RepairTripStuckMs"/>: a visit's route may start by walking away from the NPC (a ramp), which the repair
+    /// trip's "closing on it" clock would count as stuck, so this clock counts only not moving at all.
+    /// </summary>
+    internal const uint VisitStuckMs = 10_000;
+
+    /// <summary>The distance (yards) from its anchor that counts as the visiting bot moving.</summary>
+    internal const float VisitProgressYards = 2f;
+
+    private Vector3 _visitAnchor;
+    private uint _visitStuckMs;
+
+    /// <summary>Ticks the visit leg's stuck clock once per think (never while a mount step holds the bot); true once <see cref="VisitStuckMs"/> passed without the bot moving <see cref="VisitProgressYards"/>.</summary>
+    private bool VisitStuck(Player player, uint elapsedMs)
+    {
+        OpenThinkIfClockMoved(session.World.NowMs);
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (Vector3.DistanceSquared(here, _visitAnchor) >= VisitProgressYards * VisitProgressYards)
+        {
+            _visitAnchor = here;
+            _visitStuckMs = 0;
+        }
+        else if (!_visitClockedThisThink && !PlayerbotMount.IsBusy(session)) _visitStuckMs += elapsedMs;
+        _visitClockedThisThink = true;
+        return _visitStuckMs >= VisitStuckMs;
+    }
+
+    private bool _visitClockedThisThink;
     private int _repairPlansThisThink;
     private bool _repairClockedThisThink;
     private bool _thinksAreAnnounced;
@@ -396,6 +441,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _thinksAreAnnounced = true;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _visitClockedThisThink = false;
         _cooldownClockedThisThink = false;
         MarkThinkQueries();
     }
@@ -407,6 +453,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _thinkStampMs = now;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _visitClockedThisThink = false;
         MarkThinkQueries();
     }
 
