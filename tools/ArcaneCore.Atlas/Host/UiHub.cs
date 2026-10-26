@@ -153,6 +153,12 @@ public sealed class UiHub
 
     public int ConnectionCount => _connections.Count;
 
+    /// <summary>Whether the UI connection with this id is registered (it is removed first when its socket closes).</summary>
+    internal bool IsConnected(string id) => _connections.ContainsKey(id);
+
+    /// <summary>The command origin label of a UI connection (<c>ui:&lt;connection id&gt;</c>).</summary>
+    internal const string OriginPrefix = "ui:";
+
     /// <summary>Whether a server serves this hub: agent sessions exist only then (a headless run has none).</summary>
     internal bool Attached => _attached;
 

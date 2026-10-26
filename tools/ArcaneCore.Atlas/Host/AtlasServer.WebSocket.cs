@@ -137,6 +137,14 @@ public sealed partial class AtlasServer
             }
 
             await Task.WhenAll(commands.Append(pump)).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+            // A command that was still running may have set a follow before the connection was removed from the hub (later ones are
+            // refused by the view store); release once more now that the commands have ended or the wait ran out.
+            if (connection is not null)
+            {
+                _context.View.ReleaseFollow($"ui:{connection.Id}");
+            }
+
             await TryCloseAsync(socket, WebSocketCloseStatus.NormalClosure, "bye").ConfigureAwait(false);
         }
     }

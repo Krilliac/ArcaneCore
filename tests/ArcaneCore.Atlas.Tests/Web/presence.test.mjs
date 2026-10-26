@@ -565,6 +565,41 @@ test('app.runCommand: live.follow from the UI takes the host camera and follow o
     assert.equal(app.view.follow, null, 'stopping is reflected');
 });
 
+test('app: a live.follow result that beats its view event keeps the follow, because view.get names the owner', async () => {
+    const other = 'ui:other0000000';
+    const { app, socket } = makeApp();
+    app.view = { ...app.view, camera: camera(111) };
+    // Another UI holds the follow, so this UI believes a peer owns it.
+    socket.emit('event', 'view', { version: 1, origin: other, cameraChanged: true, followOrigin: other, view: hostView(app, { follow: '0xBB' }) });
+    assert.equal(app._peerFollow, true);
+
+    // This UI takes the follow over; the command result and the following view.get arrive before the view event of that change.
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: { ...hostView(app, { follow: '0xAA' }), followOrigin: socket.origin }, elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+    await app.runCommand('live.follow', { guid: '0xAA' }, { quiet: true });
+    await settle();
+    assert.equal(app.view.follow, '0xAA', 'the follow is kept');
+    assert.equal(app.view.camera.target[0], 999, 'with the jump to the entity');
+    assert.equal(app.ownsFollow(), true);
+
+    // The delayed view event, then a live frame, change nothing.
+    socket.emit('event', 'view', { version: 5, origin: socket.origin, cameraChanged: true, followOrigin: socket.origin, view: hostView(app, { follow: '0xAA' }) });
+    assert.equal(app.view.follow, '0xAA');
+    app.view = { ...app.view, camera: camera(111) };
+    socket.emit('event', 'view', liveFrame(app, 6, socket.origin));
+    assert.equal(app.view.camera.target[0], 999, 'the live feed moves this UI again');
+
+    // A host that holds no follow clears the flag too.
+    socket.emit('event', 'view', { version: 7, origin: other, cameraChanged: true, followOrigin: other, view: hostView(app, { follow: '0xCC' }) });
+    assert.equal(app._peerFollow, true);
+    socket.respond = (name) => (name === 'view.get'
+        ? { command: name, ok: true, data: hostView(app, { follow: null }), elapsedMs: 0 }
+        : { command: name, ok: true, data: {}, elapsedMs: 0 });
+    await app.refreshView();
+    assert.equal(app._peerFollow, false);
+});
+
 test('app: a first hello whose follow belongs to another UI starts at the shared camera but adopts no follow, and ignores its live frames', () => {
     const other = 'ui:other0000000';
     const { app, socket } = makeApp();

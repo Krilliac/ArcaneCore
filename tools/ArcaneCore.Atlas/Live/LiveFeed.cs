@@ -607,6 +607,18 @@ public sealed class LiveFeed : IDisposable
         if (guid is null)
         {
             _view.Patch(new JsonObject { ["follow"] = null }, origin);
+
+            // The view store ignores a clear from a UI while another UI owns the follow: report what the view really holds.
+            if (_view.Current.FollowGuid is { } kept)
+            {
+                return new JsonObject
+                {
+                    ["following"] = kept,
+                    ["found"] = LiveGuid.TryParse(kept, out ulong keptId) && Store.TryGetEntity(keptId, out _),
+                    ["note"] = "the follow is owned by another session; only its owner can stop it.",
+                };
+            }
+
             lock (_state)
             {
                 _followId = 0;

@@ -180,6 +180,50 @@ public sealed class ViewStateTests
     }
 
     [Fact]
+    public void Store_AUiThatIsNoLongerConnected_CannotSetAFollow_ButTheRestOfThePatchApplies()
+    {
+        var store = new ViewStore(ViewState.Default);
+        var connected = new HashSet<string> { "ui:a" };
+        store.OriginConnected = connected.Contains;
+
+        store.Patch(new JsonObject { ["follow"] = "AA", ["camera"] = new JsonObject { ["yaw"] = 5 } }, "ui:gone");
+
+        Assert.Null(store.Current.FollowGuid);
+        Assert.Null(store.FollowOrigin);
+        Assert.Equal(5, store.Current.Camera.Yaw);
+
+        store.Patch(new JsonObject { ["follow"] = "AA" }, "ui:a");
+        Assert.Equal("AA", store.Current.FollowGuid);
+
+        // Non-UI origins are never checked, and clearing a follow that no UI owns is not a UI-owned follow, so it stays allowed.
+        store.Patch(new JsonObject { ["follow"] = "BB" }, "cli");
+        Assert.Equal("BB", store.Current.FollowGuid);
+        store.Patch(new JsonObject { ["follow"] = null }, "ui:gone");
+        Assert.Null(store.Current.FollowGuid);
+    }
+
+    [Fact]
+    public void Store_Set_KeepsTheFollowWhenAPeerUiWouldClearIt_OrAGoneUiWouldSetIt()
+    {
+        var store = new ViewStore(ViewState.Default);
+        var connected = new HashSet<string> { "ui:a", "ui:b" };
+        store.OriginConnected = connected.Contains;
+        store.Patch(new JsonObject { ["follow"] = "AA" }, "ui:a");
+
+        store.Set(store.Current with { FollowGuid = null, MapId = 3 }, "ui:b");
+
+        Assert.Equal("AA", store.Current.FollowGuid);
+        Assert.Equal("ui:a", store.FollowOrigin);
+        Assert.Equal(3u, store.Current.MapId);
+
+        store.Set(store.Current with { FollowGuid = "CC" }, "ui:gone");
+        Assert.Equal("AA", store.Current.FollowGuid);
+
+        store.Set(store.Current with { FollowGuid = null }, "ui:a");
+        Assert.Null(store.Current.FollowGuid);
+    }
+
+    [Fact]
     public void Store_Snapshot_ReportsTheViewVersionAndFollowOwnerOfOneMoment()
     {
         var store = new ViewStore(ViewState.Default);

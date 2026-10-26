@@ -37,7 +37,11 @@ public sealed class HostModule : IAtlasModule
         AtlasState state = _state ?? AtlasState.FromEnvironment();
         context.Services.Add(state);
         context.Services.Add(new BookmarkStore(state.BookmarksFile, context.Loggers));
-        context.Services.Add(new UiHub());
+        var hub = new UiHub();
+        context.Services.Add(hub);
+
+        // A command of a UI whose socket has closed must not set a follow that nobody can release (see ViewStore.OriginConnected).
+        context.View.OriginConnected = origin => hub.IsConnected(origin[UiHub.OriginPrefix.Length..]);
 
         StatusCommands.Register(context.Commands);
         ViewCommands.Register(context.Commands);

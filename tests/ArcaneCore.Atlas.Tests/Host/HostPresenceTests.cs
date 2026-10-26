@@ -748,6 +748,42 @@ public sealed class HostPresenceTests
     }
 
     [Fact]
+    public async Task AFollowCommandStillRunningWhenItsSocketCloses_LeavesNoFollowOwnedByTheGoneUi()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var patched = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using HostRig rig = await HostRig.StartAsync(
+            new AtlasServerOptions { PresenceMinInterval = TimeSpan.Zero },
+            register: context => context.Commands.Register(new CommandDefinition(
+                "test.slowfollow",
+                "Follows an entity after a delay, as a live.follow still running when its UI leaves.",
+                [],
+                async (invocation, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                    ViewStore view = invocation.Service<AtlasContext>().View;
+                    view.Patch(new JsonObject { ["follow"] = "AB" }, HostOrigin.Label(invocation.Origin));
+                    patched.TrySetResult(view.Current.FollowGuid);
+                    return new JsonObject();
+                })));
+        UiClient a = await UiClient.ConnectAsync(rig);
+        await a.SendAsync(Raw("""{"op":"command","id":1,"name":"test.slowfollow","args":{}}"""));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The socket closes while the command is in flight; the server waits for it before it finishes the session.
+        Task closing = a.DisposeAsync().AsTask();
+        await Wait.UntilAsync(() => rig.Server!.Hub.ConnectionCount == 0, "A to be removed");
+        release.SetResult();
+
+        Assert.Null(await patched.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        await closing;
+        Assert.Null(rig.Context.View.Snapshot().FollowOrigin);
+        Assert.Null(rig.Context.View.Current.FollowGuid);
+    }
+
+    [Fact]
     public async Task InvalidPresenceFlood_IsAnsweredOnlyWhileTheErrorBudgetLasts_AndRefillsWithTime()
     {
         var time = new ManualTime();
