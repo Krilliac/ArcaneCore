@@ -682,11 +682,11 @@ public sealed class DataDrivenEscortTests
     [Fact]
     public void Hendel_GetsHisTemplateFactionBack_WhenHeSurrendersAndEvades()
     {
-        // mangos-classic dustwallow_marsh.cpp:605 uses SetFactionTemporary(RESTORE_COMBAT_STOP | RESTORE_RESPAWN); a direct field write was never given back.
+        // mangos-classic dustwallow_marsh.cpp:602 (at 3e8597afe7) uses SetFactionTemporary(RESTORE_COMBAT_STOP | RESTORE_RESPAWN); a direct field write was never given back.
         const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
         const uint friendly = 35;
         CreatureContent content = new([Template(entry, b => b.Faction = friendly), Template(5184), Template(4967), Template(4968), Template(4965)],
-            [Spawn(1, entry, -2880, -3346)], [], [], [],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346)], [], [], [],
             new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
@@ -694,13 +694,51 @@ public sealed class DataDrivenEscortTests
             (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
             Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
             var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI);
+            Creature sentry = Assert.Single(system.Creatures, c => c.Entry == 5184);
+            uint sentryFriendly = sentry.FactionTemplate;
+            Assert.NotEqual(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentryFriendly);
             ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
             Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, hendel.FactionTemplate);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentry.FactionTemplate);
             hendel.Health = hendel.MaxHealth / 10;
             world.RunTick(100);
             Assert.True(ai.Surrendered);
 
             Assert.Equal(friendly, hendel.FactionTemplate); // RED on main: stays 168
+            Assert.Equal(sentryFriendly, sentry.FactionTemplate); // RED on main: stays 168 (it runs off, despawns after 4 s)
+        }
+    }
+
+    [Fact]
+    public void Hendel_AndTheSentries_AreFriendlyAgainAfterTheyDieAndRespawn()
+    {
+        // RESTORE_COMBAT_STOP fires at death and RESTORE_RESPAWN in UpdateEntry at the respawn: neither may leave faction 168 behind.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.Entry;
+        const uint friendly = 35;
+        CreatureContent content = new([Template(entry, b => b.Faction = friendly), Template(5184), Template(4967), Template(4968), Template(4965)],
+            [Spawn(1, entry, -2880, -3346), Spawn(2, 5184, -2878, -3346)], [], [], [],
+            new CreatureAiContent([], [new CreatureAiText(-1000415, "surrender", 0, 0, 0)]));
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, -2876, -3346);
+            Creature hendel = Assert.Single(system.Creatures, c => c.Entry == entry);
+            Creature sentry = Assert.Single(system.Creatures, c => c.Entry == 5184);
+            uint sentryFriendly = sentry.FactionTemplate;
+            Assert.IsType<ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI>(hendel.AI)
+                .OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.QuestMissingDiplomat16);
+            Assert.Equal(ArcaneCore.Game.Creatures.Scripts.PrivateHendelAI.FactionHostile, sentry.FactionTemplate);
+
+            foreach (Creature dead in new[] { hendel, sentry })
+            {
+                map.Combat.Kill(null, dead);
+                world.RunTick(100);
+                system.ForceRespawn(dead);
+                Assert.True(dead.IsAlive);
+            }
+
+            Assert.Equal(friendly, hendel.FactionTemplate);
+            Assert.Equal(sentryFriendly, sentry.FactionTemplate);
         }
     }
 
@@ -793,10 +831,7 @@ public sealed class DataDrivenEscortTests
     public void Plucky_TurnsHumanOnChicken_ForTwoMinutes()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.PluckyJohnsonAI.Entry;
-        CreatureWaypoint[] path = [new(1, 0, 0, 0, 0, 0)];
-        CreatureWaypoint first = path[0];
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []),
-            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
@@ -819,10 +854,7 @@ public sealed class DataDrivenEscortTests
     public void MagramiSpectre_TurnsHostileWhenItsWalkEnds()
     {
         const uint entry = ArcaneCore.Game.Creatures.Scripts.MagramiSpectreAI.Entry;
-        CreatureWaypoint[] path = [new(1, 0, 0, 0, 0, 0)];
-        CreatureWaypoint first = path[0];
-        CreatureContent content = new([Template(entry)], [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [], new CreatureAiContent([], []),
-            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        CreatureContent content = new([Template(entry)], [Spawn(1, entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices());
         using (world)
         {
@@ -1105,7 +1137,10 @@ public sealed class DataDrivenEscortTests
         }
     }
 
-    private static void RunWindsorMasquerade(bool evadeMidScene)
+    [Fact]
+    public void Windsor_AReplayedKeepStart_AndAReplayedGossipSelect_DoNotRewindTheRunningScene() => RunWindsorMasquerade(evadeMidScene: false, replayStart: true);
+
+    private static void RunWindsorMasquerade(bool evadeMidScene, bool replayStart = false)
     {
         // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
         const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
@@ -1172,6 +1207,25 @@ public sealed class DataDrivenEscortTests
 
             Assert.False(ai.HasEscortState(EscortAI.EscortState.Paused));
             Assert.Equal(0u, windsor.NpcFlags & (uint)NpcFlags.Gossip);
+            if (replayStart)
+            {
+                // The cached menu outlives the Gossip flag: replay the start by the method and by the gossip select packet's script.
+                for (int elapsed = 0; elapsed < 30_000 && ai.DialogueStep < 2; elapsed += 100)
+                {
+                    world.RunTick(100);
+                }
+
+                int step = ai.DialogueStep;
+                Assert.True(step >= 2, $"the keep scene never advanced (step {step})");
+                ai.StartKeepEvent();
+                Assert.Equal(step, ai.DialogueStep);
+                NpcInfo info = new(windsor.Guid, entry, 1, NpcFlags.Gossip, windsor.MapId, windsor.X, windsor.Y, windsor.Z, 0f, true, false, false, false, 0);
+                ScriptedGossipReply reply = new ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip(_ => null)
+                    .SelectReply(player, info, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.SenderMain, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorGossip.ActionStart);
+                Assert.Equal(default, reply);
+                Assert.Equal(step, ai.DialogueStep);
+                Assert.False(ai.KeepEventReady);
+            }
 
             // The throne room: Prestor shows herself, the guards turn and fall, Bolvar kneels and the quest is done.
             Creature bolvar = Assert.Single(system.Creatures, c => c.Entry == 1748);

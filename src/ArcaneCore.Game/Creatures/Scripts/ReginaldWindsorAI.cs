@@ -11,6 +11,9 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// for the player's word (gossip) to enter the keep; in the throne room (26) Wrynn is taken away, Windsor reveals Prestor, who turns into
 /// Onyxia, turns the nearby royal guards into Onyxia's guards and kills him; once those are dead Bolvar kneels at his side and the
 /// quest is done. ScriptedMap's creature storage is the nearest creature of each entry on the map here.
+/// Difference (deliberate port choice): StartKeepEvent clears the keep-ready flag when the event starts, so a replayed gossip select
+/// cannot rewind the running scene. The reference never clears m_isKeepReady (stormwind_city.cpp at 3e8597afe7); an honest client cannot
+/// tell, because the Gossip flag is removed at the same moment.
 /// </summary>
 public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
