@@ -139,6 +139,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // "Do not accept packets sent before this time" (vmangos HandleMovementOpcodes, MovementHandler.cpp:293-296): the 100 ms after the
+        // server set the movement flags itself (.cheat fly / fixedz), so a packet sent before the client saw them cannot undo them.
+        if (player.Locomotion.ShouldRejectMovement(session.CurrentPacketReceivedMs))
+        {
+            return;
+        }
+
         // Client→server movement is the MovementInfo alone (gtker MSG_MOVE_*_Client, 1.12).
         var reader = new PacketReader(payload);
         MovementInfo movement = MovementInfo.Read(ref reader);
@@ -162,6 +169,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         {
             MoveControlled(session, player, mover, opcode, movement, relay);
             return;
+        }
+
+        // "Do not jump or flying mode will be removed": a jump takes the client out of the air-swim, so the cheat ends with it.
+        if (opcode == WorldOpcode.MsgMoveJump)
+        {
+            MovementCheats.EndFlyOnJump(player);
         }
 
         // The anticheat judges the block as the client sent it, before the observers correct it (docs/areas/anticheat.md).

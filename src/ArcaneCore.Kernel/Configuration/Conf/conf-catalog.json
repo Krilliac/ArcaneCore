@@ -20117,6 +20117,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Risk:RestManaBelowPct",
+      "section": "World:Playerbots",
+      "type": "float",
+      "kind": "scalar",
+      "elementType": "float",
+      "enumValues": null,
+      "default": "35",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "A bot that spends mana and has less than this percentage left (0..100; 0 turns it off) recovers before its next pull when the fight would be fine at full health and mana, instead of pulling with nothing to cast.",
+      "allowed": "a number, '.' is the decimal point",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Risk:RetreatHealthPct",
       "section": "World:Playerbots",
       "type": "float",
