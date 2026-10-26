@@ -13538,6 +13538,20 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.DropGreyQuests
+#        Description: Abandon an incomplete quest that has turned grey for the bot (quest level at
+#                     or below its vmangos grey level) and hunt no objective of it (on by default).
+#                     A completed grey quest is still turned in. Off: grey quests are kept until a
+#                     full log sheds one. Live: .reload config.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.DropGreyQuests = true
+
+#
 #    World.Playerbots.Economy.BankDeposit
 #        Description: Deposit goods the bot does not need (trade goods and reagents no spell of its
 #                     own uses, gems, recipes, stackable curios) at a banker while it stays at its

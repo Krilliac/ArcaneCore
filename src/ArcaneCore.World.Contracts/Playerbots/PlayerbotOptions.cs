@@ -170,6 +170,12 @@ public sealed class PlayerbotOptions
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit")]
     public float MaxDeliveryYards { get; set; } = 1200f;
 
+    /// <summary>
+    /// Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it
+    /// (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
+    /// </summary>
+    public bool DropGreyQuests { get; set; } = true;
+
     /// <summary>The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100).</summary>
     public float MoveSpeed { get; set; } = 7f;
 

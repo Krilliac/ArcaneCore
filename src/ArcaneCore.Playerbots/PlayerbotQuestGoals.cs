@@ -341,6 +341,49 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return true;
     }
 
+    /// <summary>Minimum milliseconds between two grey-quest abandons of one bot (<see cref="TryShedGreyQuest"/>).</summary>
+    internal const uint GreyShedIntervalMs = 5_000;
+
+    private uint _nextGreyShedMs;
+
+    /// <summary>
+    /// The lowest-level incomplete quest in the log that is grey for the player (<see cref="IsGrey"/>), skipping refused ones; zero when none.
+    /// A complete (not yet rewarded) grey quest is kept for its turn-in, and a failed one is the full-log shed's business.
+    /// </summary>
+    internal static uint GreyQuestToDrop(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null)
+    {
+        uint best = 0;
+        int bestLevel = int.MaxValue;
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint id = state.Quests.SlotQuestId(slot);
+            if (id == 0 || skip?.Invoke(id) == true || state.Quests.Get(id) is not { Status: QuestStatus.Incomplete, Rewarded: false }
+                || services.Quests.Get(id) is not { } quest || !IsGrey(player, quest)) continue;
+            if (quest.QuestLevel < bestLevel || (quest.QuestLevel == bestLevel && id < best)) { best = id; bestLevel = quest.QuestLevel; }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// "Skip and drop if quests become greyed" (<see cref="PlayerbotOptions.DropGreyQuests"/>): out of combat and alive, abandons one incomplete
+    /// grey quest per <see cref="GreyShedIntervalMs"/> through the client abandon packet, free log slot or not, then sets it aside so it is not
+    /// retaken from a giver in sight. A refused abandon is also set aside, so the packet is not sent on every think. True when a packet was sent.
+    /// </summary>
+    private bool TryShedGreyQuest(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
+    {
+        if (!_options.DropGreyQuests || player.Combat.IsInCombat || !player.IsAlive
+            || unchecked((int)(_nextGreyShedMs - now)) > 0) return false;
+        uint id = GreyQuestToDrop(player, services, state, IsRefused);
+        if (id == 0) return false;
+        int slot = state.Quests.FindSlot(id);
+        if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
+            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        _nextGreyShedMs = unchecked(now + GreyShedIntervalMs);
+        Refuse(id, now);
+        return true;
+    }
+
     /// <summary>
     /// A full log sheds one low-value quest (<see cref="LowValueQuestToShed"/>) through the ordinary client abandon packet (vmangos
     /// <c>WorldSession::HandleQuestLogRemoveQuest</c>), so the slot, source item and persistence follow a player's path. A refused
@@ -527,6 +570,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return true;
 
         if (_stage == Stage.None && TryShedUnkillableQuest(player, services, state, now)) return true;
+        if (_stage == Stage.None && TryShedGreyQuest(player, services, state, now)) return true;
 
         long phaseStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks);
@@ -898,6 +942,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (!hasFreeSlot && (_roomWanted || IsGrey(player, quest)))
                         continue;
+                    if (_options.DropGreyQuests && IsGrey(player, quest))
+                        continue;
                     if (hasFreeSlot && !SourceItemFits(player, quest))
                         continue;
                     if (IsQuestNavigationBudgetExhausted(phaseStartTicks))
@@ -1054,6 +1100,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { IsActive: true } quest)
                 continue;
             if (Suspensions?.IsQuestSuspended(questId, now) == true)
+                continue;
+            // A grey quest still in the log (drop rate-limited or refused) is not hunted for: its objectives give next to no experience.
+            if (_options.DropGreyQuests && IsGrey(player, quest))
                 continue;
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
             {

@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
@@ -1116,6 +1117,155 @@ public sealed class PlayerbotQuestGoalsTests
         return state;
     }
 
+    /// <summary>A level 10 bot with the first <paramref name="count"/> <see cref="FullLogQuests.Filler"/> quests in its log (the log keeps free slots).</summary>
+    private static PlayerNpcState AddFillers(QuestHost quest, Player player, uint count)
+    {
+        player.Level = 10;
+        PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+        for (uint i = 0; i < count; i++)
+            Assert.Equal(GmQuestAddResult.Added, quest.Feature.Services.GmAddQuest(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler + i)!));
+        Assert.True(PlayerbotQuestGoals.HasFreeLogSlot(state));
+        return state;
+    }
+
+    /// <summary>The filler quests still in the log (the bot may take the fixture's offered quest into a freed slot).</summary>
+    private static int Fillers(PlayerNpcState state)
+        => state.Quests.Statuses.Count(row => row.Key is >= FullLogQuests.Filler and < FullLogQuests.Filler + 3 && row.Value.Status == QuestStatus.Incomplete);
+
+    private static int Think(QuestHost quest, PlayerbotQuestGoals goals, Player player)
+    {
+        int abandons = 0;
+        quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+        quest.Session.ManagedBudget = new ManagedActionBudget(1);
+        goals.Update(player, 500);
+        return abandons;
+    }
+
+    /// <summary>"Skip and drop if quests become greyed": with a free slot an incomplete grey quest is abandoned and set aside; a non-grey one stays.</summary>
+    [Fact]
+    public async Task AnIncompleteGreyQuest_WithAFreeLogSlot_IsAbandonedAndRefused_AndANonGreyOneIsKept()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 2); // Filler+0 is grey (level 3), Filler+1 is level 10
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(1, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.True(goals.IsRefused(FullLogQuests.Filler));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler + 1)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>A grey quest whose objectives are done is still turned in: the drop rule leaves it.</summary>
+    [Fact]
+    public async Task ACompleteGreyQuest_IsNotDropped()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            Assert.Equal(QuestStatus.Complete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.Equal(0u, PlayerbotQuestGoals.GreyQuestToDrop(player, quest.Feature.Services, state));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.Complete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task WithDropGreyQuestsOff_AGreyQuestIsKeptAndStillHunted()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+            Assert.Equal(0, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            goals.RefreshObjectiveEntry(player, quest.Feature.Services, state);
+            Assert.Equal(90u, goals.PreferredCreatureEntry);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AGreyQuestIsNotDroppedInCombat()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            player.Map!.Combat.SetInCombatState(player, 60_000);
+            Assert.True(player.Combat.IsInCombat);
+            Assert.Equal(0, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>One abandon per think, and the next one waits <see cref="PlayerbotQuestGoals.GreyShedIntervalMs"/>.</summary>
+    [Fact]
+    public async Task GreyQuests_AreDroppedOnePerThink_AndRateLimited()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 3), manualClock: true);
+        PlayerbotQuestGoals? goals = null;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 3);
+            goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(1, Think(quest, goals, player));
+            Assert.Equal(0, Think(quest, goals, player)); // the same instant: rate limited
+            Assert.Equal(2, Fillers(state));
+            return true;
+        });
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs / 2); // still inside the interval
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.Equal(0, Think(quest, goals!, player));
+            return true;
+        });
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            Assert.Equal(1, Think(quest, goals!, player));
+            Assert.Equal(1, Fillers(state));
+            return true;
+        });
+    }
+
+    /// <summary>While the drop is rate-limited a grey quest still in the log gives the bot no kill objective to hunt.</summary>
+    [Fact]
+    public async Task AGreyQuestStillInTheLog_GivesNoHuntObjective_ButANonGreyOneDoes()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            goals.RefreshObjectiveEntry(player, quest.Feature.Services, state);
+            Assert.Equal(0u, goals.PreferredCreatureEntry);
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status); // not dropped yet: only skipped
+            Assert.Equal(GmQuestAddResult.Added, quest.Feature.Services.GmAddQuest(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler + 1)!));
+            goals.RefreshObjectiveEntry(player, quest.Feature.Services, state);
+            Assert.Equal(90u, goals.PreferredCreatureEntry);
+            return true;
+        });
+    }
+
     /// <summary>
     /// GitHub #786: a bot with a full journal walked to quest givers and asked for quests the server refuses with SMSG_QUESTLOG_FULL,
     /// thousands of times ("code=QuestLogFull"). With nothing it may give up (no grey or failed quest) it leaves the giver alone.
@@ -1193,7 +1343,7 @@ public sealed class PlayerbotQuestGoalsTests
                 if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++;
                 if (opcode is WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest) asks++;
             };
-            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
             for (int think = 0; think < 4; think++)
             { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
             Assert.Equal(0, abandons);

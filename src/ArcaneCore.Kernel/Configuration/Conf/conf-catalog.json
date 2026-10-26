@@ -16724,6 +16724,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:DropGreyQuests",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: `.reload config`.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Economy:BankDeposit",
       "section": "World:Playerbots",
       "type": "bool",
