@@ -163,11 +163,12 @@ public sealed class RemoteAdminServer : IHostedService
         byte[] token = Encoding.ASCII.GetBytes(Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant());
         try
         {
-            File.WriteAllText(path, Encoding.ASCII.GetString(token) + "\n");
+            WriteTokenFile(path, token);
             _token = token;
             _tokenPath = path;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Principal.IdentityNotMappedException
+            or PlatformNotSupportedException)
         {
             _logger.LogWarning(ex, "remote admin: could not write the token file {Path}; @token login is off", path);
         }
