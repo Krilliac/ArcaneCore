@@ -2,7 +2,7 @@ namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
 /// Shapeshift form ids and the pure predicates that depend only on the form id.
-/// Values: D:\refs\vmangos\src\game\SharedDefines.h:1421-1442 (ShapeshiftForm); the form id lives in
+/// Values: vmangos@0e3ff01 src/game/SharedDefines.h:1421-1442 (ShapeshiftForm); the form id lives in
 /// UNIT_FIELD_BYTES_1 byte 2 (Objects\UnitDefines.h:85-88). A "stance mask" is 1 &lt;&lt; (form - 1),
 /// the bit that Spell.dbc Stances / StancesNot test (SpellEntry.cpp:1032-1074).
 /// Predicates that depend on SpellShapeshiftForm.dbc flags1 (IsShapeShifted, IsNoWeaponShapeShift) are NOT

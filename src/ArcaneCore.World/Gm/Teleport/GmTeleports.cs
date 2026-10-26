@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Gm.Teleport;
 public readonly record struct RecallPosition(uint MapId, float X, float Y, float Z, float Orientation);
 
 /// <summary>
-/// vmangos <c>Player::SaveRecallPosition</c> / <c>GetRecallPosition</c> (D:\refs\vmangos\src\game\Objects\Player.cpp:5999-6006):
+/// vmangos <c>Player::SaveRecallPosition</c> / <c>GetRecallPosition</c> (vmangos@0e3ff01 src/game/Objects/Player.cpp:5999-6006):
 /// the position <c>.recall</c> returns to. It is set when the player enters the world (vmangos
 /// LoadFromDB, Player.cpp:14881) and before every GM command teleport that does not start in
 /// a taxi flight. World-thread state; not persisted (vmangos keeps it in memory too).

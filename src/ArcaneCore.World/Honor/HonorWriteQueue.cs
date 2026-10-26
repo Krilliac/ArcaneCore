@@ -28,7 +28,7 @@ namespace ArcaneCore.World.Honor;
 /// limit (docs/areas/honor.md). <see cref="FlushAsync"/> stays a pure ordered barrier: it never retries and never throws.
 /// </para>
 /// </summary>
-public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
+public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null)
 {
     private const int MaxAttempts = 3;
 
@@ -44,6 +44,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private int _pending;
 
     private enum Kind
@@ -246,6 +247,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -275,8 +277,20 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 "persist",
                 "write-dropped-on-shutdown",
                 "queue HonorWriteQueue",
-                $"queue=HonorWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                $"queue=HonorWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.honor-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-honor-stop-drain",
+                    refusal,
+                    "honor write queue shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    _drain.Refused,
+                    failed.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"honor writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -557,9 +571,23 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                 unsaved.DeleteRequested);
         }
 
+        var made = new WriteAttemptCount();
         try
         {
-            await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
+            await WriteAsync(characterId, snapshot, sweep || _stopped ? 1 : MaxAttempts, made).ConfigureAwait(false);
+        }
+        catch (StopDrainExhaustedException refused)
+        {
+            // The stop drain refused the attempt: nothing was tried, so no per-write anomaly or fault; the queue reports the refusal once. The write stays retained.
+            lock (_gate)
+            {
+                if (_characters.TryGetValue(characterId, out Unsaved? unsaved))
+                {
+                    unsaved.Failure = refused;
+                }
+            }
+
+            return refused;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -583,7 +611,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                         "persist",
                         "write-retry-exhausted",
                         $"character {characterId}",
-                        $"queue=HonorWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                        $"queue=HonorWriteQueue character={characterId} attempts={made.Made} error={ex.GetType().Name}",
                         AnomalySeverity.Error);
                 }
 
@@ -641,15 +669,23 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
         }
     }
 
-    private async Task WriteAsync(int characterId, Snapshot snapshot, int attempts)
+    private async Task WriteAsync(int characterId, Snapshot snapshot, int attempts, WriteAttemptCount made)
     {
         for (int attempt = 1; ; attempt++)
         {
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            {
+                throw refused; // retained by the caller; never a verdict (see StopDrainBudget)
+            }
+
+            made.Made = attempt;
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (scope.ServiceProvider.GetService<IHonorStore>() is not { } store)
                 {
+                    progress.Succeeded(); // no store: nothing to land, and not a stall
                     return; // hosts without persistence keep nothing
                 }
 
@@ -673,6 +709,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
                     await store.AppendCpAsync(characterId, snapshot.Cp).ConfigureAwait(false);
                 }
 
+                progress.Succeeded();
                 return;
             }
             catch (CharacterOwnershipRejectedException ex)
@@ -685,6 +722,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger)
             {
                 FaultLedger.Shared.Record("writequeue.honor-attempt", ex);
                 logger.LogWarning(ex, "honor write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    throw; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
         }

@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Tests.Economy;
 
 /// <summary>
 /// Auction browse against vmangos AuctionHouseObject::BuildListAuctionItems
-/// (D:\refs\vmangos\src\game\AuctionHouse\AuctionHouseMgr.cpp:71-75 the list is keyed by buyout price, :760-767 filters).
+/// (vmangos@0e3ff01 src/game/AuctionHouse/AuctionHouseMgr.cpp:71-75 the list is keyed by buyout price, :760-767 filters).
 /// </summary>
 public sealed class AuctionSearchParityTests
 {

@@ -5,7 +5,7 @@ namespace ArcaneCore.Atlas.Live;
 /// <summary>Constants of the map-feed protocol (design section 9, lane L1 serves it).</summary>
 internal static class LiveProtocol
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:208-230 (feed protocol 1: NDJSON over the named pipe arcanecore-mapfeed-{pid})
+    // ref: ATLAS-2026-10-18.md:208-230 (feed protocol 1: NDJSON over the named pipe arcanecore-mapfeed-{pid})
     // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/MapFeedProtocol.cs:68 (the server's Version = 1)
     // ref: claude/atlas-l1@5891e4773:src/ArcaneCore.World/Ops/MapFeed/WorldMapFeedOptions.cs:16 (the server's PipeNameTemplate = "arcanecore-mapfeed-" + pid token)
 

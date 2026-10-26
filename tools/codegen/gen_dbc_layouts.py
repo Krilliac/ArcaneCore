@@ -8,6 +8,7 @@ ClientDbcLayouts.cs remain authoritative when both sources describe a file.
 """
 
 import argparse
+import os
 from pathlib import Path
 import re
 
@@ -155,8 +156,14 @@ def generate(definitions, layouts, dbc_names):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--definitions', type=Path, default=Path('D:/ArcaneCore-lanes/_refs/csharp-cores/WoWDBDefs/definitions'))
-    parser.add_argument('--dbc-dir', type=Path, default=Path('D:/ArcaneCore-data/client-dbc-5875'))
+    lanes = os.environ.get('ARCANECORE_LANES_ROOT')
+    data = os.environ.get('ARCANECORE_DATA_ROOT')
+    parser.add_argument('--definitions', type=Path, required=not lanes,
+                        default=Path(lanes) / '_refs/csharp-cores/WoWDBDefs/definitions' if lanes else None,
+                        help='WoWDBDefs definitions directory (default: <ARCANECORE_LANES_ROOT>/_refs/csharp-cores/WoWDBDefs/definitions)')
+    parser.add_argument('--dbc-dir', type=Path, required=not data,
+                        default=Path(data) / 'client-dbc-5875' if data else None,
+                        help='build-5875 client DBC directory (default: <ARCANECORE_DATA_ROOT>/client-dbc-5875)')
     parser.add_argument('--output', type=Path, default=CLIENT_DATA / 'ClientDbcLayouts.Dbd.g.cs')
     args = parser.parse_args()
     names = {path.stem for path in args.dbc_dir.glob('*.dbc')}

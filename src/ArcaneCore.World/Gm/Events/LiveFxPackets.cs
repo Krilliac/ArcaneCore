@@ -6,8 +6,8 @@ namespace ArcaneCore.World.Gm.Events;
 
 /// <summary>
 /// The payloads the <c>.fx</c> commands send (build 5875). Each layout is checked against gtker wow_messages
-/// (<c>D:\refs\wow_messages\wow_message_parser\wowm\world\...</c>) and vmangos
-/// (<c>D:\refs\vmangos\src\game\Server\Packets\Misc.cpp</c> / <c>Spell.cpp</c>); the opcode numbers are the
+/// (<c>wow_messages wow_message_parser/wowm/world/...</c>) and vmangos
+/// (<c>vmangos@0e3ff01 src/game/Server/Packets/Misc.cpp</c> / <c>Spell.cpp</c>); the opcode numbers are the
 /// 1.12.1 ones in <c>Opcodes_1_12_1.h</c>. Where ArcaneCore already had a builder for the same packet it is reused.
 /// </summary>
 public static class LiveFxPackets

@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace ArcaneCore.World.Gm.Args;
 
-/// <summary>vmangos <c>normalizePlayerName</c> (D:\refs\vmangos\src\game\ObjectMgr.cpp:64-82).</summary>
+/// <summary>vmangos <c>normalizePlayerName</c> (vmangos@0e3ff01 src/game/ObjectMgr.cpp:64-82).</summary>
 public static class PlayerNames
 {
     /// <summary>MAX_PLAYER_NAME (ObjectMgr.h:402).</summary>

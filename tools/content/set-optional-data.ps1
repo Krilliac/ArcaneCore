@@ -18,7 +18,7 @@
   into the world database. The script
 
     1. checks each DBC in -DbcDirectory: present, a WDBC file with the build-5875 field count, and listed with the right SHA-256 in
-       the directory's SHA256SUMS when it has one (D:\refs\client-dbc-5875-effective does);
+       the directory's SHA256SUMS when it has one (client-dbc-5875-effective does);
     2. checks that -Dump holds INSERT rows for page_text and item_enchantment_template;
     3. copies appsettings.json to -BackupPath (default: appsettings.json.<stamp>.bak next to it) and checks the copy's SHA-256;
     4. sets the seven keys, keeps every other value, and reads the file back to confirm them.
@@ -31,22 +31,22 @@
 
 .PARAMETER DbcDirectory
   A permanent directory holding the five build-5875 DBCs (the effective copies, patch-2 first), for example
-  D:\refs\client-dbc-5875-effective. The world reads them at every start, so not a temporary directory.
+  client-dbc-5875-effective. The world reads them at every start, so not a temporary directory.
 
 .PARAMETER Dump
-  The classic-db or vmangos world dump (.sql or .sql.gz). Default: D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz.
+  The classic-db or vmangos world dump (.sql or .sql.gz). Default: $env:ARCANECORE_CLASSICDB_DUMP, else <ARCANECORE_REFS_ROOT>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz.
 
 .PARAMETER BackupPath
   Where the pre-change copy of appsettings.json goes. Default: <AppSettings>.<yyyyMMdd-HHmmss>.bak.
 
 .EXAMPLE
-  powershell -NoProfile -File tools\content\set-optional-data.ps1 -AppSettings C:\srv\appsettings.json -DbcDirectory D:\refs\client-dbc-5875-effective
+  powershell -NoProfile -File tools\content\set-optional-data.ps1 -AppSettings C:\srv\appsettings.json -DbcDirectory client-dbc-5875-effective
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$AppSettings,
     [Parameter(Mandatory)][string]$DbcDirectory,
-    [string]$Dump = 'D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz',
+    [string]$Dump = $(if ($env:ARCANECORE_CLASSICDB_DUMP) { $env:ARCANECORE_CLASSICDB_DUMP } elseif ($env:ARCANECORE_REFS_ROOT) { Join-Path $env:ARCANECORE_REFS_ROOT 'classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz' } else { '' }),
     [string]$BackupPath,
     [switch]$DryRun
 )
@@ -107,6 +107,7 @@ $dumpTables = @('page_text', 'item_enchantment_template')
 
 $AppSettings = [System.IO.Path]::GetFullPath($AppSettings)
 $DbcDirectory = [System.IO.Path]::GetFullPath($DbcDirectory)
+if (-not $Dump) { throw 'give -Dump, or set ARCANECORE_CLASSICDB_DUMP or ARCANECORE_REFS_ROOT' }
 $Dump = [System.IO.Path]::GetFullPath($Dump)
 if (-not (Test-Path -LiteralPath $AppSettings -PathType Leaf)) { throw "appsettings not found: $AppSettings" }
 if (-not (Test-Path -LiteralPath $DbcDirectory -PathType Container)) { throw "DBC directory not found: $DbcDirectory" }

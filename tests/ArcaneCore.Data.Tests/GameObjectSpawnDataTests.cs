@@ -12,8 +12,8 @@ namespace ArcaneCore.Data.Tests;
 /// <summary>
 /// GO3: the spawn data retail uses to place and respawn game objects (world schema step <see cref="GameObjectSpawnDataModule"/>):
 /// <c>spawntimesecsmax</c>, <c>spawn_flags</c>, cmangos <c>gameobject_addon</c> (animprogress, state) and the door/button startOpen default
-/// (D:\refs\mangos-classic\src\game\Globals\ObjectMgr.cpp:2188-2192, 2252-2282; Entities\GameObject.cpp:226-250, 920-927;
-/// D:\refs\vmangos\src\game\Objects\GameObject.cpp:698-711). Dump snippets are hand-written; no GPL rows are copied.
+/// (mangos-classic src/game/Globals/ObjectMgr.cpp:2188-2192, 2252-2282; Entities\GameObject.cpp:226-250, 920-927;
+/// vmangos@0e3ff01 src/game/Objects/GameObject.cpp:698-711). Dump snippets are hand-written; no GPL rows are copied.
 /// The provider theories run on every provider that <see cref="TestDatabases.AvailableProviders"/> offers; on this machine only SQLite
 /// is available, so the MariaDB and PostgreSQL runs happen on hosted CI.
 /// </summary>
