@@ -6,6 +6,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Items;
 using Microsoft.Extensions.DependencyInjection;
@@ -156,7 +157,7 @@ public sealed class PlayerbotKiteRangedWorldTests
 
     /// <summary>
     /// W2: the real wiring <c>PlayerbotKite.HoldsRange</c> to <c>PlayerbotCombatSpells.KiteHolds</c> to <c>PlayerbotCombatView.Build</c>. A
-    /// warrior at full health with a bow, arrows and Shoot Bow, 20 yards from a creature that is on it, is not kiting, so it walks in toward it (inside 8 yards within three seconds) and
+    /// warrior at full health with a bow, arrows and Shoot Bow, 20 yards from a creature that is on it, is not kiting, so it walks in toward it (inside 8 yards within three seconds), fights it in melee and
     /// fires no shot on the way (before, any stationary warrior out of melee reach shot, and the brain, which runs the
     /// rotation before positioning, never walked it in).
     /// </summary>
@@ -168,7 +169,10 @@ public sealed class PlayerbotKiteRangedWorldTests
         RiskTestWorld world = await RiskTestWorld.StartAsync();
         await using (world)
         {
-            Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 20, 0));
+            // Spawned north: a walk east from the human start crosses an area trigger within seven yards, and the bot (which follows triggers
+            // like a player) is teleported 687 yards away; the creature then loses its target and evades (SelectHostileTarget). That is the
+            // fixture's terrain, not the kite, so the walk must not cross it.
+            Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 0, 20));
             await world.SeeAsync(mob);
             await world.OnWorldAsync(() =>
             {
@@ -185,19 +189,98 @@ public sealed class PlayerbotKiteRangedWorldTests
                 return true;
             });
 
-            uint lastHealth = await world.OnWorldAsync(() => mob.Health);
-            int shotsFromRange = 0;
-            bool closed = await world.ThinkUntilAsync(3_000, () => Gap(world, mob) <= 8f, each: () =>
+            // Count Shoot Bow hits through the spell system (the creature's health drop would also count melee), and watch the creature each tick.
+            SpellSystem spellSystem = world.Session.Services.GetRequiredService<SpellFeature>().System;
+            int shots = 0, evadeTicks = 0;
+            string trace = "";
+            Action<Unit, Unit, SpellInfo> onHit = (_, _, spell) => { if (spell.Id == ShootBowId) shots++; };
+            spellSystem.SpellHit += onHit;
+            Action sample = () =>
             {
-                if (Gap(world, mob) > 6f && mob.Health < lastHealth) shotsFromRange++;
-                lastHealth = mob.Health;
-            });
+                if (mob.IsInEvadeMode) evadeTicks++;
+                trace += $"[{Gap(world, mob):F1} evade={mob.IsInEvadeMode} victim={mob.Combat.Victim?.Guid} threat={mob.Combat.Threat.Entries.Count} combat={world.Player.Combat.IsInCombat}] ";
+            };
+            try
+            {
+                bool closed = await world.ThinkUntilAsync(3_000, () => Gap(world, mob) <= 8f, each: sample);
+                string why = await world.OnWorldAsync(() => Describe(world, mob)) + " " + trace;
+                Assert.True(closed, "the warrior never closed in on the creature: " + why);
 
-            string why = await world.OnWorldAsync(() => Describe(world, mob));
-            Assert.True(closed, "the warrior never closed in on the creature: " + why);
-            Assert.Equal(0, shotsFromRange);
-            Assert.Equal(0, await world.OnWorldAsync(() => world.Brain.Kite.Steps));
-            Assert.False(await world.OnWorldAsync(() => world.Brain.CombatSpells.KiteHolds?.Invoke(world.Player, mob) ?? false), "the kite holds a full-health warrior: " + why);
+                // Then it fights in melee: the creature stays on it (not evading) and takes the warrior's swings.
+                uint healthAtMelee = await world.OnWorldAsync(() => mob.Health);
+                await world.ThinkUntilAsync(4_000, () => false, each: sample);
+                why = await world.OnWorldAsync(() => Describe(world, mob)) + " " + trace;
+                Assert.Equal(0, evadeTicks);
+                Assert.True(await world.OnWorldAsync(() => Gap(world, mob) <= 6f), "the warrior is not in melee reach: " + why);
+                Assert.True(await world.OnWorldAsync(() => mob.Health < healthAtMelee), "the warrior dealt no melee damage: " + why);
+                Assert.Equal(0, shots);
+                Assert.Equal(0, await world.OnWorldAsync(() => world.Brain.Kite.Steps));
+                Assert.NotNull(await world.OnWorldAsync(() => world.Brain.CombatSpells.KiteHolds));
+                Assert.False(await world.OnWorldAsync(() => world.Brain.CombatSpells.KiteHolds!.Invoke(world.Player, mob)), "the kite holds a full-health warrior: " + why);
+            }
+            finally
+            {
+                spellSystem.SpellHit -= onHit;
+            }
+        }
+    }
+
+    /// <summary>
+    /// W3: a hurt warrior that has begun to hold range against a creature, then fights a hostile player (the party and group AI call the kite
+    /// with player targets too). The kite's hold is for creature fights: <c>Update</c> answers false and positioning (<c>HoldRange</c>) and the
+    /// rotation (<c>KiteHolds</c>) both read no hold, so the bot melees the player instead of standing at range with no shot.
+    /// </summary>
+    [Fact]
+    public async Task AHurtWarriorFightingAHostilePlayer_DoesNotHoldRange_WhileACreatureIsOnIt()
+    {
+        ItemTestContent items = Content();
+        using IDisposable scope = items.Use();
+        RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await using (world)
+        {
+            WorldSession enemy = await Combat.PlayerbotPvpTestKit.EnterAsync(world.Host, "KITEENEMY", "Kiteenemy", Combat.PlayerbotPvpTestKit.Orc);
+            try
+            {
+                Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 2, 0));
+                await world.SeeAsync(mob);
+                await world.OnWorldAsync(() =>
+                {
+                    Player player = world.Player;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
+                    SpellFeature feature = world.Session.Services.GetRequiredService<SpellFeature>();
+                    SpellInfo[] added = [Hamstring(), ShootBow()];
+                    feature.System.Store = new SpellStore([.. feature.System.Store.All, .. added], [], []);
+                    foreach (SpellInfo spell in added) Assert.True(feature.Spellbook.LearnSpell(player, spell.Id));
+                    EquipRanged(player, BowEntry, 100);
+                    world.Engage(mob);
+                    player.Health = player.MaxHealth * 45 / 100;
+                    return true;
+                });
+
+                bool holding = await world.ThinkUntilAsync(8_000, () => world.Brain.Kite.HoldRange(world.Player, 0f) > PlayerbotClassRotation.MeleeRange);
+                string why = await world.OnWorldAsync(() => Describe(world, mob));
+                Assert.True(holding, "the warrior never began to hold range against the creature, so the test proves nothing: " + why);
+
+                (bool owned, float hold, bool reads) = await world.OnWorldAsync(() =>
+                {
+                    Player player = world.Player;
+                    Player other = enemy.Player!;
+                    Combat.PlayerbotPvpTestKit.Flag(other);
+                    other.Relocate(player.X + 4, player.Y, player.Z, MathF.PI, world.Session.World.NowMs);
+                    Assert.True(player.Combat.IsInCombat, "the warrior left combat, so the test proves nothing");
+                    bool kiteOwns = world.Brain.Kite.Update(player, other, RiskTestWorld.ThinkMs, null, 0f, world.Brain.Risk, grouped: true);
+                    return (kiteOwns, world.Brain.Kite.HoldRange(player, 0f), world.Brain.CombatSpells.KiteHolds!.Invoke(player, other));
+                });
+                Assert.False(owned, "the kite took a think against a player: " + why);
+                Assert.Equal(0f, hold);
+                Assert.False(reads, "the rotation reads a hold against a player: " + why);
+                Assert.Equal(PlayerbotClassRotation.MeleeRange, await world.OnWorldAsync(() => world.Brain.Kite.HoldRange(world.Player, PlayerbotClassRotation.MeleeRange)));
+            }
+            finally
+            {
+                enemy.Kick();
+                await enemy.ManagedClosed;
+            }
         }
     }
 

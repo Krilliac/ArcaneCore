@@ -101,7 +101,7 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
     /// <summary>
     /// Whether the kite is holding the bot at a range past melee against <paramref name="victim"/> now (what
     /// <see cref="RotationState.KiteHolding"/> reports): only for the creature the kite last thought about, so a PvP fight that shares
-    /// the spell object (the kite is not updated there) never reads a stale hold.
+    /// the spell object never reads a stale hold (<see cref="Update"/> also clears the hold for a player victim, so positioning agrees).
     /// </summary>
     private bool HoldsRange(Player player, Unit? victim)
         => victim is Creature && victim.Guid == _victimGuid && HoldRange(player, 0f) > PlayerbotClassRotation.MeleeRange;
@@ -144,11 +144,21 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
 
         if (_lastUpdateMs != 0 && unchecked(now - _lastUpdateMs) > FightGapMs) EndFight(player, stop: true);
         _lastUpdateMs = Math.Max(1u, now);
+        if (victim is not Creature)
+        {
+            // A player victim (PvP): the kite is a creature-fight behaviour, so nothing holds the bot at range (positioning and the
+            // rotation both read the hold) and a step under way ends.
+            EndStep(player, stop: true);
+            _holding = false;
+            _victimGuid = victim.Guid;
+            return false;
+        }
+
         if (victim.Guid != _victimGuid)
         {
-            // A new victim: the hold was made against the old one.
+            // A new victim: the hold was made against the old one, unless the bot only switched between its pursuers.
+            if (!_holding || !IsPursuer(victim)) _holding = false;
             _victimGuid = victim.Guid;
-            _holding = false;
         }
 
         if (_over) return false;
@@ -212,6 +222,16 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
                 if (pursuers > PlayerbotKiteModel.MaxPursuers || facts.NearestCaster) _holding = false;
                 return false;
         }
+    }
+
+    private bool IsPursuer(Unit unit)
+    {
+        foreach (Creature pursuer in _pursuers)
+        {
+            if (ReferenceEquals(pursuer, unit)) return true;
+        }
+
+        return false;
     }
 
     /// <summary>Forget the fight: the bot died, left combat or was reset.</summary>
@@ -510,7 +530,11 @@ internal sealed class PlayerbotKite(WorldSession session, PlayerbotOptions optio
         float height = player.Locomotion.CollisionHeight;
         for (int sample = 1; sample <= samples; sample++)
         {
-            if (PlayerbotWater.Submerged(map, Vector3.Lerp(from, to, (float)sample / samples), height)) return true;
+            // The lerp of the endpoints' heights is not the ground under the sample (a dip or a bank), so the floor is probed per sample.
+            Vector3 point = Vector3.Lerp(from, to, (float)sample / samples);
+            float floor = FloorNear(map, point.X, point.Y, point.Z);
+            if (!PlayerbotNavigation.InvalidHeight(floor)) point.Z = floor;
+            if (PlayerbotWater.Submerged(map, point, height)) return true;
         }
 
         return false;
