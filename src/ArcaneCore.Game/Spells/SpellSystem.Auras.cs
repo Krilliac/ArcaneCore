@@ -547,8 +547,14 @@ public sealed partial class SpellSystem
     {
         if (holder.IsRemoved || !holder.IsPermanent || holder.AreaParent is not null
             || (holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
-            || holder.HeartbeatRandValue > 0f || holder.PveHeartbeatTimer >= 0
-            || holder.InitialDurationArg < -1 || holder.Duration != -1 || holder.MaxDuration != -1)
+            || holder.HeartbeatRandValue > 0f || holder.PveHeartbeatTimer >= 0)
+        {
+            return true;
+        }
+
+        // ValidateAuraHolder's duration check: a bad duration is reported and repaired once (DurationInvalidReported); after that the
+        // validator does nothing more for it, so an unrepairable InitialDurationArg must not keep the unit off the fast path.
+        if (!holder.DurationInvalidReported && (holder.InitialDurationArg < -1 || holder.Duration != -1 || holder.MaxDuration != -1))
         {
             return true;
         }

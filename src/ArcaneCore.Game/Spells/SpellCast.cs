@@ -277,7 +277,7 @@ public sealed class UnitSpellState
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
-    /// <summary>Whether any holder needed a tick at the last <see cref="SpellSystem"/> aura update (see <c>SpellSystem.AnyTickingHolder</c>); false means the update skipped the snapshot.</summary>
+    /// <summary>Whether any holder needed a tick at the last <see cref="SpellSystem"/> aura update (see <c>SpellSystem.AnyTickingHolder</c>); false means the update skipped the snapshot. Diagnostic only: nothing in the game reads it for behaviour.</summary>
     internal bool HasTickingHolders { get; set; }
 
     /// <summary>Whether the <c>aura/holders-excess</c> anomaly was already reported for this unit's current excess (re-armed when the count falls back under the bound).</summary>

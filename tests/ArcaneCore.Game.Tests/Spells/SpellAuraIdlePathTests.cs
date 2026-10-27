@@ -266,8 +266,10 @@ public sealed class SpellAuraIdlePathTests
 
     // --- stack validation, phased golden trace, re-arm, and every ticking reason ---------------------------
 
-    [Fact]
-    public void APassiveWithAZeroStack_IsRepairedAndReportedOnce_EvenOnAnOtherwiseIdleUnit()
+    [Theory]
+    [InlineData((byte)0)]
+    [InlineData((byte)2)]
+    public void APassiveWithAZeroOrOverMaxStack_IsRepairedAndReportedOnce_EvenOnAnOtherwiseIdleUnit(byte badStack)
     {
         using SpellTestKit kit = Kit();
         kit.System.SpellBatchWindowMs = 0;
@@ -279,7 +281,7 @@ public sealed class SpellAuraIdlePathTests
         Assert.False(state.HasTickingHolders);
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/stack-overflow" && n.Subject == $"spell {StackPassive}");
 
-        holder.StackAmount = 0;
+        holder.StackAmount = badStack;
         Assert.True(SpellSystem.HolderNeedsTick(holder));
         kit.Advance(300);
 
@@ -421,14 +423,39 @@ public sealed class SpellAuraIdlePathTests
         SpellAura aura = holder.AuraSpan.ToArray().Single(a => a is not null)!;
         Assert.False(aura.IsPeriodic);
 
-        if (!aura.PeriodicStalledReported)
-        {
-            Assert.True(SpellSystem.HolderNeedsTick(holder));
-        }
+        // AddAuraHolder already validated it, so the flag is set; clear it to see the unreported state.
+        aura.PeriodicStalledReported = false;
+        Assert.True(SpellSystem.HolderNeedsTick(holder));
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/periodic-stalled" && n.Subject == $"spell {NoPeriodPassive}");
 
         kit.Advance(200);
 
+        Assert.Single(capture.Notices);
         Assert.True(aura.PeriodicStalledReported);
+        Assert.False(SpellSystem.HolderNeedsTick(holder));
+        Assert.False(state.HasTickingHolders);
+    }
+
+    [Fact]
+    public void APassiveWithABadDuration_CountsAsTicking_IsRepairedAndReportedOnce_ThenGoesIdle()
+    {
+        using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0;
+        Player player = AddUnit(kit);
+        CastSelf(kit, player, PassiveA);
+        UnitSpellState state = kit.System.GetState(player.Guid)!;
+        SpellAuraHolder holder = state.Auras.Single();
+        kit.Advance(200);
+        Assert.False(state.HasTickingHolders);
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/duration-invalid" && n.Subject == $"spell {PassiveA}");
+
+        holder.Duration = 5000;
+        Assert.True(SpellSystem.HolderNeedsTick(holder));
+        kit.Advance(300);
+
+        Assert.Single(capture.Notices);
+        Assert.Equal(-1, holder.Duration);
+        Assert.Equal(-1, holder.MaxDuration);
         Assert.False(SpellSystem.HolderNeedsTick(holder));
         Assert.False(state.HasTickingHolders);
     }
