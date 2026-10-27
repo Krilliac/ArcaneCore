@@ -18,6 +18,15 @@ public sealed class SpellRuleOptions
     /// </summary>
     public float MagicHitFloorPercent { get; init; } = 22.0f;
 
+    /// <summary>
+    /// Spell batch window in ms (SpellSystem.Batching.cs): a player's cast that goes off is held until the window closes and then resolves with
+    /// every other cast of that window, so two players who kill, charge or interrupt each other in one window both get their action. Retail 1.12
+    /// batched (Kaivax, Blizzard, 2019, https://us.forums.blizzard.com/en/wow/t/137118/1) and Blizzard's Classic servers used 400 ms until
+    /// 1.13.7 (https://us.forums.blizzard.com/en/wow/t/838945). Opt-in while it is verified against a client: 0 (default) resolves every cast at
+    /// once; 400 is the retail value.
+    /// </summary>
+    public uint SpellBatchWindowMs { get; init; }
+
     /// <summary>Levels a world boss counts above its target (vmangos CONFIG WorldBossLevelDiff, World.cpp:744 default 3).</summary>
     public int WorldBossLevelDiff { get; init; } = CombatConstants.WorldBossLevelDiff;
 
