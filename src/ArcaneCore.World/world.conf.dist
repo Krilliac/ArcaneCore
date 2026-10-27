@@ -1908,6 +1908,26 @@ Cluster.Worker.WorldSchemaVersion = 1
 #----------------------------------------------------------------------------
 
 #
+#    Combat.AuraCritSuppressionPercent
+#        Description: Percent a player's crit from auras (stances, talents, crit on gear) is cut
+#                     against a creature three or more levels above it, on top of the weapon-skill
+#                     term; never more than the aura crit itself. Default 1.8, retail: Blizzard
+#                     confirmed such a modifier exists in 1.12 and on its Classic servers without
+#                     giving its size (Aggrend, 2019-07-10,
+#                     https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414), and 1.8
+#                     is the Classic combat-log estimate
+#                     (https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression). 0 turns
+#                     the cut off (vmangos and cmangos-classic, which only apply the weapon-skill
+#                     term). Melee and ranged attacks and abilities; spells are not affected.
+#        Type: float
+#        Default: 1.8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#combat
+#
+Combat.AuraCritSuppressionPercent = 1.8
+
+#
 #    Combat.CastResetsMeleeSwing
 #        Description: A non-triggered cast of a spell whose interrupt flags carry
 #                     SPELL_INTERRUPT_FLAG_COMBAT (0x08), without Ex2 0x20000, restarts the

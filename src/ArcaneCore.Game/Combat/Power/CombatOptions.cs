@@ -60,6 +60,15 @@ public sealed class CombatOptions
     /// </summary>
     public bool CastResetsMeleeSwing { get; set; } = true;
 
+    /// <summary>
+    /// Percent a player's crit from auras (stances, talents, crit on gear) is cut against a creature three or more levels above it, on top
+    /// of the weapon-skill term; never more than the aura crit itself. Default 1.8, retail: Blizzard confirmed such a modifier exists in 1.12
+    /// and on its Classic servers without giving its size (Aggrend, 2019-07-10, https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414),
+    /// and 1.8 is the Classic combat-log estimate (https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression). 0 turns the cut off
+    /// (vmangos and cmangos-classic, which only apply the weapon-skill term). Melee and ranged attacks and abilities; spells are not affected.
+    /// </summary>
+    public float AuraCritSuppressionPercent { get; set; } = 1.8f;
+
     /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
 

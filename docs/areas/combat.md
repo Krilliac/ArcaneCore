@@ -67,10 +67,21 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
   always crit by creatures, and by players with any crit chance.
 - **Armor** (vmangos `SpellCaster::CalcArmorReducedDamage`). r = 0.1·armor / (8.5·level + 40),
   and the reduction is r / (1 + r), capped at 75%. At least 1 damage remains.
+- **Crit against +3 creatures.** On top of the weapon-skill term (0.2% per point of the capped deficit, 3% for 300 skill
+  against a level-63 boss), a player's crit from auras (stances, talents, crit on gear: MOD_CRIT_PERCENT) is cut by
+  `Combat:AuraCritSuppressionPercent` (default 1.8, never more than the aura crit) against a creature three or more levels
+  above it. This covers white melee and ranged swings and melee/ranged abilities, not magic spells. Evidence: Blizzard
+  confirmed the modifier and that it matches 1.12 without giving its size (Aggrend, 2019-07-10,
+  <https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414>); 1.8 is the Classic combat-log estimate over about
+  72,000 auto attacks, 4.84% total suppression (<https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression>).
+  vmangos and cmangos-classic have only the skill term; set the option to 0 to reproduce them. Player victims and pet
+  attackers are not suppressed, since the evidence covers neither.
 - **Crits** deal 200% (vmangos `CalculateMeleeDamage`, MELEE_HIT_CRIT).
 - **Crushing blows** deal 150%.
 - **Block** removes the shield block value: level/2 + strength/20 for creatures, and
-  strength/20 − 1 for players.
+  strength/20 − 1 for players. The −1 matches two values seen on Blizzard's Classic servers
+  (6 block shield + 60 Strength blocked 8; 15 block shield + 119 Strength showed 19,
+  <https://us.forums.blizzard.com/en/wow/t/block-value-formula/283718>).
 
 ### Damage, rage, combat flags, threat
 - `DealDamage`, following vmangos `Unit::DealDamage`:

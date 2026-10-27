@@ -531,6 +531,16 @@ public sealed partial class MapCombat
             ? pa.GetFloat(ranged ? UpdateFields.PlayerRangedCritPercentage : UpdateFields.PlayerCritPercentage)
             : 5f + (auras?.GetTotalAuraModifier(attacker, AuraType.ModCritPercent) ?? 0);
 
+        // The aura crit suppression against +3 creatures (MeleeHitTable.AuraCritSuppressionFor; Aggrend, Blizzard, 2019-07-10,
+        // https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414). The aura part is the weapon-checked MOD_CRIT_PERCENT
+        // sum, the FLAT term the stat system folds into the player's crit field (StatSystem.cpp:531-577, Player.cpp:7029-7070).
+        int victimMaxSkill = MeleeHitTable.SkillMaxForLevel(victim, attacker);
+        float auraCritSuppression = MeleeHitTable.AuraCritSuppressionFor(
+            attacker is Player, victimIsPlayer, attacker.Level, victimMaxSkill / 5, Environment.Options.AuraCritSuppressionPercent);
+        float attackerAuraCrit = auraCritSuppression > 0f && auras is not null
+            ? WeaponAuraModifiers.Get(auras, attacker, attackType, AuraType.ModCritPercent)
+            : 0f;
+
         return new MeleeRollInput
         {
             AttackType = attackType,
@@ -546,7 +556,7 @@ public sealed partial class MapCombat
             VictimCreatureCanBlock = creatureVictim?.CanBlock ?? true,
             VictimLevel = victim.Level,
             AttackerMaxSkill = MeleeHitTable.SkillMaxForLevel(attacker, victim),
-            VictimMaxSkill = MeleeHitTable.SkillMaxForLevel(victim, attacker),
+            VictimMaxSkill = victimMaxSkill,
             AttackerWeaponSkill = WeaponSkill(attacker, attackType, victim),
             VictimDefenseSkill = hooks.GetDefenseSkill(victim, attacker),
             DualWield = HasOffhandWeapon(attacker),
@@ -554,6 +564,8 @@ public sealed partial class MapCombat
             VictimAttackerHitBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedHitChance : AuraType.ModAttackerMeleeHitChance) ?? 0, // :414-418
             VictimAttackerCritBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedCritChance : AuraType.ModAttackerMeleeCritChance) ?? 0, // Unit.cpp:2577-2581
             BaseCritChance = baseCrit,
+            AttackerAuraCritChance = attackerAuraCrit,
+            AuraCritSuppression = auraCritSuppression,
             DodgeChance = dodge,
             ParryChance = parry,
             BlockChance = block,
