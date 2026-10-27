@@ -390,11 +390,16 @@ internal static class PlayerbotMotionAnomalies
         // The walk keeps a navigated step on the mesh surface it walks (PlayerbotMotion.MeshSurface: IMeshPointQuery.Raycast), a query
         // that is not TryGetMeshFloorUnder's nearest-polygon box: on a stacked storey the two can disagree, and the bot stood on the
         // polygon the walk put it on was judged against the storey below. The start polygon's surface under the bot (the zero-length
-        // walk StaysOnMesh uses) within MeshStoreyYards is the floor it walks on; a bot with no polygon that close is still on air.
+        // walk StaysOnMesh uses) within MeshStoreyYards is the floor it walks on; a bot with no polygon that close is still on air. The start
+        // polygon is the nearest within NavMeshPathfinder.NearExtents (3 yd sideways): off a ledge's edge the walk answers a hit at the
+        // edge, which is not under the bot, so only a polygon straight under it (IMeshFloorQuery.MeshFloorHorizontalYards, the sideways
+        // rule TryGetMeshFloorUnder and the under-map query use) counts.
         if (ValidHeight(floor) && at.Z - floor > AirwalkYards && collision.MeshPoints is { } walkable)
         {
             MeshRaycastResult under = walkable.Raycast(collision.Map.MapId, at, at, PlayerbotMoveCheck.MeshOptions);
-            if (under.Available && float.IsFinite(under.Point.Z) && MathF.Abs(under.Point.Z - at.Z) < MeshStoreyYards && under.Point.Z > floor)
+            if (under.Available && !under.Hit && float.IsFinite(under.Point.Z)
+                && Vector2.Distance(new(under.Point.X, under.Point.Y), new(at.X, at.Y)) <= IMeshFloorQuery.MeshFloorHorizontalYards
+                && MathF.Abs(under.Point.Z - at.Z) < MeshStoreyYards && under.Point.Z > floor)
             {
                 return under.Point.Z;
             }
