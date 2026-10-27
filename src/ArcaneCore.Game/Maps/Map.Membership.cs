@@ -267,6 +267,7 @@ public sealed partial class Map
     private void RemoveFromWorld(WorldObject obj)
     {
         _objects.Remove(obj.Guid);
+        NoteRemoval();
         if (obj is Unit) _heartbeatSnapshotDirty = true;
         if (_mapWide.Remove(obj))
         {
