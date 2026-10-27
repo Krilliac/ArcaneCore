@@ -16,10 +16,18 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
 
+/// <summary>The L3 tests read process-wide counters and tables (dock computations, tame scan clocks): no other test class runs beside them.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class PlayerbotHotSpotL3Collection
+{
+    public const string Name = "Playerbot hot spot L3 (process-wide counters)";
+}
+
 /// <summary>
 /// Hot-spot lane L3: the tame-target scan of a pet-less hunter reads the cells around the bot (not every creature of the map) and keeps its
 /// scan clocks bounded; the dock answer of a port is computed once per navigation mesh and port.
 /// </summary>
+[Collection(PlayerbotHotSpotL3Collection.Name)]
 public sealed class PlayerbotHotSpotL3Tests
 {
     private static uint s_entry = 996_000;
@@ -34,9 +42,9 @@ public sealed class PlayerbotHotSpotL3Tests
         };
     }
 
-    private static Creature Spawn(WorldTestHost host, Player near, float dx, float dy, CreatureTemplate template)
+    private static Creature Spawn(WorldTestHost host, Player near, float dx, float dy, CreatureTemplate template, float dz = 0f)
         => host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(near.Map!)
-            .SpawnTemporary(template, near.X + dx, near.Y + dy, near.Z, 0);
+            .SpawnTemporary(template, near.X + dx, near.Y + dy, near.Z + dz, 0);
 
     /// <summary>The scan as it was: every creature of the map, nearest wins, equal distances to the lower guid.</summary>
     private static Creature? FullScan(Player player, Map map)
@@ -82,6 +90,10 @@ public sealed class PlayerbotHotSpotL3Tests
                 Spawn(host, player, 1f, 1f, Template(rank: 1));          // elite: never
                 Spawn(host, player, 2f, 2f, Template(level: 9));         // above the hunter: never
                 Spawn(host, player, 2f, -2f, Template(type: 7, flags: 0)); // not a beast: never
+                // Same XY distance as the ring but 6 yd up/down: the 3D distance decides, so these lose to (or tie by guid with) the ring.
+                Spawn(host, player, ring, 0f, beast, dz: 6f);
+                Spawn(host, player, -ring, 0f, beast, dz: -6f);
+                Spawn(host, player, 3f, 0f, beast, dz: ring + 1f);  // 2D-near, 3D-far: beyond reach in 3D
                 for (int i = 0; i < 25; i++)
                     Spawn(host, player, random.Next(-60, 61), random.Next(-60, 61), Template());
                 for (int i = 0; i < 10; i++)
@@ -93,12 +105,17 @@ public sealed class PlayerbotHotSpotL3Tests
         }
     }
 
+    /// <summary>
+    /// Pins the work the scan hands to its filter and the locality of the grid read it relies on. The counter is taken after the 2D radius filter of
+    /// <see cref="CreatureMapSystem.CollectCreaturesNear"/>, so it cannot tell a grid read from a full scan by itself (that method falls back to one
+    /// for an oversized query); the cell read is therefore checked directly on the same grid with the same circle.
+    /// </summary>
     [Fact]
-    public async Task TameScan_ReadsOnlyTheCreaturesNearTheBot()
+    public async Task TameScan_FiltersOnlyCreaturesWithinReach_AndTheGridCellsAroundTheBotHoldFew()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession bot = await CombatTestSessions.EnterAsync(host, "TAMEB", "Tameb");
-        (long examined, int onMap, int near) = await host.OnWorldAsync(() =>
+        (long examined, int onMap, int inCells) = await host.OnWorldAsync(() =>
         {
             Player player = bot.Player!;
             for (int i = 0; i < 5; i++)
@@ -108,12 +125,15 @@ public sealed class PlayerbotHotSpotL3Tests
             long before = PlayerbotCombatView.TameCreaturesExamined;
             PlayerbotCombatView.ScanForTameCandidate(player, player.Map!);
             int total = player.Map!.FindUpdater<CreatureMapSystem>()!.Creatures.Count;
-            return (PlayerbotCombatView.TameCreaturesExamined - before, total, 5);
+            var cells = new List<WorldObject>();
+            player.Map.Grids.CollectObjects(player.X, player.Y, 28f + 10f + player.Map.Grids.MaxBoundingRadius, cells);
+            return (PlayerbotCombatView.TameCreaturesExamined - before, total, cells.Count);
         });
 
         Assert.True(onMap >= 125, $"the map holds {onMap} creatures");
-        Assert.True(examined >= near, $"examined {examined}");
-        Assert.True(examined < 40, $"the scan filtered {examined} of {onMap} creatures; it must read only the cells near the bot");
+        Assert.True(examined >= 5, $"examined {examined}");
+        Assert.True(examined < 40, $"the scan filtered {examined} of {onMap} creatures");
+        Assert.True(inCells < 40, $"the grid cells around the bot hold {inCells} objects; a full scan would read {onMap}");
     }
 
     [Fact]
@@ -251,5 +271,50 @@ public sealed class PlayerbotHotSpotL3Tests
         await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(lineOfSight: new Floor(port.Z), pathfinder: drier));
         Vector3 other = await world.OnWorldAsync(() => PlayerbotShip.ResolveDockTarget(world.Player.Map!, port, toward));
         Assert.True(Vector2.Distance(new Vector2(other.X, other.Y), new Vector2(port.X, port.Y)) >= 20f, $"resolved {other} against the wider wet area");
+    }
+
+    [Fact]
+    public async Task DockCache_DoesNotStoreAnAnswerTheProbeLayerCutShort()
+    {
+        var mesh = new DockMesh(ShipTestWorld.PortOnMap0.Position, wetRadius: 10f);
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        Vector3 port = ShipTestWorld.PortOnMap0.Position;
+        Vector3 toward = port + new Vector3(-40f, 0f, 0f);
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(lineOfSight: new Floor(port.Z), pathfinder: mesh));
+
+        (long cutComputes, Vector3 cutAnswer, long afterComputes, Vector3 fullAnswer, long hitComputes) = await world.OnWorldAsync(() =>
+        {
+            Map map = world.Player.Map!;
+            PlayerbotShip.InvalidateDockCache();
+            // A fallback query with less than MinQueryNodes left is refused without a search: the dock probes answer "no path", which is not "no dock".
+            var probe = new PlayerbotThinkProbe { NodeBudget = 10 };
+            long start = PlayerbotShip.DockComputes;
+            Vector3 cut;
+            probe.Begin();
+            try
+            {
+                using (PlayerbotThinkProbe.Fallback())
+                    cut = PlayerbotShip.ResolveDockTarget(map, port, toward);
+            }
+            finally
+            {
+                probe.End();
+            }
+
+            long cutN = PlayerbotShip.DockComputes - start;
+            Assert.True(probe.Refused > 0, "the probe refused the dock queries");
+            long mark = PlayerbotShip.DockComputes;
+            Vector3 full = PlayerbotShip.ResolveDockTarget(map, port, toward); // outside the budget: computed in full, because the cut answer was not stored
+            long afterN = PlayerbotShip.DockComputes - mark;
+            long hitMark = PlayerbotShip.DockComputes;
+            PlayerbotShip.ResolveDockTarget(map, port, toward);
+            return (cutN, cut, afterN, full, PlayerbotShip.DockComputes - hitMark);
+        });
+
+        Assert.Equal(1, cutComputes);
+        Assert.Equal(port, cutAnswer);          // nothing known dry under the refused budget
+        Assert.Equal(1, afterComputes);         // the cut answer was not remembered
+        Assert.NotEqual(port, fullAnswer);      // the full computation finds the dry pier
+        Assert.Equal(0, hitComputes);           // and that one is
     }
 }

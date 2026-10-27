@@ -1017,9 +1017,12 @@ internal static partial class PlayerbotShip
         if (!cache.TryGet(key, Environment.TickCount64, out DockEntry? entry))
         {
             t_dockPending = false;
-            Interlocked.Increment(ref s_dockComputes[0]);
+            Interlocked.Increment(ref DockComputeCount);
+            int cutsBefore = PlayerbotThinkProbe.BudgetCuts;
             entry = ComputeDock(map, portPos);
-            if (!t_dockPending)
+            // Not stored when any probe was cut short: pending tiles, a fallback query refused or clamped by the think's node budget, or a
+            // plan query answered capped/without a search. Such an answer says "unknown", not "no dock".
+            if (!t_dockPending && PlayerbotThinkProbe.BudgetCuts == cutsBefore)
                 cache.Store(key, entry, Environment.TickCount64 + DockCacheTtlMs);
         }
 
@@ -1042,17 +1045,21 @@ internal static partial class PlayerbotShip
         return best ?? portPos;
     }
 
-    /// <summary>How long a cached dock answer is kept: the ring reads terrain, models and liquid of tiles beside the port's, which may load later.</summary>
+    /// <summary>
+    /// How long a cached dock answer is kept: the ring reads terrain, models and liquid of tiles beside the port's, which may load later.
+    /// The cache is keyed by the navigation mesh object only: a models or liquid reload that does not replace the pathfinder stays stale for
+    /// up to this long (or until <see cref="InvalidateDockCache"/>).
+    /// </summary>
     internal const long DockCacheTtlMs = 60_000;
 
     /// <summary>The most ports one cache keeps (a world has a dozen).</summary>
     private const int DockCacheMaxEntries = 256;
 
     [ThreadStatic] private static bool t_dockPending;
-    private static readonly long[] s_dockComputes = new long[1]; // Interlocked
+    private static long DockComputeCount; // Interlocked only
 
     /// <summary>The dock searches run in full since the process started (test seam: a cache hit adds none).</summary>
-    internal static long DockComputes => Interlocked.Read(ref s_dockComputes[0]);
+    internal static long DockComputes => Interlocked.Read(ref DockComputeCount);
 
     private readonly record struct DockKey(uint MapId, int X, int Y, int Z);
 
@@ -1161,7 +1168,7 @@ internal static partial class PlayerbotShip
                 LoadTiles = true,
                 NonBlockingTiles = true, // a tile not in yet is read on the pool; the probe is then no point (TilesPending) and the next think asks again
             });
-            if ((res.Type & PathType.TilesPending) != 0) t_dockPending = true;
+            if ((res.Type & PathType.TilesPending) != 0 || PlayerbotThinkProbe.LastQueryCapped) t_dockPending = true;
             if ((res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
                 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards
                 && (res.Points.Count == 0 || MathF.Abs(res.End.Z - probe.Z) <= 5f))
@@ -1201,7 +1208,7 @@ internal static partial class PlayerbotShip
             LoadTiles = true,
             NonBlockingTiles = true, // pending is not dry mesh: the dock resolves on a later think, once the tile is in
         });
-        if ((res.Type & PathType.TilesPending) != 0) t_dockPending = true;
+        if ((res.Type & PathType.TilesPending) != 0 || PlayerbotThinkProbe.LastQueryCapped) t_dockPending = true;
         return (res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
             && (res.Points.Count == 0 || MathF.Abs(res.End.Z - point.Z) <= 5f)
             && !PlayerbotNavigation.IsPointOnMeshFragment(map, res.Points.Count > 0 ? res.End : point);

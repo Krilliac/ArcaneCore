@@ -272,11 +272,11 @@ internal static class PlayerbotCombatView
     }
 
     [ThreadStatic] private static List<Creature>? t_tameNear;
-    private static readonly long[] s_tameExamined = new long[1]; // Interlocked
-    private static readonly uint[] s_lastTameSweep = new uint[1]; // world thread only
+    private static long TameExamined; // Interlocked only
+    private static uint LastTameSweepMs; // written only on the world thread
 
-    /// <summary>The creatures the tame scan has run its filter over, since the process started (test seam: a scan reads the cells around the bot, not the map).</summary>
-    internal static long TameCreaturesExamined => Interlocked.Read(ref s_tameExamined[0]);
+    /// <summary>The creatures within reach (after the 2D radius filter of the cell read) the tame scan has run its filter over, since the process started (test seam).</summary>
+    internal static long TameCreaturesExamined => Interlocked.Read(ref TameExamined);
 
     /// <summary>Whether a bot has a tame scan clock on record (test seam).</summary>
     internal static bool HasTameScan(ulong botGuid) => s_lastTameScan.ContainsKey(botGuid);
@@ -294,9 +294,9 @@ internal static class PlayerbotCombatView
     /// </summary>
     internal static void SweepTameScans(uint now, bool force = false)
     {
-        if (!force && unchecked(now - s_lastTameSweep[0]) < TameScanIntervalMs)
+        if (!force && unchecked(now - LastTameSweepMs) < TameScanIntervalMs)
             return;
-        s_lastTameSweep[0] = now;
+        LastTameSweepMs = now;
         foreach (KeyValuePair<ulong, uint> entry in s_lastTameScan)
         {
             if (unchecked(now - entry.Value) >= TameScanIntervalMs)
@@ -319,7 +319,7 @@ internal static class PlayerbotCombatView
         try
         {
             creatures.CollectCreaturesNear(player.X, player.Y, TameReach, near);
-            Interlocked.Add(ref s_tameExamined[0], near.Count);
+            Interlocked.Add(ref TameExamined, near.Count);
             Creature? best = null;
             float bestSq = TameReach * TameReach;
             foreach (Creature c in near)
