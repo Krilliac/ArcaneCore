@@ -112,7 +112,9 @@ public sealed class TravelLegFailureTests(ITestOutputHelper output)
     public async Task ADockNoWalkReaches_FailsTheShipLeg_TheReplanFindsNoRoute_AndTheJourneyFailsOnce_TheQuestKept()
     {
         await using ShipTestWorld world = await ShipTestWorld.StartAsync();
-        await world.PlaceAsync(0, ShipTestWorld.Start + new Vector3(-100f, 0f, 0f));
+        // 119 yards from the port: past the walk's hand-off (100) but within the ship leg's reach (140), so the failed walk hands off to the
+        // boat, whose own walk to the dock then fails (a walk failing farther out is the walk's own: TravelFarHandOffTests).
+        await world.PlaceAsync(0, ShipTestWorld.Start + new Vector3(-55f, 0f, 0f));
         await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new Refusing()));
         PlayerbotOptions options = TravelJourneyShipTests.Options();
         var brain = new PlayerbotBrain(world.Session, options);

@@ -21,6 +21,15 @@ public sealed class UldamanEncounterTests
         }
     }
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Fact]
     public void Archaedas_AfterAWipe_IsFrozenAndUnselectableAgain_AndTheNextAltarUseReplaysTheAwakening()
     {
@@ -80,6 +89,7 @@ public sealed class UldamanEncounterTests
 
         archaedas.Health = archaedas.MaxHealth * 3 / 10;
         Ticks(run, 100); // 30 % is below both 66.6 % and 33.2 %: guardians, then warders
+        ResolveSpellBatch(spells);
 
         Assert.All(guardians, g => Assert.Same(run.Player, g.Combat.Victim));
         Assert.Equal(2, warders.Count(w => w.Combat.Victim is not null));

@@ -96,6 +96,37 @@ public sealed class PathStartWalkPolyTests
     }
 
     [Theory]
+    [InlineData(10f, 15f, true)]    // only the tall second box finds the floor, 15 below
+    [InlineData(10f, 60f, true)]    // 60 above an unmeshed ledge's floor (issue #1501)
+    [InlineData(10f, -8f, true)]    // the floor 8 above
+    [InlineData(10f, 4.5f, false)]  // inside the first box
+    [InlineData(10f, -4f, false)]   // the first box finds the floor 4 above
+    [InlineData(10f, 0f, false)]    // on the floor
+    public void AQueryWithoutAnEndTolerance_TellsAStartFoundOnlyFarAboveOrBelowItsPolygon(float startX, float startZ, bool expected)
+    {
+        using var fixture = new NavMeshFixture();
+        NavMeshPathfinder nav = Load(fixture);
+
+        PathResult path = nav.FindPath(MapId, new Vector3(startX, 10, startZ), OnMesh, new PathOptions { Mover = PathMover.FromInhabit(1) });
+
+        Assert.True(path.HasPath);
+        Assert.Equal(expected, path.StartFar);
+    }
+
+    [Fact]
+    public void AQueryWithAnEndTolerance_NeverTellsAFarStart()
+    {
+        // vmangos grades the start itself (farFromPoly, PathFinder.cpp:209-235): the path is incomplete, StartFar stays unset.
+        using var fixture = new NavMeshFixture();
+        NavMeshPathfinder nav = Load(fixture);
+
+        PathResult path = nav.FindPath(MapId, new Vector3(10, 10, 8), OnMesh, Vmangos);
+
+        Assert.Equal(PathType.Incomplete, path.Type);
+        Assert.False(path.StartFar);
+    }
+
+    [Theory]
     [InlineData(10f, 8f, 4f, 0f)]  // the start 8 above its polygon
     [InlineData(10f, 0f, 4f, 8f)]  // the end 8 above its polygon
     public void AFlierFarFromAnEndpointsPolygon_GoesStraight(float startX, float startZ, float endX, float endZ)

@@ -179,6 +179,47 @@ public sealed class PlayerbotConsumableRecoveryTests
     }
 
     [Fact]
+    public async Task BatchedFoodUse_KeepsTheBotSitting_UntilTheFoodLands()
+    {
+        // With a spell batch window the food's go waits for the boundary: the rest has begun, not ended. Standing up at the next update
+        // would cancel the food the moment it lands (STANDING_CANCELS), and the bot would eat again and again.
+        await using WorldTestHost host = Start(out _, FoodTemplate(FoodItem, FoodSpell));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        try
+        {
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            await host.OnWorldAsync(() =>
+            {
+                spells.SpellBatchWindowMs = 400;
+                InstallSpells(host, Food(FoodSpell));
+                Player player = session.Player!;
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(FoodItem, 2, out _));
+                player.Health = 20;
+                session.ManagedBudget = new ManagedActionBudget(6);
+                brain.Update(500); // Sit.
+                brain.Update(500); // Use the food: held for the batch boundary.
+                Assert.True(spells.HasPendingGo(player));
+                brain.Update(500); // Not landed yet: the rest goes on.
+                Assert.Equal(StandState.Sit, player.StandState);
+                return true;
+            });
+            await host.WaitForWorldAsync(() => spells.HasAura(session.Player!, FoodSpell), "the batched food landed");
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                session.ManagedBudget = new ManagedActionBudget(6);
+                brain.Update(500);
+                Assert.Equal(StandState.Sit, player.StandState);
+                Assert.True(spells.HasAura(player, FoodSpell));
+                Assert.Equal(1u, player.Inventory.GetItemCount(FoodItem));
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task CombatOrRemovedRecoveryAuraEndsRestWaitImmediately()
     {
         await using WorldTestHost host = Start(out _, FoodTemplate(FoodItem, FoodSpell));

@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.Population;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -169,7 +170,11 @@ internal static class PlayerbotQaClassifier
             IReadOnlyList<uint> objectives = questGoal && s.Quest != 0 ? facts.QuestObjectiveCreatures(s.Quest) : [];
             QaTemplateFacts? template = target != 0 ? facts.Template(target) : null;
             // A quest goal's target may be a game object; it is a creature when it has a template or the quest names it as an objective creature.
-            bool creature = target != 0 && (!questGoal || template is not null || objectives.Contains(target));
+            // An Explore stall's target is the entry the brain remembered from an earlier goal (GitHub #1481), and a Gather goal's is a game object node
+            // (GitHub #1487): neither is a creature the bot was walking to, so a missing spawn for it says nothing.
+            bool noCreatureTarget = string.Equals(s.Goal, nameof(PlayerbotGoalKind.Explore), StringComparison.Ordinal)
+                || string.Equals(s.Goal, nameof(PlayerbotGoalKind.Gather), StringComparison.Ordinal);
+            bool creature = target != 0 && !noCreatureTarget && (!questGoal || template is not null || objectives.Contains(target));
             if (creature && Spawns(s, facts, target) == 0)
             {
                 return new QaClassification(QaCause.MissingData, NoSpawns(s, target, template is null), title);

@@ -19,6 +19,15 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// </summary>
 public sealed class CharmPossessTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     public const uint PossessSpell = 920_001;
     public const uint CharmSpell = 920_002;
     public const uint EyesOfTheBeast = 920_003;
@@ -123,6 +132,7 @@ public sealed class CharmPossessTests
         session.Clear();
 
         kit.Spells.Advance(10_000);
+        ResolveSpellBatch(kit.Spells);
 
         Assert.True(player.CharmGuid.IsEmpty);
         Assert.Equal(0ul, player.GetUInt64(UpdateFields.PlayerFarsight));

@@ -14,6 +14,19 @@ namespace ArcaneCore.Game.Tests.ClassSpells.Totems;
 /// <summary>Active totems: vmangos AI/TotemAI.cpp:66-125, Maps/GridNotifiers.h:880-898.</summary>
 public sealed class ActiveTotemTests
 {
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(TotemTestKit kit)
+    {
+        uint window = kit.Spells.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     [Fact]
     public void ActiveTotem_CastsNormallyAtNearestEnemy_WithoutRestartingOrMoving()
     {
@@ -35,6 +48,7 @@ public sealed class ActiveTotemTests
         Assert.Equal(500, cast.Timer);
         Assert.Equal(100u, near.Health);
         kit.Advance(500);
+        FlushSpellBatch(kit);
 
         Assert.Equal(85u, near.Health);
         Assert.Equal(100u, far.Health);
@@ -196,6 +210,7 @@ public sealed class ActiveTotemTests
         kit.Spells.Units = new AllMapUnits();
         Creature totem = Summon(kit, owner);
         kit.Advance(1100);
+        FlushSpellBatch(kit);
         Assert.Equal(85u, enemy.Health);
         Assert.Equal(enemy.Guid, kit.Spells.GetState(totem.Guid)!.CurrentCast!.Targets.Unit);
     }

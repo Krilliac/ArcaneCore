@@ -213,7 +213,7 @@ public sealed partial class MapCombat
     /// <summary>
     /// vmangos Unit::CanReachWithMeleeAutoAttack / GetCombatReachToTarget: reach =
     /// max(reach, 1.5) of both + 4/3, at least 5 yd, plus 2.66 yd leeway when a player and its
-    /// target both move without walking; 2D distance² &lt; reach², dz² &lt; 36.
+    /// target both move without walking (unless <see cref="CombatOptions.MeleeMovementLeeway"/> is off); 2D distance² &lt; reach², dz² &lt; 36.
     /// </summary>
     public static bool CanReachWithMeleeAutoAttack(Unit attacker, Unit victim)
     {
@@ -228,7 +228,7 @@ public sealed partial class MapCombat
             reach = CombatConstants.AttackDistance;
         }
 
-        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim))
+        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim) && MeleeLeewayEnabled(attacker))
         {
             reach += CombatConstants.LeewayBonusRange;
         }
@@ -257,7 +257,7 @@ public sealed partial class MapCombat
             reach = CombatConstants.AttackDistance;
         }
 
-        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim))
+        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim) && MeleeLeewayEnabled(attacker))
         {
             reach += CombatConstants.LeewayBonusRange;
         }
@@ -266,6 +266,14 @@ public sealed partial class MapCombat
         float dy = attacker.Y - victim.Y;
         return (dx * dx) + (dy * dy) < reach * reach;
     }
+
+    /// <summary>
+    /// <see cref="CombatOptions.MeleeMovementLeeway"/> of the attacker's world (retail on: Blizzard's WoW Classic "Not A Bug" list,
+    /// https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23). Read only once both units already qualify, so
+    /// the common standing-still check never looks the options up; a unit outside a map uses the default (retail).
+    /// </summary>
+    private static bool MeleeLeewayEnabled(Unit attacker)
+        => attacker.Map is not { } map || CombatEnvironment.For(map.World).Options.MeleeMovementLeeway;
 
     private static float MeleeReach(Unit unit)
     {
@@ -332,7 +340,7 @@ public sealed partial class MapCombat
                     {
                         while (c.HasPendingExtraAttacks && extraVictim is not null)
                         {
-                            AttackerStateUpdate(attacker, extraVictim, WeaponAttackType.BaseAttack);
+                            Swing(attacker, extraVictim, WeaponAttackType.BaseAttack);
                             c.ConsumeExtraAttack();
                             extraAttackPerformed = true;
                         }
@@ -357,7 +365,7 @@ public sealed partial class MapCombat
                         c.SetAttackTimer(WeaponAttackType.OffAttack, CombatConstants.AttackDisplayDelayMs);
                     }
 
-                    AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
+                    Swing(attacker, victim, WeaponAttackType.BaseAttack);
                     c.ResetAttackTimer(WeaponAttackType.BaseAttack);
                 }
 
@@ -368,7 +376,7 @@ public sealed partial class MapCombat
                         c.SetAttackTimer(WeaponAttackType.BaseAttack, CombatConstants.AttackDisplayDelayMs);
                     }
 
-                    AttackerStateUpdate(attacker, victim, WeaponAttackType.OffAttack);
+                    Swing(attacker, victim, WeaponAttackType.OffAttack);
                     c.ResetAttackTimer(WeaponAttackType.OffAttack);
                 }
 
@@ -531,6 +539,16 @@ public sealed partial class MapCombat
             ? pa.GetFloat(ranged ? UpdateFields.PlayerRangedCritPercentage : UpdateFields.PlayerCritPercentage)
             : 5f + (auras?.GetTotalAuraModifier(attacker, AuraType.ModCritPercent) ?? 0);
 
+        // The aura crit suppression against +3 creatures (MeleeHitTable.AuraCritSuppressionFor; Aggrend, Blizzard, 2019-07-10,
+        // https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414). The aura part is the weapon-checked MOD_CRIT_PERCENT
+        // sum, the FLAT term the stat system folds into the player's crit field (StatSystem.cpp:531-577, Player.cpp:7029-7070).
+        int victimMaxSkill = MeleeHitTable.SkillMaxForLevel(victim, attacker);
+        float auraCritSuppression = MeleeHitTable.AuraCritSuppressionFor(
+            attacker is Player, victimIsPlayer, attacker.Level, victimMaxSkill / 5, Environment.Options.AuraCritSuppressionPercent);
+        float attackerAuraCrit = auraCritSuppression > 0f && auras is not null
+            ? WeaponAuraModifiers.Get(auras, attacker, attackType, AuraType.ModCritPercent)
+            : 0f;
+
         return new MeleeRollInput
         {
             AttackType = attackType,
@@ -546,7 +564,7 @@ public sealed partial class MapCombat
             VictimCreatureCanBlock = creatureVictim?.CanBlock ?? true,
             VictimLevel = victim.Level,
             AttackerMaxSkill = MeleeHitTable.SkillMaxForLevel(attacker, victim),
-            VictimMaxSkill = MeleeHitTable.SkillMaxForLevel(victim, attacker),
+            VictimMaxSkill = victimMaxSkill,
             AttackerWeaponSkill = WeaponSkill(attacker, attackType, victim),
             VictimDefenseSkill = hooks.GetDefenseSkill(victim, attacker),
             DualWield = HasOffhandWeapon(attacker),
@@ -554,6 +572,8 @@ public sealed partial class MapCombat
             VictimAttackerHitBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedHitChance : AuraType.ModAttackerMeleeHitChance) ?? 0, // :414-418
             VictimAttackerCritBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedCritChance : AuraType.ModAttackerMeleeCritChance) ?? 0, // Unit.cpp:2577-2581
             BaseCritChance = baseCrit,
+            AttackerAuraCritChance = attackerAuraCrit,
+            AuraCritSuppression = auraCritSuppression,
             DodgeChance = dodge,
             ParryChance = parry,
             BlockChance = block,
@@ -883,7 +903,8 @@ public sealed partial class MapCombat
 
         if (direct && combatLink)
         {
-            if (attacker.Combat.Victim is null && attacker is Player)
+            // Not for a held swing of the batch (MapCombat.SwingBatch.cs): its player sent CMSG_ATTACKSTOP within the window, and stays stopped.
+            if (attacker.Combat.Victim is null && attacker is Player && !_resolvingHeldSwings)
             {
                 Attack(attacker, victim, melee: meleeDamage);
             }

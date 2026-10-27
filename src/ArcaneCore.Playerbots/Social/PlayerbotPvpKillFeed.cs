@@ -47,6 +47,12 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
         }
     }
 
+    /// <summary>Whether the deaths on <paramref name="map"/> are heard (tests).</summary>
+    internal bool Hears(Map map)
+    {
+        lock (_gate) return _maps.Contains(map);
+    }
+
     public void Dispose()
     {
         lock (_gate)

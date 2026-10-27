@@ -40,7 +40,13 @@ public sealed class EnchantUnavailableTests
     {
         rig.Session.Clear();
         rig.Kit.Spellbook.Teach(rig.Player, EnchantSpell);
-        return rig.Kit.System.HandleCastRequest(rig.Player, EnchantSpell, new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = item.Guid });
+        SpellCastResult result = rig.Kit.System.HandleCastRequest(rig.Player, EnchantSpell, new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = item.Guid });
+        if (rig.System.SpellBatchWindowMs != 0)
+        {
+            rig.Kit.Advance(rig.System.SpellBatchWindowMs); // a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) holds the go until its boundary
+        }
+
+        return result;
     }
 
     [Fact]

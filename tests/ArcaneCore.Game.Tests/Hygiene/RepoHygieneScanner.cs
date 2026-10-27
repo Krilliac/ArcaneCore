@@ -123,6 +123,13 @@ internal static class RepoHygieneScanner
             yield return $"forbidden client-data extension {extension}";
         }
 
+        // Path.GetExtension sees only ".gz": a compressed database dump (tools/ops/deploy/backup-database.sh writes arcanecore-<time>.sql.gz)
+        // holds accounts and characters and must never be committed.
+        if (path.EndsWith(".sql.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return "compressed SQL dump";
+        }
+
         string full = Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar));
         byte[] probe = ReadProbe(full);
         foreach ((string name, byte[] bytes) in Magics)

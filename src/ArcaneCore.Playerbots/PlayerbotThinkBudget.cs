@@ -152,7 +152,8 @@ internal sealed class PlayerbotThinkBudget
 /// An estimate of the time the main think lane needs for a full pass over the bots: a smoothed value of the gaps between two main-lane thinks of
 /// one bot (every bot is visited once a pass, so a typical gap is the pass). It is not a mean: it moves up quickly (weight 1/<see cref="RiseWindow"/>)
 /// and down slowly (1/<see cref="Window"/>), so it sits above the mean when the gaps vary, which is the safe side for both users. It sizes the
-/// motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>) and the fairness bound of the think-starved report; neither may feed back into
+/// motion lease cap (<see cref="PlayerbotMotion.LeaseCapMs"/>) from the raw gaps, and, as a second instance fed the gaps less their world-stall
+/// time (<see cref="PlayerbotThinkStarvation.WithoutStall"/>), the fairness bound of the think-starved report; neither may feed back into
 /// the think budget. A gap over <see cref="MaxSampleMs"/> counts as <see cref="MaxSampleMs"/> (it is capped, not dropped), so the estimate
 /// still follows a pass that really is longer (up to 5000 bots); the report bound at 1.5 x that cap, 180 s, is the intended absolute backstop.
 /// World thread only.
@@ -229,6 +230,38 @@ internal static class PlayerbotThinkStarvation
         if (silent <= boundMs || silent > int.MaxValue) return false; // a clock that went backwards is not a gap
         reported = true;
         return true;
+    }
+
+    /// <summary>A gap between two bot ticks longer than this (ms) is a world stall, not the tick rate; the excess is not a rotation gap.</summary>
+    internal const uint StallTickMs = (uint)PlayerbotThinkBudget.MaxRealTickMs;
+
+    /// <summary>
+    /// The length (ms) past which a gap between two bot ticks, or one think, is a world stall: <see cref="StallTickMs"/>, or twice the real tick
+    /// length (<paramref name="realTickMs"/>, <see cref="PlayerbotThinkBudget.RealTickMs"/>) when that is longer. A world whose ticks all run over a
+    /// second is slow, not stalled every tick: its silence and its pass are then judged alike, with no stall taken out of either. Pure.
+    /// </summary>
+    internal static uint StallThresholdMs(double realTickMs)
+        => double.IsFinite(realTickMs) && realTickMs * 2 > StallTickMs ? (uint)Math.Min(int.MaxValue, Math.Ceiling(realTickMs * 2)) : StallTickMs;
+
+    /// <summary>
+    /// The stall (ms) in one gap between two bot ticks: its excess over <see cref="StallThresholdMs"/> of <paramref name="realTickMs"/> (0: the
+    /// fixed <see cref="StallTickMs"/>); 0 for a clock that went backwards. Pure.
+    /// </summary>
+    internal static uint StallMs(uint tickGapMs, double realTickMs = 0)
+    {
+        uint threshold = StallThresholdMs(realTickMs);
+        return tickGapMs > threshold && tickGapMs <= int.MaxValue ? tickGapMs - threshold : 0;
+    }
+
+    /// <summary>A gap (ms) less <paramref name="stalledMs"/>, the world-stall time inside it; never below 0.</summary>
+    internal static uint WithoutStall(uint gapMs, ulong stalledMs) => stalledMs >= gapMs ? 0 : gapMs - (uint)stalledMs;
+
+    /// <summary><see cref="ShouldReport(uint, uint, uint, ref bool)"/> on the silence less <paramref name="stalledMs"/>, the world-stall time since the bot's last think (never below 0).</summary>
+    internal static bool ShouldReport(uint nowMs, uint lastThinkMs, uint boundMs, ref bool reported, ulong stalledMs)
+    {
+        uint silent = unchecked(nowMs - lastThinkMs);
+        if (silent > int.MaxValue) return false; // a clock that went backwards is not a gap
+        return ShouldReport(WithoutStall(silent, stalledMs), 0, boundMs, ref reported);
     }
 
     /// <summary>The least share of its time the first lane keeps however late the main lane runs (fights still get thought for).</summary>

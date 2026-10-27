@@ -116,6 +116,7 @@ public sealed class SpellAnomalyTests
     private static SpellAuraHolder CastAura(SpellTestKit kit, Player player, uint spell)
     {
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, spell, SpellCastTargets.ForSelf()));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         return Assert.Single(kit.System.GetAuras(player), h => !h.IsRemoved && h.Spell.Id == spell);
     }
 
@@ -130,7 +131,7 @@ public sealed class SpellAnomalyTests
         using AnomalyCapture capture = CaptureFor(UnhandledEffectSpell, "spell/effect-unhandled");
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, UnhandledEffectSpell, SpellCastTargets.ForSelf()));
-        kit.Advance(100);
+        kit.Advance(Math.Max(100, kit.System.SpellBatchWindowMs)); // with spell batching on, the held go resolves at the next boundary
 
         AnomalyNotice notice = Assert.Single(capture.Notices);
         Assert.Contains($"kind=effect value={(uint)SpellEffectName.Dodge}", notice.Detail);
@@ -284,6 +285,7 @@ public sealed class SpellAnomalyTests
     public void AHealthyAura_ReportsNoDurationInvalid_StackOverflow_OrPeriodicStall()
     {
         using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: the aura's exact duration and first-tick timer count from the cast call
         Player player = Caster(kit, DurationOk);
         SpellAuraHolder holder = CastAura(kit, player, DurationOk);
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subject == $"spell {DurationOk}");
@@ -374,6 +376,7 @@ public sealed class SpellAnomalyTests
     public void ATimerAtExactlyItsPeriod_AndANormallyTickingAura_ReportNoPeriodicStall()
     {
         using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: the aura's exact duration and first-tick timer count from the cast call
         Player player = Caster(kit, PeriodicOk);
         SpellAuraHolder holder = CastAura(kit, player, PeriodicOk);
         SpellAura aura = Assert.Single(holder.AuraSpan.ToArray(), a => a is not null)!;

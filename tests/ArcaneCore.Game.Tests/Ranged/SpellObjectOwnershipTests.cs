@@ -67,7 +67,15 @@ public sealed class SpellObjectOwnershipTests : IDisposable
     };
 
     private SpellCastResult Cast(uint spell, SpellCastTargets? targets = null)
-        => _kit.System.CastSpell(_hunter, spell, targets ?? SpellCastTargets.ForSelf(), triggered: false);
+    {
+        SpellCastResult result = _kit.System.CastSpell(_hunter, spell, targets ?? SpellCastTargets.ForSelf(), triggered: false);
+        if (_kit.System.SpellBatchWindowMs != 0)
+        {
+            _kit.Advance(_kit.System.SpellBatchWindowMs); // a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) holds the go until its boundary
+        }
+
+        return result;
+    }
 
     private void Tick(uint ms = 50)
     {
@@ -191,6 +199,22 @@ public sealed class SpellObjectOwnershipTests : IDisposable
         Assert.False(_kit.System.IsSpellReady(_hunter, _kit.Store.Get(EventSpell)!));
         _kit.Advance(2_000, step: 1000);
         Assert.True(_kit.System.IsSpellReady(_hunter, _kit.Store.Get(EventSpell)!));
+    }
+
+    [Fact]
+    public void ACooldownOnEventSpell_StaysNotReady_AfterAnUpdateDropsTheCastersIdleSpellState()
+    {
+        // An event spell starts no cooldown at its go, so the next update drops the caster's spell state as idle (a batched go always
+        // resolves in an update). The living object still holds the spell back.
+        Assert.Equal(SpellCastResult.CastOk, Cast(EventSpell));
+        Assert.Single(Traps);
+
+        _kit.Advance(100);
+
+        Assert.Null(_kit.System.GetState(_hunter.Guid));
+        Assert.False(_kit.System.IsSpellReady(_hunter, _kit.Store.Get(EventSpell)!));
+        Assert.False(_kit.System.IsSpellReadyIgnoringGlobalCooldown(_hunter, _kit.Store.Get(EventSpell)!));
+        Assert.Equal(SpellCastResult.NotReady, Cast(EventSpell));
     }
 
     [Fact]

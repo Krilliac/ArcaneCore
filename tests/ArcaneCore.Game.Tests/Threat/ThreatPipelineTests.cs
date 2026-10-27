@@ -34,6 +34,15 @@ public sealed class ThreatPipelineTests
 
     private static readonly SpellDuration Forever = new(-1, 0, -1);
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(Spells.SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static SpellInfo Debuffing(uint id, SpellAttributesEx extra = 0) => Spell(id, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
     {
         Duration = new SpellDuration(10000, 0, 10000),
@@ -296,6 +305,7 @@ public sealed class ThreatPipelineTests
         Assert.False(a.Wolf.Combat.IsInCombat);
 
         Assert.Equal(SpellCastResult.CastOk, a.Cast(a.Tank, a.Wolf, Debuff, triggered: false));
+        ResolveSpellBatch(a.Kit);
 
         Assert.True(a.Wolf.Combat.Threat.Contains(a.Tank));
         Assert.Equal(0f, a.Wolf.Combat.Threat.GetThreat(a.Tank));
@@ -324,6 +334,7 @@ public sealed class ThreatPipelineTests
         a.Map.Combat.SetInCombatState(a.Tank, 0);
 
         Assert.Equal(SpellCastResult.CastOk, a.Cast(a.Healer, a.Tank, Buff, triggered: false));
+        ResolveSpellBatch(a.Kit);
 
         Assert.True(a.Wolf.Combat.Threat.Contains(a.Healer));
         Assert.Equal(0f, a.Wolf.Combat.Threat.GetThreat(a.Healer));

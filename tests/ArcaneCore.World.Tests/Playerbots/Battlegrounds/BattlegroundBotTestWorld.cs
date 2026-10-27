@@ -174,12 +174,13 @@ internal static class BattlegroundBotTestContent
     /// <param name="offered">The types whose battlemasters are spawned (every type's template, map and objectives are loaded regardless).</param>
     /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
     /// <param name="wsgBuffs">Spawn the Warsong Gulch buffs (<see cref="RestorationBuffAt"/>, <see cref="BerserkBuffAt"/>); off by default.</param>
-    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button, bool wsgBuffs = false)
+    public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button, bool wsgBuffs = false,
+        IReadOnlyList<CreatureSpawn>? extraSpawns = null)
     {
         services.AddSingleton<IMapDataStore>(new Maps());
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
         services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds());
-        var store = new Content(offered, neutralBanner, wsgBuffs);
+        var store = new Content(offered, neutralBanner, wsgBuffs, extraSpawns ?? []);
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Spells()));
@@ -324,7 +325,7 @@ internal static class BattlegroundBotTestContent
             ]));
     }
 
-    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner, bool wsgBuffs) : ICreatureDataStore, IGameObjectDataStore
+    private sealed class Content(IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner, bool wsgBuffs, IReadOnlyList<CreatureSpawn> extraSpawns) : ICreatureDataStore, IGameObjectDataStore
     {
         Task<CreatureContent> ICreatureDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new CreatureContent(
             [
@@ -354,6 +355,7 @@ internal static class BattlegroundBotTestContent
                     : Array.Empty<CreatureSpawn>(),
                 new CreatureSpawn { Guid = AvSpiritGuideSpawn, Entry = AvSpiritGuideEntry, MapId = 30, X = AvSpiritGuideAt.X, Y = AvSpiritGuideAt.Y, Z = AvSpiritGuideAt.Z },
                 new CreatureSpawn { Guid = AvGuardSpawn, Entry = AvGuardEntry, MapId = 30, X = AvGuardAt.X, Y = AvGuardAt.Y, Z = AvGuardAt.Z },
+                .. extraSpawns,
             ], [], [], []));
 
         Task<GameObjectContent> IGameObjectDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new GameObjectContent(
@@ -439,7 +441,15 @@ internal static class BattlegroundBotTestWorld
     public static Task<ScenarioTestWorld> StartWithWsgBuffsAsync(Action<PlayerbotOptions>? configure = null)
         => StartAsync(configure, NeutralBannerShape.Button, wsgBuffs: true, BattlegroundType.WarsongGulch);
 
+    /// <summary>Warsong Gulch with more creature spawns (battlemaster entries at other places or with other movement) than the two beside the start.</summary>
+    public static Task<ScenarioTestWorld> StartWithSpawnsAsync(IReadOnlyList<CreatureSpawn> extraSpawns)
+        => StartAsync(null, NeutralBannerShape.Button, wsgBuffs: false, extraSpawns, BattlegroundType.WarsongGulch);
+
     private static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, bool wsgBuffs, params BattlegroundType[] offered)
+        => await StartAsync(configure, neutralBanner, wsgBuffs, [], offered);
+
+    private static async Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, bool wsgBuffs,
+        IReadOnlyList<CreatureSpawn> extraSpawns, params BattlegroundType[] offered)
     {
         var options = new PlayerbotOptions
         {
@@ -449,7 +459,7 @@ internal static class BattlegroundBotTestWorld
         configure?.Invoke(options);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
         {
-            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner, wsgBuffs);
+            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner, wsgBuffs, extraSpawns);
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
         });
         await world.Host.OnWorldAsync(() =>

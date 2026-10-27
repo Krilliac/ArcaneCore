@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog;
@@ -104,6 +105,12 @@ public sealed class HangStackCapture
     /// <summary>The marker of one thread's block in dotnet-stack report output; none in the output means the tool captured no stacks.</summary>
     public const string ThreadMarker = "Thread (";
 
+    /// <summary>The fault-ledger site of a capture that holds no stacks or could not be written (empty output, tool failure, runner fault).</summary>
+    public const string FaultSite = "watchdog.hang-stack-capture";
+
+    /// <summary>The pause before the single retry of an exit-0 capture that printed no thread stacks (dotnet-stack's sample can miss them).</summary>
+    public static readonly TimeSpan EmptyRetryDelay = TimeSpan.FromMilliseconds(250);
+
     private readonly TickMonitorOptions _options;
     private readonly ILogger _logger;
     private readonly IHangStackRunner _runner;
@@ -175,27 +182,44 @@ public sealed class HangStackCapture
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogWarning(ex, "hang stack capture could not start");
+            FaultLedger.Shared.Record(FaultSite, ex);
+            _logger.LogFault("watchdog-hang-stack-capture", ex, "hang stack capture could not start");
             return false;
         }
     }
 
     private async Task CaptureAsync(string tool, string directory, DateTime at, string reason, long runningMicros, long gcPauseMicros)
     {
+        string path = Path.Combine(directory, $"hang-stacks-{at.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}-{_processId}.txt");
         try
         {
-            (int exitCode, string output) = await _runner.RunAsync(tool, ["report", "-p", _processId.ToString(CultureInfo.InvariantCulture)], ToolTimeout).ConfigureAwait(false);
+            IReadOnlyList<string> arguments = ["report", "-p", _processId.ToString(CultureInfo.InvariantCulture)];
+            (int exitCode, string output) = await _runner.RunAsync(tool, arguments, ToolTimeout).ConfigureAwait(false);
+            bool retried = false;
+            if (exitCode == 0 && IsEmpty(exitCode, output))
+            {
+                // An exit-0 run with no thread blocks is the intermittent EventPipe miss; one more sample usually holds the stacks.
+                retried = true;
+                await Task.Delay(EmptyRetryDelay).ConfigureAwait(false);
+                (exitCode, output) = await _runner.RunAsync(tool, arguments, ToolTimeout).ConfigureAwait(false);
+            }
+
             Directory.CreateDirectory(directory);
-            string path = Path.Combine(directory, $"hang-stacks-{at.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}-{_processId}.txt");
             var text = new StringBuilder(output.Length + 512);
             text.Append("# ").Append(at.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC, process ").Append(_processId)
                 .Append(", ").Append(tool).Append(" exit ").Append(exitCode).AppendLine();
             text.Append("# ").AppendLine(reason.ReplaceLineEndings(" "));
-            bool empty = string.IsNullOrWhiteSpace(output) || (exitCode == 0 && !output.Contains(ThreadMarker, StringComparison.Ordinal)); // the marker assumes dotnet-stack report prints "Thread (" per thread
+            bool empty = IsEmpty(exitCode, output);
             bool gcDominated = runningMicros > 0 && gcPauseMicros >= runningMicros * GcDominatedShare;
+            if (retried)
+            {
+                text.AppendLine("# RETRIED: the first run exited 0 with no thread stacks; this is the second run.");
+            }
+
             if (empty)
             {
-                text.AppendLine("# EMPTY CAPTURE: the tool printed no thread stacks, so this hang has no stack.");
+                text.Append("# EMPTY CAPTURE: the tool printed no thread stacks, so this hang has no stack. Tool exit ").Append(exitCode)
+                    .Append(", ").Append(output.Length).Append(" output chars").Append(retried ? ", after one retry" : string.Empty).AppendLine(".");
             }
 
             if (gcPauseMicros == GcPauseUnknown)
@@ -215,9 +239,17 @@ public sealed class HangStackCapture
 
             text.Append(output);
             await File.WriteAllTextAsync(path, text.ToString()).ConfigureAwait(false);
+            if (empty || exitCode != 0)
+            {
+                // Not a caught exception: counted in the ledger so .server faults and the announce channel see it, and logged on every capture
+                // (captures are already rate-limited by StackCaptureIntervalSeconds, so ledger log throttling would only hide them).
+                FaultLedger.Shared.Record(FaultSite, new InvalidOperationException(
+                    $"hang stack capture {(empty ? "is empty" : "failed")}: tool exit {exitCode}, {output.Length} output chars{(retried ? ", after one retry" : string.Empty)}"));
+            }
+
             if (empty)
             {
-                _logger.LogWarning("world tick hang: the stack tool captured no thread stacks (exit {ExitCode}), the capture is empty: {Path}", exitCode, path);
+                _logger.LogWarning("world tick hang: the stack tool captured no thread stacks (exit {ExitCode}{Retry}), the capture is empty: {Path}", exitCode, retried ? ", after one retry" : string.Empty, path);
             }
             else if (exitCode == 0)
             {
@@ -230,11 +262,32 @@ public sealed class HangStackCapture
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogWarning(ex, "world tick hang: the stack capture failed");
+            FaultLedger.Shared.Record(FaultSite, ex);
+            _logger.LogFault("watchdog-hang-stack-capture", ex, "world tick hang: the stack capture failed: {Path}", path);
+            WriteFailure(path, at, tool, reason, ex);
         }
         finally
         {
             Volatile.Write(ref _running, 0);
+        }
+    }
+
+    private static bool IsEmpty(int exitCode, string output)
+        => string.IsNullOrWhiteSpace(output) || (exitCode == 0 && !output.Contains(ThreadMarker, StringComparison.Ordinal)); // the marker assumes dotnet-stack report prints "Thread (" per thread
+
+    /// <summary>After a faulted capture, leave a file that says why it holds no stacks, so no hang is left without a capture file or a reason.</summary>
+    private void WriteFailure(string path, DateTime at, string tool, string reason, Exception fault)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+            File.WriteAllText(path, string.Create(CultureInfo.InvariantCulture,
+                $"# {at:yyyy-MM-dd HH:mm:ss} UTC, process {_processId}, {tool} not run to completion\n# {reason.ReplaceLineEndings(" ")}\n# CAPTURE FAILED: {fault.GetType().Name}: {fault.Message.ReplaceLineEndings(" ")}\n"));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(FaultSite, ex);
+            _logger.LogFault("watchdog-hang-stack-capture", ex, "world tick hang: the failed capture's reason could not be written: {Path}", path);
         }
     }
 }
