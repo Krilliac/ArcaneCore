@@ -162,28 +162,45 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         private readonly WorldTestHost _host;
         private readonly WorldSession _session;
         private readonly PlayerbotTownGoals _goals;
-        // A frozen clock: the repair plans also stop at 20 ms of wall time into the think (PlayerbotTownGoals, RunningMs), which a loaded
-        // machine reaches after the first plan (CI: 13 queries, 1 plan). The count and the query-time budgets are what these tests pin;
-        // the query time then stays 0 ticks, which a limit of 0 (the time-budget test) still spends.
-        private readonly PlayerbotThinkProbe _probe = new(new PlayerbotThinkProbeTests.ManualClock());
+        private readonly PlayerbotThinkProbe _probe;
 
-        private RepairHazardWorld(WorldTestHost host, WorldSession session, HazardPathfinder path)
+        private RepairHazardWorld(WorldTestHost host, WorldSession session, HazardPathfinder path, TimeProvider thinkClock)
         {
             _host = host;
             _session = session;
             Path = path;
+            _probe = new PlayerbotThinkProbe(thinkClock);
             _goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
         }
 
         public HazardPathfinder Path { get; }
 
+        /// <summary>The probe of the last think: its query time (<see cref="PlayerbotThinkProbe.QueryTicks"/>) and running time.</summary>
+        public PlayerbotThinkProbe Probe => _probe;
+
+        /// <summary>The query time (Stopwatch ticks) a think of this world may spend on repair plans.</summary>
+        public long QueryTicksLimit => _goals.RepairQueryTicksLimit;
+
         /// <param name="hazard">Whether a hazard lies on the way to every repair NPC.</param>
         /// <param name="queryTicksLimit">
         /// The query time a think may spend on repair plans (<see cref="PlayerbotTownGoals.RepairQueryTicksLimit"/>). Unbounded by default,
         /// so a test of the query-count budget does not depend on how fast this machine answers (a loaded one once stopped a think after
-        /// 13 queries on the 5 ms budget).
+        /// 13 queries on the 5 ms budget). Null keeps the production limit (5 ms).
         /// </param>
-        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long queryTicksLimit = long.MaxValue)
+        /// <param name="frozenThinkClock">
+        /// Whether the think probe runs on a manual clock (<see cref="PlayerbotThinkProbeTests.ManualClock"/>) instead of the system clock
+        /// (the default: every test of this world, so none depends on how fast this machine thinks).
+        /// It moves only when something calls its Advance(), and the only caller is <see cref="HazardPathfinder"/>, by
+        /// <paramref name="queryMs"/> inside each query. With <paramref name="queryMs"/> 0 nothing calls it, so the clock never moves and no
+        /// budget read off the think's own time can stop a plan: neither the query time (<see cref="PlayerbotTownGoals.RepairQueryTicksLimit"/>)
+        /// nor the think's running time (the 20 ms check, live since the probe's RunningMs replaced ElapsedMs, which read 0 during a think).
+        /// On the system clock the first think of a fresh process, JIT and all, ran past 20 ms after one plan on Windows, every time.
+        /// </param>
+        /// <param name="queryMs">
+        /// How long each path query takes on the frozen think clock. The pathfinder advances the clock inside the query, so the time is
+        /// charged both to the think's query time and to its running time, exactly, whatever this machine's speed.
+        /// </param>
+        public static async Task<RepairHazardWorld> StartAsync(bool hazard, long? queryTicksLimit = long.MaxValue, bool frozenThinkClock = true, double queryMs = 0)
         {
             var items = new ItemTestContent();
             items.Templates.Templates.Add(new ItemTemplate
@@ -201,8 +218,11 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
                 services.AddSingleton<IWorldFeature, ManualClock>();
             });
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
-            var world = new RepairHazardWorld(host, session, path);
-            world._goals.RepairQueryTicksLimit = queryTicksLimit;
+            if (queryMs != 0 && !frozenThinkClock) throw new ArgumentException("a query time needs the frozen think clock", nameof(queryMs));
+            PlayerbotThinkProbeTests.ManualClock? clock = frozenThinkClock ? new PlayerbotThinkProbeTests.ManualClock() : null;
+            if (clock is not null && queryMs > 0) path.OnQuery = () => clock.Advance(queryMs);
+            var world = new RepairHazardWorld(host, session, path, clock ?? TimeProvider.System);
+            if (queryTicksLimit is { } limit) world._goals.RepairQueryTicksLimit = limit;
             await host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
@@ -259,8 +279,12 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
         public Vector3 Origin { get; set; }
         public List<Vector3> Directs { get; } = [];
 
+        /// <summary>Runs inside every query (a test advances the think probe's manual clock there: the query's time).</summary>
+        public Action? OnQuery { get; set; }
+
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
+            OnQuery?.Invoke();
             if (start == end) return PathResult.StraightLine(start, end, PathType.Normal);
             if (Vector3.Distance(start, Origin) > 0.5f) return PathResult.None(start);
             if (Math.Abs(end.Y - Origin.Y) < 0.01f && end.X >= ScriptedPathfinder.SpawnX(0) - 0.01f) Directs.Add(end);
@@ -279,11 +303,13 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
     /// The repair trip stops planning to further NPCs in a think once the think has made <see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>
     /// queries, and the next think goes on. Each refused plan here runs the hazard detours (<see cref="RefusedPlanQueries"/>).
     /// The managed feature runs every think inside a <see cref="PlayerbotThinkProbe"/> (ManagedPlayerbotFeature.Think), the budget's source.
+    /// The think's clock is frozen so the count is the only budget that can stop it (the query-time and running-time budgets each have
+    /// their own test below).
     /// </summary>
     [Fact]
     public async Task RepairTrip_StopsPlanningInAThink_OnceTheQueryBudgetIsSpent_AndGoesOnNextThink()
     {
-        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true);
+        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, frozenThinkClock: true);
         (int queries, int plans) = await world.ThinkAsync(withProbe: true);
         output.WriteLine($"think 1: {queries} queries, {plans} plans");
         Assert.Equal(2, plans); // 13 queries after the first plan, 26 (over 16) after the second: no third
@@ -293,19 +319,46 @@ public sealed class PlayerbotTownMemoTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The other budget of the same think: the query TIME. With no time to spend (a limit of 0 ticks, what a loaded machine reaches
-    /// after the first plan), the think stops after one plan although it made far fewer queries than the count budget allows
-    /// (<see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>), and the next think goes on. This is the outcome that made the
-    /// count test above fail once under load; it is now pinned on purpose.
+    /// The other budget of the same think: the query TIME. On the frozen think clock each query takes 0.5 ms, so the first plan's 13
+    /// queries spend 6.5 ms, over the production limit of 5 ms (what a loaded machine reaches after the first plan). The count
+    /// (<see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>) and the 20 ms running time are both unspent, so the query time alone
+    /// stops the think after one plan, and the next think goes on. This is the outcome that once made the count test above fail under
+    /// load; it is now pinned on purpose.
     /// </summary>
     [Fact]
     public async Task RepairTrip_StopsPlanningInAThink_OnceTheQueryTimeBudgetIsSpent_EvenUnderTheCountBudget()
     {
-        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, queryTicksLimit: 0);
+        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, queryTicksLimit: null, frozenThinkClock: true, queryMs: 0.5);
         (int queries, int plans) = await world.ThinkAsync(withProbe: true);
+        output.WriteLine($"think 1: {queries} queries, {plans} plans, {world.Probe.QueryTicks} of {world.QueryTicksLimit} query ticks, {world.Probe.RunningMs} ms");
         Assert.Equal(1, plans);
         Assert.Equal(RefusedPlanQueries, queries);
         Assert.True(queries < PlayerbotTownGoals.MaxRepairQueriesPerThink, "the count budget must not be what stopped it");
+        Assert.True(world.Probe.QueryTicks >= world.QueryTicksLimit, "the query time was not spent");
+        Assert.True(world.Probe.RunningMs < 20.0, "the running-time budget must not be what stopped it");
+        (int next, int nextPlans) = await world.ThinkAsync(withProbe: true);
+        Assert.True(nextPlans >= 1 && next > 0, "the next think planned nothing");
+    }
+
+    /// <summary>
+    /// The third budget of the same think: its running TIME, the 20 ms that the repair loop in <see cref="PlayerbotTownGoals"/> reads
+    /// off <see cref="PlayerbotThinkProbe.RunningMs"/>. On the frozen think clock each query takes 2 ms, so the first plan's 13 queries
+    /// run the think to 26 ms. The count (<see cref="PlayerbotTownGoals.MaxRepairQueriesPerThink"/>) and the query time (limited to a
+    /// whole second here) are both unspent, so the running time alone cuts the second plan, and the next think goes on. This is the shape
+    /// of every first think on Windows on the system clock (JIT and all), pinned on purpose.
+    /// </summary>
+    [Fact]
+    public async Task RepairTrip_StopsPlanningInAThink_OnceTheThinkRunsPast20Ms_EvenUnderTheCountAndQueryTimeBudgets()
+    {
+        long second = new PlayerbotThinkProbeTests.ManualClock().TicksFor(1_000);
+        await using RepairHazardWorld world = await RepairHazardWorld.StartAsync(hazard: true, queryTicksLimit: second, frozenThinkClock: true, queryMs: 2);
+        (int queries, int plans) = await world.ThinkAsync(withProbe: true);
+        output.WriteLine($"think 1: {queries} queries, {plans} plans, {world.Probe.QueryTicks} of {world.QueryTicksLimit} query ticks, {world.Probe.RunningMs} ms");
+        Assert.Equal(1, plans);
+        Assert.Equal(RefusedPlanQueries, queries);
+        Assert.True(queries < PlayerbotTownGoals.MaxRepairQueriesPerThink, "the count budget must not be what stopped it");
+        Assert.True(world.Probe.QueryTicks < world.QueryTicksLimit, "the query-time budget must not be what stopped it");
+        Assert.True(world.Probe.RunningMs >= 20.0, "the think did not run past 20 ms");
         (int next, int nextPlans) = await world.ThinkAsync(withProbe: true);
         Assert.True(nextPlans >= 1 && next > 0, "the next think planned nothing");
     }

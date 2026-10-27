@@ -216,7 +216,7 @@ const BOAR = {
     kind: 'inspect', guid: '1234ABCD', entity: 'creature', entry: 299, name: 'Diseased Wolf', map: 0, instance: 0, p: [-9462.66, 16.2, 57],
     unit: true, level: 7, hp: 120, maxHp: 150, power: { type: 'Mana', value: 40, max: 80 }, faction: 38, flags: 0x8000, stand: 'Stand', combat: true,
     target: 'ABC', victim: null,
-    threat: [{ g: '1', name: 'Krill', t: 120.5 }, { g: '2', name: null, t: 3 }],
+    threat: [{ g: '1', name: 'Testplayer', t: 120.5 }, { g: '2', name: null, t: 3 }],
     aurasAvailable: true,
     auras: [
         { spell: 133, name: 'Fireball', stacks: 1, remainingMs: 3200, durationMs: 4000, caster: 'ABC', positive: false },
@@ -247,7 +247,7 @@ test('inspector rows: identity, state, threat, auras with names, behaviour and b
     assert.equal(row(state, 'Target'), 'ABC');
     assert.equal(row(state, 'Victim'), undefined, 'a null victim has no row');
     const threat = section(sections, 'Threat');
-    assert.deepEqual(threat.rows, [['Krill', '120.5'], ['2', '3.0']]);
+    assert.deepEqual(threat.rows, [['Testplayer', '120.5'], ['2', '3.0']]);
     const auras = section(sections, 'Auras');
     assert.equal(auras.rows[0][0], 'Fireball');
     assert.match(auras.rows[0][1], /#133 · 3\.2 s · by ABC/);
@@ -369,7 +369,7 @@ test('the Insight tab and the perf HUD in a real browser', { skip }, async (t) =
         await ev("[...document.querySelectorAll('#panel-insight button')].find((b) => b.textContent === 'Inspect').click()");
         await page.waitFor("document.querySelector('#panel-insight .inspect-result')", 'the inspector result');
         const text = await ev("document.querySelector('#panel-insight .inspect-result').textContent");
-        for (const expected of ['Diseased Wolf', '120 / 150', 'Fireball', 'spell 99999', 'permanent', 'Krill', 'SmartAI (wolf_ai)', 'Route flags']) {
+        for (const expected of ['Diseased Wolf', '120 / 150', 'Fireball', 'spell 99999', 'permanent', 'Testplayer', 'SmartAI (wolf_ai)', 'Route flags']) {
             assert.ok(text.includes(expected), `the inspector is missing '${expected}': ${text}`);
         }
         const call = host.commands.find((c) => c.name === 'live.inspect');

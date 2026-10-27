@@ -35,7 +35,7 @@ internal sealed record HelloInfo(int Protocol, string? Sha, int? Pid, IReadOnlyL
 /// </summary>
 internal static class FrameParser
 {
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:216-219 (frame and entity field list)
+    // ref: ATLAS-2026-10-18.md:216-219 (frame and entity field list)
 
     /// <summary>
     /// Largest accepted absolute coordinate. A map spans +-17066.666 yd (Core/WorldGrid.cs, vmap MapMid) and the server's no-height

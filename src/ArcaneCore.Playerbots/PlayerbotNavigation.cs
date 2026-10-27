@@ -686,6 +686,7 @@ internal static class PlayerbotNavigation
     internal static bool IsOnMeshFragment(Player player)
         => player.Map is { } map && IsPointOnMeshFragment(map, PlayerbotMotion.CurrentPosition(player));
 
+    /// <summary>Whether the walking graph puts <paramref name="point"/> on a mesh fragment. Uses the plain <c>RegionAt</c> overload: no far classification, so no extra polygon lookup.</summary>
     internal static bool IsPointOnMeshFragment(Map map, Vector3 point)
     {
         if (map.Collision.Pathfinder is not NavMeshPathfinder nav
@@ -746,7 +747,8 @@ internal static class PlayerbotNavigation
     /// search, no tile read beyond the two lookups): the walking graph (steep slopes excluded) puts the bot and the goal in different
     /// components, and the goal is outdoors (an indoor goal may be reached over steep stairs, <see cref="TryClimbIndoors"/>). False
     /// when the graph is not built yet or either place is on no region. <paramref name="fromComponent"/> and <paramref name="toComponent"/>
-    /// are each place's component whatever the answer, -1 for a place on no region (or with no graph). Transport (tram, lift, taxi) is the
+    /// are each place's component whatever the answer, -1 for a place on no region (or with no graph), and -1 for a far goal (one that only a
+    /// snap placed: it hung in the air, or lay on excluded steep ground, and the lookup took a floor beside or under it; see <c>RegionAt(..., out far)</c>). Transport (tram, lift, taxi) is the
     /// caller's to try first.
     /// Live case: Chief Hawkwind's platform from the Valley of Trials ridge, 4,900 yards away, drew an 847-yard leg and a 3,349-yard
     /// walk toward a goal no walk reaches.
@@ -758,7 +760,13 @@ internal static class PlayerbotNavigation
             || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
             return false;
         Vector3 here = PlayerbotMotion.CurrentPosition(player);
-        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate, out bool goalFar);
+        // A goal the lookup reached only by a snap (in the air, or on excluded steep ground: the far box snapped it to the floor under
+        // or over it, up to 200 yd off) has no region of its own, whichever component that floor is in: no verdict, and the path search decides
+        // (issue #1497: every refused plan toward it read as no-path-connected). A goal merely off a polygon's edge keeps its answer.
+        // RegionLeg and the other plain RegionAt callers (e.g. PlayerbotOpportunities, PlayerbotNavigationExecutor, PlayerbotTravel) still take the snap.
+        // The bot's own lookup (from) is not checked for far: a bot falling, swimming or on excluded ground is judged from the region it snaps to.
+        if (goalFar) to = -1;
         // Each side's component is given whether or not the other has one (ComponentOf answers -1 for no region): a goal off the walking
         // mesh (a retreat point in a hillside or in the air) once also read as "bot -1" in nav/goal-unreachable, as if the bot were off it too
         // (bot QA #807: on the real mesh the bot stood in its continent's component in ten of the eleven live cases probed).
@@ -777,8 +785,28 @@ internal static class PlayerbotNavigation
     }
 
     /// <summary>
+    /// Whether <paramref name="goal"/> lies in a walking region (graph component, steep slopes excluded) the bot's own does not join, for a
+    /// caller that must not start a walk to such a place. As <see cref="IsUnreachableOnFoot"/> (an indoor end is let through: the indoor climb,
+    /// <see cref="TryClimbIndoors"/>, may reach it over steep stairs), but without its leniency toward a bot whose component is more than 16
+    /// times smaller than the goal's (Teldrassil against the mainland: other callers have transport to try first, a battlemaster walk has none).
+    /// Not asked of a bot on a fragment (it hops off first), and false when the graph is not built or either place is on no region. No path search.
+    /// Unlike <see cref="InOtherWalkingComponent"/> (the tram's: keeps the 16x leniency, drops the outdoors exemption), this keeps the outdoors exemption and drops the 16x leniency.
+    /// </summary>
+    internal static bool IsInOtherWalkingRegion(Player player, Vector3 goal)
+    {
+        if (!goal.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        return from >= 0 && to >= 0 && graph.ComponentOf(from) != graph.ComponentOf(to) && !IsFragment(graph, from)
+            && IsOutdoorsOnSurface(map, goal) && IsOutdoorsOnSurface(map, here);
+    }
+
+    /// <summary>
     /// Whether the map's walking region graph (steep slopes excluded) puts the bot and <paramref name="goal"/> in different components,
     /// without <see cref="IsUnreachableOnFoot"/>'s outdoors exemption (kept: its fragment and small-part exemptions). False when the graph is not built yet or either place is on no region.
+    /// Unlike <see cref="IsInOtherWalkingRegion"/> (the battlemaster walk's), which drops the small-part leniency and keeps the outdoors exemption.
     /// </summary>
     internal static bool InOtherWalkingComponent(Player player, Vector3 goal)
     {

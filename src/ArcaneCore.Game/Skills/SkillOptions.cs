@@ -39,6 +39,13 @@ public sealed record SkillOptions
     /// <summary>vmangos SkillChance.Grey (default 0).</summary>
     public uint ChanceGrey { get; init; }
 
+    /// <summary>
+    /// Opt-in, off by default: a recipe's yellow-to-grey band uses a sliding chance, <c>(grey - skill) / (grey - yellow)</c>, instead of
+    /// <see cref="ChanceYellow"/> and <see cref="ChanceGreen"/> (<see cref="SkillRules.CraftChance"/>). Retail 1.12 has no published formula;
+    /// this curve is the one players measured (Wowpedia "Profession", citing a Wowhead comment on spell 56462), not datamined.
+    /// </summary>
+    public bool CraftingChanceCurve { get; init; }
+
     /// <summary>vmangos SkillChance.MiningSteps (code default 75, 0 = no decay).</summary>
     public uint MiningSteps { get; init; } = 75;
 

@@ -108,7 +108,7 @@ public static class FeatureCommandServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddFeatureCommands(this IServiceCollection services)
     {
-        services.TryAddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath));
+        services.TryAddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath, logger: sp.GetService<ILogger<HotCodeAudit>>()));
         services.AddHostedService<FeatureCommandHost>();
         return services;
     }

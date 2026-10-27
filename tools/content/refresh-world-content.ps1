@@ -63,11 +63,11 @@
   The SQLite world database to refresh (for example the path in Database:World:ConnectionString of the server's appsettings.json).
 
 .PARAMETER Dump
-  The classic-db or vmangos world dump (.sql or .sql.gz). Default: D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz.
+  The classic-db or vmangos world dump (.sql or .sql.gz). Default: $env:ARCANECORE_CLASSICDB_DUMP, else <ARCANECORE_REFS_ROOT>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz.
 
 .PARAMETER DbcDirectory
   A directory holding the build-5875 AreaTrigger.dbc, WorldSafeLocs.dbc, Map.dbc, AreaTable.dbc, WMOAreaTable.dbc, TaxiNodes.dbc,
-  TaxiPath.dbc and TaxiPathNode.dbc (the effective copies, patch-2 first), for example D:\refs\client-dbc-5875-effective. A SHA256SUMS file there
+  TaxiPath.dbc and TaxiPathNode.dbc (the effective copies, patch-2 first), for example client-dbc-5875-effective. A SHA256SUMS file there
   (sha256sum format) must list all eight and is checked before anything is written.
 
 .PARAMETER MpqTool
@@ -99,12 +99,12 @@
   powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory C:\srv\dbc-5875
 
 .EXAMPLE
-  powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory D:\refs\client-dbc-5875-effective -AppSettings C:\srv\appsettings.json
+  powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory client-dbc-5875-effective -AppSettings C:\srv\appsettings.json
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$WorldDatabase,
-    [string]$Dump = 'D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz',
+    [string]$Dump = $(if ($env:ARCANECORE_CLASSICDB_DUMP) { $env:ARCANECORE_CLASSICDB_DUMP } elseif ($env:ARCANECORE_REFS_ROOT) { Join-Path $env:ARCANECORE_REFS_ROOT 'classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz' } else { '' }),
     [string]$DbcDirectory,
     [string]$MpqTool,
     [string]$ClientData = 'D:\World of Warcraft Classic 1.12.1\Data',
@@ -134,6 +134,7 @@ function Get-Sha256([string]$Path) {
 
 $WorldDatabase = [System.IO.Path]::GetFullPath($WorldDatabase)
 if (-not (Test-Path -LiteralPath $WorldDatabase -PathType Leaf)) { throw "world database not found: $WorldDatabase" }
+if (-not $Dump) { throw 'give -Dump, or set ARCANECORE_CLASSICDB_DUMP or ARCANECORE_REFS_ROOT' }
 if (-not (Test-Path -LiteralPath $Dump -PathType Leaf)) { throw "dump not found: $Dump" }
 
 if (-not $Importer) {

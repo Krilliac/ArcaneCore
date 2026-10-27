@@ -227,7 +227,7 @@ public sealed class NavRegionGraphRealTerrainTests(ITestOutputHelper output)
         return count;
     }
 
-    // Issue #1481 samples, all from the live bot log D:/ArcaneCore-live/logs/world.debug-20261025-001.log: "goal unreachable on foot ... at X,Y,Z map 0
+    // Issue #1481 samples, all from the live bot log world.debug-20261025-001.log: "goal unreachable on foot ... at X,Y,Z map 0
     // components=A/B" lines (A the bot's region component, B its goal's), here with A = 64458 and B = 1630 for every one of them. The zone is the
     // line's zone=; points are ordered north to south along each road. Zone 10 is Duskwood, 41 Deadwind Pass, 8 Swamp of Sorrows.
     private static readonly (string Label, Vector3 At)[] DuskwoodRoad =

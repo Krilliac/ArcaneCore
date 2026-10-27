@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Gm.Core;
 /// command work and were declared with ArcaneCore's four-level scale, which got about half of
 /// them wrong. <see cref="Apply"/> sets those levels, unless the command already carries its own
 /// <see cref="ChatCommand.RetailLevel"/>. Switch off with <c>World:GmCommands:RetailLevels</c>.
-/// Every entry cites its line in D:\refs\vmangos\src\game\Chat\Chat.cpp.
+/// Every entry cites its line in vmangos@0e3ff01 src/game/Chat/Chat.cpp.
 /// </summary>
 public static class RetailCommandLevels
 {

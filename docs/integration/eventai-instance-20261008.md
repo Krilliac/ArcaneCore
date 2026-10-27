@@ -1,6 +1,6 @@
 # EventAI: instance data, CHANGE_MOVEMENT, death and spawned conditions (wave 4, 2026-10-08)
 
-Branch `claude/w4-eventai-instance`, cut from `08ea5ff6`. Logs: `D:/ArcaneCore-lanes/_logs/w4-eventai-instance/`.
+Branch `claude/w4-eventai-instance`, cut from `08ea5ff6`. Logs: `<lanes-root>/_logs/w4-eventai-instance/`.
 
 The wave-3 integration left four kinds of classic-db z2815 EventAI rows that could not run (docs/integration/wave3-20261007.md, "Data
 still needed"). Measured on a copy of the live world database (SQLite backup API, read-only source; `registry-check-before.txt` /

@@ -2,7 +2,7 @@
 
 Status: delivered on branch `claude/vw5-warlock-mage-utility` (base `claude/vw4-integration` 7313b9e). Each section below is one
 delivered slice with its scope, limits, provenance and the file list. Nothing is copied from the reference servers; every formula
-cites the vmangos source it was checked against (`D:\refs\vmangos`, GPL, read-only).
+cites the vmangos source it was checked against (`<refs-root>\vmangos`, GPL, read-only).
 
 Slices the design listed and this lane did not deliver are in "Not delivered" at the end, with the reason.
 

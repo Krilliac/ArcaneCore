@@ -56,6 +56,12 @@ internal static class PlayerbotMovementControl
             };
             if (change.Type != MovementChangeType.Root) ack.WriteUInt32(change.Apply ? 1u : 0u);
         }
+        else if (change.Type == MovementChangeType.TurnRate)
+        {
+            // The turn rate order is acknowledged like a speed order (guid, counter, movement block, rate), through the same pending-ledger gate a client passes.
+            movement.Write(ack); ack.WriteSingle(change.NewValue);
+            opcode = TurnRatePackets.Ack;
+        }
         else
         {
             MoveType type = change.Type switch

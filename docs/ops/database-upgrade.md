@@ -64,7 +64,7 @@ as is an existing destination file (a backup is never overwritten). A database w
 `arcane-db plan --script --component characters > upgrade.sql` prints exactly the statements an upgrade would issue and
 the version-row write after each step; every other line is a `--` comment, so the file runs as is (`mysql < upgrade.sql`,
 `psql -f`, `sqlite3`). This keeps the retail workflow of operator-applied SQL
-(`D:\refs\vmangos-wiki\docs\Database-Setup.md:46-66`, `:88`). The script does not create the database or set its
+(`<refs-root>\vmangos-wiki\docs\Database-Setup.md:46-66`, `:88`). The script does not create the database or set its
 character set. Run `arcane-db check` afterwards.
 
 For a database the Codex line created (below) the script also carries the migration's row moves, each where the
@@ -203,8 +203,8 @@ cannot be seen at all. **Stop the daemons; do not rely on the count.**
 
 By default every daemon creates and upgrades the schema when it starts (`Always`, as before). The retail servers never
 do: they refuse to start on a database that lacks migrations and make the operator apply them
-(`D:\refs\vmangos\src\mangosd\Master.cpp:415-470`, `D:\refs\vmangos\src\shared\Database\Database.cpp:587-640`,
-`D:\refs\mangos-classic\src\shared\Database\Database.cpp:490-498`). To get that behaviour in production set:
+(`<refs-root>\vmangos\src\mangosd\Master.cpp:415-470`, `<refs-root>\vmangos\src\shared\Database\Database.cpp:587-640`,
+`<refs-root>\mangos-classic\src\shared\Database\Database.cpp:490-498`). To get that behaviour in production set:
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|

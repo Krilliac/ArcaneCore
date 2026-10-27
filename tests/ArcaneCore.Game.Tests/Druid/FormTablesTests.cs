@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Tests.Druid;
 
 /// <summary>
 /// Pure druid form tables. Spell ids and Stances masks are cited from classic-db spell_template (read outside
-/// the repo); display ids and boost ids from D:\refs\vmangos\src\game\Spells\SpellAuras.cpp.
+/// the repo); display ids and boost ids from vmangos@0e3ff01 src/game/Spells/SpellAuras.cpp.
 /// </summary>
 public class FormTablesTests
 {

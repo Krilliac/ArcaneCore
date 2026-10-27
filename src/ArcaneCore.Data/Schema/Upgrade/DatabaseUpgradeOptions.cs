@@ -10,7 +10,7 @@ namespace ArcaneCore.Data.Schema.Upgrade;
 /// setting for production, where <c>arcane-db upgrade</c> applies updates), <see cref="SchemaPolicy.Never"/> (verify only).</item>
 /// <item><c>LockTimeoutSeconds</c>: how long a start waits for another process's schema work (default 60).</item>
 /// </list>
-/// The retail references never create or upgrade on start (D:\refs\vmangos\src\mangosd\Master.cpp:415-470 refuses a
+/// The retail references never create or upgrade on start (vmangos@0e3ff01 src/mangosd/Master.cpp:415-470 refuses a
 /// database that lacks migrations); <c>Never</c> is that behaviour and the default stays <c>Always</c> until the
 /// operator opts in (docs/ops/database-upgrade.md).
 /// </summary>

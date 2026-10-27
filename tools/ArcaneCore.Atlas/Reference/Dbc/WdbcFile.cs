@@ -9,21 +9,21 @@ namespace ArcaneCore.Atlas.Reference.Dbc;
 /// thread-safe. This is the minimal reader the map directory needs; it deliberately does not depend on the server's reader.
 /// </summary>
 /// <remarks>
-/// Layout: D:\WoW-RE-Research\formats\dbc.md:42-98 (header, records, string block) and :100-121 (a localized string is 8 string
+/// Layout: WoW-RE-Research formats/dbc.md:42-98 (header, records, string block) and :100-121 (a localized string is 8 string
 /// offsets plus 1 flags cell); the same header checks as src/ArcaneCore.Data/ClientData/DbcFile.cs:36-66
 /// (read here for the format only, not referenced).
 /// </remarks>
 public sealed class WdbcFile
 {
     /// <summary>The 'WDBC' magic as a little-endian 32-bit value.</summary>
-    // ref: src/ArcaneCore.Data/ClientData/DbcFile.cs:13 ; D:\WoW-RE-Research\formats\dbc.md:51
+    // ref: src/ArcaneCore.Data/ClientData/DbcFile.cs:13 ; WoW-RE-Research formats/dbc.md:51
     public const uint Magic = 0x43424457;
 
     /// <summary>Size of the header in bytes.</summary>
     public const int HeaderSize = 20;
 
     /// <summary>Number of locale slots in a localized string (enUS is slot 0, followed by one flags cell).</summary>
-    // ref: D:\WoW-RE-Research\formats\dbc.md:100-121
+    // ref: WoW-RE-Research formats/dbc.md:100-121
     public const int LocaleSlots = 8;
 
     private const int MaxRecords = 1 << 24;

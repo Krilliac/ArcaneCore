@@ -140,7 +140,9 @@ public sealed partial class TalentFeature
 
         player.Session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(TalentsResetText));
         _logger.LogInformation("{Player}: talents reset at login (a GM reset request)", player.Name);
-        _ = ClearInBackgroundAsync(CharacterId(player), player.Name);
+        string name = player.Name;
+        int characterId = CharacterId(player);
+        _ = Task.Run(() => ClearInBackgroundAsync(characterId, name)); // not inline: SQLite runs the async save synchronously
     }
 
     /// <summary>Any reset of a character flagged while online clears the stored request (vmangos Player.cpp:4077-4078).</summary>
@@ -155,7 +157,8 @@ public sealed partial class TalentFeature
             }
         }
 
-        _ = ClearInBackgroundAsync(id, player.Name);
+        string name = player.Name;
+        _ = Task.Run(() => ClearInBackgroundAsync(id, name)); // not inline: SQLite runs the async save synchronously
     }
 
     private async Task ClearInBackgroundAsync(int characterId, string name)

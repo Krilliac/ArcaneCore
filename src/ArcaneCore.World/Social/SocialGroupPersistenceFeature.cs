@@ -62,7 +62,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         _world = world;
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
         _groups = social.Context.Groups;
-        Writes = new KeyedStoreWriteQueue<IGroupStore>(scopes, loggers.CreateLogger<KeyedStoreWriteQueue<IGroupStore>>(), "group");
+        Writes = new KeyedStoreWriteQueue<IGroupStore>(scopes, loggers.CreateLogger<KeyedStoreWriteQueue<IGroupStore>>(), "group", services.GetService<ShutdownDrain>()?.Features);
         Writes.Start();
 
         Restored = _groups.Restore(stored);

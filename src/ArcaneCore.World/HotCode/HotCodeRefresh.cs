@@ -312,14 +312,7 @@ public sealed class HotCodeRefresh
                 break;
         }
 
-        try
-        {
-            _audit.Record("refresh-" + result.Status.ToString().ToLowerInvariant(), line);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogError(ex, "could not write the hot code audit log");
-        }
+        _audit.Record("refresh-" + result.Status.ToString().ToLowerInvariant(), line); // queued; a write failure is recorded and logged by the audit writer
     }
 
     /// <summary>Everything the refresh would change, built without touching anything live.</summary>

@@ -102,13 +102,13 @@ internal static class ClientTerrainRealData
 internal sealed class DbcMapDirectory : IMapDirectory
 {
     // ref: src/ArcaneCore.Data/ClientData/DbcFile.cs:40-64 (WDBC header: magic, records, fields, record size, string block size; 20 bytes)
-    // ref: D:\refs\vmangos\contrib\extractor\dbcfile.cpp:33-59 (the same five header words; records follow, then the string block)
+    // ref: vmangos@0e3ff01 contrib/extractor/dbcfile.cpp:33-59 (the same five header words; records follow, then the string block)
     private const uint WdbcMagic = 0x43424457;
     private const int HeaderBytes = 20;
 
-    // ref: D:\ArcaneCore-lanes\_refs\csharp-cores\WoWDBDefs\definitions\Map.dbd:151-158 (1.12.1.5875: ID, Directory, InstanceType, MapType, MapName_lang)
-    // ref: D:\refs\vmangos\contrib\extractor\System.cpp:220-221 (the extractor reads the id from field 0 and the folder name from field 1)
-    // ref: D:\refs\vmangos\src\game\Database\DBCfmt.h:63 (MapEntryfmt "nxix" then the name strings: id, -, instance type, -, name)
+    // ref: WoWDBDefs definitions/Map.dbd:151-158 (1.12.1.5875: ID, Directory, InstanceType, MapType, MapName_lang)
+    // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:220-221 (the extractor reads the id from field 0 and the folder name from field 1)
+    // ref: vmangos@0e3ff01 src/game/Database/DBCfmt.h:63 (MapEntryfmt "nxix" then the name strings: id, -, instance type, -, name)
     private const int IdField = 0;
     private const int DirectoryField = 1;
     private const int InstanceTypeField = 2;

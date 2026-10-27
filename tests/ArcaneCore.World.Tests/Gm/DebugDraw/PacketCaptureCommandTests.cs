@@ -13,6 +13,7 @@ namespace ArcaneCore.World.Tests.Gm.DebugDraw;
 /// <c>Diagnostics:PacketCapture:Enabled</c> is off (the default), and when on, a PKT 3.1 trace of the target's plaintext
 /// packets in both directions that <c>arcane-sniff decode</c> reads back.
 /// </summary>
+[Xunit.Collection(ArcaneCore.World.Tests.Net.PacketCaptureCollection.Name)]
 public sealed class PacketCaptureCommandTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
@@ -83,6 +84,25 @@ public sealed class PacketCaptureCommandTests
             }
 
             string trace = Assert.Single(Directory.GetFiles(directory, "*.pkt"));
+
+            // Stop returns before the background writer has drained and closed the file: wait until it can be opened exclusively.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (true)
+            {
+                try
+                {
+                    using (new FileStream(trace, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                    }
+
+                    break;
+                }
+                catch (IOException) when (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(20);
+                }
+            }
+
             using var text = new StringWriter();
             _ = await SniffDecoder.DecodeAsync(trace, text);
             string decoded = text.ToString();

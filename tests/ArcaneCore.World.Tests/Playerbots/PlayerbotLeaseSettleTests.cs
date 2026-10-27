@@ -445,6 +445,23 @@ public sealed class PlayerbotLeaseSettleTests
     }));
 
     /// <summary>
+    /// A bot at its battlemaster's spot with nobody there refuses the walk after 5 s; for a master that walks waypoints (it may be out of
+    /// the map's reach for a moment) the empty spot is no refusal, only the progress watch and the timeout end the wait.
+    /// </summary>
+    [Fact]
+    public Task BattlegroundAiAtAnEmptySpot_RefusesAfterFiveSeconds_ButNotForAMasterThatWalksWaypoints() => RunBattleground((host, session, ai, options, master) => host.OnWorldAsync(() =>
+    {
+        Player bot = session.Player!;
+        session.ManagedBudget = new ManagedActionBudget(8);
+        var here = new Vector3(bot.X, bot.Y, bot.Z);
+        for (int i = 0; i < 60 && !ai.TravelRefused; i++) ai.Travel(bot, here, DecidedMs(options), refuseEmptySpot: false);
+        Assert.False(ai.TravelRefused, "a master that walks waypoints was refused at an empty spot");
+        for (int i = 0; i < 60 && !ai.TravelRefused; i++) ai.Travel(bot, here, DecidedMs(options));
+        Assert.True(ai.TravelRefused, "control: a master that stands still is refused at an empty spot");
+        return true;
+    }));
+
+    /// <summary>
     /// Test 4b. The battleground AI drops its route without stopping the bot (the map policy refuses the step and the replan): the settle
     /// stops the bot now.
     /// </summary>

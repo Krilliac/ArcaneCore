@@ -16,7 +16,7 @@ namespace ArcaneCore.Atlas.Reference.Client.Terrain;
 /// </remarks>
 internal static class ClientTerrainGeometry
 {
-    // ref: D:\refs\vmangos\contrib\extractor\loadlib\adt.h:39-40 (16 chunks per tile edge, 8 squares per chunk edge)
+    // ref: vmangos@0e3ff01 contrib/extractor/loadlib/adt.h:39-40 (16 chunks per tile edge, 8 squares per chunk edge)
     private const int SquaresPerChunk = 8;
 
     /// <summary>Slope threshold in degrees at or above which a terrain triangle is considered steep/unwalkable.</summary>
@@ -431,7 +431,7 @@ internal static class ClientTerrainGeometry
                         }
 
                         // Only the four corners of a shown square are read: the client leaves the rest uninitialised.
-                        // ref: D:\refs\vmangos\contrib\extractor\System.cpp:607-620 (only the corners of a visible sub cell are read)
+                        // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:607-620 (only the corners of a visible sub cell are read)
                         uint a = LiquidCorner(builder, corners, tile, chunk, layer, y, x);
                         uint b = LiquidCorner(builder, corners, tile, chunk, layer, y + 1, x);
                         uint c = LiquidCorner(builder, corners, tile, chunk, layer, y, x + 1);

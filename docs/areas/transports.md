@@ -49,7 +49,7 @@ The routes need data the repository does not ship:
 * A build-5875 `TaxiPathNode.dbc`, the same file the flight paths use (`NpcServices:TaxiPathNodeDbcPath`). The world reads it
   itself, as vmangos does; the refresh reads the copy in its `-DbcDirectory` to check every ship's route and reports, as a
   `check:` line, a route the world would refuse (no speed or acceleration, a path under three nodes, a map without a
-  `map_template` row). `D:\refs\client-dbc-5875-effective\TaxiPathNode.dbc` is the client's own (patch.MPQ).
+  `map_template` row). `<refs-root>\client-dbc-5875-effective\TaxiPathNode.dbc` is the client's own (patch.MPQ).
 
 So a deploy runs the refresh, keeps `NpcServices:TaxiPathNodeDbcPath` pointing at the DBC and sets `World:Transports:Enabled`
 to true. At start the world logs `Transports: 9 routes, 9 ships sailing`; at Debug (`ArcaneCore.World.Transports`) every map
