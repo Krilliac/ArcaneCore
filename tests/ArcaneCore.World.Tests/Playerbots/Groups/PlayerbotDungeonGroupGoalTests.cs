@@ -216,9 +216,12 @@ public sealed class PlayerbotDungeonGroupGoalTests
         // The quest giver stands at the entrance, so the bots take the quest there and then are 1200 yards away when they gather.
         // Each bot is moved in the run condition (the world thread, straight after the tick in which it holds the quest), never in a
         // later world call: a group needs every member's quest, so it cannot form before the last bot is far away. Moving them after
-        // the wait returned let a scan in between form the group at the entrance, with the short 300 s entrance budget.
+        // the wait returned let a scan in between form the group at the entrance, with the short 300 s entrance budget. Group forming is
+        // also off until the last bot is moved: the coordinator's scan can come in the very tick in which the last bot takes the quest,
+        // before the run condition sees it.
         Vector3 far = EntranceArea - new Vector3(1200f, 0f, 0f);
         var moved = new HashSet<Guid>();
+        await world.OnWorldAsync(() => world.Coordinator.Options.Enabled = false);
         Assert.True(await world.RunUntilAsync(60_000, () =>
         {
             foreach ((Guid id, string _) in bots)
@@ -228,7 +231,9 @@ public sealed class PlayerbotDungeonGroupGoalTests
                 moved.Add(id);
             }
 
-            return moved.Count == bots.Length;
+            if (moved.Count != bots.Length) return false;
+            world.Coordinator.Options.Enabled = true;
+            return true;
         }), await world.TraceAsync());
 
         Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
