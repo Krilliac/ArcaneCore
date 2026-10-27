@@ -81,13 +81,20 @@ The launcher does not touch `Logging` levels, so the profile decides them. Two o
 `ArcaneCore.Game.Maps.WorldRuntime` category, and a profile that sets `Logging:LogLevel:ArcaneCore.Game.Maps.WorldRuntime` to `Error` hides them:
 
 - `Slow map update` and `Slow world update`, the per-map and per-tick lines over the `SlowMapUpdate` and `SlowWorldUpdate` thresholds. They are written
-  at **Warning** (`WorldRuntime.Perf.cs:131`, called from `WorldRuntime.cs:547` and `WorldRuntime.Parallel.cs:288`).
+  at **Warning**. "Slow map update" is written by `LogIfSlow` and `LogIfSlowMicros` (`WorldRuntime.Perf.cs:131` and `:140`), called from
+  `WorldRuntime.cs:547` (`LogIfSlow`) and `Parallel/WorldRuntime.Parallel.cs:288` (`LogIfSlowMicros`). "Slow world update" is written at
+  `WorldRuntime.cs:784` and `:832`.
+- The slow-update summary, "Slow update summary: ...". When `PerformanceLog:SummaryIntervalSeconds` is above 0, the per-map and per-tick lines
+  are mostly suppressed and counted in `PerfLogAggregator` instead (`WorldRuntime.Perf.cs:118-125`; `RecordWorldFrame` at `WorldRuntime.cs:782` and `:830`).
+  The aggregator writes its summary at **Warning** (`PerfLogAggregator.cs:364`) through the same `WorldRuntime` logger (`WorldRuntime.Perf.cs:162`),
+  so the `Error` level hides the summary too.
 - The parallel maps phase summary, "Parallel maps phase (N s): ... serial gate N entries, N contended". It is written at **Information**
-  (`WorldRuntime.Parallel.cs:332`). So is the one-time "Parallel maps phase: N map threads" line at start (`:152`).
+  (`Parallel/WorldRuntime.Parallel.cs:332`). So is the one-time "Parallel maps phase: N map threads" line at start (`:152`).
 
-Use `Information` for that category to keep both. Use `Warning` if only the slow lines are wanted. Both lines are already bounded: one per slow map
-or tick over the threshold, and one summary per interval. Neither costs anything when it is not written. This is a profile change; the
-launcher and the repo defaults do not set it.
+Use `Information` for that category to keep all of them. Use `Warning` if only the slow lines and their summary are wanted. The lines are bounded: one per
+slow map or tick over the threshold (fewer with a summary interval), and one summary per interval. They are not free when unwritten:
+`LogIfSlowMicros` builds the host-load and parallel text (`WorldRuntime.Perf.cs:128`) without checking the log level, and only the parallel
+summary checks `IsEnabled` first (`Parallel/WorldRuntime.Parallel.cs:322`). This is a profile change; the launcher and the repo defaults do not set it.
 
 ## When the tick watchdog starts
 
@@ -100,14 +107,15 @@ stack capture.
   service added by `AddWorldWatchdog` (`WorldProductionServices.cs:51`), which comes after `AddWorldDaemon` (`:45`, `WorldHost` and `WorldServer`)
   and after the console, control pipe, map feed and remote admin services.
 - The generic host starts hosted services one at a time, in registration order. So the watchdog thread starts only once all of those have
-  finished starting. Live on 2026-10-27 that was about 2 minutes after the first tick.
+  finished starting. That was about 2 minutes after the first tick, observed on one live launch (2026-10-27).
 - A hang in that window is reported by the first check, after the fact. It shows as a completed hang with the slowest recent frame. No hang
   stack is captured, because the capture runs only while a tick is still hung.
 
 The fix is to register the watchdog before the world daemon, which is a change in `WorldProductionServices.cs`, or to start the watchdog
 thread from `TickWatchdogFeature.Attach`. Either one changes start-up and stop ordering: hosted services stop in reverse registration order
 (`WorldProductionServices.cs:38-39`). It is not made here. `TickMonitorTests.AHangInTheFirstTicks_IsReportedByTheFirstCheck` pins that the
-monitor itself reports a hang in the first ticks, still in progress, as soon as its first check runs.
+monitor itself reports a hang in the first ticks, still in progress, as soon as its first check runs. It pins only `TickMonitor` behavior, not the host start order.
+
 ## Survey: what was left out, and why
 
 | Knob | Source | Decision |

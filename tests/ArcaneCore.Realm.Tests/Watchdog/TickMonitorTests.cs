@@ -247,6 +247,9 @@ public sealed class TickMonitorTests
         long p99 = _counters.Find("watchdog.tick.frame_p99_us")!.Value;
         long max = _counters.Find("watchdog.tick.frame_max_us")!.Value;
         Assert.True(p50 <= p95 && p95 <= p99 && p99 <= max, $"p50 {p50} p95 {p95} p99 {p99} max {max}");
+        // 139 frames: 100 of 150 ms, 39 of 50 ms. Rank 138 of 139 is a slow frame, and its bucket bound is clamped to the exact max.
+        Assert.Equal(150_000, p99);
+        Assert.Equal(150_000, max);
     }
 
     /// <summary>A tick that hangs among the very first ones is reported by the first check, still in progress, like any later hang.</summary>
@@ -263,6 +266,7 @@ public sealed class TickMonitorTests
 
         Assert.Contains(alerts, a => a.Kind == TickAlertKind.Hang && a.InProgress);
     }
+
     [Fact]
     public void AttachedBodyAndPhaseHistograms_AppearInTheSummaryAndTheGauges()
     {
