@@ -69,7 +69,10 @@ public static class SharedDrapeStats
 /// <para>
 /// A shared read that finds a needed piece not loaded does not wait and does not load: it records the reason here, and the drape
 /// returns null so the caller repeats it inside the gate, where loading is allowed. Every sample the shared drape returns was therefore
-/// read from fully loaded tiles by the same arithmetic as the gated drape: the points are bit-identical.
+/// read from fully loaded tiles by the same arithmetic as the gated drape. The vmap read lock is held once for the whole drape, so the
+/// model data is one snapshot; the terrain tiles do not change during the maps phase. The navmesh read lock is taken per query (it is also
+/// what in-flight path jobs hold, and holding it across a drape would make every tile change cancel them), so a navmesh tile added or
+/// removed mid-drape can make two samples reflect two mesh states: each sample equals the gated answer for the mesh state at that moment.
 /// </para>
 /// </summary>
 internal static class VMapSharedReader
@@ -95,8 +98,14 @@ internal static class VMapSharedReader
         }
     }
 
+    [ThreadStatic]
+    private static bool t_lockHeld;
+
+    /// <summary>Whether this thread's shared drape already holds the vmap read lock (it takes it once for the whole drape).</summary>
+    internal static bool LockHeld => t_lockHeld;
+
     /// <summary>Enter shared mode on this thread; dispose to restore the previous mode.</summary>
-    internal static Scope Enter() => new(t_active, t_abort);
+    internal static Scope Enter(ReaderWriterLockSlim? vmapLock = null) => new(t_active, t_abort, vmapLock);
 
     /// <summary>The reason this thread's shared drape gave up, or <see cref="SharedDrapeAbort.None"/>.</summary>
     internal static SharedDrapeAbort Reason => t_abort;
@@ -105,11 +114,19 @@ internal static class VMapSharedReader
     {
         private readonly bool _wasActive;
         private readonly SharedDrapeAbort _wasAbort;
+        private readonly ReaderWriterLockSlim? _lock;
 
-        internal Scope(bool wasActive, SharedDrapeAbort wasAbort)
+        internal Scope(bool wasActive, SharedDrapeAbort wasAbort, ReaderWriterLockSlim? vmapLock)
         {
             _wasActive = wasActive;
             _wasAbort = wasAbort;
+            _lock = vmapLock;
+            if (vmapLock is not null)
+            {
+                vmapLock.EnterReadLock(); // once for the whole drape: one vmap snapshot, one acquire/release pair instead of one per sample
+                t_lockHeld = true;
+            }
+
             t_active = true;
             t_abort = SharedDrapeAbort.None;
         }
@@ -118,6 +135,11 @@ internal static class VMapSharedReader
         {
             t_active = _wasActive;
             t_abort = _wasAbort;
+            if (_lock is not null)
+            {
+                t_lockHeld = false;
+                _lock.ExitReadLock();
+            }
         }
     }
 }

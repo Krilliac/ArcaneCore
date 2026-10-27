@@ -13,7 +13,8 @@ namespace ArcaneCore.Game.Maps.Terrain;
 /// empty <c>GridMap</c>: no height (<see cref="TerrainTile.InvalidHeightValue"/>), area flag 0
 /// and no liquid — lookups degrade, nothing fails.
 /// </para>
-/// <para>Thread affinity: world thread.</para>
+/// <para>Thread affinity: world thread, except <see cref="TryGetLoadedHeight"/> and <see cref="TryGetLoadedLiquidStatus"/>, which a map thread
+/// outside the serial gate may call for tiles already in memory (tiles are freed only by the world tick's clean-up, never during the maps phase).</para>
 /// </summary>
 public sealed class TerrainInfo
 {

@@ -400,6 +400,50 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         Assert.Equal((long)Drapes, system.DrapedPaths);
     }
 
+    // --- 4b. every change of the loaded tiles takes the write side of the lock a shared read holds ---------------------------------
+
+    [Theory]
+    [InlineData("unload")]
+    [InlineData("install")]
+    [InlineData("emptytile")]
+    [InlineData("tree")]
+    public async Task EveryChangeOfTheLoadedTiles_WaitsForAReaderInsideTheLock(string mutator)
+    {
+        using Scene scene = Build();
+        _models.Write(1); // a second map whose vmtree is not read yet
+        VMapManager vmaps = scene.Vmaps;
+        if (mutator == "install")
+        {
+            vmaps.UnloadTile(0, 31, 33); // not loaded, its file exists
+        }
+
+        Action mutate = mutator switch
+        {
+            "unload" => () => vmaps.UnloadTile(0, 31, 33),
+            "install" => () => Assert.True(vmaps.LoadTile(0, 31, 33)),
+            "emptytile" => () => Assert.False(vmaps.LoadTile(0, 31, 34)), // no vmtile file: known empty
+            _ => () => Assert.NotNull(vmaps.GetTree(1)),
+        };
+
+        ReaderWriterLockSlim gate = vmaps.SharedLock;
+        Task writer;
+        gate.EnterReadLock(); // a shared reader inside the lock
+        try
+        {
+            writer = Task.Run(mutate);
+            SpinWait.SpinUntil(() => gate.WaitingWriteCount == 1 || writer.IsCompleted, TimeSpan.FromSeconds(10));
+            Assert.False(writer.IsCompleted, $"{mutator} changed the loaded tiles while a shared reader was inside the lock");
+            Assert.Equal(1, gate.WaitingWriteCount);
+        }
+        finally
+        {
+            gate.ExitReadLock();
+        }
+
+        await writer.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, gate.WaitingWriteCount);
+    }
+
     // --- 5. concurrent drapes while tiles load and unload -----------------------------------------------------------------------
 
     [Fact]

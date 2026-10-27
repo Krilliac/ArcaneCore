@@ -68,7 +68,8 @@ public readonly record struct GroundQuery(
 /// height to detail vertices), so a mesh height kept as a unit's z floats it; <see cref="DrapePath"/> puts every point of a creature leg
 /// on the ground and splits a chord that would pass over or under it (docs/areas/collision-pathing.md, "Ground snap").
 /// <para>
-/// Thread affinity: world thread (or inside the serial gate). The model tree (<c>VMapManager</c>) is world-thread state whose tiles
+/// Thread affinity: world thread (or inside the serial gate), except <see cref="TryDrapePathShared"/>, which a map thread may run outside
+/// it over what is already loaded (shared mode, <see cref="VMapSharedReader"/>). The model tree (<c>VMapManager</c>) is world-thread state whose tiles
 /// are loaded and freed in place, and the terrain tiles are shared by the instances of a map id: never call this from a path-job pool thread.
 /// Allocation: <see cref="TrySnap"/> and <see cref="SnapOrKeep"/> allocate nothing; <see cref="DrapePath"/> allocates its result list.
 /// </para>
@@ -282,8 +283,9 @@ public static class GroundHeight
     /// (<paramref name="abort"/> says why). It is the same code with the same arithmetic: model heights come from the vmap tiles under the
     /// read side of their lock, terrain and liquid from tiles already in memory, and the navmesh branches from the pathfinder's shared
     /// queries. A drape that would need a tile loaded, a navmesh the owner has not looked up, or services that are not known to be safe
-    /// to read concurrently is discarded whole, and the caller repeats it inside the gate with <see cref="DrapePath"/>, so a non-null
-    /// result is bit-identical to the gated one (see <see cref="VMapSharedReader"/> for the memory-model argument). The query must not
+    /// to read concurrently is discarded whole, and the caller repeats it inside the gate with <see cref="DrapePath"/>. Every sample of a
+    /// non-null result equals the gated answer for the model and terrain state (one snapshot for the whole drape) and the navmesh state at
+    /// that moment (see <see cref="VMapSharedReader"/> for the memory-model argument and why the navmesh lock is not held across the drape). The query must not
     /// load tiles. Allocation: the result list, as <see cref="DrapePath"/>.
     /// </summary>
     internal static List<Vector3>? TryDrapePathShared(
@@ -305,7 +307,9 @@ public static class GroundHeight
             return null;
         }
 
-        using VMapSharedReader.Scope scope = VMapSharedReader.Enter();
+        // The vmap read lock is taken once here for the whole drape (one snapshot of the model tiles, one acquire/release pair). Lock order is
+        // vmap read, then navmesh read (per query); nothing takes them the other way round.
+        using VMapSharedReader.Scope scope = VMapSharedReader.Enter((collision.LineOfSight as VMapManager)?.SharedLock);
         List<Vector3> draped = DrapePath(collision, start, points, step, tolerance, maxPoints, query, modelTolerance, cornersOnMesh);
         abort = VMapSharedReader.Reason;
         return abort == SharedDrapeAbort.None ? draped : null;

@@ -84,6 +84,7 @@ public sealed partial class CreatureMapSystem
 
             SharedDrapeStats.RecordFallback(abort);
             GatedDrapes++;
+            NoteDrapeTicks(Stopwatch.GetTimestamp() - started); // the shared attempt that gave up is part of the update's path time
             using (Serial())
             {
                 // Timed inside the gate: the wait for another map to release it is not this map's drape time.

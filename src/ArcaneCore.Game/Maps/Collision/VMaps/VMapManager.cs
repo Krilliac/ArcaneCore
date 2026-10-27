@@ -215,21 +215,12 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
 
         string[] unused = [.. _models.Where(m => m.Value is not null && !used.Contains(m.Key)).Select(m => m.Key)];
-        // _models is read and written by the owner thread only (AcquireModel): a shared reader never looks at it, and the models its tiles
-        // hold stay reachable through their ModelInstance objects. The write lock is taken anyway so that the cache never changes under a
-        // reader that is inside a tile query.
-        _sharedLock.EnterWriteLock();
-        try
+        // No lock: _models is read and written by the owner thread only (AcquireModel), a shared reader never looks at it, and the models
+        // its tiles hold stay reachable through their ModelInstance objects, so dropping a cache entry frees nothing a reader uses.
+        foreach (string name in unused)
         {
-            foreach (string name in unused)
-            {
-                _models.Remove(name);
-                _cachedModelNames.TryRemove(name, out _);
-            }
-        }
-        finally
-        {
-            _sharedLock.ExitWriteLock();
+            _models.Remove(name);
+            _cachedModelNames.TryRemove(name, out _);
         }
 
         return unused.Length;
@@ -454,7 +445,13 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     /// </summary>
     private float? GetModelHeightShared(uint mapId, Vector3 point, float maxSearchDistance)
     {
-        _sharedLock.EnterReadLock();
+        // A shared drape takes the read lock once for all its samples (VMapSharedReader.Scope); a bare shared-mode caller takes it per call.
+        bool take = !VMapSharedReader.LockHeld;
+        if (take)
+        {
+            _sharedLock.EnterReadLock();
+        }
+
         try
         {
             if (!_trees.TryGetValue(mapId, out VMapTree? tree))
@@ -480,9 +477,15 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
         finally
         {
-            _sharedLock.ExitReadLock();
+            if (take)
+            {
+                _sharedLock.ExitReadLock();
+            }
         }
     }
+
+    /// <summary>The lock shared reads hold for reading and every change of the loaded tiles for writing (tests: the write-lock seam).</summary>
+    internal ReaderWriterLockSlim SharedLock => _sharedLock;
 
     public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
     {
