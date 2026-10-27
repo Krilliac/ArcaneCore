@@ -186,6 +186,7 @@ public sealed class CrashReportTests
         Assert.False(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new OperationCanceledException(), new InvalidOperationException("real bug"))));
         Assert.False(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new InvalidOperationException("real bug"))));
     }
+
     [Fact]
     public void ShouldIgnoreFirstChance_IoExceptionInnerChainIsDepthCapped()
     {
