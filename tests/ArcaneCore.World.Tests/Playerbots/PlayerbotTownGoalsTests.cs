@@ -1116,6 +1116,60 @@ public sealed class PlayerbotTownGoalsTests
         finally { FarRepairServices.Current.Value = null; }
     }
 
+    /// <summary>
+    /// GitHub #1476 (Vendor and Train visit class): the visit leg to a visible service NPC planned a route that the bot then never made
+    /// progress on (the plan succeeds, the walk does not close). Unlike the repair trip (<see cref="PlayerbotTownGoals.RepairTripStuckMs"/>)
+    /// the visit had no stuck clock, so only the 120 s stall watch ended it. The visit must be given up, the NPC set aside, well before.
+    /// </summary>
+    [Fact]
+    public async Task AVisitThatNeverMakesProgress_IsGivenUpLongBeforeTheStallWatch_AndSetsTheNpcAside()
+    {
+        var fixture = new TownVendorFixture();
+        TownVendorServices.Current.Value = fixture;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices:
+                services => services.AddSingleton<ISpellContentStore>(fixture));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "town NPC visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    player.Relocate(player.X - 25, player.Y, player.Z, player.Orientation, host.World.NowMs);
+                    float startX = player.X;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true })
+                    {
+                        Suspensions = new PlayerbotSuspensions(),
+                    };
+                    uint stuckMs = 0;
+                    bool givenUp = false;
+                    const uint stepMs = 500;
+                    // 60 s of world time, half of the stall watch's 120 s: the motion is never elapsed, so the bot never leaves where it stands (no progress).
+                    for (int step = 0; step < 120 && !givenUp; step++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        goals.BeginThink();
+                        if (!goals.Update(player, stepMs)) givenUp = true;
+                        else stuckMs += stepMs;
+                    }
+
+                    Assert.True(Math.Abs(player.X - startX) < 1f, "the bot moved: the test does not model a bot with no progress");
+                    Assert.True(givenUp, "the visit leg held the bot for 60 s without any progress");
+                    Assert.True(stuckMs <= 20_000, $"given up only after {stuckMs} ms of no progress");
+                    Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs),
+                        "the NPC the bot could not close on was not set aside");
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
     private sealed class BlockWestPathfinder(float minX) : IPathfinder
     {
         public bool Enabled => true;
