@@ -43,10 +43,11 @@ public sealed class WorldRuntimePositionTests
         // identifies exactly that read.
         long reads = 0, sawIdle = 0, sawFeatures = 0, torn = 0, unverifiedReads = 0;
         string? firstTorn = null;
-        long deadline = Environment.TickCount64 + 400;
+        long deadline = Environment.TickCount64 + 400, cap = Environment.TickCount64 + 10_000;
         try
         {
-            while (Environment.TickCount64 < deadline)
+            // Past 400 ms, keep reading until both phases were seen: a starved writer thread no longer makes the run vacuous.
+            while (Environment.TickCount64 < deadline || ((sawIdle == 0 || sawFeatures == 0) && Environment.TickCount64 < cap))
             {
                 long unverifiedBefore = world.PositionReadsUnverified;
                 TickPosition p = world.CurrentPosition;

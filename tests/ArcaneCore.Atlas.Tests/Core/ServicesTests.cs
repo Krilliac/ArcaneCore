@@ -14,6 +14,8 @@ public sealed class ServicesTests
 
         public TimeSpan Delay { get; init; }
 
+        public ManualResetEventSlim? Gate { get; init; }
+
         public Func<TileKey, Exception?> Fail { get; init; } = _ => null;
 
         public IReadOnlyList<string> Layers { get; } = [LayerIds.Terrain];
@@ -29,6 +31,8 @@ public sealed class ServicesTests
             {
                 Thread.Sleep(Delay);
             }
+
+            Gate?.Wait(TimeSpan.FromSeconds(10));
 
             cancellationToken.ThrowIfCancellationRequested();
             if (Fail(tile) is { } failure)
@@ -73,10 +77,20 @@ public sealed class ServicesTests
     [Fact]
     public async Task Cache_SharesOneBuildBetweenConcurrentRequests()
     {
-        (LayerCache cache, CountingSource source) = Cache(source: new CountingSource { Delay = TimeSpan.FromMilliseconds(150) });
+        using var gate = new ManualResetEventSlim();
+        using var started = new CountdownEvent(8);
+        (LayerCache cache, CountingSource source) = Cache(source: new CountingSource { Gate = gate });
         var tile = new TileKey(0, 32, 32);
 
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => cache.Get(LayerIds.Terrain, tile, CancellationToken.None))));
+        Task[] requests = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            started.Signal();
+            return cache.Get(LayerIds.Terrain, tile, CancellationToken.None);
+        })).ToArray();
+        Assert.True(started.Wait(TimeSpan.FromSeconds(10)), "not every request started");
+        Assert.True(SpinWait.SpinUntil(() => source.Builds == 1, TimeSpan.FromSeconds(10)), "no build started");
+        gate.Set();
+        await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(1, source.Builds);
     }
