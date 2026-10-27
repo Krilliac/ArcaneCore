@@ -374,6 +374,23 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
             $"expected dry pier >= 10 yd from water keyframe, got {resolved}");
     }
 
+    /// <summary>The dock probes read navigation tiles without blocking the world thread: they ask non-blocking and take "pending" as no dry mesh.</summary>
+    [Fact]
+    public async Task ResolveDockTarget_ReadsTilesWithoutBlocking_AndAnswersPendingNotDry()
+    {
+        var mesh = new TileReadingMesh(ShipTestWorld.PortOnMap0.Position.Z);
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.OnWorldAsync(() => ArcaneCore.Game.Maps.Collision.WorldCollision.Of(world.Host.World).Install(
+            lineOfSight: new PierFloor(ShipTestWorld.PortOnMap0.Position.Z), pathfinder: mesh));
+        Vector3 toward = ShipTestWorld.PortOnMap0.Position + new Vector3(-40f, 0f, 0f);
+        Vector3 resolved = await world.OnWorldAsync(() =>
+            PlayerbotShip.ResolveDockTarget(world.Player.Map!, ShipTestWorld.PortOnMap0.Position, toward));
+
+        Assert.Equal(0, mesh.BlockingReads); // a blocking query would have read its tile on the world thread
+        Assert.True(mesh.PendingAnswers > 0);
+        Assert.Equal(ShipTestWorld.PortOnMap0.Position, resolved); // nothing is known dry yet: the port itself, the next think asks again
+    }
+
     [Fact]
     public async Task TryBegin_WhenBotIsAlreadyAboardTheSameShip_StartsInRideStageInsteadOfRefusing()
     {
@@ -437,6 +454,35 @@ public sealed class PlayerbotShipTests(ITestOutputHelper output)
 
         public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
             => new(true, false, 1f, end with { Z = port.Z });
+    }
+
+    /// <summary>A navigation mesh whose tiles are never in: a query that may not block answers pending, one that may counts as a synchronous tile read.</summary>
+    private sealed class TileReadingMesh(float z) : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public int BlockingReads { get; private set; }
+        public int PendingAnswers { get; private set; }
+        public bool Enabled => true;
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (options is { LoadTiles: true, NonBlockingTiles: false })
+            {
+                BlockingReads++;
+                return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start, end with { Z = z }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+            }
+
+            PendingAnswers++;
+            return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.TilesPending, [start]);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = z });
     }
 
     private sealed class PierFloor(float z) : ArcaneCore.Game.Maps.Collision.ILineOfSight

@@ -1187,11 +1187,34 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (++_failCount < ConfirmFailures || _failDiagnosed || Suspensions is not { } suspensions) return;
         _failDiagnosed = true;
-        bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
+        // The two searches of the diagnosis are path jobs: while one is under way the confirmation waits for a later think (the failures
+        // already counted stand), and a decided verdict is kept per quest and spot (PlayerbotNavigation.DiagnoseSteepAscent).
+        PlayerbotNavigation.DiagnosisState steepState = PlayerbotNavigation.DiagnoseSteepAscent(player, destination, _options, questId, now, out float ascent);
+        if (steepState == PlayerbotNavigation.DiagnosisState.Pending)
+        {
+            _failDiagnosed = false;
+            return;
+        }
+
+        bool steep = steepState == PlayerbotNavigation.DiagnosisState.Found;
         int fromComp = -1, toComp = -1;
         bool unreachable = !steep && PlayerbotNavigation.IsUnreachableOnFoot(player, destination, out fromComp, out toComp);
         PlayerbotHazard hazard = default;
-        if (!steep && !unreachable && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder))
+        bool blocked = false;
+        if (!steep && !unreachable)
+        {
+            PlayerbotNavigation.DiagnosisState hazardState = PlayerbotNavigation.DiagnoseReturnHazard(player, destination, _options, questId, now,
+                out hazard, friendlyTownEnder);
+            if (hazardState == PlayerbotNavigation.DiagnosisState.Pending)
+            {
+                _failDiagnosed = false;
+                return;
+            }
+
+            blocked = hazardState == PlayerbotNavigation.DiagnosisState.Found;
+        }
+
+        if (!steep && !unreachable && !blocked)
         {
             // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
             // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).

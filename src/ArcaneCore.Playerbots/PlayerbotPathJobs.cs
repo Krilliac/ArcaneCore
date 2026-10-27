@@ -166,6 +166,12 @@ internal sealed class PlayerbotPathJobs
     /// <summary>Test seam: the wall clock in milliseconds (the wait bounds are wall time; the game clock may run faster).</summary>
     internal Func<long> WallMs { get; init; } = static () => Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency;
 
+    /// <summary>The logger of this service (faults of work done for it on other threads are logged here).</summary>
+    internal ILogger Logger => _logger;
+
+    /// <summary>Bounds the region searches the world thread runs itself when a queued one is lost (<see cref="PlayerbotRegionRoutes.TryRoute"/>).</summary>
+    internal PlayerbotRegionRoutes.SyncSearchBudget RegionSyncBudget { get; } = new();
+
     /// <summary>The service the running think is bound to (<see cref="Bind"/>), if any.</summary>
     internal static PlayerbotPathJobs? Bound => t_bound;
 
@@ -176,6 +182,16 @@ internal sealed class PlayerbotPathJobs
     internal static bool LastPendingWasJob => t_lastPendingWasJob;
 
     internal static void NoteTilePending() => t_lastPendingWasJob = false;
+
+    /// <summary>
+    /// A background job other than a path search (a region route, <see cref="PlayerbotRegionRoutes"/>) is under way for the running query:
+    /// counted as a pending answer (<see cref="PendingAnswers"/>), so the planning wrappers answer <see cref="PlanOutcome.Pending"/>.
+    /// </summary>
+    internal static void NoteExternalPending()
+    {
+        t_pendingAnswers++;
+        t_lastPendingWasJob = true;
+    }
 
     /// <summary>Whether the running query may be answered pending (a <see cref="Deferrable"/> scope, not inside <see cref="NoDefer"/>).</summary>
     internal static bool InDeferrableScope => t_deferDepth > 0 && t_noDeferDepth == 0;
