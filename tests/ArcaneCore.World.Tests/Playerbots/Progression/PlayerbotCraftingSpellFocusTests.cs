@@ -154,6 +154,16 @@ public sealed class PlayerbotCraftingSpellFocusTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS), a craft that went off waits in the batch for its go: the world runs on to the
+    /// batch boundary before the bags are read. Without batching nothing is held and this returns at once.
+    /// </summary>
+    private static Task SpellBatchGoneAsync(WorldTestHost host, Player player)
+        => host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(player), "the batched craft went off");
+
+    /// <summary>The spell batch window of the world's spell system (0 without batching).</summary>
+    private static uint SpellBatchWindowMs(WorldTestHost host) => host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs;
+
     private static bool Step(WorldSession session, PlayerbotCrafting crafting, Player player)
     {
         session.ManagedBudget = new ManagedActionBudget(5);
@@ -222,17 +232,25 @@ public sealed class PlayerbotCraftingSpellFocusTests
     [Fact]
     public async Task BotNextToACookingFire_Cooks()
     {
-        await RunAsync(knowsCampfire: false, woodCount: 0, (host, session, crafting, player) => host.OnWorldAsync(() =>
+        await RunAsync(knowsCampfire: false, woodCount: 0, async (host, session, crafting, player) =>
         {
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            Assert.NotNull(Objs(host, player).Summon(FireEntry, player.X + 2f, player.Y, player.Z, 0));
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                Assert.NotNull(Objs(host, player).Summon(FireEntry, player.X + 2f, player.Y, player.Z, 0));
 
-            Assert.True(Step(session, crafting, player));
-            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
-            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
-            Assert.False(capture.Any(CraftFailed), capture.Describe());
-            return true;
-        }));
+                Assert.True(Step(session, crafting, player));
+                return true;
+            });
+            await SpellBatchGoneAsync(host, player);
+            await host.OnWorldAsync(() =>
+            {
+                Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+                Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+                Assert.False(capture.Any(CraftFailed), capture.Describe());
+                return true;
+            });
+        });
     }
 
     [Fact]
@@ -289,7 +307,7 @@ public sealed class PlayerbotCraftingSpellFocusTests
             Assert.False(await host.OnWorldAsync(() => Step(session, crafting, player)));
             await host.World.AdvanceClockAsync(560_000);
             Assert.True(await host.OnWorldAsync(() => Step(session, crafting, player)));
-            await host.World.AdvanceClockAsync(200);
+            await host.World.AdvanceClockAsync(200 + SpellBatchWindowMs(host)); // past the go, which spell batching holds to the boundary
             Assert.Equal(1u, await host.OnWorldAsync(() => player.Inventory.GetItemCount(Product)));
         }, manualClock: true);
     }

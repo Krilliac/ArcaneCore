@@ -160,6 +160,49 @@ public sealed partial class InstanceManager
         return true;
     }
 
+    /// <summary>
+    /// The dungeon half of vmangos <c>HandleGonameCommand</c> (TeleportCommands.cpp:1262-1303): a GM going to <paramref name="target"/> inside a
+    /// dungeon instance must enter that very instance. A GM in a group may go only when it is the target's group
+    /// (<see cref="GmInstanceGo.GroupMismatch"/>). A GM with no bind of its own or its group's to the map is bound to the target's instance
+    /// (the group when the GM leads one, else the GM; permanent when the instance cannot reset), so <see cref="ResolveEntry"/> finds it instead
+    /// of creating an empty instance. A GM that is already bound keeps its bind, as vmangos does. World thread.
+    /// </summary>
+    public GmInstanceGo PrepareGmGoToInstanceOf(Player gm, Player target)
+    {
+        ArgumentNullException.ThrowIfNull(gm);
+        ArgumentNullException.ThrowIfNull(target);
+        if (target.Map is not { } map || !_mapStates.TryGetValue(map, out InstanceMapState? state) || state.Save.IsDeleted)
+        {
+            return GmInstanceGo.NotInstance;
+        }
+
+        Group? group = GroupOf(gm.Guid);
+        if (group is not null && GroupOf(target.Guid)?.Id != group.Id)
+        {
+            return GmInstanceGo.GroupMismatch;
+        }
+
+        InstanceSave save = state.Save;
+
+        // ArcaneCore safety deviation (not in vmangos): a map flagged to reset when it unloads is about to lose its save, so binding the GM to
+        // that save would leave a bind to a deleted instance. The GM enters through ResolveEntry as any unbound visitor does.
+        if (state.ResetAfterUnload || GetBoundSaveForSelfOrGroup(gm.Guid, save.MapId) is not null)
+        {
+            return GmInstanceGo.Ready;
+        }
+
+        if (group is not null && group.IsLeader(gm.Guid))
+        {
+            BindGroup(group, save, permanent: !save.CanReset);
+        }
+        else
+        {
+            BindPlayer(gm.Guid, save, permanent: !save.CanReset);
+        }
+
+        return GmInstanceGo.Ready;
+    }
+
     // vmangos DungeonMap::BindPlayerOrGroupOnEnter.
     private void BindPlayerOrGroupOnEnter(Player player, InstanceSave save, Map map)
     {
@@ -459,4 +502,17 @@ public sealed partial class InstanceManager
 
         return binds;
     }
+}
+
+/// <summary>The outcome of <see cref="InstanceManager.PrepareGmGoToInstanceOf"/>.</summary>
+public enum GmInstanceGo
+{
+    /// <summary>The target is not in a dungeon instance: nothing was done.</summary>
+    NotInstance,
+
+    /// <summary>The GM may go: it is bound to (or already holds a bind that decides) the instance it enters.</summary>
+    Ready,
+
+    /// <summary>The GM is in a group other than the target's (vmangos <c>LANG_CANNOT_GO_TO_INST_PARTY</c>).</summary>
+    GroupMismatch,
 }

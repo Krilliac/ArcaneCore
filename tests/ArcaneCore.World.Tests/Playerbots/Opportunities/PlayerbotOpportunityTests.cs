@@ -641,7 +641,7 @@ public sealed class PlayerbotOpportunityTests
         await GatheringBotAsync(rig);
         if (guarded) await AddGuardAsync(rig, 96520, 5f, 2f, 12, 1, 400);
 
-        bool gathering = await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Vendor && rig.Bot.Brain.TargetEntry == NodeChest, steps: 40);
+        bool gathering = await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Gather && rig.Bot.Brain.TargetEntry == NodeChest, steps: 40);
         Assert.Equal(!guarded, gathering);
     }
 
@@ -1204,6 +1204,150 @@ public sealed class PlayerbotOpportunityTests
         Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
     }
 
+    /// <summary>
+    /// The chest the exact search refuses (a snake of more polygons than its budget) lies in the next region of the graph. The region route
+    /// is asked through the cache like the legs of a far goal: while its answer is outstanding (here a lost search, marked asked) the chest
+    /// answers pending - neither searched on the world thread nor refused - and once the pair is answered the bot walks to it.
+    /// </summary>
+    [Fact]
+    public async Task AChestAcrossARegionBoundary_AnswersPending_UntilTheRegionRouteIsSearched()
+    {
+        const float cell = 1f;
+        const int width = 150;
+        const int lastRow = 46;
+        ChestSpawn chest = new(FreeChest, 9, 0f, lastRow * cell + 2f);
+        using var fixture = new NavMeshFixture();
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - (cell / 2f), StartY - (cell / 2f), width, lastRow + 1, cell)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (i, j) => (j & 1) == 0 || i == ((((j - 1) / 2) & 1) == 0 ? width - 1 : 0),
+            LinkedSides = [0],
+        });
+        fixture.WriteTile(0, fileX + 1, fileY, new CellTile(detourX + 1, detourY, StartX - (cell / 2f), StartY - (cell / 2f) + ((lastRow + 1) * cell), width, 10, cell)
+        {
+            Height = (_, _) => StartZ,
+            LinkedSides = [4],
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory);
+        Assert.True(nav.LoadTile(0, fileX, fileY));
+        Assert.True(nav.LoadTile(0, fileX + 1, fileY));
+        Task<NavRegionGraph?>? building = nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotNull(building);
+        NavRegionGraph graph = (await building)!;
+
+        await using Rig rig = await Rig.StartAsync([chest], tweak: options =>
+        {
+            options.Opportunities.ScanRadiusYards = 80f;
+            options.Opportunities.PersonalityVariance = 0f;
+            options.Opportunities.MinValue = 0f;
+        });
+        (int from, int to, Vector3 here, Vector3 goal) = await rig.World(() =>
+        {
+            WorldCollision.Of(rig.Host.World).Install(pathfinder: nav);
+            GameObject box = rig.ChestOf(chest);
+            Vector3 position = PlayerbotMotion.CurrentPosition(rig.Player);
+            Vector3 target = new(box.X, box.Y, box.Z);
+            var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+            return (nav.RegionAt(graph, position, locate), nav.RegionAt(graph, target, locate), position, target);
+        });
+        Assert.True(from >= 0 && to >= 0 && from != to, $"regions {from}, {to}");
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        cache.MarkAsked(from, to, long.MaxValue / 2); // a search that never comes back, never old enough to be searched here
+
+        using AnomalyCapture capture = await rig.World(() => PlayerbotAnomalies.CaptureFor(rig.Player));
+        for (int think = 0; think < 3; think++)
+        {
+            await rig.World(() => rig.Bot.Step()); // pending is no verdict: the find is neither started nor set aside
+        }
+
+        Assert.Equal(0, cache.Searches);
+        Assert.Equal(1, cache.AskedCount);
+        Assert.NotEqual(KeyOf(chest), rig.Bot.Controller.ActiveKey); // Pending is no verdict: the chest is not taken (a direct FindRoute would take it at once)
+        Assert.Equal(0, capture.Count(Key("unreachable")));
+        Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
+
+        cache.Search(from, here, to, goal);
+        Assert.Equal(1, cache.Searches);
+        Assert.True(await RunClockAsync(rig, () => rig.Bot.Controller.ActiveKey == KeyOf(chest), steps: 20), "the chest was never taken up: " + rig.Bot.Controller.Report);
+        Assert.Equal(1, cache.Searches);
+        Assert.Equal(0, capture.Count(Key("unreachable")));
+        Assert.False(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock));
+    }
+
+    /// <summary>
+    /// A far chest while the tile under the bot is never read (the read does not finish) answers pending while the tile wait runs, and is set aside once the
+    /// wait is spent (<see cref="TileWait.MaxMs"/>, wall clock and game clock): it is not asked again at every scan for ever.
+    /// </summary>
+    [Fact]
+    public async Task AChestWhoseTileNeverArrives_IsSetAside_OnceTheTileWaitIsSpent()
+    {
+        const float cell = 1f;
+        const int width = 150;
+        const int lastRow = 46;
+        ChestSpawn chest = new(FreeChest, 9, 0f, lastRow * cell + 2f);
+        using var fixture = new NavMeshFixture();
+        using var gate = new ManualResetEventSlim();
+        bool blockReads = false;
+        (int detourX, int detourY) = ((int)MathF.Floor(StartY / 533.3333f), (int)MathF.Floor(StartX / 533.3333f));
+        (int fileX, int fileY) = TerrainTile.TileOf(StartX, StartY)!.Value;
+        fixture.WriteParams(0);
+        fixture.WriteTile(0, fileX, fileY, new CellTile(detourX, detourY, StartX - (cell / 2f), StartY - (cell / 2f), width, lastRow + 1, cell)
+        {
+            Height = (_, _) => StartZ,
+            Walkable = (i, j) => (j & 1) == 0 || i == ((((j - 1) / 2) & 1) == 0 ? width - 1 : 0),
+            LinkedSides = [0],
+        });
+        fixture.WriteTile(0, fileX + 1, fileY, new CellTile(detourX + 1, detourY, StartX - (cell / 2f), StartY - (cell / 2f) + ((lastRow + 1) * cell), width, 10, cell)
+        {
+            Height = (_, _) => StartZ,
+            LinkedSides = [4],
+        });
+        var nav = new NavMeshPathfinder(fixture.Directory)
+        {
+            FileReader = path =>
+            {
+                if (blockReads && path.EndsWith(".mmtile", StringComparison.Ordinal)) gate.Wait();
+                return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            },
+        };
+        try
+        {
+            // The graph is built from the files; no tile is resident, so the first query of the bot starts a read on the pool that never finishes.
+            Assert.NotNull(await nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!);
+            blockReads = true;
+
+            await using Rig rig = await Rig.StartAsync([chest], tweak: options =>
+            {
+                options.Opportunities.ScanRadiusYards = 80f;
+                options.Opportunities.PersonalityVariance = 0f;
+                options.Opportunities.MinValue = 0f;
+            });
+            long realTicks = 0;
+            rig.Bot.Controller.ChestWaitRealTicks = () => Interlocked.Read(ref realTicks);
+            await rig.World(() => { WorldCollision.Of(rig.Host.World).Install(pathfinder: nav); return true; });
+
+            bool setAside = false;
+            for (int second = 1; second <= 60 && !setAside; second++)
+            {
+                await rig.World(() => rig.Bot.Step());
+                rig.Clock += 1_000;
+                Interlocked.Add(ref realTicks, System.Diagnostics.Stopwatch.Frequency);
+                setAside = rig.Bot.Controller.Ledger.IsDeferred(KeyOf(chest), rig.Clock);
+                if (second <= 5) Assert.False(setAside, $"set aside after {second} s, while the tile wait still runs");
+            }
+
+            Assert.True(setAside, "the chest was asked again at every scan for a minute and never set aside: " + rig.Bot.Controller.Report);
+            Assert.Null(rig.Bot.Controller.ActiveKey);
+        }
+        finally
+        {
+            gate.Set();
+        }
+    }
+
     [Fact]
     public async Task AChestTheBotCannotWalkTo_IsReportedUnreachableOnce_AndSetAside()
     {
@@ -1214,6 +1358,19 @@ public sealed class PlayerbotOpportunityTests
         Assert.Equal(1, capture.Count(Key("unreachable")));
         Assert.True(rig.Bot.Controller.Ledger.IsDeferred(KeyOf(far), rig.Clock));
     }
+
+    /// <summary>A trial plan that answers pending is no refusal: the chest is neither rejected nor accepted yet, whichever step answered it.</summary>
+    [Theory]
+    [InlineData("Pending", "Refused", "Refused", "Pending")]
+    [InlineData("Refused", "Refused", "Pending", "Pending")]
+    [InlineData("Pending", "Refused", "Route", "Route")]
+    [InlineData("Pending", "Route", "Refused", "Route")]
+    [InlineData("Route", "Refused", "Refused", "Route")]
+    [InlineData("Refused", "Refused", "Refused", "Refused")]
+    [InlineData("Refused", "Pending", "Refused", "Pending")]
+    public void TheChestVerdict_KeepsAPendingTrialFromBecomingARefusal(string exact, string graph, string nearest, string expected)
+        => Assert.Equal(Enum.Parse<PlanOutcome>(expected),
+            PlayerbotOpportunities.ChestVerdict(Enum.Parse<PlanOutcome>(exact), Enum.Parse<PlanOutcome>(graph), Enum.Parse<PlanOutcome>(nearest)));
 
     [Fact]
     public async Task AChestBeyondTheNavMesh_IsRefusedInBegin_WithoutStartingAnEpisodeOrReportingUnreachable()

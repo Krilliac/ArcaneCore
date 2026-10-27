@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
@@ -35,52 +36,83 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
     private const uint ScavengerEntry = 1509;
     private const uint DuskbatEntry = 1513;
 
+    /// <summary>The visit window of the host's camp spawns (they keep the default respawn delay).</summary>
+    private static readonly uint CampVisitWindowMs = PlayerbotWorldDestinations.VisitWindowMs(
+        new CreatureSpawn { Guid = 910001, Entry = ScavengerEntry, MapId = 0, X = 0f, Y = 0f, Z = 0f });
+
     /// <summary>
     /// Regression for live world.debug.log (<c>bot-quest/objective-no-progress count=1337</c>, e.g.
     /// <c>quest=376 entry=1513 progress=0..5 reason=all-spawns-visited</c>): when all spawns of an
     /// objective are visited, <c>PreferredCreatureEntry</c> is cleared so the bot stops trying to walk
-    /// visited spawns, and killing stray respawns (incrementing progress) or alternating between two
-    /// visited objectives does not re-emit <c>all-spawns-visited</c> on every progress increment or switch.
+    /// visited spawns. GitHub #1541: an all-visited camp is a respawn wait, so nothing is reported while stray respawns keep adding
+    /// progress, however many visit windows pass; once a full visit window (<see cref="CampVisitWindowMs"/>) passes without
+    /// progress, the stall is reported once, at Info since the objective has some credit.
     /// </summary>
     [Fact]
-    public async Task AllSpawnsVisited_ClearsPreferredEntry_AndDoesNotRefireAcrossProgressIncrementsOrAlternatingObjectives()
+    public async Task AllSpawnsVisited_ClearsPreferredEntry_IsSilentWhileProgressRises_AndFiresOnceAtInfoAfterAWindowWithout()
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate { Entry = ScavengerPawItem, Name = "Scavenger Paw", Class = (uint)ItemClass.Quest, Stackable = 20 });
         items.Templates.Templates.Add(new ItemTemplate { Entry = DuskbatWingItem, Name = "Duskbat Wing", Class = (uint)ItemClass.Quest, Stackable = 20 });
         using IDisposable itemScope = items.Use();
 
-        await using ObjectiveTestHost env = await ObjectiveTestHost.StartDamnedQuestAsync();
+        await using ObjectiveTestHost env = await ObjectiveTestHost.StartDamnedQuestAsync(manualClock: true);
+        string key = PlayerbotAnomalies.Key("quest", "objective-no-progress");
+        PlayerbotQuestGoals goals = null!;
+        AnomalyCapture capture = null!;
         await env.Host.OnWorldAsync(() =>
         {
-            Player player = env.Session.Player!;
-            PlayerNpcState state = env.Feature.Services.StateOf(player)!;
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-
-            var goals = new PlayerbotQuestGoals(env.Session, new PlayerbotOptions { Enabled = true })
+            capture = PlayerbotAnomalies.CaptureFor(env.Session.Player!);
+            goals = new PlayerbotQuestGoals(env.Session, new PlayerbotOptions { Enabled = true })
             {
                 Contention = new PlayerbotContention(new PlayerbotOptions { Enabled = true }),
                 Suspensions = new PlayerbotSuspensions(),
                 AllSpawnsVisited = (_, entry, _) => entry is ScavengerEntry or DuskbatEntry,
             };
-
-            // Even as stray respawns are looted (progress 0 -> 1 -> 2 -> 3) while all spawns remain marked visited,
-            // PreferredCreatureEntry stays 0 and all-spawns-visited fires only once for the episode.
-            for (int tick = 0; tick < 6; tick++)
-            {
-                if (tick > 0)
-                {
-                    Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(ScavengerPawItem, 1, out _));
-                    Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(DuskbatWingItem, 1, out _));
-                }
-                goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
-                Assert.Equal(0u, goals.PreferredCreatureEntry);
-            }
-
-            string key = PlayerbotAnomalies.Key("quest", "objective-no-progress");
-            Assert.Equal(1, capture.Count(key));
             return true;
         });
+
+        try
+        {
+            // Stray respawns are looted (progress 0 -> 1 -> ... -> 5) a full window apart while all spawns stay marked visited.
+            for (int tick = 0; tick < 6; tick++)
+            {
+                if (tick > 0) await env.Host.World.AdvanceClockAsync(CampVisitWindowMs + 1_000);
+                await env.Host.OnWorldAsync(() =>
+                {
+                    Player player = env.Session.Player!;
+                    if (tick > 0)
+                    {
+                        Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(ScavengerPawItem, 1, out _));
+                        Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(DuskbatWingItem, 1, out _));
+                    }
+                    goals.RefreshObjectiveEntry(player, env.Feature.Services, env.Feature.Services.StateOf(player)!);
+                    Assert.Equal(0u, goals.PreferredCreatureEntry);
+                    return true;
+                });
+            }
+
+            Assert.Equal(0, capture.Count(key));
+
+            // A full window more with no credit: one report, and no repeat on later looks.
+            for (int round = 0; round < 3; round++)
+            {
+                await env.Host.World.AdvanceClockAsync(CampVisitWindowMs + 1_000);
+                await env.Host.OnWorldAsync(() =>
+                {
+                    Player player = env.Session.Player!;
+                    goals.RefreshObjectiveEntry(player, env.Feature.Services, env.Feature.Services.StateOf(player)!);
+                    Assert.Equal(0u, goals.PreferredCreatureEntry);
+                    return true;
+                });
+            }
+
+            Assert.Equal(1, capture.Count(key));
+            AnomalyNotice notice = capture.Notices.Single(n => n.Key == key);
+            Assert.Contains("progress=5 reason=all-spawns-visited", notice.Detail, StringComparison.Ordinal);
+            Assert.Equal(AnomalySeverity.Info, notice.Severity);
+        }
+        finally { capture.Dispose(); }
     }
 
     /// <summary>
@@ -131,8 +163,9 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
     }
 
     /// <summary>
-    /// If two different quest objectives both time out or are visited, alternating between them must not
-    /// re-emit duplicate <c>bot-quest/objective-no-progress</c> anomalies for the same <c>(questId, entry, progress)</c>.
+    /// If two different quest objectives are both found all visited, alternating between them must not
+    /// re-emit duplicate <c>bot-quest/objective-no-progress</c> anomalies for the same <c>(questId, entry)</c>: the first look at each
+    /// opens its episode (GitHub #1541), the first look a full visit window later reports it, and later looks stay silent.
     /// </summary>
     [Fact]
     public async Task AlternatingObjectives_DeduplicateNoProgressAnomaliesPerQuestAndEntry()
@@ -142,49 +175,51 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
         items.Templates.Templates.Add(new ItemTemplate { Entry = DuskbatWingItem, Name = "Duskbat Wing", Class = (uint)ItemClass.Quest, Stackable = 20 });
         using IDisposable itemScope = items.Use();
 
-        await using ObjectiveTestHost env = await ObjectiveTestHost.StartDamnedQuestAsync();
+        await using ObjectiveTestHost env = await ObjectiveTestHost.StartDamnedQuestAsync(manualClock: true);
+        string key = PlayerbotAnomalies.Key("quest", "objective-no-progress");
+        PlayerbotQuestGoals goals = null!;
+        AnomalyCapture capture = null!;
         await env.Host.OnWorldAsync(() =>
         {
-            Player player = env.Session.Player!;
-            PlayerNpcState state = env.Feature.Services.StateOf(player)!;
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-
-            var suspensions = new PlayerbotSuspensions();
-            var goals = new PlayerbotQuestGoals(env.Session, new PlayerbotOptions { Enabled = true })
+            capture = PlayerbotAnomalies.CaptureFor(env.Session.Player!);
+            goals = new PlayerbotQuestGoals(env.Session, new PlayerbotOptions { Enabled = true })
             {
-                Suspensions = suspensions,
                 AllSpawnsVisited = (_, _, _) => true,
             };
+            return true;
+        });
 
-            uint now = env.Session.World.NowMs;
-            // Round 1: first objective is visited -> reported once.
-            goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
-
-            // Suspend DuskbatEntry so ScavengerEntry is chosen -> reported once.
-            suspensions.SuspendEntry(DuskbatEntry, now);
-            goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
-
-            // Suspend ScavengerEntry on a fresh suspension table so DuskbatEntry is chosen -> reported once.
+        // Picks with the other entry set aside, so the given one is chosen.
+        Task LookAtAsync(uint setAside) => env.Host.OnWorldAsync(() =>
+        {
+            Player player = env.Session.Player!;
             goals.Suspensions = new PlayerbotSuspensions();
-            goals.Suspensions.SuspendEntry(ScavengerEntry, now);
-            goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
+            goals.Suspensions.SuspendEntry(setAside, env.Session.World.NowMs);
+            goals.RefreshObjectiveEntry(player, env.Feature.Services, env.Feature.Services.StateOf(player)!);
+            return true;
+        });
 
-            // Alternating back again must not re-fire either objective.
-            goals.Suspensions = new PlayerbotSuspensions();
-            goals.Suspensions.SuspendEntry(DuskbatEntry, now);
-            goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
+        try
+        {
+            // Round 1 opens both episodes: nothing yet.
+            await LookAtAsync(DuskbatEntry);
+            await LookAtAsync(ScavengerEntry);
+            Assert.Equal(0, capture.Count(key));
 
-            goals.Suspensions = new PlayerbotSuspensions();
-            goals.Suspensions.SuspendEntry(ScavengerEntry, now);
-            goals.RefreshObjectiveEntry(player, env.Feature.Services, state);
+            // A full window later each is reported once, and alternating back again does not re-fire either.
+            await env.Host.World.AdvanceClockAsync(CampVisitWindowMs + 1_000);
+            await LookAtAsync(DuskbatEntry);
+            await LookAtAsync(ScavengerEntry);
+            await LookAtAsync(DuskbatEntry);
+            await LookAtAsync(ScavengerEntry);
 
-            string key = PlayerbotAnomalies.Key("quest", "objective-no-progress");
             int scavengerNotices = capture.Notices.Count(n => n.Key == key && n.Detail.Contains("entry=1509", StringComparison.Ordinal));
             int duskbatNotices = capture.Notices.Count(n => n.Key == key && n.Detail.Contains("entry=1513", StringComparison.Ordinal));
             Assert.Equal(1, scavengerNotices);
             Assert.Equal(1, duskbatNotices);
-            return true;
-        });
+            Assert.All(capture.Notices.Where(n => n.Key == key), n => Assert.Equal(AnomalySeverity.Warning, n.Severity));
+        }
+        finally { capture.Dispose(); }
     }
 
     /// <summary>
@@ -263,7 +298,7 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
         public WorldSession Session { get; }
         public QuestNpcFeature Feature => Host.WorldServices.GetRequiredService<QuestNpcFeature>();
 
-        public static async Task<ObjectiveTestHost> StartDamnedQuestAsync()
+        public static async Task<ObjectiveTestHost> StartDamnedQuestAsync(bool manualClock = false)
         {
             var fixture = new QuestInteractionFixture();
             string databasePath = Path.Combine(Path.GetTempPath(), "arcane-playerbot-objfix-" + Guid.NewGuid().ToString("N") + ".db");
@@ -279,7 +314,11 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
             WorldTestHost host;
             try
             {
-                host = WorldTestHost.Start(configureServices: services => services.AddCharacterDatabase(configuration));
+                host = WorldTestHost.Start(configureServices: services =>
+                {
+                    services.AddCharacterDatabase(configuration);
+                    if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
+                });
             }
             finally
             {
@@ -341,6 +380,11 @@ public sealed class PlayerbotQuestObjectiveProgressFixTests
             });
 
             return new ObjectiveTestHost(host, session);
+        }
+
+        private sealed class ManualClock : IWorldFeature
+        {
+            public void Attach(WorldRuntime world) => world.UseManualClock();
         }
 
         public async ValueTask DisposeAsync()

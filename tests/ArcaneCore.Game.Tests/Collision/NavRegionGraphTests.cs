@@ -106,6 +106,31 @@ public sealed class NavRegionGraphTests : IDisposable
         Assert.Equal(NavRegionRouteStatus.Unreachable, graph.FindRoute(a, from, -1, to, 100, out _));
     }
 
+    /// <summary>
+    /// With <c>nearestFromAnywhere</c> the way to the portal nearest the goal is given even for a start nearer the goal than any portal
+    /// (the default overload answers an empty way there), and it is the same way from a far start.
+    /// </summary>
+    [Fact]
+    public void NearestFromAnywhere_GivesTheNearestPortal_ForAStartNearerTheGoalThanAnyPortal()
+    {
+        NavMeshPathfinder nav = Write((10, 10, A), (10, 11, B), (11, 10, C));
+        NavRegionGraph graph = Graph(_fixture.Directory);
+        Vector3 nearStart = new(37, 5, 0), farStart = new(2, 5, 0), to = new(75, 5, 0);
+        int a = nav.RegionAt(graph, nearStart, Walking), goalRegion = nav.RegionAt(graph, to, Walking);
+
+        Assert.Equal(NavRegionRouteStatus.Unreachable, graph.FindRoute(a, nearStart, goalRegion, to, 100, out List<Vector3> byDefault));
+        Assert.Empty(byDefault);
+
+        Assert.Equal(NavRegionRouteStatus.Unreachable, graph.FindRoute(a, nearStart, goalRegion, to, 100, nearestFromAnywhere: true, out List<Vector3> nearWay, out _));
+        Near(new Vector3(20, 40 + NavRegionGraph.PortalInsetYards, 0), Assert.Single(nearWay));
+
+        Assert.Equal(NavRegionRouteStatus.Unreachable, graph.FindRoute(a, farStart, goalRegion, to, 100, nearestFromAnywhere: true, out List<Vector3> farWay, out _));
+        Assert.Equal(nearWay, farWay);
+        // The default overload from the far start is the same as the new one: the flag only lifts the start's threshold.
+        Assert.Equal(NavRegionRouteStatus.Unreachable, graph.FindRoute(a, farStart, goalRegion, to, 100, out List<Vector3> farDefault));
+        Assert.Equal(farWay, farDefault);
+    }
+
     [Fact]
     public void TheSearchStops_AtItsNodeBudget()
     {

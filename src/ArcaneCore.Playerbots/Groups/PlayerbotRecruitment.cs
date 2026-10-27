@@ -105,7 +105,7 @@ internal static class PlayerbotRecruitment
     internal static bool GoalYields(PlayerbotGoalKind goal, int remainingObjectives) => goal switch
     {
         PlayerbotGoalKind.Explore or PlayerbotGoalKind.Grind or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train
-            or PlayerbotGoalKind.Home or PlayerbotGoalKind.Mount => true,
+            or PlayerbotGoalKind.Home or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather => true,
         PlayerbotGoalKind.Quest => remainingObjectives > NearlyDoneObjectives,
         _ => false,
     };

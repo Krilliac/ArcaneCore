@@ -84,7 +84,15 @@ public sealed class CooldownOnEventAuraTests : IDisposable
         CategoryRecoveryTime = CategoryMs,
     };
 
-    private SpellCastResult Cast(uint spell) => _kit.System.CastSpell(_player, spell, SpellCastTargets.ForSelf(), triggered: false);
+    private SpellCastResult Cast(uint spell)
+    {
+        SpellCastResult result = _kit.System.CastSpell(_player, spell, SpellCastTargets.ForSelf(), triggered: false);
+        FlushSpellBatch();
+        return result;
+    }
+
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private void FlushSpellBatch() => _kit.Advance(_kit.System.SpellBatchWindowMs);
 
     private bool Ready(uint spell) => _kit.System.IsSpellReady(_player, _kit.Store.Get(spell)!);
 
@@ -274,6 +282,7 @@ public sealed class CooldownOnEventAuraTests : IDisposable
         _kit.Spellbook.Teach(_enemy, FriendStealth);
         enemySession.Clear();
         Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_enemy, FriendStealth, SpellCastTargets.ForUnit(_player.Guid), triggered: false));
+        FlushSpellBatch();
         Assert.True(_kit.System.HasAura(_player, FriendStealth));
         _session.Clear();
 

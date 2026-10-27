@@ -15,6 +15,15 @@ public sealed class SpellCostSeamTests
 {
     private const uint Costly = 9701;
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static SpellInfo CostlySpell() =>
         SpellTestKit.Spell(Costly, SpellTestKit.Effect(SpellEffectName.Dummy, 0)) with
         {
@@ -76,6 +85,7 @@ public sealed class SpellCostSeamTests
         SpellSystem.SetPower(player, PowerType.Rage, 100);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, Costly, SpellCastTargets.ForSelf()));
+        ResolveSpellBatch(kit);
 
         Assert.Equal(["taker rage=70 item=", "effect"], log);
     }

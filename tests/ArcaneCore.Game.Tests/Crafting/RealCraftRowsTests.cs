@@ -35,6 +35,15 @@ public sealed class RealCraftRowsTests
             Reagents = reagents,
         };
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(CraftingTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static CraftingTestKit Rig()
     {
         SpellInfo transmute = Row(17187, 12360, new SpellReagent(12359, 1), new SpellReagent(12363, 1)) with
@@ -58,6 +67,7 @@ public sealed class RealCraftRowsTests
         rig.Give(2589, 3);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(3275));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(2u, rig.Inventory.GetItemCount(2589));
         Assert.Equal(1u, rig.Inventory.GetItemCount(1251));
@@ -75,6 +85,7 @@ public sealed class RealCraftRowsTests
 
         rig.Give(10938);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(7421));
+        ResolveSpellBatch(rig);
         Assert.Equal(1u, rig.Inventory.GetItemCount(6218));
         Assert.Equal(0u, rig.Inventory.GetItemCount(6217) + rig.Inventory.GetItemCount(10940) + rig.Inventory.GetItemCount(10938));
     }
@@ -90,6 +101,7 @@ public sealed class RealCraftRowsTests
 
         rig.Give(9149);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(17187));
+        ResolveSpellBatch(rig);
         Assert.Equal(1u, rig.Inventory.GetItemCount(12360));
         Assert.Equal(1u, rig.Inventory.GetItemCount(9149));         // the tool stays
         Assert.Equal(1u, rig.Inventory.GetItemCount(12359));
@@ -101,6 +113,7 @@ public sealed class RealCraftRowsTests
         rig.Kit.Now += 2000;
         rig.Kit.System.Update(100);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(17187));
+        ResolveSpellBatch(rig);
         Assert.Equal(2u, rig.Inventory.GetItemCount(12360));
     }
 }

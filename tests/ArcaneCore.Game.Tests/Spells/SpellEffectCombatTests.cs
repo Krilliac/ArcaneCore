@@ -100,11 +100,13 @@ public sealed class SpellEffectCombatTests
 
         Assert.Single(kit.System.DispellableAuras(caster, friend, 1));
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Dispel, SpellCastTargets.ForUnit(friend.Guid)));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.False(kit.System.HasAura(friend, MagicDebuff));
         Assert.True(kit.System.HasAura(friend, MagicBuff));
 
         kit.Advance(1500);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Dispel, SpellCastTargets.ForUnit(enemy.Guid)));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.False(kit.System.HasAura(enemy, MagicBuff));
 
         kit.Advance(1500);

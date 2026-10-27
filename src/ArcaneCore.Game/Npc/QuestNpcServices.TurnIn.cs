@@ -20,7 +20,7 @@ public sealed partial class QuestNpcServices
     /// Whether turning in <paramref name="quest"/> with <paramref name="rewardChoiceIndex"/> has bag room for its reward items
     /// after required delivery items are removed.
     /// </summary>
-    public static bool CanFitQuestRewards(Player player, Quest quest, uint rewardChoiceIndex = 0, QuestNpcServices? services = null)
+    public static bool CanFitQuestRewards(Player player, Quest quest, uint rewardChoiceIndex = 0, QuestNpcServices? services = null, IReadOnlySet<ObjectGuid>? offered = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(quest);
@@ -52,8 +52,12 @@ public sealed partial class QuestNpcServices
             return true;
         }
 
+        // The removals are capped by the injected service's count (services.InventoryCount, which excludes the offered stacks), so this fits
+        // check TRUSTS that count. The result is only compared with InventoryFull: a service that over-reports makes the staging fail with a
+        // different code, which reads here as "fits". The production service is the same PlayerInventory.GetItemCount with the same exclude;
+        // a test fake must honour `exclude` too.
         ArcaneCore.Game.Items.InventoryRewardGrant[] removals = RequiredItemRemovals(quest)
-            .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, player.Inventory.GetItemCount(r.Entry))))
+            .Select(r => new ArcaneCore.Game.Items.InventoryRewardGrant(r.Entry, Math.Min(r.Count, services is not null ? services.InventoryCount(player, r.Entry, offered: offered) : InventoryCountOf(player, r.Entry, false, offered))))
             .Where(r => r.Count > 0)
             .ToArray();
 
@@ -61,7 +65,7 @@ public sealed partial class QuestNpcServices
         player.Inventory.GuidAllocator = new ArcaneCore.Game.Items.ItemGuidAllocator(1_000_000);
         try
         {
-            ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, removals, out _, out _);
+            ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, removals, out _, out _, keepForRemovals: offered);
             return result != ItemInventoryResult.InventoryFull;
         }
         finally
@@ -186,13 +190,14 @@ public sealed partial class QuestNpcServices
     /// bank (a miss is an EQUIP_ERR_ITEM_NOT_FOUND naming the item when <paramref name="msg"/>), and a negative
     /// RewOrReqMoney must be payable (QUESTGIVER_QUEST_INVALID reason 22 regardless of <paramref name="msg"/>, line 12722-12726).
     /// </summary>
-    private bool RewardRequirements(Player player, Quest quest, bool msg)
+    private bool RewardRequirements(Player player, Quest quest, bool msg, IReadOnlySet<ObjectGuid>? offered = null)
     {
         if (quest.HasSpecialFlag(QuestSpecialFlags.Deliver))
         {
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
-                if (quest.ReqItemCount[i] != 0 && InventoryCount(player, quest.ReqItemId[i]) < quest.ReqItemCount[i])
+                uint count = InventoryCount(player, quest.ReqItemId[i], offered: offered);
+                if (quest.ReqItemCount[i] != 0 && count < quest.ReqItemCount[i])
                 {
                     if (msg)
                     {
@@ -214,25 +219,25 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>vmangos <c>CanRewardQuest(quest, msg)</c>.</summary>
-    private bool CanRewardQuest(PlayerNpcState state, Quest quest, bool msg)
-        => RewardBase(state, quest) && RewardRequirements(state.Quests.Player, quest, msg);
+    private bool CanRewardQuest(PlayerNpcState state, Quest quest, bool msg, IReadOnlySet<ObjectGuid>? offered = null)
+        => RewardBase(state, quest) && RewardRequirements(state.Quests.Player, quest, msg, offered);
 
     /// <summary>
     /// Whether <paramref name="player"/> currently satisfies the non-mutating turn-in requirements (<see cref="RewardBase"/> and
     /// <see cref="RewardRequirements"/>) for <paramref name="quest"/> without sending error packets.
     /// </summary>
-    public bool MeetsTurnInRequirements(Player player, Quest quest)
+    public bool MeetsTurnInRequirements(Player player, Quest quest, IReadOnlySet<ObjectGuid>? offered = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(quest);
-        return StateOf(player) is { Loaded: true } state && CanRewardQuest(state, quest, msg: false);
+        return StateOf(player) is { Loaded: true } state && CanRewardQuest(state, quest, msg: false, offered);
     }
 
     /// <summary>
     /// vmangos <c>CanCompleteRepeatableQuest</c> (Player.cpp:12663-12680): a repeatable quest may be completed from the
     /// ender's list without being in the log: takeable, its delivery items in the bags, and rewardable.
     /// </summary>
-    private bool CanCompleteRepeatableQuest(PlayerNpcState state, Quest quest)
+    private bool CanCompleteRepeatableQuest(PlayerNpcState state, Quest quest, IReadOnlySet<ObjectGuid>? offered = null)
     {
         if (!CanTakeQuest(state, quest, null))
         {
@@ -244,14 +249,14 @@ public sealed partial class QuestNpcServices
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
                 if (quest.ReqItemId[i] != 0 && quest.ReqItemCount[i] != 0
-                    && InventoryCount(state.Quests.Player, quest.ReqItemId[i]) < quest.ReqItemCount[i])
+                    && InventoryCount(state.Quests.Player, quest.ReqItemId[i], offered: offered) < quest.ReqItemCount[i])
                 {
                     return false;
                 }
             }
         }
 
-        return CanRewardQuest(state, quest, msg: false);
+        return CanRewardQuest(state, quest, msg: false, offered);
     }
 
     /// <summary>
@@ -327,7 +332,7 @@ public sealed partial class QuestNpcServices
     /// Explains why a turn-in of <paramref name="questId"/> at <paramref name="guid"/> cannot complete right now, or returns null when every
     /// turn-in and reward-staging rule passes. Used by playerbots to log the exact refusal and set the quest aside instead of stalling at the ender.
     /// </summary>
-    public string? DiagnoseTurnInRefusal(Player player, ObjectGuid guid, uint questId, uint choice = 0)
+    public string? DiagnoseTurnInRefusal(Player player, ObjectGuid guid, uint questId, uint choice = 0, IReadOnlySet<ObjectGuid>? offered = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         if (Ready(player) is not { } state) return "journal not loaded";
@@ -361,8 +366,9 @@ public sealed partial class QuestNpcServices
         {
             for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
             {
-                if (quest.ReqItemCount[i] != 0 && InventoryCount(player, quest.ReqItemId[i]) < quest.ReqItemCount[i])
-                    return $"missing required delivery item {quest.ReqItemId[i]} ({InventoryCount(player, quest.ReqItemId[i])}/{quest.ReqItemCount[i]})";
+                uint count = InventoryCount(player, quest.ReqItemId[i], offered: offered);
+                if (quest.ReqItemCount[i] != 0 && count < quest.ReqItemCount[i])
+                    return $"missing required delivery item {quest.ReqItemId[i]} ({count}/{quest.ReqItemCount[i]})";
             }
         }
 
@@ -381,7 +387,7 @@ public sealed partial class QuestNpcServices
 
         grants.AddRange(spellGrant.CreatedItems.Select(item => new ArcaneCore.Game.Items.InventoryRewardGrant(item.Entry, item.Count, Created: true)));
         ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
-            out ArcaneCore.Game.Items.InventoryRewardStage? stage, out uint failedEntry);
+            out ArcaneCore.Game.Items.InventoryRewardStage? stage, out uint failedEntry, offered);
         if (result != ItemInventoryResult.Ok || stage is null)
         {
             return result switch

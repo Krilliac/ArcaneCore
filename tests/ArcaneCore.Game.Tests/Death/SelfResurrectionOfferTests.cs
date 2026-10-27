@@ -8,6 +8,15 @@ namespace ArcaneCore.Game.Tests.Death;
 
 public sealed class SelfResurrectionOfferTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     // vmangos Player.cpp:19866-19879 supplies the five vanilla rank pairs.
     [Theory]
     [InlineData(20707u, 3026u)]
@@ -89,6 +98,7 @@ public sealed class SelfResurrectionOfferTests
         Assert.False(kit.Spellbook.HasSpell(player, 3026));
 
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
 
         Assert.Equal(250u, player.Health);
         Assert.Equal(DeathState.Alive, player.Combat.DeathState);
@@ -136,6 +146,7 @@ public sealed class SelfResurrectionOfferTests
         Assert.Equal(3026u, player.GetUInt32(UpdateFields.PlayerSelfResSpell));
         player.EndQuestSettlement(hold);
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
     }
 
     [Fact]
@@ -150,6 +161,7 @@ public sealed class SelfResurrectionOfferTests
         Assert.Equal(3026u, player.GetUInt32(UpdateFields.PlayerSelfResSpell));
         kit.System.IsInTransit = _ => false;
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
     }
 
     [Fact]

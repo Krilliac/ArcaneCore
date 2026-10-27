@@ -133,6 +133,15 @@ public sealed class NavRegionGraph
 
     /// <summary>As <see cref="FindRoute(int, Vector3, int, Vector3, int, out List{Vector3})"/>; <paramref name="settled"/> is the number of portals the search settled (its work).</summary>
     public NavRegionRouteStatus FindRoute(int fromRegion, Vector3 from, int toRegion, Vector3 to, int maxNodes, out List<Vector3> portals, out int settled)
+        => FindRoute(fromRegion, from, toRegion, to, maxNodes, nearestFromAnywhere: false, out portals, out settled);
+
+    /// <summary>
+    /// As <see cref="FindRoute(int, Vector3, int, Vector3, int, out List{Vector3}, out int)"/>. With <paramref name="nearestFromAnywhere"/> the
+    /// fallback chain (not found) leads to the settled portal nearest <paramref name="to"/> whether or not it is nearer than
+    /// <paramref name="from"/>; the caller applies its own threshold (PlayerbotRegionRoutes does, per asking position).
+    /// </summary>
+    public NavRegionRouteStatus FindRoute(int fromRegion, Vector3 from, int toRegion, Vector3 to, int maxNodes, bool nearestFromAnywhere,
+        out List<Vector3> portals, out int settled)
     {
         portals = [];
         settled = 0;
@@ -155,7 +164,7 @@ public sealed class NavRegionGraph
         HashSet<int> closed = buffers.Closed;
         PriorityQueue<int, float> open = buffers.Open;
         int nearest = -1;
-        float nearestYards = Vector3.Distance(from, to);
+        float nearestYards = nearestFromAnywhere ? float.PositiveInfinity : Vector3.Distance(from, to);
         for (int l = _firstLink[fromRegion]; l < _firstLink[fromRegion + 1]; l++)
         {
             Offer(l, -1, Vector3.Distance(from, _links[l].At));

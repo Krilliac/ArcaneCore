@@ -97,6 +97,19 @@ public sealed class MageTalentScriptTests : IDisposable
         _enemy.Health = 100_000;
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     public void Dispose() => _kit.Dispose();
 
     /// <summary>The proc event of a spell of <paramref name="spellId"/> that hit the enemy for <paramref name="amount"/> (a crit or not).</summary>
@@ -138,6 +151,7 @@ public sealed class MageTalentScriptTests : IDisposable
         Assert.Equal(1, ignite.StackAmount);
         _kit.Advance(4000);
         Assert.Equal(100_000u - 400, _enemy.Health);          // two ticks of 200: 40% of the crit over 4 seconds
+        FlushSpellBatch(_kit); // the expired holder leaves at the batch boundary
         Assert.Null(Holder(_enemy, IgniteScript.IgniteDot));
     }
 
@@ -181,6 +195,7 @@ public sealed class MageTalentScriptTests : IDisposable
         Assert.Equal(4000, ignite.Duration);                  // a fresh 4 seconds
         _kit.Advance(4000);
         Assert.Equal(100_000u - 200 - 300 - 300, _enemy.Health);
+        FlushSpellBatch(_kit); // the expired holder leaves at the batch boundary
         Assert.Null(Holder(_enemy, IgniteScript.IgniteDot));
     }
 

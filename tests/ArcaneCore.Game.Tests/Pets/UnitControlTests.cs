@@ -25,6 +25,15 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// </summary>
 public sealed class UnitControlTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static PetTestKit Kit() => new(ControlSpells());
 
     private static Creature Mob(PetTestKit kit, float x = 8, float y = 5)
@@ -374,6 +383,7 @@ public sealed class UnitControlTests
         session.Clear();
 
         kit.Spells.Advance(3_000); // the aura runs out
+        ResolveSpellBatch(kit.Spells);
         Assert.False(kit.Spells.System.HasAura(mob, 920_100));
         kit.Run(200);
         Assert.Empty(mob.Motion.ActiveTypes);

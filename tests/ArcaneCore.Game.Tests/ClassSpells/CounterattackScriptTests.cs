@@ -52,6 +52,19 @@ public sealed class CounterattackScriptTests : IDisposable
 
     public void Dispose() => _kit.Dispose();
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private SpellCastResult Cast(Unit target) => _kit.System.CastSpell(_hunter, Counterattack, SpellCastTargets.ForUnit(target.Guid), triggered: false);
 
     [Fact]
@@ -69,6 +82,7 @@ public sealed class CounterattackScriptTests : IDisposable
         Assert.Equal(SpellCastResult.BadTargets, Cast(_other));  // GetReactiveTarget(REACTIVE_HUNTER_PARRY) is the attacker
         uint before = _attacker.Health;
         Assert.Equal(SpellCastResult.CastOk, Cast(_attacker));
+        FlushSpellBatch(_kit);
         Assert.Equal(before - 40, _attacker.Health);
     }
 

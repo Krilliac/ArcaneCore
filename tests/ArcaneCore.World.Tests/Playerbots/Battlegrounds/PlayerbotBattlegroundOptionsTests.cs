@@ -181,6 +181,56 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         Assert.True(PlayerbotNavigation.OnWalkableMesh(map, resolved), $"expected resolved midfield {resolved} to be on walkable mesh outside stump");
     }
 
+    /// <summary>The midfield reach probe reads its tile without blocking the world thread: it asks non-blocking and takes "pending" as walkable.</summary>
+    [Fact]
+    public void ResolveWarsongMidfield_ReadsTilesWithoutBlocking_AndAcceptsAPendingProbe()
+    {
+        var map = _world.GetMap(489);
+        var ownStand = new System.Numerics.Vector3(1539.5f, 1481.2f, 352.0f);
+        var enemyStand = new System.Numerics.Vector3(917.4f, 1434.0f, 345.0f);
+        var mesh = new TileReadingMidfieldMesh(floorZ: 308.0f);
+        ArcaneCore.Game.Maps.Collision.WorldCollision.Of(_world).Install(lineOfSight: mesh, pathfinder: mesh);
+
+        System.Numerics.Vector3 resolved = PlayerbotBattlegroundCoordinator.ResolveWarsongMidfield(map, ownStand, enemyStand);
+
+        Assert.Equal(0, mesh.BlockingReads);
+        Assert.True(mesh.PendingAnswers > 0);
+        Assert.Equal(((ownStand + enemyStand) / 2f).X, resolved.X, 0.01f); // pending is walkable: the midpoint stands
+    }
+
+    private sealed class TileReadingMidfieldMesh(float floorZ)
+        : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
+    {
+        public int BlockingReads { get; private set; }
+        public int PendingAnswers { get; private set; }
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, System.Numerics.Vector3 from, System.Numerics.Vector3 to, float modifyDistance, out System.Numerics.Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float zSearch, float maxSearchDistance) => floorZ;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float zSearch, out ArcaneCore.Game.Maps.Collision.ModelAreaInfo info) { info = default; return false; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (options is { LoadTiles: true, NonBlockingTiles: false })
+            {
+                BlockingReads++;
+                return ArcaneCore.Game.Maps.Collision.PathResult.StraightLine(start with { Z = floorZ }, end with { Z = floorZ }, ArcaneCore.Game.Maps.Collision.PathType.Normal);
+            }
+
+            PendingAnswers++;
+            return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.TilesPending, [start]);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, System.Numerics.Vector3 center, float radius, Random random, ArcaneCore.Game.Maps.Collision.PathOptions? options, out System.Numerics.Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public ArcaneCore.Game.Maps.Collision.MeshRaycastResult Raycast(uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = floorZ });
+    }
+
     private sealed class MidfieldStumpMesh(System.Numerics.Vector3 stumpCenter, float stumpRadius, float floorZ)
         : ArcaneCore.Game.Maps.Collision.ILineOfSight, ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshPointQuery
     {

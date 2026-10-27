@@ -63,6 +63,7 @@ public sealed class SpellCastPipelineCharacterisationTests
         });
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, CostedHeal, SpellCastTargets.ForSelf()));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.Equal(70u, rageAtEffect);
         Assert.False(readyAtEffect);
@@ -99,6 +100,7 @@ public sealed class SpellCastPipelineCharacterisationTests
         var logger = new CapturingLogger();
         using var kit = new SpellTestKit(spell);
         var system = new SpellSystem(kit.Store, () => kit.Now, spellbook: kit.Spellbook, random: new Random(1), logger: logger) { MapUpdateIntervalMs = 0 };
+        system.SpellBatchWindowMs = 0; // assumes same-call resolution: the effect's exception leaves HandleCastRequest (a batched go records it instead)
         (Player player, FakeSession session) = kit.AddPlayer(1);
         kit.Spellbook.Teach(player, FaultSelfSpell);
         var thrown = new CastProbeFault("cast-pipeline-probe-1");
@@ -132,6 +134,7 @@ public sealed class SpellCastPipelineCharacterisationTests
             School = SpellSchool.Fire,
         };
         using var kit = new SpellTestKit(spell);
+        kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: the effect's exception leaves HandleCastRequest (a batched go records it instead)
         (Player caster, _) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 10, 0);
         kit.World.RunTick(0);

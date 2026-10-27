@@ -18,6 +18,9 @@ public sealed class AuraPolarityTests
     private const uint SliceAndDice = 940002;
     private const uint Hellfire = 940003;
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static SpellInfo StealthShape(uint id = Stealth) => Spell(
         id,
         Effect(SpellEffectName.ApplyAura, -1, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift),
@@ -38,6 +41,7 @@ public sealed class AuraPolarityTests
         kit.Spellbook.Teach(rogue, Stealth);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(rogue, Stealth, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
 
         SpellAuraHolder holder = kit.System.GetAuras(rogue).Single();
         Assert.True(holder.IsPositive);
@@ -52,6 +56,7 @@ public sealed class AuraPolarityTests
         (Player rogue, _) = kit.AddPlayer(1);
         kit.Spellbook.Teach(rogue, Stealth);
         kit.System.HandleCastRequest(rogue, Stealth, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
         Assert.Single(kit.System.GetAuras(rogue));
 
         kit.System.CancelAura(rogue, Stealth);
@@ -91,6 +96,7 @@ public sealed class AuraPolarityTests
         (Player rogue, _) = kit.AddPlayer(1);
         kit.Spellbook.Teach(rogue, SliceAndDice);
         kit.System.HandleCastRequest(rogue, SliceAndDice, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
 
         SpellAuraHolder holder = kit.System.GetAuras(rogue).Single();
         Assert.True(holder.IsPositive);

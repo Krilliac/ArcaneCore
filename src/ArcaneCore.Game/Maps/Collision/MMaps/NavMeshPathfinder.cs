@@ -686,7 +686,32 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// when no polygon is found there.
     /// </summary>
     public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options)
+        => RegionAtCore(graph, at, options, computeFar: false, out _);
+
+    /// <summary>
+    /// How much nearer (yards, 3D) an unfiltered polygon must be to a point than the walking filter's hit for the point to count as lying on
+    /// excluded ground (a steep slope): the walking hit is then a neighbour's floor, not the point's own place. Well past a footprint edge's few tenths.
+    /// </summary>
+    private const float ExcludedGroundMarginYards = 1.0f;
+
+    /// <summary>
+    /// <see cref="RegionAt(NavRegionGraph, Vector3, PathOptions)"/> that also says whether the located point is <paramref name="far"/> from
+    /// <paramref name="at"/>: not the goal's own place but the floor beside a point in the air or on excluded ground. Far when
+    /// (a) the point lies more than <c>NearExtents.Y</c> (5) above or below <paramref name="at"/>, whether the far box snapped to the floor under or
+    /// over it or a near-box hit on a slope was that far off; or
+    /// (b) steep slopes are excluded by the filter, the walking hit is more than 0.1 yd off horizontally, and a lookup in the near box with nothing
+    /// excluded finds a polygon more than <see cref="ExcludedGroundMarginYards"/> nearer (3D): the point lies on a steep slope.
+    /// With <c>EndTolerance</c> above 0 (the single {5, 10, 5} box) far is never set. With <see cref="PathOptions.ExcludeOnlyInSearch"/>
+    /// rule (b) is never taken (the lookup already excludes nothing); rule (a) still applies.
+    /// A point merely outside a polygon's footprint but within the near box is not far, whatever its horizontal distance.
+    /// Rule (b) costs one more polygon lookup, paid only by this overload. Meaningful only when the result is not -1.
+    /// </summary>
+    public int RegionAt(NavRegionGraph graph, Vector3 at, PathOptions options, out bool far)
+        => RegionAtCore(graph, at, options, computeFar: true, out far);
+
+    private int RegionAtCore(NavRegionGraph graph, Vector3 at, PathOptions options, bool computeFar, out bool far)
     {
+        far = false;
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(options);
         if (!Invariant.Check(IsFinite(at), $"NavMeshPathfinder.RegionAt called with non-finite coordinates {at} on map {graph.MapId}")
@@ -703,8 +728,22 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         }
 
         Vector3 recast = NavMeshFormat.ToRecast(at);
-        return mesh.HaveTileAt(recast) && TryLocate(mesh, recast, options, options.EndTolerance, out NavPolyRef poly, out _, out _)
-            ? graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly) : -1;
+        if (!mesh.HaveTileAt(recast) || !TryLocate(mesh, recast, options, options.EndTolerance, out NavPolyRef poly, out Vector3 onMesh, out _))
+        {
+            return -1;
+        }
+
+        if (computeFar && options.EndTolerance <= 0)
+        {
+            // Not TryLocate's own flag, which also counts a near-box hit past a tenth of a yard horizontally (a spawn beside an eroded edge).
+            far = MathF.Abs(onMesh.Y - recast.Y) > NearExtents.Y
+                || (!options.ExcludeOnlyInSearch && (options.ExcludeFlags & NavTerrain.SteepSlopes) != 0
+                    && NavMeshTile.DistanceXzSquared(onMesh, recast) > 0.01f
+                    && mesh.TryFindNearestPoly(recast, NearExtents, options.EffectiveIncludeFlags | NavTerrain.SteepSlopes, NavTerrain.Empty, out _, out Vector3 unfiltered)
+                    && Vector3.Distance(onMesh, recast) - Vector3.Distance(unfiltered, recast) > ExcludedGroundMarginYards);
+        }
+
+        return graph.RegionOf(poly.Tile.X, poly.Tile.Y, poly.Poly);
     }
 
     /// <summary>The histogram every completed <see cref="FindPath"/> adds to (the shared <c>nav.path_query</c> one unless a test supplies its own).</summary>
@@ -1314,7 +1353,10 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             type |= PathType.Short;
         }
 
-        return new PathResult(type, points);
+        // Without an end tolerance the start is not graded (vmangos/MaNGOS Zero getPolyByLocation's boxes): tell the caller when it lies
+        // past the near box's height off its polygon, found only by the far box (PathResult.StartFar, issue #1501).
+        bool startFarVertically = tolerance <= 0 && startFar && MathF.Abs(startOnMesh.Y - startRc.Y) > NearExtents.Y;
+        return new PathResult(type, points) { StartFar = startFarVertically };
     }
 
     // vmangos inRange(p1, p2, r, h): horizontal distance within r and vertical within h.

@@ -48,7 +48,10 @@ public sealed class VisibleSlotLimitTests
     }
 
     private static void Cast(SpellTestKit kit, Player caster, Player victim, uint spell)
-        => Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, spell, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+    {
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, spell, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
+    }
 
     [Fact]
     public void TheSeventeenthDebuffOfOneCategory_EvictsTheOldest()

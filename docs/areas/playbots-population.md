@@ -375,7 +375,12 @@ older build placed badly (a level 9 bot at Raven Hill) and bots that walked over
 that sees them alive and idle. The zone checked is the one the bot stands in at that pass, whatever it is doing: a bot travelling
 on its own (a travel goal, a road through a harder zone) that is under- or out-levelled for the zone
 it is crossing is teleported too, mid-goal, and its goal is cut short. That is deliberate: a low-level bot crossing Duskwood is as
-likely to die there as one placed there. Dead, in-combat, teleporting, party-driven, scripted, group-driven and vetoed bots are
+likely to die there as one placed there. A bot in a capital or city, or on a map outside `AllowedMaps`, is never moved (the
+atlas does not hold those zones: the bot went there on purpose). Two more kinds of bot are moved whatever their level, before the
+misfits (issue #1454: bots placed in Deadwind Pass before the operator excluded it stalled there, escaped to a bind point in
+the same area and stalled again): a bot standing in an `ExcludedZones` zone of an allowed map, and a stalled bot in a zone it
+escaped (see [Dead-end escape veto](#dead-end-escape-veto)) or one over its capacity (see
+[Zone capacity](#zone-capacity-spawnsperbot)). Dead, in-combat, teleporting, party-driven, scripted, group-driven and vetoed bots are
 never moved. `Off` leaves the bot to its own goals. No bot is relocated on a parking pass, and only bots with a
 `playerbot_population_member` row are ever moved: never a real player, never an operator's bot.
 
@@ -397,7 +402,9 @@ spawns, 15 of them in an underground crypt on a 600 s respawn; 127 level 60 bots
 and the bots stalled. The atlas now caps each zone: **a zone takes no new or relocated bot while its assigned bots (the running
 bots standing in it) are at least the level-fitting surface creature spawns divided by `SpawnsPerBot`** (default 3; 0 turns the cap
 off). It applies in `PopulationZoneAtlas.Pick` and `PickSafe`, so creation and relocation both skip a full zone; when every
-fitting zone is full no bot is placed rather than overfilling one. Bots already standing in an over-cap zone are not evicted.
+fitting zone is full no bot is placed rather than overfilling one. A bot already standing in an over-cap zone is not evicted while
+it makes progress; a **stalled** one (`PlayerbotStallWatch` reports a stall or death loop) in a zone whose assigned bots, itself
+included, are more than its cap at the bot's level is relocated like an out-levelled bot (see [Relocation](#relocation)).
 
 * The count is per zone and team (`PopulationSpawnCapacity`): the database spawns hostile to the team under the survey's rule
   (`PopulationCreatureSurvey.CountSurface`: no civilians, no-aggro, invisible or not-selectable creatures, no positive game event

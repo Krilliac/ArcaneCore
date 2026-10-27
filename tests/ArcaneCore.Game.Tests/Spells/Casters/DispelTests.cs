@@ -86,6 +86,9 @@ public sealed class DispelTests
         return (caster, friend, enemy);
     }
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static void Apply(SpellTestKit kit, Unit caster, uint spell, Unit target)
         => kit.System.CastSpell(caster, spell, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
@@ -100,6 +103,7 @@ public sealed class DispelTests
         Apply(kit, friend, MagicBuff, friend);
 
         kit.System.HandleCastRequest(caster, DispelMagicTwo, SpellCastTargets.ForUnit(friend.Guid));
+        FlushSpellBatch(kit);
 
         Assert.True(kit.System.HasAura(friend, MagicBuff));
         Assert.Equal(1, new[] { MagicDebuffA, MagicDebuffB, MagicDebuffC }.Count(id => kit.System.HasAura(friend, id)));
@@ -114,6 +118,7 @@ public sealed class DispelTests
         Apply(kit, caster, MagicDebuffA, enemy);
 
         kit.System.HandleCastRequest(caster, DispelMagic, SpellCastTargets.ForUnit(enemy.Guid));
+        FlushSpellBatch(kit);
 
         Assert.False(kit.System.HasAura(enemy, MagicBuff));
         Assert.True(kit.System.HasAura(enemy, MagicDebuffA));
@@ -129,7 +134,9 @@ public sealed class DispelTests
         Apply(kit, enemy, DiseaseDebuff, friend);
 
         kit.System.HandleCastRequest(caster, CureDisease, SpellCastTargets.ForUnit(enemy.Guid));
+        FlushSpellBatch(kit);
         kit.System.HandleCastRequest(caster, CureDisease, SpellCastTargets.ForUnit(friend.Guid));
+        FlushSpellBatch(kit);
 
         Assert.False(kit.System.HasAura(enemy, DiseaseDebuff));
         Assert.False(kit.System.HasAura(friend, DiseaseDebuff));
@@ -147,6 +154,7 @@ public sealed class DispelTests
 
         Apply(kit, friend, StealthBuff, friend);
         kit.System.HandleCastRequest(caster, DispelEverything, SpellCastTargets.ForUnit(friend.Guid));
+        FlushSpellBatch(kit);
 
         foreach (uint debuff in new[] { MagicDebuffA, DiseaseDebuff, CurseDebuff, PoisonDebuff })
         {
@@ -171,6 +179,7 @@ public sealed class DispelTests
         session.Clear();
 
         kit.System.HandleCastRequest(caster, DispelMagicTwo, SpellCastTargets.ForUnit(enemy.Guid));
+        FlushSpellBatch(kit);
 
         Assert.Equal(1, kit.System.GetAuras(enemy).Single(h => h.Spell.Id == StackingBuff).StackAmount);
         byte[] log = SpellTestKit.Packets(session, WorldOpcode.SmsgSpelldispellog).Single();
@@ -178,6 +187,7 @@ public sealed class DispelTests
         Assert.Equal(1u, BitConverter.ToUInt32(log, log.Length - 8));
 
         kit.System.HandleCastRequest(caster, DispelMagic, SpellCastTargets.ForUnit(enemy.Guid));
+        FlushSpellBatch(kit);
         Assert.False(kit.System.HasAura(enemy, StackingBuff));
     }
 
@@ -189,6 +199,7 @@ public sealed class DispelTests
         Apply(kit, enemy, MagicDebuffA, friend);
 
         kit.System.HandleCastRequest(caster, DispelThree, SpellCastTargets.ForUnit(friend.Guid));
+        FlushSpellBatch(kit);
 
         Assert.False(kit.System.HasAura(friend, MagicDebuffA));
     }
@@ -204,6 +215,7 @@ public sealed class DispelTests
         session.Clear();
 
         kit.System.HandleCastRequest(caster, DispelMagic, SpellCastTargets.ForUnit(friend.Guid));
+        FlushSpellBatch(kit);
 
         Assert.True(kit.System.HasAura(friend, MagicDebuffA));
         Assert.Empty(SpellTestKit.Packets(session, WorldOpcode.SmsgSpelldispellog));

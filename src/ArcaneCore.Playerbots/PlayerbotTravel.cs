@@ -337,7 +337,8 @@ internal sealed class JourneyWalk
 /// only walks and begins legs; nothing it begins is moved by it.
 /// <list type="bullet">
 /// <item>A walk leg right before a boat, zeppelin or portal leg ends within <see cref="HandOffYards"/> of its end (that leg's driver walks the
-/// last yards to its dock or mage itself); a failure of such a walk hands off at once, and the next driver's failure is the leg's.</item>
+/// last yards to its dock or mage itself); a failure of such a walk within <see cref="PlayerbotShip.BeginReachYards"/> of its end hands off at
+/// once, and the next driver's failure is the leg's; farther out the failure is the walk's own.</item>
 /// <item>A failed leg (its driver reported it once) is replanned once from where the bot stands, leaving out the failed means or point on top
 /// of the drivers' backoffs (<see cref="TravelExclusions"/>); a second failure, or a replan with no route, fails the journey: reported once
 /// (anomaly area <see cref="AnomalyArea"/>, <c>leg-failed</c>). The journey is bounded (<see cref="DeadlineOf"/>, <c>overdue</c>). Nothing is
@@ -1071,7 +1072,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         return StepResult.Yield;
     }
 
-    /// <summary>One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure hands off too.</summary>
+    /// <summary>One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too.</summary>
     private static StepResult Walk(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
         uint now, out string? why)
     {
@@ -1115,7 +1116,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             case JourneyWalk.Outcome.Yield:
                 return StepResult.Yield;
             case JourneyWalk.Outcome.Failed:
-                if (handOff) return StepResult.Next; // the next leg's own driver walks to its dock or mage, and its failure is the leg's
+                // Near the next leg's start its own driver walks the last yards to its dock or mage, and its failure is the leg's; farther out
+                // the failure is the walk's (issue #1456: a boat leg begun thousands of yards out reported its dock unreachable).
+                if (handOff && left <= PlayerbotShip.BeginReachYards) return StepResult.Next;
                 why = "walk: " + walkWhy;
                 return StepResult.Failed;
             default:
