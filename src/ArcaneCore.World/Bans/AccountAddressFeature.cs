@@ -39,7 +39,7 @@ public sealed class AccountAddressFeature(IServiceProvider services, IServiceSco
         }
 
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
-        Writes = new KeyedStoreWriteQueue<IAccountAddressStore>(scopes, loggers.CreateLogger<KeyedStoreWriteQueue<IAccountAddressStore>>(), "account address");
+        Writes = new KeyedStoreWriteQueue<IAccountAddressStore>(scopes, loggers.CreateLogger<KeyedStoreWriteQueue<IAccountAddressStore>>(), "account address", services.GetService<ShutdownDrain>()?.Features);
         Writes.Start();
         _registry.Registered += OnRegistered;
     }

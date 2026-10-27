@@ -39,6 +39,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 internal sealed class ScenarioTestWorld : IAsyncDisposable
 {
     private readonly string _database;
+    private readonly ConcurrentDictionary<string, WorldTestClient> _prepared = new(StringComparer.OrdinalIgnoreCase);
 
     private ScenarioTestWorld(WorldTestHost host, ScenarioTimeProvider time, string database)
     {
@@ -132,15 +133,37 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     }
 
     /// <summary>A real socket client (e.g. a GM) in this world; characters live in the SQLite store, not the host's memory store.</summary>
+    /// <remarks>A character made earlier by <see cref="PrepareCharacterAsync"/> for <paramref name="account"/> is only logged in.</remarks>
     public async Task<WorldTestClient> EnterWorldAsync(string account, string character, AccountSecurity security)
+    {
+        if (!_prepared.TryRemove(account, out WorldTestClient? client))
+        {
+            client = await CreateCharacterClientAsync(account, character, security);
+        }
+
+        int id = (await WithScopeAsync(sp => sp.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync()))
+            .Single(identity => identity.Name.Equals(character, StringComparison.OrdinalIgnoreCase)).Id;
+        await client.LoginAsync((ulong)id);
+        return client;
+    }
+
+    /// <summary>
+    /// Create <paramref name="character"/> on a socket client now (authenticated, not logged in) and keep the client for a later
+    /// <see cref="EnterWorldAsync"/>. Call it before adding bots: a create issued by EnterWorldAsync while bots run overlaps their
+    /// character saves on this one SQLite file, and creating first removes that overlap.
+    /// </summary>
+    public async Task PrepareCharacterAsync(string account, string character, AccountSecurity security)
+    {
+        WorldTestClient client = await CreateCharacterClientAsync(account, character, security);
+        Xunit.Assert.True(_prepared.TryAdd(account, client), $"account {account} was already prepared");
+    }
+
+    private async Task<WorldTestClient> CreateCharacterClientAsync(string account, string character, AccountSecurity security)
     {
         byte[] key = await Host.AddAccountAsync(account, security);
         WorldTestClient client = await Host.ConnectAsync();
         await client.AuthenticateAsync(account, key);
         await client.CreateCharacterAsync(character);
-        int id = (await WithScopeAsync(sp => sp.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync()))
-            .Single(identity => identity.Name.Equals(character, StringComparison.OrdinalIgnoreCase)).Id;
-        await client.LoginAsync((ulong)id);
         return client;
     }
 
@@ -184,15 +207,30 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await Bots.ShutdownBeforeWorldStopAsync();
-        await Host.DisposeAsync();
         try
         {
-            File.Delete(_database);
+            // A test that threw between PrepareCharacterAsync and EnterWorldAsync leaves its prepared client here.
+            foreach (string account in _prepared.Keys)
+            {
+                if (_prepared.TryRemove(account, out WorldTestClient? prepared))
+                {
+                    await prepared.DisposeAsync();
+                }
+            }
         }
-        catch (IOException)
+        finally
         {
-            // A pooled handle may still be closing; the temp file is harmless.
+            // One throwing client dispose must not skip the bot and host teardown.
+            await Bots.ShutdownBeforeWorldStopAsync();
+            await Host.DisposeAsync();
+            try
+            {
+                File.Delete(_database);
+            }
+            catch (IOException)
+            {
+                // A pooled handle may still be closing; the temp file is harmless.
+            }
         }
     }
 

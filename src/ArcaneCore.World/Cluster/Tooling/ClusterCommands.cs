@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Cluster.Tooling;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Cluster.Transfer;
@@ -563,18 +564,75 @@ public sealed class ClusterCommands : ICommandGroup
         string contentRev = manifest?.ContentRevision ?? "w44-unified-1.12.1.5875";
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
-        int pendingTransfers;
-        try
+        if (services.GetService<ITransferDecisionStore>() is not { } transfers)
         {
-            pendingTransfers = CountUnresolvedTransfers(services);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>().LogWarning(ex, "cluster diag could not read the unresolved transfer count");
-            context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store.");
+            ReplyDiag(context, 0, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev);
             return true;
         }
 
+        // The decision store's COUNT would run inline on the world thread (the SQLite provider runs its async calls synchronously):
+        // count on the pool and send the report from the world thread.
+        WorldRuntime world = context.World;
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>(); // resolved here: the pool continuations below must not touch the session scope
+        _ = Task.Run(async () =>
+        {
+            int pendingTransfers;
+            try
+            {
+                pendingTransfers = await transfers.CountUnresolvedAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster.diag-count", ex);
+                logger?.LogWarning(ex, "cluster diag could not read the unresolved transfer count"); // logged here, not from the posted action: a stopped world never runs it
+                world.Post(() => context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store."));
+                return;
+            }
+
+            world.Post(() => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
+        }).ContinueWith(
+            t =>
+            {
+                Exception ex = t.Exception!.GetBaseException();
+                if (ex is OperationCanceledException or OutOfMemoryException)
+                {
+                    return;
+                }
+
+                FaultLedger.Shared.Record("cluster.diag-post", ex);
+                logger?.LogFault("cluster-diag-post", ex, "cluster diag could not post its reply to the world thread");
+                try
+                {
+                    world.Post(() => context.Reply("Cluster diagnostics unavailable: the report could not be delivered."));
+                }
+                catch (Exception replyEx) when (replyEx is not OutOfMemoryException)
+                {
+                    // Post only enqueues; it can throw only when the world's clock is disposed. The first fault above stands.
+                    FaultLedger.Shared.Record("cluster.diag-post", replyEx);
+                    logger?.LogFault("cluster-diag-post", replyEx, "cluster diag could not queue its failure reply");
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return true;
+    }
+
+    /// <summary>World thread: build and send the <c>.cluster diag</c> report once the unresolved transfer count is known.</summary>
+    private static void ReplyDiag(
+        CommandContext context,
+        int pendingTransfers,
+        int pendingWrites,
+        int retainedFailures,
+        CharacterFencingOptions fencing,
+        CharacterOwnershipToken? worldToken,
+        string nodeId,
+        string role,
+        Guid incarnation,
+        int realmId,
+        string contentRev)
+    {
+        IServiceProvider services = context.Session.Services;
         DiagSchemaVersions schema = DiagSchemaVersions.Current;
         var nodes = new List<ClusterNodeDescriptor>
         {
@@ -638,7 +696,6 @@ public sealed class ClusterCommands : ICommandGroup
             });
 
         context.Reply(report.FormatDeterministicSummary());
-        return true;
     }
 
     /// <summary>
@@ -764,12 +821,6 @@ public sealed class ClusterCommands : ICommandGroup
     // The core bot registry (logged in and running), not the playerbot pack's feature: World does not reference the pack (tier 2b).
     private static HashSet<string> GetRunningBotNames(IServiceProvider services)
         => services.GetService<ManagedBotRegistry>()?.RunningNames() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Unresolved (pre-commit or committed) transfers across all characters, from the registered decision store; 0 when none is registered. Blocks on the store query (Administrator-only command; the EF store's query is a COUNT over the indexed state column); a store failure propagates to the caller.</summary>
-    private static int CountUnresolvedTransfers(IServiceProvider services)
-        => services.GetService<ITransferDecisionStore>() is { } store
-            ? store.CountUnresolvedAsync().GetAwaiter().GetResult()
-            : 0;
 
     private static (int Pending, int Retained) SumQueueDepths(IServiceProvider services)
     {

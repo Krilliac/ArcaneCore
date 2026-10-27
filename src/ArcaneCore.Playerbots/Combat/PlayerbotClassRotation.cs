@@ -304,6 +304,25 @@ internal abstract class PlayerbotClassRotation
             || command is { Kind: RotationActionKind.PetFollow } && s.PetFightingCrowdControlled ? command : null;
     }
 
+    /// <summary>The bow, gun and crossbow shots and the thrown-weapon throw of a warrior or rogue, in the order they are tried (spells 2480, 7918, 7919, 2764).</summary>
+    internal const string ShootBow = "Shoot Bow";
+    internal const string ShootGun = "Shoot Gun";
+    internal const string ShootCrossbow = "Shoot Crossbow";
+    internal const string Throw = "Throw";
+
+    /// <summary>
+    /// The ranged shot of a class that fights in melee: out of melee reach, standing still, with a ranged weapon equipped, the first
+    /// of Shoot Bow, Shoot Gun, Shoot Crossbow and Throw the bot knows and can cast now (<see cref="RotationState.CanCast"/> judges the
+    /// weapon type, ammunition and range). An ordinary ability, not Auto Shot: one cast per use. Only while the kite holds the bot at
+    /// range (<see cref="RotationState.KiteHolding"/>): otherwise the bot closes to melee instead of standing to shoot. Never at a
+    /// crowd-controlled victim, whose crowd control the damage would break.
+    /// </summary>
+    protected static RotationAction? RangedShot(RotationState s, RotationUnit victim)
+    {
+        bool when = s.KiteHolding && !victim.IsCrowdControlled && !victim.InMeleeRange && s.HasRangedWeapon && !s.IsMoving;
+        return Do(s, ShootBow, victim, when) ?? Do(s, ShootGun, victim, when) ?? Do(s, ShootCrossbow, victim, when) ?? Do(s, Throw, victim, when);
+    }
+
     // --- shared rotations -------------------------------------------------------------------------------------------------
 
     /// <summary>A wand at low mana (vmangos: Shoot below 5-10% mana when nothing else is running).</summary>

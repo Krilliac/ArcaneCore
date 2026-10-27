@@ -15,6 +15,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -133,7 +134,7 @@ public sealed class SocialFeature(
         configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
         configuration?.GetSection(GuildOptions.SectionName).Bind(GuildOptions);
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
-        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
+        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions, services?.GetService<ShutdownDrain>()?.Features);
         _writes.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("social.writes-fatal", ex);

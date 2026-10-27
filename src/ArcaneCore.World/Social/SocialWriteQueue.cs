@@ -80,13 +80,15 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain;
     private int _pending;
 
-    public SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger, SocialWriteQueueOptions? options = null)
+    public SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger, SocialWriteQueueOptions? options = null, StopDrainBudget? drain = null)
     {
         _scopes = scopes;
         _logger = logger;
         _options = options ?? new SocialWriteQueueOptions();
+        _drain = drain ?? new StopDrainBudget();
     }
 
     private enum KeyKind
@@ -442,6 +444,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             _stopped = true;
         }
 
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -481,8 +484,20 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 "persist",
                 "write-dropped-on-shutdown",
                 "queue SocialWriteQueue",
-                $"queue=SocialWriteQueue undrainedTargets={left.Length} firstTarget={left[0]}",
+                $"queue=SocialWriteQueue undrainedTargets={left.Length} firstTarget={left[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.social-stop-drain", refusal);
+                _logger.LogFault(
+                    "writequeue-social-stop-drain",
+                    refusal,
+                    "social write queue shutdown drain stalled; {Refused} of {Undrained} retained targets were not attempted: {Summary}",
+                    _drain.Refused,
+                    left.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"social writes did not drain for {string.Join(", ", left)}", first);
         }
 
@@ -769,7 +784,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             value = work.Value;
         }
 
-        Exception? failure = await TryWriteAsync(work.Key, value, MaxAttempts).ConfigureAwait(false);
+        var made = new WriteAttemptCount();
+        Exception? failure = await TryWriteAsync(work.Key, value, MaxAttempts, made).ConfigureAwait(false);
         bool newEpisode = false;
         lock (_gate)
         {
@@ -794,19 +810,22 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
                 newEpisode = !_retained.ContainsKey(work.Key); // a retained write failing again is the same episode
                 SetRetained(work.Key, value, failure);
-                _logger.LogFault("writequeue.social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
+                if (failure is not StopDrainExhaustedException)
+                {
+                    _logger.LogFault("writequeue.social", failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
+                }
             }
 
             ReleaseKey(work.Key);
         }
 
-        if (failure is not null && newEpisode && failure is not CharacterOwnershipRejectedException)
+        if (failure is not null && newEpisode && failure is not CharacterOwnershipRejectedException and not StopDrainExhaustedException)
         {
             AnomalyLedger.Shared.Report(
                 "persist",
                 "write-retry-exhausted",
                 "queue SocialWriteQueue",
-                $"queue=SocialWriteQueue kind={work.Key.Kind} id={work.Key.A} attempts={MaxAttempts} error={failure.GetType().Name}",
+                $"queue=SocialWriteQueue kind={work.Key.Kind} id={work.Key.A} attempts={made.Made} error={failure.GetType().Name}",
                 AnomalySeverity.Error);
         }
 
@@ -936,7 +955,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     }
 
     /// <summary>Apply one key's value to the store. Null on success; otherwise the last failure.</summary>
-    private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts)
+    private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
         lock (_gate)
         {
@@ -946,15 +965,32 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
         }
 
+        if (_stopped)
+        {
+            attempts = 1; // at stop: one attempt per write, busy or not, no inline retry
+        }
+
         for (int attempt = 1; ; attempt++)
         {
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            {
+                return refused; // shutdown drain only: nothing is attempted, the write stays retained
+            }
+
+            if (made is not null)
+            {
+                made.Made = attempt;
+            }
+
             await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (key.Kind is KeyKind.Petition or KeyKind.PetitionPurge)
                 {
                     if (scope.ServiceProvider.GetService<IPetitionStore>() is not { } petitions)
                     {
+                        progress.Succeeded();
                         return null; // hosts without persistence keep nothing
                     }
 
@@ -971,11 +1007,13 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                             break;
                     }
 
+                    progress.Succeeded();
                     return null;
                 }
 
                 if (scope.ServiceProvider.GetService<ISocialStore>() is not { } store)
                 {
+                    progress.Succeeded();
                     return null; // hosts without persistence keep nothing
                 }
 
@@ -993,6 +1031,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                         break;
                 }
 
+                progress.Succeeded();
                 return null;
             }
             catch (CharacterOwnershipRejectedException ex)
@@ -1005,6 +1044,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             {
                 FaultLedger.Shared.Record("writequeue.social-attempt", ex);
                 _logger.LogWarning(ex, "social write for {Kind} {Id} failed (attempt {Attempt}); retrying", key.Kind, key.A, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(Math.Max(0, _options.RetryDelayMs) * attempt).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
