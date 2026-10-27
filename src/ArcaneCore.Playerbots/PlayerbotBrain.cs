@@ -1819,7 +1819,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     _suspensions.SuspendEntry(TargetEntry, now);
                 }
                 break;
-            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount:
+            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather:
                 if (deadEndPin) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                 else _suspensions.SuspendEntry(TargetEntry, now);
                 break;
@@ -2144,7 +2144,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
     {
-        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Mount && (entry != 0 || quest != 0))
+        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather && (entry != 0 || quest != 0))
             _errand = (goal, entry, quest, _session.World.NowMs);
     }
 
