@@ -64,7 +64,7 @@ public sealed class MailboxAccessTests
         foreach (Probe probe in new[] { Probe.Fabricated, Probe.NotAMailbox, Probe.OutOfRange })
         {
             await PlaceForAsync(host, "Mbxretail", probe);
-            Assert.Empty(await SendAsync(client, opcode, GuidFor(probe)));
+            AssertRefused(opcode, await SendAsync(client, opcode, GuidFor(probe)));
         }
 
         await PlaceForAsync(host, "Mbxretail", Probe.InRange);
@@ -105,7 +105,7 @@ public sealed class MailboxAccessTests
 
         // Permissive still requires a game object GUID.
         await host.PlaceAsync("Mbxperm", StartX, StartY, StartZ);
-        Assert.Empty(await SendAsync(client, opcode, ObjectGuid.Player(1).Value));
+        AssertRefused(opcode, await SendAsync(client, opcode, ObjectGuid.Player(1).Value));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public sealed class MailboxAccessTests
         host.WorldServices.GetRequiredService<EconomyFeature>().MailboxAccessOverride = spy;
 
         ulong guid = GuidFor(Probe.Fabricated);
-        Assert.Empty(await SendAsync(client, opcode, guid));
+        AssertRefused(opcode, await SendAsync(client, opcode, guid));
         Assert.Equal([guid], spy.Asked);
     }
 
@@ -162,6 +162,20 @@ public sealed class MailboxAccessTests
 
     private static Task PlaceForAsync(WorldTestHost host, string name, Probe probe)
         => host.PlaceAsync(name, probe == Probe.OutOfRange ? StartX + 30 : StartX, StartY, StartZ);
+
+    /// <summary>A refused request changes nothing. CMSG_SEND_MAIL answers MAIL_ERR_INTERNAL_ERROR, as vmangos HandleSendMail does (MailHandler.cpp:131-134);
+    /// the other mail opcodes stay silent.</summary>
+    private static void AssertRefused(WorldOpcode opcode, List<WorldOpcode> replies)
+    {
+        if (opcode == WorldOpcode.CmsgSendMail)
+        {
+            Assert.Equal(WorldOpcode.SmsgSendMailResult, Assert.Single(replies));
+        }
+        else
+        {
+            Assert.Empty(replies);
+        }
+    }
 
     /// <summary>Send one mail opcode, then the sentinel; return the mail replies that arrived before it.</summary>
     private static async Task<List<WorldOpcode>> SendAsync(WorldTestClient client, WorldOpcode opcode, ulong mailbox)
