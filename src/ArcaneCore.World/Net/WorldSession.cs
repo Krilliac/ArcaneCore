@@ -717,6 +717,13 @@ public sealed partial class WorldSession : IPlayerSession
             HeuristicsClientPacket(opcode, payload);
             if (opcode == WorldOpcode.CmsgPing)
             {
+                // Answered in any state (vmangos parity), but under the same netguard budget as every other packet, so an
+                // unauthenticated socket cannot draw a pong per ping until the pre-auth timeout.
+                if (ApplyPacketBudget(opcode) is { } pingVerdict)
+                {
+                    return pingVerdict;
+                }
+
                 if (!TryHandlePing(payload)) // vmangos answers pings in WorldSocket, in any state
                 {
                     _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
@@ -745,35 +752,9 @@ public sealed partial class WorldSession : IPlayerSession
                 return false;
             }
 
-            // Net:Protection:World* packet budgets (docs/ops/netguard.md): over a budget the packet is dropped, a flood closes the connection.
-            if (_packetLimiter is not null)
+            if (ApplyPacketBudget(opcode) is { } verdict)
             {
-                switch (_packetLimiter.OnPacket((ushort)opcode, Clock.Milliseconds()))
-                {
-                    case OpcodeRateVerdict.Flood:
-                        if (_guard is not null)
-                        {
-                            _guard.ReportPacketFlood(RemoteEndpoint);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting", RemoteEndpoint, _protection.WorldFloodPacketsPerSecond);
-                        }
-
-                        return false;
-                    case OpcodeRateVerdict.Dropped:
-                        _budgetDropped = true;
-                        if (_guard is not null)
-                        {
-                            _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
-                        }
-                        else if (_packetGate.TryEnter(out int suppressed))
-                        {
-                            _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), suppressed);
-                        }
-
-                        return true;
-                }
+                return verdict;
             }
 
             if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
@@ -866,6 +847,47 @@ public sealed partial class WorldSession : IPlayerSession
         while (_worldQueue.TryDequeue(out QueuedPacket packet))
         {
             Release(packet);
+        }
+    }
+
+    /// <summary>
+    /// Net:Protection:World* packet budgets (docs/ops/netguard.md): null lets the packet through; true means it was dropped over a
+    /// budget (the connection stays); false means a flood (close the connection).
+    /// </summary>
+    private bool? ApplyPacketBudget(WorldOpcode opcode)
+    {
+        if (_packetLimiter is null)
+        {
+            return null;
+        }
+
+        switch (_packetLimiter.OnPacket((ushort)opcode, Clock.Milliseconds()))
+        {
+            case OpcodeRateVerdict.Flood:
+                if (_guard is not null)
+                {
+                    _guard.ReportPacketFlood(RemoteEndpoint);
+                }
+                else
+                {
+                    _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting", RemoteEndpoint, _protection.WorldFloodPacketsPerSecond);
+                }
+
+                return false;
+            case OpcodeRateVerdict.Dropped:
+                _budgetDropped = true;
+                if (_guard is not null)
+                {
+                    _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                }
+                else if (_packetGate.TryEnter(out int suppressed))
+                {
+                    _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), suppressed);
+                }
+
+                return true;
+            default:
+                return null;
         }
     }
 

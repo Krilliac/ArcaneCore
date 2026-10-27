@@ -17,18 +17,21 @@ public static class LogSafe
     /// Returns <paramref name="value"/> with every control, format or line-separator character
     /// replaced by a visible escape, truncated to <see cref="MaxLength"/> characters.
     /// </summary>
-    public static string Escape(string? value)
+    public static string Escape(string? value) => Escape(value, MaxLength);
+
+    /// <summary>As <see cref="Escape(string?)"/>, truncated to <paramref name="maxLength"/> characters instead.</summary>
+    public static string Escape(string? value, int maxLength)
     {
         if (string.IsNullOrEmpty(value))
         {
             return string.Empty;
         }
 
-        var builder = new StringBuilder(Math.Min(value.Length, MaxLength) + 8);
+        var builder = new StringBuilder(Math.Min(value.Length, maxLength) + 8);
         int taken = 0;
         foreach (char c in value)
         {
-            if (taken >= MaxLength)
+            if (taken >= maxLength)
             {
                 builder.Append("...");
                 break;

@@ -22,6 +22,26 @@ public sealed class SocialOptions
     /// </summary>
     public int MaxJoinedChannels { get; set; }
 
+    /// <summary>
+    /// ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is
+    /// created. 0 = no cap. vmangos has none and the stock client's limit is unverified; the default (255) is the client's chat edit box
+    /// length, so no name typed into it is refused.
+    /// </summary>
+    public int MaxChannelNameLength { get; set; } = 255;
+
+    /// <summary>
+    /// ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD
+    /// and a set is ignored. 0 = no cap. Default 255, as for <see cref="MaxChannelNameLength"/>.
+    /// </summary>
+    public int MaxChannelPasswordLength { get; set; } = 255;
+
+    /// <summary>
+    /// ArcaneCore hardening: the shortest time (milliseconds) between two ready-check answers of one member that are forwarded to the
+    /// leader; answers inside it are dropped, and a new ready check resets it. 0 = off. vmangos forwards every answer, pending check or not
+    /// (GroupHandler.cpp HandleRaidReadyCheckOpcode); a client answers once per check, so the default (1000) never drops a real answer.
+    /// </summary>
+    public int ReadyCheckAnswerIntervalMs { get; set; } = 1000;
+
     /// <summary>AllowTwoSide.AddFriend.</summary>
     public bool AllowTwoSideAddFriend { get; set; }
 

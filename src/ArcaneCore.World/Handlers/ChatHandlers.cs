@@ -81,6 +81,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
         WorldRuntimeOptions options = session.World.Options;
         ChatFeature chat = session.Services.GetRequiredService<ChatFeature>();
+        if (chat.Options.MaxMessageLength > 0 && message.Length > chat.Options.MaxMessageLength)
+        {
+            return; // World:Chat:MaxMessageLength: an oversized message is dropped before it is gated or broadcast
+        }
+
         if (language == Language.Addon)
         {
             // Disabled addon channel? (vmangos AddonChannel). Addon messages are not touched by the
@@ -194,6 +199,14 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 message = filtered;
             }
         }
+        else if (SanitizeAwayText(message, chat.Options, session.Services.GetService<ChatWordFilterFeature>()?.Filter) is { } away)
+        {
+            message = away;
+        }
+        else
+        {
+            return; // an AFK/DND text with a bad link or a blocked word is dropped like any other chat line
+        }
 
         // AzerothCore PlayerScript::OnPlayerCanUseChat (docs/integration/script-hooks.md): after commands, before every feature and the core.
         if (session.World.Scripts.Player.HasChat
@@ -288,6 +301,43 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// AFK and DND text is stored on the player and sent to every whisperer, so it gets the same treatment as spoken chat: the
+    /// invisible-character strip (<see cref="ChatOptions.FakeMessagePreventing"/>), the cap (<see cref="ChatOptions.MaxAwayMessageLength"/>,
+    /// applied before the link check so a cut never leaves a half link behind), the link check (<see cref="ChatOptions.StrictLinkSeverity"/>)
+    /// and the word filter (<see cref="ChatOptions.WordFilter"/>). Null when the text is to be dropped. Whether vmangos sanitises AFK
+    /// text is unverified; every step is behind an option.
+    /// </summary>
+    internal static string? SanitizeAwayText(string message, ChatOptions options, ChatWordFilter? filter)
+    {
+        if (message.Length == 0)
+        {
+            return message;
+        }
+
+        if (options.FakeMessagePreventing)
+        {
+            message = ChatSanitizer.StripInvisibleChars(message);
+        }
+
+        if (options.MaxAwayMessageLength > 0 && message.Length > options.MaxAwayMessageLength)
+        {
+            message = message[..options.MaxAwayMessageLength];
+        }
+
+        if (options.StrictLinkSeverity > 0 && !ChatSanitizer.IsValidChatMessage(message, options.StrictLinkSeverity))
+        {
+            return null;
+        }
+
+        if (options.WordFilter && filter is { ChatRuleCount: > 0 })
+        {
+            return filter.Apply(message);
+        }
+
+        return message;
     }
 
     /// <summary>

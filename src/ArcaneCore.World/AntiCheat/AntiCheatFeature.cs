@@ -251,11 +251,22 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         ArgumentNullException.ThrowIfNull(gameObject);
         float dx = player.X - gameObject.X, dy = player.Y - gameObject.Y, dz = player.Z - gameObject.Z;
         float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
-        float slack = 20f + (player.RunSpeed * 2f * session.LatencyMs / 1000f);
+        float slack = InteractSlack(player.RunSpeed, session.LatencyMs, _options);
         if (distance > slack)
         {
             OnRejected(session, player, AntiCheatViolation.Interact, 15f, "game object use far out of range");
         }
+    }
+
+    /// <summary>
+    /// The far-use slack in yards: 20 plus what the run speed covers in twice the client-reported latency. The latency term is clamped
+    /// to <see cref="AntiCheatOptions.MaxLatencySlackMs"/> as MovementAntiCheat.Slack does, so a client that reports a 60 s ping cannot
+    /// widen it to hundreds of yards.
+    /// </summary>
+    internal static float InteractSlack(float runSpeed, int latencyMs, AntiCheatOptions options)
+    {
+        int latencySlackMs = Math.Clamp(2 * Math.Max(0, latencyMs), 0, Math.Max(options.LatencySlackMs, options.MaxLatencySlackMs));
+        return 20f + (runSpeed * latencySlackMs / 1000f);
     }
 
     // --- scoring and escalation ---------------------------------------------------------------------------------------
