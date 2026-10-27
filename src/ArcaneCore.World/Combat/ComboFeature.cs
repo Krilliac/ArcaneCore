@@ -34,7 +34,13 @@ public sealed class ComboFeature(IServiceProvider services) : IWorldFeature
         }
     }
 
-    private void Unsubscribe(Map map) => Service?.Unobserve(map.Combat);
+    private void Unsubscribe(Map map)
+    {
+        if (Service is { } combos && map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combos.Unobserve(combat);
+        }
+    }
 
     private void Subscribe(Map map)
     {

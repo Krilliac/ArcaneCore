@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Crafting;
+using ArcaneCore.Kernel.Skills;
 using ArcaneCore.World.Combat;
 using ArcaneCore.World.Crafting;
 using ArcaneCore.World.Economy;
@@ -7,6 +9,7 @@ using ArcaneCore.World.Items;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Skills;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -16,7 +19,7 @@ namespace ArcaneCore.World.Tests.Instances;
 /// <summary>
 /// An unloaded instance or battleground map must be released by every feature that tracks maps: the per-map collections
 /// (<c>_maps</c> of the enchanting, economy, item maintenance and skills features, <c>_observed</c> of the combo point and
-/// reactive services) used to keep each destroyed map reachable for the life of the process.
+/// reactive services, and the spell feature's combat subscriptions) used to keep each destroyed map reachable for the life of the process.
 /// </summary>
 public sealed class InstanceMapRetentionTests
 {
@@ -30,11 +33,20 @@ public sealed class InstanceMapRetentionTests
         {
             _services = new ServiceCollection()
                 .AddSingleton(sp => new SpellFeature(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance))
+                .AddSingleton(sp => new TeleportFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<TeleportFeature>.Instance))
+                .AddSingleton(new EnchantCatalog([new SpellItemEnchantment(1, [0u, 0u, 0u], [0, 0, 0], [0u, 0u, 0u], "test", 0, 0)]))
+                .AddSingleton(SkillCatalog.Empty)
                 .AddSingleton(sp => new ComboFeature(sp))
                 .BuildServiceProvider();
             IServiceScopeFactory scopes = _services.GetRequiredService<IServiceScopeFactory>();
             var saves = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
             World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
+            Spells = _services.GetRequiredService<SpellFeature>();
+            Spells.Attach(World);
+            Enchanting = new EnchantingFeature(_services, NullLogger<EnchantingFeature>.Instance);
+            Enchanting.Attach(World);
+            Skills = new SkillsFeature(_services, scopes, NullLogger<SkillsFeature>.Instance);
+            Skills.Attach(World);
             Combo = _services.GetRequiredService<ComboFeature>();
             Combo.Attach(World);
             Reactive = new ReactiveFeature(_services);
@@ -43,17 +55,10 @@ public sealed class InstanceMapRetentionTests
             Maintenance.Attach(World);
             Economy = new EconomyFeature(_services, scopes, NullLogger<EconomyFeature>.Instance);
             Economy.Attach(World);
-            // Enchanting and skills only subscribe once their content (DBC files) is loaded, which a unit test cannot supply;
-            // wire their map handlers exactly as their Attach does.
-            Enchanting = new EnchantingFeature(_services, NullLogger<EnchantingFeature>.Instance);
-            World.MapCreated += Enchanting.OnMapCreated;
-            World.MapUnloading += Enchanting.OnMapUnloading;
-            Skills = new SkillsFeature(_services, scopes, NullLogger<SkillsFeature>.Instance);
-            World.MapCreated += Skills.OnMapCreated;
-            World.MapUnloading += Skills.OnMapUnloading;
         }
 
         public WorldRuntime World { get; }
+        public SpellFeature Spells { get; }
         public ComboFeature Combo { get; }
         public ReactiveFeature Reactive { get; }
         public ItemMaintenanceFeature Maintenance { get; }
@@ -63,6 +68,7 @@ public sealed class InstanceMapRetentionTests
 
         public int Tracked(string name) => name switch
         {
+            "spell" => Spells.SubscribedCombatCount,
             "combo" => Combo.Service!.ObservedCount,
             "reactive" => Reactive.Reactives!.ObservedCount,
             "maintenance" => Maintenance.TrackedMapCount,
@@ -76,12 +82,14 @@ public sealed class InstanceMapRetentionTests
         {
             await Economy.DisposeAsync();
             await Skills.DisposeAsync();
+            await Spells.DisposeAsync();
             World.Dispose();
             await _services.DisposeAsync();
         }
     }
 
     [Theory]
+    [InlineData("spell")]
     [InlineData("combo")]
     [InlineData("reactive")]
     [InlineData("maintenance")]
@@ -107,7 +115,7 @@ public sealed class InstanceMapRetentionTests
     }
 
     [Fact]
-    public async Task AnUnloadedInstanceMap_IsCollectable_AfterAllSixFeaturesHaveSeenIt()
+    public async Task AnUnloadedInstanceMap_IsCollectable_AfterAllSevenFeaturesHaveSeenIt()
     {
         await using var rig = new Rig();
         WeakReference<Map> weak = CreateAndUnload(rig.World);

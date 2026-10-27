@@ -39,7 +39,13 @@ public sealed class ReactiveFeature(IServiceProvider services) : IWorldFeature
         }
     }
 
-    private void Release(Map map) => Reactives?.Unobserve(map.Combat);
+    private void Release(Map map)
+    {
+        if (Reactives is { } reactives && map.FindUpdater<MapCombat>() is { } combat)
+        {
+            reactives.Unobserve(combat);
+        }
+    }
 
     private void Install(Map map)
     {

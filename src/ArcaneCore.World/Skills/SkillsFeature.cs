@@ -279,9 +279,9 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
     /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
     internal int TrackedMapCount => _maps.Count;
 
-    internal void OnMapUnloading(Map map) => _maps.Remove(map);
+    private void OnMapUnloading(Map map) => _maps.Remove(map);
 
-    internal void OnMapCreated(Map map)
+    private void OnMapCreated(Map map)
     {
         if (_maps.Add(map))
         {
