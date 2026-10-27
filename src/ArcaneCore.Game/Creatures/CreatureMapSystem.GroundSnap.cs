@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures;
@@ -35,7 +36,8 @@ public sealed partial class CreatureMapSystem
     /// and a creature that only swims (<c>InhabitType</c> 2) stays in its water. A creature that also swims is put on the liquid surface
     /// where the liquid covers the floor, a pure walker on the floor. Where no floor is in the window (another storey, no data, a terrain
     /// tile that is not in memory) a point keeps its height. On the calling thread, which must be allowed to read the model trees: the world
-    /// thread, or a map thread inside the serial gate (an ungated wander leg enters it for the drape, like its other model reads).
+    /// thread, or a map thread inside the serial gate. An ungated wander leg tries the drape outside the gate first, from what is already loaded
+    /// (<see cref="GroundHeight.TryDrapePathShared"/>), and enters the gate for it only when that gives up, like its other model reads.
     /// The time it takes is part of the update's path-time budget (<see cref="PathTicksThisTick"/>, <see cref="HasPathBudget"/>), and a
     /// finished path job's result is only applied while that budget has room (<see cref="HasDrapeBudget"/>).
     /// </summary>
@@ -68,6 +70,20 @@ public sealed partial class CreatureMapSystem
         List<Vector3> draped;
         if (_ungatedMotion)
         {
+            // First from what is loaded, outside the gate (GroundHeight.TryDrapePathShared: bit-identical when it answers). It gives up, and the
+            // drape is repeated inside the gate as before, when a tile it needs is not in memory or the navmesh is not one a shared query may use.
+            List<Vector3>? shared = GroundHeight.TryDrapePathShared(Map.Collision, start, corners, out SharedDrapeAbort abort, step: GroundSampleYards,
+                tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards, cornersOnMesh: cornersOnMesh);
+            if (shared is not null)
+            {
+                SharedDrapes++;
+                SharedDrapeStats.RecordHit();
+                NoteDrapeTicks(Stopwatch.GetTimestamp() - started);
+                return shared;
+            }
+
+            SharedDrapeStats.RecordFallback(abort);
+            GatedDrapes++;
             using (Serial())
             {
                 // Timed inside the gate: the wait for another map to release it is not this map's drape time.
@@ -95,6 +111,12 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>Paths put on the ground since the system was created (diagnostics, tests).</summary>
     internal long DrapedPaths { get; private set; }
+
+    /// <summary>Drapes of an ungated wander leg answered outside the serial gate (<see cref="GroundHeight.TryDrapePathShared"/>; diagnostics, tests).</summary>
+    internal long SharedDrapes { get; private set; }
+
+    /// <summary>Drapes of an ungated wander leg that took the serial gate: the shared drape gave up, and a gated drape ran (diagnostics, tests).</summary>
+    internal long GatedDrapes { get; private set; }
 
     /// <summary>The <see cref="Stopwatch"/> ticks those drapes took (diagnostics, tests).</summary>
     internal long DrapeTicksTotal { get; private set; }

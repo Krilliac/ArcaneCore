@@ -74,6 +74,32 @@ public sealed class TerrainInfo
         return true;
     }
 
+    /// <summary>
+    /// <see cref="GetLiquidStatus"/> from a tile already in memory, never loading one (a ground drape on a map thread outside the serial
+    /// gate; the slot is read once, like <see cref="TryGetLoadedHeight"/>). False, with nothing else meaningful, when the tile is not in memory.
+    /// </summary>
+    public bool TryGetLoadedLiquidStatus(float x, float y, float z, LiquidTypeFlags requiredType, out LiquidStatus status, out LiquidData data)
+    {
+        status = LiquidStatus.NoWater;
+        data = default;
+        TerrainTile tile;
+        if (TerrainTile.TileOf(x, y) is not { } index)
+        {
+            tile = TerrainTile.Empty;
+        }
+        else if (Volatile.Read(ref _tiles[(index.X * Size) + index.Y]) is { } loaded)
+        {
+            tile = loaded;
+        }
+        else
+        {
+            return false;
+        }
+
+        status = LiquidStatusOn(tile, x, y, z, requiredType, out data);
+        return true;
+    }
+
     /// <summary>Whether a tile is in memory.</summary>
     public bool IsTileLoaded(int tileX, int tileY) => _tiles[(tileX * Size) + tileY] is not null;
 
