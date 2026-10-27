@@ -405,7 +405,7 @@ public static class CrashDialog
             head.Append("(not recorded)\n");
         }
 
-        head.Append("Full report: ").Append(facts.ReportPath ?? "(not written: " + (facts.ReportError ?? "unknown error") + ")").Append('\n');
+        head.Append("Full report: ").Append(facts.ReportPath ?? ("(not written: " + (facts.ReportError ?? "unknown error") + ")")).Append('\n');
         if (facts.JournalPath is { Length: > 0 } journal)
         {
             head.Append("Crash journal: ").Append(journal).Append('\n');

@@ -19,10 +19,14 @@ public sealed partial class MapCombat
     /// <summary>Swings waiting for the next batch boundary on this map.</summary>
     internal int PendingSwings => _heldSwings.Count;
 
+    /// <summary>The melee batch window: the spell system's window when it batches swings, else 0 (no batching).</summary>
+    private uint SwingBatchWindowMs => SpellMitigation is { SpellBatchMelee: true } spells ? spells.SpellBatchWindowMs : 0;
+
     /// <summary>A ready swing: resolved now, or held for the batch.</summary>
     private void Swing(Unit attacker, Unit victim, WeaponAttackType hand)
     {
-        if (SpellMitigation is not { SpellBatchWindowMs: not 0 and var window, SpellBatchMelee: true })
+        uint window = SwingBatchWindowMs;
+        if (window == 0)
         {
             AttackerStateUpdate(attacker, victim, hand);
             return;
@@ -39,11 +43,15 @@ public sealed partial class MapCombat
     /// <summary>At the first update in a later batch (or at once when melee batching was switched off) the held swings resolve.</summary>
     private void UpdateHeldSwings()
     {
-        if (_heldSwings.Count == 0
-            || (SpellMitigation is { SpellBatchWindowMs: not 0 and var window, SpellBatchMelee: true }
-                && SpellSystem.BatchIndex(_world.NowMs, window) == _heldSwingIndex))
+        if (_heldSwings.Count == 0)
         {
             return;
+        }
+
+        uint window = SwingBatchWindowMs;
+        if (window != 0 && SpellSystem.BatchIndex(_world.NowMs, window) == _heldSwingIndex)
+        {
+            return; // still the batch the swings were held in
         }
 
         (Unit Attacker, Unit Victim, WeaponAttackType Hand)[] swings = [.. _heldSwings];
