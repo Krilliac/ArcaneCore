@@ -11108,6 +11108,30 @@ World.GmCommands.Boost.MaxQuality = 3
 #----------------------------------------------------------------------------
 
 #
+#    World.GmCommands.DebugDraw.FollowIntervalMs
+#        Description: Milliseconds between two reads of a followed unit's path (.debug vis follow);
+#                     it is redrawn only when it changed. 100..10000.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.FollowIntervalMs = 500
+
+#
+#    World.GmCommands.DebugDraw.FollowNearbyMaxRadius
+#        Description: Widest .debug vis follow nearby radius in yards (a larger request is cut to
+#                     it). 5..533.
+#        Type: float
+#        Default: 100
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.FollowNearbyMaxRadius = 100
+
+#
 #    World.GmCommands.DebugDraw.GameObjectDisplayInfoDbcPath
 #        Description: The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is
 #                     shipped). When set, every marker model (built-in and overridden) is checked
@@ -11158,6 +11182,18 @@ World.GmCommands.DebugDraw.Glow = true
 #        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
 #
 World.GmCommands.DebugDraw.LifetimeSeconds = 120
+
+#
+#    World.GmCommands.DebugDraw.MaxFollowedUnits
+#        Description: Most units one GM follows at once (.debug vis follow, follow nearby); they
+#                     share MaxMarkersPerGm. 1..50.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.MaxFollowedUnits = 10
 
 #
 #    World.GmCommands.DebugDraw.MaxMarkersPerGm
