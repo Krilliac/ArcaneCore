@@ -43,8 +43,11 @@ public sealed class PetHappinessTests
 
     [Theory]
     [InlineData(0u, SummonService.HappinessState.Unhappy)]
-    [InlineData(349_999u, SummonService.HappinessState.Unhappy)]
+    [InlineData(332_999u, SummonService.HappinessState.Unhappy)] // vmangos Pet.h:130 HAPPINESS_LEVEL_SIZE 333000, Pet.cpp:870-875
+    [InlineData(333_000u, SummonService.HappinessState.Content)]
     [InlineData(350_000u, SummonService.HappinessState.Content)]
+    [InlineData(665_999u, SummonService.HappinessState.Content)]
+    [InlineData(666_000u, SummonService.HappinessState.Happy)]
     [InlineData(700_000u, SummonService.HappinessState.Happy)]
     public void StateOf_SplitsTheBarInThirds(uint happiness, SummonService.HappinessState expected)
         => Assert.Equal(expected, SummonService.StateOf(happiness));

@@ -23,9 +23,12 @@ public sealed partial class SummonService
         Happy = 3,
     }
 
-    /// <summary>vmangos Pet::GetHappinessState.</summary>
+    /// <summary>The width of one happiness state (vmangos Pet.h:130 HAPPINESS_LEVEL_SIZE), not a third of <see cref="HappinessMax"/>.</summary>
+    public const uint HappinessLevelSize = 333_000;
+
+    /// <summary>vmangos Pet::GetHappinessState (Pet.cpp:870-875): below one level unhappy, from two levels happy, content between.</summary>
     public static HappinessState StateOf(uint happiness)
-        => happiness < HappinessMax / 3 ? HappinessState.Unhappy : happiness < HappinessMax / 3 * 2 ? HappinessState.Content : HappinessState.Happy;
+        => happiness < HappinessLevelSize ? HappinessState.Unhappy : happiness < HappinessLevelSize * 2 ? HappinessState.Content : HappinessState.Happy;
 
     /// <summary>
     /// The damage factor of a hunter pet's happiness: 1.25 happy, 1 content, 0.75 unhappy (vmangos SpellCaster.cpp:1378-1390 for melee damage,

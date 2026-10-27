@@ -72,11 +72,15 @@ Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/PetTargetTests.cs` (9 tests, 
 * no room: `SendEquipError` is sent whenever the store is not fully ok (also for a partial fit), the part that fits is stored, nothing when
   nothing fits; the item push (`created`) goes to the caster.
 
-Limits, recorded: (1) there is no tap list in the combat system (the threat-and-aggro lane owns it), so `ISoulShardTapSource` is a seam
-(`SoulShardRules.UseTapSource`) with no shipped implementation, and without one every kill counts as tapped; the loot recipients cannot stand
-in because the loot bag only exists after the death; (2) the creature template's xp multiplier of 0 and `UNIT_STATE_NO_KILL_REWARD` are not
+Limits, recorded: (1) the tap comes from the loot tap: `LootSoulShardTapSource` (`src/ArcaneCore.Game/Loot/LootSoulShardTapSource.cs`) asks
+`LootService.IsTappedBy` (vmangos Creature::IsTappedBy, Creature.cpp:1615-1632: the tapper, their pet, their group, or a battleground group),
+and `SpellRulesSoulShardFeature` installs it with `SoulShardRules.UseTapSource`, so another player's tap gives no shard. A deliberate
+divergence from vmangos: a creature with no recorded tap (a scripted kill, or one no damage ever tapped) or on a map without a loot service
+counts as tapped, so those kills keep giving a shard as they did before the source shipped; a bare `SpellSystem` with no source installed also
+counts every kill as tapped. Tests: `tests/ArcaneCore.Game.Tests/Loot/LootSoulShardTapSourceTests.cs`,
+`tests/ArcaneCore.World.Tests/SpellRules/SoulShardTapSourceFeatureTests.cs`; (2) the creature template's xp multiplier of 0 and `UNIT_STATE_NO_KILL_REWARD` are not
 modelled; (3) no `Spells:Warlock:SoulShards:RequireTap` switch was added: the design's switch would only have let a host skip a retail rule, and
-nothing needs it until a tap source exists.
+the tap rule is retail behaviour, so it stays unconditional.
 
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/SoulShardTests.cs` (10 tests; RED first: 6 failed, the 4 negative cases passed by design).
 
