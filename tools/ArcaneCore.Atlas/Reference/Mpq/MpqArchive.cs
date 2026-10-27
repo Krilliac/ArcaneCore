@@ -96,21 +96,21 @@ public readonly record struct MpqEntry(int HashIndex, uint BlockIndex, ushort Lo
 public sealed class MpqArchive : IDisposable
 {
     /// <summary>Hash entry that never held a file; terminates a search.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:172 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq-internal.h:50
+    // ref: StormLib src/StormLib.h:172 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:50
     public const uint HashEntryFree = 0xFFFFFFFF;
 
     /// <summary>Hash entry that held a file once; does not terminate a search.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:171
+    // ref: StormLib src/StormLib.h:171
     public const uint HashEntryDeleted = 0xFFFFFFFE;
 
     /// <summary>Largest file this reader will materialise (a guard against a corrupt size field).</summary>
     public const long MaxFileBytes = 1L << 30;
 
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:149-150 ; mpq-internal.h:33
+    // ref: StormLib src/StormLib.h:149-150 ; mpq-internal.h:33
     private const uint HeaderMagic = 0x1A51504D;
     private const uint UserDataMagic = 0x1B51504D;
 
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:511-512
+    // ref: StormLib src/StormLib.h:511-512
     private const int HeaderSizeV1 = 0x20;
     private const int HeaderSizeV2 = 0x2C;
 
@@ -118,7 +118,7 @@ public sealed class MpqArchive : IDisposable
     // first MiB, which covers every archive of the client (header at offset 0).
     private const long HeaderSearchLimit = 1 << 20;
 
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:568-570 (hash table below 2^20 entries in the extended format)
+    // ref: StormLib src/StormLib.h:568-570 (hash table below 2^20 entries in the extended format)
     private const uint MaxHashEntries = 1 << 20;
     private const uint MaxBlockEntries = 1 << 22;
 
@@ -146,7 +146,7 @@ public sealed class MpqArchive : IDisposable
         _blocks = blocks;
         VerifyChecksums = verifyChecksums;
 
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:411-414,419 (version 0 offsets are 32-bit and wrap)
+        // ref: StormLib src/SBaseFileTable.cpp:411-414,419 (version 0 offsets are 32-bit and wrap)
         _offsetMask = header.FormatVersion == 0 ? 0xFFFFFFFFL : -1L;
         SectorSize = 0x200 << header.SectorShift;
         _listFile = new Lazy<IReadOnlyList<string>>(LoadListFile, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -162,7 +162,7 @@ public sealed class MpqArchive : IDisposable
     public MpqHeader Header { get; }
 
     /// <summary>Size in bytes of a file sector.</summary>
-    // ref: D:\mangos-unified\dep\StormLib\src\SFileOpenArchive.cpp:505 ; mpq-internal.h:72 (512 * 2^block_size)
+    // ref: StormLib src/SFileOpenArchive.cpp:505 ; mpq-internal.h:72 (512 * 2^block_size)
     public int SectorSize { get; }
 
     /// <summary>Length of the archive file on disk.</summary>
@@ -231,7 +231,7 @@ public sealed class MpqArchive : IDisposable
             return false;
         }
 
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:787-817,819-846 (chain walk: start slot from hash type 0,
+        // ref: StormLib src/SBaseCommon.cpp:787-817,819-846 (chain walk: start slot from hash type 0,
         // match on both name hashes, stop at a free slot, wrap around once)
         uint mask = (uint)_hashes.Length - 1;
         uint start = hash.TableIndex & mask;
@@ -243,7 +243,7 @@ public sealed class MpqArchive : IDisposable
         // an entry of any other locale or platform is never returned. The 1.12.1 client's own Storm.dll is not disassembled
         // here, so this is StormLib's documented behaviour (lane policy), not a verified client fact; the client's archives
         // hold locale 0 and platform 0 only.
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:811-850 (GetHashEntryLocale)
+        // ref: StormLib src/SBaseFileTable.cpp:811-850 (GetHashEntryLocale)
         bool found = false;
         uint index = start;
         do
@@ -295,7 +295,7 @@ public sealed class MpqArchive : IDisposable
         ArgumentNullException.ThrowIfNull(path);
         MpqBlock block = entry.Block;
 
-        // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:223 (incremental patch: raw data begins with a patch header; Cataclysm-era)
+        // ref: StormLib src/StormLib.h:223 (incremental patch: raw data begins with a patch header; Cataclysm-era)
         if ((block.Flags & MpqFileFlags.PatchFile) != 0)
         {
             throw new NotSupportedException($"{Name}: '{path}' is an incremental patch file (flag 0x{MpqFileFlags.PatchFile:X8}).");
@@ -360,15 +360,15 @@ public sealed class MpqArchive : IDisposable
     /// <inheritdoc />
     public void Dispose() => _handle.Dispose();
 
-    // ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:271 (BLOCK_INDEX_MASK)
+    // ref: StormLib src/StormLib.h:271 (BLOCK_INDEX_MASK)
     private const uint BlockIndexMask = 0x0FFFFFFF;
 
-    // en-US LANGID; ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:816-850 (the locale a lookup prefers)
+    // en-US LANGID; ref: StormLib src/SBaseFileTable.cpp:816-850 (the locale a lookup prefers)
     private const ushort PreferredLocale = 0x0409;
 
     private bool IsValidBlock(uint blockIndex)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:784-809 (IsValidHashEntry1: index below the block table,
+        // ref: StormLib src/SBaseFileTable.cpp:784-809 (IsValidHashEntry1: index below the block table,
         // block flagged as existing, data starting inside the file)
         uint index = blockIndex & BlockIndexMask;
         if (blockIndex >= HashEntryDeleted || index >= _blocks.Length)
@@ -390,7 +390,7 @@ public sealed class MpqArchive : IDisposable
 
         byte[] bytes = Read(entry, listFileName);
 
-        // ref: D:\mangos-unified\dep\StormLib\src\SFileListFile.cpp:275-301 (lines end at CR or LF; runs of them are skipped)
+        // ref: StormLib src/SFileListFile.cpp:275-301 (lines end at CR or LF; runs of them are skipped)
         var names = new List<string>();
         int position = 0;
         while (position < bytes.Length)
@@ -422,7 +422,7 @@ public sealed class MpqArchive : IDisposable
     private void ReadStoredSectors(MpqBlock block, uint key, byte[] result)
     {
         // No sector offset table: the sectors are laid out back to back and (if encrypted) each has its own key.
-        // ref: D:\mangos-unified\dep\StormLib\src\SFileReadFile.cpp:99-141 (offset = sector index * sector size; key + sector index)
+        // ref: StormLib src/SFileReadFile.cpp:99-141 (offset = sector index * sector size; key + sector index)
         ReadRaw(block.Offset, result);
         if (!block.IsEncrypted)
         {
@@ -438,7 +438,7 @@ public sealed class MpqArchive : IDisposable
 
     private void ReadSingleUnit(MpqBlock block, uint key, string path, byte[] result)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SFileReadFile.cpp:239-348 (one block of CompressedSize bytes, decrypted with the
+        // ref: StormLib src/SFileReadFile.cpp:239-348 (one block of CompressedSize bytes, decrypted with the
         // plain file key, then decompressed when the compression bits are set)
         int storedSize = checked((int)Math.Min(block.CompressedSize, MaxFileBytes));
         if (!block.IsCompressed && storedSize < result.Length)
@@ -468,7 +468,7 @@ public sealed class MpqArchive : IDisposable
         int sectorCount = (result.Length + sectorSize - 1) / sectorSize;
 
         // The sector offset table: sectorCount + 1 little-endian offsets, plus one more dword when the file has checksums.
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1242-1251,1277-1305 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq.c:627-642,705
+        // ref: StormLib src/SBaseCommon.cpp:1242-1251,1277-1305 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq.c:627-642,705
         int tableBytes = (sectorCount + 1) * 4;
         int readBytes = tableBytes + ((block.Flags & MpqFileFlags.SectorCrc) != 0 ? 4 : 0);
         byte[] tableRaw = new byte[readBytes];
@@ -565,7 +565,7 @@ public sealed class MpqArchive : IDisposable
     /// <param name="path">For messages.</param>
     internal uint[]? LoadChecksums(MpqBlock block, ReadOnlySpan<uint> offsets, int sectorCount, string path)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseCommon.cpp:1073-1079,1405-1450 (the table is run through the multi-method
+        // ref: StormLib src/SBaseCommon.cpp:1073-1079,1405-1450 (the table is run through the multi-method
         // SCompDecompress2 when shorter than sectorCount * 4 bytes, otherwise plain; it is never encrypted)
         if (!MpqSectorTable.TryLocateChecksums(offsets, sectorCount, SectorSize, out uint at, out uint storedSize))
         {
@@ -659,7 +659,7 @@ public sealed class MpqArchive : IDisposable
             long headerPosition = position;
             uint id = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
 
-            // ref: D:\mangos-unified\dep\StormLib\src\SFileOpenArchive.cpp:350-378,92-117 (user data: sizes ordered, header within the file)
+            // ref: StormLib src/SFileOpenArchive.cpp:350-378,92-117 (user data: sizes ordered, header within the file)
             if (id == UserDataMagic && userData is null)
             {
                 var candidate = new MpqUserData(
@@ -694,7 +694,7 @@ public sealed class MpqArchive : IDisposable
 
     private static MpqHeader ParseHeader(ReadOnlySpan<byte> h, long position, long length, MpqUserData? userData, string name)
     {
-        // Layout: ref: D:\mangos-unified\dep\StormLib\src\StormLib.h:538-576 ; D:\refs\vmangos\dep\libmpq\libmpq\mpq-internal.h:67-84
+        // Layout: ref: StormLib src/StormLib.h:538-576 ; vmangos@0e3ff01 dep/libmpq/libmpq/mpq-internal.h:67-84
         uint headerSize = BinaryPrimitives.ReadUInt32LittleEndian(h[4..]);
         uint archiveSize = BinaryPrimitives.ReadUInt32LittleEndian(h[8..]);
         ushort version = BinaryPrimitives.ReadUInt16LittleEndian(h[12..]);
@@ -710,7 +710,7 @@ public sealed class MpqArchive : IDisposable
         if (version == 0)
         {
             // Version 0 has no extension; StormLib masks the sector size to its low byte.
-            // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:495-538
+            // ref: StormLib src/SBaseFileTable.cpp:495-538
             shift &= 0xFF;
         }
         else if (version == 1)
@@ -760,7 +760,7 @@ public sealed class MpqArchive : IDisposable
         int count = (int)header.HashTableEntries;
         byte[] raw = ReadTable(handle, length, header, header.HashTableOffset, (long)count * 16, mask, name, "hash");
 
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:2414-2419 ; libmpq mpq.c:223
+        // ref: StormLib src/SBaseFileTable.cpp:2414-2419 ; libmpq mpq.c:223
         MpqCrypto.Decrypt(raw, MpqCrypto.HashTableKey);
 
         // Entry: u32 nameA, u32 nameB, u16 locale, u8 platform, u8 reserved, u32 blockIndex
@@ -791,7 +791,7 @@ public sealed class MpqArchive : IDisposable
 
         byte[] raw = ReadTable(handle, length, header, header.BlockTableOffset, (long)count * 16, mask, name, "block");
 
-        // ref: D:\mangos-unified\dep\StormLib\src\SBaseFileTable.cpp:2478-2483 ; libmpq mpq.c:242
+        // ref: StormLib src/SBaseFileTable.cpp:2478-2483 ; libmpq mpq.c:242
         MpqCrypto.Decrypt(raw, MpqCrypto.BlockTableKey);
 
         // The optional hi-block table: one u16 per block holding bits 32-47 of the file offset, neither encrypted nor compressed.

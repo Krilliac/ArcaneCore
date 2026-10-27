@@ -67,7 +67,7 @@ public sealed class LookupCommands : ICommandGroup
     [
         new ChatCommand("lookup", AccountSecurity.Moderator, "Syntax: .lookup $subcommand", Children:
         [
-            new ChatCommand("item", AccountSecurity.Moderator, "Syntax: .lookup item $itemname\nLooks up an item by name.", LookupItem, RetailLevel: 2),
+            new ChatCommand("item", AccountSecurity.Moderator, "Syntax: .lookup item $itemname\nLooks up an item by name. From the console, the first use replies that item content is not loaded yet while it loads in the background; run the command again shortly.", LookupItem, RetailLevel: 2),
             new ChatCommand("creature", AccountSecurity.Moderator, "Syntax: .lookup creature $namepart\nLooks up a creature by name.", LookupCreature, RetailLevel: 2),
             new ChatCommand("object", AccountSecurity.Moderator, "Syntax: .lookup object $objname\nLooks up a gameobject by name.", LookupObject, RetailLevel: 2),
             new ChatCommand("tele", AccountSecurity.Moderator, "Syntax: .lookup tele $substring\nSearch and output all teleport locations containing $substring.", LookupTele, RetailLevel: 2),
@@ -83,10 +83,20 @@ public sealed class LookupCommands : ICommandGroup
 
         string needle = args.ToLowerInvariant();
         Player? caller = context.IsConsole ? null : context.Player;
-        IItemTemplateStore? templates = caller?.Inventory.Templates
-            ?? (context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items
-                ? (items.Templates.Count > 0 ? items.Templates : items.EnsureLoadedAsync().GetAwaiter().GetResult())
-                : null);
+        IItemTemplateStore? templates = caller?.Inventory.Templates;
+        if (templates is null && context.Session.Services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items)
+        {
+            if (!items.IsLoaded)
+            {
+                // Console commands run on the world thread: load on the pool and ask for a retry instead of waiting here.
+                items.StartLoadInBackground();
+                context.Reply("Item content is not loaded yet; loading now. Run the command again shortly.");
+                return true;
+            }
+
+            templates = items.Templates;
+        }
+
         if (templates is null || LiveItemTemplateStore.Unwrap(templates) is not { } store)
         {
             context.Reply(GmStrings.NoItemsFound);

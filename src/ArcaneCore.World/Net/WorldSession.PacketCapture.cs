@@ -41,8 +41,8 @@ public sealed partial class WorldSession
 
             try
             {
-                _packetCapture?.Dispose();
-                _packetCapture = new PacketCapture(options.Directory, options.MaxBytes);
+                _packetCapture?.Stop(); // a finished or dead trace: its writer closes the file in the background
+                _packetCapture = new PacketCapture(options.Directory, options.MaxBytes, _logger);
                 message = "Packet capture on: " + _packetCapture.Path;
                 return true;
             }
@@ -65,7 +65,7 @@ public sealed partial class WorldSession
             }
 
             message = "Packet capture off: " + _packetCapture.Path;
-            _packetCapture.Dispose();
+            _packetCapture.Stop(); // the writer drains what is queued and closes the file; the lock is not held for the disk
             _packetCapture = null;
             return true;
         }
@@ -83,18 +83,18 @@ public sealed partial class WorldSession
         // Off (the default): no lock on the per-packet path. A start racing this read only misses one packet.
         if (Volatile.Read(ref _packetCapture) is null) return;
 
-        // PKT writer serializes reads and sends. Never let a diagnostic disk error drop a connection.
+        // Write only queues the record (disk errors surface in the capture's background writer), so the send lock is held briefly.
         lock (_sendLock)
         {
             PacketCapture? capture = _packetCapture;
             if (capture is null) return;
-            try { capture.Write(fromClient, (ushort)opcode, payload); }
-            catch (IOException ex)
+            if (capture.Faulted)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("net.packet-capture", ex); // capture stops here; the connection must not
-                capture.Dispose();
-                _packetCapture = null;
+                _packetCapture = null; // the writer already recorded the disk error; drop the dead trace so .debug capture reports it off
+                return;
             }
+
+            capture.Write(fromClient, (ushort)opcode, payload);
         }
     }
 }

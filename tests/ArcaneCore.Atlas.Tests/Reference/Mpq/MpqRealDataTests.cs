@@ -13,10 +13,10 @@ namespace ArcaneCore.Atlas.Tests.Reference.Mpq;
 /// </summary>
 public sealed class MpqRealDataTests(ITestOutputHelper output)
 {
-    // The archives the StormLib extraction was made from, in its patch order (D:\ArcaneCore-lanes\_wf\atlas-logs\client-extract.log).
+    // The archives the StormLib extraction was made from, in its patch order (atlas-logs\client-extract.log).
     private static readonly string[] ExtractedArchives = ["dbc.MPQ", "terrain.MPQ", "wmo.MPQ", "model.MPQ", "misc.MPQ", "patch.MPQ", "patch-2.MPQ"];
 
-    // D:\ArcaneCore-data\client-dbc-5875\README.txt:13-15: patch.MPQ carries deletion entries for exactly these four DBCs.
+    // client-dbc-5875 README.txt:13-15: patch.MPQ carries deletion entries for exactly these four DBCs.
     private static readonly string[] DeletedDbcs =
         ["CharacterCreateCameras.dbc", "SoundCharacterMacroLines.dbc", "SpellAuraNames.dbc", "SpellEffectNames.dbc"];
 

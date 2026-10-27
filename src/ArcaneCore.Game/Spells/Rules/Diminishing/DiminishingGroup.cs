@@ -23,6 +23,16 @@ public enum DiminishingGroup
 
     /// <summary>Only meant to cap the duration at 10 s in PvP; vmangos never enforces it, so neither does this code.</summary>
     LimitOnly,
+
+    /// <summary>
+    /// The PvP "slowing effect" category of patch 1.4.0, whose only member is Frost Shock. Patch 1.4.0 (2005-04-19) lists Frost Shock as "a slowing
+    /// effect" and Entangling Roots and Frost Nova as "an immobilizing effect", two different categories
+    /// (https://vanilla-wow-archive.fandom.com/wiki/Patch_1.4.0, Shaman, Druid and Mage sections; https://warcraft.wiki.gg/wiki/Patch_1.4.0).
+    /// Frost Shock left diminishing returns only in patch 2.3.0 (https://vanilla-wow-archive.fandom.com/wiki/Diminishing_returns, "Patch changes").
+    /// vmangos files it under DIMINISHING_CONTROL_ROOT (SpellEntry.cpp:333-343) although it quotes the same note;
+    /// <see cref="SpellRuleOptions.FrostShockDiminishesAsRoot"/> reproduces that.
+    /// </summary>
+    Slowing,
 }
 
 /// <summary>Whom a group diminishes (vmangos SharedDefines.h:1339-1345 DiminishingReturnsType).</summary>
@@ -56,7 +66,7 @@ public static class DiminishingGroups
         DiminishingGroup.Sleep or DiminishingGroup.ControlRoot or DiminishingGroup.TriggerRoot or DiminishingGroup.Fear
             or DiminishingGroup.Charm or DiminishingGroup.Polymorph or DiminishingGroup.Silence or DiminishingGroup.Disarm
             or DiminishingGroup.DeathCoil or DiminishingGroup.Freeze or DiminishingGroup.Banish or DiminishingGroup.WarlockFear
-            or DiminishingGroup.Knockout => DiminishingType.Player,
+            or DiminishingGroup.Knockout or DiminishingGroup.Slowing => DiminishingType.Player,
         _ => DiminishingType.None,
     };
 

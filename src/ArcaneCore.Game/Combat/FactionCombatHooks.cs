@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Combat;
 
 /// <summary>
 /// Production <see cref="CombatHooks"/>: a template-only SUBSET of vmangos
-/// <c>WorldObject::IsValidAttackTarget</c> (D:\refs\vmangos\src\game\Objects\Object.cpp:3745-3815). It is not
+/// <c>WorldObject::IsValidAttackTarget</c> (vmangos@0e3ff01 src/game/Objects/Object.cpp:3745-3815). It is not
 /// "vmangos CanAttack"; it reads only the FactionTemplate.dbc rows of the <see cref="FactionTemplateCatalog"/>
 /// the creature and quest areas already load.
 /// <para>

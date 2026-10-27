@@ -62,7 +62,7 @@ public sealed class Group
 
     public string LeaderName { get; internal set; } = string.Empty;
 
-    /// <summary>Last online time of the leader (D:\refs\vmangos\src\game\Group\Group.cpp:1448-1471).</summary>
+    /// <summary>Last online time of the leader (vmangos@0e3ff01 src/game/Group/Group.cpp:1448-1471).</summary>
     internal long LeaderLastOnlineUnixSeconds { get; set; }
 
     public LootMethod LootMethod { get; internal set; } = LootMethod.GroupLoot;

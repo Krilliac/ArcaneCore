@@ -446,7 +446,10 @@ public sealed partial class AlteracValley : Battleground
         }
     }
 
-    /// <summary>vmangos <c>UpdateScore</c> (BattleGroundAV.cpp:774-797): reinforcements change; at most down to 0, no win condition.</summary>
+    /// <summary>
+    /// vmangos <c>UpdateScore</c> (BattleGroundAV.cpp:774-797): reinforcements change; at most down to 0, no win condition. With
+    /// <see cref="BattlegroundOptions.AlteracValleyReinforcementLoss"/> a side that reaches 0 loses at once (cmangos mangos-classic UpdateScore).
+    /// </summary>
     private void UpdateScore(int teamIndex, int points)
     {
         _teamScores[teamIndex] += points;
@@ -455,6 +458,12 @@ public sealed partial class AlteracValley : Battleground
             if (_teamScores[teamIndex] < 1)
             {
                 _teamScores[teamIndex] = 0;
+                if (Options.AlteracValleyReinforcementLoss && Status == BattlegroundStatus.InProgress)
+                {
+                    Host.UpdateWorldState(teamIndex == 1 ? WorldStateHordeScore : WorldStateAllianceScore, 0);
+                    EndBattleground(teamIndex == 0 ? Team.Horde : Team.Alliance);
+                    return;
+                }
             }
             else if (!_informedNearLose[teamIndex] && _teamScores[teamIndex] < NearLoseScore)
             {

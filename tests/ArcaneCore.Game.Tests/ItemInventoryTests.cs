@@ -33,6 +33,23 @@ public sealed class ItemInventoryTests
     }
 
     [Fact]
+    public void AllItemsEnumerator_KeepsAnsweringFalse_AfterItEnded()
+    {
+        var inventory = Wire(new PlayerInventory(ObjectGuid.Player(5), Race.Human, Class.Warrior, 1));
+        inventory.AddStartingItems();
+        PlayerInventory.Enumerator walk = inventory.AllItems.GetEnumerator();
+        int count = 0;
+        while (walk.MoveNext())
+        {
+            count++;
+        }
+
+        Assert.Equal(7, count);
+        Assert.False(walk.MoveNext()); // read items[items.Length] before the fix (IndexOutOfRangeException)
+        Assert.False(walk.MoveNext());
+    }
+
+    [Fact]
     public void Snapshot_IsNullUntilLoaded()
     {
         (Player player, _) = CreatePlayer();

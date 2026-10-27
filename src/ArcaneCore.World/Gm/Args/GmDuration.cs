@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Gm.Args;
 
 /// <summary>
 /// The vmangos time helpers GM commands use for durations (ban length, shutdown delay, uptime):
-/// <c>TimeStringToSecs</c> (D:\refs\vmangos\src\shared\Util.cpp:252-282) and
+/// <c>TimeStringToSecs</c> (vmangos@0e3ff01 src/shared/Util.cpp:252-282) and
 /// <c>secsToTimeString</c> (Util.cpp:197-250).
 /// </summary>
 public static class GmDuration

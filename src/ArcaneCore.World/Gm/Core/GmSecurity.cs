@@ -2,7 +2,7 @@ using ArcaneCore.Kernel.Accounts;
 
 namespace ArcaneCore.World.Gm.Core;
 
-/// <summary>vmangos HasLowerSecurity (D:\refs\vmangos\src\game\Chat\Chat.cpp:1521-1563).</summary>
+/// <summary>vmangos HasLowerSecurity (vmangos@0e3ff01 src/game/Chat/Chat.cpp:1521-1563).</summary>
 public static class GmSecurity
 {
     /// <summary>

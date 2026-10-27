@@ -1,12 +1,12 @@
 # Multithreading and parallel performance: research and plan (2026-10-17)
 
 Status: research and design only. Nothing here is implemented, and no code or configuration changed with this page.
-Requested by Nate on 2026-10-17 ("start deep researching into multi threading and other related techniques and prepare
+Requested by the maintainer on 2026-10-17 ("start deep researching into multi threading and other related techniques and prepare
 to work on that throughout the project"). It fills in the ROADMAP item "Multithreading and parallel performance"
 ([ROADMAP](../ROADMAP.md)). That item asks for "parallel map/instance updates, keeping one writer per map, and moving bot think
 and pathfinding work off the world thread", checked against the references before any code is written.
 
-Source pin: `grok/live-sweep` at `4e9e85b4` (2026-10-17 7:22 PM CT). Live evidence comes from `D:\ArcaneCore-live\logs` on Nate's
+Source pin: `grok/live-sweep` at `4e9e85b4` (2026-10-17 7:22 PM CT). Live evidence comes from `<live-home>\logs` on the maintainer's
 PC (Ryzen 9 9900X3D, 12 cores / 24 threads, 31 GB). Two windows were read: the 24-hour log `world.debug-20261017-001.log`
 (Oct 16 7:00 PM CT to Oct 17 6:59 PM CT) and the current log (7:00 to 7:24 PM CT). Log timestamps are UTC; times on this
 page are CT unless marked otherwise.
@@ -28,9 +28,9 @@ Proposed configuration keys appear in **bold** below, not as code. None of them 
    blocking pauses of **1.2-4.3 s**, gen1 as well as gen2. A gen2 pause of 3.3 s (2:25 PM CT) turned a normal map-1 update
    into 3,326 ms. With Server GC, a collection waits for all of its GC threads. When the CPU is saturated, the slowest GC
    thread sets the pause.
-3. **The live build is a Debug build.** `D:\ArcaneCore-sweep\README.md` deploys with `-c Debug`, and
+3. **The live build is a Debug build.** `<sweep-root>\README.md` deploys with `-c Debug`, and
    `Directory.Build.props` does not override Optimize, so the JIT runs with optimizations disabled. This is the cheapest
-   large CPU win there is (typically 1.5-3x on hot loops; not measured here). The ROADMAP leaves the decision to Nate
+   large CPU win there is (typically 1.5-3x on hot loops; not measured here). The ROADMAP leaves the decision to the maintainer
    ("live stays on Debug"), so this plan only recommends measuring it (§6 W0).
 4. **The references agree on one core design:** *one owner thread per map (or per map partition), and maps run in
    parallel*. TrinityCore and AzerothCore schedule every Map::Update on a MapUpdater pool, controlled by `MapUpdate.Threads`.
@@ -314,7 +314,7 @@ Sources: [Orleans overview](https://learn.microsoft.com/en-us/dotnet/orleans/ove
 | Background (concurrent) GC | On | Keep; the 1-4 s pauses were blocking gen1/gen2 under host starvation ([background GC](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/background-gc)) |
 | `ThreadPool.SetMinThreads` | Read loops, save queues and nav executor share the pool | Raise the minimum modestly (e.g. 2x cores) once map workers exist, so injection delay never stalls IO ([SetMinThreads](https://learn.microsoft.com/en-us/dotnet/api/system.threading.threadpool.setminthreads), [threading config](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/threading)) |
 | NativeAOT | Startup and memory | **No for now.** Hot code reload (`World:HotCode`), reflection and EF Core work against it, and steady-state tick speed would not improve ([NativeAOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)) |
-| Optimized build (Release or Optimize=true) | All CPU-bound code | **Highest return for the effort**; Nate's decision (§10) |
+| Optimized build (Release or Optimize=true) | All CPU-bound code | **Highest return for the effort**; the maintainer's decision (§10) |
 | SQLite WAL + single writer + batched transactions | characters.db | **Yes (W1).** "only one writer can append to the WAL at a time" ([WAL](https://sqlite.org/wal.html)); Microsoft.Data.Sqlite async "will execute synchronously" ([async limitations](https://learn.microsoft.com/en-us/dotnet/standard/data/sqlite/async)). `BEGIN CONCURRENT` is a branch feature, not in stock builds ([begin-concurrent](https://www.sqlite.org/src/doc/begin-concurrent/doc/begin_concurrent.md)) |
 | Detour query objects | Pathfinding on several threads | One query object per thread; the navmesh is shared read-only ([dtNavMeshQuery](https://recastnav.com/classdtNavMeshQuery.html)). ArcaneCore's `[ThreadStatic]` scratch already does this |
 | BenchmarkDotNet | Micro-benchmarks | Already present (`tools/perf/ArcaneCore.Benchmarks`); add map-update and writer benchmarks ([BenchmarkDotNet](https://benchmarkdotnet.org/)) |
@@ -384,9 +384,9 @@ rollout flag, and its first steps. Gains are estimates to be confirmed by §8; t
 - **Goal:** separate code cost from host cost, and get the cheap multipliers.
 - **Steps:**
   1. A/B an optimized build (Release, or Debug with Optimize=true) on the same population with the 200-bot terrain
-     benchmark and live TickMonitor lines. **Needs Nate's go** (ROADMAP: "live stays on Debug").
+     benchmark and live TickMonitor lines. **Needs the maintainer's go** (ROADMAP: "live stays on Debug").
   2. Host isolation while builds and live share the PC: run the world server at AboveNormal priority and builds at
-     BelowNormal, or give the server a CPU set. **Needs Nate's go** ("leave the build setup as is").
+     BelowNormal, or give the server a CPU set. **Needs the maintainer's go** ("leave the build setup as is").
   3. GC experiment matrix (runtimeconfig or env only): current / `DOTNET_GCHeapCount`=6 / `GCHeapAffinitizeRanges` / +
      SustainedLowLatency. Record max pause, p99 tick and working set.
   4. One `dotnet-gcdump` and one `dotnet-trace` CPU sample of the live server to find the LOH contents and the top
@@ -587,7 +587,7 @@ rollback (flag off) tested.
    and quest completions per hour, over at least 1 h per arm with the same bot count. Builds are paused or deprioritized
    during measurement.
 
-CI stays the gate. The box and the PC run only filtered tests (Nate's standing rule).
+CI stays the gate. The box and the PC run only filtered tests (the maintainer's standing rule).
 
 ---
 
@@ -626,7 +626,7 @@ Steps 1 and 2 are independent and can run side by side. Step 3 depends on step 1
 
 ---
 
-## 10. Decisions for Nate
+## 10. Open decisions
 
 1. **Optimized live build.** Measure Release (or Debug plus Optimize=true) on live, or keep Debug? This is the cheapest
    multiplier, and the ROADMAP says it is your call.

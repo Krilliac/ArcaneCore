@@ -87,6 +87,7 @@ public sealed class FeatureLifecycleTests : IDisposable
         // Reported and audited like a module swap.
         Assert.Contains(_reporter.Events, e => e.Lane == HotSwapLane.Feature && e.Action == "detach" && e.Result == HotSwapResult.Applied);
         Assert.Contains(_reporter.Events, e => e.Lane == HotSwapLane.Feature && e.Action == "attach" && e.Result == HotSwapResult.Applied);
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
         string audit = await File.ReadAllTextAsync(_auditPath);
         Assert.Contains("\tfeature\tconsole detach ProbeFeature: applied", audit, StringComparison.Ordinal);
         Assert.Contains("\tfeature\tconsole attach ProbeFeature: applied", audit, StringComparison.Ordinal);

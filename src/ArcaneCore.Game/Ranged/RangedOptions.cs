@@ -10,7 +10,10 @@ public enum AmmoMode
     Infinite = 1,
 }
 
-/// <summary>How the spell range leeway of moving casters is treated (<c>Ranged:Range:Leeway</c>).</summary>
+/// <summary>
+/// How the spell range leeway of moving casters is treated (<c>Ranged:Range:Leeway</c>): every spell range check, the melee
+/// abilities' reach included. White swings follow <c>Combat:MeleeMovementLeeway</c>.
+/// </summary>
 public enum RangeLeewayMode
 {
     /// <summary>Retail 1.12.1 (vmangos Object.cpp GetLeewayBonusRange): +2.66 yd when a mover is involved and both run.</summary>

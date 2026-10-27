@@ -75,6 +75,9 @@ internal sealed class PlayerbotPartyAI
     /// <summary>A resting bot gets up and follows when its master is farther than this.</summary>
     internal const float RestBreakDistance = 30f;
 
+    /// <summary>A kiting party bot ends its steps within this many yards of its master.</summary>
+    internal const float KiteLeashYards = 30f;
+
     /// <summary>How long a dead bot waits for a resurrection (vmangos waits while ShouldAutoRevive says no) before it runs back.</summary>
     internal const long DefaultDeadWaitMs = 120_000;
 
@@ -97,6 +100,7 @@ internal sealed class PlayerbotPartyAI
     private ObjectGuid _tradePartner;
     private bool _tradeCounts; // the window with _tradePartner is worth a TradeCompleted note (set on the partner's accept, read on completion)
     private readonly PlayerbotCombatSpells _combatSpells;
+    private readonly PlayerbotKite _kite;
     private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
@@ -167,6 +171,7 @@ internal sealed class PlayerbotPartyAI
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _combatSpells = new PlayerbotCombatSpells(session);
+        _kite = new PlayerbotKite(session, options, _combatSpells);
         _equipment = equipment ?? new PlayerbotEquipment(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _combatSpells) { AvoidsStrongCreatures = false };
@@ -1593,6 +1598,7 @@ internal sealed class PlayerbotPartyAI
         _followDrop.Reset();
         _recovery.Reset();
         _combatSpells.Reset();
+        _kite.Reset(_session.Player);
         TargetEntry = 0;
     }
 
@@ -1873,6 +1879,24 @@ internal sealed class PlayerbotPartyAI
 
         Goal = PlayerbotGoalKind.Assist;
         TargetEntry = target is Creature creature ? creature.Entry : 0;
+
+        // A hurt ranged bot kites within 30 yards of its master (never in Stay mode: that holds the bot where it is).
+        if (_mode != PlayerbotPartyMode.Stay)
+        {
+            Player? kiteMaster = _session.World.FindOnlinePlayer(_master);
+            Vector3? centre = kiteMaster is not null && ReferenceEquals(kiteMaster.Map, player.Map) ? new Vector3(kiteMaster.X, kiteMaster.Y, kiteMaster.Z) : null;
+            if (_kite.Update(player, target, interval, centre, KiteLeashYards, _risk, grouped: true))
+            {
+                _route = null;
+                _rangedIdleMs = 0;
+                return;
+            }
+        }
+        else
+        {
+            _kite.Reset(player);
+        }
+
         if (_combatSpells.Update(player, target, interval))
         {
             if ((player.Movement.Flags & MovementFlags.MaskMoving) == 0)
@@ -1882,7 +1906,7 @@ internal sealed class PlayerbotPartyAI
         }
 
         float distance = Distance(player, target);
-        float preferredRange = _combatSpells.PreferredRange(player);
+        float preferredRange = _kite.HoldRange(player, _combatSpells.PreferredRange(player));
         bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
         PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(preferredRange, distance,
             player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
@@ -2128,6 +2152,7 @@ internal sealed class PlayerbotPartyAI
         _thinkElapsed = 0;
         TargetEntry = 0;
         _combatSpells.Reset();
+        _kite.Reset(_session.Player);
         _unreachable.Clear();
     }
 

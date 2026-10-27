@@ -10,7 +10,7 @@ The generated [opcode reference](../reference/opcodes.md) combines `WorldOpcode.
 
 ## Format and behavior sources
 
-- PKT 3.1 header and record order: `D:/ArcaneCore-lanes/_refs/csharp-cores/WowPacketParser/WowPacketParser/Loading/BinaryPacketReader.cs`, `ReadHeader` and `Read` (version 0x301, build, locale, 40-byte key slot, Unix start time, start tick, direction, connection index, record tick, optional size, record size, 32-bit opcode). Only format facts were used; no GPL source was copied.
+- PKT 3.1 header and record order: `<lanes-root>/_refs/csharp-cores/WowPacketParser/WowPacketParser/Loading/BinaryPacketReader.cs`, `ReadHeader` and `Read` (version 0x301, build, locale, 40-byte key slot, Unix start time, start tick, direction, connection index, record tick, optional size, record size, 32-bit opcode). Only format facts were used; no GPL source was copied.
 - World header sizes and encryption boundary: [wowdev World Packet](https://wowdev.wiki/World_Packet) and vmangos `src/game/Server/WorldSocket.cpp`, `WorldSocket::handle_input_header` / `WorldSocket::handle_input_payload`. Captures start after the authenticated session is selected; the existing `WorldSession.ReadLoopAsync` and `WorldSession.Send` strip/decrypt or assemble transport headers before calling the trace writer.
 - PKT 3.1 struct field names are independently described by [TrinityCore PacketLog.cpp](https://master.trinitycore.net/da/d3f/packetlog_8cpp_source). This implementation was written against the WPP reader and the local round-trip tests, without copying its source.
 

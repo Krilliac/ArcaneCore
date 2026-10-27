@@ -1120,7 +1120,7 @@ public sealed partial class WorldSession : IPlayerSession
 
             _state = SessionState.Closed;
             Volatile.Write(ref _closedAtTick, Environment.TickCount64);
-            _packetCapture?.Dispose();
+            _packetCapture?.Stop(); // the writer drains in the background; the lock is not held for the disk
             _packetCapture = null;
             _outbound.Writer.TryComplete();
         }

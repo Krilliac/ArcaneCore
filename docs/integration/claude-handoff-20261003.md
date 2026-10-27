@@ -1,6 +1,6 @@
 # Claude handoff: ArcaneCore, 2026-10-03
 
-Nathan asked to finish this wave and move continuation to Claude. Start with the
+The maintainer asked to finish this wave and move continuation to Claude. Start with the
 published candidate [draft PR #11](https://github.com/Krilliac/ArcaneCore/pull/11),
 branch `codex/integrate-feature-fleet-20261003`. All 19 original sources and all
 10 later external sources are incorporated; none is excluded. Three historical
@@ -15,7 +15,7 @@ substitute a source branch's green checks for combined validation.
 
 ## Custody and environment
 
-Local checkout: `C:\Users\Nathan\Documents\Codex\2026-10-02\task-2\ArcaneCore-continuation-20261003`,
+Local checkout: `<continuation-checkout>`,
 work branch `codex/grok-salvage-20261003`. It is published to the canonical
 candidate branch by ordinary fast-forward push. Existing original checkouts,
 worktrees and partial feature histories were preserved. All Codex workers are
@@ -34,13 +34,13 @@ The linked original Claude session was inaccessible read-only:
 was not recovered or operated. Do not assume additional context from that URL.
 
 Read the charter, current README, `docs/integration/seams.md`, global
-`C:\Users\Nathan\.codex\AGENTS.md`, and any current Claude/local instructions.
+the Codex AGENTS.md in the user profile, and any current Claude/local instructions.
 The machine is shared with Sonder/Spark. .NET SDK 10.0.401 and existing EF/Pomelo
 9 dependencies are installed; no paid infrastructure/new security access was
 introduced. Serialize heavy native work. Preflight:
 
 ```powershell
-powershell -NoProfile -File C:\Users\Nathan\.claude\scripts\fleet-preflight.ps1
+powershell -NoProfile -File <claude-home>\scripts\fleet-preflight.ps1
 git status --short
 git rev-parse HEAD
 git log -12 --format='%H %P %s'
@@ -335,7 +335,7 @@ source branch's own result is still not combined proof, and none of it involved 
 
 ## Client/session context
 
-Nathan deferred computer use. This wave did not launch/control a real client,
+The maintainer deferred computer use. This wave did not launch/control a real client,
 acceptance server, alter realmlist, or inspect client/run directories. The supplied
 baseline report belongs to his selected file-access session, at server pin
 `f8ae6e8b5f805e94f145194a82f80e876fa2dec3`, build5875. It reports realm/auth,
@@ -345,7 +345,7 @@ saved-position restoration and restart/relog. Those checks remain pending.
 
 The separate quest UI handoff remains pinned to
 `248accc71acbe70144b92c33761d8f9ae0ab07cc`; publishing did not switch that selected
-session. Continue only when Nathan resumes the intended client session. Test
+session. Continue only when the maintainer resumes the intended client session. Test
 NPC greeting/accept/authoritative combat/reward UI, durable reward relog/restart,
 two-player visibility/aura ownership, terrain/collision, services, economy and
 instance entry/reset behavior. Keep the old report's pin distinct from this

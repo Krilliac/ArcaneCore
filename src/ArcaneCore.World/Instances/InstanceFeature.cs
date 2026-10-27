@@ -14,6 +14,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
@@ -155,7 +156,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             }
         }
 
-        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>());
+        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
         _writes.FatalFailure += error =>
         {
             FaultLedger.Shared.Record("instance.write-queue-fatal", error, terminating: true);

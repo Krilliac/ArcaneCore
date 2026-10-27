@@ -14,6 +14,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -60,7 +61,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
-        _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger, services.GetService<ShutdownDrain>()?.Features);
         _routeWrites.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("npc-services.route-writes-fatal", ex);

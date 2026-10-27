@@ -45,7 +45,7 @@ public sealed record NavPolyId(TileKey? Tile, int DetourX, int DetourY, int Laye
 /// </summary>
 public sealed class NavQueryFilter(NavTerrain include, NavTerrain exclude, bool allowOffMesh) : IDtQueryFilter
 {
-    // ref: D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMeshQuery.cpp:72-77 (dtQueryFilter::passFilter: (poly->flags & includeFlags) != 0 &&
+    // ref: vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMeshQuery.cpp:72-77 (dtQueryFilter::passFilter: (poly->flags & includeFlags) != 0 &&
     // (poly->flags & excludeFlags) == 0) and src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshTile.cs:554-558 (the server also refuses off-mesh polygons).
     // vmangos never sets an area cost (grep setAreaCost over src/game and contrib/mmap/src finds none), so every area costs 1.0.
 
@@ -162,7 +162,7 @@ public static class NavQuery
         RcVec3f startRc = NavGeometry.ToRecast(start);
         RcVec3f endRc = NavGeometry.ToRecast(end);
 
-        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1101-1110 and D:\refs\vmangos@0e3ff01\src\game\Maps\PathFinder.cpp:99-105, 695-706 (HaveTiles:
+        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1101-1110 and vmangos@0e3ff01 src/game/Maps/PathFinder.cpp:99-105, 695-706 (HaveTiles:
         // calcTileLoc then getTileAt(tx, ty, 0)): an end on a tile that is not loaded is a straight line typed Normal | NotUsingPath.
         if (!HaveTileAt(mesh, startRc) || !HaveTileAt(mesh, endRc))
         {
@@ -175,7 +175,7 @@ public static class NavQuery
         NavLocate? endLocated = Locate(view, query, filter, endRc, options.EndTolerance, options.WideEndSearch);
         if (startLocated is null || endLocated is null)
         {
-            // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1126-1131 and D:\refs\vmangos@0e3ff01\src\game\Maps\PathFinder.cpp:191-198: an end not on the usable mesh is NoPath.
+            // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1126-1131 and vmangos@0e3ff01 src/game/Maps/PathFinder.cpp:191-198: an end not on the usable mesh is NoPath.
             return Straight(start, end, PathType.NoPath, "locate-failed", startLocated, endLocated);
         }
 
@@ -193,7 +193,7 @@ public static class NavQuery
         }
 
         // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshQuery.cs:332-376 (FindWorldPath): the goal of an incomplete corridor is the
-        // closest point of its last polygon to the end; the corners are Detour's straight path with options 0 (D:\refs\vmangos@0e3ff01\src\game\Maps\PathFinder.cpp:406-415
+        // closest point of its last polygon to the end; the corners are Detour's straight path with options 0 (vmangos@0e3ff01 src/game/Maps/PathFinder.cpp:406-415
         // passes no options); the first point is the caller's start, and a one-corner path gets the goal appended.
         RcVec3f goal = endLocated.Point;
         if (!complete)
@@ -312,7 +312,7 @@ public static class NavQuery
 
     private static NavLocate? Locate(NavMapView view, DtNavMeshQuery query, NavQueryFilter filter, RcVec3f point, float tolerance, bool wide)
     {
-        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1171-1205 (TryLocate) and D:\refs\vmangos@0e3ff01\src\game\Maps\PathFinder.cpp:128-141 (FindWalkPoly) / :209 (farFromPoly).
+        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1171-1205 (TryLocate) and vmangos@0e3ff01 src/game/Maps/PathFinder.cpp:128-141 (FindWalkPoly) / :209 (farFromPoly).
         if (tolerance > 0)
         {
             return LocateWithTolerance(view, query, filter, point, tolerance);
@@ -330,7 +330,7 @@ public static class NavQuery
             return found;
         }
 
-        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1201-1204 (cmangos FarPolySearchBound, D:\refs\mangos-classic@8ec338a\src\game\MotionGenerators\PathFinder.h:59).
+        // ref: src/ArcaneCore.Game/Maps/Collision/MMaps/NavMeshPathfinder.cs:1201-1204 (cmangos FarPolySearchBound, mangos-classic src/game/MotionGenerators/PathFinder.h:59).
         return TryBox(view, query, filter, point, Rc(NavMeshPathfinder.WideExtents), "wide", far: true);
     }
 

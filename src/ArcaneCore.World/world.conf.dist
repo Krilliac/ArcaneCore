@@ -1335,6 +1335,21 @@ Bans.RevokeSessionKeyOnBan = false
 #----------------------------------------------------------------------------
 
 #
+#    Battleground.AlteracValleyReinforcementLoss
+#        Description: End Alterac Valley in favour of the other side when a side's reinforcements
+#                     reach 0 (the patch 2.3.0 rule; cmangos mangos-classic BattleGroundAV.cpp
+#                     UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the
+#                     match, and vmangos removed the reinforcement win (BattleGroundAV.cpp:782-787).
+#                     The reinforcements are counted either way.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#battleground
+#
+Battleground.AlteracValleyReinforcementLoss = false
+
+#
 #    Battleground.CastDeserter
 #        Description: Cast Deserter on a player who leaves a running or starting match (vmangos
 #                     Battleground.CastDeserter, World.cpp:781, mangosd.conf.dist.in:2929, default
@@ -1893,6 +1908,26 @@ Cluster.Worker.WorldSchemaVersion = 1
 #----------------------------------------------------------------------------
 
 #
+#    Combat.AuraCritSuppressionPercent
+#        Description: Percent a player's crit from auras (stances, talents, crit on gear) is cut
+#                     against a creature three or more levels above it, on top of the weapon-skill
+#                     term; never more than the aura crit itself. Default 1.8, retail: Blizzard
+#                     confirmed such a modifier exists in 1.12 and on its Classic servers without
+#                     giving its size (Aggrend, 2019-07-10,
+#                     https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414), and 1.8
+#                     is the Classic combat-log estimate
+#                     (https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression). 0 turns
+#                     the cut off (vmangos and cmangos-classic, which only apply the weapon-skill
+#                     term). Melee and ranged attacks and abilities; spells are not affected.
+#        Type: float
+#        Default: 1.8
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#combat
+#
+Combat.AuraCritSuppressionPercent = 1.8
+
+#
 #    Combat.CastResetsMeleeSwing
 #        Description: A non-triggered cast of a spell whose interrupt flags carry
 #                     SPELL_INTERRUPT_FLAG_COMBAT (0x08), without Ex2 0x20000, restarts the
@@ -1937,6 +1972,27 @@ Combat.CastingConsumesSwing = false
 #        Docs: docs/reference/configuration.md#combat
 #
 Combat.MeleeCastingBlocksSwing = true
+
+#
+#    Combat.MeleeMovementLeeway
+#        Description: Whether a white swing's reach grows by the 2.66 yd movement leeway when a
+#                     player is involved and both units move without walking (vmangos
+#                     Unit::GetCombatReachToTarget, Unit.cpp:10374-10394, and
+#                     GetLeewayBonusRangeForTargets, Object.cpp:1890-1897). Default true, retail:
+#                     Blizzard ruled "Melee leeway is working as intended in both PvE and PvP" on
+#                     its 1.12-reference WoW Classic servers and "for players with low latency, the
+#                     state of melee leeway is how they would have experienced the game in 2006"
+#                     (Kaivax, WoW Classic "Not A Bug" list,
+#                     https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23).
+#                     False is the deviation without it. The melee abilities' leeway follows
+#                     Ranged:Range:Leeway with every other spell range.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#combat
+#
+Combat.MeleeMovementLeeway = true
 
 #
 #    Combat.RateEnergy
@@ -3440,6 +3496,43 @@ Diagnostics.BeepOnStartup = false
 Diagnostics.BreakOnInvariant = false
 
 #
+#    Diagnostics.CrashDialog
+#        Description: Show a dialog (a Win32 message box) when the process is about to end because
+#                     of an unhandled exception, an unobserved task exception under an
+#                     OnUnobservedTask policy that terminates, or a world tick hang the watchdog
+#                     ends. It names the exception, its message and full stack with inner
+#                     exceptions, the daemon and version, thread, time, fault-ledger site and
+#                     signature, and the crash report file (a crash-report.*.txt file written next
+#                     to the daemon), crash journal and log file. It appears after the crash is
+#                     logged and recorded, and the exit policy runs when it is closed. Only a
+#                     Windows console session with no redirected standard stream, outside CI, opens
+#                     one; a service, test run, redirected or non-Windows process is unaffected.
+#                     Default off: an unattended process must never wait on a dialog.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDialog = false
+
+#
+#    Diagnostics.FaultDialog
+#        Description: Also show a dialog the first time each fault signature is caught and survived
+#                     (the fault ledger, .server faults), on a background thread so the faulting
+#                     thread never waits, at most one open at a time (faults while one is open are
+#                     only logged). Needs the same interactive Windows console session as
+#                     CrashDialog; takes effect once the host has started. Default off: a fault
+#                     storm of new signatures still means one box after another.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultDialog = false
+
+#
 #    Diagnostics.FaultLogLimit
 #        Description: How many occurrences of one fault (an exception type thrown from one place,
 #                     caught at one of the server's catch-and-log sites) are logged in full. After
@@ -3576,7 +3669,9 @@ Diagnostics.PacketCapture.Enabled = false
 #
 #    Diagnostics.PacketCapture.MaxBytes
 #        Description: Maximum bytes in one trace, including its header; a full trace stops
-#                     automatically.
+#                     automatically. A trace also stops when the disk writer falls 8192 records
+#                     behind. Records are written by a background writer and the file is finished
+#                     asynchronously after a stop; the server drains open traces at shutdown.
 #        Type: long
 #        Default: 67108864
 #        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
@@ -3921,10 +4016,13 @@ Economy.ReturnExpiredMoneyOnlyMail = true
 #                     commit is answered with its ordinary failure reply (auction DATABASE error,
 #                     mail INTERNAL_ERROR, trade cancelled), one whose outcome cannot be read kicks
 #                     its actors. Operational, not a gameplay rule: 15 is the shipped value, three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the actors' own saves, the settlement transaction), so one
-#                     locked write ahead of it cannot use up the budget. Valid range 1-300.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the actors' own saves, the settlement transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4051,11 +4149,13 @@ Forms.ResetFistAttackTimeOnFormLoss = false
 #                     save, the instance write drain, the loot transaction) before it is abandoned:
 #                     a take that never started is refused to the client as usual, one whose outcome
 #                     cannot be read kicks the taker. Operational, not a gameplay rule: 15 is the
-#                     shipped value, three lock waits of the shipped 5 s
+#                     shipped value, three typical lock waits of the shipped 5 s
 #                     Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already
 #                     in flight on the character save queue's one consumer, the taker's own save,
 #                     the loot transaction), so one locked write ahead of it cannot use up the
-#                     budget. Valid range 1-300.
+#                     budget. A write-gate wait is not capped at one bound: it gives up after 5 s
+#                     without a hand-off or 20 s of active waiting, but the settlement's budget
+#                     token ends any wait it is passed to earlier. Valid range 1-300.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -6669,12 +6769,14 @@ Quests.RewardMode = AllSupported
 #        Description: Seconds one reward settlement may take end to end (save, drains, the reward
 #                     transaction) before it is abandoned and reconciled from the stored rows.
 #                     Operational, not a gameplay rule: 15 is the shipped value. It covers three
-#                     lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an
-#                     unrelated character's write already in flight on the character save queue's
-#                     one consumer, the settlement's own save, the reward transaction), so one
-#                     locked write ahead of it cannot use up the budget. A test that deliberately
-#                     holds a settlement open raises it so its observation window is not a race
-#                     against this deadline.
+#                     typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row
+#                     (an unrelated character's write already in flight on the character save
+#                     queue's one consumer, the settlement's own save, the reward transaction), so
+#                     one locked write ahead of it cannot use up the budget. A write-gate wait is
+#                     not capped at one bound: it gives up after 5 s without a hand-off or 20 s of
+#                     active waiting, but the settlement's budget token ends any wait it is passed
+#                     to earlier. A test that deliberately holds a settlement open raises it so its
+#                     observation window is not a race against this deadline.
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -7203,6 +7305,19 @@ Skills.ChanceOrange = 100
 Skills.ChanceYellow = 75
 
 #
+#    Skills.CraftingChanceCurve
+#        Description: Opt-in, off by default: crafting skill-ups between a recipe's yellow and grey
+#                     levels use the player-measured sliding chance (grey - skill) / (grey - yellow)
+#                     instead of the yellow and green chances (not a datamined retail rule).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#skills
+#
+Skills.CraftingChanceCurve = false
+
+#
 #    Skills.DbcPaths
 #        Description: The four DBC paths, in the order SkillLine, SkillRaceClassInfo, SkillTiers,
 #                     SkillLineAbility.
@@ -7449,7 +7564,10 @@ SpellRules.CreatureSpellCrit = false
 #
 #    SpellRules.DiminishingResetMs
 #        Description: Milliseconds after the last aura of a diminishing group ended before the level
-#                     resets (vmangos Unit::GetDiminishing, Unit.cpp:7630: 15 seconds).
+#                     resets. Retail: 15 seconds, patch 1.4.0 (2005-04-19): "Spells must be used on
+#                     the same target within 15 seconds of the *end* of the duration in order to be
+#                     diminished" (https://vanilla-wow-archive.fandom.com/wiki/Patch_1.4.0, PvP
+#                     section); vmangos Unit::GetDiminishing, Unit.cpp:7630, agrees.
 #        Type: uint
 #        Default: 15000
 #        Allowed: a whole number, 0 to 4294967295
@@ -7457,6 +7575,23 @@ SpellRules.CreatureSpellCrit = false
 #        Docs: docs/reference/configuration.md#spellrules
 #
 SpellRules.DiminishingResetMs = 15000
+
+#
+#    SpellRules.DiminishingResetSweepMs
+#        Description: Period in milliseconds of a reset sweep for diminishing returns. Retail: 0,
+#                     the level resets as soon as DiminishingResetMs has passed (patch 1.4.0). A
+#                     positive value (for example 5000) reproduces the "resets between 15 and 20
+#                     seconds" reading reported for Classic Era
+#                     (https://warcraft.wiki.gg/wiki/Diminishing_returns, Classic section, and
+#                     https://vanilla-wow-archive.fandom.com/wiki/Diminishing_returns: "it checks
+#                     every 5 seconds"); neither page cites a Blizzard source.
+#        Type: uint
+#        Default: 0
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.DiminishingResetSweepMs = 0
 
 #
 #    SpellRules.DiminishingReturns
@@ -7469,6 +7604,22 @@ SpellRules.DiminishingResetMs = 15000
 #        Docs: docs/reference/configuration.md#spellrules
 #
 SpellRules.DiminishingReturns = true
+
+#
+#    SpellRules.FrostShockDiminishesAsRoot
+#        Description: Whether Frost Shock shares the controlled-root diminishing group with Frost
+#                     Nova and Entangling Roots. Retail: false, its own "slowing effect" group
+#                     (patch 1.4.0, Shaman: "This is considered a slowing effect", against "an
+#                     immobilizing effect" for the roots;
+#                     https://vanilla-wow-archive.fandom.com/wiki/Patch_1.4.0). true reproduces
+#                     vmangos (SpellEntry.cpp:333-343, DIMINISHING_CONTROL_ROOT).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.FrostShockDiminishesAsRoot = false
 
 #
 #    SpellRules.IgnoreHolyResistance
@@ -7525,6 +7676,61 @@ SpellRules.MagicHitFloorPercent = 22
 #        Docs: docs/reference/configuration.md#spellrules
 #
 # SpellRules.ResistTablePath =
+
+#
+#    SpellRules.SpellBatchAuraExpiry
+#        Description: With SpellBatchWindowMs set: a timed aura that runs out stays until the first
+#                     update of the next batch (channel auras excepted).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchAuraExpiry = true
+
+#
+#    SpellRules.SpellBatchCreatures
+#        Description: With SpellBatchWindowMs set: creature (pet, totem) casts are batched like
+#                     players' (retail: every unit's messages went through the same tick).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchCreatures = true
+
+#
+#    SpellRules.SpellBatchMelee
+#        Description: With SpellBatchWindowMs set: white melee swings are held and resolve at the
+#                     same window boundaries (MapCombat.SwingBatch.cs).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchMelee = true
+
+#
+#    SpellRules.SpellBatchWindowMs
+#        Description: Spell batch window in ms (SpellSystem.Batching.cs): a player's cast that goes
+#                     off is held until the window closes and then resolves with every other cast of
+#                     that window, so two players who kill, charge or interrupt each other in one
+#                     window both get their action. Retail 1.12 batched (Kaivax, Blizzard, 2019,
+#                     https://us.forums.blizzard.com/en/wow/t/137118/1) and Blizzard's Classic
+#                     servers used 400 ms until 1.13.7
+#                     (https://us.forums.blizzard.com/en/wow/t/838945). Opt-in while it is verified
+#                     against a client: 0 (default) resolves every cast at once; 400 is the retail
+#                     value.
+#        Type: uint
+#        Default: 0
+#        Allowed: a whole number, 0 to 4294967295
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchWindowMs = 0
 
 #
 #    SpellRules.WorldBossLevelDiff
@@ -8771,7 +8977,8 @@ World.Respawn.Dynamic.ScalePerPlayer = 0.1
 #        Description: The character save queue warns while its oldest waiting snapshot has waited
 #                     this many milliseconds. 0 disables the age check. Default 5000, the characters
 #                     database's write bound (Database:SqliteWriteTimeoutMs): a snapshot that old
-#                     has waited out at least one locked write (docs/areas/persistence.md).
+#                     has waited out at least one write-gate bound (5 s without a hand-off; a moving
+#                     queue may keep a waiter up to 20 s) (docs/areas/persistence.md).
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -10844,12 +11051,12 @@ World.GmCommands.RetailLevels = true
 
 #
 #    World.GmCommands.SecurityMap
-#        Description: The retail account level (vmangos AccountTypes,
-#                     D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1,
-#                     TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6,
-#                     CONSOLE 7) each stored AccountSecurity stands for. ArcaneCore stores four
-#                     levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored
-#                     level onto them (an operator may remap, e.g. GameMaster=4).
+#        Description: The retail account level (vmangos AccountTypes, vmangos@0e3ff01
+#                     src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER
+#                     3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored
+#                     AccountSecurity stands for. ArcaneCore stores four levels, so the retail
+#                     levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an
+#                     operator may remap, e.g. GameMaster=4).
 #        Type: Dictionary<AccountSecurity, byte>
 #        Default: Player = 0; Moderator = 1; GameMaster = 3; Administrator = 6
 #        Allowed: a map: one key per entry name; each value is a whole number, 0 to 255
@@ -13439,6 +13646,50 @@ World.Playerbots.Chat.Voice.TradeRepeatSeconds = 900
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ClientFidelity = Lean
+
+#
+#    World.Playerbots.Combat.Kite.Enabled
+#        Description: Kite at all (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.Enabled = true
+
+#
+#    World.Playerbots.Combat.Kite.HealthPct
+#        Description: A bot kites once its health falls to this percentage (10..95).
+#        Type: float
+#        Default: 50
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.HealthPct = 50
+
+#
+#    World.Playerbots.Combat.Kite.MaxStepsPerFight
+#        Description: Steps one fight may use before the bot stops kiting and fights on (1..32).
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.MaxStepsPerFight = 8
+
+#
+#    World.Playerbots.Combat.Kite.StepYards
+#        Description: The longest single step away from the pursuer, in yards (4..20).
+#        Type: float
+#        Default: 10
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Combat.Kite.StepYards = 10
 
 #
 #    World.Playerbots.CombatLaneShare
@@ -18925,7 +19176,7 @@ World.Social.MaxJoinedChannels = 0
 #
 #    World.Social.OfflineLeaderDelaySeconds
 #        Description: Seconds before an offline group leader yields to an online member. Zero
-#                     disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072
+#                     disables the handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072
 #                     defaults to 300 seconds.
 #        Type: int
 #        Default: 300

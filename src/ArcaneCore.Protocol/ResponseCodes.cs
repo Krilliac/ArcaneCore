@@ -3,7 +3,7 @@ namespace ArcaneCore.Protocol;
 /// <summary>
 /// Character-screen result codes (1 byte), the client's response-code table. Every value below was checked against the
 /// owned 1.12.1 client: its glue screen maps code N to the N-th GlueStrings key of one 83-entry table (codes 0x00-0x52;
-/// anything else is shown as "(N)"). See D:/WoW-RE-Research/protocol/client-error-codes.md and docs/areas/client-errors.md.
+/// anything else is shown as "(N)"). See WoW-RE-Research protocol/client-error-codes.md and docs/areas/client-errors.md.
 /// gtker/wow_messages world_result.wowm disagrees on the CHAR_NAME tail (it puts CHAR_NAME_SUCCESS at 0x50); the binary
 /// has CHAR_NAME_CONSECUTIVE_SPACES at 0x50 and CHAR_NAME_SUCCESS at 0x52, as vmangos SharedDefines.h does. The binary wins.
 /// </summary>

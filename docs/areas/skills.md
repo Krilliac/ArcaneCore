@@ -5,7 +5,7 @@ configuration, collisions) is in [docs/integration/skills.md](../integration/ski
 
 Everything here follows the standing directive: as close to vanilla 1.12.1 as possible, taken from the
 references, with every deviation behind a configuration option or listed below. References, in order of
-authority: **vmangos** (`D:\refs\vmangos`, only the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD` blocks),
+authority: **vmangos** (`<refs-root>\vmangos`, only the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD` blocks),
 **mangos-classic**, **gtker wow_messages**, **classic-db** (read only, ids and numbers as test fixtures, nothing
 copied). Each piece of code cites file:line.
 
