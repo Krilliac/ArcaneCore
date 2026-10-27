@@ -1008,11 +1008,114 @@ internal static partial class PlayerbotShip
     internal static Vector3 ResolveDockTarget(Map map, Vector3 portPos, Vector3 toward)
     {
         map.Collision.LoadTilesOnDemand(portPos.X, portPos.Y);
-        if (map.Collision.MeshPoints is null || OnDryDockMesh(map, portPos))
+        if (map.Collision.MeshPoints is not { } mesh)
             return portPos;
 
+        DockCache cache = DockCaches.GetValue(mesh, static _ => new DockCache());
+        var key = new DockKey(map.MapId, BitConverter.SingleToInt32Bits(portPos.X), BitConverter.SingleToInt32Bits(portPos.Y),
+            BitConverter.SingleToInt32Bits(portPos.Z));
+        if (!cache.TryGet(key, Environment.TickCount64, out DockEntry? entry))
+        {
+            t_dockPending = false;
+            Interlocked.Increment(ref s_dockComputes[0]);
+            entry = ComputeDock(map, portPos);
+            if (!t_dockPending)
+                cache.Store(key, entry, Environment.TickCount64 + DockCacheTtlMs);
+        }
+
+        if (entry.PortIsDock)
+            return portPos;
+
+        // The first ring with any candidate answers; among its candidates (in direction order) the one nearest `toward`, the first on a tie.
         Vector3? best = null;
         float bestDist = float.PositiveInfinity;
+        foreach (Vector3 candidate in entry.Candidates)
+        {
+            float dist = Flat(candidate, toward);
+            if (dist < bestDist)
+            {
+                best = candidate;
+                bestDist = dist;
+            }
+        }
+
+        return best ?? portPos;
+    }
+
+    /// <summary>How long a cached dock answer is kept: the ring reads terrain, models and liquid of tiles beside the port's, which may load later.</summary>
+    internal const long DockCacheTtlMs = 60_000;
+
+    /// <summary>The most ports one cache keeps (a world has a dozen).</summary>
+    private const int DockCacheMaxEntries = 256;
+
+    [ThreadStatic] private static bool t_dockPending;
+    private static readonly long[] s_dockComputes = new long[1]; // Interlocked
+
+    /// <summary>The dock searches run in full since the process started (test seam: a cache hit adds none).</summary>
+    internal static long DockComputes => Interlocked.Read(ref s_dockComputes[0]);
+
+    private readonly record struct DockKey(uint MapId, int X, int Y, int Z);
+
+    /// <summary>
+    /// A dock answer independent of the asker: the port is itself a dock, or the candidates of the first ring that has any, in direction order.
+    /// Immutable once built.
+    /// </summary>
+    private sealed class DockEntry(bool portIsDock, Vector3[] candidates, long expiresMs)
+    {
+        public bool PortIsDock { get; } = portIsDock;
+        public Vector3[] Candidates { get; } = candidates;
+        public long ExpiresMs { get; } = expiresMs;
+    }
+
+    /// <summary>
+    /// The dock answers of one navigation mesh, keyed by (map, port position). It hangs off the mesh object (<see cref="ConditionalWeakTable{TKey,TValue}"/>),
+    /// so installing another mesh starts empty and the old cache goes with its mesh. Read and written from any thread under its lock.
+    /// </summary>
+    private sealed class DockCache
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<DockKey, DockEntry> _entries = [];
+
+        public bool TryGet(DockKey key, long nowMs, out DockEntry entry)
+        {
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(key, out DockEntry? found) && nowMs < found.ExpiresMs)
+                {
+                    entry = found;
+                    return true;
+                }
+            }
+
+            entry = null!;
+            return false;
+        }
+
+        public void Store(DockKey key, DockEntry entry, long expiresMs)
+        {
+            lock (_gate)
+            {
+                if (_entries.Count >= DockCacheMaxEntries && !_entries.ContainsKey(key))
+                    _entries.Clear();
+                _entries[key] = new DockEntry(entry.PortIsDock, entry.Candidates, expiresMs);
+            }
+        }
+    }
+
+    private static readonly ConditionalWeakTable<object, DockCache> DockCaches = [];
+
+    /// <summary>Forget every cached dock answer of every mesh (a transport schedule or route data reload; tests).</summary>
+    internal static void InvalidateDockCache()
+    {
+        DockCaches.Clear();
+    }
+
+    private static DockEntry ComputeDock(Map map, Vector3 portPos)
+    {
+        if (OnDryDockMesh(map, portPos))
+            return new DockEntry(true, [], 0);
+
+        var found = new List<Vector3>(StepOffDirections);
         foreach (float radius in DockSearchRadiiYards)
         {
             for (int i = 0; i < StepOffDirections; i++)
@@ -1020,21 +1123,15 @@ internal static partial class PlayerbotShip
                 float angle = i * MathF.Tau / StepOffDirections;
                 float x = portPos.X + (MathF.Cos(angle) * radius);
                 float y = portPos.Y + (MathF.Sin(angle) * radius);
-                if (!TryResolveDockPoint(map, x, y, portPos, out Vector3 candidate))
-                    continue;
-                float dist = Flat(candidate, toward);
-                if (dist < bestDist)
-                {
-                    best = candidate;
-                    bestDist = dist;
-                }
+                if (TryResolveDockPoint(map, x, y, portPos, out Vector3 candidate))
+                    found.Add(candidate);
             }
 
-            if (best is { } found)
-                return found;
+            if (found.Count > 0)
+                break;
         }
 
-        return portPos;
+        return new DockEntry(false, found.ToArray(), 0);
     }
 
     private static bool TryResolveDockPoint(Map map, float x, float y, Vector3 portPos, out Vector3 point)
@@ -1064,6 +1161,7 @@ internal static partial class PlayerbotShip
                 LoadTiles = true,
                 NonBlockingTiles = true, // a tile not in yet is read on the pool; the probe is then no point (TilesPending) and the next think asks again
             });
+            if ((res.Type & PathType.TilesPending) != 0) t_dockPending = true;
             if ((res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
                 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards
                 && (res.Points.Count == 0 || MathF.Abs(res.End.Z - probe.Z) <= 5f))
@@ -1103,6 +1201,7 @@ internal static partial class PlayerbotShip
             LoadTiles = true,
             NonBlockingTiles = true, // pending is not dry mesh: the dock resolves on a later think, once the tile is in
         });
+        if ((res.Type & PathType.TilesPending) != 0) t_dockPending = true;
         return (res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
             && (res.Points.Count == 0 || MathF.Abs(res.End.Z - point.Z) <= 5f)
             && !PlayerbotNavigation.IsPointOnMeshFragment(map, res.Points.Count > 0 ? res.End : point);
