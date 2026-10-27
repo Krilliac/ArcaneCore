@@ -188,7 +188,7 @@ public sealed partial class SpellSystem
         }
 
         bool channel = cast.State == SpellCastState.Casting;
-        bool generic = cast.State == SpellCastState.Preparing && cast.CastTime > 0;
+        bool generic = cast.State == SpellCastState.Preparing && cast.CastTime > 0 && !cast.BatchedGo; // a cast held in the spell batch is committed
         if ((!channel && !generic) || cast.Spell.PreventionType != SpellConstants.PreventionTypeSilence)
         {
             return;

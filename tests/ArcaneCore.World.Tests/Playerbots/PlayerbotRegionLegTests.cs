@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
@@ -99,6 +100,197 @@ public sealed class PlayerbotRegionLegTests : IDisposable
         Assert.True(route is not null, "the region graph joins the two sides but the plan was refused");
         Vector3 end = route!.Points[^1];
         Assert.True(end.Y > start.Y + 30f, $"the route ends at {end}, against the wall instead of toward the door");
+    }
+
+    /// <summary>
+    /// A far goal planned through a waiting wrapper: the region search is a miss, runs off the think (the plan is pending), and the leg is
+    /// planned on a later think from the finished answer. The next leg between the same regions is a cache hit: no search.
+    /// </summary>
+    [Fact]
+    public async Task ARegionRouteMiss_RunsOffTheThink_AndTheNextLegIsACacheHit()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        await world.PlaceAsync(Start);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        Assert.Equal(0, cache.Searches);
+
+        var wait = new TileWait();
+        uint now = 1_000;
+        PlayerbotRoute? route = null;
+        PlanOutcome outcome = await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now, out route));
+        Assert.Equal(PlanOutcome.Pending, outcome);
+        Assert.Null(route);
+
+        for (int tries = 0; tries < 400 && outcome == PlanOutcome.Pending; tries++)
+        {
+            await Task.Delay(25);
+            now += 25;
+            outcome = await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now, out route));
+        }
+
+        Assert.Equal(PlanOutcome.Route, outcome);
+        Assert.NotNull(route);
+        Assert.Equal(1, cache.Searches);
+        Assert.Equal(1, cache.Count);
+
+        // The same pair again: a hit, answered on the first ask.
+        Assert.Equal(PlanOutcome.Route, await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, Goal, Options, ref wait, now + 25, out route)));
+        Assert.Equal(1, cache.Searches);
+    }
+
+    /// <summary>
+    /// A region route that stays unanswered (here: marked in flight by a search that was lost) is not waited for for ever: past the caller's
+    /// wait bound the ask is searched on the asking thread and answered.
+    /// </summary>
+    [Fact]
+    public async Task AnUnansweredRegionRoute_IsSearchedOnTheAskingThread_PastTheWaitBound()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        cache.MarkAsked(from, to, 1_000); // the pool never answers
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 1_000, maxWaitMs: 30_000, budget: budget));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out _, out _, wallMs: 30_999, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(0, cache.Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus status, out _, wallMs: 31_001, maxWaitMs: 30_000, budget: budget));
+        Assert.NotEqual(NavRegionRouteStatus.Exhausted, status);
+        Assert.Equal(1, cache.Searches);
+    }
+
+    /// <summary>
+    /// The searches the asking thread runs for lost work are bounded: one per window of <see cref="PlayerbotRegionRoutes.SyncSearchBudget.WindowMs"/>.
+    /// A second lost pair waits for the next window.
+    /// </summary>
+    [Fact]
+    public async Task TheSyncFallback_IsLimitedToOneSearchPerWindow()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        int to2 = to + 1000, to3 = to + 1001; // no such region: FindRoute range-checks only the from region, so the search settles the start's component, then answers Unreachable
+        cache.MarkAsked(from, to2, 0);
+        cache.MarkAsked(from, to3, 0);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to2, Goal, mayDefer: true, out _, out _, wallMs: 40_000, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(1, cache.Searches);
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to3, Goal, mayDefer: true, out _, out _, wallMs: 40_010, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(1, cache.Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to3, Goal, mayDefer: true, out _, out _, wallMs: 40_060, maxWaitMs: 30_000, budget: budget));
+        Assert.Equal(2, cache.Searches);
+    }
+
+    /// <summary>
+    /// The state of deferred asks is bounded and drains: many distinct pairs are queued, searched by the workers, and leave nothing asked
+    /// or queued behind; a stale mark is cleared by the search, and the ask of a pair that is no longer cached is queued, not searched at once.
+    /// </summary>
+    [Fact]
+    public async Task DeferredAsks_DrainToNothing_AndALostMarkIsClearedBySearching()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        for (int i = 0; i < 300; i++)
+            PlayerbotRegionRoutes.TryRoute(graph, from, Start, 1000 + i, Goal, mayDefer: true, out _, out _, wallMs: 0, budget: budget);
+        // Only this graph's own counts: the queue and the worker count are process-wide and other tests' bots use them at the same time.
+        for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++)
+            await Task.Delay(25);
+
+        Assert.Equal(0, cache.AskedCount);
+        Assert.Equal(300, cache.Count);
+        Assert.Equal(300, cache.Searches);
+
+        cache.MarkAsked(from, 5000, 0);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(0, cache.AskedCount);
+
+        // Evict pair 1000 (the oldest) by storing MaxEntries more pairs: bounded, and its next deferred ask is queued, not answered on this thread.
+        for (int extra = 0; extra < PlayerbotRegionRoutes.MaxEntries; extra++) cache.Search(from, Start, 6000 + extra, Goal);
+        Assert.True(cache.Count <= PlayerbotRegionRoutes.MaxEntries);
+        Assert.False(cache.TryGet(from, 1000, Start, out _, out _));
+        Assert.False(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 1000, Goal, mayDefer: true, out _, out _, wallMs: 10_000_000, maxWaitMs: 30_000, budget: budget));
+        for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++) await Task.Delay(25);
+        Assert.Equal(0, cache.AskedCount);
+        Assert.True(cache.TryGet(from, 1000, Start, out _, out _));
+    }
+
+    /// <summary>
+    /// A search that faults once is not kept: the next ask searches again and gets the real answer (a transient fault must not refuse the
+    /// pair until it is evicted). A pair that faults twice is kept as "no decision", so a lasting fault is not searched on every ask.
+    /// </summary>
+    [Fact]
+    public async Task AFaultedRegionSearch_IsRetriedOnce_AndKeptOnlyWhenItFaultsTwice()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(graph, Start, locate), to = world.Nav.RegionAt(graph, Goal, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+
+        int calls = 0;
+        cache.SearchProbe = (_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) throw new InvalidOperationException("transient fault");
+        };
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus first, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, first);
+        Assert.Equal(0, cache.Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus second, out _));
+        Assert.NotEqual(NavRegionRouteStatus.Exhausted, second);
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(2, cache.Searches);
+
+        cache.SearchProbe = (_, _) => throw new InvalidOperationException("lasting fault");
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out NavRegionRouteStatus one, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, one);
+        Assert.Equal(1, cache.Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out NavRegionRouteStatus two, out _));
+        Assert.Equal(NavRegionRouteStatus.Exhausted, two);
+        Assert.Equal(2, cache.Count);
+        long searches = cache.Searches;
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, Start, 5000, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(searches, cache.Searches); // kept: a hit
+    }
+
+    /// <summary>A rebuilt graph is a new instance: it starts with an empty cache, and the old graph's routes never answer for it.</summary>
+    [Fact]
+    public async Task ARebuiltGraph_DoesNotSeeTheOldGraphsRoutes_AndTheCacheIsBounded()
+    {
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, Layout);
+        NavRegionGraph first = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        NavRegionGraph rebuilt = NavRegionGraph.Build(_fixture.Directory, 0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotSame(first, rebuilt);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        int from = world.Nav.RegionAt(first, Start, locate), to = world.Nav.RegionAt(first, Goal, locate);
+        Assert.NotEqual(from, to);
+
+        Assert.True(PlayerbotRegionRoutes.TryRoute(first, from, Start, to, Goal, mayDefer: false, out NavRegionRouteStatus status, out List<Vector3> portals));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(first).Searches);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(first, from, Start, to, Goal, mayDefer: true, out NavRegionRouteStatus again, out List<Vector3> hit));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(first).Searches);
+        Assert.Equal(status, again);
+        Assert.Equal(portals, hit);
+
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(rebuilt).Count);
+        Assert.True(PlayerbotRegionRoutes.TryRoute(rebuilt, from, Start, to, Goal, mayDefer: false, out _, out _));
+        Assert.Equal(1, PlayerbotRegionRoutes.Of(rebuilt).Searches);
+
+        // Bounded: more pairs than MaxEntries keep MaxEntries.
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(rebuilt);
+        for (int extra = 0; extra < PlayerbotRegionRoutes.MaxEntries + 20; extra++)
+            cache.Search(from, Start, extra + 1000, Goal);
+        Assert.True(cache.Count <= PlayerbotRegionRoutes.MaxEntries);
     }
 
     // The layout of NavRegionGraphTests: Detour tile (x, y) covers world Y from 40x and world X from 40y.

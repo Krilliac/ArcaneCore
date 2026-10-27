@@ -113,6 +113,9 @@ public sealed class SpellModChargeTests
     private static SpellCastResult Cast(SpellTestKit kit, Player caster, Player target, uint spell)
         => kit.System.HandleCastRequest(caster, spell, SpellCastTargets.ForUnit(target.Guid));
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static uint Rage(Player player) => SpellSystem.GetPower(player, PowerType.Rage);
 
     private static SpellMod? ModOf(SpellTestKit kit, Player player, uint spell, SpellModOp op)
@@ -136,12 +139,14 @@ public sealed class SpellModChargeTests
         using (kit)
         {
             Assert.Equal(SpellCastResult.CastOk, Cast(kit, caster, target, Instant));
+            FlushSpellBatch(kit);
 
             Assert.Equal(100u, Rage(caster));                         // free
             Assert.False(kit.System.HasAura(caster, FreeCast));       // the pinned mod's aura went with the successful cast
             Assert.Null(ModOf(kit, caster, FreeCast, SpellModOp.Cost));
 
             Assert.Equal(SpellCastResult.CastOk, Cast(kit, caster, target, Instant));
+            FlushSpellBatch(kit);
             Assert.Equal(80u, Rage(caster));                          // the next one pays
         }
     }
@@ -154,6 +159,7 @@ public sealed class SpellModChargeTests
         {
             Cast(kit, caster, target, OtherBolt);
             kit.Advance(2100);
+            FlushSpellBatch(kit);
 
             Assert.Equal(50u, Rage(caster));                          // paid in full
             Assert.Equal(1, ModOf(kit, caster, FreeCast, SpellModOp.Cost)!.Charges);
@@ -167,6 +173,7 @@ public sealed class SpellModChargeTests
         using (kit)
         {
             Cast(kit, caster, target, Instant);
+            FlushSpellBatch(kit);
 
             Assert.Equal(100u - 10u, Rage(caster));
             Assert.Equal(1, ModOf(kit, caster, TwoCharges, SpellModOp.Cost)!.Charges);
@@ -185,6 +192,7 @@ public sealed class SpellModChargeTests
             // vmangos prepare computes the cost without dropping a charge (Spell.cpp:3395); the bar end does (:3646).
             Assert.Equal(1, ModOf(kit, caster, FreeCast, SpellModOp.Cost)!.Charges);
             kit.Advance(2100);
+            FlushSpellBatch(kit);
 
             Assert.Equal(100u, Rage(caster));
             Assert.False(kit.System.HasAura(caster, FreeCast));
@@ -216,6 +224,7 @@ public sealed class SpellModChargeTests
         using (kit)
         {
             Cast(kit, caster, target, Bolt);
+            FlushSpellBatch(kit);
 
             Assert.True(target.Health < 60u);                         // already landed: the bolt was instant
             Assert.False(kit.System.HasAura(caster, SwiftShape));
@@ -229,6 +238,7 @@ public sealed class SpellModChargeTests
         using (kit)
         {
             Cast(kit, caster, target, Bolt);
+            FlushSpellBatch(kit);
 
             // Patch 1.11: Nature's Grace is not consumed by a spell Nature's Swiftness made instant (Player.cpp:22444-22453).
             Assert.Equal(1, ModOf(kit, caster, GraceShape, SpellModOp.CastingTime)!.Charges);
@@ -246,6 +256,7 @@ public sealed class SpellModChargeTests
             kit.System.Mods.Options.InstantCastKeepsFlatCastTimeCharge = false;
 
             Cast(kit, caster, target, Bolt);
+            FlushSpellBatch(kit);
 
             Assert.False(kit.System.HasAura(caster, GraceShape));
         }
@@ -355,6 +366,7 @@ public sealed class SpellModChargeTests
             Assert.Equal(1, ModOf(kit, caster, ShadowTrance, SpellModOp.CastingTime)!.Charges);
 
             Cast(kit, caster, target, Bolt);
+            FlushSpellBatch(kit);
 
             Assert.False(kit.System.HasAura(caster, ShadowTrance));
         }
@@ -370,6 +382,7 @@ public sealed class SpellModChargeTests
             kit.System.Relations = new FakeRelations { Hostile = { target.Guid } };
             kit.Spellbook.Teach(caster, CritBolt);
             Cast(kit, caster, target, CritBolt);
+            FlushSpellBatch(kit);
 
             Assert.False(kit.System.HasAura(caster, CritShape));   // the crit roll of the landing hit used it
         }

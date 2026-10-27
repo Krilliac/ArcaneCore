@@ -60,9 +60,20 @@ public sealed partial class SpellSystem
     /// <summary>Turn the post-finish deferral on: the caller promises to call <see cref="RunPostFinishProcs"/> for every finished cast.</summary>
     public void EnablePostFinishProcs() => PostFinishProcsEnabled = true;
 
-    /// <summary>The generic cast <paramref name="unit"/> is running (vmangos <c>GetCurrentSpell(CURRENT_GENERIC_SPELL)</c>), or null.</summary>
+    /// <summary>
+    /// The generic cast <paramref name="unit"/> is running (vmangos <c>GetCurrentSpell(CURRENT_GENERIC_SPELL)</c>), or null. A held go that the
+    /// spell batch is resolving is the unit's running cast while it resolves: an instant left the cast slot when it was held, and the slot may
+    /// hold a newer cast by now (SpellSystem.Batching.cs).
+    /// </summary>
     internal SpellCast? CurrentGenericCast(Unit unit)
-        => GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) && state.CurrentCast is { State: not SpellCastState.Finished } cast ? cast : null;
+    {
+        if (_resolvingBatchedGo is { State: not SpellCastState.Finished } resolving && ReferenceEquals(resolving.Caster, unit))
+        {
+            return resolving;
+        }
+
+        return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) && state.CurrentCast is { State: not SpellCastState.Finished } cast ? cast : null;
+    }
 
     /// <summary>Run <paramref name="action"/> when <paramref name="cast"/> has finished (see <see cref="RunPostFinishProcs"/>).</summary>
     internal void DeferUntilFinished(SpellCast cast, Action action) => _postFinishProcs.GetOrCreateValue(cast).Add(action);

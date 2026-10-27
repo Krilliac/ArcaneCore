@@ -52,6 +52,9 @@ public enum DebugMarkerKind : byte
 
     /// <summary>A creature's spawn (home) point.</summary>
     Spawn = 15,
+
+    /// <summary>The goal (destination) of a followed unit's path (<c>.debug vis follow</c>).</summary>
+    PathGoal = 16,
 }
 
 /// <summary>
@@ -103,6 +106,7 @@ public static class DebugMarkerStyles
         new(DebugMarkerKind.Height, "DebugDraw: floor height", 2974, 266, 0.6f),          // UngoroCrystal_Yellow01 / AuraYellowVeryTall
         new(DebugMarkerKind.Range, "DebugDraw: range", 5811, 0, 1.0f),                    // World\Goober\G_JewelBlack.mdx
         new(DebugMarkerKind.Spawn, "DebugDraw: spawn point", 6431, 363, 0.6f),            // ...\Silithus\...\GlyphedCrystal / AuraPurpleShort
+        new(DebugMarkerKind.PathGoal, "DebugDraw: path goal", 6431, 266, 0.8f),           // ...\Silithus\...\GlyphedCrystal / AuraYellowVeryTall
     ];
 
     /// <summary>Every style, indexed by kind.</summary>

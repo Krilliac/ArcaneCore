@@ -51,6 +51,11 @@ public sealed class PlayerbotRetreatEscapeTests
 
         Assert.True(await world.ThinkUntilAsync(3_000, () => world.Brain.Risk.Retreat.UsedEscapes.Contains(escape)),
             $"no {escape}: {await world.OnWorldAsync(() => world.Brain.RiskReport)}");
+        // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the escape goes off at the next batch boundary; the bot thinks on meanwhile.
+        SpellSystem spells = world.Session.Services.GetRequiredService<SpellFeature>().System;
+        if (await world.OnWorldAsync(() => spells.HasPendingGo(world.Player)))
+            Assert.True(await world.ThinkUntilAsync(spells.SpellBatchWindowMs + RiskTestWorld.ThinkMs, () => !spells.HasPendingGo(world.Player)),
+                "the escape never went off");
         Assert.True(await world.OnWorldAsync(() => world.Session.Services.GetRequiredService<SpellFeature>().System
             .HasAura(atEnemy ? mob : world.Player, spellId)), "the server did not apply the escape");
         Assert.Contains("escapes=" + escape.Replace(' ', '_'), await world.OnWorldAsync(() => world.Brain.RiskReport));

@@ -149,6 +149,108 @@ public sealed class PlayerbotRoutePlanWatchTests
         Assert.False(cap.Any(Key("goal-unreachable")), cap.Describe());
     }
 
+    /// <summary>
+    /// Plans toward <paramref name="goal"/> (timestamped, from where the bot stands) <paramref name="times"/> times, one second apart; each
+    /// is refused. The motion blacklist a suppression adds lasts <see cref="PlayerbotMotion.LoopBlacklistMs"/>, shorter than any suppression,
+    /// but expires only by the clock of a bot that has moved: this bot stands still, so it is lifted here as the clock would lift it.
+    /// </summary>
+    private static async Task RefuseAsync(RiskTestWorld world, Vector3 goal, int times)
+    {
+        TileWait[] wait = [default];
+        for (int i = 0; i < times; i++)
+        {
+            PlanOutcome outcome = await world.OnWorldAsync(() =>
+            {
+                PlayerbotMotion.Unblacklist(world.Player, goal);
+                return PlayerbotNavigation.PlanToward(world.Player, goal, Options, ref wait[0], world.Host.World.NowMs, out _);
+            });
+            Assert.Equal(PlanOutcome.Refused, outcome);
+            await world.Host.World.AdvanceClockAsync(1_000);
+        }
+    }
+
+    /// <summary>
+    /// Bot QA #1492: the watch suppresses a pair after <see cref="PlayerbotRoutePlanWatch.MaxConsecutiveRefusals"/> refusals while the
+    /// anomaly check kept counting across the suppression, so the first refusal after it expired was the anomaly's fifth in a row and
+    /// <c>bot-nav/goal-unreachable</c> fired on every suppression cycle. A suppression starts the anomaly's count over.
+    /// </summary>
+    [Fact]
+    public async Task TimestampedPlanToward_RefusedAgainAfterTheSuppressionExpires_DoesNotReportGoalUnreachable()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        var mesh = new Canned((start, _) => PathResult.None(start));
+        await OnMesh(world, mesh);
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        Vector3 goal = await world.OnWorldAsync(() => new Vector3(world.Player.X + 80f, world.Player.Y, world.Player.Z));
+
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        int queriesBefore = mesh.Queries;
+        await RefuseAsync(world, goal, 1);
+
+        Assert.True(mesh.Queries > queriesBefore, "the suppression must have expired: the plan searches the mesh again");
+        Assert.False(cap.Any(Key("goal-unreachable")), cap.Describe());
+        Assert.False(cap.Any(Key("no-path-connected")), cap.Describe());
+    }
+
+    [Fact]
+    public async Task Suppression_OfAPairSuppressedBefore_LastsLongerThanTheFirst()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        var mesh = new Canned((start, _) => PathResult.None(start));
+        await OnMesh(world, mesh);
+        Vector3 goal = await world.OnWorldAsync(() => new Vector3(world.Player.X + 80f, world.Player.Y, world.Player.Z));
+
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+
+        // The second suppression outlives the first one's span: the pair is still held without a search.
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        int queriesBefore = mesh.Queries;
+        await RefuseAsync(world, goal, 1);
+        Assert.Equal(queriesBefore, mesh.Queries);
+
+        // ... and expires in its turn (twice the first span).
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs);
+        await RefuseAsync(world, goal, 1);
+        Assert.True(mesh.Queries > queriesBefore, "the escalated suppression must expire after twice the first span");
+    }
+
+    [Fact]
+    public void SuppressionSpan_DoublesPerStrike_UpToTheCap()
+    {
+        Assert.Equal(PlayerbotRoutePlanWatch.SuppressMs, PlayerbotRoutePlanWatch.SuppressionSpanMs(1));
+        Assert.Equal(PlayerbotRoutePlanWatch.SuppressMs * 2, PlayerbotRoutePlanWatch.SuppressionSpanMs(2));
+        Assert.Equal(PlayerbotRoutePlanWatch.SuppressMs * 4, PlayerbotRoutePlanWatch.SuppressionSpanMs(3));
+        Assert.Equal(PlayerbotRoutePlanWatch.MaxSuppressMs, PlayerbotRoutePlanWatch.SuppressionSpanMs(50));
+    }
+
+    /// <summary>A goal still refused once the watch has escalated its suppression is really unreachable: that is reported, once.</summary>
+    [Fact]
+    public async Task TimestampedPlanToward_StillRefusedAfterAnEscalatedSuppression_ReportsGoalUnreachableOnce()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        var mesh = new Canned((start, _) => PathResult.None(start));
+        await OnMesh(world, mesh);
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        Vector3 goal = await world.OnWorldAsync(() => new Vector3(world.Player.X + 80f, world.Player.Y, world.Player.Z));
+
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+        Assert.False(cap.Any(Key("goal-unreachable")), cap.Describe());
+
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressionSpanMs(2) + 1);
+        await RefuseAsync(world, goal, 1);
+        Assert.Equal(1, cap.Count(Key("goal-unreachable")));
+
+        await RefuseAsync(world, goal, PlayerbotRoutePlanWatch.MaxConsecutiveRefusals);
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.MaxSuppressMs + 1);
+        await RefuseAsync(world, goal, 1);
+        Assert.Equal(1, cap.Count(Key("goal-unreachable")));
+    }
+
     [Fact]
     public async Task BlacklistedDestinationRefusals_DoNotReportGoalUnreachableOrNoPathConnected()
     {

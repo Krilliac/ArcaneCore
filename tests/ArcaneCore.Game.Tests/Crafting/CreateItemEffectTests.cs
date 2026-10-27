@@ -22,6 +22,15 @@ public sealed class CreateItemEffectTests
 {
     private const uint Craft = SkillTestKit.SmeltCopper;
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(CraftingTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static CraftingTestKit Rig(int value = 1, uint output = CraftingTestKit.LinenBandage, uint? reagent = CraftingTestKit.LinenCloth, uint cooldownMs = 0, bool skills = true)
     {
         SpellInfo spell = CraftingTestKit.Craft(Craft, SpellTestKit.Effect(SpellEffectName.CreateItem, value) with { ItemType = output }) with
@@ -48,6 +57,7 @@ public sealed class CreateItemEffectTests
         rig.SkillRandom.Ints.Enqueue(1);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(2u, rig.Inventory.GetItemCount(CraftingTestKit.LinenCloth));
         Assert.Equal(1u, rig.Inventory.GetItemCount(CraftingTestKit.LinenBandage));
@@ -78,6 +88,7 @@ public sealed class CreateItemEffectTests
         CreateItemSpells.Install(rig.System);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
 
         Item crafted = Assert.Single(rig.Inventory.AllItems, item => item.Entry == output);
         Assert.Equal(1001, crafted.RandomPropertyId);
@@ -129,6 +140,7 @@ public sealed class CreateItemEffectTests
         rig.SkillRandom.Ints.Enqueue(roll);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
 
         Assert.Equal((ushort)(skill + expectedGain), rig.Skills.GetValuePure(SkillIds.Blacksmithing));
     }
@@ -142,6 +154,7 @@ public sealed class CreateItemEffectTests
         rig.SkillRandom.Ints.Enqueue(1);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
 
         Assert.Equal((ushort)100, rig.Skills.GetValuePure(SkillIds.Blacksmithing));
         Assert.Single(rig.SkillRandom.Ints);   // the roll was never taken: GainChance of grey is 0
@@ -154,6 +167,7 @@ public sealed class CreateItemEffectTests
         rig.Give(CraftingTestKit.LinenCloth, 1);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(1u, rig.Inventory.GetItemCount(CraftingTestKit.LinenBandage));
     }
@@ -197,11 +211,13 @@ public sealed class CreateItemEffectTests
         using CraftingTestKit three = Rig(value: 3);
         three.Give(CraftingTestKit.LinenCloth, 1);
         Assert.Equal(SpellCastResult.CastOk, three.Cast(Craft));
+        ResolveSpellBatch(three);
         Assert.Equal(3u, three.Inventory.GetItemCount(CraftingTestKit.LinenBandage));
 
         using CraftingTestKit clamped = Rig(value: 30);   // the bandage stacks to 20: DoCreateItem clamps (SpellEffects.cpp:1931-1934)
         clamped.Give(CraftingTestKit.LinenCloth, 1);
         Assert.Equal(SpellCastResult.CastOk, clamped.Cast(Craft));
+        ResolveSpellBatch(clamped);
         Assert.Equal(20u, clamped.Inventory.GetItemCount(CraftingTestKit.LinenBandage));
     }
 
@@ -239,12 +255,14 @@ public sealed class CreateItemEffectTests
         rig.Give(CraftingTestKit.LinenCloth, 5);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
         Assert.Equal(SpellCastResult.NotReady, rig.Cast(Craft));
         Assert.Equal(4u, rig.Inventory.GetItemCount(CraftingTestKit.LinenCloth));   // the refused cast took nothing
 
         rig.Kit.Now += 172_800_001;
         rig.Kit.System.Update(100);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Craft));
+        ResolveSpellBatch(rig);
     }
 
     [Fact]

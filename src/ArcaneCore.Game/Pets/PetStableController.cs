@@ -126,7 +126,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             PetStableState next = state with { Pets = [.. state.Pets, new StabledPet(slot, active with { IsCurrent = false })] };
             Write(player, id, async ct => { await store.StableAsync(id, slot, active, ct).ConfigureAwait(false); return true; },
                 _ => { SetState(id, next); Send(player, StableResult.SuccessStable); },
-                () => summons.ReplaceCachedPet(id, active));
+                () => summons.ReplaceCachedPet(id, active), replacedCurrentRow: static _ => true);
         });
     }
 
@@ -278,7 +278,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
 
                     Send(player, StableResult.SuccessUnstable);
                 },
-                () => summons.ReplaceCachedPet(id, active));
+                () => summons.ReplaceCachedPet(id, active), replacedCurrentRow: static taken => taken is not null);
         });
     }
 
@@ -356,7 +356,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         {
             FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
-            _logger.LogError(ex, "pet stable load failed for character {CharacterId}", id);
+            _logger.LogFault("pet-stable", ex, "pet stable load failed for character {CharacterId}", id);
         }
 
         Post(() =>
@@ -381,27 +381,27 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         });
     }
 
-    private void Write<T>(Player player, int id, Func<CancellationToken, Task<T>> write, Action<T> succeeded, Action failed)
+    private void Write<T>(Player player, int id, Func<CancellationToken, Task<T>> write, Action<T> succeeded, Action failed, Func<T, bool>? replacedCurrentRow = null)
     {
         Entry entry = _entries[id];
         entry.Busy = true;
-        _ = WriteAsync(player, id, entry, write, succeeded, failed);
+        _ = WriteAsync(player, id, entry, write, succeeded, failed, replacedCurrentRow);
     }
 
-    private async Task WriteAsync<T>(Player player, int id, Entry entry, Func<CancellationToken, Task<T>> write, Action<T> succeeded, Action failed)
+    private async Task WriteAsync<T>(Player player, int id, Entry entry, Func<CancellationToken, Task<T>> write, Action<T> succeeded, Action failed, Func<T, bool>? replacedCurrentRow)
     {
         T result = default!;
         bool ok = false;
         try
         {
-            result = await summons.QueueSerializedWriteAsync(id, write).ConfigureAwait(false);
+            result = await summons.QueueSerializedWriteAsync(id, write, replacedCurrentRow).ConfigureAwait(false);
             ok = true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
-            _logger.LogError(ex, "pet stable write failed for character {CharacterId}", id);
+            _logger.LogFault("pet-stable", ex, "pet stable write failed for character {CharacterId}", id);
         }
 
         Post(() =>

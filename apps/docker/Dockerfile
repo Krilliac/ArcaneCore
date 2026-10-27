@@ -8,7 +8,12 @@
 # build; Dependabot (.github/dependabot.yml, docker ecosystem) proposes tag and digest bumps together. When global.json moves to a
 # new SDK, move these tags with it: .github/workflows/docker-smoke.yml builds every target so a mismatch fails CI.
 
-FROM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:e2438fd800a09d2d761aefe4edd30675c8f1db8958e4423c0844cc9a0240e60f AS build
+# --platform=$BUILDPLATFORM: the build stage always runs natively on the builder. The published output is framework-dependent (no
+# RuntimeIdentifier, no ReadyToRun), so it is architecture-neutral and a linux/arm64 image (docker-publish.yml) needs no emulation
+# of the compile; only the small runtime stages below are per-platform. The apphost the publish also writes is never used (the
+# entrypoints are `dotnet X.dll`).
+# CONFIGURATION: Release by default; pass --build-arg CONFIGURATION=Debug for a Debug image (docs/guide/docker.md, "Debug or Release").
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:e2438fd800a09d2d761aefe4edd30675c8f1db8958e4423c0844cc9a0240e60f AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
@@ -20,20 +25,23 @@ COPY tools/ tools/
 RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode && dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode \
  && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj --locked-mode \
  && dotnet restore tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj --locked-mode \
- && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode
+ && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode \
+ && dotnet restore tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj --locked-mode
 # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) references World, so World cannot reference it: it is published on its
 # own and its assembly placed beside the world executable, where Program.cs loads it (its packages are all World's).
 RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world && dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c $CONFIGURATION --no-restore -o /out/playerbots && cp /out/playerbots/ArcaneCore.Playerbots.dll /out/playerbots/ArcaneCore.Playerbots.pdb /out/world/ \
  && dotnet publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj -c $CONFIGURATION --no-restore -o /out/realm \
  && dotnet publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj -c $CONFIGURATION --no-restore -o /out/tools \
- && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade
+ && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade \
+ && dotnet publish tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj -c $CONFIGURATION --no-restore -o /out/account
 
 # Shared runtime skeleton (AzerothCore "skeleton"/"runtime"): non-root user, data and log directories.
 FROM mcr.microsoft.com/dotnet/runtime:11.0.0-rc.2@sha256:c2fe4a619dab039d442e63ca56ed3ab1c10d0a0a59b778741d002bbb53c6c637 AS runtime
 ARG USER_ID=1000
 ARG GROUP_ID=1000
-ENV DOTNET_gcServer=0 \
-    DOTNET_TieredPGO=1 \
+# No DOTNET_gcServer here: an environment setting overrides runtimeconfig.json, and the World ships Server GC on purpose
+# (ArcaneCore.World.csproj, measured in docs/integration/perf-limits-20261008.md). Set DOTNET_gcServer=0 per service to opt out.
+ENV DOTNET_TieredPGO=1 \
     TZ=Etc/UTC
 RUN (getent group ${GROUP_ID} || groupadd -g ${GROUP_ID} arcane) \
  && (getent passwd ${USER_ID} || useradd -u ${USER_ID} -g ${GROUP_ID} -m arcane) \
@@ -60,11 +68,14 @@ EXPOSE 3724 9465
 VOLUME ["/arcanecore/logs"]
 ENTRYPOINT ["dotnet", "ArcaneCore.Realm.dll"]
 
-# AzerothCore "db-import"/"tools": one-shot helpers, run with `docker compose run --rm tools ...`.
+# AzerothCore "db-import"/"tools": one-shot helpers, run with `docker compose run --rm tools ...`. The entrypoint is the content importer;
+# the database upgrade tool (/arcanecore/dbupgrade/arcane-db.dll) and the account tool (/arcanecore/account/arcane-account.dll) are run
+# with `--entrypoint dotnet`.
 FROM runtime AS tools
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 WORKDIR /arcanecore/tools
 COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/tools/ ./
 COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/dbupgrade/ /arcanecore/dbupgrade/
+COPY --from=build --chown=${USER_ID}:${GROUP_ID} /out/account/ /arcanecore/account/
 ENTRYPOINT ["dotnet", "arcane-content-importer.dll"]

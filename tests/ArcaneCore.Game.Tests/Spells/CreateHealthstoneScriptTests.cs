@@ -72,6 +72,14 @@ public sealed class CreateHealthstoneScriptTests
         return rig;
     }
 
+    /// <summary>Casts and, with spell batching on, advances one window so the held go resolves (window 0: no-op).</summary>
+    private static SpellCastResult Cast(CraftingTestKit rig, uint spell)
+    {
+        SpellCastResult result = rig.Cast(spell);
+        rig.Kit.Advance(rig.System.SpellBatchWindowMs);
+        return result;
+    }
+
     private static void GiveShards(CraftingTestKit rig, int count)
     {
         for (int i = 0; i < count; i++)
@@ -101,7 +109,7 @@ public sealed class CreateHealthstoneScriptTests
         using CraftingTestKit rig = Rig(talent);
         GiveShards(rig, 3);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.Cast(spell));
+        Assert.Equal(SpellCastResult.CastOk, Cast(rig, spell));
 
         Assert.Equal(1u, rig.Inventory.GetItemCount(expected));
         Assert.Equal(1, rig.Inventory.AllItems.Count(item => HealthstoneItems.Contains(item.Entry)));
@@ -117,7 +125,7 @@ public sealed class CreateHealthstoneScriptTests
         GiveShards(rig, 2);
         rig.Give(5509);
 
-        Assert.Equal(SpellCastResult.DontReport, rig.Cast(CreateHealthstoneScript.CreateHealthstone));
+        Assert.Equal(SpellCastResult.DontReport, Cast(rig, CreateHealthstoneScript.CreateHealthstone));
 
         Assert.Equal(1u, rig.Inventory.GetItemCount(5509));
         Assert.Equal(2u, rig.Inventory.GetItemCount(SoulShardRules.SoulShard));
@@ -135,7 +143,7 @@ public sealed class CreateHealthstoneScriptTests
         GiveShards(rig, 1);
         rig.Give(5509);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.Cast(CreateHealthstoneScript.CreateHealthstone));
+        Assert.Equal(SpellCastResult.CastOk, Cast(rig, CreateHealthstoneScript.CreateHealthstone));
 
         Assert.Equal(1u, rig.Inventory.GetItemCount(19009));
         Assert.Equal(0u, rig.Inventory.GetItemCount(SoulShardRules.SoulShard));
@@ -150,7 +158,7 @@ public sealed class CreateHealthstoneScriptTests
         {
         }
 
-        Assert.Equal(SpellCastResult.DontReport, rig.Cast(CreateHealthstoneScript.CreateHealthstoneMajor));
+        Assert.Equal(SpellCastResult.DontReport, Cast(rig, CreateHealthstoneScript.CreateHealthstoneMajor));
 
         Assert.Equal(0u, rig.Inventory.GetItemCount(9421));
         Assert.Equal(1u, rig.Inventory.GetItemCount(SoulShardRules.SoulShard));
@@ -163,7 +171,7 @@ public sealed class CreateHealthstoneScriptTests
     {
         using CraftingTestKit rig = Rig();
 
-        Assert.Equal(SpellCastResult.ItemNotReady, rig.Cast(CreateHealthstoneScript.CreateHealthstone));
+        Assert.Equal(SpellCastResult.ItemNotReady, Cast(rig, CreateHealthstoneScript.CreateHealthstone));
 
         Assert.Equal(0u, rig.Inventory.GetItemCount(5509));
     }

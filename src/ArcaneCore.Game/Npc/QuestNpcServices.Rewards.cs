@@ -25,7 +25,7 @@ public sealed partial class QuestNpcServices
     /// items and is complete (GossipDef.cpp:484-497). A repeatable quest not in the log is completable from the ender's
     /// list (CanCompleteRepeatableQuest). This request never credits an objective.
     /// </summary>
-    public void CompleteQuest(Player player, ObjectGuid guid, uint questId)
+    public void CompleteQuest(Player player, ObjectGuid guid, uint questId, IReadOnlySet<ObjectGuid>? offered = null)
     {
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest))
         {
@@ -33,8 +33,8 @@ public sealed partial class QuestNpcServices
         }
 
         bool complete = state.Quests.GetStatus(questId) != QuestStatus.Complete && quest.IsRepeatable
-            ? CanCompleteRepeatableQuest(state, quest)
-            : CanRewardQuest(state, quest, msg: false);
+            ? CanCompleteRepeatableQuest(state, quest, offered)
+            : CanRewardQuest(state, quest, msg: false, offered);
         SendRequestItems(player, guid, quest, complete, closeOnCancel: false);
     }
 
@@ -54,9 +54,13 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    /// <summary>Validate current progress, NPC interaction, choice, money and the complete inventory batch without live mutations.</summary>
+    /// <summary>
+    /// Validate current progress, NPC interaction, choice, money and the complete inventory batch without live mutations.
+    /// <paramref name="offered"/>: items sitting in the player's open trade window; the turn-in neither counts nor takes them, because
+    /// shrinking an offered stack would change what a partner who already accepted receives.
+    /// </summary>
     public bool TryPrepareReward(Player player, ObjectGuid guid, uint questId, uint choice,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out QuestRewardPlan? plan)
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out QuestRewardPlan? plan, IReadOnlySet<ObjectGuid>? offered = null)
     {
         plan = null;
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest) || !RewardBase(state, quest))
@@ -68,7 +72,11 @@ public sealed partial class QuestNpcServices
         // items, money or bag space tells the client why and re-sends the offer window so the player can retry
         // (QuestHandler.cpp:262-271); the live state stays untouched.
         QuestStatusData? data = state.Quests.Get(questId);
-        if (!RewardRequirements(player, quest, msg: true))
+        // The requirement-order check, as vmangos ChooseReward runs CanRewardQuest(quest, msg) before the reward-storage checks: a delivery item
+        // sitting in the open trade is reported (ITEM_NOT_FOUND, offer re-sent) before the silent refusals below (invalid choice, money, spell,
+        // reputation). It also keeps this path consistent with the previews that pass offered (CompleteQuest, MeetsTurnInRequirements,
+        // DiagnoseTurnInRefusal). The keepForRemovals in TryStageQuestRewards is the economic backstop.
+        if (!RewardRequirements(player, quest, msg: true, offered))
         {
             ResendOfferReward(player, guid, quest);
             return false;
@@ -92,7 +100,7 @@ public sealed partial class QuestNpcServices
         // vmangos RewardQuest stores the quest items first; items a reward spell creates follow them.
         grants.AddRange(spellGrant.CreatedItems.Select(item => new InventoryRewardGrant(item.Entry, item.Count, Created: true)));
         ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
-            out InventoryRewardStage? stage, out uint failedEntry);
+            out InventoryRewardStage? stage, out uint failedEntry, offered);
         if (result != ItemInventoryResult.Ok || stage is null)
         {
             SendRewardStageRefusal(player, questId, result, failedEntry);

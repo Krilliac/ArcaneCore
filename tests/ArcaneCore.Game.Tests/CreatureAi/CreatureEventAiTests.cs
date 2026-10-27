@@ -100,6 +100,19 @@ public sealed class CreatureEventAiTests
         Assert.True(ai.MeleeEnabled);
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     [Fact]
     public void MainSpellFlag_IsMetadataOnly_AndRealSpellSystemCastsAtConfiguredRange()
     {
@@ -120,6 +133,7 @@ public sealed class CreatureEventAiTests
 
         map.Combat.DealDamage(player, wolf, 1, direct: false);
         Run(kit.World, 6000); // Include the next EventAI timer batch after the 5-second timer.
+        FlushSpellBatch(kit);
 
         float distance = MathF.Sqrt(MathF.Pow(wolf.X - player.X, 2) + MathF.Pow(wolf.Y - player.Y, 2));
         Assert.InRange(distance, 18.5f, 21.5f);
@@ -429,6 +443,7 @@ public sealed class CreatureEventAiTests
         caster.SpellHit += (c, t, s) => hits.Add((c, t, s.Id));
 
         map.Combat.DealDamage(player, wolf, 1, direct: false);
+        FlushSpellBatch(kit);
 
         SpellAuraHolder holder = Assert.Single(kit.System.GetAuras(player));
         Assert.Equal(SpellTestKit.DotSpell, holder.Spell.Id);

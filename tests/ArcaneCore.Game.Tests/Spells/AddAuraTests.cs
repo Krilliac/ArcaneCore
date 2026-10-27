@@ -50,6 +50,7 @@ public sealed class AddAuraTests
         kit.Advance(19_900);
         Assert.True(kit.System.HasAura(player, TwentySecondInvisibility));
         kit.Advance(200);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, an aura that ran out ends at the next boundary (0: no-op)
         Assert.False(kit.System.HasAura(player, TwentySecondInvisibility));
     }
 

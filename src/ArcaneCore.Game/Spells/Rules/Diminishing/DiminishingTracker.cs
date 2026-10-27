@@ -15,7 +15,16 @@ public sealed class DiminishingTracker
     /// entry when no aura of the group is up and more than <paramref name="resetMs"/> passed since the last
     /// one ended, otherwise the entry's count.
     /// </summary>
-    public DiminishingLevel GetLevel(DiminishingGroup group, uint nowMs, uint resetMs)
+    public DiminishingLevel GetLevel(DiminishingGroup group, uint nowMs, uint resetMs) => GetLevel(group, nowMs, resetMs, resetSweepMs: 0);
+
+    /// <summary>
+    /// <see cref="GetLevel(DiminishingGroup, uint, uint)"/> with an optional reset sweep. <paramref name="resetSweepMs"/> 0 (retail, patch 1.4.0:
+    /// "within 15 seconds of the *end* of the duration") resets as soon as more than <paramref name="resetMs"/> passed since the last aura ended.
+    /// A positive value models a server that only looks for expired entries every <paramref name="resetSweepMs"/> (on the clock's multiples of it),
+    /// so the reset lands between <paramref name="resetMs"/> and <paramref name="resetMs"/> + <paramref name="resetSweepMs"/> after the end
+    /// (the "15-20 s" reading, <see cref="SpellRuleOptions.DiminishingResetSweepMs"/>). No random draw either way.
+    /// </summary>
+    public DiminishingLevel GetLevel(DiminishingGroup group, uint nowMs, uint resetMs, uint resetSweepMs)
     {
         foreach (Entry entry in _entries)
         {
@@ -29,7 +38,7 @@ public sealed class DiminishingTracker
                 return DiminishingLevel.Level1;
             }
 
-            if (entry.Stack == 0 && unchecked(nowMs - entry.HitTime) > resetMs)
+            if (entry.Stack == 0 && IsResetDue(unchecked(nowMs - entry.HitTime), nowMs, resetMs, resetSweepMs))
             {
                 entry.HitCount = 0;
                 return DiminishingLevel.Level1;
@@ -39,6 +48,21 @@ public sealed class DiminishingTracker
         }
 
         return DiminishingLevel.Level1;
+    }
+
+    /// <summary>
+    /// Whether the reset is due <paramref name="elapsedMs"/> after the last aura ended. With a sweep, the last sweep at or before
+    /// <paramref name="nowMs"/> (<paramref name="nowMs"/> minus its remainder) must itself be more than <paramref name="resetMs"/> after the end.
+    /// </summary>
+    private static bool IsResetDue(uint elapsedMs, uint nowMs, uint resetMs, uint resetSweepMs)
+    {
+        if (resetSweepMs == 0)
+        {
+            return elapsedMs > resetMs;
+        }
+
+        uint sinceSweep = nowMs % resetSweepMs;
+        return elapsedMs >= sinceSweep && elapsedMs - sinceSweep > resetMs;
     }
 
     /// <summary>One more hit: bump an existing entry up to immune, or create it at level 2.</summary>

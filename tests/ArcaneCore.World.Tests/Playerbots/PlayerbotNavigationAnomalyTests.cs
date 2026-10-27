@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Protocol;
@@ -214,8 +215,11 @@ public sealed class PlayerbotNavigationAnomalyTests
 
     // --- nav/replan-loop ----------------------------------------------------------------------------------------
 
-    /// <summary>Plans toward one goal <paramref name="times"/> times, <paramref name="gapMs"/> apart on the world clock, the bot moving <paramref name="stepYards"/> between plans.</summary>
-    private static async Task PlanRepeatedly(RiskTestWorld world, int times, uint gapMs, float stepYards, bool rooted = false)
+    /// <summary>
+    /// Plans toward one goal <paramref name="times"/> times, <paramref name="gapMs"/> apart on the world clock, the bot moving <paramref name="stepYards"/>
+    /// between plans; <paramref name="inCombat"/> says, per plan, whether the bot is put in combat before it (or taken out of it).
+    /// </summary>
+    private static async Task PlanRepeatedly(RiskTestWorld world, int times, uint gapMs, float stepYards, bool rooted = false, Func<int, bool>? inCombat = null)
     {
         for (int i = 0; i < times; i++)
         {
@@ -228,6 +232,13 @@ public sealed class PlayerbotNavigationAnomalyTests
                     var movement = player.Movement;
                     movement.Flags |= MovementFlags.Root;
                     player.ApplyMovement(movement, 0);
+                }
+
+                if (inCombat is not null)
+                {
+                    if (inCombat(i)) player.Map!.Combat.SetInCombatState(player, 60_000);
+                    else MapCombat.ClearInCombat(player);
+                    Assert.Equal(inCombat(i), player.Combat.IsInCombat);
                 }
 
                 PlayerbotNavigation.TryPlanToward(player, new Vector3(player.X + 100f, player.Y - stepYards * i, player.Z), Options, out _);
@@ -246,6 +257,47 @@ public sealed class PlayerbotNavigationAnomalyTests
         await PlanRepeatedly(world, PlayerbotNavigationAnomalies.ReplanLoopPlans, 5_000, stepYards: 0f);
         Assert.True(cap.Any(Key("replan-loop")), cap.Describe());
         Assert.Equal(1, cap.Count(Key("replan-loop"))); // one report for the episode
+        // Issue #1494: the detail names the route the plans answered (its first leg and length), so a report can be told from a bot that walks it.
+        Assert.Contains("first leg", cap.Notices.Single(n => n.Key == Key("replan-loop")).Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #1494: plans from one spot minutes apart (a bot resting, drinking or standing at a vendor between them) are separate visits, not
+    /// one loop: <see cref="PlayerbotRoutePlanWatch"/> resets after <see cref="PlayerbotRoutePlanWatch.WindowMs"/> idle, and so does the check.
+    /// </summary>
+    [Fact]
+    public async Task ReplanningOneGoalFromOneSpot_MinutesApart_IsNoLoop()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Normal, [start, end])));
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        await PlanRepeatedly(world, PlayerbotNavigationAnomalies.ReplanLoopPlans, PlayerbotRoutePlanWatch.WindowMs + 20_000, stepYards: 0f);
+        Assert.False(cap.Any(Key("replan-loop")), cap.Describe());
+    }
+
+    /// <summary>
+    /// Issue #1494: plans made while the bot is in combat (it cannot walk the route: it fights) do not count toward a loop, as in
+    /// <see cref="PlayerbotRoutePlanWatch"/>; a plan after the fight starts a new count.
+    /// </summary>
+    [Fact]
+    public async Task ReplanningFromOneSpot_InCombatThenOutOfIt_IsNoLoop()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Normal, [start, end])));
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        int last = PlayerbotNavigationAnomalies.ReplanLoopPlans - 1;
+        await PlanRepeatedly(world, PlayerbotNavigationAnomalies.ReplanLoopPlans, 5_000, stepYards: 0f, inCombat: i => i < last);
+        Assert.False(cap.Any(Key("replan-loop")), cap.Describe());
+    }
+
+    [Fact]
+    public async Task ReplanningFromOneSpot_InCombatThroughout_IsNoLoop()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await OnMesh(world, new Canned((start, end) => new PathResult(PathType.Normal, [start, end])));
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        await PlanRepeatedly(world, PlayerbotNavigationAnomalies.ReplanLoopPlans, 5_000, stepYards: 0f, inCombat: static _ => true);
+        Assert.False(cap.Any(Key("replan-loop")), cap.Describe());
     }
 
     [Fact]

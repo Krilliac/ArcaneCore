@@ -83,7 +83,10 @@ public sealed class AlteracValleyAssaultScenarioTests
 
             await context.StepAsync("the bot takes control of its shredder", async () =>
             {
+                long mark = ally.Mark();
                 ScenarioContext.Expect(await ally.CastAsync(AlteracValleyAssaultTestContent.ControlShredder, shredder!.Guid), "control refused");
+                // Its go (at once, or at the batch boundary with spell batching on), then the charm it applied.
+                await ally.WaitForPacketAsync(WorldOpcode.SmsgSpellGo, ScenarioDecoders.SpellGo, g => g.SpellId == AlteracValleyAssaultTestContent.ControlShredder, mark);
                 await context.ExpectAsync(ally, "the bot controls the shredder", p => p.CharmGuid == shredder!.Guid);
             });
 

@@ -98,6 +98,19 @@ public sealed class StanceTests
         }
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         public Rig(CombatOptions? options = null, ShapeshiftFormCatalog? forms = null)
@@ -127,13 +140,17 @@ public sealed class StanceTests
         public SpellCastResult Cast(uint spell, bool triggered = false)
         {
             Kit.Advance(1500);
-            return System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered);
+            SpellCastResult result = System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered);
+            FlushSpellBatch(Kit);
+            return result;
         }
 
         public SpellCastResult CastAtEnemy(uint spell)
         {
             Kit.Advance(1500);
-            return System.CastSpell(Player, spell, SpellCastTargets.ForUnit(Enemy.Guid), triggered: false);
+            SpellCastResult result = System.CastSpell(Player, spell, SpellCastTargets.ForUnit(Enemy.Guid), triggered: false);
+            FlushSpellBatch(Kit);
+            return result;
         }
 
         public bool Has(uint spell) => System.HasAura(Player, spell);
@@ -434,6 +451,7 @@ public sealed class StanceTests
         new ShapeshiftService(kit.System, ShapeshiftFormCatalog.WarriorStances, new CombatOptions(), _ => []).Install();
         kit.World.RunTick(0);
         kit.System.CastSpell(player, BattleStance, SpellCastTargets.ForSelf(), triggered: false);
+        FlushSpellBatch(kit);
         Assert.Equal(ShapeshiftForm.BattleStance, ShapeshiftService.GetForm(player));
 
         player.Health = 0;

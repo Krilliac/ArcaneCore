@@ -15,6 +15,15 @@ namespace ArcaneCore.Game.Tests;
 
 public sealed class QuestSettlementCombatTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -97,6 +106,7 @@ public sealed class QuestSettlementCombatTests
         Assert.Equal(SpellCastResult.NotReady, kit.System.CastSpell(caster, InstantHeal, SpellCastTargets.ForSelf(), triggered: true));
         caster.EndQuestSettlement(operation);
         kit.Advance(2000);
+        ResolveSpellBatch(kit);
         Assert.Equal(45u, target.Health);
         Assert.Equal(50u, SpellSystem.GetPower(caster, PowerType.Rage));
     }

@@ -13,6 +13,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Bots;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Gm.Args;
@@ -76,8 +77,13 @@ public sealed class DebugDrawCommands : ICommandGroup
                 new ChatCommand("range", AccountSecurity.GameMaster, "Syntax: .debug vis range [#yards]\nMark a circle of #yards around you on the floor (default the visibility distance, 100 yards).", Range, RetailLevel: 3),
                 new ChatCommand("spawns", AccountSecurity.GameMaster, "Syntax: .debug vis spawns [#yards]\nMark the spawn points of the creatures spawned within #yards (default 40), nearest first.", Spawns, RetailLevel: 3),
                 new ChatCommand("kit", AccountSecurity.GameMaster, "Syntax: .debug vis kit #kitid\nPlay a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked).", Kit, RetailLevel: 3),
+                new ChatCommand("follow", AccountSecurity.GameMaster, "Syntax: .debug vis follow [off]\nStart or stop following the selected creature or playerbot: its current path is drawn (blue corners, red when incomplete or a straight line, a glyphed crystal with a tall yellow glow at its goal) and redrawn whenever it changes, until the unit leaves your map, a creature dies, or you log out or change map. With off: stop following every unit and remove their path markers.", Follow, Children:
+                [
+                    new ChatCommand("nearby", AccountSecurity.GameMaster, "Syntax: .debug vis follow nearby [#yards]\nFollow every creature and playerbot moving within #yards of you now (default 40), nearest first, up to your follow limit.", FollowNearby, RetailLevel: 3),
+                    new ChatCommand("list", AccountSecurity.GameMaster, "Syntax: .debug vis follow list\nList the units you follow with their path points and markers.", FollowList, RetailLevel: 3),
+                ], RetailLevel: 3),
                 new ChatCommand("list", AccountSecurity.GameMaster, "Syntax: .debug vis list\nList your drawings with their marker counts and the seconds they have left.", List, RetailLevel: 3),
-                new ChatCommand("clear", AccountSecurity.GameMaster, "Syntax: .debug vis clear\nRemove all your markers now.", Clear, RetailLevel: 3),
+                new ChatCommand("clear", AccountSecurity.GameMaster, "Syntax: .debug vis clear\nRemove all your markers now and stop following.", Clear, RetailLevel: 3),
             ], RetailLevel: 3),
         ], RetailLevel: 3),
     ];
@@ -586,7 +592,148 @@ public sealed class DebugDrawCommands : ICommandGroup
 
     private static bool Clear(CommandContext context, string args)
     {
-        context.Reply(Cleared(Feature(context).Clear(context.Player)));
+        DebugDrawFeature feature = Feature(context);
+        int follows = feature.Follow.Forget(context.Player);
+        context.Reply(Cleared(feature.Clear(context.Player)));
+        if (follows > 0)
+        {
+            context.Reply(FollowStopped(follows));
+        }
+
+        return true;
+    }
+
+    /// <summary>Default <c>.debug vis follow nearby</c> radius (yards).</summary>
+    public const float FollowNearbyDefault = 40f;
+
+    public static string Following(string name, int count, int max) => F($"{Prefix}following {name} ({count} of {max}); its path is redrawn when it changes. .debug vis follow again stops.");
+
+    public static string Unfollowed(string name) => F($"{Prefix}stopped following {name}.");
+
+    public static string FollowStopped(int count) => F($"{Prefix}stopped following {count} unit(s).");
+
+    public static string FollowFull(int max) => F($"{Prefix}you already follow {max} unit(s), the limit (.debug vis follow off, or World:GmCommands:DebugDraw:MaxFollowedUnits).");
+
+    public const string FollowNotBot = Prefix + "that player is not a playerbot: only a bot's route can be drawn, so nothing will show.";
+
+    public const string FollowNoRoutes = Prefix + "no playerbot pack is attached: a bot has no route to draw until it is.";
+
+    public const string FollowNothing = Prefix + "you follow nothing.";
+
+    private static bool Follow(CommandContext context, string args)
+    {
+        // "off" is an argument, not a subcommand: it changes only what this GM's client shows, never server state, so it is not one of the
+        // audited write verbs (Gm/Audit, DebugWriteEnforcementTests).
+        if (args.Trim().Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            return FollowOff(context);
+        }
+
+        if (!string.IsNullOrWhiteSpace(args))
+        {
+            return false;
+        }
+
+        if (context.Player.Map is not { } map)
+        {
+            context.Reply(NotInMap);
+            return true;
+        }
+
+        if (SelectedUnit(context, map) is not { } unit)
+        {
+            return true;
+        }
+
+        DebugDrawFeature feature = Feature(context);
+        DebugPathFollow follow = feature.Follow;
+        string name = NameOf(unit);
+        if (follow.Stop(context.Player, unit.Guid))
+        {
+            context.Reply(Unfollowed(name));
+            return true;
+        }
+
+        if (unit is Player player)
+        {
+            if (!player.Session.IsPlayerbot)
+            {
+                context.Reply(FollowNotBot);
+            }
+            else if (context.Session.Services.GetService<ManagedBotRegistry>()?.RouteSource is null)
+            {
+                context.Reply(FollowNoRoutes);
+            }
+        }
+
+        if (!follow.Start(context.Player, unit))
+        {
+            context.Reply(FollowFull(feature.Options.MaxFollowedUnits));
+            return true;
+        }
+
+        context.Reply(Following(name, follow.Count(context.Player), feature.Options.MaxFollowedUnits));
+        return true;
+    }
+
+    private static bool FollowNearby(CommandContext context, string text)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractOptFloat(out float radius, FollowNearbyDefault) || !args.IsEmpty || !float.IsFinite(radius) || radius < 1f)
+        {
+            return false;
+        }
+
+        if (context.Player.Map is null)
+        {
+            context.Reply(NotInMap);
+            return true;
+        }
+
+        DebugDrawFeature feature = Feature(context);
+        DebugPathFollow follow = feature.Follow;
+        float cap = feature.Options.FollowNearbyMaxRadius;
+        string capped = radius > cap ? F($" (cut to {cap:F0} yd, World:GmCommands:DebugDraw:FollowNearbyMaxRadius)") : string.Empty;
+        radius = Math.Min(radius, cap);
+        IReadOnlyList<Unit> moving = follow.MovingNear(context.Player, radius);
+        int max = feature.Options.MaxFollowedUnits;
+        int room = Math.Max(0, max - follow.Count(context.Player));
+        List<Unit> taken = [.. moving.Take(room)];
+        follow.StartMany(context.Player, taken);
+        List<string> names = [.. taken.Select(NameOf)];
+
+        string started = names.Count > 0 ? ": " + string.Join(", ", names) : ".";
+        context.Reply(F($"{Prefix}{moving.Count} unit(s) moving within {radius:F0} yd{capped}; now following {names.Count} more ({follow.Count(context.Player)} of {max}){started}"));
+        if (moving.Count > names.Count)
+        {
+            context.Reply(F($"{Prefix}{moving.Count - names.Count} farther unit(s) left out (follow limit {max}); the markers are shared among the units you follow."));
+        }
+
+        return true;
+    }
+
+    private static bool FollowOff(CommandContext context)
+    {
+        context.Reply(FollowStopped(Feature(context).Follow.StopAll(context.Player)));
+        return true;
+    }
+
+    private static bool FollowList(CommandContext context, string args)
+    {
+        IReadOnlyList<DebugFollowEntry> entries = Feature(context).Follow.Entries(context.Player);
+        if (entries.Count == 0)
+        {
+            context.Reply(FollowNothing);
+            return true;
+        }
+
+        context.Reply(F($"{Prefix}following {entries.Count} unit(s):"));
+        foreach (DebugFollowEntry entry in entries)
+        {
+            string path = entry.PathPoints == 0 ? "standing (no path)" : F($"{entry.PathPoints} path point(s), {entry.Markers} marker(s)");
+            context.Reply(F($"{Prefix}{entry.Name} ({(entry.IsPlayer ? "bot" : "creature")}): {path}"));
+        }
+
         return true;
     }
 
