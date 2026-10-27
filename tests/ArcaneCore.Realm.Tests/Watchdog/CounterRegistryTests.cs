@@ -72,24 +72,32 @@ public sealed class CounterRegistryTests
         const int PerThread = 200_000;
         Counter[] hot = [_registry.GetOrAdd("hot.a"), _registry.GetOrAdd("hot.b"), _registry.GetOrAdd("hot.c"), _registry.GetOrAdd("hot.d")];
         using var start = new ManualResetEventSlim(false);
-        Task[] writers = [.. Enumerable.Range(0, Threads).Select(t => Task.Run(() =>
+        using var readerUp = new ManualResetEventSlim(false);
+        // Own threads, and the writers wait for the reader: on Task.Run eight writers blocked on the start event could hold the pool's
+        // threads, so the reader task began only after every writer had finished and took no snapshot (Node1, five gates at once:
+        // snapshots was 0). Now the reader is running before any increment.
+        Task[] writers = [.. Enumerable.Range(0, Threads).Select(t => Task.Factory.StartNew(() =>
         {
             start.Wait();
+            readerUp.Wait();
             for (int i = 0; i < PerThread; i++)
             {
                 hot[(i + t) & 3].Increment();
             }
-        }))];
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default))];
 
         // A reader takes snapshots and registers new counters while the writers run.
         var previous = new Dictionary<string, long>(StringComparer.Ordinal);
         int snapshots = 0;
-        Task reader = Task.Run(() =>
+        Task reader = Task.Factory.StartNew(() =>
         {
             start.Wait();
+            readerUp.Set();
             int registered = 0;
-            while (!writers.All(w => w.IsCompleted))
+            bool writing;
+            do
             {
+                writing = !writers.All(w => w.IsCompleted);
                 _registry.GetOrAdd("late." + registered++);
                 CounterSnapshot snapshot = _registry.Snapshot(snapshots);
                 snapshots++;
@@ -104,7 +112,8 @@ public sealed class CounterRegistryTests
                     previous[sample.Name] = sample.Value;
                 }
             }
-        });
+            while (writing);
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         start.Set();
         await Task.WhenAll(writers);
