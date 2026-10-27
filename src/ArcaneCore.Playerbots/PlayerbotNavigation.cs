@@ -767,8 +767,28 @@ internal static class PlayerbotNavigation
     }
 
     /// <summary>
+    /// Whether <paramref name="goal"/> lies in a walking region (graph component, steep slopes excluded) the bot's own does not join, for a
+    /// caller that must not start a walk to such a place. As <see cref="IsUnreachableOnFoot"/> (an indoor end is let through: the indoor climb,
+    /// <see cref="TryClimbIndoors"/>, may reach it over steep stairs), but without its leniency toward a bot whose component is more than 16
+    /// times smaller than the goal's (Teldrassil against the mainland: other callers have transport to try first, a battlemaster walk has none).
+    /// Not asked of a bot on a fragment (it hops off first), and false when the graph is not built or either place is on no region. No path search.
+    /// Unlike <see cref="InOtherWalkingComponent"/> (the tram's: keeps the 16x leniency, drops the outdoors exemption), this keeps the outdoors exemption and drops the 16x leniency.
+    /// </summary>
+    internal static bool IsInOtherWalkingRegion(Player player, Vector3 goal)
+    {
+        if (!goal.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return false;
+        Vector3 here = PlayerbotMotion.CurrentPosition(player);
+        int from = nav.RegionAt(graph, here, WalkingLocate), to = nav.RegionAt(graph, goal, WalkingLocate);
+        return from >= 0 && to >= 0 && graph.ComponentOf(from) != graph.ComponentOf(to) && !IsFragment(graph, from)
+            && IsOutdoorsOnSurface(map, goal) && IsOutdoorsOnSurface(map, here);
+    }
+
+    /// <summary>
     /// Whether the map's walking region graph (steep slopes excluded) puts the bot and <paramref name="goal"/> in different components,
     /// without <see cref="IsUnreachableOnFoot"/>'s outdoors exemption (kept: its fragment and small-part exemptions). False when the graph is not built yet or either place is on no region.
+    /// Unlike <see cref="IsInOtherWalkingRegion"/> (the battlemaster walk's), which drops the small-part leniency and keeps the outdoors exemption.
     /// </summary>
     internal static bool InOtherWalkingComponent(Player player, Vector3 goal)
     {

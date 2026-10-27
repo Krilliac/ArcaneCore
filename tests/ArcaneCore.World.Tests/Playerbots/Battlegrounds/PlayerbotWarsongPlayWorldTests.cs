@@ -212,7 +212,7 @@ public sealed class PlayerbotWarsongPlayWorldTests
             // Past the ten-minute set-aside the same battlemaster is still out of reach from here.
             await context.IdleAsync(TimeSpan.FromMilliseconds(PlayerbotBattlegroundCoordinator.SetAsideMs + 60_000));
             ScenarioContext.ExpectEqual(1, Walks(), string.Join(" | ", coordinator.Events));
-            ScenarioContext.Expect(capture.Count(ObjectiveUnreachable) <= 2, capture.Describe());
+            ScenarioContext.ExpectEqual(1, capture.Count(ObjectiveUnreachable), capture.Describe());
         });
     }
 
