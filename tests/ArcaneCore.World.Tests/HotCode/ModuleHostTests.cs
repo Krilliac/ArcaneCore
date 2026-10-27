@@ -179,6 +179,7 @@ public sealed class ModuleHostTests : IDisposable
         Assert.Empty(host.List());
         Assert.False(_opcodes.TryGet(WorldOpcode.CmsgQueryTime, out _));
         Assert.Null(Help("hotfixture"));
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
         string audit = await File.ReadAllTextAsync(Path.Combine(_dir, "audit.log"));
         Assert.Contains("module-rejected", audit);
         Assert.Contains(Sha(dll), audit);
@@ -488,6 +489,7 @@ public sealed class ModuleHostTests : IDisposable
         await _host.LoadAsync("Nothing");
         await _host.UnloadAsync("HotFixture");
 
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
         string[] lines = await File.ReadAllLinesAsync(Path.Combine(_dir, "audit.log"));
 
         Assert.Equal(3, lines.Length);

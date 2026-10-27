@@ -148,6 +148,12 @@ internal sealed class RotationState
 
     public bool HasRangedWeapon { get; init; }
 
+    /// <summary>
+    /// The kite is holding the bot at range this think (<see cref="PlayerbotKite.HoldRange"/> is past melee): a warrior or rogue
+    /// shoots only then. Without it the bot walks in to melee, where its class does its damage.
+    /// </summary>
+    public bool KiteHolding { get; init; }
+
     public bool HasWand { get; init; }
 
     public RotationItem? HealingPotion { get; init; }

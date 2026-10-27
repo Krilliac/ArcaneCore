@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -250,7 +251,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             var settings = new HonorSettings();
             services.GetService<IConfiguration>()?.GetSection(HonorSettings.SectionName).Bind(settings);
             _options = settings.ToOptions();
-            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>());
+            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>(), drain: services.GetService<ShutdownDrain>()?.Features);
             _writes.FatalFailure += ex =>
             {
                 FaultLedger.Shared.Record("honor.writes-fatal", ex);

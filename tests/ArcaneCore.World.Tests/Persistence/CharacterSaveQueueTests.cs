@@ -520,7 +520,7 @@ public sealed class CharacterSaveQueueTests
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync());
         Assert.IsType<IOException>(error.InnerException);
         Assert.Contains("1", error.Message);
-        Assert.Equal(6, kit.Store.Attempts.Count);
+        Assert.Equal(6, kit.Store.Attempts.Count); // as before the stop drain: three inline attempts when the consumer reaches the snapshot, three more in the final pass
         Assert.Equal(0, kit.Queue.Pending);
     }
 
@@ -1538,10 +1538,148 @@ public sealed class CharacterSaveQueueTests
         kit.Queue.Start();
         Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
 
-        // Still locked at shutdown: the drain retries inline, then reports the character instead of dropping it silently.
+        // Still locked at shutdown: the drain makes its one attempt, then reports the character instead of dropping it silently.
         InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(20)));
         Assert.Contains("1", refused.Message, StringComparison.Ordinal);
         Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task Stop_WithALockedDatabase_RetriesUntilTheLaneStalls_ThenRefuses_AndNamesAll()
+    {
+        const int snapshots = 10;
+        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) } };
+        await using var kit = new Kit(drain: drain);
+        kit.Store.OnSave = async (_, _) =>
+        {
+            await Task.Delay(200);
+            throw Busy();
+        };
+        for (int id = 1; id <= snapshots; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        kit.Queue.Start();
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+
+        for (int id = 1; id <= snapshots; id++)
+        {
+            Assert.Contains(id.ToString(), refused.Message, StringComparison.Ordinal); // every character is named
+        }
+
+        Assert.InRange(kit.Store.Attempts.Count, 2, 3); // ten snapshots, three inline attempts each and 200 ms per attempt would be thirty
+        Assert.All(kit.Store.Attempts, s => Assert.Equal(1, s.Id)); // snapshot 1 made its attempts until the lane stalled; 2..10 were refused untried
+        Assert.True(drain.Saves.Refused >= 9, drain.Saves.Describe());
+        Assert.Empty(kit.Store.Saved);
+        Assert.Equal(snapshots, kit.Queue.RetainedCharacters.Count);
+    }
+
+    [Fact]
+    public async Task Stop_ATransientFailureOfOneSnapshot_IsRetriedInlineAndLands()
+    {
+        var drain = new ShutdownDrain();
+        await using var kit = new Kit(drain: drain);
+        var failures = 0;
+        kit.Store.OnSave = (state, _) => state.Id == 1 && Interlocked.Increment(ref failures) <= 2
+            ? Task.FromException(new IOException("transient blip"))
+            : Task.CompletedTask;
+        for (int id = 1; id <= 3; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)); // the consumer starts inside the stop: every snapshot is written while stopping
+
+        Assert.Equal([1, 2, 3], kit.Store.Saved.Select(s => s.Id).Order());
+        Assert.Equal(3, kit.Store.Attempts.Count(a => a.Id == 1));
+        Assert.Equal(0, drain.Saves.Refused);
+    }
+
+    [Fact]
+    public async Task Stop_ABusyLockThatClearsAfterOneBusyTimeout_LandsEverySnapshot()
+    {
+        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(500) } };
+        await using var kit = new Kit(drain: drain);
+        var calls = 0;
+        kit.Store.OnSave = async (state, _) =>
+        {
+            if (state.Id == 1 && Interlocked.Increment(ref calls) <= 2)
+            {
+                await Task.Delay(200); // the store's bounded wait on a foreign lock
+                throw Busy();
+            }
+        };
+        for (int id = 1; id <= 3; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal([1, 2, 3], kit.Store.Saved.Select(s => s.Id).Order());
+        Assert.Equal(0, drain.Saves.Refused);
+        Assert.Equal(0, drain.Saves.StalledMs); // the landing reset the stall
+    }
+
+    [Fact]
+    public void SavesLaneDefault_IsThreeBusyTimeouts()
+    {
+        var drain = new ShutdownDrain();
+        Assert.Equal(TimeSpan.FromSeconds(15), drain.Saves.StallBudget);
+        Assert.Equal(TimeSpan.FromSeconds(10), drain.Features.StallBudget);
+
+        // A queue stopped outside a host (no drain) gets its own lane with the saves budget, not the feature one. The lane is private: read it through the field.
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
+        var lane = (StopDrainBudget)typeof(CharacterSaveQueue).GetField("_drain", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(queue)!;
+        Assert.Equal(TimeSpan.FromSeconds(15), lane.StallBudget);
+        Assert.Contains("of 15000 ms", lane.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stop_HealthySlowDrain_IsNeverCut()
+    {
+        const int snapshots = 30;
+        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) } };
+        await using var kit = new Kit(drain: drain);
+        kit.Store.OnSave = async (_, _) => await Task.Delay(40);
+        for (int id = 1; id <= snapshots; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        kit.Queue.Start();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(60)); // thirty landed saves cost more than the stall budget in wall time, and none is cut
+        elapsed.Stop();
+
+        Assert.Equal(snapshots, kit.Store.Saved.Count);
+        Assert.Equal(0, drain.Saves.Refused);
+        Assert.True(elapsed.Elapsed >= TimeSpan.FromMilliseconds(600), $"the drain took {elapsed.Elapsed}");
+    }
+
+    [Fact]
+    public async Task Stop_UsesTheSavesLane_NotTheFeaturesLane()
+    {
+        var drain = new ShutdownDrain { Features = new StopDrainBudget { StallBudget = TimeSpan.Zero } };
+        drain.Features.Begin();
+        Assert.True(drain.Features.Exhausted); // whatever the feature queues burned
+        await using var kit = new Kit(drain: drain);
+        for (int id = 1; id <= 3; id++)
+        {
+            kit.Queue.Enqueue(State(id, (uint)id));
+        }
+
+        kit.Queue.Start();
+        await kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(3, kit.Store.Saved.Count);
+        Assert.True(drain.Saves.Started);
+        Assert.Equal(0, drain.Saves.Refused);
+        Assert.Equal(0, drain.Features.Refused);
     }
 
     [Fact]
@@ -1661,7 +1799,7 @@ public sealed class CharacterSaveQueueTests
     private sealed class Kit : IAsyncDisposable
     {
         private readonly ServiceProvider _services;
-        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null, TimeSpan? busyPause = null)
+        public Kit(WorldRuntimeOptions? options = null, ILogger<CharacterSaveQueue>? logger = null, IOpsAnnouncer? announcer = null, TimeSpan? busyPause = null, ShutdownDrain? drain = null)
         {
             _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
             IServiceScopeFactory scopes = _services.GetRequiredService<IServiceScopeFactory>();
@@ -1669,8 +1807,8 @@ public sealed class CharacterSaveQueueTests
             IOptions<WorldRuntimeOptions> opts = Options.Create(options ?? new WorldRuntimeOptions());
             // A pause too long to end during a test makes the ordering asserts independent of wall-clock stalls; without one the production default stands.
             Queue = busyPause is { } pause
-                ? new CharacterSaveQueue(scopes, log, opts, announcer) { BusyBackoff = [pause] }
-                : new CharacterSaveQueue(scopes, log, opts, announcer);
+                ? new CharacterSaveQueue(scopes, log, opts, announcer, drain) { BusyBackoff = [pause] }
+                : new CharacterSaveQueue(scopes, log, opts, announcer, drain);
         }
 
         public RecordingStore Store { get; } = new();

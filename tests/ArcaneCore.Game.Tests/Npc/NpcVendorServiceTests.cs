@@ -176,6 +176,47 @@ public sealed class NpcVendorServiceTests
     }
 
     [Fact]
+    public void SoldItem_IsNotReachableByPosition_GetItemIgnoresTheBuybackSlots()
+    {
+        // vmangos Player::GetItemByPos (Player.cpp:8475) only serves the equipment, backpack, bag and bank-bag
+        // slots plus the keyring; the buyback slots are reached through GetBuybackItem only.
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
+        Item sword = kit.Give(Sword);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+
+        Assert.Same(sword, kit.Player.Inventory.GetBuybackItem(InventorySlots.BuybackStart));
+        Assert.Null(kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.BuybackStart));
+    }
+
+    [Fact]
+    public void SoldItem_CannotBeAutoStoredOutOfTheBuybackSlot()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
+        Item sword = kit.Give(Sword);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+        uint money = kit.Player.Money;
+
+        kit.Player.Inventory.AutoStoreBagItem(InventorySlots.Bag0, InventorySlots.BuybackStart, InventorySlots.Bag0);
+
+        Assert.Same(sword, kit.Player.Inventory.GetBuybackItem(InventorySlots.BuybackStart));
+        Assert.Equal(0u, kit.Player.Inventory.GetItemCount(Sword));
+        Assert.Equal(money, kit.Player.Money);
+    }
+
+    [Fact]
+    public void SoldItem_CannotBeAutoEquippedOutOfTheBuybackSlot()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor);
+        Item sword = kit.Give(Sword);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+
+        kit.Player.Inventory.AutoEquipItem(InventorySlots.Bag0, InventorySlots.BuybackStart);
+
+        Assert.Same(sword, kit.Player.Inventory.GetBuybackItem(InventorySlots.BuybackStart));
+        Assert.Null(kit.Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand));
+    }
+
+    [Fact]
     public void SellItem_SpentExpendableCharges_ScaleThePrice()
     {
         // vmangos HandleSellItemOpcode (ItemHandler.cpp:523-537): negative template charges make the price relative to
