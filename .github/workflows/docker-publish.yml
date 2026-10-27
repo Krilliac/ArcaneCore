@@ -1,0 +1,210 @@
+name: Docker publish
+
+# Builds the world, realm and tools images of apps/docker/Dockerfile in BOTH configurations (Debug and Release) for linux/amd64 and
+# linux/arm64 and pushes them to the GitHub Container Registry, so a Docker VPS pulls them (docker-compose.prod.yml,
+# docs/guide/docker.md) instead of building from source.
+#
+# Triggers: a nightly schedule (skipped when main has no new commit since the last successful scheduled run), a version tag v*, and
+# workflow_dispatch. A pull request that changes the Dockerfile, the build props, a project file or a lock file (the inputs that decide
+# what the image contains; C# source changes alone do not start it, docker-smoke builds the amd64 image from those) runs the same
+# multi-arch build with push: false, so a linux/arm64 failure shows before the merge.
+#
+# Tags pushed per image (every tag names its configuration, so Debug and Release can never overwrite each other):
+#   nightly      edge (Debug), edge-release (Release), sha-<7 hex>-debug and sha-<7 hex>-release (the commit built)
+#   v* tag       the tag itself (Release) and <tag>-debug (Debug); no sha- tag, a tag run never touches the nightly tags
+#   by hand      manual-sha-<7 hex>-debug and manual-sha-<7 hex>-release on a branch, a prefix that no nightly tag has, so a hand run never
+#                overwrites a nightly. A hand run on a v* tag is refused: it would re-push the release tag.
+#
+# linux/arm64 is best effort on the nightly, tag and hand runs: the multi-arch build is tried first; if it fails BEFORE anything was pushed
+# (no digest output) the same image is built and pushed for linux/amd64 only, the run stays green and the run summary and an annotation say
+# that arm64 is missing. A failing amd64 build still fails the run. On a pull request the multi-arch step is NOT best effort: an arm64
+# failure fails the check, which is its whole purpose. An arm64 miss is not retried until main moves (the skip check compares commits only).
+# Git tags ending in -debug are refused: <tag>-debug is the Debug image tag of tag <tag>.
+#
+# Old sha- tags are NOT pruned here; see "Pruning" in docs/guide/docker.md.
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  push:
+    tags: ["v*"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/docker/**"
+      - ".dockerignore"
+      - "global.json"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - ".editorconfig"
+      - "**/*.csproj"
+      - "**/packages.lock.json"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changed:
+    name: new commit since the last nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      EVENT: ${{ github.event_name }}
+      SHA: ${{ github.sha }}
+    steps:
+      # Only the scheduled run is skipped, and only when the last successful scheduled run built this very commit. Hand runs, tags and
+      # pull requests always build. If the lookup fails, build (a wasted run is better than a missed one).
+      - name: Compare with the last successful nightly
+        id: check
+        run: |
+          build=true
+          if [ "$EVENT" = "schedule" ]; then
+            last=$(gh api "repos/$GH_REPO/actions/workflows/docker-publish.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""' || true)
+            if [ -n "$last" ] && [ "$last" = "$SHA" ]; then
+              build=false
+              echo "main has not moved since the last nightly ($SHA); skipping." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: publish ${{ matrix.target }} ${{ matrix.configuration }}
+    needs: changed
+    if: needs.changed.outputs.build == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # packages: write is static on purpose (GitHub does not evaluate expressions in permissions). A pull request run still holds it, but
+    # no step uses it there: the login is skipped, push is false and nothing writes the cache; a fork's token is read-only anyway.
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [world, realm, tools]
+        configuration: [Debug, Release]
+    env:
+      CONFIGURATION: ${{ matrix.configuration }}
+      OWNER: ${{ github.repository_owner }}
+      # Lower-case configuration, used in tag names and cache scopes.
+      CFG: ${{ matrix.configuration == 'Debug' && 'debug' || 'release' }}
+    steps:
+      - name: Refuse a version tag that ends in -debug
+        if: github.ref_type == 'tag' && endsWith(github.ref_name, '-debug')
+        run: |
+          echo "::error::Tags ending in -debug are reserved: <tag>-debug is the Debug image tag of the release <tag>."
+          exit 1
+
+      - name: Refuse a hand run on a version tag
+        if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+        run: |
+          echo "::error::Run this workflow on a branch. A hand run on a v* tag would re-push that release tag."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The registry path must be lower case; the owner of this repository is not.
+      # Repository move: the image owner is derived here from the repository owner; docker-compose.prod.yml defaults to ghcr.io/krilliac
+      # and takes ARCANE_IMAGE_REPO as the override. Change that default (and the README and docs/guide/docker.md) when the repository moves.
+      - name: Image name
+        id: image
+        env:
+          TARGET: ${{ matrix.target }}
+        run: echo "name=ghcr.io/${OWNER,,}/arcanecore-${TARGET}" >> "$GITHUB_OUTPUT"
+
+      # arm64 runtime stages are tiny (a base image and a COPY); the compile runs natively (Dockerfile, --platform=$BUILDPLATFORM).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # A pull request only builds: nothing is pushed, so it needs no login (and a fork's token could not write anyway).
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag,suffix=${{ matrix.configuration == 'Debug' && '-debug' || '' }}
+            type=raw,value=${{ matrix.configuration == 'Debug' && 'edge' || 'edge-release' }},enable=${{ github.event_name == 'schedule' }}
+            type=sha,suffix=-${{ env.CFG }},enable=${{ github.event_name == 'schedule' }}
+            type=sha,prefix=manual-sha-,suffix=-${{ env.CFG }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+
+      # linux/arm64 is best effort outside pull requests: a failure here is not a failure of the run (the amd64-only step below takes over,
+      # but only when nothing was pushed). On a pull request the failure fails the job.
+      - name: Build and push (linux/amd64 and linux/arm64)
+        id: multiarch
+        continue-on-error: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            CONFIGURATION=${{ env.CONFIGURATION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: ${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ env.CFG }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,ignore-error=true,scope={0}-{1}', matrix.target, env.CFG) || '' }}
+
+      - name: Build and push (linux/amd64 only, arm64 failed)
+        # No digest output means the push did not happen; a failure after a good multi-arch push (the tags are right) must not overwrite them.
+        id: amd64only
+        if: steps.multiarch.outcome == 'failure' && steps.multiarch.outputs.digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          build-args: |
+            CONFIGURATION=${{ env.CONFIGURATION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: ${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ env.CFG }}
+
+      - name: Run summary
+        if: always()
+        env:
+          MULTIARCH: ${{ steps.multiarch.outcome }}
+          AMD64ONLY: ${{ steps.amd64only.outcome }}
+          TARGET: ${{ matrix.target }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [ "$AMD64ONLY" = "success" ]; then
+            echo "::warning title=arm64 missing::$TARGET $CONFIGURATION was built for linux/amd64 only; the linux/arm64 build failed (best effort)."
+            echo "- **$TARGET $CONFIGURATION: linux/amd64 only. The linux/arm64 build failed** (best effort, see the failed step above)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MULTIARCH" = "failure" ] && [ "$AMD64ONLY" = "skipped" ]; then
+            echo "::warning title=build step failed after the push::$TARGET $CONFIGURATION: the multi-arch step reported a failure after pushing; the pushed tags were left alone."
+            echo "- **$TARGET $CONFIGURATION: the multi-arch step failed after the push (tags left as pushed); check the log.**" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MULTIARCH" = "success" ]; then
+            echo "- $TARGET $CONFIGURATION: linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$TAGS" ]; then
+            printf '  tags: %s\n' "$(echo "$TAGS" | tr '\n' ' ')" >> "$GITHUB_STEP_SUMMARY"
+          fi
