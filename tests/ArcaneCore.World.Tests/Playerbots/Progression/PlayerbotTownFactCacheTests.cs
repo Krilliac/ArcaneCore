@@ -30,10 +30,10 @@ namespace ArcaneCore.World.Tests.Playerbots.Progression;
 public sealed class PlayerbotTownFactCacheTests
 {
     private const uint WantedPotion = 9701, OtherPotion = 9702, Bar = 9703, Ore = 9704;
-    private const uint ReagentA = 9711, ReagentB = 9712, ReagentE = 9713, ToolA = 9721, WornBoots = 9731;
-    private const uint PotionRecipe = 997001, OtherRecipe = 997002, SmeltRecipe = 997003, BarRecipe = 997004, EnchantRecipe = 997005;
+    private const uint ReagentA = 9711, ReagentB = 9712, ReagentE = 9713, ReagentU = 9714, ToolA = 9721, WornBoots = 9731, UpgradeBoots = 9732;
+    private const uint PotionRecipe = 997001, OtherRecipe = 997002, SmeltRecipe = 997003, BarRecipe = 997004, EnchantRecipe = 997005, UpgradeRecipe = 997006;
 
-    private static readonly uint[] Probes = [0, ReagentA, ReagentB, ReagentE, ToolA, WantedPotion, OtherPotion, Bar, Ore, 2901, 12345];
+    private static readonly uint[] Probes = [0, ReagentA, ReagentB, ReagentE, ReagentU, ToolA, WantedPotion, OtherPotion, Bar, Ore, 2901, 12345];
 
     private static ItemTestContent Items()
     {
@@ -41,10 +41,12 @@ public sealed class PlayerbotTownFactCacheTests
         foreach (uint entry in new[] { WantedPotion, OtherPotion })
             items.Templates.Templates.Add(new ItemTemplate { Entry = entry, Name = $"potion {entry}", Class = (uint)ItemClass.Consumable,
                 InventoryType = (uint)InventoryType.NonEquip, Stackable = 20, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
-        foreach (uint entry in new[] { ReagentA, ReagentB, ReagentE, ToolA, Bar, Ore })
+        foreach (uint entry in new[] { ReagentA, ReagentB, ReagentE, ReagentU, ToolA, Bar, Ore })
             items.Templates.Templates.Add(new ItemTemplate { Entry = entry, Name = $"supply {entry}", Class = (uint)ItemClass.TradeGoods,
                 InventoryType = (uint)InventoryType.NonEquip, Stackable = 20, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
-        items.Templates.Templates.Add(PlayerbotEquipmentTests.Template(WornBoots, InventoryType.Feet, 5));
+        // Equal boots: a craftable pair is no upgrade while the worn ones work, and is one once they are broken.
+        items.Templates.Templates.Add(PlayerbotEquipmentTests.Template(WornBoots, InventoryType.Feet, 70) with { MaxDurability = 10 });
+        items.Templates.Templates.Add(PlayerbotEquipmentTests.Template(UpgradeBoots, InventoryType.Feet, 70));
         return items;
     }
 
@@ -54,6 +56,7 @@ public sealed class PlayerbotTownFactCacheTests
         // A bar is wanted only while a known recipe uses it (PlayerbotCrafting.CraftPriority rung 4).
         Recipe(SmeltRecipe, Bar, [new SpellReagent(Ore, 1)], [0, 0]),
         Recipe(BarRecipe, OtherPotion, [new SpellReagent(Bar, 2)], [0, 0]),
+        Recipe(UpgradeRecipe, UpgradeBoots, [new SpellReagent(ReagentU, 2)], [0, 0]),
         // Wanted only while a worn item has no permanent enchantment (PlayerbotCrafting.WantsToEnchantSpell).
         new SpellInfo
         {
@@ -138,6 +141,17 @@ public sealed class PlayerbotTownFactCacheTests
                 Check("enchant removed", recomputes: true);
                 Assert.True(cached.Needs(player, ReagentE));
 
+                // A worn item that breaks scores 0, so a craftable replacement becomes an upgrade; repairing it (money only) ends that.
+                book.LearnSpell(player, UpgradeRecipe);
+                Check("learned spell: boots recipe", recomputes: true);
+                Assert.False(cached.Needs(player, ReagentU));
+                worn.Durability = 0;
+                Check("worn item broken", recomputes: true);
+                Assert.True(cached.Needs(player, ReagentU));
+                worn.Durability = worn.MaxDurability;
+                Check("worn item repaired", recomputes: true);
+                Assert.False(cached.Needs(player, ReagentU));
+
                 // Carrying five of a potion ends the want for it and so the need for its reagent; the bank does not count as carried,
                 // so a deposit and a withdraw flip the need back and forth.
                 Assert.True(cached.Needs(player, ReagentA));
@@ -154,7 +168,12 @@ public sealed class PlayerbotTownFactCacheTests
                 Check("bank withdraw", recomputes: true);
                 Assert.False(cached.Needs(player, ReagentA));
 
-                // A swapped spellbook snapshot (a forgotten spell) and a different spellbook instance.
+                // The same spells read from a reloaded spell store (a new instance, as after a content reload) is a new read.
+                store = feature.System.Store = Store();
+                Check("spell store swapped, same spells", recomputes: true);
+                Check("nothing changed after the store swap", recomputes: false);
+
+                // A swapped spellbook snapshot (a forgotten spell), then another spellbook (its snapshot is a new list too).
                 Assert.True(book.ForgetSpell(player, BarRecipe));
                 Check("forgotten spell: new snapshot", recomputes: true);
                 Assert.False(cached.Needs(player, Ore));
@@ -205,6 +224,13 @@ public sealed class PlayerbotTownFactCacheTests
                 Assert.Equal(1, PlayerbotCrafting.ReagentIndexBuilds - before);
 
                 book.LearnSpell(player, BarRecipe); // learned spell: a known recipe now uses bars
+                before = PlayerbotCrafting.ReagentIndexBuilds;
+                Assert.True(PlayerbotCrafting.WantsToCraftSpell(player, smelt, weights, store, book));
+                Assert.True(PlayerbotCrafting.WantsToCraftSpell(player, smelt, weights, store, book));
+                Assert.Equal(1, PlayerbotCrafting.ReagentIndexBuilds - before);
+
+                // The same spell snapshot against a reloaded spell store: the index was read from the old store, so it is built again.
+                store = feature.System.Store = Store();
                 before = PlayerbotCrafting.ReagentIndexBuilds;
                 Assert.True(PlayerbotCrafting.WantsToCraftSpell(player, smelt, weights, store, book));
                 Assert.True(PlayerbotCrafting.WantsToCraftSpell(player, smelt, weights, store, book));

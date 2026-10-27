@@ -29,7 +29,7 @@ internal sealed class PlayerbotVendorSupplyNeeds
 
     private bool _hasBook;
 
-    /// <summary>The time-to-live backstop of a read: a change no stamp covers (a skill, an enchant) is seen within it.</summary>
+    /// <summary>The time-to-live backstop of a read: a change no stamp covers (a skill rank, an honor rank) is seen within it.</summary>
     internal const uint CacheTtlMs = 10_000;
 
     /// <summary>How many times the spellbook was read (<see cref="Refresh"/>): the cache's test seam.</summary>
@@ -42,7 +42,7 @@ internal sealed class PlayerbotVendorSupplyNeeds
     /// The stamps: the spell store and spellbook instances; the bot's known-spell snapshot (<see cref="SpellbookCache.GetSpells"/> hands out
     /// the same instance until the book changes, so a learned or forgotten spell is a new reference); its level; and a hash of every stored
     /// item (position, guid, entry, stack count, permanent enchantment), which covers a buy, a sale, a craft, a loot, an equip, an enchant
-    /// and a bank move. Money is not stamped: <see cref="Refresh"/> and what it calls never read it. <see cref="CacheTtlMs"/> is the
+    /// and a bank move; a worn item breaking or being repaired is stamped too. Money is not stamped: <see cref="Refresh"/> and what it calls never read it. <see cref="CacheTtlMs"/> is the
     /// backstop for what no stamp covers (a skill rank that changes whether an item can be used).
     /// </remarks>
     internal bool RefreshIfChanged(Player player, SpellStore? store, SpellbookCache? spellbook, uint nowMs)
@@ -75,7 +75,7 @@ internal sealed class PlayerbotVendorSupplyNeeds
 
     /// <summary>
     /// A hash of the bot's stored items (<see cref="PlayerInventory.AllItems"/>, which walks the equipment slots first: position, guid,
-    /// entry, stack count and permanent enchantment of each). The position is mixed in because a move between two slots (a bank
+    /// entry, stack count and permanent enchantment of each, and whether a worn item is broken). The position is mixed in because a move between two slots (a bank
     /// deposit) can leave the walk order unchanged while changing what counts. One pass over the bags, no allocation: far cheaper than the
     /// spellbook read it guards (every known recipe weighed against the inventory).
     /// </summary>
@@ -90,6 +90,9 @@ internal sealed class PlayerbotVendorSupplyNeeds
             hash = (hash ^ item.Entry) * Prime;
             hash = (hash ^ item.Count) * Prime;
             hash = (hash ^ item.GetUInt32(UpdateFields.ItemFieldEnchantment)) * Prime;
+            // A broken worn item scores 0 (PlayerbotItemScore.Score), which makes a craftable replacement an upgrade: a repair must be seen.
+            if (item.BagSlot == InventorySlots.Bag0 && item.Slot < InventorySlots.EquipmentEnd)
+                hash = (hash ^ (item.MaxDurability > 0 && item.Durability == 0 ? 1UL : 0UL)) * Prime;
         }
 
         return hash;
