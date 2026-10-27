@@ -3496,6 +3496,43 @@ Diagnostics.BeepOnStartup = false
 Diagnostics.BreakOnInvariant = false
 
 #
+#    Diagnostics.CrashDialog
+#        Description: Show a dialog (a Win32 message box) when the process is about to end because
+#                     of an unhandled exception, an unobserved task exception under an
+#                     OnUnobservedTask policy that terminates, or a world tick hang the watchdog
+#                     ends. It names the exception, its message and full stack with inner
+#                     exceptions, the daemon and version, thread, time, fault-ledger site and
+#                     signature, and the crash report file (a crash-report.*.txt file written next
+#                     to the daemon), crash journal and log file. It appears after the crash is
+#                     logged and recorded, and the exit policy runs when it is closed. Only a
+#                     Windows console session with no redirected standard stream, outside CI, opens
+#                     one; a service, test run, redirected or non-Windows process is unaffected.
+#                     Default off: an unattended process must never wait on a dialog.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDialog = false
+
+#
+#    Diagnostics.FaultDialog
+#        Description: Also show a dialog the first time each fault signature is caught and survived
+#                     (the fault ledger, .server faults), on a background thread so the faulting
+#                     thread never waits, at most one open at a time (faults while one is open are
+#                     only logged). Needs the same interactive Windows console session as
+#                     CrashDialog; takes effect once the host has started. Default off: a fault
+#                     storm of new signatures still means one box after another.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.FaultDialog = false
+
+#
 #    Diagnostics.FaultLogLimit
 #        Description: How many occurrences of one fault (an exception type thrown from one place,
 #                     caught at one of the server's catch-and-log sites) are logged in full. After
