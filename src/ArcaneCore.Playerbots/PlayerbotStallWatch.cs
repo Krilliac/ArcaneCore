@@ -284,8 +284,7 @@ internal sealed partial class PlayerbotStallWatch
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
     /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
-    /// The watch restarts at the next look, where the bot then stands; before, that restart also cleared the report, so the next think
-    /// (100 ms later in the population tests) dropped it without any progress and a relocation pass that came after it saw no stall.
+    /// The watch restarts at the next look, where the bot then stands, and the report stays until progress from there.
     /// </summary>
     internal void ReportExternal(string reason)
     {
