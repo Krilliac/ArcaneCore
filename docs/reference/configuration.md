@@ -902,6 +902,7 @@ How to read the tables:
 | `Skills:ChanceGrey` | `uint` | `0` | - | vmangos SkillChance.Grey (default 0). |
 | `Skills:ChanceOrange` | `uint` | `100` | - | vmangos SkillChance.Orange (default 100). |
 | `Skills:ChanceYellow` | `uint` | `75` | - | vmangos SkillChance.Yellow (default 75). |
+| `Skills:CraftingChanceCurve` | `bool` | `false` | - | Opt-in, off by default: crafting skill-ups between a recipe's yellow and grey levels use the player-measured sliding chance `(grey - skill) / (grey - yellow)` instead of the yellow and green chances (not a datamined retail rule). |
 | `Skills:DbcPaths` | `string[]` | `[null, null, null, null]` | - | The four DBC paths, in the order SkillLine, SkillRaceClassInfo, SkillTiers, SkillLineAbility. |
 | `Skills:FlushDebounceMs` | `int` | `5000` | - | How long a changed skill table waits before it is written (ms); logout, shutdown and deletion flush at once. |
 | `Skills:GainCrafting` | `uint` | `1` | - | vmangos SkillGain.Crafting (default 1). |

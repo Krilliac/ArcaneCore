@@ -8853,6 +8853,22 @@
       "isCollection": false
     },
     {
+      "path": "Skills:CraftingChanceCurve",
+      "section": "Skills",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Opt-in, off by default: crafting skill-ups between a recipe's yellow and grey levels use the player-measured sliding chance `(grey - skill) / (grey - yellow)` instead of the yellow and green chances (not a datamined retail rule).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#skills",
+      "isCollection": false
+    },
+    {
       "path": "Skills:DbcPaths",
       "section": "Skills",
       "type": "string[]",
