@@ -9368,6 +9368,22 @@
       "isCollection": false
     },
     {
+      "path": "SpellRules:SpellBatchAuraExpiry",
+      "section": "SpellRules",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With `SpellBatchWindowMs` set: a timed aura that runs out stays until the first update of the next batch (channel auras excepted).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#spellrules",
+      "isCollection": false
+    },
+    {
       "path": "SpellRules:SpellBatchCreatures",
       "section": "SpellRules",
       "type": "bool",

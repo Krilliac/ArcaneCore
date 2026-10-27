@@ -39,6 +39,27 @@ public sealed partial class SpellSystem
     /// <summary>Whether creature (and pet and totem) casts are batched too when <see cref="SpellBatchWindowMs"/> is set (<c>SpellRules:SpellBatchCreatures</c>).</summary>
     public bool SpellBatchCreatures { get; set; } = true;
 
+    /// <summary>Whether a timed aura that runs out stays until the batch boundary (<c>SpellRules:SpellBatchAuraExpiry</c>), with <see cref="SpellBatchWindowMs"/> set.</summary>
+    public bool SpellBatchAuraExpiry { get; set; } = true;
+
+    /// <summary>
+    /// Whether the expiry of <paramref name="holder"/>, which has run out, waits for the batch boundary: with aura expiry batching on, a holder
+    /// that is not a channel's stays until the first update in a later batch than the one it ran out in, so an aura ends together with the
+    /// other events of its batch (a stun that ends mid-batch lets its target act only from the next one). False removes it now.
+    /// </summary>
+    private bool HoldAuraExpiry(SpellAuraHolder holder)
+    {
+        uint window = SpellBatchWindowMs;
+        if (window == 0 || !SpellBatchAuraExpiry || holder.Spell.IsChanneled)
+        {
+            return false;
+        }
+
+        uint index = BatchIndex(NowMs, window);
+        holder.ExpiryBatchIndex ??= index;
+        return holder.ExpiryBatchIndex == index;
+    }
+
     /// <summary>Whether white melee swings are batched when <see cref="SpellBatchWindowMs"/> is set (<c>SpellRules:SpellBatchMelee</c>, read by <see cref="Combat.MapCombat"/>).</summary>
     public bool SpellBatchMelee { get; set; } = true;
 

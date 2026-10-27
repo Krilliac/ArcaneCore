@@ -7678,6 +7678,18 @@ SpellRules.MagicHitFloorPercent = 22
 # SpellRules.ResistTablePath =
 
 #
+#    SpellRules.SpellBatchAuraExpiry
+#        Description: With SpellBatchWindowMs set: a timed aura that runs out stays until the first
+#                     update of the next batch (channel auras excepted).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchAuraExpiry = true
+
+#
 #    SpellRules.SpellBatchCreatures
 #        Description: With SpellBatchWindowMs set: creature (pet, totem) casts are batched like
 #                     players' (retail: every unit's messages went through the same tick).

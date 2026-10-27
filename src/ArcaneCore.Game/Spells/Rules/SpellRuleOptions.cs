@@ -33,6 +33,9 @@ public sealed class SpellRuleOptions
     /// <summary>With <see cref="SpellBatchWindowMs"/> set: white melee swings are held and resolve at the same window boundaries (MapCombat.SwingBatch.cs).</summary>
     public bool SpellBatchMelee { get; init; } = true;
 
+    /// <summary>With <see cref="SpellBatchWindowMs"/> set: a timed aura that runs out stays until the first update of the next batch (channel auras excepted).</summary>
+    public bool SpellBatchAuraExpiry { get; init; } = true;
+
     /// <summary>Levels a world boss counts above its target (vmangos CONFIG WorldBossLevelDiff, World.cpp:744 default 3).</summary>
     public int WorldBossLevelDiff { get; init; } = CombatConstants.WorldBossLevelDiff;
 

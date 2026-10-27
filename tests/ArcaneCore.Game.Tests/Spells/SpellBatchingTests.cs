@@ -174,6 +174,42 @@ public sealed class SpellBatchingTests
     }
 
     [Fact]
+    public void AnAuraThatRunsOut_StaysUntilTheNextBatch_ThenGoes()
+    {
+        using var kit = Kit(Window); // the clock starts at 10 000, a boundary
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10);
+        kit.System.CastSpell(caster, StunSpell, SpellCastTargets.ForUnit(target.Guid), triggered: true); // 4 s, lands at once
+
+        kit.Advance(4000); // runs out at 14 000, in the batch that started there
+        Assert.True(kit.System.HasAura(target, StunSpell));
+        kit.Advance(Window - 100);
+        Assert.True(kit.System.HasAura(target, StunSpell));
+        Assert.True((target.UnitFlags & UnitFlags.Stunned) != 0);
+
+        kit.Advance(100); // the first update of the next batch
+        Assert.False(kit.System.HasAura(target, StunSpell));
+        Assert.True((target.UnitFlags & UnitFlags.Stunned) == 0);
+    }
+
+    [Theory]
+    [InlineData(0u, true)]
+    [InlineData(Window, false)]
+    public void WithoutAWindow_OrWithAuraExpiryBatchingOff_AnAuraGoesWhenItRunsOut(uint window, bool batchAuraExpiry)
+    {
+        using var kit = Kit(window);
+        kit.System.SpellBatchAuraExpiry = batchAuraExpiry;
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10);
+        kit.System.CastSpell(caster, StunSpell, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        kit.Advance(3900);
+        Assert.True(kit.System.HasAura(target, StunSpell));
+        kit.Advance(100);
+        Assert.False(kit.System.HasAura(target, StunSpell));
+    }
+
+    [Fact]
     public void ACastThatFailsItsCheck_IsNotHeld()
     {
         using var kit = Kit(Window);
