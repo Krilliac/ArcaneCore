@@ -20,6 +20,9 @@ public sealed partial class CreatureMapSystem
 
     private readonly List<PendingAssist> _pendingAssists = [];
 
+    /// <summary>Creatures examined by <see cref="CallForHelp"/> and <see cref="CallNearestGuard"/> since the system started (tests: the search reads the cells around the caller, not the whole map).</summary>
+    internal long AssistScanExamined { get; private set; }
+
     /// <summary>Delayed assistance calls waiting for their delay (helper, enemy, due time on <see cref="ClockMs"/>).</summary>
     public int PendingAssistCount => _pendingAssists.Count;
 
@@ -110,6 +113,7 @@ public sealed partial class CreatureMapSystem
         int count = 0;
         foreach (Creature helper in _creatures.Values.ToArray())
         {
+            AssistScanExamined++;
             if (CanAssist(helper, creature, enemy, radius))
             {
                 helper.CalledAssistance = true;
