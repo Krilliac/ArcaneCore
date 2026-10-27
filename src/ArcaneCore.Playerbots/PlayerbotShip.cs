@@ -128,6 +128,13 @@ internal static partial class PlayerbotShip
     /// <summary>A bot this close (flat yards) to a port, within <see cref="DockHeightYards"/> of its height, stands at the dock; and this close to the docked ship it may step aboard.</summary>
     internal const float BoardReachYards = 40f;
 
+    /// <summary>
+    /// The farthest (flat yards) from the departure port a leg begins (<see cref="TryBegin"/>): a journey's walk hands off within
+    /// <see cref="PlayerbotTravel.HandOffYards"/> of the port, and the dock may lie <see cref="BoardReachYards"/> beyond it. The leg's own walk
+    /// covers only those last yards; a bot farther out is still on its walk leg, whose failure is the walk's (issue #1456).
+    /// </summary>
+    internal const float BeginReachYards = PlayerbotTravel.HandOffYards + BoardReachYards;
+
     /// <summary>The height a dock may lie above or below the port's node (a pier above a boat at sea level; not the ground under a zeppelin tower).</summary>
     internal const float DockHeightYards = 25f;
 
@@ -208,7 +215,8 @@ internal static partial class PlayerbotShip
     /// Begin the leg on <paramref name="route"/> from port A (<paramref name="fromA"/>) or B. Refused (false, with why) when the means is
     /// switched off, the bot's faction may not ride it, the bot is dead, aboard something or not on the departure map, the arrival map is
     /// not one bots may walk (<see cref="PlayerbotOptions.AllowedMaps"/>), the ship does not sail (<c>ship-missing</c>, reported once until a
-    /// leg of that dock succeeds), or the departure dock is backed off. A leg of the same route and direction under way answers true.
+    /// leg of that dock succeeds), the departure dock is backed off, or the bot stands more than <see cref="BeginReachYards"/> from the departure
+/// port (not reported: the walk there is someone else's). A leg of the same route and direction under way answers true.
     /// </summary>
     internal static bool TryBegin(WorldSession session, Player player, ShipRoute route, bool fromA, PlayerbotOptions options, out string? why)
     {
@@ -247,6 +255,10 @@ internal static partial class PlayerbotShip
         bool alreadyAboardTargetShip = player.Transport is { } aboardTarget && aboardTarget.Entry == route.Entry;
         if (!alreadyAboardTargetShip && player.MapId != from.MapId)
             return Refuse(out why, $"ship: the bot is on map {player.MapId}, the port on map {from.MapId}");
+        float portYards = Flat(Position(player), from.Position);
+        if (!alreadyAboardTargetShip && portYards > BeginReachYards)
+            return Refuse(out why, string.Create(CultureInfo.InvariantCulture,
+                $"ship: the bot stands {portYards:F0} yd from the port of ship {route.Entry} (at most {BeginReachYards:F0}); it walks there first"));
         if (!PlayerbotMapPolicy.Allows(options.AllowedMaps, to.MapId, null, current: false))
             return Refuse(out why, $"ship: bots may not walk map {to.MapId}");
         uint now = session.World.NowMs;
