@@ -301,43 +301,43 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         return true;
     }
 
-    /// <summary>Undo a saved slot purchase that could not be charged; the cached stable is reloaded on next use.</summary>
+    /// <summary>
+    /// Undo a saved slot purchase that could not be charged. The entry is dropped (as TakeOut does) instead of being marked busy: after a
+    /// logout and relogin the current entry is a new one whose load was queued behind the purchase but ahead of this revert, so it holds the
+    /// purchased slot, and an old continuation must not install it. The next use reloads, queued behind the revert.
+    /// </summary>
     private void TakeSlotBack(Player player, int id, IPetStableStore store, byte before)
     {
-        _entries.TryGetValue(id, out Entry? entry);
-        if (entry is not null)
-        {
-            entry.Busy = true;
-            entry.State = null;
-        }
+        _entries.Remove(id);
 
         if (player.IsInWorld)
         {
             Send(player, StableResult.ErrMoney);
         }
 
-        _ = RevertSlotsAsync(id, entry, store, before);
+        _ = RevertSlotsAsync(id, store, before);
     }
 
-    private async Task RevertSlotsAsync(int id, Entry? entry, IPetStableStore store, byte slots)
+    /// <summary>Writes the slot count back, retrying once; a revert that still fails leaves a saved slot nobody paid for, so it is reported to the anomaly ledger.</summary>
+    private async Task RevertSlotsAsync(int id, IPetStableStore store, byte slots)
     {
-        try
+        for (int attempt = 1; attempt <= 2; attempt++)
         {
-            await summons.QueueSerializedWriteAsync(id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; }).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record("pet.stable", ex);
-            _logger.LogFault("pet-stable", ex, "pet stable slot rollback failed for character {CharacterId}", id);
-        }
-
-        Post(() =>
-        {
-            if (entry is not null)
+            try
             {
-                entry.Busy = false;
+                await summons.QueueSerializedWriteAsync(id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; }).ConfigureAwait(false);
+                return;
             }
-        });
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("pet.stable", ex);
+                _logger.LogFault("pet-stable", ex, "pet stable slot rollback failed for character {CharacterId} (attempt {Attempt})", id, attempt);
+                if (attempt == 2)
+                {
+                    AnomalyLedger.Shared.Report("pet", "stable-rollback-failed", $"character {id}", $"slot purchase saved but not paid for and the rollback to {slots} failed twice: {ex.Message}", AnomalySeverity.Error);
+                }
+            }
+        }
     }
 
     private bool Allowed(Player player, ObjectGuid npc)

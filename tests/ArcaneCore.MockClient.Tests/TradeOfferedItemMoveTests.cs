@@ -369,6 +369,65 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(10u, await ReceiverCountAsync(rig));
     }
 
+    private const uint TrinketEntry = 992821;
+
+    /// <summary>
+    /// The refusal above uses a non-equippable stack, so it would also pass if the move were impossible anyway. Here a plain trinket
+    /// (ordinary equippable item, no requirements) first goes into its slot through the same opcode when it is not offered, which shows
+    /// the packet really equips; the offered twin is then refused and stays in the backpack.
+    /// </summary>
+    [Fact]
+    public async Task AutoEquipItemSlotOfOfferedEquippableItem_AfterFirstAccept_IsRefusedWhereTheSameMoveOtherwiseEquips()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Item offered, Item control) = await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+            var templates = new ItemTemplateStore([new ItemTemplate { Entry = TrinketEntry, Class = 4, SubClass = 0, Name = "Test Trinket", DisplayId = 1, InventoryType = 12, Stackable = 1 }], []);
+            sender.Inventory.Templates = templates;
+            receiver.Inventory.Templates = templates;
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(TrinketEntry, 1, out _));
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(TrinketEntry, 1, out _));
+            List<Item> trinkets = [];
+            for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
+            {
+                if (sender.Inventory.GetItem(InventorySlots.Bag0, slot) is { } item && item.Entry == TrinketEntry) trinkets.Add(item);
+            }
+
+            return (trinkets[0], trinkets[1]);
+        }).WaitAsync(rig.Token);
+        byte slot = offered.Slot;
+        await OpenAndOfferAsync(rig, slot);
+        await AcceptAsync(rig);
+
+        // CMSG_AUTOEQUIP_ITEM_SLOT: u64 item guid, u8 equipment slot (12 = first trinket, 13 = second).
+        byte[] controlPayload = new byte[9];
+        BinaryPrimitives.WriteUInt64LittleEndian(controlPayload, control.Guid.Value);
+        controlPayload[8] = InventorySlots.Trinket1;
+        await rig.Sender.SendAsync(WorldOpcode.CmsgAutoequipItemSlot, controlPayload, rig.Token);
+        await SyncAsync(rig);
+        await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Assert.Equal(control.Guid, sender.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Trinket1)?.Guid);
+            return true;
+        }).WaitAsync(rig.Token);
+
+        byte[] payload = new byte[9];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, offered.Guid.Value);
+        payload[8] = InventorySlots.Trinket1 + 1;
+        await RefusedAsync(rig, WorldOpcode.CmsgAutoequipItemSlot, payload, scored: true);
+
+        await AssertOfferedStaysAsync(rig, offered.Guid, slot);
+        await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Assert.Null(sender.Inventory.GetItem(InventorySlots.Bag0, (byte)(InventorySlots.Trinket1 + 1)));
+            return true;
+        }).WaitAsync(rig.Token);
+    }
+
     private static async Task OpenBankAsync(Rig rig)
         => await rig.Server.World.InvokeAsync(() =>
         {

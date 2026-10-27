@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -25,6 +26,27 @@ public sealed class PetStableTests
         private readonly ConcurrentQueue<Action> _posts = new();
 
         public void Post(Action action) => _posts.Enqueue(action);
+
+        /// <summary>Continuations posted and not yet run.</summary>
+        public int Pending => _posts.Count;
+
+        /// <summary>Runs the oldest posted continuation; the test decides the order the world thread sees them in.</summary>
+        public void RunOne()
+        {
+            Assert.True(_posts.TryDequeue(out Action? action));
+            action!();
+        }
+
+        /// <summary>Waits (without running anything) until <paramref name="count"/> continuations are posted.</summary>
+        public async Task PostedAsync(int count)
+        {
+            using CancellationTokenSource timeout = new(HangBound);
+            while (Pending < count)
+            {
+                if (timeout.IsCancellationRequested) throw new TimeoutException("the continuations were never posted");
+                await Task.Delay(1).ConfigureAwait(false);
+            }
+        }
 
         public async Task UntilAsync(Func<bool> done)
         {
@@ -65,8 +87,17 @@ public sealed class PetStableTests
             await SetPurchasedSlotsCoreAsync(slots);
         }
 
+        /// <summary>Slot writes seen so far (the purchase is call 1).</summary>
+        public int SlotCalls { get; private set; }
+
+        /// <summary>Slot writes numbered <see cref="FailSlotCallsFrom"/> through <see cref="FailSlotCallsThrough"/> fault (0 = none).</summary>
+        public int FailSlotCallsFrom { get; set; }
+        public int FailSlotCallsThrough { get; set; }
+
         private Task SetPurchasedSlotsCoreAsync(byte slots)
         {
+            int call = ++SlotCalls;
+            if (FailSlotCallsFrom > 0 && call >= FailSlotCallsFrom && call <= FailSlotCallsThrough) return Task.FromException(new InvalidOperationException("down"));
             if (Fail) return Task.FromException(new InvalidOperationException("down"));
             Slots = slots;
             return Task.CompletedTask;
@@ -261,6 +292,82 @@ public sealed class PetStableTests
 
         await pump.UntilAsync(() => store.Slots == 0);
         Assert.Equal((500u, 0), (hunter.Money, saves));
+    }
+
+    [Fact]
+    public async Task BuySlot_RevertAfterLogoutAndRelogin_DoesNotLeaveTheUnpaidSlotCached()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+
+        stable.HandleBuySlot(hunter, StableMaster); // purchase write in flight
+        kit.Map.RemoveObject(hunter);               // logout: the player can no longer pay at commit
+        stable.Forget(1);
+        stable.Prefetch(hunter);                    // relogin: its load is queued behind the purchase and ahead of the revert
+        gate.SetResult();
+
+        await pump.PostedAsync(2);                  // the purchase commit, then the load that read the purchased slot
+        pump.RunOne();                              // commit finds no payer and takes the slot back
+        pump.RunOne();                              // the relogin load completes
+        Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0); // the stable the database no longer has must not be cached
+
+        await pump.UntilAsync(() => store.Slots == 0);
+        Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0);
+    }
+
+    [Fact]
+    public async Task BuySlot_RollbackWriteFailsOnce_IsRetried()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        store.FailSlotCallsFrom = 2;
+        store.FailSlotCallsThrough = 2;
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
+
+        stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+        store.SlotGate = gate;
+        stable.HandleBuySlot(hunter, StableMaster);
+        hunter.Money = 100;
+        gate.SetResult();
+
+        await pump.UntilAsync(() => store.SlotCalls == 3);
+        Assert.Equal((byte)0, store.Slots);
+        Assert.False(capture.Any("pet/stable-rollback-failed"), capture.Describe());
+    }
+
+    [Fact]
+    public async Task BuySlot_RollbackWriteFailsTwice_ReportsAnAnomaly()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        store.FailSlotCallsFrom = 2;
+        store.FailSlotCallsThrough = 9;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
+
+        stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+        var gate = new TaskCompletionSource();
+        store.SlotGate = gate;
+        stable.HandleBuySlot(hunter, StableMaster);
+        hunter.Money = 100;
+        gate.SetResult();
+
+        await pump.UntilAsync(() => capture.Any("pet/stable-rollback-failed"));
+        Assert.Equal((3, (byte)1), (store.SlotCalls, store.Slots));
+        Assert.Equal(1, capture.Count("pet/stable-rollback-failed"));
     }
 
     [Fact]
