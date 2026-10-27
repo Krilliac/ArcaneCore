@@ -77,6 +77,11 @@ public sealed partial class PlayerInventory
     /// <summary>Skill/spell/dual-wield answers (replaced by the skills/spells areas).</summary>
     public IItemRequirements Requirements { get; set; } = DefaultItemRequirements.Instance;
 
+    /// <summary>
+    /// The guid of the loot window the player has open (vmangos Player::GetLootGuid), kept by the loot service; empty when none.
+    /// </summary>
+    public ObjectGuid LootingGuid { get; set; } = ObjectGuid.Empty;
+
     /// <summary>The stat application hook (replaceable by the combat/spells areas).</summary>
     public IItemStatsApplier StatsApplier { get; set; } = EquipmentStatsApplier.Instance;
 
