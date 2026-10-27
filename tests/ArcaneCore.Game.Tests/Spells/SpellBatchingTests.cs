@@ -1,7 +1,10 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
+using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Spells;
@@ -152,6 +155,24 @@ public sealed class SpellBatchingTests
         Assert.Equal(SpellCastResult.NotReady, kit.System.HandleCastRequest(caster, Jab, SpellCastTargets.ForUnit(target.Guid))); // its cooldown now runs
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void ACreatureCast_IsHeldToo_UnlessCreatureBatchingIsOff(bool batchCreatures, bool held)
+    {
+        using var kit = Kit(Window);
+        kit.System.SpellBatchCreatures = batchCreatures;
+        (Player target, _) = kit.AddPlayer(1);
+        Creature caster = Creature(kit, 9001, 5);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Zap, SpellCastTargets.ForUnit(target.Guid), triggered: false));
+
+        Assert.Equal(held, kit.System.HasPendingGo(caster));
+        Assert.Equal(held, target.Health == 60);
+        kit.Advance(Window);
+        Assert.True(target.Health < 60);
+    }
+
     [Fact]
     public void ACastThatFailsItsCheck_IsNotHeld()
     {
@@ -195,6 +216,18 @@ public sealed class SpellBatchingTests
 
         Assert.Equal(0, kit.System.PendingBatchedGoes);
         Assert.Equal(60u, target.Health);
+    }
+
+    private static Creature Creature(SpellTestKit kit, uint guid, float x)
+    {
+        var template = Template(guid, b => b.Faction = 14);
+        var creature = new Creature(guid, template, null, Content([template], []), new Random(1));
+        creature.MapId = 0;
+        creature.Relocate(x, 0, 83.5f, 0, kit.Now);
+        var map = kit.World.GetMap(0);
+        map.AddObject(creature);
+        map.Combat.Track(creature);
+        return creature;
     }
 
     private static SpellTestKit Kit(uint window = 0)

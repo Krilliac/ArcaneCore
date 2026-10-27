@@ -246,7 +246,7 @@ public sealed partial class SpellSystem
         ProcessDeathAuraRemovals();
         UpdateSobering(diffMs);
         UpdateDynamicObjects(diffMs); // persistent area auras (PersistentAreaAuras/SpellSystem.PersistentAreaAuras.cs)
-        UpdateSpellBatch(diffMs); // casts held for the spell batch window go off together (SpellSystem.Batching.cs)
+        UpdateSpellBatch(); // casts held for the spell batch window go off together (SpellSystem.Batching.cs)
         if (_states.Count == 0)
         {
             return;

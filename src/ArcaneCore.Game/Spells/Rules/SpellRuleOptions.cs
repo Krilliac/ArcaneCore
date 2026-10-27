@@ -27,6 +27,12 @@ public sealed class SpellRuleOptions
     /// </summary>
     public uint SpellBatchWindowMs { get; init; }
 
+    /// <summary>With <see cref="SpellBatchWindowMs"/> set: creature (pet, totem) casts are batched like players' (retail: every unit's messages went through the same tick).</summary>
+    public bool SpellBatchCreatures { get; init; } = true;
+
+    /// <summary>With <see cref="SpellBatchWindowMs"/> set: white melee swings are held and resolve at the same window boundaries (MapCombat.SwingBatch.cs).</summary>
+    public bool SpellBatchMelee { get; init; } = true;
+
     /// <summary>Levels a world boss counts above its target (vmangos CONFIG WorldBossLevelDiff, World.cpp:744 default 3).</summary>
     public int WorldBossLevelDiff { get; init; } = CombatConstants.WorldBossLevelDiff;
 

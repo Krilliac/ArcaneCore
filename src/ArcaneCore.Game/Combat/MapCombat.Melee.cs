@@ -340,7 +340,7 @@ public sealed partial class MapCombat
                     {
                         while (c.HasPendingExtraAttacks && extraVictim is not null)
                         {
-                            AttackerStateUpdate(attacker, extraVictim, WeaponAttackType.BaseAttack);
+                            Swing(attacker, extraVictim, WeaponAttackType.BaseAttack);
                             c.ConsumeExtraAttack();
                             extraAttackPerformed = true;
                         }
@@ -365,7 +365,7 @@ public sealed partial class MapCombat
                         c.SetAttackTimer(WeaponAttackType.OffAttack, CombatConstants.AttackDisplayDelayMs);
                     }
 
-                    AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
+                    Swing(attacker, victim, WeaponAttackType.BaseAttack);
                     c.ResetAttackTimer(WeaponAttackType.BaseAttack);
                 }
 
@@ -376,7 +376,7 @@ public sealed partial class MapCombat
                         c.SetAttackTimer(WeaponAttackType.BaseAttack, CombatConstants.AttackDisplayDelayMs);
                     }
 
-                    AttackerStateUpdate(attacker, victim, WeaponAttackType.OffAttack);
+                    Swing(attacker, victim, WeaponAttackType.OffAttack);
                     c.ResetAttackTimer(WeaponAttackType.OffAttack);
                 }
 

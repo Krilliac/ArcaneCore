@@ -7641,6 +7641,30 @@ SpellRules.MagicHitFloorPercent = 22
 # SpellRules.ResistTablePath =
 
 #
+#    SpellRules.SpellBatchCreatures
+#        Description: With SpellBatchWindowMs set: creature (pet, totem) casts are batched like
+#                     players' (retail: every unit's messages went through the same tick).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchCreatures = true
+
+#
+#    SpellRules.SpellBatchMelee
+#        Description: With SpellBatchWindowMs set: white melee swings are held and resolve at the
+#                     same window boundaries (MapCombat.SwingBatch.cs).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SpellBatchMelee = true
+
+#
 #    SpellRules.SpellBatchWindowMs
 #        Description: Spell batch window in ms (SpellSystem.Batching.cs): a player's cast that goes
 #                     off is held until the window closes and then resolves with every other cast of

@@ -19,15 +19,28 @@ namespace ArcaneCore.Game.Spells;
 /// fails its check is not held: it fails at once, as without batching.
 /// </para>
 /// <para>
-/// Not batched: triggered casts (they resolve inside the cast that triggers them), creature and game-object casts, channels (the channel
-/// keeps its cast slot), next-swing spells (they go with the swing), auto-repeat shots and item-equip casts. Melee swings, periodic ticks and
-/// aura expiry are not batched either. Thread affinity: the world thread, like the rest of <see cref="SpellSystem"/>.
+/// Creature casts are batched too (<see cref="SpellBatchCreatures"/>), and white swings close with the same windows (<see cref="SpellBatchMelee"/>,
+/// <see cref="Combat.MapCombat"/>). Not batched: triggered casts (they resolve inside the cast that triggers them), game-object casts, channels
+/// (the channel keeps its cast slot), next-swing spells (they go with the swing), auto-repeat shots and item-equip casts. Thread affinity: the
+/// world thread, like the rest of <see cref="SpellSystem"/>.
 /// </para>
 /// </summary>
 public sealed partial class SpellSystem
 {
     private readonly List<SpellCast> _batchedGoes = [];
-    private uint _batchElapsedMs;
+    private uint _batchIndex; // BatchIndex at which the held casts were held
+
+    /// <summary>
+    /// The batch a moment falls in: <c>now / window</c>. Every system that batches (the casts here, the white swings in
+    /// <see cref="Combat.MapCombat"/>, aura expiry) closes its window at the same instants, so one batch is one batch everywhere.
+    /// </summary>
+    internal static uint BatchIndex(uint nowMs, uint windowMs) => nowMs / windowMs;
+
+    /// <summary>Whether creature (and pet and totem) casts are batched too when <see cref="SpellBatchWindowMs"/> is set (<c>SpellRules:SpellBatchCreatures</c>).</summary>
+    public bool SpellBatchCreatures { get; set; } = true;
+
+    /// <summary>Whether white melee swings are batched when <see cref="SpellBatchWindowMs"/> is set (<c>SpellRules:SpellBatchMelee</c>, read by <see cref="Combat.MapCombat"/>).</summary>
+    public bool SpellBatchMelee { get; set; } = true;
 
     /// <summary>
     /// The spell batch window in ms (<c>SpellRules:SpellBatchWindowMs</c>); 0 (the default) resolves every cast the moment it goes off.
@@ -65,7 +78,8 @@ public sealed partial class SpellSystem
     }
 
     private bool IsBatchable(SpellCast cast)
-        => SpellBatchWindowMs != 0 && !cast.IsTriggered && cast.Caster is Player && _objectCastDepth == 0 && !cast.Spell.IsChanneled
+        => SpellBatchWindowMs != 0 && !cast.IsTriggered && (cast.Caster is Player || (SpellBatchCreatures && cast.Caster is Creatures.Creature))
+            && _objectCastDepth == 0 && !cast.Spell.IsChanneled
             && !cast.Spell.IsNextMeleeSwing && !cast.AutoRepeatShot && !cast.IsItemEquipCast && !cast.IsItemTriggeredCast;
 
     /// <summary>The go of <paramref name="cast"/>: at once, or held for the batch when <see cref="IsBatchable"/> and its go-time check passes.</summary>
@@ -82,6 +96,11 @@ public sealed partial class SpellSystem
         if (cast.CastTime == 0 && _states.TryGetValue(cast.Caster.Guid, out UnitSpellState? state) && ReferenceEquals(state.CurrentCast, cast))
         {
             state.CurrentCast = null;
+        }
+
+        if (_batchedGoes.Count == 0)
+        {
+            _batchIndex = BatchIndex(NowMs, SpellBatchWindowMs);
         }
 
         cast.BatchedGo = true;
@@ -139,29 +158,18 @@ public sealed partial class SpellSystem
             skipCooldown: true, castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
     }
 
-    /// <summary>Counts the window; at its boundary (or at once when batching was switched off with casts held) the held casts go off.</summary>
-    private void UpdateSpellBatch(uint diffMs)
+    /// <summary>At the first update in a later batch (or at once when batching was switched off with casts held) the held casts go off.</summary>
+    private void UpdateSpellBatch()
     {
-        uint window = SpellBatchWindowMs;
         if (_batchedGoes.Count == 0)
         {
-            _batchElapsedMs = window == 0 ? 0 : (_batchElapsedMs + diffMs) % window;
             return;
         }
 
-        if (window != 0)
+        uint window = SpellBatchWindowMs;
+        if (window != 0 && BatchIndex(NowMs, window) == _batchIndex)
         {
-            _batchElapsedMs += diffMs;
-            if (_batchElapsedMs < window)
-            {
-                return;
-            }
-
-            _batchElapsedMs %= window;
-        }
-        else
-        {
-            _batchElapsedMs = 0;
+            return;
         }
 
         FlushSpellBatch();

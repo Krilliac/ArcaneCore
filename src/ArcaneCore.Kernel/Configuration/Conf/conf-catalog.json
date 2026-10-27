@@ -9336,6 +9336,38 @@
       "isCollection": false
     },
     {
+      "path": "SpellRules:SpellBatchCreatures",
+      "section": "SpellRules",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With `SpellBatchWindowMs` set: creature (pet, totem) casts are batched like players' (retail: every unit's messages went through the same tick).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#spellrules",
+      "isCollection": false
+    },
+    {
+      "path": "SpellRules:SpellBatchMelee",
+      "section": "SpellRules",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "With `SpellBatchWindowMs` set: white melee swings are held and resolve at the same window boundaries (MapCombat.SwingBatch.cs).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#spellrules",
+      "isCollection": false
+    },
+    {
       "path": "SpellRules:SpellBatchWindowMs",
       "section": "SpellRules",
       "type": "uint",
