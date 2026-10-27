@@ -75,6 +75,39 @@ A dump is written by the crashing process, so a cap trims at the next launch (or
 `-MaxDumpFiles` times the dump size free on the volume. Dumps contain session keys and character data (`OpsDiagnosticsOptions.cs:21-26`):
 keep `dumps` private. `Max` also sets `Ops:Diagnostics:Dumps:Enabled=true` on the World, which turns on the `.debug dump` command: administrator-only and rate-limited (`MinIntervalSeconds` 600), but a security-relevant default; use `-Diagnostics Standard` or set `Ops__Diagnostics__Dumps__Enabled=false` in the environment to keep it off.
 
+## Log levels a profile must not raise
+
+The launcher does not touch `Logging` levels, so the profile decides them. Two of the World's performance lines come from the
+`ArcaneCore.Game.Maps.WorldRuntime` category, and a profile that sets `Logging:LogLevel:ArcaneCore.Game.Maps.WorldRuntime` to `Error` hides them:
+
+- `Slow map update` and `Slow world update`, the per-map and per-tick lines over the `SlowMapUpdate` and `SlowWorldUpdate` thresholds. They are written
+  at **Warning** (`WorldRuntime.Perf.cs:131`, called from `WorldRuntime.cs:547` and `WorldRuntime.Parallel.cs:288`).
+- The parallel maps phase summary, "Parallel maps phase (N s): ... serial gate N entries, N contended". It is written at **Information**
+  (`WorldRuntime.Parallel.cs:332`). So is the one-time "Parallel maps phase: N map threads" line at start (`:152`).
+
+Use `Information` for that category to keep both. Use `Warning` if only the slow lines are wanted. Both lines are already bounded: one per slow map
+or tick over the threshold, and one summary per interval. Neither costs anything when it is not written. This is a profile change; the
+launcher and the repo defaults do not set it.
+
+## When the tick watchdog starts
+
+The tick monitor counts frames from the first tick, but its checks start later. That is what reports a hang, writes `TickHang` and runs the hang
+stack capture.
+
+- The world feature attaches the monitor, and `TickWatchdogFeature.cs:54` calls `StartTicking`, inside `WorldHost.StartAsync` before
+  `world.Start()` (`WorldHost.cs:168`). So every frame of the tick loop is recorded.
+- The checks run on the watchdog thread. `WatchdogHost.StartAsync` (`WatchdogHost.cs:48-62`) starts that thread. `WatchdogHost` is a hosted
+  service added by `AddWorldWatchdog` (`WorldProductionServices.cs:51`), which comes after `AddWorldDaemon` (`:45`, `WorldHost` and `WorldServer`)
+  and after the console, control pipe, map feed and remote admin services.
+- The generic host starts hosted services one at a time, in registration order. So the watchdog thread starts only once all of those have
+  finished starting. Live on 2026-10-27 that was about 2 minutes after the first tick.
+- A hang in that window is reported by the first check, after the fact. It shows as a completed hang with the slowest recent frame. No hang
+  stack is captured, because the capture runs only while a tick is still hung.
+
+The fix is to register the watchdog before the world daemon, which is a change in `WorldProductionServices.cs`, or to start the watchdog
+thread from `TickWatchdogFeature.Attach`. Either one changes start-up and stop ordering: hosted services stop in reverse registration order
+(`WorldProductionServices.cs:38-39`). It is not made here. `TickMonitorTests.AHangInTheFirstTicks_IsReportedByTheFirstCheck` pins that the
+monitor itself reports a hang in the first ticks, still in progress, as soon as its first check runs.
 ## Survey: what was left out, and why
 
 | Knob | Source | Decision |
