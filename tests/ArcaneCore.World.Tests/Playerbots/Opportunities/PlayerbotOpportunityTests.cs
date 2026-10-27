@@ -641,7 +641,7 @@ public sealed class PlayerbotOpportunityTests
         await GatheringBotAsync(rig);
         if (guarded) await AddGuardAsync(rig, 96520, 5f, 2f, 12, 1, 400);
 
-        bool gathering = await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Vendor && rig.Bot.Brain.TargetEntry == NodeChest, steps: 40);
+        bool gathering = await RunBrainAsync(rig, () => rig.Bot.Brain.Goal == PlayerbotGoalKind.Gather && rig.Bot.Brain.TargetEntry == NodeChest, steps: 40);
         Assert.Equal(!guarded, gathering);
     }
 
