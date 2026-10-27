@@ -59,10 +59,12 @@ Every tag names its configuration, so the two configurations and the different k
 on a `v*` tag is refused, because it would re-push the release tag. The nightly run is skipped when `main` has no new commit since the last
 successful scheduled run; a push to `main` does not start it. A pull request that touches the Dockerfile, the build props, a project file or
 a lock file (not C# sources alone; `docker-smoke` builds the amd64 image from those) runs the same multi-arch build without pushing, so a
-`linux/arm64` failure shows before the merge.
+`linux/arm64` failure fails that check (it is not best effort there).
 
-`linux/arm64` is best effort: if the multi-arch build fails, the same tags are pushed for `linux/amd64` only, the run stays green, and the
-run summary and a warning annotation name the image and configuration that lack arm64.
+Outside pull requests `linux/arm64` is best effort: if the multi-arch build fails before anything was pushed, the same tags are pushed for
+`linux/amd64` only, the run stays green, and the run summary and a warning annotation name the image and configuration that lack arm64.
+The skip check compares commits only, so a missed arm64 image is not retried until `main` moves (or by a hand run). Git tags ending in
+`-debug` are reserved: the workflow refuses a `v*-debug` tag.
 
 GHCR packages start **private**. After the first push, the repository owner makes each of the three packages public once (GitHub:
 profile or organization, Packages, the package, Package settings, Change visibility, Public) so a VPS can pull without a login; until

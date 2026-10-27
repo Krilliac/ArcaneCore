@@ -69,7 +69,7 @@ Both configurations are offered for every runtime. The files are attached to the
 [`nightly` pre-release](https://github.com/Krilliac/ArcaneCore/releases/tag/nightly) and to every
 [versioned release](https://github.com/Krilliac/ArcaneCore/releases); the file names never change, so these links are stable.
 
-- **Nightly** is rebuilt every night when `main` has a new commit since the last run, and replaced in place. It carries **Debug** (the
+- **Nightly** is rebuilt every night when `main` has a new commit since the last successful scheduled run, and recreated at that commit each time. It carries **Debug** (the
   configuration the live development server runs) and **Release** builds.
 - Tagged `v*` releases carry the same set of files, built from the tagged commit.
 
@@ -84,8 +84,8 @@ Both configurations are offered for every runtime. The files are attached to the
 For a versioned release replace `nightly` with the tag, for example `.../releases/download/<tag>/arcanecore-linux-x64-release.tar.gz`.
 The arm64 archives are built on a best-effort basis: when an arm64 build fails, the release has no arm64 archive of that configuration for
 that run (assets of earlier runs are removed, never left behind next to newer x64 ones), so those links 404 and `SHA256SUMS` lists what the
-release carries. The assets are swapped in place after the `nightly` tag moves, so a download during the few minutes of an upload can mix
-files of two builds; compare against `SHA256SUMS` (and the commit in the release notes).
+release carries. The `nightly` release is deleted and recreated at the new commit by each run, so for a few seconds during that swap its links 404;
+compare downloads against `SHA256SUMS` (and the commit in the release notes). Assets are never mixed between builds.
 
 Each archive unpacks to `arcanecore-<platform>/`, self-contained and laid out like the Docker images, plus the `*.conf.dist` files of every key
 (the images do not carry those):

@@ -13,9 +13,10 @@ name: Release binaries
 #   arcanecore-linux-arm64-debug.tar.gz  arcanecore-linux-arm64-release.tar.gz      SHA256SUMS
 # A pull request that changes this workflow or the publish script only builds and smoke-checks (no release); a manual run does the same.
 # The arm64 builds are best effort: when one fails the run stays green, the run summary and an annotation name the missing archives, and the
-# release step deletes the assets an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one. The nightly tag
-# moves to the new commit before the upload and stale assets go after it, so a download during that window can get files of two builds
-# (acceptable for a rolling pre-release).
+# release step removes the assets an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one. The nightly
+# release is deleted (with its tag) and recreated at the built commit every run, so the tag is made by the release API rather than moved by
+# a ref update; for the few seconds of the swap the release is absent. UNVERIFIED until the first scheduled run. A v* release that already
+# exists is never overwritten: the run fails instead. Skip check: the last run must also have had no failed job (an arm64 miss is retried).
 on:
   schedule:
     - cron: "47 2 * * *"
@@ -58,7 +59,13 @@ jobs:
           build=true
           if [ "$EVENT" = "schedule" ]; then
             last=$(gh api "repos/$GH_REPO/actions/workflows/release-binaries.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""' || true)
-            if [ -n "$last" ] && [ "$last" = "$SHA" ]; then
+            run_id=$(gh api "repos/$GH_REPO/actions/workflows/release-binaries.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].id // ""' || true)
+            # A best-effort arm64 job that failed leaves the run green but the job itself failed: such a run does not count (retry).
+            bad=1
+            if [ -n "$run_id" ]; then
+              bad=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped")] | length' || echo 1)
+            fi
+            if [ -n "$last" ] && [ "$last" = "$SHA" ] && [ "$bad" = "0" ]; then
               build=false
               echo "main has not moved since the last nightly ($SHA); skipping." >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -176,42 +183,20 @@ jobs:
       - name: Nightly pre-release (scheduled run)
         if: github.event_name == 'schedule'
         run: |
-          # Move the nightly tag to this commit (create it the first time), keep the release (and so its URL), replace the assets.
-          if gh api "repos/$GH_REPO/git/ref/tags/nightly" > /dev/null 2>&1; then
-            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true > /dev/null
-          else
-            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" > /dev/null
+          # Delete the release and its tag, then create both again at this commit (the release API creates the tag from --target).
+          # The URL stays the same. UNVERIFIED until the first scheduled run.
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release delete nightly --cleanup-tag --yes
           fi
           notes="Rolling pre-release, rebuilt nightly when main has a new commit. Debug and Release archives for every runtime. Built from commit $SHA. Not a stable release: use a v* release for a version. Verify downloads against SHA256SUMS."
-          if gh release view nightly > /dev/null 2>&1; then
-            gh release edit nightly --prerelease --title "Nightly (Debug and Release)" --notes "$notes"
-          else
-            gh release create nightly --prerelease --verify-tag --title "Nightly (Debug and Release)" --notes "$notes"
-          fi
-          gh release upload nightly dist/* --clobber
-          # Remove assets this run did not produce (an arm64 build that failed this time would otherwise leave last run's archive, which
-          # --clobber never touches, next to fresh x64 ones and a SHA256SUMS that does not list it). Only this workflow's own names.
-          gh release view nightly --json assets --jq '.assets[].name' | while IFS= read -r asset; do
-            case "$asset" in arcanecore-* | SHA256SUMS) ;; *) continue ;; esac
-            if [ ! -e "dist/$asset" ]; then
-              echo "deleting stale asset $asset"
-              gh release delete-asset nightly "$asset" --yes
-            fi
-          done
+          gh release create nightly --prerelease --target "$SHA" --title "Nightly (Debug and Release)" --notes "$notes" dist/*
 
       - name: Versioned release (v* tag)
         if: github.ref_type == 'tag'
         run: |
+          # A release that already exists is never overwritten (its assets are what users verified against).
           if gh release view "$REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$REF_NAME" dist/* --clobber
-            # Remove assets this run did not produce (see the nightly step). Only this workflow's own names.
-            gh release view "$REF_NAME" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
-              case "$asset" in arcanecore-* | SHA256SUMS) ;; *) continue ;; esac
-              if [ ! -e "dist/$asset" ]; then
-                echo "deleting stale asset $asset"
-                gh release delete-asset "$REF_NAME" "$asset" --yes
-              fi
-            done
-          else
-            gh release create "$REF_NAME" dist/* --verify-tag --title "$REF_NAME" --generate-notes
+            echo "::error::Release $REF_NAME already exists; refusing to replace its assets. Delete the release first if that is intended."
+            exit 1
           fi
+          gh release create "$REF_NAME" dist/* --verify-tag --title "$REF_NAME" --generate-notes

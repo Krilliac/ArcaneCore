@@ -15,8 +15,11 @@ name: Docker publish
 #   by hand      manual-sha-<7 hex>-debug and manual-sha-<7 hex>-release on a branch, a prefix that no nightly tag has, so a hand run never
 #                overwrites a nightly. A hand run on a v* tag is refused: it would re-push the release tag.
 #
-# linux/arm64 is best effort: the multi-arch build is tried first; if it fails the same image is built and pushed for linux/amd64 only,
-# the run stays green and the run summary and an annotation say that arm64 is missing. A failing amd64 build still fails the run.
+# linux/arm64 is best effort on the nightly, tag and hand runs: the multi-arch build is tried first; if it fails BEFORE anything was pushed
+# (no digest output) the same image is built and pushed for linux/amd64 only, the run stays green and the run summary and an annotation say
+# that arm64 is missing. A failing amd64 build still fails the run. On a pull request the multi-arch step is NOT best effort: an arm64
+# failure fails the check, which is its whole purpose. An arm64 miss is not retried until main moves (the skip check compares commits only).
+# Git tags ending in -debug are refused: <tag>-debug is the Debug image tag of tag <tag>.
 #
 # Old sha- tags are NOT pruned here; see "Pruning" in docs/guide/docker.md.
 on:
@@ -98,6 +101,12 @@ jobs:
       # Lower-case configuration, used in tag names and cache scopes.
       CFG: ${{ matrix.configuration == 'Debug' && 'debug' || 'release' }}
     steps:
+      - name: Refuse a version tag that ends in -debug
+        if: github.ref_type == 'tag' && endsWith(github.ref_name, '-debug')
+        run: |
+          echo "::error::Tags ending in -debug are reserved: <tag>-debug is the Debug image tag of the release <tag>."
+          exit 1
+
       - name: Refuse a hand run on a version tag
         if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
         run: |
@@ -143,10 +152,11 @@ jobs:
             type=sha,suffix=-${{ env.CFG }},enable=${{ github.event_name == 'schedule' }}
             type=sha,prefix=manual-sha-,suffix=-${{ env.CFG }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
 
-      # linux/arm64 is best effort: a failure here is not a failure of the run (the amd64-only step below takes over).
+      # linux/arm64 is best effort outside pull requests: a failure here is not a failure of the run (the amd64-only step below takes over,
+      # but only when nothing was pushed). On a pull request the failure fails the job.
       - name: Build and push (linux/amd64 and linux/arm64)
         id: multiarch
-        continue-on-error: true
+        continue-on-error: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -159,10 +169,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           push: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=${{ matrix.target }}-${{ env.CFG }}
-          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,scope={0}-{1}', matrix.target, env.CFG) || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=gha,mode=max,ignore-error=true,scope={0}-{1}', matrix.target, env.CFG) || '' }}
 
       - name: Build and push (linux/amd64 only, arm64 failed)
-        if: steps.multiarch.outcome == 'failure'
+        # No digest output means the push did not happen; a failure after a good multi-arch push (the tags are right) must not overwrite them.
+        id: amd64only
+        if: steps.multiarch.outcome == 'failure' && steps.multiarch.outputs.digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -180,12 +192,16 @@ jobs:
         if: always()
         env:
           MULTIARCH: ${{ steps.multiarch.outcome }}
+          AMD64ONLY: ${{ steps.amd64only.outcome }}
           TARGET: ${{ matrix.target }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          if [ "$MULTIARCH" = "failure" ]; then
+          if [ "$AMD64ONLY" = "success" ]; then
             echo "::warning title=arm64 missing::$TARGET $CONFIGURATION was built for linux/amd64 only; the linux/arm64 build failed (best effort)."
             echo "- **$TARGET $CONFIGURATION: linux/amd64 only. The linux/arm64 build failed** (best effort, see the failed step above)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MULTIARCH" = "failure" ] && [ "$AMD64ONLY" = "skipped" ]; then
+            echo "::warning title=build step failed after the push::$TARGET $CONFIGURATION: the multi-arch step reported a failure after pushing; the pushed tags were left alone."
+            echo "- **$TARGET $CONFIGURATION: the multi-arch step failed after the push (tags left as pushed); check the log.**" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$MULTIARCH" = "success" ]; then
             echo "- $TARGET $CONFIGURATION: linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
           fi
