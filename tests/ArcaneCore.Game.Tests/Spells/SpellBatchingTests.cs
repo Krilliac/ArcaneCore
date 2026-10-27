@@ -17,6 +17,7 @@ public sealed class SpellBatchingTests
     private const uint Slay = 941001;     // instant damage far above a test player's health
     private const uint Kick = 941002;     // instant interrupt with a 4 s school lockout
     private const uint SlowBolt = 941003; // 1.5 s silenceable fire bolt
+    private const uint Jab = 941004;      // instant, off the global cooldown, 10 s cooldown
     private const uint Window = 400;
 
     [Fact]
@@ -128,6 +129,23 @@ public sealed class SpellBatchingTests
     }
 
     [Fact]
+    public void AnOffGlobalCooldownSpell_SentTwiceInOneWindow_GoesOffOnce()
+    {
+        using var kit = Kit(Window);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10);
+        kit.Spellbook.Teach(caster, Jab);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Jab, SpellCastTargets.ForUnit(target.Guid)));
+        Assert.Equal(SpellCastResult.NotReady, kit.System.HandleCastRequest(caster, Jab, SpellCastTargets.ForUnit(target.Guid)));
+        Assert.Equal(1, kit.System.PendingBatchedGoes);
+        kit.Advance(Window);
+
+        Assert.Equal(45u, target.Health); // one 15-point hit
+        Assert.Equal(SpellCastResult.NotReady, kit.System.HandleCastRequest(caster, Jab, SpellCastTargets.ForUnit(target.Guid))); // its cooldown now runs
+    }
+
+    [Fact]
     public void ACastThatFailsItsCheck_IsNotHeld()
     {
         using var kit = Kit(Window);
@@ -180,6 +198,8 @@ public sealed class SpellBatchingTests
                 with { School = SpellSchool.Fire, DamageClass = SpellDamageClass.Magic }),
             Ranged(Spell(Slay, Effect(SpellEffectName.SchoolDamage, 5000, SpellImplicitTarget.UnitEnemy))
                 with { School = SpellSchool.Fire, DamageClass = SpellDamageClass.Magic }),
+            Ranged(Spell(Jab, Effect(SpellEffectName.SchoolDamage, 15, SpellImplicitTarget.UnitEnemy))
+                with { School = SpellSchool.Fire, DamageClass = SpellDamageClass.Magic, RecoveryTime = 10_000 }),
             Ranged(Spell(Kick, Effect(SpellEffectName.InterruptCast, 0, SpellImplicitTarget.UnitEnemy)) with { Duration = new SpellDuration(4000, 0, 4000) }),
             Ranged(Spell(SlowBolt, Effect(SpellEffectName.SchoolDamage, 15, SpellImplicitTarget.UnitEnemy))
                 with { School = SpellSchool.Fire, CastTime = new SpellCastTime(1500, 0, 0), PreventionType = 1, DamageClass = SpellDamageClass.Magic }));

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells;
@@ -57,6 +58,36 @@ public sealed partial class SpellSystem
         cast.BatchedGo = true;
         _batchedGoes.Add(cast);
         return SpellCastResult.CastOk;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="caster"/> has a cast waiting in the batch whose go will start a cooldown that <paramref name="spell"/> would
+    /// have to wait for: the same spell, or a spell of the same cooldown <paramref name="category"/> (0: none). The cooldown starts at the go
+    /// (<see cref="PayCastCosts"/>), so without this an off-GCD cooldown spell sent twice in one window would go off twice.
+    /// </summary>
+    private bool HasBatchedGoOnCooldown(Unit caster, SpellInfo spell, uint category)
+    {
+        foreach (SpellCast held in _batchedGoes)
+        {
+            if (!ReferenceEquals(held.Caster, caster) || held.State == SpellCastState.Finished)
+            {
+                continue;
+            }
+
+            ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(held.Spell, held.CastItem);
+            if (held.Spell.Id == spell.Id && (cooldown.RecoveryTime != 0 || cooldown.CategoryRecoveryTime != 0 || held.ItemCooldownMs > 0))
+            {
+                return true;
+            }
+
+            uint heldCategory = held.ItemCategory ?? cooldown.Category;
+            if (category != 0 && heldCategory == category && (cooldown.CategoryRecoveryTime != 0 || held.ItemCategoryCooldownMs > 0))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The checks <see cref="Cast"/> runs before it pays, without their replies: the cast item is still owned and usable, and CheckCast passes.</summary>
