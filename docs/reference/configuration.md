@@ -261,6 +261,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Battleground:AlteracValleyReinforcementLoss` | `bool` | `false` | - | End Alterac Valley in favour of the other side when a side's reinforcements reach 0 (the patch 2.3.0 rule; cmangos mangos-classic BattleGroundAV.cpp UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the match, and vmangos removed the reinforcement win (BattleGroundAV.cpp:782-787). The reinforcements are counted either way. |
 | `Battleground:CastDeserter` | `bool` | `true` | - | Cast Deserter on a player who leaves a running or starting match (vmangos Battleground.CastDeserter, World.cpp:781, mangosd.conf.dist.in:2929, default on). |
 | `Battleground:GroupQueueLimit` | `uint` | `40` | - | Groups larger than this are queued as individuals (vmangos BattleGround.GroupQueueLimit, default 40). |
 | `Battleground:InvitationType` | `uint` | `1` | - | 0 invites from the queue in order, 1 balances the two sides (vmangos Battleground.InvitationType; World.cpp:787 reads 0 when the key is missing but the shipped mangosd.conf.dist.in:2932 sets 1, which is the retail behaviour and the default here). |

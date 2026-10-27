@@ -1804,6 +1804,22 @@
       "isCollection": false
     },
     {
+      "path": "Battleground:AlteracValleyReinforcementLoss",
+      "section": "Battleground",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "End Alterac Valley in favour of the other side when a side's reinforcements reach 0 (the patch 2.3.0 rule; cmangos mangos-classic BattleGroundAV.cpp UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the match, and vmangos removed the reinforcement win (BattleGroundAV.cpp:782-787). The reinforcements are counted either way.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#battleground",
+      "isCollection": false
+    },
+    {
       "path": "Battleground:CastDeserter",
       "section": "Battleground",
       "type": "bool",

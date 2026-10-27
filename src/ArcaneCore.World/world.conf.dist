@@ -1335,6 +1335,21 @@ Bans.RevokeSessionKeyOnBan = false
 #----------------------------------------------------------------------------
 
 #
+#    Battleground.AlteracValleyReinforcementLoss
+#        Description: End Alterac Valley in favour of the other side when a side's reinforcements
+#                     reach 0 (the patch 2.3.0 rule; cmangos mangos-classic BattleGroundAV.cpp
+#                     UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the
+#                     match, and vmangos removed the reinforcement win (BattleGroundAV.cpp:782-787).
+#                     The reinforcements are counted either way.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#battleground
+#
+Battleground.AlteracValleyReinforcementLoss = false
+
+#
 #    Battleground.CastDeserter
 #        Description: Cast Deserter on a player who leaves a running or starting match (vmangos
 #                     Battleground.CastDeserter, World.cpp:781, mangosd.conf.dist.in:2929, default
