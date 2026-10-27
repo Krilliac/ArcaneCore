@@ -28,11 +28,11 @@ public sealed class AlteracValleyTests
         HordeLoseSpell = 24954,
     };
 
-    private static (AlteracValley Bg, RecordingHost Host, RecordingPorts Ports) NewAv(bool weekend = false)
+    private static (AlteracValley Bg, RecordingHost Host, RecordingPorts Ports) NewAv(bool weekend = false, BattlegroundOptions? options = null)
     {
         var host = new RecordingHost();
         var ports = new RecordingPorts { Weekend = weekend };
-        var bg = new AlteracValley(AvTemplate(), bracket: 0, instanceId: 301, clientInstanceId: 1, new BattlegroundOptions(), ports.ToPorts(host));
+        var bg = new AlteracValley(AvTemplate(), bracket: 0, instanceId: 301, clientInstanceId: 1, options ?? new BattlegroundOptions(), ports.ToPorts(host));
         return (bg, host, ports);
     }
 
@@ -177,6 +177,58 @@ public sealed class AlteracValleyTests
         // vmangos (Nostalrius) removed the reinforcement-zero victory (BattleGroundAV.cpp:782-787).
         Assert.Equal(0, bg.TeamScore(Team.Horde));
         Assert.Equal(BattlegroundStatus.InProgress, bg.Status);
+    }
+
+    [Fact]
+    public void ReinforcementLoss_IsOffByDefault()
+        => Assert.False(new BattlegroundOptions().AlteracValleyReinforcementLoss);
+
+    [Fact]
+    public void WithReinforcementLoss_ASideThatReachesZeroLoses_AtTheDeathThatEmptiesIt()
+    {
+        var (bg, host, _) = NewAv(options: new BattlegroundOptions { AlteracValleyReinforcementLoss = true });
+        Start(bg);
+        for (int i = 0; i < AlteracValley.InitialPoints - 1; i++)
+        {
+            bg.HandleKillPlayer(Horde[0], Alliance[0]);
+        }
+
+        Assert.Equal(1, bg.TeamScore(Team.Horde));
+        Assert.Equal(BattlegroundStatus.InProgress, bg.Status);
+
+        // cmangos mangos-classic UpdateScore: the other side wins when a side's reinforcements reach 0.
+        bg.HandleKillPlayer(Horde[0], Alliance[0]);
+        Assert.Equal(0, bg.TeamScore(Team.Horde));
+        Assert.Equal(BattlegroundStatus.WaitLeave, bg.Status);
+        Assert.Equal(BattlegroundWinner.Alliance, bg.Winner);
+        Assert.Contains((AlteracValley.WorldStateHordeScore, 0u), host.WorldStates);
+
+        // Nothing more is counted once the match is over.
+        bg.HandleKillPlayer(Horde[0], Alliance[0]);
+        Assert.Equal(0, bg.TeamScore(Team.Horde));
+    }
+
+    [Fact]
+    public void WithReinforcementLoss_ADestroyedTowerThatEmptiesASide_EndsTheMatch()
+    {
+        var (bg, _, _) = NewAv(options: new BattlegroundOptions { AlteracValleyReinforcementLoss = true });
+        Start(bg);
+        for (int i = 0; i < AlteracValley.InitialPoints - AlteracValley.ResourcesLostPerTower + 1; i++)
+        {
+            bg.HandleKillPlayer(Horde[0], Alliance[0]);
+        }
+
+        Assert.Equal(AlteracValley.ResourcesLostPerTower - 1, bg.TeamScore(Team.Horde));
+        Assert.Equal(BattlegroundStatus.InProgress, bg.Status);
+
+        bg.EventPlayerClickedOnFlag(Alliance[0], Banner(bg, AlteracValley.NodeTowerPoint));
+        Tick(bg, AlteracValley.CaptureTimeMs - 1000, 1000);
+        Assert.Equal(BattlegroundStatus.InProgress, bg.Status);
+        bg.Update(1000);
+
+        Assert.Equal(0, bg.TeamScore(Team.Horde));
+        Assert.Equal(BattlegroundStatus.WaitLeave, bg.Status);
+        Assert.Equal(BattlegroundWinner.Alliance, bg.Winner);
     }
 
     [Fact]
