@@ -49,7 +49,7 @@ public sealed class PetHappinessTests
     [InlineData(665_999u, SummonService.HappinessState.Content)]
     [InlineData(666_000u, SummonService.HappinessState.Happy)]
     [InlineData(700_000u, SummonService.HappinessState.Happy)]
-    public void StateOf_SplitsTheBarInThirds(uint happiness, SummonService.HappinessState expected)
+    public void StateOf_SplitsTheBarAtOneAndTwoLevels(uint happiness, SummonService.HappinessState expected)
         => Assert.Equal(expected, SummonService.StateOf(happiness));
 
     [Theory]

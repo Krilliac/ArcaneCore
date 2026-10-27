@@ -98,6 +98,19 @@ public sealed class LootSoulShardTapSourceTests
     }
 
     [Fact]
+    public void ABattlegroundGroupMember_TapsAnUntappedCreature_EvenWithTheOptionOff()
+    {
+        using PetTestKit kit = Kit();
+        (Player warlock, _) = kit.AddPlayer(1);
+        (Player friend, _) = kit.AddPlayer(2);
+        (LootSoulShardTapSource source, FakeGroups groups) = Source();
+        Group group = groups.Create(LootMethod.FreeForAll, friend, warlock);
+        group.IsBattlegroundGroup = true;
+
+        Assert.True(source.IsTappedBy(Victim(kit), warlock));
+    }
+
+    [Fact]
     public void NoLootService_CountsAsTapped()
     {
         using PetTestKit kit = Kit();

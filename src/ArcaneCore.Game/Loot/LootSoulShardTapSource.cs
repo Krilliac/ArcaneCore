@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Loot;
 /// Creature::IsTappedBy, Creature.cpp:1615-1632, which <see cref="LootService.IsTappedBy"/> follows). <paramref name="lootOf"/> finds the loot
 /// service of the victim's map. A creature with no recorded tap (a scripted kill that never called <see cref="LootService.OnCreatureDamaged"/>)
 /// is untapped, as in vmangos: no shard, unless <paramref name="untappedCountsAsTapped"/> (SpellRules:SoulShardUntappedCountsAsTapped) keeps
-/// the shard for it. A creature on a map without a loot service counts as tapped, as it did before any source was installed.
+/// the shard for it (a player in a battleground group is a tapper of any creature, as in vmangos). A creature on a map without a loot service counts as tapped, as it did before any source was installed.
 /// </summary>
 public sealed class LootSoulShardTapSource(Func<Creature, LootService?> lootOf, bool untappedCountsAsTapped = false) : ISoulShardTapSource
 {
@@ -17,11 +17,17 @@ public sealed class LootSoulShardTapSource(Func<Creature, LootService?> lootOf, 
     {
         ArgumentNullException.ThrowIfNull(victim);
         ArgumentNullException.ThrowIfNull(player);
-        if (victim.LootTapPlayerGuid.IsEmpty && victim.LootTapGroup is null)
+        if (lootOf(victim) is not { } loot)
         {
-            return untappedCountsAsTapped;
+            return true;
         }
 
-        return lootOf(victim) is not { } loot || loot.IsTappedBy(player, victim);
+        // LootService.IsTappedBy first: a player in a battleground group is a tapper of any creature, tapped or not (Creature.cpp:1615-1632).
+        if (loot.IsTappedBy(player, victim))
+        {
+            return true;
+        }
+
+        return untappedCountsAsTapped && victim.LootTapPlayerGuid.IsEmpty && victim.LootTapGroup is null;
     }
 }
