@@ -688,7 +688,17 @@ internal static partial class PlayerbotShip
         if (trip.Walk is null && unchecked(now - trip.StageMs) <= NoProgressMs)
         {
             if (unchecked((int)(trip.NextPlanMs - now)) > 0) return;
+            long dockMark = PathSearchCounters.TilesPending;
             Vector3 dockTarget = ResolveDockTarget(map, at.Position, Position(player));
+            if (dockTarget == at.Position && PathSearchCounters.TilesPending != dockMark && trip.Tiles.Hold(now))
+            {
+                // The dock resolved to the port itself (no dry point beside it, or the port read as dry) while a tile of a probe was still being
+                // read: no verdict on the pier yet, and no refused plan to count. (A dry point found stands even when a probe beside it met an
+                // unread tile.) Ask again shortly.
+                trip.NextPlanMs = unchecked(now + PlanRetryMs);
+                return;
+            }
+
             PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, dockTarget, options, ref trip.Tiles, now, out PlayerbotRoute? route);
             if (outcome == PlanOutcome.Route && route is not null && route.Distance > ProgressYards)
             {
@@ -1052,6 +1062,7 @@ internal static partial class PlayerbotShip
                 AllowPartial = true,
                 MaxSearchNodes = 64,
                 LoadTiles = true,
+                NonBlockingTiles = true, // a tile not in yet is read on the pool; the probe is then no point (TilesPending) and the next think asks again
             });
             if ((res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
                 && MathF.Abs(res.End.Z - portZ) <= DockHeightYards
@@ -1090,6 +1101,7 @@ internal static partial class PlayerbotShip
             AllowPartial = true,
             MaxSearchNodes = 64,
             LoadTiles = true,
+            NonBlockingTiles = true, // pending is not dry mesh: the dock resolves on a later think, once the tile is in
         });
         return (res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0
             && (res.Points.Count == 0 || MathF.Abs(res.End.Z - point.Z) <= 5f)

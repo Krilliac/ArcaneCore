@@ -107,6 +107,22 @@ internal sealed class PlayerbotRoute
     /// </summary>
     internal bool PartialToGoal { get; set; }
 
+    /// <summary>
+    /// A route towards the landing beside a lift (<see cref="PlayerbotElevator.TryBegin"/>, a bot beyond <see cref="ElevatorNetwork.NearLiftYards"/>
+    /// of it), not towards the goal the caller asked for: where it ends says nothing about whether that goal is reachable.
+    /// </summary>
+    internal bool ToLiftLanding { get; set; }
+
+    /// <summary>The landing <see cref="ToLiftLanding"/> walks towards (the point every leg of the approach closes on; a leg's own end is only
+    /// as far as one route reaches). Meaningless unless <see cref="ToLiftLanding"/>.</summary>
+    internal Vector3 LiftLanding { get; set; }
+
+    /// <summary>
+    /// What a caller's progress clock measures this walk against: the lift's landing for a <see cref="ToLiftLanding"/> route (walking to
+    /// the lift may lead away from the goal, e.g. a canyon floor under a plateau), the goal otherwise.
+    /// </summary>
+    internal Vector3 ProgressAim(Vector3 goal) => ToLiftLanding ? LiftLanding : goal;
+
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
 
@@ -388,7 +404,7 @@ internal static class PlayerbotNavigation
         using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
         return Outcome(TryPlan(player, destination, options, out route, trial: trial, completedQuestReturn: completedQuestReturn,
-            friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd), mark, ref wait, now, ref route);
+            friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd, deferTrial: trial), mark, ref wait, now, ref route);
     }
 
     /// <summary><see cref="TryPlanFar"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
@@ -474,14 +490,17 @@ internal static class PlayerbotNavigation
 
     /// <param name="trial">A plan made to weigh something (the pull estimate's approach, a detour's waypoint), not to walk a goal: a
     /// refusal of it is no evidence that the bot is boxed in (<see cref="PlayerbotRisk.Refused"/> is not told).</param>
+    /// <param name="deferTrial">The caller handles a pending answer (<see cref="PlanExact"/>): a trial search may then run as a path job
+    /// (<see cref="PlayerbotPathJobs"/>) and be decided on a later think instead of searching on this one.</param>
     /// <param name="nearestEnd">The caller takes the mesh's nearest end to an off-mesh destination as its answer, however far it lies (a
     /// revive spot re-checked by its caller); a chase does too (<paramref name="chase"/>: a ranged bot fights from where the mesh ends).
     /// Other exact plans refuse such an end beyond <see cref="PlayerbotNavigationAnomalies.PathEndShortYards"/> (<see cref="Usable"/>).</param>
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
         out PlayerbotRoute? route, bool trial = false, bool completedQuestReturn = false, bool friendlyTownEnder = false,
-        bool chase = false, bool nearestEnd = false)
+        bool chase = false, bool nearestEnd = false, bool deferTrial = false)
         => Plan(player, destination, destination, options, partial: false, trial, out route, out _,
-            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd);
+            completedQuestReturn: completedQuestReturn, friendlyTownEnder: friendlyTownEnder, chase: chase, nearestEnd: nearestEnd,
+            deferTrial: deferTrial);
 
     /// <summary>
     /// A route to <paramref name="destination"/> with no hazard check at all: only the escape from a ring of strong creatures
@@ -576,6 +595,13 @@ internal static class PlayerbotNavigation
         if (PlayerbotAsyncNavigationPlan.Current?.Exhausted == true) return false;
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
         if (!goal.IsFinite() || !origin.IsFinite()) return false;
+        // A goal in a remembered dead-end pin cell is refused at once, near or far: no region search or path job is worth starting for it.
+        if (IsDeadEndPin(player, goal))
+        {
+            t_nonPathRefusal = true;
+            return false;
+        }
+
         float distance = Vector3.Distance(origin, goal);
         long pending = PendingMark;
         // The way to the goal itself first: the search reads the navigation tiles it crosses (PathOptions.LoadTiles), so a road
@@ -853,7 +879,19 @@ internal static class PlayerbotNavigation
         var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
         int from = nav.RegionAt(graph, start, locate), to = nav.RegionAt(graph, goal, locate);
         if (from < 0 || to < 0) return null;
-        NavRegionRouteStatus status = graph.FindRoute(from, start, to, goal, RegionSearchNodes, out List<Vector3> portals);
+        // The region search is cached per graph and region pair (PlayerbotRegionRoutes). A miss under a planning wrapper (its callers handle
+        // PlanOutcome.Pending) is queued for the pool (a bounded FIFO) and the bot answers pending, like a path job; elsewhere it searches here
+        // once and keeps the answer. A queued pair whose work is lost is searched here after the wait bound, within the jobs' sync budget.
+        bool mayDefer = PlayerbotPathJobs.InDeferrableScope && PlayerbotAsyncNavigationPlan.Current is null;
+        PlayerbotPathJobs? jobs = PlayerbotPathJobs.Bound;
+        long wallMs = jobs?.WallMs() ?? (System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency);
+        if (!PlayerbotRegionRoutes.TryRoute(graph, from, start, to, goal, mayDefer, out NavRegionRouteStatus status, out List<Vector3> portals,
+            jobs?.Logger, wallMs, options.PathJobWaitMaxMs, jobs?.RegionSyncBudget))
+        {
+            PlayerbotPathJobs.NoteExternalPending();
+            return null;
+        }
+
         bool unreachable = status == NavRegionRouteStatus.Unreachable && from != to && !IsFragment(graph, from)
             && map.Collision.IsOutdoors(goal.X, goal.Y, goal.Z + 1f);
         if (portals.Count == 0) return unreachable ? false : null;
@@ -907,7 +945,7 @@ internal static class PlayerbotNavigation
     /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial, bool trial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, bool completedQuestReturn = false,
-        bool friendlyTownEnder = false, bool chase = false, bool nearestEnd = false)
+        bool friendlyTownEnder = false, bool chase = false, bool nearestEnd = false, bool deferTrial = false)
     {
         if (PlayerbotAsyncNavigationPlan.Current?.Deferred == true)
         {
@@ -915,8 +953,10 @@ internal static class PlayerbotNavigation
             straightRefused = false;
             return false;
         }
-        // A chase answers this think (combat responsiveness) and a trial weighs candidates: neither can wait for a path job.
-        using PlayerbotPathJobs.NoDeferScope noDefer = chase || trial ? PlayerbotPathJobs.NoDefer() : default;
+        // A chase answers this think (combat responsiveness). A trial weighs a candidate: through a planning wrapper (PlanExact, whose
+        // callers handle PlanOutcome.Pending: deferTrial) it is a path job like any far query and the candidate waits for a later think;
+        // a bool caller (TryPlan) cannot tell a pending answer from a refusal and keeps its synchronous search.
+        using PlayerbotPathJobs.NoDeferScope noDefer = chase || (trial && !deferTrial) ? PlayerbotPathJobs.NoDefer() : default;
         if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused, searchNodes, noFallbacks: trial || chase,
                 nearestEnd: chase || nearestEnd) || route is null) return false;
         bool crossBeside = completedQuestReturn && friendlyTownEnder;
@@ -1513,6 +1553,129 @@ internal static class PlayerbotNavigation
         if (climb < SteepAscentYards) return false;
         ascent = climb;
         return true;
+    }
+
+    /// <summary>The answer of a deferred diagnosis (<see cref="DiagnoseSteepAscent"/>, <see cref="DiagnoseReturnHazard"/>).</summary>
+    internal enum DiagnosisState : byte
+    {
+        /// <summary>A search of the diagnosis is still a path job (or a tile read): no verdict, ask again on a later think.</summary>
+        Pending,
+
+        /// <summary>The verdict: not the case.</summary>
+        Clear,
+
+        /// <summary>The verdict: the case.</summary>
+        Found,
+    }
+
+    /// <summary>The bot may stand this far from where a diagnosis was made and still get its cached verdict (<see cref="PlayerbotWorldDestinations"/>'s spot).</summary>
+    internal const float DiagnosisSpotYards = 3f;
+
+    /// <summary>...and within this height (yards): a floor above or below the spot is another place (a verdict made under a mezzanine is not the one above it).</summary>
+    internal const float DiagnosisSpotHeightYards = 1.5f;
+
+    /// <summary>How long a diagnosis verdict stands (ms): a hazard or the bot's neighbourhood may change.</summary>
+    internal const uint DiagnosisTtlMs = 120_000;
+
+    /// <summary>The verdicts one bot keeps (oldest dropped first).</summary>
+    internal const int MaxDiagnoses = 8;
+
+    private sealed class DiagnosisBook
+    {
+        internal readonly List<DiagnosisEntry> Entries = [];
+    }
+
+    private sealed class DiagnosisEntry(bool steep, uint questId, Vector3 spot, Vector3 goal, bool friendlyTownEnder, uint madeMs)
+    {
+        internal readonly bool Steep = steep;
+        internal readonly uint QuestId = questId;
+        internal readonly Vector3 Spot = spot;
+        internal readonly Vector3 Goal = goal;
+        internal readonly bool FriendlyTownEnder = friendlyTownEnder;
+        internal readonly uint MadeMs = madeMs;
+        internal bool Found;
+        internal float Ascent;
+        internal PlayerbotHazard Hazard;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, DiagnosisBook> Diagnoses = [];
+
+    private static DiagnosisEntry? CachedDiagnosis(Player player, bool steep, uint questId, Vector3 spot, Vector3 goal, bool friendlyTownEnder, uint now)
+    {
+        if (!Diagnoses.TryGetValue(player, out DiagnosisBook? book)) return null;
+        foreach (DiagnosisEntry entry in book.Entries)
+        {
+            if (entry.Steep == steep && entry.QuestId == questId && entry.FriendlyTownEnder == friendlyTownEnder
+                && unchecked(now - entry.MadeMs) <= DiagnosisTtlMs
+                && Vector3.DistanceSquared(entry.Goal, goal) <= 1f
+                && Vector2.DistanceSquared(new Vector2(entry.Spot.X, entry.Spot.Y), new Vector2(spot.X, spot.Y)) <= DiagnosisSpotYards * DiagnosisSpotYards
+                && MathF.Abs(entry.Spot.Z - spot.Z) <= DiagnosisSpotHeightYards)
+                return entry;
+        }
+
+        return null;
+    }
+
+    private static void RememberDiagnosis(Player player, DiagnosisEntry entry)
+    {
+        DiagnosisBook book = Diagnoses.GetOrCreateValue(player);
+        if (book.Entries.Count >= MaxDiagnoses) book.Entries.RemoveAt(0);
+        book.Entries.Add(entry);
+    }
+
+    /// <summary>
+    /// <see cref="RequiresSteepAscent"/> as a deferrable diagnosis: its two searches of <see cref="DiagnosisSearchNodes"/> nodes run as path
+    /// jobs (<see cref="PlayerbotPathJobs"/>) and the verdict is <see cref="DiagnosisState.Pending"/> until they are answered; the caller asks
+    /// again on a later think. The verdict is kept per bot, quest and spot (<see cref="DiagnosisSpotYards"/>, <see cref="DiagnosisTtlMs"/>), so
+    /// asking again once decided runs no search.
+    /// </summary>
+    internal static DiagnosisState DiagnoseSteepAscent(Player player, Vector3 goal, PlayerbotOptions options, uint questId, uint now, out float ascent)
+    {
+        Vector3 spot = PlayerbotMotion.CurrentPosition(player);
+        if (CachedDiagnosis(player, steep: true, questId, spot, goal, friendlyTownEnder: false, now) is { } known)
+        {
+            ascent = known.Ascent;
+            return known.Found ? DiagnosisState.Found : DiagnosisState.Clear;
+        }
+
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool found = RequiresSteepAscent(player, goal, options, out ascent);
+        if (PendingSince(mark))
+        {
+            ascent = 0;
+            return DiagnosisState.Pending;
+        }
+
+        RememberDiagnosis(player, new DiagnosisEntry(steep: true, questId, spot, goal, false, now) { Found = found, Ascent = ascent });
+        return found ? DiagnosisState.Found : DiagnosisState.Clear;
+    }
+
+    /// <summary>
+    /// <see cref="HasBlockingReturnHazard"/> as a deferrable diagnosis, as <see cref="DiagnoseSteepAscent"/>: its route search is a path job
+    /// and the verdict is kept per bot, quest and spot.
+    /// </summary>
+    internal static DiagnosisState DiagnoseReturnHazard(Player player, Vector3 goal, PlayerbotOptions options, uint questId, uint now,
+        out PlayerbotHazard hazard, bool friendlyTownEnder = false)
+    {
+        Vector3 spot = PlayerbotMotion.CurrentPosition(player);
+        if (CachedDiagnosis(player, steep: false, questId, spot, goal, friendlyTownEnder, now) is { } known)
+        {
+            hazard = known.Hazard;
+            return known.Found ? DiagnosisState.Found : DiagnosisState.Clear;
+        }
+
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool found = HasBlockingReturnHazard(player, goal, options, out hazard, friendlyTownEnder);
+        if (PendingSince(mark))
+        {
+            hazard = default;
+            return DiagnosisState.Pending;
+        }
+
+        RememberDiagnosis(player, new DiagnosisEntry(steep: false, questId, spot, goal, friendlyTownEnder, now) { Found = found, Hazard = hazard });
+        return found ? DiagnosisState.Found : DiagnosisState.Clear;
     }
 
     /// <summary>

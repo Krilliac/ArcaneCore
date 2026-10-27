@@ -51,6 +51,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal const float ClosingStepYards = 2f;
 
     private uint _closingSpawn;
+    private bool _closingToLift; // the not-closing clock measures to a lift's landing (PlayerbotRoute.ToLiftLanding), not to the spawn
     private float _closingBest = float.PositiveInfinity;
     private uint _closingMs;
     private uint _closingClockedAt;
@@ -475,7 +476,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
                 LastPlanRefused = true;
                 return false;
             }
-            if (NotClosing(player, _routeSpawnGuid, elapsedMs, now))
+            if (NotClosing(player, _routeSpawnGuid, elapsedMs, now, _route))
             {
                 if (!hunting && returnQuestId == 0 && QuestId != 0)
                     Suspensions?.SuspendQuest(QuestId, now);
@@ -625,7 +626,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
             // On the other level of a lift (the Great Lift between Thousand Needles and The Barrens, the Thunder Bluff lifts): the brain
             // drives the ride from the next think, and the destination plans again from the other landing (PlayerbotElevator). When the
-            // lift's own mesh check found the way on foot, that route is walked: still one path query this think.
+            // lift's own mesh check found the way on foot, that route is walked: still one path query this think. The route to the
+            // lift's landing (PlayerbotRoute.ToLiftLanding) of a bot farther than ElevatorNetwork.NearLiftYards from the lift, which has no
+            // trip yet, costs the direct check plus up to one PlanToward per car, and NotClosing measures it to that landing; the destination plans again on each think and the trip begins once the bot is near.
             PlayerbotRoute? walk = null;
             if (_navigationPlan is null && transit && PlayerbotElevator.TryBegin(_session, player, destination, _options, out walk))
             {
@@ -753,7 +756,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _tileWait.Reset();
             // A leg planned again to the spawn the last leg walked to keeps that walk's not-closing clock (NotClosing): planning the same
             // dead end afresh every think is no progress. One that does not come nearer for SpawnNotClosingMs is passed over.
-            if (NotClosing(player, entry.Spawn.Guid, elapsedMs, now))
+            if (NotClosing(player, entry.Spawn.Guid, elapsedMs, now, route))
             {
                 if (!hunting && returnQuestId == 0 && questId != 0)
                     Suspensions?.SuspendQuest(questId, now);
@@ -868,15 +871,21 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _tripWatch.Note(player, entry, spawnGuid, now);
     }
 
-    private bool NotClosing(Player player, uint spawnGuid, uint elapsedMs, uint now)
+    /// <param name="route">The walk being followed or planned. For a route to a lift's landing (<see cref="PlayerbotRoute.ToLiftLanding"/>) the
+    /// distance is measured to that landing, not to the spawn: the way to the lift may lead away from the goal.</param>
+    private bool NotClosing(Player player, uint spawnGuid, uint elapsedMs, uint now, PlayerbotRoute? route = null)
     {
         DestinationEntry? spawn = null;
         foreach (DestinationEntry entry in _entries)
             if (entry.Spawn.Guid == spawnGuid) { spawn = entry; break; }
         if (spawn is null) return false;
-        float distance = MathF.Sqrt(DistanceSquared(player, spawn.Spawn));
-        if (spawnGuid != _closingSpawn || unchecked(now - _closingClockedAt) > 60_000u)
+        bool toLift = route is { ToLiftLanding: true };
+        float distance = toLift
+            ? Vector3.Distance(new(player.X, player.Y, player.Z), route!.LiftLanding)
+            : MathF.Sqrt(DistanceSquared(player, spawn.Spawn));
+        if (spawnGuid != _closingSpawn || toLift != _closingToLift || unchecked(now - _closingClockedAt) > 60_000u)
         {
+            _closingToLift = toLift;
             (_closingSpawn, _closingBest, _closingMs, _closingClockedAt) = (spawnGuid, distance, 0, now);
             return false;
         }
@@ -1187,11 +1196,34 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
         if (++_failCount < ConfirmFailures || _failDiagnosed || Suspensions is not { } suspensions) return;
         _failDiagnosed = true;
-        bool steep = PlayerbotNavigation.RequiresSteepAscent(player, destination, _options, out float ascent);
+        // The two searches of the diagnosis are path jobs: while one is under way the confirmation waits for a later think (the failures
+        // already counted stand), and a decided verdict is kept per quest and spot (PlayerbotNavigation.DiagnoseSteepAscent).
+        PlayerbotNavigation.DiagnosisState steepState = PlayerbotNavigation.DiagnoseSteepAscent(player, destination, _options, questId, now, out float ascent);
+        if (steepState == PlayerbotNavigation.DiagnosisState.Pending)
+        {
+            _failDiagnosed = false;
+            return;
+        }
+
+        bool steep = steepState == PlayerbotNavigation.DiagnosisState.Found;
         int fromComp = -1, toComp = -1;
         bool unreachable = !steep && PlayerbotNavigation.IsUnreachableOnFoot(player, destination, out fromComp, out toComp);
         PlayerbotHazard hazard = default;
-        if (!steep && !unreachable && !PlayerbotNavigation.HasBlockingReturnHazard(player, destination, _options, out hazard, friendlyTownEnder))
+        bool blocked = false;
+        if (!steep && !unreachable)
+        {
+            PlayerbotNavigation.DiagnosisState hazardState = PlayerbotNavigation.DiagnoseReturnHazard(player, destination, _options, questId, now,
+                out hazard, friendlyTownEnder);
+            if (hazardState == PlayerbotNavigation.DiagnosisState.Pending)
+            {
+                _failDiagnosed = false;
+                return;
+            }
+
+            blocked = hazardState == PlayerbotNavigation.DiagnosisState.Found;
+        }
+
+        if (!steep && !unreachable && !blocked)
         {
             // No steep ground or hazard: for a bot that may not take the tram or a lift the ender across it is the reason, but only
             // when the tram or a lift really is the way there (any other failed plan is not a transit block, and is never set aside here).

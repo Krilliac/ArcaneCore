@@ -135,13 +135,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (row.Value is { Status: QuestStatus.Complete, Rewarded: false })
             {
-                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest))
+                IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest, offered))
                 {
                     _awaitingBagSpace.Remove(row.Key);
                     continue;
                 }
 
-                if (!RewardItemsFit(player, quest, services))
+                if (!RewardItemsFit(player, quest, services, offered))
                 {
                     NeedsBagSpaceForTurnIn = true;
                     _awaitingBagSpace.Add(row.Key);
@@ -220,7 +221,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 || services.Quests.Get(id) is not { IsActive: true } quest || !services.IsRewardable(id)) continue;
             // A refused abandon packet must not be sent on every think, regardless of home.
             if (IsRefused(id)) continue;
-            bool invalidatedAutoComplete = quest.IsAutoComplete && !services.MeetsTurnInRequirements(player, quest);
+            bool invalidatedAutoComplete = quest.IsAutoComplete && !services.MeetsTurnInRequirements(player, quest, Offered(player));
             if (!invalidatedAutoComplete && !_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
                 Home is null ? _options.MaxDeliveryYards : 0, player, completed: true))
             {
@@ -472,7 +473,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (!QuestPackets.IsRequestItemsCompletable(packet.Payload))
                     {
-                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? "quest requirements not met at ender";
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? "quest requirements not met at ender";
                         RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "IncompleteAtEnder"), now);
                         return false;
                     }
@@ -498,7 +499,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (_stage is Stage.CompleteResponse or Stage.RewardOffer)
                     {
-                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? $"turn-in timed out in stage {_stage}";
                         RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                         return false;
                     }
@@ -523,7 +524,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
             {
-                string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? $"turn-in timed out in stage {_stage}";
                 RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                 return false;
             }
@@ -613,7 +614,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return false;
             }
 
-            if (!services.MeetsTurnInRequirements(player, target.Quest))
+            if (!services.MeetsTurnInRequirements(player, target.Quest, Offered(player)))
             {
                 if (target.Quest.IsAutoComplete || (target.Quest.ReqItemCount.All(c => c == 0) && target.Quest.ReqCreatureOrGOCount.All(c => c == 0)))
                     Suspensions?.MarkUnreachableQuest(target.Quest.Id, now);
@@ -675,7 +676,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     {
                         _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
                             WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
-                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
+                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice, Offered(player)) ?? "reward choice refused";
                         RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now, enderGuid: target.Npc.Guid);
                         return false;
                     }
@@ -852,14 +853,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     continue;
                 if (status.Status == QuestStatus.Complete && !status.Rewarded)
                 {
-                    if (!services.MeetsTurnInRequirements(player, quest))
+                    IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                    if (!services.MeetsTurnInRequirements(player, quest, offered))
                     {
                         if (_stage != Stage.None && _stageQuest == id)
                             ClearStage();
                         continue;
                     }
 
-                    bool fits = RewardItemsFit(player, quest, services);
+                    bool fits = RewardItemsFit(player, quest, services, offered);
                     if (_stage == Stage.None && !fits)
                     {
                         NeedsBagSpaceForTurnIn = true;
@@ -1461,8 +1463,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// (bank included) towards <c>SrcItemCount</c> and needs room for the rest (vmangos <c>Player::CanGiveQuestSourceItemIfNeed</c>,
     /// Player.cpp:13643-13676), refusing the accept otherwise. A quest without a source item always fits.
     /// </summary>
-    internal static bool RewardItemsFit(Player player, Quest quest, QuestNpcServices? services = null) =>
-        QuestNpcServices.CanFitQuestRewards(player, quest, RewardChoice(player, quest), services);
+    internal static bool RewardItemsFit(Player player, Quest quest, QuestNpcServices? services = null, IReadOnlySet<ObjectGuid>? offered = null) =>
+        QuestNpcServices.CanFitQuestRewards(player, quest, RewardChoice(player, quest), services, offered);
+
+    /// <summary>The bot's items sitting in its open trade window, which a turn-in neither counts nor takes (null without a trade).</summary>
+    private IReadOnlySet<ObjectGuid>? Offered(Player player) => _session.Services.GetService<QuestNpcFeature>()?.OfferedInTrade(player);
 
     private void RefreshBagSpaceWait(Player player, QuestNpcServices services, PlayerNpcState state)
     {
@@ -1473,7 +1478,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
                 {
-                    if (services.Quests.Get(id) is not { } cq || RewardItemsFit(player, cq, services))
+                    if (services.Quests.Get(id) is not { } cq || RewardItemsFit(player, cq, services, Offered(player)))
                     {
                         _awaitingBagSpace.Remove(id);
                     }
@@ -1493,7 +1498,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (row.Value is { Status: QuestStatus.Complete, Rewarded: false }
                     && services.Quests.Get(row.Key) is { } cq
-                    && !RewardItemsFit(player, cq, services))
+                    && !RewardItemsFit(player, cq, services, Offered(player)))
                 {
                     anyBlocked = true;
                     break;

@@ -275,7 +275,14 @@ public sealed class QuestIntegrationTests
     {
         public uint RemainingCount { get; set; }
         public ItemInfo? GetItem(uint itemId) => itemId == 7 ? new(7, 100, 10, 1, 0, uint.MaxValue, uint.MaxValue, 0, 0, 0, 0) : null;
-        public uint GetItemCount(Player player, uint itemId, bool inBankAlso) => RemainingCount;
+        public uint GetItemCount(Player player, uint itemId, bool inBankAlso, IReadOnlySet<ObjectGuid>? exclude = null)
+        {
+            // Stacks in `exclude` (an open trade window) are not counted, as in the production service.
+            uint excluded = exclude is null
+                ? 0
+                : (uint)player.Inventory.AllItems.Where(i => i.Entry == itemId && exclude.Contains(i.Guid)).Sum(i => (long)i.Count);
+            return RemainingCount > excluded ? RemainingCount - excluded : 0;
+        }
         public ArcaneCore.Game.Items.InventoryResult CanStoreNewItem(Player player, uint itemId, uint count) => ArcaneCore.Game.Items.InventoryResult.Ok;
         public bool StoreNewItem(Player player, uint itemId, uint count) => false;
         public void DestroyItemCount(Player player, uint itemId, uint count) { }

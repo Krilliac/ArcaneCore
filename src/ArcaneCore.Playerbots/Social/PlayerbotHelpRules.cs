@@ -80,7 +80,7 @@ internal static class PlayerbotHelpRules
 
     /// <summary>The goals a bot may leave to lend a hand: it is walking, grinding or on an errand, not fighting, resting, recovering, retreating or in a group's run.</summary>
     internal static bool IsFreeGoal(PlayerbotGoalKind goal) => goal is PlayerbotGoalKind.Explore or PlayerbotGoalKind.Quest or PlayerbotGoalKind.Grind
-        or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Home or PlayerbotGoalKind.Mount;
+        or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Home or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather;
 
     /// <summary>Whether the class has a direct heal the brain's assist lane casts at the player it helps (<c>PlayerbotBrain.TryHealTagger</c>).</summary>
     internal static bool IsHealer(Class cls) => cls is Class.Priest or Class.Paladin or Class.Druid or Class.Shaman;
