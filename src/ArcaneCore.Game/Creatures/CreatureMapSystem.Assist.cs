@@ -110,8 +110,13 @@ public sealed partial class CreatureMapSystem
             return 0;
         }
 
+        // The cells around the caller, not every creature of the map (vmangos Cell::VisitGridObjects with the call radius). The query is 2D
+        // and widened by both bounding radii; the exact 3D range and sight tests stay in CanAssist. Collected into a fresh list first because
+        // AttackStart below can re-enter the near query. Order: map-join order (the grid), which matches the dictionary order of the old scan.
+        var candidates = new List<Creature>();
+        CollectCreaturesNear(creature.X, creature.Y, radius + creature.BoundingRadius + Map.Grids.MaxBoundingRadius, candidates);
         int count = 0;
-        foreach (Creature helper in _creatures.Values.ToArray())
+        foreach (Creature helper in candidates)
         {
             AssistScanExamined++;
             if (CanAssist(helper, creature, enemy, radius))

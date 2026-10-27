@@ -146,7 +146,10 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(enemy);
         Creature? nearest = null;
         float best = GuardPostTable.NearestGuardRadius * GuardPostTable.NearestGuardRadius;
-        foreach (Creature candidate in _creatures.Values)
+        // The cells within the guard radius, not every creature of the map; the 3D distance test below is exact.
+        var candidates = new List<Creature>();
+        CollectCreaturesNear(civilian.X, civilian.Y, GuardPostTable.NearestGuardRadius, candidates);
+        foreach (Creature candidate in candidates)
         {
             AssistScanExamined++;
             if (ReferenceEquals(candidate, civilian) || !candidate.IsAlive || candidate.Combat.IsInCombat
