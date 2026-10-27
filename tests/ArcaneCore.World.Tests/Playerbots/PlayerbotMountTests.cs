@@ -9,6 +9,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
@@ -64,6 +65,14 @@ public sealed class PlayerbotMountTests
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
         }], [], []);
     }
+
+    /// <summary>
+    /// With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS), a mount-up that went off waits in the batch for its go: the world runs on
+    /// to the batch boundary. Without batching nothing is held and this returns at once.
+    /// </summary>
+    private static Task SpellBatchGoneAsync(WorldTestHost host, WorldSession session)
+        => host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(session.Player!),
+            "the batched mount-up went off");
 
     [Fact]
     public async Task Reserve_IsTheRidingTrainingPlusTheCheapestUsableMount_FromTheDataAndDiscounted()
@@ -546,6 +555,46 @@ public sealed class PlayerbotMountTests
             (bool took, bool battle, int fails) = await TryMountAsync(host, session, p => { host.WorldServices.GetRequiredService<SpellFeature>().Spellbook.LearnSpell(p, MountFixture.MountSpell); p.SetByte(UpdateFields.UnitFieldBytes1, 2, 17); }); // battle stance
             Assert.Equal((false, 0), (took, fails));
             Assert.True(battle);
+        });
+    }
+
+    [Fact]
+    public async Task BatchedMountUp_IsUnderwayUntilItsGo_NotAFailedSummon()
+    {
+        // With a spell batch window the instant mount-up (here a mount item's use) leaves the cast slot and waits for the boundary: the
+        // bot must wait for it, not judge it refused, back off and report bot-mount/summon-failed.
+        await RunAsync(new MountFixture(), async (host, session) =>
+        {
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            Player player = session.Player!;
+            var options = new PlayerbotOptions { Enabled = true };
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                spells.SpellBatchWindowMs = 400;
+                InstallMountSpell(host);
+                player.Inventory.AddItem(98003, 1, out _);
+                session.ManagedBudget = new ManagedActionBudget(5);
+                Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+                Assert.True(spells.HasPendingGo(player));
+                Assert.False(MountService.IsMounted(player));
+                Assert.True(PlayerbotMount.IsBusy(session));
+                Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options)); // still underway: waits, sends nothing
+                Assert.Equal(0, PlayerbotMount.For(session).Failures);
+                return true;
+            });
+
+            await SpellBatchGoneAsync(host, session);
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(MountService.IsMounted(player));
+                Assert.False(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+                Assert.False(PlayerbotMount.IsBusy(session));
+                Assert.Equal(0, PlayerbotMount.For(session).Failures);
+                Assert.Equal(0u, PlayerbotMount.For(session).BackoffUntil);
+                Assert.False(capture.Any(PlayerbotAnomalies.Key("mount", "summon-failed")), capture.Describe());
+                return true;
+            });
         });
     }
 
