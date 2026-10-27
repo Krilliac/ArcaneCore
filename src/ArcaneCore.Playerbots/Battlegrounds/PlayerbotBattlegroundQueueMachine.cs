@@ -114,6 +114,9 @@ internal readonly record struct PlayerbotBattlegroundFacts
 
     /// <summary>The walk to the battlemaster refused a route (or arrived at an empty/dead battlemaster spot).</summary>
     public bool TravelRefused { get; init; }
+
+    /// <summary>Travel: the length of the walk to the battlemaster as estimated when it was planned, in yards (0: not known, the base timeout).</summary>
+    public float TravelYards { get; init; }
 }
 
 /// <summary>
@@ -126,6 +129,70 @@ internal static class PlayerbotBattlegroundQueueMachine
 {
     /// <summary>The longest a bot walks to a battlemaster.</summary>
     internal const uint TravelTimeoutMs = 600_000;
+
+    /// <summary>The slowest pace (yards a second) a walk to a battlemaster is expected to keep, fights and detours included; a run is 7.</summary>
+    internal const float TravelYardsPerSecond = 3f;
+
+    /// <summary>The most a walk to a battlemaster is given, however long its way.</summary>
+    internal const uint MaxTravelTimeoutMs = 3_600_000;
+
+    /// <summary>A walk is longer than its straight line: the way round a ridge or a river (the estimate of a walk's length is the line times this).</summary>
+    internal const float TravelDetourFactor = 1.5f;
+
+    /// <summary>
+    /// The longest a bot walks to a battlemaster whose way is <paramref name="pathYards"/> long: <see cref="TravelTimeoutMs"/> for a short or
+    /// unknown way, longer by the pace <see cref="TravelYardsPerSecond"/> for a long one, at most <see cref="MaxTravelTimeoutMs"/>. A flat
+    /// ten minutes timed out the long walks across a continent (live: 'timed out walking to ArathiBasin battlemaster').
+    /// </summary>
+    internal static uint TravelTimeoutFor(float pathYards)
+    {
+        if (!float.IsFinite(pathYards) || pathYards <= 0f) return TravelTimeoutMs;
+        double ms = pathYards / (double)TravelYardsPerSecond * 1000.0;
+        return (uint)Math.Clamp(ms, TravelTimeoutMs, MaxTravelTimeoutMs);
+    }
+
+    /// <summary>How much closer to the battlemaster a walk has to get to count as progress.</summary>
+    internal const float TravelProgressYards = 10f;
+
+    /// <summary>The least time a walk may go without that progress before it is given up (a long timeout, <see cref="TravelTimeoutFor"/>, is no licence to stand still).</summary>
+    internal const uint TravelStallMs = 180_000;
+
+    /// <summary>
+    /// The time without progress a walk of <paramref name="travelYards"/> (its estimated way) is given: <see cref="TravelStallMs"/> and half the
+    /// time the way takes at the walk's pace. The watch measures the straight line to the master, and a road that winds away from it for a
+    /// long stretch (round a ridge or a river) gains nothing on that line while it is walked.
+    /// </summary>
+    internal static uint TravelStallFor(float travelYards)
+    {
+        if (!float.IsFinite(travelYards) || travelYards <= 0f) return TravelStallMs;
+        double ms = TravelStallMs + (travelYards / (double)TravelYardsPerSecond * 500.0);
+        return (uint)Math.Min(ms, MaxTravelTimeoutMs);
+    }
+
+    /// <summary>
+    /// The walk's progress watch. <paramref name="yardsLeft"/> is the straight distance to the battlemaster now; <paramref name="bestYards"/>
+    /// (negative: not seen yet) and <paramref name="bestAtMs"/> are the closest it came and when, updated here. True when the bot has not come
+    /// <see cref="TravelProgressYards"/> closer than that in <paramref name="stallMs"/>. While <paramref name="fighting"/> (a fight on the road
+    /// is answered before the walk goes on) the clock does not run: it restarts at <paramref name="nowMs"/>, so a fight is never a stall.
+    /// </summary>
+    internal static bool TravelStalled(float yardsLeft, bool fighting, uint stallMs, ref float bestYards, ref uint bestAtMs, uint nowMs)
+    {
+        if (!float.IsFinite(yardsLeft)) return false;
+        if (bestYards < 0f || yardsLeft < bestYards - TravelProgressYards)
+        {
+            bestYards = yardsLeft;
+            bestAtMs = nowMs;
+            return false;
+        }
+
+        if (fighting)
+        {
+            bestAtMs = nowMs;
+            return false;
+        }
+
+        return unchecked(nowMs - bestAtMs) > stallMs;
+    }
 
     /// <summary>The longest the server takes to put the bot in a queue after the join.</summary>
     internal const uint JoinReplyTimeoutMs = 15_000;
@@ -148,7 +215,7 @@ internal static class PlayerbotBattlegroundQueueMachine
                 return f.Roll ? (PlayerbotBattlegroundPhase.Travel, PlayerbotBattlegroundAction.PlanToBattlemaster) : (phase, PlayerbotBattlegroundAction.None);
 
             case PlayerbotBattlegroundPhase.Travel:
-                if (f.Taken || f.Unable || f.InPhaseMs > TravelTimeoutMs) return (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.Release);
+                if (f.Taken || f.Unable || f.InPhaseMs > TravelTimeoutFor(f.TravelYards)) return (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.Release);
                 if (f.InReach) return (PlayerbotBattlegroundPhase.Join, PlayerbotBattlegroundAction.Hello);
                 return f.TravelRefused ? (PlayerbotBattlegroundPhase.Idle, PlayerbotBattlegroundAction.SetAside) : (phase, PlayerbotBattlegroundAction.None);
 

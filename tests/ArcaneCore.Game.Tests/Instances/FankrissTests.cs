@@ -18,6 +18,15 @@ namespace ArcaneCore.Game.Tests.Instances;
 
 public sealed class FankrissTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private sealed class Arena : IDisposable
     {
         public WorldRuntime World { get; } = TestWorld.CreateRuntime();
@@ -144,6 +153,7 @@ public sealed class FankrissTests
         Creature boss = creatures.SpawnTemporary(content.FindTemplate(15510)!, -8075, 1193, -92, 0);
 
         Assert.Equal(CreatureCastResult.Ok, creatures.CastSpell(boss, 720, player, triggered: false));
+        ResolveSpellBatch(kit);
         Assert.Equal(-8043.6f, player.X);
         Assert.Equal(1254.1f, player.Y);
         Assert.True(kit.System.HasAura(player, 720));

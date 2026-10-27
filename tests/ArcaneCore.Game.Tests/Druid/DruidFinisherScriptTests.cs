@@ -92,6 +92,19 @@ public sealed class DruidFinisherScriptTests : IDisposable
         _druid.SetInt32(UpdateFields.UnitFieldAttackPower, 1000);
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     public void Dispose() => _kit.Dispose();
 
     private uint Energy => MapCombat.GetPower(_druid, PowerType.Energy);
@@ -103,6 +116,7 @@ public sealed class DruidFinisherScriptTests : IDisposable
         _combos.AddComboPoints(_druid, _enemy, 5);
 
         Assert.Equal(SpellCastResult.CastOk, _kit.System.CastSpell(_druid, Bite, SpellCastTargets.ForUnit(_enemy.Guid), triggered: false));
+        FlushSpellBatch(_kit);
 
         // 100 + (int)(36 * 5) = 280; + (int)(1000 * 5 * 0.03) = 430; the cast cost 35 energy, the 50 left give (int)(50 * 2.7) = 135.
         Assert.Equal((Bite, 0, 565), _capture.Values.Single(v => v.Spell == Bite));

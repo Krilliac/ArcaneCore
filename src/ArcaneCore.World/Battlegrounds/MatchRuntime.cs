@@ -818,16 +818,21 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             return;
         }
 
-        if (_feature.EntryPointOf(player) is { } point)
+        // The entry point is forgotten only once the teleport back was accepted: a refused one (the player is mid-teleport, a GM move is
+        // in flight) keeps it for the leave that follows.
+        if (_feature.EntryPointOf(player) is { } point
+            && teleport.Teleports.TeleportTo(p, point.MapId, point.X, point.Y, point.Z, point.Orientation))
         {
             _feature.ForgetEntryPoint(player);
-            if (teleport.Teleports.TeleportTo(p, point.MapId, point.X, point.Y, point.Z, point.Orientation))
-            {
-                return;
-            }
+            return;
         }
 
-        teleport.Teleports.TeleportToHomebind(p);
+        // The leave went to the bind point: the entry point it could not use is stale. A refused bind-point teleport too (the player is
+        // mid-teleport) keeps it for the leave that follows.
+        if (teleport.Teleports.TeleportToHomebind(p))
+        {
+            _feature.ForgetEntryPoint(player);
+        }
     }
 
     public void UnhandledAreaTrigger(ObjectGuid player, uint areaTriggerId)

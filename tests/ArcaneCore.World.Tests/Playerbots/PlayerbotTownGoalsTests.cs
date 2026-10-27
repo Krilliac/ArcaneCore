@@ -606,6 +606,107 @@ public sealed class PlayerbotTownGoalsTests
     }
 
     /// <summary>
+    /// #1442: a full-bag bot sells an unbound bind-on-equip green that is no upgrade for what it wears, and keeps an upgrade, a bound item, a quest
+    /// item and (here) the protected filler. Returns whether a sale was wanted, the money earned and the bag counts of the probed entries.
+    /// </summary>
+    private static async Task<(bool Wanted, bool Sold, uint Money, uint[] Counts)> FullBagsOfGreensAsync(
+        ItemTemplate[] probes, uint[] boundEntries)
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9600, durability: 25) with { Armor = 100 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9690, Name = "Skill goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 5, RequiredSkill = 164 });
+        foreach (ItemTemplate probe in probes)
+            items.Templates.Templates.Add(probe);
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                return await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    foreach (Item existing in player.Inventory.AllItems.Where(item => item.BagSlot == InventorySlots.Bag0
+                        && item.Slot >= InventorySlots.ItemStart && item.Slot < InventorySlots.ItemEnd).ToArray())
+                        player.Inventory.DestroyItem(existing.BagSlot, existing.Slot);
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9600);
+                    foreach (ItemTemplate probe in probes)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(probe.Entry, 1, out _));
+                    foreach (Item item in player.Inventory.AllItems.Where(candidate => boundEntries.Contains(candidate.Entry)))
+                        item.SetBinding(true);
+                    while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9690, 1, out _));
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Vendor;
+                    player.Money = 0;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    bool wanted = goals.HasCandidate(player);
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    bool sold = goals.Update(player, 1500);
+                    return (wanted, sold, (uint)player.Money, probes.Select(probe => player.Inventory.GetItemCount(probe.Entry)).ToArray());
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    private static ItemTemplate BoeGreen(uint entry, int armor, uint sellPrice, uint bonding = 2)
+        => Boots(entry, durability: 25) with { Quality = 2, Bonding = bonding, SellPrice = sellPrice, Armor = armor };
+
+    [Fact]
+    public async Task FullBags_UnboundBindOnEquipGreen_NoUpgrade_IsSold()
+    {
+        (bool wanted, bool sold, uint money, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9601, armor: 1, sellPrice: 40)], []);
+        Assert.True(wanted, "a full-bag bot holding an unneeded unbound BoE green has no sell trip (#1442)");
+        Assert.True(sold);
+        Assert.Equal(0u, counts[0]);
+        Assert.Equal(40u, money);
+    }
+
+    [Fact]
+    public async Task FullBags_BindOnEquipUpgrade_IsKept()
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9602, armor: 500, sellPrice: 40)], []);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    [Fact]
+    public async Task FullBags_BoundBindOnEquipGreen_IsKept()
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9603, armor: 1, sellPrice: 40)], [9603]);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    [Fact]
+    public async Task FullBags_BindOnPickupGreen_IsKept()
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9605, armor: 1, sellPrice: 40, bonding: 1)], []);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    [Fact]
+    public async Task FullBags_QuestItemGreen_IsKept()
+    {
+        ItemTemplate quest = new() { Entry = 9604, Name = "Quest green", Class = (uint)ItemClass.Quest, Quality = 2, Bonding = 2,
+            Stackable = 1, SellPrice = 40 };
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([quest], []);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    /// <summary>
     /// A hunter with a gun and no bullets buys the vendor's bullets (one CMSG_BUY_ITEM buys the BuyCount) and the out-of-combat
     /// upkeep then selects them with CMSG_SET_AMMO (vmangos AddHunterAmmo creates and sets them instead).
     /// </summary>
@@ -1013,6 +1114,60 @@ public sealed class PlayerbotTownGoalsTests
             finally { session.Kick(); await session.ManagedClosed; }
         }
         finally { FarRepairServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// GitHub #1476 (Vendor and Train visit class): the visit leg to a visible service NPC planned a route that the bot then never made
+    /// progress on (the plan succeeds, the walk does not close). Unlike the repair trip (<see cref="PlayerbotTownGoals.RepairTripStuckMs"/>)
+    /// the visit had no stuck clock, so only the 120 s stall watch ended it. The visit must be given up, the NPC set aside, well before.
+    /// </summary>
+    [Fact]
+    public async Task AVisitThatNeverMakesProgress_IsGivenUpLongBeforeTheStallWatch_AndSetsTheNpcAside()
+    {
+        var fixture = new TownVendorFixture();
+        TownVendorServices.Current.Value = fixture;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices:
+                services => services.AddSingleton<ISpellContentStore>(fixture));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "town NPC visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    player.Relocate(player.X - 25, player.Y, player.Z, player.Orientation, host.World.NowMs);
+                    float startX = player.X;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true })
+                    {
+                        Suspensions = new PlayerbotSuspensions(),
+                    };
+                    uint stuckMs = 0;
+                    bool givenUp = false;
+                    const uint stepMs = 500;
+                    // 60 s of world time, half of the stall watch's 120 s: the motion is never elapsed, so the bot never leaves where it stands (no progress).
+                    for (int step = 0; step < 120 && !givenUp; step++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        goals.BeginThink();
+                        if (!goals.Update(player, stepMs)) givenUp = true;
+                        else stuckMs += stepMs;
+                    }
+
+                    Assert.True(Math.Abs(player.X - startX) < 1f, "the bot moved: the test does not model a bot with no progress");
+                    Assert.True(givenUp, "the visit leg held the bot for 60 s without any progress");
+                    Assert.True(stuckMs <= 20_000, $"given up only after {stuckMs} ms of no progress");
+                    Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs),
+                        "the NPC the bot could not close on was not set aside");
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
     }
 
     private sealed class BlockWestPathfinder(float minX) : IPathfinder

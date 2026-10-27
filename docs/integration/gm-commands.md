@@ -131,8 +131,49 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   is runtime state only because this branch has no persisted power-cap schema. Responses use mangos LANG ids 122/123
   (ENERGY) and 125/126 (rage), with invariant numeric formatting. A selected creature or offline/missing player returns
   `No character selected.` and security checks run before mutation.
-* `.goname` does not create the GM's instance bind and has no battleground rule; the teleport service's instance rules
-  apply and a refused teleport answers the invalid-coordinates text (vmangos is silent).
+* `.goname` follows vmangos for the target's map (TeleportCommands.cpp:1242-1303). To a player in a battleground it refuses a GM
+  bound to a different running match with LANG_CANNOT_GO_TO_BG_FROM_BG and otherwise sends the GM to that match; to a player in a
+  dungeon instance it refuses a GM in another group (LANG_CANNOT_GO_TO_INST_PARTY) and binds an unbound GM to that instance (this bind
+  is made before the teleport, as vmangos does). `.namego` from inside a battleground sends the summoned player to the caller's match.
+  A battleground move binds nothing when the command runs. The command records an intent (the target match, the player's side and the
+  open-world entry point) that alone admits the one far teleport; the arrival in the match's map commits it. A binding to a match that no
+  longer exists counts as none (cleared when a command, a queue join or an arrival meets it), as vmangos cleans up an outdated setting.
+  A bound GM is on the match's map but is not a participant: only a queue invitation adds a player to a match (vmangos
+  `HandleMoveWorldportAckOpcode` adds only `IsInvitedForBattleGroundInstance`), so the GM is in no team count, raid or scoreboard, the
+  match's invitation count and free slots are the same before, during and after the visit, and the queue is not over-invited. The bind
+  is cleared by the ordinary leave paths (a far teleport off the map, the match removing the player, logout). Not ported: the
+  smart-instance-binding mode. A refused teleport answers the invalid-coordinates text (vmangos is silent).
+  Deviations from vmangos:
+  1. `.namego` of a player in another running match: vmangos overwrites the battleground id and sends the player no new loading screen
+     (a near teleport, `Player.cpp:1896`, when both matches share a map id, as two Warsong Gulch matches do; the old match keeps the
+     player in either case). ArcaneCore forces a far teleport (`TELE_TO_FORCE_MAP_CHANGE`, which vmangos `.goname` sets when the
+     battleground id changes but `.namego` does not) and removes the player from the old match on its arrival in the new match's map:
+     team count, raid, scoreboard, queue slot and invitation are all released, with no Deserter. Until the player arrives it is still a
+     member of the old match; a refused, abandoned or failed teleport leaves it where it was. If the new match is deleted while the
+     player is in the loading screen, the entry is refused and the player goes back to where it stood, as in vmangos
+     (`MovementHandler.cpp:78-91` → `HandleReturnOnTeleportFail` → `TeleportTo(oldLoc)`).
+  2. No binding changes before the arrival. vmangos sets `bgInstanceID` and `joinPos` at the command and a failed teleport leaves them
+     stale. The open-world entry point is recorded at the command and stored on arrival.
+  3. `.goname` refuses while the GM itself is being teleported (vmangos has that check only in `.namego`).
+  4. Deserter on leaving a running battleground is cast only for a player that holds the queue invitation to that match (accepted, or
+     accepted and not yet arrived); vmangos casts it for any non-GM bound to the match. A leave caused by a GM move never casts it.
+  5. A GM-bound player is not a participant of the match.
+  6. `.goname` to a dungeon whose map is flagged to reset when it unloads does not bind the GM to that instance (it would bind to a
+     save about to be deleted); the GM enters like any unbound visitor.
+  7. A far teleport that the destination refuses goes back to where it started and, when that is refused too (for example the origin
+     match ended while the player was in the loading screen), to the bind point. This is vmangos behaviour (`HandleReturnOnTeleportFail`,
+     `Player.cpp:2122-2135`: `if (!TeleportTo(oldLoc)) TeleportToHomebind();`). Deviations: (a) ArcaneCore kicks the player when the
+     bind point refuses it too, where vmangos ignores the result of `TeleportToHomebind`; (b) the way back to the origin is entered
+     directly, without a new loading screen, so a client that loaded another map id than the origin's sees the wrong map (the bind
+     point does get a fresh far teleport and loading screen when its map id differs from the one the client loaded). The entry point of
+     a leaving participant is forgotten once the teleport back to it, or the bind point teleport that replaced it, was accepted.
+  Checked against vmangos 0e3ff01 for the GM teleport commands: `.recall`, `.tele`, `.go xyz` and `.go creature/object` to a
+  battleground map are refused for a player that is bound to no match, exactly as vmangos `Player::TeleportTo` refuses them
+  (`Player.cpp:1861-1864`, "don't let enter battlegrounds without assigned battleground id ... don't let gm level > 1 either"); only
+  `.goname` and `.namego` assign the id. `.namego` passes `TELE_TO_NOT_LEAVE_COMBAT` (`TeleportCommands.cpp:1187`) as vmangos does, so
+  a summon inside one map keeps the target's combat (a far teleport ends it, `Player.cpp:2021`). Known gap: `.groupgo` has none of
+  the vmangos instance checks (`TeleportCommands.cpp:203-248`: only the leader may summon into an instance, no summon from instance
+  to instance).
 * Movement cheats (`.cheat fly`, `.cheat fixedz`): cleared only once a far teleport completes on arrival (the worldport-ack path); kept by a far teleport that never sends SMSG_NEW_WORLD (refused, bailed out, stalled while scheduled), matching the client's continuous flight. An ArcaneCore behaviour: vmangos never clears these cheats on a teleport.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).

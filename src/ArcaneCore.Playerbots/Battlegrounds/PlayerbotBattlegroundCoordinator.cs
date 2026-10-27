@@ -90,6 +90,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>The Warsong Gulch plan of each match and team, made at most once per tick (<see cref="WarsongOrder"/>).</summary>
     private readonly Dictionary<(uint Instance, Team Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> _wsgPlans = [];
 
+    /// <summary>
+    /// The settled Warsong Gulch midfield of each match and team (<see cref="ResolveWarsongMidfield(Map, Vector3, Vector3, out bool)"/>): only a
+    /// point the mesh accepted with every tile read is kept; one resolved while tiles were pending, or a fallback, is asked again next tick.
+    /// </summary>
+    private readonly Dictionary<(uint Instance, Team Team), Vector3> _wsgMidfields = [];
+
     /// <summary>The Warsong Gulch flag stand spawns (Alliance, Horde) of the loaded object content (the stands are despawned while their flag is away).</summary>
     private (object? Of, Vector3? Alliance, Vector3? Horde) _wsgStands;
 
@@ -99,8 +105,18 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// </summary>
     private readonly Dictionary<(ObjectGuid Master, uint Zone), uint> _refusedMasters = [];
 
-    /// <summary>How long a battlemaster whose route was refused is left alone from the bot's zone.</summary>
+    /// <summary>
+    /// The battlemasters a bot's own walk stalled on, until when (world ms): a stall is about the bot, so the master is left alone by that bot
+    /// alone for <see cref="RefusedMasterMs"/> (the bot tries another master, or none), while every other bot of the zone still picks it.
+    /// Without it the bot would walk to the same master again once its ten-minute set-aside ended, and stall again, without end.
+    /// </summary>
+    private readonly Dictionary<(ObjectGuid Player, ObjectGuid Master), uint> _stalledMasters = [];
+
+    /// <summary>How long a battlemaster whose route was refused is left alone from the bot's zone (and, after a stall, by that bot).</summary>
     internal const uint RefusedMasterMs = 3_600_000;
+
+    /// <summary>How long a master that walks waypoints may be missing from the map before a bot at its goal takes the empty spot for a refusal (a walker may be out of the map's reach for a moment).</summary>
+    internal const uint WalkerMissingRefuseMs = 60_000;
 
     /// <summary>What happened so far: queued, entered, left after a match, invitations declined at the cap, queues given up (status and tests).</summary>
     internal (int Queued, int Entered, int Left, int Declined, int QueueTimeouts) Totals { get; private set; }
@@ -150,7 +166,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _orderedBots.Clear();
             _setAside.Clear();
             _wsgPlans.Clear();
+            _wsgMidfields.Clear();
             _refusedMasters.Clear();
+            _stalledMasters.Clear();
             _scanElapsed = ScanMs;
             _world = null;
         }
@@ -177,6 +195,25 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         public Team Team { get; set; }
         public ObjectGuid Battlemaster { get; set; }
         public Vector3 MasterAt { get; set; }
+
+        /// <summary>The walk to the battlemaster as planned: its straight distance from where the bot started, scaled for the way round (<see cref="PlayerbotBattlegroundQueueMachine.TravelTimeoutFor"/>).</summary>
+        public float TravelYards { get; set; }
+
+        /// <summary>The least distance to the battlemaster so far (negative: none seen yet) and when it was reached: the walk's progress watch (<see cref="PlayerbotBattlegroundQueueMachine.TravelStalled"/>).</summary>
+        public float BestYardsToMaster { get; set; } = -1f;
+        public uint BestYardsAtMs { get; set; }
+
+        /// <summary>The zone the bot started the walk in: a refusal of the master is for this zone too, not only for the one the walk stalled in.</summary>
+        public uint StartZone { get; set; }
+
+        /// <summary>The master walks waypoints (<see cref="Battlemaster.Walks"/>): a bot standing at its goal does not take an empty spot for a missing master.</summary>
+        public bool MasterWalks { get; set; }
+
+        /// <summary>The last facts pass found the walk stalled (no progress for the stall time): the bot is set aside alone, the master is not refused for its zone.</summary>
+        public bool WalkStalled { get; set; }
+
+        /// <summary>Since when (world ms) the master, which walks waypoints, is not found alive on the map; null while it is found.</summary>
+        public uint? MasterMissingSinceMs { get; set; }
         public bool HelloSent { get; set; }
         public bool JoinSent { get; set; }
         public uint QueuedSinceMs { get; set; }
@@ -280,7 +317,16 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         switch (t.Phase)
         {
             case PlayerbotBattlegroundPhase.Travel:
-                ai.Travel(player, t.MasterAt, elapsedMs);
+                // The master is met where it stands now: a waypoint walker (spawns 190500 and 190516 of the emissary 14991, game event 20) leaves its spawn point.
+                // The goal follows the live creature once it moved more than a few yards, so the walk is not replanned at every step.
+                if (player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } live)
+                {
+                    t.MasterMissingSinceMs = null;
+                    FollowMaster(t, new Vector3(player.X, player.Y, player.Z), new Vector3(live.X, live.Y, live.Z));
+                }
+                else
+                    t.MasterMissingSinceMs ??= Now;
+                ai.Travel(player, t.MasterAt, elapsedMs, refuseEmptySpot: RefusesEmptySpot(t, Now));
                 break;
             case PlayerbotBattlegroundPhase.InMatch when Feature()?.BattlegroundOf(player.Guid) is { } match && match.PlayerTeam(player.Guid) is { } team:
                 ai.Play(player, match, team, t.Role, elapsedMs, match is WarsongGulch wsg ? WarsongOrder(wsg, team, player) : null);
@@ -381,6 +427,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             && map.MapId == match.MapId && map.InstanceId == match.InstanceId;
         bool reach = t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join && player.IsInWorld
             && player.Map?.FindObject(t.Battlemaster) is Creature { IsAlive: true } master && Distance(player, master) <= PlayerbotBattlegroundAI.InteractYards;
+        // A walk that does not close on the master for minutes is refused like one the navigation refused (the existing refusal path).
+        bool stalled = t.Phase == PlayerbotBattlegroundPhase.Travel && player.IsInWorld
+            && WatchTravel(t, new Vector3(player.X, player.Y, player.Z), PlayerbotBattlegroundAI.IsAttacked(player), Now);
+        // A stall says something about this bot (a rock, a mover bug), not about the master: it is set aside alone (see SetAside below).
+        t.WalkStalled = stalled && t.AI?.TravelRefused != true;
+
         return new PlayerbotBattlegroundFacts
         {
             InReach = reach,
@@ -400,7 +452,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             BackInWorld = player.IsInWorld && !teleporting && !state.InBattleground && player.Map?.Template is not { IsBattleground: true },
             InPhaseMs = unchecked(Now - t.PhaseSinceMs),
             MatchGone = bound && match is null,
-            TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && t.AI?.TravelRefused == true,
+            TravelRefused = t.Phase == PlayerbotBattlegroundPhase.Travel && (t.AI?.TravelRefused == true || stalled),
+            TravelYards = t.TravelYards,
         };
     }
 
@@ -506,7 +559,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
             case PlayerbotBattlegroundAction.SetAside:
                 SetAside(t.BotId, t.Type);
-                if (facts.TravelRefused) RefuseMaster(t.Battlemaster, player);
+                if (facts.TravelRefused && !t.WalkStalled) RefuseMaster(t, player);
+                else if (t.WalkStalled) _stalledMasters[(player.Guid, t.Battlemaster)] = unchecked(Now + RefusedMasterMs);
                 Note(facts.TravelRefused ? $"{t.Name} could not walk to the {t.Type} battlemaster: set aside" : $"{t.Name} got no queue slot for {t.Type}: set aside");
                 if (!bot.Session.IsInChaosProbe)
                 {
@@ -518,10 +572,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 break;
 
             case PlayerbotBattlegroundAction.Release:
-                if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutMs)
+                if (t.Phase == PlayerbotBattlegroundPhase.Travel && facts.InPhaseMs > PlayerbotBattlegroundQueueMachine.TravelTimeoutFor(facts.TravelYards))
                 {
                     SetAside(t.BotId, t.Type);
-                    RefuseMaster(t.Battlemaster, player);
+                    RefuseMaster(t, player);
                     Note($"{t.Name} timed out walking to the {t.Type} battlemaster: set aside");
                     if (!bot.Session.IsInChaosProbe)
                         PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", $"timed out walking to {t.Type} battlemaster {t.Battlemaster}");
@@ -598,8 +652,56 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     private void SetAside(Guid botId, BattlegroundType type) => _setAside[(botId, type)] = unchecked(Now + SetAsideMs);
 
-    /// <summary>The walk from the bot's zone to <paramref name="master"/> failed: no bot walks there from that zone for <see cref="RefusedMasterMs"/>.</summary>
-    private void RefuseMaster(ObjectGuid master, Player player) => _refusedMasters[(master, player.ZoneId)] = unchecked(Now + RefusedMasterMs);
+    /// <summary>The walk from the bot's zone to the battlemaster of <paramref name="t"/> failed: no bot walks there for <see cref="RefusedMasterMs"/> from the zone the walk started in (<see cref="Tracked.StartZone"/>: the bots still there stop being sent) or from the one it failed in.</summary>
+    private void RefuseMaster(Tracked t, Player player)
+    {
+        uint until = unchecked(Now + RefusedMasterMs);
+        _refusedMasters[(t.Battlemaster, player.ZoneId)] = until;
+        _refusedMasters[(t.Battlemaster, t.StartZone)] = until;
+    }
+
+    /// <summary>
+    /// One look at the walk's progress (<see cref="PlayerbotBattlegroundQueueMachine.TravelStalled"/>): true when the bot at <paramref name="at"/>
+    /// has come no closer to the master's goal for the walk's stall time. A fight on the road (<paramref name="fighting"/>) stops the clock.
+    /// </summary>
+    internal static bool WatchTravel(Tracked t, Vector3 at, bool fighting, uint now)
+    {
+        float best = t.BestYardsToMaster;
+        uint bestAt = t.BestYardsAtMs;
+        bool stalled = PlayerbotBattlegroundQueueMachine.TravelStalled(Vector3.Distance(at, t.MasterAt), fighting,
+            PlayerbotBattlegroundQueueMachine.TravelStallFor(t.TravelYards), ref best, ref bestAt, now);
+        t.BestYardsToMaster = best;
+        t.BestYardsAtMs = bestAt;
+        return stalled;
+    }
+
+    /// <summary>
+    /// The walk's goal follows the live battlemaster at <paramref name="live"/>: once it is more than <see cref="MasterMovedYards"/> from the goal
+    /// (a bot within <see cref="NearMasterYards"/> of it follows every half yard, so that its stop within the interaction distance is a stop
+    /// within reach of the creature, not of where it was). The progress watch's mark moves with the goal: its best distance is shifted by the
+    /// change of the bot's distance to the goal (clamped at zero) and its clock is left alone, so a goal pacing away and back from a bot that
+    /// stands still is still a stall, while a goal that walks the road away from a bot that closes on it is no stall.
+    /// </summary>
+    internal static void FollowMaster(Tracked t, Vector3 at, Vector3 live)
+    {
+        float threshold = Vector3.Distance(at, live) <= NearMasterYards ? NearMasterMovedYards : MasterMovedYards;
+        if (Vector3.Distance(live, t.MasterAt) <= threshold) return;
+        float change = Vector3.Distance(at, live) - Vector3.Distance(at, t.MasterAt);
+        t.MasterAt = live;
+        if (t.BestYardsToMaster >= 0f && float.IsFinite(change)) t.BestYardsToMaster = MathF.Max(0f, t.BestYardsToMaster + change);
+    }
+
+    /// <summary>
+    /// Whether a bot at its goal takes an empty spot for a missing master: always for a master that stands still; for one that walks waypoints
+    /// only once it has been missing from the map for <see cref="WalkerMissingRefuseMs"/> (the worst wait at an empty spot is then about a minute
+    /// and the 5 seconds of the bot's own count, not the stall time).
+    /// </summary>
+    internal static bool RefusesEmptySpot(Tracked t, uint now)
+        => !t.MasterWalks || (t.MasterMissingSinceMs is { } since && unchecked(now - since) >= WalkerMissingRefuseMs);
+
+    /// <summary>Whether the walk of <paramref name="player"/> to <paramref name="master"/> stalled lately (that bot leaves the master alone, see <see cref="_stalledMasters"/>).</summary>
+    internal bool IsMasterStalledFor(ObjectGuid player, ObjectGuid master)
+        => _stalledMasters.TryGetValue((player, master), out uint until) && unchecked((int)(until - Now)) > 0;
 
     /// <summary>Whether the walk from <paramref name="zone"/> to <paramref name="master"/> failed lately.</summary>
     internal bool IsMasterRefused(ObjectGuid master, uint zone)
@@ -617,8 +719,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (unchecked((int)(until - now)) <= 0) _setAside.Remove(key);
         foreach (((ObjectGuid, uint) key, uint until) in _refusedMasters.ToArray())
             if (unchecked((int)(until - now)) <= 0) _refusedMasters.Remove(key);
+        foreach (((ObjectGuid, ObjectGuid) key, uint until) in _stalledMasters.ToArray())
+            if (unchecked((int)(until - now)) <= 0) _stalledMasters.Remove(key);
         foreach (KeyValuePair<(uint, Team), (ulong Tick, Dictionary<ObjectGuid, PlayerbotWsgOrder> Orders)> plan in _wsgPlans.ToArray())
             if (_tick - plan.Value.Tick > 1) _wsgPlans.Remove(plan.Key);
+        foreach ((uint, Team) key in _wsgMidfields.Keys.ToArray())
+            if (!_wsgPlans.ContainsKey(key)) _wsgMidfields.Remove(key);
 
         BattlegroundManager manager = feature.Manager;
         BuildDemand(manager);
@@ -646,7 +752,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             var tracked = new Tracked(bot.BotId, player.Name)
             {
                 Phase = PlayerbotBattlegroundPhase.Travel, PhaseSinceMs = now, Type = choice.Type, Bracket = choice.Bracket, Team = player.Team,
-                Battlemaster = master.Guid, MasterAt = master.At, AI = new PlayerbotBattlegroundAI(bot.Session, _options),
+                Battlemaster = master.Guid, MasterAt = master.At, MasterWalks = master.Walks, StartZone = player.ZoneId, AI = new PlayerbotBattlegroundAI(bot.Session, _options),
+                TravelYards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At) * PlayerbotBattlegroundQueueMachine.TravelDetourFactor,
             };
             _tracked[bot.BotId] = tracked;
             _demand.AddBotCommitted(choice.Type, choice.Bracket, player.Team);
@@ -816,8 +923,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         Vector3 ownRoom = new(room.X, room.Y, room.Z);
         Vector3 enemyStand = enemy == Team.Alliance ? allianceStand : hordeStand;
         Vector3 ownStand = team == Team.Alliance ? allianceStand : hordeStand;
-        Vector3 middle = ResolveWarsongMidfield(map, ownStand, enemyStand);
-
+        if (!_wsgMidfields.TryGetValue((wsg.InstanceId, team), out Vector3 middle))
+        {
+            middle = ResolveWarsongMidfield(map, ownStand, enemyStand, out bool settled);
+            if (settled) _wsgMidfields[(wsg.InstanceId, team)] = middle;
+        }
 
         var bots = new List<PlayerbotWsgMember>();
         foreach (Tracked t in _tracked.Values)
@@ -880,8 +990,21 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         };
     }
 
+    /// <summary><see cref="ResolveWarsongMidfield(Map, Vector3, Vector3, out bool)"/> without the settled answer.</summary>
     internal static Vector3 ResolveWarsongMidfield(Map map, Vector3 ownStand, Vector3 enemyStand)
+        => ResolveWarsongMidfield(map, ownStand, enemyStand, out _);
+
+    /// <summary>
+    /// The middle of the Warsong Gulch field the bots hold: the point between the two flag stands, snapped to the ground and then to the
+    /// walkable mesh (the nearest ring point that passes <see cref="CheckWarsongMidfield"/>; failing all, the nearest walkable point on the way
+    /// to the bot's own stand, else the stand itself). With a mesh, a point the mesh was never asked about is not returned: the answer is one
+    /// the mesh accepted, or a fallback. <paramref name="settled"/> is false for a fallback (the walk back to the own stand, and the stand: the
+    /// walkable check reads no tile, so a tile not resident yet answers "not walkable" like a hole) and whenever a tile read was waited for on
+    /// the way; the caller does not keep such an answer: it asks again once the tiles are loaded.
+    /// </summary>
+    internal static Vector3 ResolveWarsongMidfield(Map map, Vector3 ownStand, Vector3 enemyStand, out bool settled)
     {
+        long pendingMark = PlayerbotNavigation.PendingMark;
         Vector3 middle = (ownStand + enemyStand) / 2f;
         float probeZ = MathF.Max(ownStand.Z, enemyStand.Z) + 5f;
         float terrain = map.Terrain.GetHeight(middle.X, middle.Y, middle.Z);
@@ -901,39 +1024,79 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             middle.Z = ground;
         }
 
-        if (map.Collision.MeshPoints is not null && !IsWalkableWarsongMidfield(map, middle, ownStand))
+        if (map.Collision.MeshPoints is null)
         {
-            ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f, 28f];
-            foreach (float radius in radii)
+            // No mesh to ask (yet): the snapped point is all there is. It costs no query and is asked again each tick, as before.
+            settled = false;
+            return middle;
+        }
+
+        MidfieldCheck first = CheckWarsongMidfield(map, middle, ownStand);
+        if (first != MidfieldCheck.NotWalkable)
+        {
+            settled = first == MidfieldCheck.Walkable && !PlayerbotNavigation.PendingSince(pendingMark);
+            return middle;
+        }
+
+        ReadOnlySpan<float> radii = [5f, 9f, 14f, 20f, 28f];
+        foreach (float radius in radii)
+        {
+            for (int i = 0; i < 8; i++)
             {
-                for (int i = 0; i < 8; i++)
-                {
-                    float angle = i * MathF.PI / 4f;
-                    float x = middle.X + (radius * MathF.Cos(angle));
-                    float y = middle.Y + (radius * MathF.Sin(angle));
-                    float candZ = middle.Z;
-                    float candTerrain = map.Terrain.GetHeight(x, y, candZ);
-                    float candGround = candTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candTerrain)
-                        ? map.Collision.GetHeight(x, y, candTerrain + 2f, maxSearchDistance: 6f)
-                        : map.Collision.GetHeight(x, y, candZ + 6f, maxSearchDistance: 12f);
-                    if (candGround > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candGround))
-                        candZ = candGround;
-                    if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
-                        candZ = candMeshZ;
-                    var candidate = new Vector3(x, y, candZ);
-                    if (IsWalkableWarsongMidfield(map, candidate, ownStand))
-                        return candidate;
-                }
+                float angle = i * MathF.PI / 4f;
+                Vector3 candidate = SnapToGround(map, middle.X + (radius * MathF.Cos(angle)), middle.Y + (radius * MathF.Sin(angle)), middle.Z);
+                MidfieldCheck check = CheckWarsongMidfield(map, candidate, ownStand);
+                if (check == MidfieldCheck.NotWalkable) continue;
+                settled = check == MidfieldCheck.Walkable && !PlayerbotNavigation.PendingSince(pendingMark);
+                return candidate;
             }
         }
 
-        return middle;
+        // No point around the middle passed the reach probe, and the middle itself is off the mesh: it is never returned. Walk back along the
+        // line to the bot's own stand for the nearest ground the mesh accepts, and fall back to the stand (a walkable place by construction).
+        ReadOnlySpan<float> fractions = [0.05f, 0.1f, 0.15f, 0.2f, 0.3f, 0.4f, 0.5f, 0.65f, 0.8f];
+        foreach (float fraction in fractions)
+        {
+            Vector3 candidate = SnapToGround(map, middle.X + ((ownStand.X - middle.X) * fraction), middle.Y + ((ownStand.Y - middle.Y) * fraction),
+                middle.Z + ((ownStand.Z - middle.Z) * fraction));
+            if (!PlayerbotNavigation.OnWalkableMesh(map, candidate)) continue;
+            settled = false;
+            return candidate;
+        }
+
+        settled = false;
+        return ownStand;
     }
 
-    private static bool IsWalkableWarsongMidfield(Map map, Vector3 candidate, Vector3 ownStand)
+    /// <summary>The ground at (<paramref name="x"/>, <paramref name="y"/>) near <paramref name="z"/>: terrain, then the collision floor, then the mesh floor.</summary>
+    private static Vector3 SnapToGround(Map map, float x, float y, float z)
+    {
+        float candZ = z;
+        float candTerrain = map.Terrain.GetHeight(x, y, candZ);
+        float candGround = candTerrain > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candTerrain)
+            ? map.Collision.GetHeight(x, y, candTerrain + 2f, maxSearchDistance: 6f)
+            : map.Collision.GetHeight(x, y, candZ + 6f, maxSearchDistance: 12f);
+        if (candGround > Game.Maps.Terrain.TerrainTile.InvalidHeight && float.IsFinite(candGround))
+            candZ = candGround;
+        if (map.Collision.TryGetMeshFloor(x, y, candZ, 12f, 4f, out float candMeshZ) && float.IsFinite(candMeshZ))
+            candZ = candMeshZ;
+        return new Vector3(x, y, candZ);
+    }
+
+    /// <summary>What the mesh says of a midfield candidate (<see cref="CheckWarsongMidfield"/>).</summary>
+    private enum MidfieldCheck : byte
+    {
+        NotWalkable,
+        Walkable,
+
+        /// <summary>A tile of the probe is still being read: no verdict yet.</summary>
+        Pending,
+    }
+
+    private static MidfieldCheck CheckWarsongMidfield(Map map, Vector3 candidate, Vector3 ownStand)
     {
         if (!PlayerbotNavigation.OnWalkableMesh(map, candidate))
-            return false;
+            return MidfieldCheck.NotWalkable;
         Vector2 toOwn = new(ownStand.X - candidate.X, ownStand.Y - candidate.Y);
         Vector2 dir = toOwn.LengthSquared() > 1f ? Vector2.Normalize(toOwn) : new Vector2(1f, 0f);
         float probeX = candidate.X + (dir.X * 18f);
@@ -949,15 +1112,16 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             AllowPartial = true,
             MaxSearchNodes = 256,
             LoadTiles = true,
+            NonBlockingTiles = true, // a tile not in yet is read on the pool, never on the world thread: pending counts as walkable below
         });
         if ((reach.Type & PathType.TilesPending) != 0)
-            return true;
+            return MidfieldCheck.Pending;
         if (!reach.HasPath || (reach.Type & PathType.NoPath) != 0)
-            return false;
+            return MidfieldCheck.NotWalkable;
         if ((reach.Type & PathType.Incomplete) != 0
             && Vector2.Distance(new Vector2(reach.End.X, reach.End.Y), new Vector2(candidate.X, candidate.Y)) < 10f)
-            return false;
-        return true;
+            return MidfieldCheck.NotWalkable;
+        return MidfieldCheck.Walkable;
     }
 
     /// <summary>Where the two Warsong Gulch flag stands are spawned (cached per object content).</summary>
@@ -982,44 +1146,85 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     // --- content ----------------------------------------------------------------------------------------------------
 
     /// <summary>A battlemaster spawn: its guid, where it stands, its name and its faction template.</summary>
-    private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction);
+    private sealed record Battlemaster(ObjectGuid Guid, uint SpawnGuid, BattlegroundType Type, Vector3 At, string Name, uint Faction, bool Walks);
 
     /// <summary>The distance within which a battlemaster's absence from the map is trusted (well inside the visibility range).</summary>
     internal const float MasterPresenceYards = 60f;
 
+    /// <summary>How far the live battlemaster has to be from the goal of the walk before the goal moves to it.</summary>
+    private const float MasterMovedYards = 3f;
+
+    /// <summary>Within this distance of the bot the goal follows the live battlemaster by <see cref="NearMasterMovedYards"/> (under the interaction distance less the stop margin).</summary>
+    private const float NearMasterYards = 12f;
+
+    /// <summary>How far a battlemaster near the bot has to move from the goal for the goal to follow it.</summary>
+    private const float NearMasterMovedYards = 0.5f;
+
     /// <summary>
     /// The nearest battlemaster of <paramref name="type"/> on the bot's map within <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/> that
-    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>).
-    /// The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
+    /// the bot may talk to (its faction is not hostile to the bot, as for a trainer: <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>)
+    /// and can walk to. The battlemasters are the creature spawns whose entry has a <c>battlemaster_entry</c> row (<see cref="BattlegroundFeature.Battlemasters"/>).
+    /// <para>
+    /// Nearest is by straight line (ties by spawn guid, so the answer does not depend on the spawn order), but a master that stands still
+    /// (spawn movement type not waypoint) is taken over a nearer one that walks its waypoints (the emissary 14991 spawns 190500 and 190516 under game
+    /// event 20 walk away from their spawn points, and the bot has to be within reach of the creature itself). A master is only taken when the walk is
+    /// possible by the region graph alone (<see cref="PlayerbotNavigation.IsInOtherWalkingRegion"/>: Teldrassil's island against the mainland;
+    /// a master or a bot indoors is let through, the indoor climb has its escapes). No path search: the walk itself is planned in legs
+    /// (<see cref="PlayerbotNavigation.PlanToward"/>) and a route that fails there refuses the master for the zone (<see cref="RefuseMaster"/>).
+    /// Known false negative: the 16x size leniency of <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> is not applied, so a bot on a
+    /// medium plateau bounded by steep slopes (a component under a sixteenth of the master's, but no fragment) gets <c>NoBattlemaster</c> though
+    /// transport or an escape might reach the master.
+    /// </para>
     /// </summary>
     private Battlemaster? FindMaster(Player player, BattlegroundType type)
     {
         if (player.Map is not { } map || services.GetService<QuestNpcFeature>() is not { } npcs) return null;
         float reach = Math.Clamp(_options.Battlegrounds.MaxTravelYards, 100, 20_000);
-        Battlemaster? best = null;
-        float nearest = reach;
+        Battlemaster? still = null, walking = null;
+        float stillAt = reach, walkingAt = reach;
         // A spawn a game event holds back is not in the world while its event is off (the Warsong Emissary, 15105, of game event 19 "Call
         // to Arms: Warsong Gulch"; vmangos GameEventMgr GameEventSpawn/GameEventUnspawn): walking to it finds nobody.
         ArcaneCore.Game.WorldState.Events.ISpawnGate? gate = map.FindUpdater<CreatureMapSystem>()?.SpawnGate;
+        var here = new Vector3(player.X, player.Y, player.Z);
         foreach (Battlemaster master in MastersOn(player.MapId))
         {
             if (master.Type != type) continue;
             if (gate is not null && !gate.AllowsCreature(master.SpawnGuid)) continue;
-            if (IsMasterRefused(master.Guid, player.ZoneId)) continue;
-            float distance = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), master.At);
+            if (IsMasterRefused(master.Guid, player.ZoneId) || IsMasterStalledFor(player.Guid, master.Guid)) continue;
+            // A walker is judged where it stands now when the map has it (its spawn point is only where its route starts).
+            Creature? creature = master.Walks || Vector3.Distance(here, master.At) <= MasterPresenceYards ? map.FindObject(master.Guid) as Creature : null;
+            bool alive = creature is { IsAlive: true };
+            Vector3 at = master.Walks && alive ? new Vector3(creature!.X, creature.Y, creature.Z) : master.At;
+            float distance = Vector3.Distance(here, at);
             // Within sight of the spawn point the map says whether the master is there: an emissary whose event the gate still allows but
             // that is not in the world (or is dead) had bots walk up, hold 5 s and report 'no living battlemaster' (live: 15105 Undercity, 15102 Ironforge).
-            if (distance <= MasterPresenceYards && map.FindObject(master.Guid) is not Creature { IsAlive: true }) continue;
-            if (distance > nearest
-                || !PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
-                || PlayerbotNavigation.IsUnreachableOnFoot(player, master.At, out _, out _))
+            if (distance <= MasterPresenceYards && !alive) continue;
+            float limit = master.Walks ? walkingAt : stillAt;
+            Battlemaster? held = master.Walks ? walking : still;
+            // Strictly nearer, or as near with the lower spawn guid.
+            if (distance > limit || (distance == limit && held is not null && master.SpawnGuid >= held.SpawnGuid)) continue;
+            if (!PlayerbotTrainerDestinations.CanApproachTrainer(player, npcs.Services, npcs.FactionTemplates, master.Faction)
+                || PlayerbotNavigation.IsInOtherWalkingRegion(player, at))
                 continue;
-            nearest = distance;
-            best = master;
+            if (master.Walks)
+            {
+                walking = master with { At = at };
+                walkingAt = distance;
+            }
+            else
+            {
+                still = master;
+                stillAt = distance;
+            }
         }
 
-        return best;
+        return still ?? walking;
     }
+
+    /// <summary>Test hook, not for production code: the battlemaster <see cref="FindMaster"/> picks (spawn guid and goal: the spawn point, or the live position of a master that walks waypoints and is in the world).</summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    internal (uint SpawnGuid, Vector3 At)? FindMasterForTests(Player player, BattlegroundType type)
+        => FindMaster(player, type) is { } master ? (master.SpawnGuid, master.At) : null;
 
     private List<Battlemaster> MastersOn(uint mapId)
     {
@@ -1038,7 +1243,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             if (!feature.Battlemasters.TryGetValue(spawn.Entry, out BattlegroundType type) || content.FindTemplate(spawn.Entry) is not { } template) continue;
             if (!float.IsFinite(spawn.X) || !float.IsFinite(spawn.Y) || !float.IsFinite(spawn.Z)) continue;
             list.Add(new Battlemaster(ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid), spawn.Guid, type, new Vector3(spawn.X, spawn.Y, spawn.Z),
-                template.Name, template.Faction));
+                template.Name, template.Faction, spawn.MovementType == (byte)CreatureMovementType.Waypoint));
         }
 
         _masters[mapId] = list;

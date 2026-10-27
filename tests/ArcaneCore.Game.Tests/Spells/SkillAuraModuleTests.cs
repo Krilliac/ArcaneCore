@@ -224,6 +224,7 @@ public sealed class SkillAuraModuleTests
         skills.Set(SkillIds.Swords, 20, 75);
         Cast(kit, player, Temporary, Permanent);
         kit.Advance(60_000);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the aura that ran out ends at the next boundary (0: no-op)
         Assert.Equal(0, skills.GetBonus(SkillIds.Swords));
         Assert.Equal(5, skills.GetBonus(SkillIds.Swords, permanent: true));
         Cast(kit, player, Temporary);

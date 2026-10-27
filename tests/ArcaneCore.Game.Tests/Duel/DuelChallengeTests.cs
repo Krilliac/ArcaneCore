@@ -16,7 +16,20 @@ namespace ArcaneCore.Game.Tests.Duel;
 public sealed class DuelChallengeTests
 {
     private static SpellCastResult CastDuel(DuelRig rig, Player caster, Player target)
-        => rig.Kit.System.HandleCastRequest(caster, DuelSpell, SpellCastTargets.ForUnit(target.Guid));
+    {
+        SpellCastResult result = rig.Kit.System.HandleCastRequest(caster, DuelSpell, SpellCastTargets.ForUnit(target.Guid));
+        ResolveSpellBatch(rig.Kit);
+        return result;
+    }
+
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(Spells.SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
 
     private static List<GameObject> Flags(DuelRig rig) => [.. rig.Objects.GameObjects.Where(go => go.Entry == FlagEntry)];
 
@@ -261,6 +274,7 @@ public sealed class DuelChallengeTests
         kit.Spellbook.Teach(a, DuelSpell);
 
         kit.System.HandleCastRequest(a, DuelSpell, SpellCastTargets.ForUnit(b.Guid));
+        ResolveSpellBatch(kit);
 
         Assert.Contains((byte)SpellCastResult.NoDueling, FailureReasons(sa));
         Assert.Null(a.Duel);

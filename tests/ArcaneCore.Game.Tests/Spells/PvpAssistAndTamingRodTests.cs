@@ -66,6 +66,7 @@ public sealed class PvpAssistAndTamingRodTests
         Assert.Equal(0u, (uint)(healer.Flags & PlayerFlags.ContestedPvp));
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, FriendlyHeal, SpellCastTargets.ForUnit(ally.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.True(healer.Combat.IsInCombat);
         Assert.Equal(UnitFlags.Pvp, healer.UnitFlags & UnitFlags.Pvp);
@@ -180,6 +181,7 @@ public sealed class PvpAssistAndTamingRodTests
         // Add level 25 poison -> Anti-Venom succeeds and dispels the level 25 poison while leaving level 30 poison
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(spider, PoisonLow, SpellCastTargets.ForUnit(player.Guid), triggered: true));
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, 7932, SpellCastTargets.ForUnit(player.Guid)));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.False(kit.System.HasAura(player, PoisonLow));
         Assert.True(kit.System.HasAura(player, PoisonHigh));
     }

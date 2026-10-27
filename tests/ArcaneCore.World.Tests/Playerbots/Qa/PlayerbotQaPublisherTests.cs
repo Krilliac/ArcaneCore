@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Qa;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -284,6 +286,27 @@ public sealed class PlayerbotQaPublisherTests : IDisposable
         };
         QaFindingView normal = QaData.View(B, count: 1, bots: 1, kind: QaSignalKind.Anomaly) with { Goal = "bot-travel", Reason = "stuck" };
         Rig rig = NewRig(findings: [held, normal]);
+
+        await rig.Run();
+
+        Assert.Equal(1, rig.GitHub.Creates);
+        Assert.Equal(QaPublicationState.Pending, rig.State.Get(A)!.Publication.State);
+        Assert.Equal(QaPublicationState.Published, rig.State.Get(B)!.Publication.State);
+    }
+
+    /// <summary>
+    /// A target the brain gave up on because its health is held at the death-prevention threshold (PlayerbotInvincibleWatch) is an abandonment by
+    /// design, not a fault (GitHub #1477: 129 occurrences opened an issue): report-only. The same subsystem's other codes are still published.
+    /// </summary>
+    [Fact]
+    public async Task InvincibleTargetAbandoned_IsReportOnly_ButOtherCombatAnomaliesArePublished()
+    {
+        QaFindingView abandoned = QaData.View(A, count: 50, bots: 1, kind: QaSignalKind.Anomaly) with
+        {
+            Goal = PlayerbotAnomalies.Subsystem("combat"), Reason = PlayerbotInvincibleWatch.AnomalyCode,
+        };
+        QaFindingView other = QaData.View(B, count: 1, bots: 1, kind: QaSignalKind.Anomaly) with { Goal = PlayerbotAnomalies.Subsystem("combat"), Reason = "stuck" };
+        Rig rig = NewRig(findings: [abandoned, other]);
 
         await rig.Run();
 

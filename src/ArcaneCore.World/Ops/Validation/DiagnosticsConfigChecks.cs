@@ -23,6 +23,8 @@ public sealed class DiagnosticsConfigChecks : IConfigCheck
         Bool(issues, section, nameof(DiagnosticsOptions.FirstChanceExceptions));
         Bool(issues, section, nameof(DiagnosticsOptions.BeepOnStartup));
         Bool(issues, section, nameof(DiagnosticsOptions.BeepOnException));
+        Bool(issues, section, nameof(DiagnosticsOptions.CrashDialog));
+        Bool(issues, section, nameof(DiagnosticsOptions.FaultDialog));
 
         string key = DiagnosticsOptions.SectionName + ":" + nameof(DiagnosticsOptions.InvariantLogLimit);
         string? limit = section[nameof(DiagnosticsOptions.InvariantLogLimit)];

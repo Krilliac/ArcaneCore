@@ -152,6 +152,13 @@ public sealed class GatheringWorldTests
         Assert.Equal((byte)SpellCastResult.BadTargets, bad[5]);
     }
 
+    /// <summary>
+    /// With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS), a cast that went off waits in the batch for its go: the world runs on to the
+    /// batch boundary before its result is read. Without batching nothing is held and this returns at once.
+    /// </summary>
+    private static Task SpellBatchGoneAsync(WorldTestHost host, Player player)
+        => host.WaitForWorldAsync(() => !Spells(host).HasPendingGo(player), "the batched cast went off");
+
     [Fact]
     public async Task Skinning_NeedsASkinnableCorpse_ASkillAgainstTheLevel_AndRaisesTheSkill()
     {
@@ -180,6 +187,7 @@ public sealed class GatheringWorldTests
 
         await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Skinning, 120, 150, 2));   // skill >= 100: needs level * 5 = 100
         Assert.Equal(SpellCastResult.CastOk, Cast());
+        await SpellBatchGoneAsync(host, player);
         Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));   // red level 100, skill 120: orange, halved once by the steps = 500 per mille; the roll is the lowest (1)
     }
 
@@ -209,6 +217,7 @@ public sealed class GatheringWorldTests
         SpellCastResult Cast() => host.OnWorldAsync(() => spells.CastSpell(player, SkinCast, SpellCastTargets.ForUnit(boar.Guid), triggered: false)).GetAwaiter().GetResult();
 
         Assert.Equal(SpellCastResult.CastOk, Cast());
+        await SpellBatchGoneAsync(host, player);
         Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));
         Assert.Equal(SpellCastResult.TargetUnskinnable, Cast());
         Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));

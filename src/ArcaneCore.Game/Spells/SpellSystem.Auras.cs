@@ -550,6 +550,17 @@ public sealed partial class SpellSystem
 
         if (!holder.IsPermanent && holder.Duration <= 0)
         {
+            if (holder.ExpiryBatchIndex is not null)
+            {
+                // Ran out earlier and is held for the spell batch: it goes at the first update in a later batch.
+                if (!HoldAuraExpiry(holder))
+                {
+                    ExpireHolder(state, holder);
+                }
+
+                return;
+            }
+
             if (!holder.ExpiredReported)
             {
                 holder.ExpiredReported = true;
@@ -602,6 +613,7 @@ public sealed partial class SpellSystem
         // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
         if (runs)
         {
+            holder.ExpiryBatchIndex = null; // running (again, after a refresh): no expiry is held
             ChargePerSecondCost(holder, diffMs);
             if (holder.IsRemoved)
             {
@@ -660,25 +672,31 @@ public sealed partial class SpellSystem
             }
         }
 
-        if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
+        if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0 && !HoldAuraExpiry(holder))
         {
-            AuraRemoveMode expireMode = holder.Spell.IsChanneled
-                && ResolveAuraCaster(holder) is { } channelCaster
-                && channelCaster.GetUInt32(UpdateFields.UnitChannelSpell) == holder.Spell.Id
-                ? AuraRemoveMode.Channel
-                : AuraRemoveMode.Expire;
-            RemoveHolder(state, holder, expireMode);
-            if ((!holder.IsRemoved || state.Auras.Contains(holder)) && !holder.ExpiredReported)
-            {
-                holder.ExpiredReported = true;
-                AnomalyLedger.Shared.Report(
-                    "aura",
-                    "expired-not-removed",
-                    FormatSpellSubject(holder.Spell.Id),
-                    $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} reason=post-remove-still-present",
-                    AnomalySeverity.Warning);
-                state.Auras.Remove(holder);
-            }
+            ExpireHolder(state, holder);
+        }
+    }
+
+    /// <summary>A timed holder ran out: removed with Expire (Channel while its caster still channels it).</summary>
+    private void ExpireHolder(UnitSpellState state, SpellAuraHolder holder)
+    {
+        AuraRemoveMode expireMode = holder.Spell.IsChanneled
+            && ResolveAuraCaster(holder) is { } channelCaster
+            && channelCaster.GetUInt32(UpdateFields.UnitChannelSpell) == holder.Spell.Id
+            ? AuraRemoveMode.Channel
+            : AuraRemoveMode.Expire;
+        RemoveHolder(state, holder, expireMode);
+        if ((!holder.IsRemoved || state.Auras.Contains(holder)) && !holder.ExpiredReported)
+        {
+            holder.ExpiredReported = true;
+            AnomalyLedger.Shared.Report(
+                "aura",
+                "expired-not-removed",
+                FormatSpellSubject(holder.Spell.Id),
+                $"target={FormatUnitSubject(holder.Target)} durationMs={holder.Duration} reason=post-remove-still-present",
+                AnomalySeverity.Warning);
+            state.Auras.Remove(holder);
         }
     }
 

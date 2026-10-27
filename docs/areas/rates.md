@@ -166,6 +166,7 @@ damage uses its owner's bonus, so 1.
 | SkillGain.Gathering | `Skills:GainGathering` | 1 | points per gathering (and fishing) skill-up | no |
 | SkillGain.Weapon | `Skills:GainWeapon` | 1 | points per weapon skill-up | no |
 | SkillChance.Orange / Yellow / Green / Grey | `Skills:ChanceOrange` / `ChanceYellow` / `ChanceGreen` / `ChanceGrey` | 100 / 75 / 25 / 0 | skill-up chance by colour (percent) | no |
+| (none, ArcaneCore opt-in) | `Skills:CraftingChanceCurve` | false | crafting only: the yellow-to-grey band uses the player-measured sliding chance `(grey - skill) / (grey - yellow)` instead of the yellow and green chances; not a datamined retail rule | no |
 | SkillChance.MiningSteps / SkinningSteps | `Skills:MiningSteps` / `Skills:SkinningSteps` | 75 / 75 | skill-up decay steps (0: none) | no |
 | SkillFail.Loot/Gain.Fishing, SkillFail.Possible.FishingPool | `SpecialLoot:Fishing:FailLoot` / `FailGain` / `FailPossibleFishingPool` | false / false / true | failed fishing casts | no |
 | Rate.Mining.Amount | `GameObjects:MiningAmountRate` | 1 | uses of a mining node | no |

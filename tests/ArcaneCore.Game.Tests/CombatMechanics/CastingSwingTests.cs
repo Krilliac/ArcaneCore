@@ -86,6 +86,7 @@ public sealed class CastingSwingTests
     public void Retail_ACastDoesNotConsumeTheSwing_ItFiresOnceTheCastEnds(uint step)
     {
         using var rig = new Rig();
+        rig.Kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: the go and the swing within a tick of the cast's end
         rig.Kit.System.HandleCastRequest(rig.Caster, CastBolt, SpellCastTargets.ForUnit(rig.Target.Guid)); // 2000 ms on the cast bar
         rig.Combat.Attack(rig.Caster, rig.Target);
 
@@ -145,10 +146,24 @@ public sealed class CastingSwingTests
 
     // --- cast resets the melee timer ------------------------------------------------------------
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static uint CastAndReadTimer(Rig rig, uint spell, bool triggered)
     {
         rig.Caster.Combat.SetAttackTimer(WeaponAttackType.BaseAttack, 500);
         rig.Kit.System.CastSpell(rig.Caster, spell, SpellCastTargets.ForSelf(), triggered);
+        FlushSpellBatch(rig.Kit); // only the spell clock moves: the world (and its swing timers) does not tick
         return rig.MainHandTimer;
     }
 

@@ -1064,6 +1064,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         _open[player] = bag;
+        player.Inventory.LootingGuid = bag.Source;
         bag.Viewers.Add(player);
         player.UnitFlags |= UnitFlags.Looting;
         if (bag.Permission == LootPermission.Roll && !bag.RollsStarted)
@@ -1396,6 +1397,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         _open.Remove(player);
+        player.Inventory.LootingGuid = ObjectGuid.Empty;
         bag.Viewers.Remove(player);
         player.UnitFlags &= ~UnitFlags.Looting;
         player.Session.Send(WorldOpcode.SmsgLootReleaseResponse, LootPackets.ReleaseResponse(guid));
@@ -1530,6 +1532,7 @@ public sealed partial class LootService : IViewerFieldFilter
         foreach (Player viewer in bag.Viewers.ToArray())
         {
             _open.Remove(viewer);
+            viewer.Inventory.LootingGuid = ObjectGuid.Empty;
             viewer.UnitFlags &= ~UnitFlags.Looting;
             viewer.Session.Send(WorldOpcode.SmsgLootReleaseResponse, LootPackets.ReleaseResponse(bag.Source));
         }

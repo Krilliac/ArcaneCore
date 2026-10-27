@@ -124,6 +124,7 @@ public sealed class SpiritOfRedemptionTests
         Assert.Equal(full, priest.Health);
 
         kit.Advance(10_000); // 27827 ends: the form goes, and with it the spirit aura
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the aura that ran out ends at the next boundary (0: no-op)
         Assert.False(kit.System.HasAura(priest, Linked2));
         Assert.NotEqual(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
         Assert.True(priest.IsAlive);
