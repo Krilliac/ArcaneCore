@@ -1353,7 +1353,10 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             type |= PathType.Short;
         }
 
-        return new PathResult(type, points);
+        // Without an end tolerance the start is not graded (vmangos/MaNGOS Zero getPolyByLocation's boxes): tell the caller when it lies
+        // past the near box's height off its polygon, found only by the far box (PathResult.StartFar, issue #1501).
+        bool startFarVertically = tolerance <= 0 && startFar && MathF.Abs(startOnMesh.Y - startRc.Y) > NearExtents.Y;
+        return new PathResult(type, points) { StartFar = startFarVertically };
     }
 
     // vmangos inRange(p1, p2, r, h): horizontal distance within r and vertical within h.

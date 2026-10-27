@@ -1077,6 +1077,21 @@ internal static class PlayerbotNavigation
             return !straightRefused;
         }
 
+        // The bot stands off the mesh, more than its near box above or below the polygon the search started from: only the far box
+        // (200 yards tall) found that polygon, and the path's first leg runs from the bot straight to it. No mesh route begins there
+        // (issue #1501: a bot on an unmeshed ledge got a 60-yard drop as its first leg, -8165.9, -1449.7, 195.6 to -8154.9, -1446.9,
+        // 135.9, and the motion refused it as bot-motion/start-blocked on every think). Off the mesh, the stepped terrain line is the way
+        // (as for the no-mmap answer above: at most a yard of climb or drop a yard); a refusal of it is no verdict on the goal, so the
+        // route-plan watch is not charged (t_nonPathRefusal) and the fragment hop and the stall watch decide.
+        if (path.StartFar && path.HasPath)
+        {
+            if (PlayerbotMoveCheck.TerrainRoute(map, start, destination, options, out route)) return true;
+            route = null;
+            straightRefused = true;
+            t_nonPathRefusal = true;
+            return false;
+        }
+
         if (partial && from is null && !noFallbacks && (path.Type & PathType.Incomplete) != 0 && !AtDestination(path.End, destination)
             && IsIndoorsOrInWmo(map, destination)
             && Vector2.Distance(Flat(path.End), Flat(destination)) <= ClimbReachYards

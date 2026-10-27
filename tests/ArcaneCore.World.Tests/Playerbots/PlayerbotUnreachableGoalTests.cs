@@ -568,6 +568,66 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         });
     }
 
+    /// <summary>
+    /// Issue #1501: a bot on a ledge the mesh does not cover, 60 yards above the floor, is located on the floor polygon only by the far box
+    /// (FarExtents, 200 yards tall). The mesh's answer from there is no route: its first leg is a 60-yard drop that the motion refuses as
+    /// <c>bot-motion/start-blocked</c> on every think. With no terrain under the bot the plan is refused, and the refusal is no verdict on
+    /// the goal (the route-plan watch is not charged). The control: from the floor itself the same plan is the mesh's route.
+    /// </summary>
+    [Fact]
+    public async Task ABotFarAboveTheMesh_GetsNoMeshRouteThatDropsFromItsLedge_AndTheRefusalIsNoVerdict()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        var options = new PlayerbotOptions { Enabled = true };
+        Vector3 destination = new(25, 5, 0);
+
+        (bool controlPlanned, PlayerbotRoute? control) = await world.Host.OnWorldAsync(() =>
+        {
+            bool planned = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? route);
+            return (planned, route);
+        });
+        Assert.True(controlPlanned && control is not null, "the control: from the floor the mesh routes");
+        Assert.True(control!.Navigated, "the control's route is the mesh's");
+
+        Vector3 ledge = new(5, 5, 60);
+        await world.PlaceAsync(ledge);
+        Assert.True(MathF.Abs(world.Player.Z - ledge.Z) < 1f, $"the bot stands on its ledge (z {world.Player.Z})");
+
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        (bool planned, PlayerbotRoute? route, bool towardPlanned, PlayerbotRoute? toward, bool refusedNext) = await world.Host.OnWorldAsync(() =>
+        {
+            bool exact = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? exactRoute);
+            uint now = world.Host.World.NowMs;
+            bool towardOk = PlayerbotNavigation.TryPlanToward(world.Player, destination, options, out PlayerbotRoute? towardRoute, nowMs: now);
+            if (towardRoute is not null)
+            {
+                // The think follows what it planned: a first leg off the ledge is refused there (start-blocked).
+                world.Session.ManagedBudget = new ManagedActionBudget(1);
+                PlayerbotMotion.Follow(world.Session, world.Player, towardRoute, options, now);
+            }
+            for (int i = 0; i < PlayerbotNavigationAnomalies.RepeatedRefusals; i++)
+                PlayerbotNavigation.TryPlanToward(world.Player, destination, options, out _, nowMs: now + (uint)(i * 10));
+            bool refused = PlayerbotRoutePlanWatch.ShouldRefuse(world.Player, PlayerbotMotion.CurrentPosition(world.Player), destination,
+                now + (uint)(PlayerbotNavigationAnomalies.RepeatedRefusals * 10));
+            return (exact, exactRoute, towardOk, towardRoute, refused);
+        });
+
+        AssertNoDropFromLedge(planned, route, ledge);
+        AssertNoDropFromLedge(towardPlanned, toward, ledge);
+        Assert.False(refusedNext, "a refusal from off the mesh is no verdict: the route-plan watch is not charged");
+        Assert.Equal(0, cap.Count(PlayerbotMotionAnomalies.Key(PlayerbotMotionAnomalies.Code.StartBlocked)));
+
+        static void AssertNoDropFromLedge(bool planned, PlayerbotRoute? route, Vector3 ledge)
+        {
+            if (!planned || route is null) return;
+            Assert.True(route.Points.Count >= 2);
+            Assert.True(MathF.Abs(route.Points[1].Z - route.Points[0].Z) <= PlayerbotNavigation.ProjectedEndYards,
+                $"the route's first leg drops from {route.Points[0]} to {route.Points[1]} (bot at {ledge}); navigated {route.Navigated}");
+        }
+    }
+
     private sealed class Content(CreatureContent content) : ICreatureDataStore
     {
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
