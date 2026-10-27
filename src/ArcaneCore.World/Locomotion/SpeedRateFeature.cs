@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
@@ -65,8 +66,8 @@ public sealed class SpeedRateFeature(ILogger<SpeedRateFeature> logger) : IWorldF
 /// <summary>
 /// CMSG_FORCE_TURN_RATE_CHANGE_ACK (vmangos WorldSession::HandleForceSpeedChangeAckOpcodes, MovementHandler.cpp:415-534, the turn rate case):
 /// u64 GUID, u32 counter, movement block, f32 rate, the layout of the speed acks (<see cref="SpeedPackets.ReadAck"/>). The server already took
-/// the rate when it sent the order (<see cref="UnitSpeed.SetTurnRate"/>), so an ack for the player's own GUID that reports that rate (within
-/// 0.01, the speed ack's tolerance) stores the movement block and is relayed to the observers as MSG_MOVE_SET_TURN_RATE; anything else is ignored.
+/// the rate when it sent the order (<see cref="UnitSpeed.SetTurnRate"/>), so an ack for the player's own GUID that matches the pending order by
+/// counter and rate (within 0.01, the speed ack's tolerance) stores the movement block and is relayed to the observers as MSG_MOVE_SET_TURN_RATE; anything else is ignored.
 /// </summary>
 public sealed class TurnRateAckHandler : IOpcodeHandlerGroup
 {
@@ -80,12 +81,35 @@ public sealed class TurnRateAckHandler : IOpcodeHandlerGroup
         }
 
         SpeedAck ack = SpeedPackets.ReadAck(payload);
-        if (ack.Guid != player.Guid.Value || !MovementHandlers.IsAcceptable(session, ack.Movement) || MathF.Abs(ack.Speed - player.TurnRate) > 0.01f)
+        if (ack.Guid != player.Guid.Value)
+        {
+            session.NoteOrphanAck(TurnRatePackets.Ack, "acknowledgement names another mover");
+            return;
+        }
+
+        if (!MovementHandlers.IsAcceptable(session, ack.Movement))
         {
             return;
         }
 
+        // vmangos HasPendingMovementChange / FindPendingMovementSpeedChange (MovementHandler.cpp:464,:474): only an ack of a sent order, by counter and rate.
+        if (!MovementControl.AcknowledgeTurnRate(player, ack.Counter, ack.Speed))
+        {
+            session.NoteOrphanAck(TurnRatePackets.Ack, "no pending turn rate change matches the counter and rate");
+            return;
+        }
+
+        // A possessed or charmed player moves nothing (vmangos resolves the mover with GetMoverFromGuid, MovementHandler.cpp:459-461; here GetConfirmedMover, as HandleMovementOpcodes does at :298-300).
+        Unit? mover = player.GetConfirmedMover();
+        if (mover is null || !ReferenceEquals(mover, player) || player.Map is null)
+        {
+            return;
+        }
+
+        AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
+        antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
         MovementHandlers.ApplyObserved(session, player, TurnRatePackets.Ack, ack.Movement);
+        antiCheat?.AfterMovement(player);
         player.Map?.BroadcastToObservers(player, TurnRatePackets.Observer, SpeedPackets.BuildObserver(player.Guid.Value, player.Movement, player.TurnRate));
     }
 }

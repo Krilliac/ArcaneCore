@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Reputation;
 /// process only: a crash, or a store that is still down at exit, loses what is retained (loudly).
 /// </para>
 /// </summary>
-public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger logger, IHostApplicationLifetime? lifetime = null)
+public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger logger, IHostApplicationLifetime? lifetime = null, StopDrainBudget? drain = null)
 {
     private const int MaxAttempts = 3;
 
@@ -47,6 +47,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private int _pending;
 
     private enum Kind
@@ -232,6 +233,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -259,8 +261,20 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 "persist",
                 "write-dropped-on-shutdown",
                 "queue ReputationWriteQueue",
-                $"queue=ReputationWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                $"queue=ReputationWriteQueue undrainedCharacters={failed.Length} firstCharacter={failed[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.reputation-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-reputation-stop-drain",
+                    refusal,
+                    "reputation write queue shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    _drain.Refused,
+                    failed.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"reputation writes did not drain for characters {string.Join(", ", failed)}", first);
         }
     }
@@ -512,9 +526,10 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     selectedCandidate);
             }
 
+            var made = new WriteAttemptCount();
             try
             {
-                await WriteAsync(characterId, snapshot, sweep ? 1 : MaxAttempts).ConfigureAwait(false);
+                await WriteAsync(characterId, snapshot, sweep || _stopped ? 1 : MaxAttempts, made).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -542,6 +557,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     }
                 }
 
+                if (ex is StopDrainExhaustedException)
+                {
+                    return ex; // refused by the stop drain: nothing was attempted, so no anomaly or fault here; the queue reports the refusal once, and the write stays retained
+                }
+
                 if (rejected)
                 {
                     AnomalyLedger.Shared.Report(
@@ -561,7 +581,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                             "persist",
                             "write-retry-exhausted",
                             $"character {characterId}",
-                            $"queue=ReputationWriteQueue character={characterId} attempts={MaxAttempts} error={ex.GetType().Name}",
+                            $"queue=ReputationWriteQueue character={characterId} attempts={made.Made} error={ex.GetType().Name}",
                             AnomalySeverity.Error);
                     }
 
@@ -626,15 +646,23 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
-    private async Task WriteAsync(int characterId, Snapshot snapshot, int attempts)
+    private async Task WriteAsync(int characterId, Snapshot snapshot, int attempts, WriteAttemptCount made)
     {
         for (int attempt = 1; ; attempt++)
         {
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            {
+                throw refused; // retained by the caller; never a verdict (see StopDrainBudget)
+            }
+
+            made.Made = attempt;
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICharacterReputationStore>() is not { } store)
                 {
+                    progress.Succeeded(); // no store: nothing to land, and not a stall
                     return; // hosts without persistence (the empty-catalog test host) keep nothing
                 }
 
@@ -654,12 +682,18 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     await store.SaveWatchedFactionAsync(characterId, watched, ownership: snapshot.Ownership).ConfigureAwait(false);
                 }
 
+                progress.Succeeded();
                 return;
             }
             catch (Exception ex) when (attempt < attempts && !IsOwnershipRejection(ex) && ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("writequeue.reputation-attempt", ex);
                 logger.LogWarning(ex, "reputation write for character {Character} failed (attempt {Attempt}); retrying", characterId, attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    throw; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 await Task.Delay(200 * attempt).ConfigureAwait(false);
             }
         }

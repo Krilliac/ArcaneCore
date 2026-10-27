@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -54,7 +55,7 @@ public sealed class CreatureRespawnFeature(IServiceProvider services, ILogger<Cr
             stored = store.LoadAsync(Clock.UnixSeconds).GetAwaiter().GetResult();
         }
 
-        _queue = new CreatureRespawnQueue(scopes, services.GetRequiredService<ILoggerFactory>().CreateLogger<CreatureRespawnQueue>());
+        _queue = new CreatureRespawnQueue(scopes, services.GetRequiredService<ILoggerFactory>().CreateLogger<CreatureRespawnQueue>(), services.GetService<ShutdownDrain>()?.Features);
         _queue.LoadInitial(stored);
         _queue.Start();
 

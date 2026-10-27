@@ -63,7 +63,8 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         {
             ReleaseStale(connection);
             int timeout = TimeoutFor(connection);
-            SqliteWriteGate.Hold hold = gate.Enter(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs) ?? throw gate.Busy(timeout);
+            SqliteWriteGate.GateEntry entry = gate.TryEnter(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs);
+            SqliteWriteGate.Hold hold = entry.Hold ?? throw gate.Busy(entry.WaitedMs);
             Granted(hold);
             _byConnection.AddOrUpdate(connection, hold);
         }
@@ -78,8 +79,8 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         {
             ReleaseStale(connection);
             int timeout = TimeoutFor(connection);
-            SqliteWriteGate.Hold hold = await gate.EnterAsync(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs, cancellationToken).ConfigureAwait(false)
-                ?? throw gate.Busy(timeout);
+            SqliteWriteGate.GateEntry entry = await gate.TryEnterAsync(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs, cancellationToken).ConfigureAwait(false);
+            SqliteWriteGate.Hold hold = entry.Hold ?? throw gate.Busy(entry.WaitedMs);
             Granted(hold);
             _byConnection.AddOrUpdate(connection, hold);
         }
@@ -287,7 +288,8 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         if (command.Transaction is not null || !IsWrite(command.CommandText) || GateFor(command.Connection) is not { } gate) return;
         if (command.Connection is { } connection) ReleaseStale(connection);
         int timeout = TimeoutFor(command);
-        SqliteWriteGate.Hold hold = gate.Enter(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs) ?? throw gate.Busy(timeout);
+        SqliteWriteGate.GateEntry entry = gate.TryEnter(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs);
+        SqliteWriteGate.Hold hold = entry.Hold ?? throw gate.Busy(entry.WaitedMs);
         Granted(hold);
         _byCommand.AddOrUpdate(command, hold);
     }
@@ -297,8 +299,8 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         if (command.Transaction is not null || !IsWrite(command.CommandText) || GateFor(command.Connection) is not { } gate) return;
         if (command.Connection is { } connection) ReleaseStale(connection);
         int timeout = TimeoutFor(command);
-        SqliteWriteGate.Hold hold = await gate.EnterAsync(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs, cancellationToken).ConfigureAwait(false)
-            ?? throw gate.Busy(timeout);
+        SqliteWriteGate.GateEntry entry = await gate.TryEnterAsync(timeout, OwnerOf(eventData.Context, gate), _options.MaxHoldMs, cancellationToken).ConfigureAwait(false);
+        SqliteWriteGate.Hold hold = entry.Hold ?? throw gate.Busy(entry.WaitedMs);
         Granted(hold);
         _byCommand.AddOrUpdate(command, hold);
     }

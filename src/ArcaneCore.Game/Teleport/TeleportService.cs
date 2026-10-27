@@ -434,11 +434,6 @@ public sealed partial class TeleportService
             return true;
         }
 
-        // A far transfer ends the client's flight and fixed Z (the client enters the world afresh), so a leftover GM cheat would only keep
-        // whitelisting the fly hack's own flags (MovementCheats.GrantedFor) for a player who is no longer flying. A near teleport keeps the
-        // client's swimming and levitating (ArriveNear), so the cheat stays there.
-        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
-
         var pending = new Pending(this, player, destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation))
         {
             StartedMs = _world.NowMs,
@@ -671,6 +666,15 @@ public sealed partial class TeleportService
 
         if (TryEnterMap(player, dest))
         {
+            // ArcaneCore behaviour, not vmangos parity: vmangos never clears PLAYER_CHEAT_FLY / PLAYER_CHEAT_FIXED_Z on a teleport (see
+            // MovementCheats.cs). A far transfer makes the client enter the world afresh (the point after Map::Add in vmangos
+            // HandleMoveWorldportAckOpcode, MovementHandler.cpp:117-124), so a leftover cheat would only keep whitelisting the fly hack's
+            // flags (MovementCheats.GrantedFor) for a player who is no longer flying. It is cleared on arrival. A far teleport that never
+            // sends SMSG_NEW_WORLD (bailed out in ExecuteTeleportFar, or stalled while scheduled) keeps the cheats, because the client is
+            // still flying on the source map and would otherwise be flagged. A map-entry failure (the return-to-origin branch below)
+            // also keeps them: SMSG_NEW_WORLD was already sent there, but a stale cheat grants no immunity (MovementCheats.cs), so
+            // clearing it would add a second behaviour for no gain.
+            player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
             VerifyLanding(player, dest, dest.MapId);
             HonorlessTargetDue?.Invoke(player, true);
         }

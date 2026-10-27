@@ -32,7 +32,7 @@ namespace ArcaneCore.World.Instances;
 /// and faults <see cref="FlushCharacterAsync"/> and <see cref="StopAsync"/>.
 /// </para>
 /// </summary>
-public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logger) : IInstancePersistence
+public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null) : IInstancePersistence
 {
     private const int MaxAttempts = 3;
 
@@ -56,6 +56,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private Exception? _terminalFailure;
     private int _pending;
     private long _enqueued;
@@ -387,6 +388,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             _stopped = true;
         }
 
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -419,8 +421,20 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 "persist",
                 "write-dropped-on-shutdown",
                 "queue InstanceWriteQueue",
-                $"queue=InstanceWriteQueue undrainedTargets={left.Length} firstTarget={left[0]}",
+                $"queue=InstanceWriteQueue undrainedTargets={left.Length} firstTarget={left[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record("writequeue.instance-stop-drain", refusal);
+                logger.LogFault(
+                    "writequeue-instance-stop-drain",
+                    refusal,
+                    "instance write queue shutdown drain stalled; {Refused} of {Undrained} retained targets were not attempted: {Summary}",
+                    _drain.Refused,
+                    left.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"instance writes did not drain for {string.Join(", ", left)}", first);
         }
 
@@ -723,7 +737,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
         }
 
-        Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts).ConfigureAwait(false);
+        var made = new WriteAttemptCount();
+        Exception? failure = await TryWriteAsync(work.Key, work.Value, MaxAttempts, made).ConfigureAwait(false);
         bool reportExhausted = false;
         lock (_gate)
         {
@@ -740,7 +755,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             {
                 bool alreadyRetained = _retained.ContainsKey(work.Key); // a retained write failing again is the same episode
                 SetRetained(work.Key, work.Value, failure);
-                if (failure is not CharacterOwnershipRejectedException)
+                if (failure is not CharacterOwnershipRejectedException and not StopDrainExhaustedException)
                 {
                     reportExhausted = !alreadyRetained;
                     logger.LogFault("writequeue.instance", failure, "instance write for {Target} failed; retained for retry", DescribeKey(work.Key));
@@ -754,7 +769,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 "persist",
                 "write-retry-exhausted",
                 "queue InstanceWriteQueue",
-                $"queue=InstanceWriteQueue target={DescribeKey(work.Key)} attempts={MaxAttempts} error={failure.GetType().Name}",
+                $"queue=InstanceWriteQueue target={DescribeKey(work.Key)} attempts={made.Made} error={failure.GetType().Name}",
                 AnomalySeverity.Error);
         }
 
@@ -902,7 +917,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         return failure;
     }
 
-    private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts)
+    private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
         lock (_gate)
         {
@@ -912,13 +927,30 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             }
         }
 
+        if (_stopped)
+        {
+            attempts = 1; // at stop: one attempt per write, busy or not, no inline retry
+        }
+
         for (int attempt = 1; ; attempt++)
         {
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            {
+                return refused; // shutdown drain only: nothing is attempted, the write stays retained
+            }
+
+            if (made is not null)
+            {
+                made.Made = attempt;
+            }
+
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 if (scope.ServiceProvider.GetService<IInstanceStore>() is not { } store)
                 {
+                    progress.Succeeded();
                     return null;
                 }
 
@@ -956,6 +988,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                         break;
                 }
 
+                progress.Succeeded();
                 return null;
             }
             catch (CharacterOwnershipRejectedException ex)
@@ -968,6 +1001,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             {
                 FaultLedger.Shared.Record("writequeue.instance-attempt", ex);
                 logger.LogWarning(ex, "instance write for {Target} failed (attempt {Attempt}); retrying", DescribeKey(key), attempt);
+                if (_stopped && _drain.Exhausted)
+                {
+                    return ex; // the lane has stalled: no retry, the caller retains the real failure
+                }
+
                 int delayMs = Math.Max(0, (int)RetryDelay.TotalMilliseconds) * attempt;
                 if (delayMs > 0)
                 {

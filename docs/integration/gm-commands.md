@@ -174,6 +174,7 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   a summon inside one map keeps the target's combat (a far teleport ends it, `Player.cpp:2021`). Known gap: `.groupgo` has none of
   the vmangos instance checks (`TeleportCommands.cpp:203-248`: only the leader may summon into an instance, no summon from instance
   to instance).
+* Movement cheats (`.cheat fly`, `.cheat fixedz`): cleared only once a far teleport completes on arrival (the worldport-ack path); kept by a far teleport that never sends SMSG_NEW_WORLD (refused, bailed out, stalled while scheduled), matching the client's continuous flight. An ArcaneCore behaviour: vmangos never clears these cheats on a teleport.
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.

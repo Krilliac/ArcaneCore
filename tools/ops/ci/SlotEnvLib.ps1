@@ -61,3 +61,31 @@ function ConvertTo-PsSingleQuoted {
     param([Parameter(Mandatory)][string]$Value)
     return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
 }
+
+function Add-MaxCpuCount {
+    <#
+    .SYNOPSIS
+      Caps MSBuild width: inserts -maxcpucount:N right after the verb of each `dotnet build|test|msbuild|publish|pack|restore` call.
+    .DESCRIPTION
+      A text rewrite, right after the verb so it never lands behind a `--` that hands the rest to the test runner. A pwsh `dotnet`
+      function cannot do this: function calls split `-v:diag` into two arguments and drop `--`. The command is split at `;`, `&&`,
+      `||`, `|` and newlines and each call is decided on its own: it is left alone when MaxCpuCount is 0 or when that call sets
+      -m / -maxcpucount before any `--` (a `-m` of another tool, or after `--`, does not count). The verb must end at whitespace or
+      end of line (so `dotnet build-server` is not a build), is case-insensitive, and may follow a closing quote (`"C:\sdk\dotnet.exe" build`).
+      `dotnet run` is not touched.
+    #>
+    param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][int]$MaxCpuCount)
+    if ($MaxCpuCount -le 0) { return $Command }
+    $verb = [regex]'(?i)\bdotnet(\.exe)?["'']?\s+(build|test|msbuild|publish|pack|restore)(?=\s|$)'
+    $parts = [regex]::Split($Command, '(;|&&|\|\||\||\r?\n)')   # the capture group keeps the separators at the odd indexes
+    for ($i = 0; $i -lt $parts.Count; $i += 2) {
+        $m = $verb.Match($parts[$i])
+        if (-not $m.Success) { continue }
+        $tail = $parts[$i].Substring($m.Index + $m.Length)
+        $dd = [regex]::Match($tail, '(^|\s)--(\s|$)')
+        if ($dd.Success) { $tail = $tail.Substring(0, $dd.Index) }
+        if ($tail -match '(?i)(^|\s)(--?|/)(m|maxcpucount)(:|\s|$)') { continue }
+        $parts[$i] = $parts[$i].Insert($m.Index + $m.Length, " -maxcpucount:$MaxCpuCount")
+    }
+    return -join $parts
+}

@@ -231,6 +231,23 @@ internal static class PlayerbotThinkStarvation
         return true;
     }
 
+    /// <summary>A gap between two bot ticks longer than this (ms) is a world stall, not the tick rate; the excess is not a rotation gap.</summary>
+    internal const uint StallTickMs = (uint)PlayerbotThinkBudget.MaxRealTickMs;
+
+    /// <summary>The stall (ms) in one gap between two bot ticks: its excess over <see cref="StallTickMs"/>; 0 for a clock that went backwards. Pure.</summary>
+    internal static uint StallMs(uint tickGapMs) => tickGapMs > StallTickMs && tickGapMs <= int.MaxValue ? tickGapMs - StallTickMs : 0;
+
+    /// <summary>A gap (ms) less <paramref name="stalledMs"/>, the world-stall time inside it; never below 0.</summary>
+    private static uint WithoutStall(uint gapMs, ulong stalledMs) => stalledMs >= gapMs ? 0 : gapMs - (uint)stalledMs;
+
+    /// <summary><see cref="ShouldReport(uint, uint, uint, ref bool)"/> on the silence less <paramref name="stalledMs"/>, the world-stall time since the bot's last think (never below 0).</summary>
+    internal static bool ShouldReport(uint nowMs, uint lastThinkMs, uint boundMs, ref bool reported, ulong stalledMs)
+    {
+        uint silent = unchecked(nowMs - lastThinkMs);
+        if (silent > int.MaxValue) return false; // a clock that went backwards is not a gap
+        return ShouldReport(WithoutStall(silent, stalledMs), 0, boundMs, ref reported);
+    }
+
     /// <summary>The least share of its time the first lane keeps however late the main lane runs (fights still get thought for).</summary>
     internal const double MinPriorityScale = 0.2;
 

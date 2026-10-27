@@ -71,7 +71,10 @@ All are `SEC_ADMINISTRATOR`, after cMaNGOS `ahbotCommandTable`. The root exists 
 
 - `.ahbot rebuild [all]`: expires the bot auctions that have no bid (with `all`, every bot auction; one with a player bid sells to
   that player), then runs sell passes to refill the houses.
-- `.ahbot reload`: reloads the options (except `Enabled` and `UpdateIntervalSeconds`) and `ahbot_items`.
+- `.ahbot reload`: reloads the options (except `Enabled` and `UpdateIntervalSeconds`) and `ahbot_items`. The `ahbot_items` read runs off the
+  world thread, so the reply comes a moment later (from the world thread). If an `.ahbot item` change or a newer `.ahbot reload` happened in
+  the meantime, the options are applied but the `ahbot_items` rows are not, and the reply says the reload was superseded: run `.ahbot reload` again.
+  If the world has shut down before the reply could be posted, the reload is dropped and recorded as `economy.ahbot-reload-post` in the fault ledger.
 - `.ahbot status`: the bot's auctions per house and quality.
 - `.ahbot item #item [$value [$addchance [$min [$max]]]] | #item reset`: shows or sets the item's `ahbot_items` row
   (cMaNGOS `SetItemData`: add chance capped at 100, an amount of 0 means the stack size).

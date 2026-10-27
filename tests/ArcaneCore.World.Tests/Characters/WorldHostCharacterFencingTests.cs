@@ -11,8 +11,51 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Characters;
 
+// Stopping a host drains every open packet trace in the process (PacketCapture.DrainAll), so this class shares the capture tests' serial collection.
+[Collection(Net.PacketCaptureCollection.Name)]
 public sealed class WorldHostCharacterFencingTests
 {
+    [Fact]
+    public async Task Stop_SavesPlayersFirst_ThenDrainsALiveCapture()
+    {
+        await using TestKit kit = TestKit.Create(enabled: true);
+        await kit.Host.StartAsync(CancellationToken.None);
+        var stream = new MemoryStream();
+        var capture = new ArcaneCore.World.Net.PacketCapture(stream, "host-stop.pkt", 1024 * 1024);
+        capture.Write(false, 0x01EC, new byte[16]);
+        var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.SaveOverride = _ =>
+        {
+            saveStarted.TrySetResult();
+            return releaseSave.Task;
+        };
+        kit.SaveQueue.Enqueue(new CharacterState(1, 0, 12, 0, 0, 83.5f, 0, 1, 0));
+        await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(10)); // the save is in flight and cannot finish until released
+
+        Task stop = kit.Host.StopAsync(CancellationToken.None);
+        try
+        {
+            // The stop is now held in the save queue's drain. The trace must stay open for as long as the save is pending: a drain that ran
+            // before the saves (the old order) would close it within milliseconds.
+            DateTime until = DateTime.UtcNow.AddSeconds(1.5);
+            while (DateTime.UtcNow < until)
+            {
+                Assert.False(stop.IsCompleted);
+                Assert.True(capture.IsOpen, "the capture was drained before the player save finished");
+                await Task.Delay(10);
+            }
+        }
+        finally
+        {
+            releaseSave.TrySetResult();
+        }
+
+        await stop.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.False(capture.IsOpen);
+        Assert.Equal(66 + 24 + 16, stream.ToArray().Length); // the stop waited until the queued record was on disk
+    }
+
     [Fact]
     public async Task ClaimsBeforeFeatureAttachmentAndReleasesAfterAHealthyDrain()
     {

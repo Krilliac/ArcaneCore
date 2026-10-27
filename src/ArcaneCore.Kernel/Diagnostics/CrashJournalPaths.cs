@@ -23,6 +23,16 @@ public static class CrashJournalPaths
 
     /// <summary><c>crash-faults.&lt;name&gt;.jsonl</c> in <paramref name="directory"/>, with characters a file name cannot hold replaced by '_'.</summary>
     public static string PathFor(string directory, string processName)
+        => Path.Combine(directory, $"crash-faults.{SafeName(processName)}.jsonl");
+
+    /// <summary>
+    /// <c>crash-report.&lt;name&gt;.&lt;yyyyMMdd-HHmmss&gt;Z.txt</c> in <paramref name="directory"/>: the file the crash dialog
+    /// (<c>Diagnostics:CrashDialog</c>) writes its text and the full crash report to. Written only when that dialog is shown.
+    /// </summary>
+    public static string ReportPathFor(string directory, string processName, DateTime utc)
+        => Path.Combine(directory, $"crash-report.{SafeName(processName)}.{utc.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}Z.txt");
+
+    private static string SafeName(string processName)
     {
         char[] invalid = Path.GetInvalidFileNameChars();
         string safe = string.Create(processName.Length, processName, (span, source) =>
@@ -32,7 +42,7 @@ public static class CrashJournalPaths
                 span[i] = Array.IndexOf(invalid, source[i]) >= 0 ? '_' : source[i];
             }
         });
-        return Path.Combine(directory, $"crash-faults.{(safe.Length == 0 ? "process" : safe)}.jsonl");
+        return safe.Length == 0 ? "process" : safe;
     }
 
     /// <summary>The legacy shared journal in <paramref name="directory"/>.</summary>

@@ -52,6 +52,12 @@ public sealed partial class SpellSystem
             return false;
         }
 
+        // Spell batching: a held cast has not started its cooldown yet (that happens at its go); it blocks a second request meanwhile.
+        if (_batchedGoes.Count != 0 && HasBatchedGoOnCooldown(state.Unit, spell, category))
+        {
+            return false;
+        }
+
         if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
         {
             return false;
