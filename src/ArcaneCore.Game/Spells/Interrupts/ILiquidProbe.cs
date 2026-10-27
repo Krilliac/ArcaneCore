@@ -12,7 +12,7 @@ public interface ILiquidProbe
 }
 
 /// <summary>
-/// Terrain-backed probe: vmangos Player::UpdateTerainEnvironmentFlags (D:\refs\vmangos\src\game\Objects\Player.cpp:
+/// Terrain-backed probe: vmangos Player::UpdateTerainEnvironmentFlags (vmangos@0e3ff01 src/game/Objects/Player.cpp:
 /// 20353-20419) queries the liquid at z + 0.01 for any liquid type and sets HIGH_LIQUID when the status is
 /// in-water or under-water and the surface is above z + GetMinSwimDepth(), where the minimum swim depth is
 /// 0.75 * collision height (Unit.h:543) and the collision height defaults to 2.0 (Unit.cpp:117).

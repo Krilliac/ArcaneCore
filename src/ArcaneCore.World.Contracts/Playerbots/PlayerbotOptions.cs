@@ -180,6 +180,19 @@ public sealed class PlayerbotOptions
     /// </summary>
     public int StallSeconds { get; set; } = 120;
 
+    /// <summary>The default of <see cref="CutRegionMaxPolygons"/>.</summary>
+    public const int DefaultCutRegionMaxPolygons = 5000;
+
+    /// <summary>
+    /// The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw
+    /// Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is
+    /// exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the
+    /// Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps.
+    /// Bots only; no retail behaviour depends on it.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 0 to 1000000 (0: no region is exempt)")]
+    public int CutRegionMaxPolygons { get; set; } = DefaultCutRegionMaxPolygons;
+
     /// <summary>
     /// How a bot's movement reaches the world (on by default). On: the bot reports its motion with the MSG_MOVE_* packets a 1.12
     /// client sends, dispatched through the ordinary movement handlers like any client's. Off: the server relocates the bot itself
@@ -220,6 +233,9 @@ public sealed class PlayerbotOptions
 
     /// <summary>Risk against reward before a pull, and retreat from a lost fight (<c>World:Playerbots:Risk</c>; live).</summary>
     public PlayerbotRiskOptions Risk { get; set; } = new();
+
+    /// <summary>Kiting (<c>World:Playerbots:Combat</c>; live).</summary>
+    public PlayerbotCombatOptions Combat { get; set; } = new();
 
     /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
     public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
@@ -330,6 +346,7 @@ public sealed class PlayerbotOptions
         if (!float.IsFinite(MoveSpeed) || MoveSpeed <= 0 || MoveSpeed > 100)
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
         if (StallSeconds is < 10 or > 86_400) throw new InvalidOperationException($"{SectionName}: StallSeconds must be 10..86400.");
+        if (CutRegionMaxPolygons is < 0 or > 1_000_000) throw new InvalidOperationException($"{SectionName}: CutRegionMaxPolygons must be 0..1000000.");
         if (!Enum.IsDefined(ClientFidelity)) throw new InvalidOperationException($"{SectionName}: ClientFidelity must be Lean or Full.");
         if (AllowedMaps is null || AllowedMaps.Length == 0 || AllowedMaps.Distinct().Count() != AllowedMaps.Length)
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
@@ -341,6 +358,8 @@ public sealed class PlayerbotOptions
         Party.Validate();
         if (Risk is null) throw new InvalidOperationException($"{SectionName}:Risk is missing.");
         Risk.Validate();
+        if (Combat is null) throw new InvalidOperationException($"{SectionName}:Combat is missing.");
+        Combat.Validate();
         if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
         Opportunities.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");

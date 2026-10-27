@@ -1,6 +1,6 @@
 # Script fidelity review: verdicts (2026-10-08)
 
-Every finding of the LLM fidelity review (`D:/ArcaneCore-lanes/_plan/llm-fidelity-review-20261008.md`, outside the repo; 96 rows, model claims comparing the ported dungeon/raid scripts with mangos-classic ScriptDev2 and vmangos) checked against both reference sources by hand, on branch `claude/script-fidelity` from `ddebfd52`. Fixes are in commit `076a6861`; each has a test in `tests/ArcaneCore.Game.Tests/Instances/ScriptFidelityTests.cs` (plus one each in `RaidBossTests.cs` and `DungeonScriptExpansionTests.cs`) that fails on `ddebfd52` and passes on `076a6861`.
+Every finding of the LLM fidelity review (`<lanes-root>/_plan/llm-fidelity-review-20261008.md`, outside the repo; 96 rows, model claims comparing the ported dungeon/raid scripts with mangos-classic ScriptDev2 and vmangos) checked against both reference sources by hand, on branch `claude/script-fidelity` from `ddebfd52`. Fixes are in commit `076a6861`; each has a test in `tests/ArcaneCore.Game.Tests/Instances/ScriptFidelityTests.cs` (plus one each in `RaidBossTests.cs` and `DungeonScriptExpansionTests.cs`) that fails on `ddebfd52` and passes on `076a6861`.
 
 Verdicts: **fixed** (confirmed, fixed in `076a6861`), **partial, fixed** (the true part fixed), **open** (confirmed, not fixed - cosmetic, feature work or an engine gap; the note says which), **partial** (only part of the claim holds), **unconfirmed**, **false** (false positive, with the reason), **out of scope** (Codex lanes: Blackwing Lair 469, Zul'Gurub 309, Ruins of Ahn'Qiraj 509).
 

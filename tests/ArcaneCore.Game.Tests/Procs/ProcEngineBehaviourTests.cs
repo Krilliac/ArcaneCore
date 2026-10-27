@@ -15,7 +15,7 @@ namespace ArcaneCore.Game.Tests.Procs;
 /// What the proc engine changes, observed only through the hit paths (white swings, spell hits, periodic ticks): the auras that proc, the
 /// spells they trigger, the damage they deal, the charges they spend and the reflected spells. vmangos SpellCaster::ProcDamageAndSpell,
 /// Unit::ProcDamageAndSpellFor, Unit::HandleTriggers and the AuraProcHandler table (UnitAuraProcHandler.cpp). These tests use only APIs that
-/// existed before the engine, so they fail on the engine-less base (RED evidence in D:/ArcaneCore-lanes/_logs/w2-proc-engine/).
+/// existed before the engine, so they fail on the engine-less base (RED evidence in w2-proc-engine/).
 /// </summary>
 public sealed class ProcEngineBehaviourTests
 {

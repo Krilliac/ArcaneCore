@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Diagnostics;
 using System.Text.Json;
 using ArcaneCore.World.Playerbots.Qa;
 using Xunit;
@@ -13,6 +14,36 @@ public sealed class PlayerbotQaAggregatorTests
 
     private static string Ingest(PlayerbotQaAggregator aggregator, QaSignal signal, DateTime? now = null)
         => aggregator.Ingest(signal, NoQaContentFacts.Instance, now ?? QaData.T0) ?? throw new InvalidOperationException("refused");
+
+    private static QaSignal WorldAnomaly(string subsystem, string code, string detail) => new()
+    {
+        Kind = QaSignalKind.Anomaly, AtUtc = QaData.T0, Goal = subsystem, Reason = code, FaultCode = AnomalyLedger.KeyOf(subsystem, code), Detail = detail,
+        Message = detail, Occurrences = 1,
+    };
+
+    /// <summary>
+    /// A content defect and a behaviour defect of the same chest family arrive under different ledger keys, so each finding keeps one cause
+    /// whichever signal came last (the cause used to follow the last occurrence's detail text).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NoDataAndGuaranteedMissingChestSignals_KeepAStableCausePerFinding_InEitherOrder(bool guaranteedFirst)
+    {
+        QaSignal noData = WorldAnomaly(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootNoDataCode, "gameobject entry 1 loot 2: reason no-rows, row -");
+        QaSignal missing = WorldAnomaly(ArcaneCore.Game.Loot.LootService.AnomalySubsystem, ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode, "gameobject entry 3 loot 4: reason guaranteed-missing, row item 5");
+        PlayerbotQaAggregator aggregator = New();
+
+        foreach (QaSignal signal in guaranteedFirst ? new[] { missing, noData, missing, noData } : new[] { noData, missing, noData, missing })
+        {
+            Ingest(aggregator, signal);
+        }
+
+        IReadOnlyList<QaFindingView> findings = aggregator.Snapshot();
+        Assert.Equal(2, findings.Count);
+        Assert.Equal(QaCause.MissingData, Assert.Single(findings, f => f.Key.Contains(ArcaneCore.Game.Loot.LootService.GameObjectLootNoDataCode, StringComparison.Ordinal)).Cause);
+        Assert.Equal(QaCause.BehaviourBug, Assert.Single(findings, f => f.Key.Contains(ArcaneCore.Game.Loot.LootService.GameObjectLootEmptyCode, StringComparison.Ordinal)).Cause);
+    }
 
     [Fact]
     public void SameStallFromThreeBots_IsOneFinding_ThreeDistinctBots()

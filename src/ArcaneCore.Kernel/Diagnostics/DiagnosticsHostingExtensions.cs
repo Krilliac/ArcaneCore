@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,26 +56,25 @@ public static class DiagnosticsHostingExtensions
 /// Re-points the crash hooks and the invariant log at the host's logger once it exists, and collects
 /// the daemon's <see cref="ICrashContextProvider"/>s. Registered first, so it starts before the world and
 /// the listeners. The hooks are deliberately not detached on stop: a crash during shutdown is still a crash.
+/// It also gives the crash dialog the log file path and, with <c>Diagnostics:FaultDialog</c>, subscribes the
+/// new-fault dialog to the fault ledger until the host stops.
 /// </summary>
 internal sealed class DiagnosticsHostedService(
     IOptions<DiagnosticsOptions> options,
     IEnumerable<ICrashContextProvider> providers,
     ILoggerFactory loggerFactory,
-    IHostApplicationLifetime? lifetime = null) : IHostedService
+    IHostApplicationLifetime? lifetime = null,
+    IOptions<ArcaneLoggingOptions>? loggingOptions = null) : IHostedService
 {
+    private Action<FaultNotice>? _faultDialog;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         DiagnosticsOptions value = options.Value;
         ILogger crashLogger = loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Crash");
         Invariant.Configure(value, loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Invariant"));
         FaultLedger.Shared.Configure(value);
-        string crashJournal = Path.Combine(AppContext.BaseDirectory, "crash-faults.jsonl");
-        FaultLedger.Shared.ConfigureCrashJournal(crashJournal);
-        int replayedCrashes = FaultLedger.Shared.ReplayCrashJournal(crashJournal);
-        if (replayedCrashes > 0)
-        {
-            crashLogger.LogWarning("Diagnostics: replayed {Count} prior terminating crash fault(s) from {Path} into FaultLedger", replayedCrashes, crashJournal);
-        }
+        CrashJournalPaths.ConfigureAndReplay(FaultLedger.Shared, AppContext.BaseDirectory, CrashJournalPaths.ProcessName(), crashLogger);
 
         AnomalyLedger.Shared.Configure(loggerFactory.CreateLogger("ArcaneCore.Diagnostics.Anomaly"), value.FaultLogLimit);
         CrashHandler handler = CrashHandler.Install(value, new LoggerCrashSink(crashLogger), [.. providers]);
@@ -86,6 +86,8 @@ internal sealed class DiagnosticsHostedService(
         {
             crashLogger.LogWarning("Diagnostics:FirstChanceExceptions is on but this is a Release build of the Kernel; the first-chance hook is compiled out and the key is ignored");
         }
+
+        ConfigureDialogs(value, crashLogger);
 
         if (value.BeepOnStartup)
         {
@@ -102,5 +104,38 @@ internal sealed class DiagnosticsHostedService(
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _faultDialog, null) is { } subscribed)
+        {
+            FaultLedger.Shared.FaultNoticed -= subscribed;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void ConfigureDialogs(DiagnosticsOptions value, ILogger crashLogger)
+    {
+        FileSinkOptions? file = loggingOptions?.Value.File;
+        CrashDialog.LogFilePath = file is { Enabled: true, Path.Length: > 0 } ? Path.GetFullPath(file.Path) : null;
+        if (!value.CrashDialog && !value.FaultDialog)
+        {
+            return;
+        }
+
+        string? whyNot = CrashDialog.EnvironmentProbe().WhyNot();
+        crashLogger.LogInformation(
+            "Diagnostics: CrashDialog={CrashDialog}, FaultDialog={FaultDialog}: {Availability}",
+            value.CrashDialog, value.FaultDialog, whyNot is null ? "dialogs open in this session" : "no dialog opens in this session (" + whyNot + ")");
+        if (value.FaultDialog && _faultDialog is null)
+        {
+            Action<Exception> onFailure = ex =>
+            {
+                FaultLedger.Shared.Record(CrashDialog.FailureSite, ex);
+                crashLogger.LogFault("diagnostics-crash-dialog", ex, "the new-fault dialog failed");
+            };
+            _faultDialog = notice => CrashDialog.TryShowFault(enabled: true, notice, onFailure);
+            FaultLedger.Shared.FaultNoticed += _faultDialog;
+        }
+    }
 }

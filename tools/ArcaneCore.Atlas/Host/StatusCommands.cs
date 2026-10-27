@@ -67,7 +67,7 @@ internal static class StatusCommands
             ["cacheBytes"] = context.Cache.Bytes,
             ["caches"] = new JsonArray([.. participants.Select(p => (JsonNode)new JsonObject { ["name"] = p.Name, ["count"] = p.Count, ["bytes"] = p.Bytes })]),
             ["cacheBytesTotal"] = context.Cache.Bytes + participants.Sum(p => p.Bytes),
-            ["ui"] = new JsonObject { ["connections"] = context.Services.Get<UiHub>()?.ConnectionCount ?? 0 },
+            ["ui"] = BuildUi(context.Services.Get<UiHub>()),
         };
         if (context.Services.Get<Live.LiveFeed>() is { } live)
         {
@@ -76,6 +76,13 @@ internal static class StatusCommands
 
         return status;
     }
+
+    private static JsonObject BuildUi(UiHub? hub)
+        => new()
+        {
+            ["connections"] = hub?.ConnectionCount ?? 0,
+            ["sessions"] = new JsonArray([.. (hub?.PresenceSnapshot() ?? []).Select(p => (JsonNode)p.ToJson())]),
+        };
 
     /// <summary>The <c>layers.list</c> data.</summary>
     public static JsonArray BuildLayers(AtlasContext context)

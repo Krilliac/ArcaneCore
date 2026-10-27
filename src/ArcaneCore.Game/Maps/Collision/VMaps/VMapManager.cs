@@ -267,12 +267,20 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
 
+    /// <summary>Whether a prefetch of the tile was asked for, is finished and has not been taken (diagnostics and tests).</summary>
+    internal bool IsPrefetchFinished(uint mapId, int tileX, int tileY) => _prefetch.Contains(mapId, tileX, tileY) && !_prefetch.IsRunning(mapId, tileX, tileY);
+
     /// <summary>
     /// Read and parse a tile's <c>.vmtile</c> and the model files it names that are not cached yet, on the thread pool
     /// (<see cref="TilePrefetchCache{T}"/>), so <see cref="LoadTile"/> only instantiates them. Nothing happens for a map without vmap
     /// data, an untiled map or a tile already loaded. World thread.
     /// </summary>
-    public void Prefetch(uint mapId, int tileX, int tileY)
+    public void Prefetch(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: false);
+
+    /// <summary><see cref="Prefetch(uint, int, int)"/> for a teleport's destination, against the arrival budget (<see cref="TilePrefetchCache{T}.MaxArrivalEntries"/>). World thread.</summary>
+    public void PrefetchArrival(uint mapId, int tileX, int tileY) => Prefetch(mapId, tileX, tileY, arrival: true);
+
+    private void Prefetch(uint mapId, int tileX, int tileY, bool arrival)
     {
         if (GetTree(mapId) is not { IsTiled: true } tree || tree.IsTileLoaded(tileX, tileY))
         {
@@ -318,7 +326,7 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
             }
 
             return spawns;
-        });
+        }, arrival);
     }
 
     void ICollisionTileLifecycle.OnTileUnloaded(uint mapId, int tileX, int tileY) => UnloadTile(mapId, tileX, tileY);

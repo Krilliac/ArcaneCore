@@ -35,7 +35,7 @@ internal sealed record PkwareVector(PlainText Source, int DictionaryBytes, int P
 
 /// <summary>
 /// PKWARE Data Compression Library streams made by a compressor this repository did not write: StormLib's <c>implode</c>
-/// (D:\mangos-unified\dep\StormLib\src\pklib\implode.c, binary mode, the three dictionary sizes) compiled with clang 22.1.8 and driven
+/// (StormLib src/pklib/implode.c, binary mode, the three dictionary sizes) compiled with clang 22.1.8 and driven
 /// the way <c>SCompImplode</c> drives it (SCompression.cpp:196-243, 674-698). Each stream was also expanded by StormLib's own
 /// <c>explode</c> (pklib\explode.c) in the generator and matched its plaintext byte for byte before being recorded here. The
 /// plaintexts are rebuilt by <see cref="Plain"/>; nothing here comes from client data.

@@ -625,6 +625,153 @@ public sealed class TickMonitorTests
         Assert.Equal(0, monitor.ActionsFired);
     }
 
+    private sealed class ThrowingHostLoadProbe : IHostLoadProbe
+    {
+        public HostLoadReading Current { get; set; }
+
+        public bool Throw { get; set; }
+
+        public HostLoadReading Read() => Throw ? throw new InvalidOperationException("probe failed") : Current;
+    }
+
+    private sealed class ToolRunner : IHangStackRunner
+    {
+        public Task<(int ExitCode, string Output)> RunAsync(string tool, IReadOnlyList<string> arguments, TimeSpan timeout)
+            => Task.FromResult((0, "Thread (0x1):\n  ArcaneCore.Game.Maps.WorldRuntime.RunTick\n"));
+    }
+
+    // A process using 0.2 cores on a 24 cpu machine at 45% load whose memory load (97%) is at the GC high-memory threshold, sampled once a second.
+    private static HostLoadReading IdleUnderMemoryPressure(int seconds)
+    {
+        const long Gib = 1024L * 1024 * 1024;
+        return new HostLoadReading(seconds * 2_000_000L, true, seconds * 108_000_000L, seconds * 240_000_000L, 0, 0, 0, 0, 12, 0, 24,
+            MemoryLoadBytes: (long)(32 * Gib * 0.97), HighMemoryLoadThresholdBytes: (long)(32 * Gib * 0.97), TotalAvailableMemoryBytes: 32 * Gib);
+    }
+
+    [Fact]
+    public void ActionHang_MemoryStarvedVerdict_OnlyDefersTheAction_AFarLongerHangStillFires()
+    {
+        var actuator = new FakeTickHangActuator();
+        var probe = new FakeHostLoadProbe { Current = IdleUnderMemoryPressure(0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+        sampler.Check(_clock.NowMicros);
+
+        var options = new TickMonitorOptions { HangMs = 2000, ActionHangMs = 5000, Action = TickHangAction.FailFast };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator) { HostLoad = sampler };
+        monitor.StartTicking(50);
+        Tick(monitor, 2, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        for (int second = 1; second <= 7; second++)
+        {
+            _clock.AdvanceMs(1_000);
+            probe.Current = IdleUnderMemoryPressure(second);
+            sampler.Check(_clock.NowMicros);
+        }
+
+        Assert.Equal(HostLoadVerdict.MemoryStarved, sampler.Report(7_000_000)!.Value.Verdict);
+        monitor.Check(_clock.NowMicros); // 7 s: past ActionHangMs (5 s), within 3x of it
+        Assert.Empty(actuator.Calls);
+
+        for (int second = 8; second <= 16; second++)
+        {
+            _clock.AdvanceMs(1_000);
+            probe.Current = IdleUnderMemoryPressure(second);
+            sampler.Check(_clock.NowMicros);
+        }
+
+        Assert.Equal(HostLoadVerdict.MemoryStarved, sampler.Report(16_000_000)!.Value.Verdict);
+        monitor.Check(_clock.NowMicros); // 16 s: past 3 x ActionHangMs (15 s), still memory-starved
+        Assert.Single(actuator.Calls);
+        Assert.Equal(1, monitor.ActionsFired);
+    }
+
+    // A tick that began at second 0 and has been running for 15 s, memory-starved the whole time, checked at 15.000 s and then 1 ms later.
+    private (TickMonitor Monitor, FakeTickHangActuator Actuator, HostLoadSampler Sampler) MemoryStarvedHangAt15Seconds()
+    {
+        var actuator = new FakeTickHangActuator();
+        var probe = new FakeHostLoadProbe { Current = IdleUnderMemoryPressure(0) };
+        var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+        sampler.Check(_clock.NowMicros);
+
+        var options = new TickMonitorOptions { HangMs = 2000, ActionHangMs = 5000, Action = TickHangAction.FailFast };
+        var monitor = new TickMonitor(options, _clock, _counters, _log, actuator) { HostLoad = sampler };
+        monitor.StartTicking(50);
+        Tick(monitor, 2, 50);
+        monitor.OnTick(_clock.NowMicros);
+
+        for (int second = 1; second <= 15; second++)
+        {
+            _clock.AdvanceMs(1_000);
+            probe.Current = IdleUnderMemoryPressure(second);
+            sampler.Check(_clock.NowMicros);
+        }
+
+        return (monitor, actuator, sampler);
+    }
+
+    [Fact]
+    public void ActionHang_MemoryStarved_ExactlyThreeTimesActionHangMs_StillDefers_AMillisecondLaterFires()
+    {
+        (TickMonitor monitor, FakeTickHangActuator actuator, HostLoadSampler sampler) = MemoryStarvedHangAt15Seconds();
+        Assert.Equal(HostLoadVerdict.MemoryStarved, sampler.Report(15_000_000)!.Value.Verdict);
+
+        monitor.Check(_clock.NowMicros); // exactly 15.000 s = 3 x ActionHangMs
+        Assert.Empty(actuator.Calls);
+
+        _clock.AdvanceMs(1);
+        monitor.Check(_clock.NowMicros); // 15.001 s
+        Assert.Single(actuator.Calls);
+    }
+
+    [Fact]
+    public void ActionHang_MemoryStarvedDeferral_IsSaidOncePerHungTick_WithAWarning()
+    {
+        (TickMonitor monitor, FakeTickHangActuator actuator, _) = MemoryStarvedHangAt15Seconds();
+
+        monitor.Check(_clock.NowMicros);
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Empty(actuator.Calls);
+        LogLine line = Assert.Single(_log.Of(WatchdogEvents.TickActionDeferred));
+        Assert.Equal(LogLevel.Warning, line.Level);
+        Assert.Contains("deferred", line.Message);
+    }
+
+    [Fact]
+    public async Task AFaultingGcPauseProbe_IsSaidInTheCapture_NotShownAsAZeroPause()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-tickmonitor-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var probe = new ThrowingHostLoadProbe { Current = new HostLoadReading(0, true, 0, 0, 0, 0, 0, 0, 12, 0, 24) };
+            var sampler = new HostLoadSampler(new HostLoadOptions(), 1000, _clock, probe);
+            sampler.Check(_clock.NowMicros);
+
+            var options = new TickMonitorOptions { HangMs = 2000, StackCaptureTool = "C:/tools/dotnet-stack.exe", StackCaptureDirectory = directory, StackCaptureIntervalSeconds = 300 };
+            var monitor = new TickMonitor(options, _clock, _counters, _log) { HostLoad = sampler };
+            monitor.StackCapture = new HangStackCapture(options, _log, new ToolRunner(), fileExists: _ => true, processId: 4242);
+            monitor.StartTicking(50);
+            Tick(monitor, 2, 50);
+            monitor.OnTick(_clock.NowMicros);
+
+            _clock.AdvanceMs(3_000);
+            probe.Throw = true;
+            monitor.Check(_clock.NowMicros);
+            await monitor.StackCapture.Last;
+
+            string text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(directory)));
+            Assert.Contains("GC pause unknown", text);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public void OnTick_ReturnsTheClosedFramesLength_AndZeroForTheFirstTick()
     {

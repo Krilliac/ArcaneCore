@@ -158,6 +158,14 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (HandleCastSpellOpcode,
+        // vmangos@0e3ff01 SpellHandler.cpp:301-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
+        // the caster's own stale window.
+        if ((player.UnitFlags & UnitFlags.Looting) != 0)
+        {
+            ReleaseLoot?.Invoke(player);
+        }
+
         spell = AutoSelectRankForTarget(player, spell, targets);
         if ((targets.Mask & SpellCastTargetFlags.TradeItem) != 0 && TradeEnchantmentRequest is { } deferred)
         {
@@ -238,6 +246,7 @@ public sealed partial class SpellSystem
         ProcessDeathAuraRemovals();
         UpdateSobering(diffMs);
         UpdateDynamicObjects(diffMs); // persistent area auras (PersistentAreaAuras/SpellSystem.PersistentAreaAuras.cs)
+        UpdateSpellBatch(); // casts held for the spell batch window go off together (SpellSystem.Batching.cs)
         if (_states.Count == 0)
         {
             return;
@@ -563,7 +572,7 @@ public sealed partial class SpellSystem
 
         if (castTime == 0)
         {
-            return Cast(cast);
+            return GoOrBatch(cast);
         }
 
         return SpellCastResult.CastOk;
@@ -597,7 +606,7 @@ public sealed partial class SpellSystem
         try
         {
             SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true,
-                castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
+                castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory, batchedGo: cast.BatchedGo);
             InventoryRewardStage? reagentStage = null;
             if (result == SpellCastResult.CastOk)
             {
@@ -794,6 +803,11 @@ public sealed partial class SpellSystem
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
+            if (entry.Miss is SpellMissInfo.Immune or SpellMissInfo.Immune2)
+            {
+                ReportObjectEffectSkipped(cast, target, "the carrier missed as immune");
+            }
+
             if (entry.Miss == SpellMissInfo.None)
             {
                 if (!objectOnly) hits.Add(target.Guid); // a carrier for GO effects is not itself a hit
@@ -913,6 +927,11 @@ public sealed partial class SpellSystem
 
     private void UpdateCast(SpellCast cast, uint diffMs)
     {
+        if (cast.BatchedGo)
+        {
+            return; // waiting in the spell batch for its go (SpellSystem.Batching.cs)
+        }
+
         if (cast.Timer < 0)
         {
             if (!cast.StuckReported)
@@ -1022,7 +1041,7 @@ public sealed partial class SpellSystem
 
         if (cast.State == SpellCastState.Preparing)
         {
-            Cast(cast);
+            GoOrBatch(cast);
         }
         else if (cast.State == SpellCastState.Casting)
         {
@@ -1038,9 +1057,9 @@ public sealed partial class SpellSystem
     /// </summary>
     private void Cancel(SpellCast cast)
     {
-        if (cast.State == SpellCastState.Finished)
+        if (cast.State == SpellCastState.Finished || cast.BatchedGo)
         {
-            return;
+            return; // a cast held in the spell batch is committed (SpellSystem.Batching.cs)
         }
 
         UnitSpellState state = GetOrCreateState(cast.Caster);
@@ -1281,8 +1300,12 @@ public sealed partial class SpellSystem
     /// Line of sight is delegated to the vmap-los seam. Reagents, items, shapeshift, facing and area restrictions belong to other
     /// areas (docs/areas/spells.md).
     /// </summary>
+    /// <param name="batchedGo">
+    /// A go released by the spell batch (<see cref="FlushSpellBatch"/>): the caster's own state (alive, stun, silence, fear), range and line of
+    /// sight were checked when the cast entered the batch and are not asked again (SpellSystem.Batching.cs).
+    /// </param>
     private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict,
-        bool skipCooldown = false, Item? castItem = null, SpellInfo? triggeringSpell = null, uint? itemCategory = null)
+        bool skipCooldown = false, Item? castItem = null, SpellInfo? triggeringSpell = null, uint? itemCategory = null, bool batchedGo = false)
     {
         Unit caster = state.Unit;
         if (IsQuestSettlementPending(caster))
@@ -1313,7 +1336,7 @@ public sealed partial class SpellSystem
         // exception (EventAI "cast on death"), a dead player still needs SPELL_ATTR_ALLOW_CAST_WHILE_DEAD. A passive spell is exempt, as in
         // vmangos (`!(Attributes & SPELL_ATTR_PASSIVE)`): a character that logs in as a ghost must still get its passives (languages,
         // proficiencies), or it knows no language and every chat line, '.' commands included, is refused (wave-10 rehearsal).
-        if (!caster.IsAlive && !spell.IsPassive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0
+        if (!batchedGo && !caster.IsAlive && !spell.IsPassive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0
             && !(caster is Creatures.Creature && triggered && triggeringSpell is null))
         {
             return SpellCastResult.CasterDead;
@@ -1340,7 +1363,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
-        if (!triggered)
+        if (!triggered && !batchedGo)
         {
             // The caster's own state (stun, confuse, fear, silence, pacify) and the immunity-granting-spell bypass (vmangos Spell::CheckCasterAuras).
             SpellCastResult stateResult = Rules.Gating.CasterAuraGate.Check(this, caster, spell, CastTimeFor(caster, spell));
@@ -1453,7 +1476,7 @@ public sealed partial class SpellSystem
             // vmangos Spell.cpp:3112-3117 resolves a resurrection's body to its owner, and 5780-5788 checks the body's line of sight
             // (the resurrect effect checks, ResurrectEffects.CheckCorpse): the range is never measured to the ghost, which may have
             // left for a graveyard.
-            if (!HasResurrectionCorpseTarget(spell, targets))
+            if (!HasResurrectionCorpseTarget(spell, targets) && !batchedGo)
             {
                 // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
                 SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk
@@ -1471,7 +1494,7 @@ public sealed partial class SpellSystem
                 }
             }
         }
-        else if (targets.HasDest)
+        else if (targets.HasDest && !batchedGo)
         {
             SpellCastResult range = CheckDestRange(caster, spell, targets, strict, SpellModifiers);
             if (range != SpellCastResult.CastOk)
@@ -1522,7 +1545,7 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Spell::CheckRange: self-only range always passes; combat-range spells use melee
-    /// reach (5 yd + both combat reaches); otherwise the SpellRange maximum plus the player leeway
+    /// reach (5 yd + both combat reaches, plus the 2.66 yd movement leeway); otherwise the SpellRange maximum plus the player leeway
     /// (1.25 yd at cast start, 6.25 yd on landing) against the combat distance (3D distance minus
     /// both combat reaches), with the minimum range giving TOO_CLOSE.
     /// </summary>
@@ -1555,6 +1578,16 @@ public sealed partial class SpellSystem
             }
 
             float meleeRange = Math.Max(SpellConstants.AttackDistance, reach + rangeMod + (4.0f / 3.0f));
+
+            // The movement leeway is added after the ATTACK_DISTANCE floor (vmangos Unit::GetCombatReachToTarget with ability = true,
+            // Unit.cpp:10380-10392: "When both player and target has > 70% of normal runspeed, and are moving, the player gains an
+            // additional 2.66yd of melee range"). Retail: Blizzard ruled melee leeway "working as intended in both PvE and PvP" on its
+            // 1.12-reference WoW Classic servers (https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23).
+            if (movementLeeway)
+            {
+                meleeRange += RangeLeeway.Bonus(caster, target);
+            }
+
             float dx = caster.X - target.X;
             float dy = caster.Y - target.Y;
             return (dx * dx) + (dy * dy) < meleeRange * meleeRange ? SpellCastResult.CastOk : SpellCastResult.OutOfRange;

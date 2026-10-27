@@ -4,7 +4,7 @@ Lane `claude/vw4-fishing-special-loot`, base `claude/vw-integration` (41babaf). 
 configuration, behaviour changes the integrator must know) is in [docs/integration/fishing-special-loot.md](../integration/fishing-special-loot.md).
 
 Standing directive: as close to vanilla 1.12.1 as possible, taken from the references, every deviation behind a configuration option that defaults to
-retail or listed under **Limits**. References, in order of authority: **vmangos** (`D:\refs\vmangos`, the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD`
+retail or listed under **Limits**. References, in order of authority: **vmangos** (`<refs-root>\vmangos`, the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD`
 blocks), **mangos-classic**, **gtker wow_messages**, **classic-db** (read only, ids and numbers as fixtures, nothing copied). Each piece of code cites
 file:line. Where vmangos and the other references disagree the choice is stated.
 
@@ -103,7 +103,7 @@ file:line. Where vmangos and the other references disagree the choice is stated.
 
 ## Provenance and tests
 
-References used: `D:\refs\vmangos` (LootMgr.cpp, Player.cpp, GameObject.cpp, SpellEffects.cpp, Spell.cpp, LootHandler.cpp, SpellHandler.cpp, Creature.cpp/h, GridMap.cpp, World.cpp), `D:\refs\mangos-classic`
-(`mangos.sql`, `SpellEffects.cpp:185`), `D:\refs\wow_messages` (SMSG_FISH_*, SMSG_PLAY_OBJECT_SOUND, SMSG_LOOT_RESPONSE), `D:\refs\classic-db` (data shapes). Tests: Game.Tests (rules and flows with real-data-shaped
+References used: `<refs-root>\vmangos` (LootMgr.cpp, Player.cpp, GameObject.cpp, SpellEffects.cpp, Spell.cpp, LootHandler.cpp, SpellHandler.cpp, Creature.cpp/h, GridMap.cpp, World.cpp), `<refs-root>\mangos-classic`
+(`mangos.sql`, `SpellEffects.cpp:185`), `<refs-root>\wow_messages` (SMSG_FISH_*, SMSG_PLAY_OBJECT_SOUND, SMSG_LOOT_RESPONSE), `<refs-root>\classic-db` (data shapes). Tests: Game.Tests (rules and flows with real-data-shaped
 fixtures), World.Tests (loopback: fishing, Pick Pocket, Disenchant, Pick Lock, Skinning), Data.Tests (provider theories for the new world and characters modules; SQLite only on a machine without
 MariaDB/PostgreSQL, the hosted CI runs the rest), plus the guard tests for prospecting and milling.

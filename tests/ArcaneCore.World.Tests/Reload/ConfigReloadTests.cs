@@ -429,7 +429,7 @@ public sealed class ConfigReloadTests : IDisposable
     public async Task PlayerbotRisk_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // The brains and party AIs read World:Playerbots:Risk from this options object at every decision.
-        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "RestManaBelowPct": 50, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
         var playerbots = new PlayerbotOptions { Enabled = true };
         PlayerbotRiskOptions risk = playerbots.Risk;
         ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
@@ -439,6 +439,7 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.False(risk.Enabled);
         Assert.Equal(2f, risk.Tolerance);
         Assert.Equal(20f, risk.RetreatHealthPct);
+        Assert.Equal(50f, risk.RestManaBelowPct);
         Assert.Equal(30, risk.DangerMemorySeconds);
         Assert.False(risk.PartyRetreatOnWipe);
 
@@ -450,7 +451,36 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
         Assert.True(risk.Enabled);
         Assert.Equal(1f, risk.Tolerance);
+        Assert.Equal(35f, risk.RestManaBelowPct);
         Assert.Equal(300, risk.DangerMemorySeconds);
+    }
+
+    [Fact]
+    public async Task PlayerbotCombat_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The brains, party AIs and group AIs read World:Playerbots:Combat from this options object at every decision (PlayerbotKite).
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Combat": { "Kite": { "Enabled": false, "HealthPct": 30, "StepYards": 6, "MaxStepsPerFight": 3 } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotKiteOptions kite = playerbots.Combat.Kite;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(kite, playerbots.Combat.Kite); // changed in place: the running bots hold these objects
+        Assert.False(kite.Enabled);
+        Assert.Equal(30f, kite.HealthPct);
+        Assert.Equal(6f, kite.StepYards);
+        Assert.Equal(3, kite.MaxStepsPerFight);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Combat": { "Kite": { "HealthPct": 1 } } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(30f, kite.HealthPct);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(kite.Enabled);
+        Assert.Equal(50f, kite.HealthPct);
+        Assert.Equal(10f, kite.StepYards);
+        Assert.Equal(8, kite.MaxStepsPerFight);
     }
 
     [Fact]
@@ -767,6 +797,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
+        }
+
+        // Kiting is live key by key (docs/areas/playbots-combat.md, Kiting).
+        foreach (PropertyInfo property in typeof(PlayerbotKiteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Combat)}:{nameof(PlayerbotCombatOptions.Kite)}:{property.Name}");
         }
 
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()

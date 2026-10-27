@@ -12,7 +12,7 @@ public sealed class SocialOptions
 
     /// <summary>
     /// Seconds before an offline group leader yields to an online member. Zero disables the
-    /// handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072 defaults to 300 seconds.
+    /// handoff. vmangos@0e3ff01 src/game/World.cpp:811,2063-2072 defaults to 300 seconds.
     /// </summary>
     public int OfflineLeaderDelaySeconds { get; set; } = 300;
 

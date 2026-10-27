@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,7 +48,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         _services = services ?? throw new ArgumentNullException(nameof(services));
         ArgumentNullException.ThrowIfNull(loggers);
         _logger = loggers.CreateLogger<RestFeature>();
-        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>());
+        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
         Writes.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("rest.writes-fatal", ex);

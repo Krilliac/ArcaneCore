@@ -213,6 +213,8 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.MoveSpeed = 101f);
         AssertInvalid(o => o.StallSeconds = 9);
         AssertInvalid(o => o.StallSeconds = 86401);
+        AssertInvalid(o => o.CutRegionMaxPolygons = -1);
+        AssertInvalid(o => o.CutRegionMaxPolygons = 1_000_001);
         AssertInvalid(o => o.ClientFidelity = (PlayerbotClientFidelity)99);
         AssertInvalid(o => o.AllowedMaps = null!);
         AssertInvalid(o => o.AllowedMaps = []);
@@ -230,6 +232,7 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.Scenarios.StepTimeoutSeconds = 601);
         AssertInvalid(o => o.Party = null!);
         AssertInvalid(o => o.Risk = null!);
+        AssertInvalid(o => o.Combat = null!);
         AssertInvalid(o => o.Opportunities = null!);
         AssertInvalid(o => o.Chat = null!);
         AssertInvalid(o => o.Groups = null!);
@@ -246,6 +249,15 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.Battlegrounds = null!);
         AssertInvalid(o => o.Chaos = null!);
         AssertInvalid(o => o.Policy = null!);
+    }
+
+    [Fact]
+    public void PlayerbotOptions_CutRegionMaxPolygons_ValidationBoundaries()
+    {
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { CutRegionMaxPolygons = -1 }.Validate());
+        new PlayerbotOptions { CutRegionMaxPolygons = 0 }.Validate();
+        new PlayerbotOptions { CutRegionMaxPolygons = 1_000_000 }.Validate();
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { CutRegionMaxPolygons = 1_000_001 }.Validate());
     }
 
     [Fact]
@@ -622,6 +634,15 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid<PlayerbotRiskOptions>(o => o.RecoverHealthPct = 5f, o => o.Validate());
         AssertInvalid<PlayerbotRiskOptions>(o => o.DangerMemorySeconds = -1, o => o.Validate());
         AssertInvalid<PlayerbotRiskOptions>(o => o.DeathLoopMemorySeconds = -1, o => o.Validate());
+
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = 1f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = 96f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.HealthPct = float.NaN, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.StepYards = 3f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.StepYards = 21f, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 0, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite.MaxStepsPerFight = 33, o => o.Validate());
+        AssertInvalid<PlayerbotCombatOptions>(o => o.Kite = null!, o => o.Validate());
 
         AssertInvalid<PlayerbotSocialOptions>(o => o.Guilds = null!, o => o.Validate());
         AssertInvalid<PlayerbotSocialOptions>(o => o.GuildChat = null!, o => o.Validate());

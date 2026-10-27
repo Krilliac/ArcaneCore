@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Groups;
 
 /// <summary>
 /// Values used by the 1.12 party stats packets. Visible aura slots come from UNIT_FIELD_AURA
-/// (SpellSystem.Auras.cs); D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:599-755 reads
+/// (SpellSystem.Auras.cs); vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:599-755 reads
 /// those same fields, with 32 positive and 16 negative slots.
 /// </summary>
 internal sealed class GroupMemberStatsSnapshot
@@ -64,7 +64,7 @@ internal sealed class GroupMemberStatsSnapshot
         };
     }
 
-    /// <summary>D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:757-773: changed fields, including vacated aura slots.</summary>
+    /// <summary>vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:757-773: changed fields, including vacated aura slots.</summary>
     public GroupUpdateFlags Diff(GroupMemberStatsSnapshot before)
     {
         GroupUpdateFlags flags = GroupUpdateFlags.None;

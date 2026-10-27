@@ -165,7 +165,7 @@ credit with members in reward range), or, without a quest, when the objective cr
 group then walks out, then disbands. The brains turn the quests in.
 
 **Failure**: two wipes, 30 minutes on one goal, a step (gather, travel, enter, leave, regroup) taking more than 5 minutes, two minutes at
-the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point or objective (`no-path-to-approach`, `no-path-to-objective`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left (a real player counts toward the two only while online: when the player of a one-bot-and-one-player pair disconnects or logs out the group ends at once with `player-gone`, with no grace period; a group that has already succeeded, or is walking out, is not failed by it), or the leader gone. The goal is then set aside for every member for
+the objective's spawn without it in sight, 30 seconds failing to plan a way to the approach point, objective or (a dungeon quest group) instance entrance (`no-path-to-approach`, `no-path-to-objective`, `no-path-to-entrance`, like a run's `no-path-to-entrance` / `no-path-to-boss`), too few members left (a real player counts toward the two only while online: when the player of a one-bot-and-one-player pair disconnects or logs out the group ends at once with `player-gone`, with no grace period; a group that has already succeeded, or is walking out, is not failed by it), or the leader gone. The goal is then set aside for every member for
 10 minutes (its quest and objective in the brain's suspensions, so the brain does not walk into it alone either), and the group walks
 out of an instance before it disbands. A group that cannot walk out in time is brought to the entrance by the teleport service (at most `MaxBringOuts`, 2 times, before it disbands).
 
@@ -766,8 +766,8 @@ World-boss raids (`PlayerbotWorldBoss*Tests`, `WorldBossTestKit`, `WorldBossReal
 
 ## Live replay (2026-10-08)
 
-`PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`D:/ArcaneCore-lanes/_logs/w6-integrate/rehearsal/orig-characters.db`
-and `orig-world.db`, the live settings without their `Database`, `Auth` and `Realms` sections, terrain `D:/ArcaneCore-data/terrain-5875`;
+`PlayerbotLiveSnapshotReplayTests` on the wave-6 rehearsal snapshot (`<lanes-root>/_logs/w6-integrate/rehearsal/orig-characters.db`
+and `orig-world.db`, the live settings without their `Database`, `Auth` and `Realms` sections, terrain `<data-root>/terrain-5875`;
 the five desired bots: Dawnrover, paladin 6, Elwynn; Ironwander, warrior 5, and Mirthblade, rogue 8, Dun Morogh; Duststalker, hunter 8,
 Durotar; Graveweaver, warlock 1, Tirisfal), six runs of 10 game minutes each with this branch and six with its base (`claude/bot-risk`
 d3b26dcb):

@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells.Rules.Application;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -148,6 +149,33 @@ public sealed partial class SpellSystem
         [SpellEffectName.Attack] = EffectAttack,
     };
 
+    /// <summary>Anomaly code (subsystem <c>spell</c>) of a game-object-directed cast whose effect was dropped before it ran.</summary>
+    public const string GameObjectEffectSkippedCode = "gameobject-effect-skipped";
+
+    /// <summary>
+    /// Report that a cast aimed at a game object lost its effect before any handler ran (a pending quest settlement, the application rules, or an
+    /// Immune miss on the carrier): the client sees a normal cast and nothing opens. The carrier of an effect aimed at an explicit game object is
+    /// the caster, so only the caster's own application is reported: a unit target of a mixed cast losing its effects is not this signal. The
+    /// "target is the caster" test and the "target is a game object" test come first and are a few field reads, so unit casts pay nothing; strings
+    /// are built only when a report is due. Ids and guid low only, no names.
+    /// </summary>
+    private static void ReportObjectEffectSkipped(SpellCast cast, Unit carrier, string why)
+    {
+        SpellCastTargets targets = cast.Targets;
+        if (!ReferenceEquals(carrier, cast.Caster)
+            || (targets.Mask & (SpellCastTargetFlags.GameObject | SpellCastTargetFlags.Locked)) == 0 || targets.GameObject.IsEmpty)
+        {
+            return;
+        }
+
+        AnomalyLedger.Shared.Report(
+            "spell",
+            GameObjectEffectSkippedCode,
+            $"spell {cast.Spell.Id}",
+            $"{why}; object guid {targets.GameObject.Low} entry {targets.GameObject.Entry}, caster guid {cast.Caster.Guid.Low}",
+            AnomalySeverity.Warning);
+    }
+
     /// <summary>vmangos Spell::EffectAttack (SpellEffects.cpp:3350-3354): start melee auto-attack against a living target other than the caster.</summary>
     private static void EffectAttack(SpellEffectContext context)
     {
@@ -162,6 +190,7 @@ public sealed partial class SpellSystem
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
+            ReportObjectEffectSkipped(cast, target, "a quest settlement is pending for the caster or the carrier");
             return null;
         }
 
@@ -178,6 +207,7 @@ public sealed partial class SpellSystem
             effectMask = application.EffectMask;
             if (effectMask == 0)
             {
+                ReportObjectEffectSkipped(cast, target, "the application rules removed every effect");
                 return null;
             }
         }

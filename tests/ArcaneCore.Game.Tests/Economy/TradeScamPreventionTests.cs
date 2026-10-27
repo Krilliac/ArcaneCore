@@ -4,7 +4,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Economy;
 
 /// <summary>
-/// The accept delay after a trade modification: D:\refs\vmangos\src\game\Handlers\TradeHandler.cpp:251-257 and :657-658
+/// The accept delay after a trade modification: vmangos@0e3ff01 src/game/Handlers/TradeHandler.cpp:251-257 and :657-658
 /// (delay 200 ms, measured with whole-second time(): difftime(time(nullptr), last) * 1000 is 0 or at least 1000).
 /// </summary>
 public sealed class TradeScamPreventionTests

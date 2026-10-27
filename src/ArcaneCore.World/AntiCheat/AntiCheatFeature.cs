@@ -163,6 +163,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             Alive = player.IsAlive,
             Rooted = player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
             GrantedFlags = GrantedFlags(player, state),
+            ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
             Transport = ClaimOf(player, movement),
             Terrain = _options.TerrainChecks && player.Map is { } map ? state.TerrainOf(map) : null,
         };
@@ -640,7 +641,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// </summary>
     private static MovementFlags GrantedFlags(Player player, PlayerState state)
     {
-        MovementFlags granted = state.ExplicitGrants;
+        MovementFlags granted = state.ExplicitGrants | MovementCheats.GrantedFlags(player);
         LocomotionState locomotion = player.Locomotion;
         if (locomotion.Auras.Has(AuraType.WaterWalk) || locomotion.Pending.HasPendingOfType(MovementChangeType.WaterWalk))
         {

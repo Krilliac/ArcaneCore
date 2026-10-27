@@ -49,6 +49,7 @@ public static class WatchdogEvents
     public static readonly EventId TickHang = new(7102, "TickHang");
     public static readonly EventId TickSummary = new(7103, "TickSummary");
     public static readonly EventId TickAction = new(7104, "TickAction");
+    public static readonly EventId TickActionDeferred = new(7105, "TickActionDeferred");
     public static readonly EventId MemoryGrowth = new(7110, "MemoryGrowth");
     public static readonly EventId MemoryPressure = new(7111, "MemoryPressure");
     public static readonly EventId MemoryAction = new(7112, "MemoryAction");

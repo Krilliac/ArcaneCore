@@ -1,6 +1,6 @@
 # EventAI ID coverage, ClassicDB z2815 (2026-10-08)
 
-Source: read-only `D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz`, table
+Source: read-only `<refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz`, table
 `creature_ai_scripts`. Run `py -3 tools/analysis/eventai_coverage.py <dump>` for counts of **every**
 reference event ID (0–42) and action ID (0–65, including the reference's UNUSED/REUSE markers
 6–8 and 49, which have zero uses). The script streams `INSERT` rows and checks the discovered Game handler declarations.

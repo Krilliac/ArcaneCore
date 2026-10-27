@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Reputation;
 
 /// <summary>
 /// The full unit-to-unit reaction ladder of vmangos <c>WorldObject::GetReactionTo</c> and
-/// <c>GetFactionReactionTo</c> (D:\refs\vmangos\src\game\Objects\Object.cpp:3608-3743), re-implemented with the
+/// <c>GetFactionReactionTo</c> (vmangos@0e3ff01 src/game/Objects/Object.cpp:3608-3743), re-implemented with the
 /// reputation state, forced reactions, duels and group membership this codebase has. Order: self; the same
 /// charmer or owner guid; GM neutral; forced rank; for player-controlled units the duel, same-raid and reputation
 /// (at war) rules; then the faction rule (contested guards, forced rank, standing capped at Neutral while at war, and

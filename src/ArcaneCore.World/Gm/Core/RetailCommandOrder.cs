@@ -1,7 +1,7 @@
 namespace ArcaneCore.World.Gm.Core;
 
 /// <summary>
-/// The order of the root commands in the vmangos command table (D:\refs\vmangos\src\game\Chat\Chat.cpp:1185-1366).
+/// The order of the root commands in the vmangos command table (vmangos@0e3ff01 src/game/Chat/Chat.cpp:1185-1366).
 /// Abbreviations resolve to the first entry whose name starts with the typed word (hasStringAbbr,
 /// Chat.cpp:1566-1600), so the table order decides what ".g" or ".s" means. Roots this server adds
 /// that are not in the retail table keep their registration order after the retail ones.

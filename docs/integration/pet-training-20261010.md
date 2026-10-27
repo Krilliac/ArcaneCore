@@ -1,7 +1,7 @@
 # Pet training (lane `pet-training`, wave 19)
 
 Hunter beast training: training-point costs, the family check and the four-active-spell limit. References (read-only, nothing copied):
-vmangos (primary, `D:\refs\vmangos`), mangos-classic, mangoszero. Server rules only; no wire change.
+vmangos (primary, `<refs-root>\vmangos`), mangos-classic, mangoszero. Server rules only; no wire change.
 
 ## Delivered scope
 

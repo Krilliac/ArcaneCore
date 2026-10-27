@@ -92,7 +92,7 @@ public sealed class PlayerbotSpeechTests
     {
         var limiter = new PlayerbotSpeechLimiter();
         var options = new PlayerbotSpeechOptions { TargetGapSeconds = 10, DedupeSeconds = 0 };
-        BotSpeech whisper = BotSpeech.WhisperTo("Nathan", Player, "hey", "test") with { IsReply = true };
+        BotSpeech whisper = BotSpeech.WhisperTo("Testplayer", Player, "hey", "test") with { IsReply = true };
         Assert.Equal(BotSpeechAdmission.Queued, limiter.TryTake(BotA, GuidA, whisper, null, options, 0));
         Assert.Equal(BotSpeechAdmission.Target, limiter.TryTake(BotA, GuidA, whisper with { Text = "again" }, null, options, 5_000));
         Assert.Equal(BotSpeechAdmission.Queued, limiter.TryTake(BotA, GuidA, whisper with { Text = "again", Priority = BotSpeechPriority.High }, null, options, 5_000));
@@ -259,13 +259,13 @@ public sealed class PlayerbotSpeechTests
     [Fact]
     public void LegacyReplies_AreSaidOnTheirChannel()
     {
-        var reply = new BotChatReply(BotA, Player, "Nathan", ChatType.Whisper, "hey", null, false, "Builtin");
+        var reply = new BotChatReply(BotA, Player, "Testplayer", ChatType.Whisper, "hey", null, false, "Builtin");
         BotSpeech speech = Assert.IsType<BotSpeech>(PlayerbotPartyAI.SpeechOf(reply));
         Assert.Equal(BotSpeechChannel.Whisper, speech.Channel);
-        Assert.Equal("Nathan", speech.Target);
+        Assert.Equal("Testplayer", speech.Target);
         Assert.True(speech.IsReply);
 
-        var announcement = new BotChatReply(BotA, Player, "Nathan", ChatType.Guild, "ding 20!", null, false, "Builtin", Guild: "Knights");
+        var announcement = new BotChatReply(BotA, Player, "Testplayer", ChatType.Guild, "ding 20!", null, false, "Builtin", Guild: "Knights");
         BotSpeech guild = Assert.IsType<BotSpeech>(PlayerbotPartyAI.SpeechOf(announcement));
         Assert.Equal(BotSpeechChannel.Guild, guild.Channel);
         Assert.Equal("Knights", guild.Guild);

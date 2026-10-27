@@ -2,8 +2,12 @@
 
 Status: researched design and implementation plan, requested 2026-10-03;
 module/process direction approved by the developer on 2026-10-03.
-Implementation tracking belongs to the single [roadmap worklist](ROADMAP.md#m15-clustering-worklist).
-This tranche changes documentation; no cluster processes or transport are shipped.
+The delivered state is tracked in the [roadmap](ROADMAP.md#delivered).
+The gateway process and worker transport described below now exist in code
+(`src/ArcaneCore.Gateway`, `src/ArcaneCore.World/Cluster`); the design text predates them and is kept
+as the record of intent. Phase status is in the roadmap's
+[clustering phase status](ROADMAP.md#clustering-phase-status); the open gaps are in
+[gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond).
 The inventory below was checked against integration source
 `e06d4e468118454d906c1d4be8914a3522106d1b`. The constraint bullets on sessions,
 maps and instances, ID allocators, write queues and far transfer were re-read
@@ -555,7 +559,7 @@ validates and applies them on its own tick. Common rules (planned):
 
 ## Phased implementation and acceptance
 
-The roadmap owns phase status. The technical closure criteria are:
+The roadmap owns phase status ([clustering phase status](ROADMAP.md#clustering-phase-status)). The technical closure criteria are:
 
 | Phase / lane owner | Concrete implementation | Required closure |
 |---|---|---|

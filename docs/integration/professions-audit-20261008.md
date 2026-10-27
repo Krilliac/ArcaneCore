@@ -1,7 +1,7 @@
 # Profession coverage audit (2026-10-08)
 
 Worktree `codex/w2-professions`, based on main `92966fdd`. The local reference sources are
-`D:/refs/vmangos`, `D:/refs/mangos-classic` and the read-only z2815 ClassicDB dump. This is a code and
+`<refs-root>/vmangos`, `<refs-root>/mangos-classic` and the read-only z2815 ClassicDB dump. This is a code and
 synthetic/loopback-test audit; it is not a build-5875 client acceptance run.
 
 | Path | Current coverage and reference | Remaining limit |
@@ -21,7 +21,7 @@ current owners. No schema change or world content write is part of this lane.
 
 ## Data and acceptance still needed
 
-`D:/refs/client-dbc-5875-effective` currently has ItemRandomProperties.dbc and
+`<refs-root>/client-dbc-5875-effective` currently has ItemRandomProperties.dbc and
 SpellItemEnchantment.dbc, but no Lock.dbc, Faction.dbc or FactionTemplate.dbc. The first is needed
 for real mining and herbalism lock cases; the faction files are needed for the reputation and
 interaction services that authorize the ScriptDev2 blacksmith trainers. The six leatherworking

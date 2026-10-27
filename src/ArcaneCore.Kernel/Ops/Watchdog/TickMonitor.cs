@@ -33,10 +33,14 @@ public sealed class RuntimeTickHangActuator(IHostApplicationLifetime? lifetime =
         try
         {
             var timeout = new TimeoutException(reason);
-            string report = CrashHandler.Current?.Render(CrashKind.Unhandled, timeout)
+            CrashHandler? handler = CrashHandler.Current;
+            string report = handler?.Render(CrashKind.Unhandled, timeout)
                 ?? $"FATAL TICK HANG: {reason}";
             Console.Error.WriteLine(report);
             Console.Error.Flush();
+
+            // Opt-in (Diagnostics:CrashDialog); returns at once when off or headless, never throws, and the exit below still runs.
+            handler?.ShowFatalDialog(CrashKind.Unhandled, timeout, failFast: false, "the world tick watchdog: Ops:Watchdog:TickMonitor:Action = FailFast", report);
         }
         catch
         {
@@ -88,6 +92,9 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
 {
     private const long NoTick = long.MinValue;
 
+    /// <summary>How many times ActionHangMs a memory-starved hang may last before the fatal action fires regardless.</summary>
+    internal const long MemoryStarvedGraceFactor = 3;
+
     private readonly TickMonitorOptions _options;
     private readonly WatchdogClock _clock;
     private readonly ITickHangActuator _actuator;
@@ -126,6 +133,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private long _hangReportedForStart = NoTick;
     private long _actionFiredForStart = NoTick;
     private long _stackCapturedForStart = NoTick;
+    private long _deferralLoggedForStart = NoTick;
     private long _nextSummaryMicros = NoTick;
     private volatile bool _started;
     private volatile bool _stopped;
@@ -356,15 +364,24 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
             if (StackCapture is { } capture && _stackCapturedForStart != last)
             {
                 _stackCapturedForStart = last;
-                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)");
+                capture.TryCapture(nowMicros, $"world tick running for {Micros.ToMillis(nowMicros - last)} ms (hang threshold {Micros.ToMillis(_hangMicros)} ms)", nowMicros - last, GcPauseMicros(nowMicros - last));
             }
         }
 
         // 1b. Fatal hang action: when a single tick remains wedged past ActionHangMs and the host-load sampler does not blame GC pauses, machine CPU starvation or a stopped process.
+        // A memory-starved verdict only defers the action: an idle process on a memory-loaded host is also what a deadlock looks like, so past MemoryStarvedGraceFactor x ActionHangMs it fires anyway.
         if (!_stopped && last != NoTick && nowMicros - last > _actionHangMicros && _actionFiredForStart != last)
         {
             HostLoadVerdict verdict = HostVerdict(nowMicros - last);
-            if (verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled))
+            bool memoryDeferred = verdict == HostLoadVerdict.MemoryStarved && nowMicros - last <= _actionHangMicros * MemoryStarvedGraceFactor;
+            if (memoryDeferred && _deferralLoggedForStart != last)
+            {
+                _deferralLoggedForStart = last; // once per hung tick, not once per check
+                _logger.LogWarning(WatchdogEvents.TickActionDeferred, "world tick has been hung for {RunningMs} ms (action threshold {ActionHangMs} ms): action {Action} deferred while this process is memory-starved; it fires anyway past {GraceMs} ms",
+                    Micros.ToMillis(nowMicros - last), Micros.ToMillis(_actionHangMicros), _options.Action, Micros.ToMillis(_actionHangMicros * MemoryStarvedGraceFactor));
+            }
+
+            if (!memoryDeferred && verdict is not (HostLoadVerdict.HostStarved or HostLoadVerdict.GcPauses or HostLoadVerdict.GcPaging or HostLoadVerdict.ProcessStalled))
             {
                 _actionFiredForStart = last;
                 _actionCounter.Increment();
@@ -544,6 +561,20 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return HostLoadVerdict.Unknown;
+        }
+    }
+
+    /// <summary>The GC pause inside the window of a slow tick (watchdog thread): 0 without a sampler or a baseline, -1 when the probe faulted (recorded).</summary>
+    private long GcPauseMicros(long windowMicros)
+    {
+        try
+        {
+            return HostLoad?.Report(windowMicros)?.GcPauseMicros ?? 0;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("TickMonitor.GcPauseMicros", ex, "world tick hang: the GC pause of the hung window could not be read");
+            return HangStackCapture.GcPauseUnknown;
         }
     }
 

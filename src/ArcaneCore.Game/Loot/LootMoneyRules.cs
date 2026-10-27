@@ -4,7 +4,7 @@ namespace ArcaneCore.Game.Loot;
 
 /// <summary>
 /// Creature/item/chest money generation, re-implemented from vmangos Loot::GenerateMoneyLoot
-/// (D:\refs\vmangos\src\game\LootMgr.cpp:735-746): nothing when max is 0; max when max &lt;= min
+/// (vmangos@0e3ff01 src/game/LootMgr.cpp:735-746): nothing when max is 0; max when max &lt;= min
 /// (the 3 classic-db rows with max &lt; min pay max); a plain uniform roll when the range is under
 /// 32700; otherwise the roll is made on the values shifted right 8 bits and shifted back, so large
 /// boss purses are multiples of 256. The money rate is applied (truncating) before the shift back.

@@ -5,7 +5,7 @@ using Xunit;
 namespace ArcaneCore.Game.Tests.Druid;
 
 /// <summary>
-/// Shapeshift interlocks read from UNIT_FIELD_BYTES_1 byte 2 (D:\refs\vmangos\src\game\Objects\UnitDefines.h:85-88):
+/// Shapeshift interlocks read from UNIT_FIELD_BYTES_1 byte 2 (vmangos@0e3ff01 src/game/Objects/UnitDefines.h:85-88):
 /// Unit::IsInDisallowedMountForm (Unit.cpp:5870-5878) and the taxi reply of Player::ActivateTaxiPathTo
 /// (Player.cpp:17872-17880, ERR_TAXIPLAYERSHAPESHIFTED).
 /// </summary>

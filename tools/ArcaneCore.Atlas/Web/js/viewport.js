@@ -3,6 +3,7 @@
 
 import { eye as cameraEye, frameBounds, intersectPlaneZ, lookAtPoint, ndcToScreen, project, rayThrough, screenToNdc, vec } from './camera.js';
 import { LabelLayer, drawLabels, layoutLabels, LABEL_FONT } from './labels.js';
+import { PEER_CSS_COLOR, peerLabelCandidates } from './presence.js';
 import { buildLiveGeometry, pickEntity } from './live.js';
 import { describeSurface, normalizePick } from './normalize.js';
 import { computeNotices } from './notices.js';
@@ -128,6 +129,7 @@ export class Viewport {
             this.dirty = true;
         });
         app.events.on('overlays', () => (this.dirty = true));
+        app.events.on('presence', () => (this.dirty = true));
         app.events.on('selection', () => {
             this.liveDirty = true;
             this.dirty = true;
@@ -462,7 +464,8 @@ export class Viewport {
         this.drawTimes.push(time);
     }
 
-    #labelCandidates() {
+    /** Label candidates of the live entities, the visible overlays and the other sessions (`peers`: those on the current map). */
+    #labelCandidates(peers = this.app.presence.onMap(this.app.view.map)) {
         const candidates = [...this.liveLabels];
         for (const entry of this.app.overlays.entries()) {
             if (entry.visible) {
@@ -471,17 +474,22 @@ export class Viewport {
                 }
             }
         }
+        candidates.push(...peerLabelCandidates(peers, this.app.view.map));
         return candidates;
     }
 
     #drawLabels(view) {
         const ctx = this.labels.ctx;
-        this.labels.draw(this.#labelCandidates(), view.camera);
+        const peers = this.app.presence.onMap(view.map);
+        this.labels.draw(this.#labelCandidates(peers), view.camera);
         // Pins: the selected point (cobalt) and the point under the cursor (white). Drawn in 2D, so they never hide behind terrain.
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         const sel = this.app.selection.point;
         if (sel) {
             this.#pin(ctx, sel, '#4F8BFF', 9, true);
+        }
+        for (const peer of peers) {
+            this.#pin(ctx, peer.at, PEER_CSS_COLOR, 6, false);
         }
         const hov = this.hoverInfo;
         if (hov && !this.nav.flying) {
