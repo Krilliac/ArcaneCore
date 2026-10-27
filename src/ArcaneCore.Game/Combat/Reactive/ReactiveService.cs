@@ -308,6 +308,16 @@ public sealed class ReactiveService
 
     private readonly HashSet<MapCombat> _observed = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>Stop tracking one map's combat when the map unloads, so the service does not keep the dead map alive.</summary>
+    public void Unobserve(MapCombat combat)
+    {
+        ArgumentNullException.ThrowIfNull(combat);
+        _observed.Remove(combat);
+    }
+
+    /// <summary>How many maps' combat this service currently follows.</summary>
+    internal int ObservedCount => _observed.Count;
+
     /// <summary>The reactions' view of a white swing outcome (vmangos CalculateMeleeDamage procEx, Unit.cpp:8806-8830).</summary>
     public static AttackAvoidance AvoidanceOf(MeleeHitOutcome outcome) => outcome switch
     {

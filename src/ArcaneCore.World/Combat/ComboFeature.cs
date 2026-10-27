@@ -27,11 +27,14 @@ public sealed class ComboFeature(IServiceProvider services) : IWorldFeature
 
         world.PlayerLoggingOut += combos.OnPlayerGone;
         world.MapCreated += Subscribe;
+        world.MapUnloading += Unsubscribe;
         foreach (Map map in world.Maps)
         {
             Subscribe(map);
         }
     }
+
+    private void Unsubscribe(Map map) => Service?.Unobserve(map.Combat);
 
     private void Subscribe(Map map)
     {

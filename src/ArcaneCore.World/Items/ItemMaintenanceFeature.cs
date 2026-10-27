@@ -13,9 +13,18 @@ public sealed class ItemMaintenanceFeature(ItemsFeature items) : IWorldFeature
 {
     private readonly HashSet<Map> _maps = [];
 
-    public void Attach(WorldRuntime world) => world.MapCreated += OnMapCreated;
+    /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
+    internal int TrackedMapCount => _maps.Count;
 
-    private void OnMapCreated(Map map)
+    public void Attach(WorldRuntime world)
+    {
+        world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
+    }
+
+    internal void OnMapUnloading(Map map) => _maps.Remove(map);
+
+    internal void OnMapCreated(Map map)
     {
         if (_maps.Add(map))
         {

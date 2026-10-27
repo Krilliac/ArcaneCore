@@ -126,6 +126,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -196,6 +197,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             world.PlayerLoggedIn -= OnPlayerLoggedIn;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
         }
 
         await StopAsync().ConfigureAwait(false);
@@ -430,7 +432,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private readonly HashSet<Map> _maps = [];
 
-    private void OnMapCreated(Map map)
+    /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
+    internal int TrackedMapCount => _maps.Count;
+
+    internal void OnMapUnloading(Map map) => _maps.Remove(map);
+
+    internal void OnMapCreated(Map map)
     {
         if (_maps.Add(map))
         {
