@@ -3806,6 +3806,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // Within sight but FindTargets found nothing to fight: this patch is depleted, gated, or unavailable.
                 BlockExploreCell(current);
             }
+            else if (_route is { Complete: true, ToLiftLanding: true })
+            {
+                // A leg of the walk to a lift's landing ends where one route reaches, which may be farther from the cell (the lift can lie away
+                // from it) and is no dead end: each accepted leg closes at least PlayerbotElevator.ApproachProgressYards on the lift.
+            }
             else if (_route is { Complete: true })
             {
                 // A previous route leg finished outside the 65-yard sight radius: if it failed to reduce flat distance by at least 4 yards,
@@ -3888,7 +3893,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _route is not { Points.Count: > 0 } plannedRoute
             || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), plannedRoute.Points[^1]) <= 4f * 4f
                 && flatDistSq > 65f * 65f)
-            || (plannedRoute.Navigated && flatDistSq <= 175f * 175f
+            || (!plannedRoute.ToLiftLanding && plannedRoute.Navigated && flatDistSq <= 175f * 175f
                 && (System.Numerics.Vector2.DistanceSquared(new(destination.X, destination.Y), new(plannedRoute.Points[^1].X, plannedRoute.Points[^1].Y)) > 15f * 15f
                     || MathF.Abs(destination.Z - plannedRoute.Points[^1].Z) > 8f)))
         {
