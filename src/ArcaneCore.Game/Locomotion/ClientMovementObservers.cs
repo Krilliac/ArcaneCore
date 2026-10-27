@@ -2,6 +2,7 @@ using System.Reflection;
 using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -114,7 +115,7 @@ public static partial class MovementObservers
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-before", ex);
-                logger?.LogError(ex, "movement observer {Observer} failed before applying {Opcode}", observer.GetType().Name, context.Opcode);
+                logger?.LogFault("movement-observer-before", ex, "movement observer {Observer} failed before applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }
     }
@@ -130,7 +131,7 @@ public static partial class MovementObservers
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-after", ex);
-                logger?.LogError(ex, "movement observer {Observer} failed after applying {Opcode}", observer.GetType().Name, context.Opcode);
+                logger?.LogFault("movement-observer-after", ex, "movement observer {Observer} failed after applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }
     }

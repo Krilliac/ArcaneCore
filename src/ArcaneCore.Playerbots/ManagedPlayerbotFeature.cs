@@ -2443,7 +2443,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("playerbot.feature", ex);
-                    logger.LogWarning(ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                    logger.LogFault(LogLevel.Warning, "playerbot-group-coordinator", ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
                 }
             }
             // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
@@ -2477,7 +2477,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     FaultLedger.Shared.Record("playerbot.feature", ex);
                     FaultLedger.Shared.Record("playerbot.bg-coordinator", ex);
-                    logger.LogWarning(ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                    logger.LogFault(LogLevel.Warning, "playerbot-bg-coordinator", ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
                 }
             }
         }

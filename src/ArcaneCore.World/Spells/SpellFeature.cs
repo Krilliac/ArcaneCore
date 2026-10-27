@@ -373,7 +373,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.update", ex);
-            _logger.LogError(ex, "spell update failed");
+            ArcaneCore.Kernel.Diagnostics.FaultLedgerLogging.LogFault(_logger, "spell-update", ex, "spell update failed"); // per tick: the ledger throttles repeats and counts them
         }
     }
 

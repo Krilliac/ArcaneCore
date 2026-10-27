@@ -337,6 +337,8 @@ public sealed partial class Map
         }
     }
 
+    private readonly ArcaneCore.Kernel.Logging.LogGate _orphanLogGate = new(TimeSpan.FromMinutes(1));
+
     public bool VerifyVisibleSetInvariants(Player player)
     {
         if (player.VisibleObjects.Count == 0)
@@ -360,9 +362,23 @@ public sealed partial class Map
 
         foreach (ObjectGuid orphan in orphans)
         {
-            _logger.LogWarning(
-                "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map",
-                player.Name, player.Guid.Low, MapId, orphan);
+            // Checked on every visibility tick: one line per window; the held-back heals are counted on the next admitted line.
+            if (_orphanLogGate.TryEnter(out int suppressed))
+            {
+                if (suppressed == 0)
+                {
+                    _logger.LogWarning(
+                        "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map",
+                        player.Name, player.Guid.Low, MapId, orphan);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map ({Suppressed} more since)",
+                        player.Name, player.Guid.Low, MapId, orphan, suppressed);
+                }
+            }
+
             RemoveVisible(player, orphan);
             if (orphan != player.Guid && player.Session.WantsUpdateObjects)
             {
