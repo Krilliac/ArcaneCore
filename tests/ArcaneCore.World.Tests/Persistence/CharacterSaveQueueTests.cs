@@ -1600,7 +1600,10 @@ public sealed class CharacterSaveQueueTests
     [Fact]
     public async Task Stop_ABusyLockThatClearsAfterOneBusyTimeout_LandsEverySnapshot()
     {
-        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(500) } };
+        // The stall budget counts the wall time of attempts that failed (2 x 200 ms here, plus whatever a loaded host adds to each Task.Delay). It must therefore sit far
+        // above the simulated busy time, or a slow CI host exhausts the lane for a reason that has nothing to do with the lock clearing. The budget's own behaviour is pinned by
+        // Stop_WithALockedDatabase_RetriesUntilTheLaneStalls_ThenRefuses_AndNamesAll; this test decides on the lock clearing alone.
+        var drain = new ShutdownDrain { Saves = new StopDrainBudget { StallBudget = TimeSpan.FromMinutes(5) } };
         await using var kit = new Kit(drain: drain);
         var calls = 0;
         kit.Store.OnSave = async (state, _) =>
