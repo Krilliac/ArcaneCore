@@ -150,7 +150,7 @@ public static class WorldConfigKeys
         LiveSocialCount("MaxJoinedChannels", o => o.MaxJoinedChannels, (o, v) => o.MaxJoinedChannels = v),
         // Not vmangos keys: channel name and password length caps (0 = none), read at each join or password change.
         LiveSocialCount("MaxChannelNameLength", o => o.MaxChannelNameLength, (o, v) => o.MaxChannelNameLength = v),
-        LiveSocialCount("MaxChannelPasswordLength", o => o.MaxChannelPasswordLength, (o, v) => o.MaxChannelPasswordLength = v),
+        LiveSocialCount("MaxChannelPassphraseLength", o => o.MaxChannelPassphraseLength, (o, v) => o.MaxChannelPassphraseLength = v),
         // Not a vmangos key: the ready-check answer rate limit (0 = off), read at each answer.
         LiveSocialCount("ReadyCheckAnswerIntervalMs", o => o.ReadyCheckAnswerIntervalMs, (o, v) => o.ReadyCheckAnswerIntervalMs = v),
         // vmangos Group.OfflineLeaderDelay (World.cpp:811): seconds before an offline group leader yields; 0 disables. GroupManager reads it at each tick.

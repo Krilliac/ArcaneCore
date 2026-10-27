@@ -19271,7 +19271,7 @@ World.Social.AllowTwoSideGuild = false
 World.Social.MaxChannelNameLength = 255
 
 #
-#    World.Social.MaxChannelPasswordLength
+#    World.Social.MaxChannelPassphraseLength
 #        Description: ArcaneCore hardening: the longest channel password (characters) accepted on
 #                     join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 =
 #                     no cap. Default 255, as for MaxChannelNameLength.
@@ -19281,7 +19281,7 @@ World.Social.MaxChannelNameLength = 255
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldsocial
 #
-World.Social.MaxChannelPasswordLength = 255
+World.Social.MaxChannelPassphraseLength = 255
 
 #
 #    World.Social.MaxJoinedChannels

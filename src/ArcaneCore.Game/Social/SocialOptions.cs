@@ -33,7 +33,7 @@ public sealed class SocialOptions
     /// ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD
     /// and a set is ignored. 0 = no cap. Default 255, as for <see cref="MaxChannelNameLength"/>.
     /// </summary>
-    public int MaxChannelPasswordLength { get; set; } = 255;
+    public int MaxChannelPassphraseLength { get; set; } = 255;
 
     /// <summary>
     /// ArcaneCore hardening: the shortest time (milliseconds) between two ready-check answers of one member that are forwarded to the

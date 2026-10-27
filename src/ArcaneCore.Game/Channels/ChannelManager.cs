@@ -43,7 +43,7 @@ public sealed class ChannelManager(SocialContext context)
             return;
         }
 
-        // World:Social:MaxChannelNameLength / MaxChannelPasswordLength: refused before any Channel object is created.
+        // World:Social:MaxChannelNameLength / MaxChannelPassphraseLength: refused before any Channel object is created.
         int maxName = context.Options.MaxChannelNameLength;
         if (maxName > 0 && name.Length > maxName)
         {
@@ -51,7 +51,7 @@ public sealed class ChannelManager(SocialContext context)
             return;
         }
 
-        int maxPassword = context.Options.MaxChannelPasswordLength;
+        int maxPassword = context.Options.MaxChannelPassphraseLength;
         if (maxPassword > 0 && password.Length > maxPassword)
         {
             player.Session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.WrongPassword, name));
@@ -122,9 +122,9 @@ public sealed class ChannelManager(SocialContext context)
     /// <summary>CMSG_CHANNEL_PASSWORD.</summary>
     public void SetPassword(Player player, string name, string password)
     {
-        if (context.Options.MaxChannelPasswordLength > 0 && password.Length > context.Options.MaxChannelPasswordLength)
+        if (context.Options.MaxChannelPassphraseLength > 0 && password.Length > context.Options.MaxChannelPassphraseLength)
         {
-            return; // World:Social:MaxChannelPasswordLength
+            return; // World:Social:MaxChannelPassphraseLength
         }
 
         Get(player, name)?.SetPassword(player, password);

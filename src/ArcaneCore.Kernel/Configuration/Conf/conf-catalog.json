@@ -24044,7 +24044,7 @@
       "isCollection": false
     },
     {
-      "path": "World:Social:MaxChannelPasswordLength",
+      "path": "World:Social:MaxChannelPassphraseLength",
       "section": "World:Social",
       "type": "int",
       "kind": "scalar",
