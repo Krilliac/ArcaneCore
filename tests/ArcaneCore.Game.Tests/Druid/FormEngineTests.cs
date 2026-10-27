@@ -174,6 +174,19 @@ public sealed class FormEngineTests
         public void OnFormChanged(Unit unit, byte oldForm, byte newForm) => Changes.Add((oldForm, newForm));
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         public Rig(Race race = Race.NightElf, Class playerClass = Class.Druid, float scale = 1.0f)
@@ -216,7 +229,9 @@ public sealed class FormEngineTests
         public SpellCastResult Cast(uint spell)
         {
             Kit.Advance(1500);
-            return System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered: false);
+            SpellCastResult result = System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered: false);
+            FlushSpellBatch(Kit);
+            return result;
         }
 
         /// <summary>A server-side cast (GM .aura, a script): the client would have cancelled the old form first, because every form spell is NOT_SHAPESHIFT.</summary>

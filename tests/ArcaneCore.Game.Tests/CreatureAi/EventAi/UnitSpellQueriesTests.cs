@@ -40,6 +40,19 @@ public sealed class UnitSpellQueriesTests
         public void OnCreatureRemoved(Creature creature) => inner.OnCreatureRemoved(creature);
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     [Fact]
     public void AuraStacks_ReadTheRealSpellSystem_AndAnAuraEventFiresOnThem()
     {
@@ -69,6 +82,7 @@ public sealed class UnitSpellQueriesTests
         Assert.False(queries.IsCasting(wolf));
 
         map.Combat.DealDamage(player, wolf, 1, direct: false);
+        FlushSpellBatch(kit);
 
         Assert.Equal(1, queries.GetAuraStacks(player, SpellTestKit.DotSpell));
         Assert.Equal(0, queries.GetAuraStacks(wolf, SpellTestKit.DotSpell));
