@@ -62,6 +62,8 @@ public sealed partial class EconomyFeature
     {
         if (!MailboxAccess.CanUseMailbox(player, request.Mailbox))
         {
+            // vmangos HandleSendMail answers MAIL_ERR_INTERNAL_ERROR when CheckMailBox fails (vmangos@0e3ff01 MailHandler.cpp:131-134).
+            SendMailResult(session, 0, MailAction.Send, MailResult.InternalError);
             return;
         }
 
@@ -102,8 +104,10 @@ public sealed partial class EconomyFeature
 
     private void ContinueSendMail(WorldSession session, Player player, SendMailRequest request)
     {
-        // The box-size read was asynchronous: the sender may have died or left the mailbox meanwhile. vmangos HandleSendMail runs its
-        // CheckMailBox (alive, mailbox in reach; MailHandler.cpp:65-80, :131) in the same call as the send, so re-check it here.
+        // The box-size read was asynchronous: the sender may have died or left the mailbox meanwhile. vmangos checks CheckMailBox (alive,
+        // mailbox in reach; MailHandler.cpp:65-80) only before its async COUNT(*) (:131, :232); its callback (:93-108, then
+        // HandleSendMailCallback :237) re-checks only the session, guid and IsInWorld. We re-check here because the read can race the
+        // sender dying or walking away.
         if (!Settlements.CanAct(session, player) || !MailboxAccess.CanUseMailbox(player, request.Mailbox))
         {
             SendMailResult(session, 0, MailAction.Send, MailResult.InternalError);

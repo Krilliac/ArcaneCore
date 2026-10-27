@@ -13,9 +13,10 @@ using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
-/// CMSG_SEND_MAIL re-checks the mailbox after the asynchronous recipient box-size read: vmangos HandleSendMail runs its
-/// CheckMailBox (alive, mailbox in reach) and the send in one call (vmangos development MailHandler.cpp:65-80, :131), so a sender that dies or walks
-/// away while the read is in flight must not post the letter.
+/// CMSG_SEND_MAIL re-checks the mailbox after the asynchronous recipient box-size read. vmangos@0e3ff01 checks CheckMailBox (alive, mailbox in
+/// reach; MailHandler.cpp:65-80) only before its async COUNT(*) (:131, :232) and does not re-check it after: its callback (:93-108, then
+/// HandleSendMailCallback :237) checks only the session, guid and IsInWorld. ArcaneCore re-checks because the read can race the sender dying or
+/// walking away, so such a sender must not post the letter. A failed check before the read answers MAIL_ERR_INTERNAL_ERROR as vmangos does (:131-134).
 /// </summary>
 public sealed class EconomyMailSendRecheckTests
 {
