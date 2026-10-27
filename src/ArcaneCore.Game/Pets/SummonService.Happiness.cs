@@ -27,6 +27,21 @@ public sealed partial class SummonService
     public static HappinessState StateOf(uint happiness)
         => happiness < HappinessMax / 3 ? HappinessState.Unhappy : happiness < HappinessMax / 3 * 2 ? HappinessState.Content : HappinessState.Happy;
 
+    /// <summary>
+    /// The damage factor of a hunter pet's happiness: 1.25 happy, 1 content, 0.75 unhappy (vmangos SpellCaster.cpp:1378-1390 for melee damage,
+    /// :1663-1675 for spell damage, StatSystem.cpp:1088-1107). Applied once, in the done bonuses; the pet's damage fields are not scaled, so a
+    /// white swing is 125% / 75% rather than the field-and-bonus product. 1 for any unit that is not a hunter's pet (GetPetType() == HUNTER_PET).
+    /// </summary>
+    public static float HappinessDamageFactor(Unit unit)
+        => unit is Creature { Summon: { Kind: SummonKind.Pet } } pet && pet.GetOwner() is Player { Class: Class.Hunter }
+            ? StateOf(pet.GetUInt32(UpdateFields.UnitFieldPower5)) switch
+            {
+                HappinessState.Happy => 1.25f,
+                HappinessState.Unhappy => 0.75f,
+                _ => 1.0f,
+            }
+            : 1.0f;
+
     /// <summary>vmangos Pet::LooseHappiness: the happiness a tick takes at <paramref name="loyaltyLevel"/> (×1.5 in combat).</summary>
     public static int HappinessLoss(int loyaltyLevel, bool inCombat)
     {
