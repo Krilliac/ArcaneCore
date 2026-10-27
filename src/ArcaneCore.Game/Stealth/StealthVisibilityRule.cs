@@ -32,9 +32,9 @@ public sealed class StealthVisibilityRule : IVisibilityRule
     /// <summary>vmangos Player::IsGroupVisibleFor (Player.cpp:2924-2935): mode 0 same sub-group, 1 same raid, 2 same team.</summary>
     private bool IsGroupVisibleFor(Player stealthed, Player viewer) => _options.GroupVisibilityMode switch
     {
-        StealthGroupVisibility.SameRaid => _spells.Groups.GetGroupMembers(stealthed, raid: true).Contains(viewer.Guid),
+        StealthGroupVisibility.SameRaid => _spells.Groups.IsMember(stealthed, viewer.Guid, raid: true),
         StealthGroupVisibility.SameTeam => stealthed.Team == viewer.Team,
-        _ => _spells.Groups.GetGroupMembers(stealthed, raid: false).Contains(viewer.Guid),
+        _ => _spells.Groups.IsMember(stealthed, viewer.Guid, raid: false),
     };
 
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)

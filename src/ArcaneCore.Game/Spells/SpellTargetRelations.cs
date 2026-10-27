@@ -67,6 +67,23 @@ public interface ISpellGroupResolver
     /// <paramref name="raid"/> false = the unit's party (its raid sub-group when in a raid).
     /// </summary>
     IReadOnlyCollection<ObjectGuid> GetGroupMembers(Unit unit, bool raid);
+
+    /// <summary>
+    /// Whether <paramref name="other"/> is in <c>GetGroupMembers(unit, raid)</c> (so true for the unit itself),
+    /// answered without allocating. Implementations should override; the default enumerates the collection.
+    /// </summary>
+    bool IsMember(Unit unit, ObjectGuid other, bool raid)
+    {
+        foreach (ObjectGuid guid in GetGroupMembers(unit, raid))
+        {
+            if (guid == other)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 /// <summary>Default <see cref="ISpellGroupResolver"/>: nobody is grouped, a unit's party is itself.</summary>
@@ -78,6 +95,12 @@ public sealed class NoGroupResolver : ISpellGroupResolver
     {
         ArgumentNullException.ThrowIfNull(unit);
         return [unit.Guid];
+    }
+
+    public bool IsMember(Unit unit, ObjectGuid other, bool raid)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return unit.Guid == other;
     }
 }
 
