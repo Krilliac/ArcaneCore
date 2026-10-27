@@ -946,9 +946,18 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             if (entry.Entry != preferred || IsVisited(entry.Spawn.Guid, now)) continue;
             if (Vector3.DistanceSquared(center, new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z)) > CampYards * CampYards) continue;
             if (_visited.Count >= MaxVisits && !PruneVisits(now)) return;
-            ulong respawnMs = ((ulong)entry.Spawn.SpawnTimeMinSeconds + entry.Spawn.SpawnTimeMaxSeconds) / 2 * 1000;
-            _visited[entry.Spawn.Guid] = unchecked(now + (uint)Math.Clamp(respawnMs, MinVisitMs, MaxVisitMs));
+            _visited[entry.Spawn.Guid] = unchecked(now + VisitWindowMs(entry.Spawn));
         }
+    }
+
+    /// <summary>
+    /// How long a visit to <paramref name="spawn"/> keeps it skipped: its mean respawn delay, held within <see cref="MinVisitMs"/> and
+    /// <see cref="MaxVisitMs"/>.
+    /// </summary>
+    internal static uint VisitWindowMs(CreatureSpawn spawn)
+    {
+        ulong respawnMs = ((ulong)spawn.SpawnTimeMinSeconds + spawn.SpawnTimeMaxSeconds) / 2 * 1000;
+        return (uint)Math.Clamp(respawnMs, MinVisitMs, MaxVisitMs);
     }
 
     /// <summary>Drops the expired visits; true when there is room for one more.</summary>
