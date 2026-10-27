@@ -14,8 +14,9 @@ namespace ArcaneCore.MockClient.Tests;
 
 /// <summary>
 /// CMSG_SEND_MAIL re-checks the mailbox after the asynchronous recipient box-size read. vmangos@0e3ff01 checks CheckMailBox (alive, mailbox in
-/// reach; MailHandler.cpp:65-80) only before its async COUNT(*) (:131, :232) and does not re-check it after: its callback (:93-108, then
-/// HandleSendMailCallback :237) checks only the session, guid and IsInWorld. ArcaneCore re-checks because the read can race the sender dying or
+/// reach; MailHandler.cpp:65-80) once, at the top of HandleSendMail (:131), and never again: its box-size callback (:93-108, then
+/// HandleSendMailCallback :237) checks only the session, guid and IsInWorld, and runs synchronously for an online receiver (:222-226), so
+/// only an offline receiver's COUNT(*) (:232) leaves a window. ArcaneCore re-checks because that read can race the sender dying or
 /// walking away, so such a sender must not post the letter. A failed check before the read answers MAIL_ERR_INTERNAL_ERROR as vmangos does (:131-134).
 /// </summary>
 public sealed class EconomyMailSendRecheckTests
@@ -65,6 +66,7 @@ public sealed class EconomyMailSendRecheckTests
             control.Release.TrySetResult(true);
         }
     }
+
     [Theory]
     [InlineData("dead")]
     [InlineData("out-of-reach")]
@@ -93,7 +95,6 @@ public sealed class EconomyMailSendRecheckTests
         Assert.Equal(MailResult.InternalError, result);
         Assert.Empty(await rig.ReceiverMailAsync());
     }
-
 
     /// <summary>The retail check's two conditions (alive, mailbox in reach), with reach switchable by the test.</summary>
     private sealed class ToggleMailbox : IMailboxAccess

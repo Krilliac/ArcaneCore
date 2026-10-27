@@ -68,15 +68,7 @@ public sealed class MailboxAccessTests
         }
 
         await PlaceForAsync(host, "Mbxretail", Probe.InRange);
-        List<WorldOpcode> allowed = await SendAsync(client, opcode, GuidFor(Probe.InRange));
-        if (reply is { } expected)
-        {
-            Assert.Equal(expected, Assert.Single(allowed));
-        }
-        else
-        {
-            Assert.Empty(allowed);
-        }
+        AssertAllowed(opcode, reply, await SendAsync(client, opcode, GuidFor(Probe.InRange)));
     }
 
     [Theory]
@@ -92,15 +84,7 @@ public sealed class MailboxAccessTests
         foreach (Probe probe in new[] { Probe.Fabricated, Probe.NotAMailbox, Probe.OutOfRange, Probe.InRange })
         {
             await PlaceForAsync(host, "Mbxperm", probe);
-            List<WorldOpcode> got = await SendAsync(client, opcode, GuidFor(probe));
-            if (reply is { } expected)
-            {
-                Assert.Equal(expected, Assert.Single(got));
-            }
-            else
-            {
-                Assert.Empty(got);
-            }
+            AssertAllowed(opcode, reply, await SendAsync(client, opcode, GuidFor(probe)));
         }
 
         // Permissive still requires a game object GUID.
@@ -165,11 +149,16 @@ public sealed class MailboxAccessTests
 
     /// <summary>A refused request changes nothing. CMSG_SEND_MAIL answers MAIL_ERR_INTERNAL_ERROR, as vmangos HandleSendMail does (MailHandler.cpp:131-134);
     /// the other mail opcodes stay silent.</summary>
-    private static void AssertRefused(WorldOpcode opcode, List<WorldOpcode> replies)
+    private static void AssertRefused(WorldOpcode opcode, List<(WorldOpcode Opcode, byte[] Payload)> replies)
     {
         if (opcode == WorldOpcode.CmsgSendMail)
         {
-            Assert.Equal(WorldOpcode.SmsgSendMailResult, Assert.Single(replies));
+            (WorldOpcode got, byte[] payload) = Assert.Single(replies);
+            Assert.Equal(WorldOpcode.SmsgSendMailResult, got);
+            (uint mailId, MailAction action, MailResult result) = DecodeSendMailResult(payload);
+            Assert.Equal(0u, mailId);
+            Assert.Equal(MailAction.Send, action);
+            Assert.Equal(MailResult.InternalError, result);
         }
         else
         {
@@ -177,15 +166,42 @@ public sealed class MailboxAccessTests
         }
     }
 
-    /// <summary>Send one mail opcode, then the sentinel; return the mail replies that arrived before it.</summary>
-    private static async Task<List<WorldOpcode>> SendAsync(WorldTestClient client, WorldOpcode opcode, ulong mailbox)
+    /// <summary>
+    /// An allowed request answers the expected opcode (or stays silent). This host has no economy store, so the economy is disabled and an allowed
+    /// request is itself answered MAIL_ERR_INTERNAL_ERROR: the result cannot tell it from a refusal here. EveryMailOpcode_ConsultsTheMailboxCheck_WithTheAddressedGuid
+    /// proves each opcode asks the check, and EconomyMailSendRecheckTests proves the refusal against a real store; this asserts the decoded action of a send answer.
+    /// </summary>
+    private static void AssertAllowed(WorldOpcode opcode, WorldOpcode? reply, List<(WorldOpcode Opcode, byte[] Payload)> got)
+    {
+        if (reply is not { } expected)
+        {
+            Assert.Empty(got);
+            return;
+        }
+
+        (WorldOpcode op, byte[] payload) = Assert.Single(got);
+        Assert.Equal(expected, op);
+        if (opcode == WorldOpcode.CmsgSendMail)
+        {
+            Assert.Equal(MailAction.Send, DecodeSendMailResult(payload).Action);
+        }
+    }
+
+    private static (uint MailId, MailAction Action, MailResult Result) DecodeSendMailResult(byte[] payload)
+    {
+        var reader = new PacketReader(payload);
+        return (reader.ReadUInt32(), (MailAction)reader.ReadUInt32(), (MailResult)reader.ReadUInt32());
+    }
+
+    /// <summary>Send one mail opcode, then the sentinel; return the mail replies (opcode and payload) that arrived before it.</summary>
+    private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> SendAsync(WorldTestClient client, WorldOpcode opcode, ulong mailbox)
     {
         await client.SendAsync(opcode, Payload(opcode, mailbox));
         await client.SendAsync(WorldOpcode.MsgQueryNextMailTime, []);
-        var replies = new List<WorldOpcode>();
+        var replies = new List<(WorldOpcode Opcode, byte[] Payload)>();
         while (true)
         {
-            (WorldOpcode got, _) = await client.ReadAsync();
+            (WorldOpcode got, byte[] payload) = await client.ReadAsync();
             if (got == WorldOpcode.MsgQueryNextMailTime)
             {
                 return replies;
@@ -193,7 +209,7 @@ public sealed class MailboxAccessTests
 
             if (got is WorldOpcode.SmsgSendMailResult or WorldOpcode.SmsgMailListResult)
             {
-                replies.Add(got);
+                replies.Add((got, payload));
             }
         }
     }
