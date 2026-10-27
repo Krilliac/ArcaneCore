@@ -55,7 +55,7 @@ public sealed class SpellRulesCoreFeature(IServiceProvider services, ILogger<Spe
         system.ApplicationRules.Add(new MechanicResistRule());
         if (Options.DiminishingReturns)
         {
-            new DiminishingRule(Options.DiminishingResetMs).Attach(system);
+            new DiminishingRule(Options.DiminishingResetMs, Options.DiminishingResetSweepMs, Options.FrostShockDiminishesAsRoot).Attach(system);
         }
 
         logger.LogInformation(
