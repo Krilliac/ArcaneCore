@@ -912,6 +912,10 @@ internal static partial class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
         => Validate(map, route, fromPoint, toPoint, from, candidate, out _);
 
+    /// <summary>
+    /// <see cref="Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3)"/> with the reason a step was refused. Internal only so the
+    /// tests can read that reason; the mover itself calls it from this class.
+    /// </summary>
     internal static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
         out string? rejectReason)
     {
@@ -982,6 +986,7 @@ internal static partial class PlayerbotMotion
             }
 
             Vector3 resolved = float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            bool resolvedSwapped = false; // the line-of-sight fallback below replaced the floor found above
             if (map.Collision.LineOfSight is { Enabled: true } los
                 && (resolved.Z != rawCandidate.Z || MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards))
             {
@@ -994,23 +999,26 @@ internal static partial class PlayerbotMotion
                         && los.IsInLineOfSight(map.MapId, fromChest, candidate with { Z = candidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = candidate;
+                        resolvedSwapped = true;
                     }
                     else if (rawCandidate.Z != resolved.Z
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = rawCandidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = rawCandidate;
+                        resolvedSwapped = true;
                     }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = rawCandidate with { Z = from.Z };
+                        resolvedSwapped = true;
                     }
                 }
             }
 
             // The leg's mesh floor stands only as found: the line-of-sight fallback above must not swap it back for the chord over the
             // drop (or the bot's own height), which the old refusal covered.
-            if (legMeshFloor && resolved.Z != best + 0.05f)
+            if (legMeshFloor && resolvedSwapped)
             {
                 rejectReason = "NoGroundSupport";
                 return null;
