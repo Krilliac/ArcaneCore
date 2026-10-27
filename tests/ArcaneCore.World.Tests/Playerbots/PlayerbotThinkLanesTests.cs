@@ -858,8 +858,8 @@ public sealed class PlayerbotThinkLanesTests
     [Fact]
     public void AWorldStall_IsNotARotationGap_TheSilenceIsJudgedWithoutIt()
     {
-        // A world thread that stood still about 16.5 s made the first tick after report 974 of 1000 bots, one at 19745 ms against a
-        // 12254 ms bound (8169 ms pass). The excess over StallTickMs is the stall.
+        // A world thread that stood still about 16.5 s (a gap of 16 500 ms between two bot ticks) leaves every bot about 19.7 s silent against
+        // a 12 254 ms bound (8169 ms pass). The excess over StallTickMs is the stall. The figures are illustrative.
         Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(50));
         Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(PlayerbotThinkStarvation.StallTickMs));
         Assert.Equal(15_500u, PlayerbotThinkStarvation.StallMs(16_500));
@@ -885,8 +885,9 @@ public sealed class PlayerbotThinkLanesTests
     {
         // A zero budget thinks one bot per tick, in rotation (about 150 ms between the thinks of one bot): none is behind it. A 3 s command
         // blocks the world thread (in the commands phase, before the features), so the two bots the first tick after it does not think for
-        // are 3 s silent, past the 2 s bound, though the rotation is as fair as before.
-        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 2000, burnMs: 0, "Stallbot");
+        // are 5 s silent, past the 3 s bound, though the rotation is as fair as before. Without the stall they are about 1 s silent, so a loaded
+        // runner has 2 s of margin.
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 3000, burnMs: 0, "Stallbot");
         try
         {
             // A measured pass (not the 3 x cold-start bound) and every bot primed.
@@ -894,11 +895,13 @@ public sealed class PlayerbotThinkLanesTests
             while (DateTime.UtcNow < deadline && !await host.World.InvokeAsync(() => feature.MainPassMs > 0 && thinks.Count == 3 && thinks.Values.All(n => n >= 5)))
                 await Task.Delay(50);
             (int before, int thinksBefore, uint bound) = await host.World.InvokeAsync(() => (capture.Notices.Count, thinks.Values.Sum(),
-                PlayerbotThinkStarvation.ReportBoundMs(2000, feature.MainPassMs)));
+                PlayerbotThinkStarvation.ReportBoundMs(3000, feature.MainPassMs)));
             Assert.True(thinksBefore >= 15, "the bots did not warm up");
-            Assert.Equal(2000u, bound); // a short pass leaves the configured bound
-            await host.World.InvokeAsync(() => { Thread.Sleep(3000); return true; });
-            while (DateTime.UtcNow < deadline.AddSeconds(20) && await host.World.InvokeAsync(() => thinks.Values.Sum()) < thinksBefore + 9) await Task.Delay(50);
+            Assert.Equal(3000u, bound); // a short pass leaves the configured bound
+            await host.World.InvokeAsync(() => { Thread.Sleep(5000); return true; });
+            while (DateTime.UtcNow < deadline.AddSeconds(30) && await host.World.InvokeAsync(() => thinks.Values.Sum()) < thinksBefore + 9) await Task.Delay(50);
+            int thinksAfter = await host.World.InvokeAsync(() => thinks.Values.Sum());
+            Assert.True(thinksAfter >= thinksBefore + 9, $"the bots thought {thinksAfter - thinksBefore} times after the stall, not three more cycles");
             (int after, string described) = await host.World.InvokeAsync(() => (capture.Notices.Count, capture.Describe()));
             Assert.True(after == before, $"{after - before} bots were reported starved by a world stall: {described}");
         }
