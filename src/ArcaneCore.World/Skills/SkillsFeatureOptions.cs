@@ -72,6 +72,12 @@ public sealed class SkillsFeatureOptions
     /// <summary>vmangos SkillChance.Grey (default 0).</summary>
     public uint ChanceGrey { get; set; }
 
+    /// <summary>
+    /// Opt-in, off by default: crafting skill-ups between a recipe's yellow and grey levels use the player-measured sliding chance
+    /// <c>(grey - skill) / (grey - yellow)</c> instead of the yellow and green chances (not a datamined retail rule).
+    /// </summary>
+    public bool CraftingChanceCurve { get; set; }
+
     /// <summary>vmangos SkillChance.MiningSteps (code default 75; the sample configuration says 0 = no decay).</summary>
     public uint MiningSteps { get; set; } = 75;
 
@@ -94,6 +100,7 @@ public sealed class SkillsFeatureOptions
         ChanceYellow = ChanceYellow,
         ChanceGreen = ChanceGreen,
         ChanceGrey = ChanceGrey,
+        CraftingChanceCurve = CraftingChanceCurve,
         MiningSteps = MiningSteps,
         SkinningSteps = SkinningSteps,
         MaxPlayerLevel = maxPlayerLevel,

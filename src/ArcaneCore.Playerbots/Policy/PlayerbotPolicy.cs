@@ -82,7 +82,7 @@ public static class PlayerbotPolicySchema
     public static PlayerbotPolicyGoal? GoalOf(PlayerbotGoalKind kind) => kind switch
     {
         PlayerbotGoalKind.Quest => PlayerbotPolicyGoal.Quest,
-        PlayerbotGoalKind.Vendor => PlayerbotPolicyGoal.Town,
+        PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Gather => PlayerbotPolicyGoal.Town,
         PlayerbotGoalKind.Train => PlayerbotPolicyGoal.Train,
         PlayerbotGoalKind.Mount => PlayerbotPolicyGoal.Mount,
         PlayerbotGoalKind.Grind => PlayerbotPolicyGoal.Grind,

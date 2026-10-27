@@ -62,6 +62,12 @@ public static class GmStrings
     /// <summary>LANG_APPEARING_TO (114; mangos.sql:3502).</summary>
     public static string AppearingTo(string link) => $"{link} is appearing to your location.";
 
+    /// <summary>LANG_CANNOT_GO_TO_INST_PARTY (104; mangos.sql:3492; vmangos Language.h:107). The text takes no argument; vmangos passes the name link anyway.</summary>
+    public const string CannotGoToInstParty = "You cannot go to the player's instance because you are in a party now.";
+
+    /// <summary>LANG_CANNOT_GO_TO_BG_FROM_BG (736; mangos.sql:4001; vmangos Language.h:779).</summary>
+    public const string CannotGoToBgFromBg = "You cannot teleport to a battleground from another battleground. Please leave the current battleground first.";
+
     /// <summary>LANG_COMMAND_NOITEMFOUND (436; mangos.sql:3789).</summary>
     public const string NoItemsFound = "No items found!";
 

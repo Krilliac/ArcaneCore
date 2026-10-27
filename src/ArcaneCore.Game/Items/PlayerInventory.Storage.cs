@@ -417,15 +417,24 @@ public sealed partial class PlayerInventory
     }
 
     private bool CanLoadIntoOwnSlot(ItemTemplate template, byte slot)
+        => slot < InventorySlots.KeyringEnd && _items[slot] is null && CanOccupyOwnSlot(template, Class, slot);
+
+    /// <summary>
+    /// Whether <paramref name="template"/> may sit in the character's own <paramref name="slot"/> when stored items are loaded: an equipment slot takes
+    /// what <see cref="ItemTemplateRules.AllowedEquipSlots"/> allows (a dual-wielder's off hand included), a bag slot a bag, the keyring a key.
+    /// The inventory load and the character list read share it, so the list shows the item the world will wear.
+    /// </summary>
+    public static bool CanOccupyOwnSlot(ItemTemplate template, Class playerClass, byte slot)
     {
-        if (slot >= InventorySlots.KeyringEnd || _items[slot] is not null)
+        ArgumentNullException.ThrowIfNull(template);
+        if (slot >= InventorySlots.KeyringEnd)
         {
             return false;
         }
 
         if (slot < InventorySlots.EquipmentEnd)
         {
-            return template.AllowedEquipSlots(Class, canDualWield: true).Contains(slot);
+            return template.AllowedEquipSlots(playerClass, canDualWield: true).Contains(slot);
         }
 
         if (slot < InventorySlots.BagEnd || (slot >= InventorySlots.BankBagStart && slot < InventorySlots.BankBagEnd))

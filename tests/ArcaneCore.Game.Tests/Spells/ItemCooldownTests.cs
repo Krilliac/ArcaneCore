@@ -55,6 +55,7 @@ public sealed class ItemCooldownTests
         (Player player, _) = kit.AddPlayer(1);
         Wire(player, new ItemSpell(Spell, 0, 2, 0, 2000, 0, 3000));
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, InventorySlots.Bag0, InventorySlots.ItemStart, 0, SpellCastTargets.ForSelf()));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Equal((uint)4, Assert.Single(kit.System.GetActiveCooldowns(player)).Category);
     }
 

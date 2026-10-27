@@ -8,6 +8,15 @@ namespace ArcaneCore.Game.Tests.Death;
 
 public sealed class ReincarnationTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static SpellInfo Effect() => SelfResurrectionOfferTests.Resurrection(21169) with
     {
         Reagents = [new(17030, 1)], RecoveryTime = 3_600_000,
@@ -28,6 +37,7 @@ public sealed class ReincarnationTests
         if (ghost) Assert.True(player.Map!.Combat.RepopPlayer(player));
 
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
 
         Assert.Equal(250u, player.Health);
         Assert.Equal(1u, player.Inventory.GetItemCount(17030));
@@ -60,6 +70,7 @@ public sealed class ReincarnationTests
         kit.System.OnUnitDied(player);
         Assert.Equal(3026u, player.GetUInt32(UpdateFields.PlayerSelfResSpell));
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
         Assert.Equal(1u, player.Inventory.GetItemCount(17030));
     }
 
@@ -72,6 +83,7 @@ public sealed class ReincarnationTests
         player.Map!.Combat.Kill(null, player);
         kit.System.OnUnitDied(player);
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
         player.Map!.Combat.Kill(null, player);
         kit.System.OnUnitDied(player);
         Assert.Equal(0u, player.GetUInt32(UpdateFields.PlayerSelfResSpell));

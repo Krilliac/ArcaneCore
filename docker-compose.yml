@@ -57,6 +57,14 @@ services:
       Ops__Metrics__RealmPrometheusPrefix: "http://+:9465/metrics/" # the Realm reads its own key (docs/ops/metrics.md)
     ports:
       - ${DOCKER_REALM_EXTERNAL_PORT:-3724}:3724
+    # The daemon exposes no HTTP health endpoint (metrics are off unless enabled), and the runtime image has no curl: healthy means the
+    # logon port accepts a TCP connection, which the realm only does after its auth schema is current (Program.cs). bash is in the image.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3724"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     volumes:
       - ${DOCKER_VOL_LOGS:-./env/logs}:/arcanecore/logs
     depends_on:
@@ -92,6 +100,14 @@ services:
       Ops__Metrics__Realm: ${ARCANE_REALM_NAME:-ArcaneCore}
     ports:
       - ${DOCKER_WORLD_EXTERNAL_PORT:-8085}:8085
+    # Healthy once the world port accepts a TCP connection: the listener opens after the three schemas are current and the world has
+    # loaded. The long start_period covers a first start that creates and seeds the schemas (failed checks inside it do not count).
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8085"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
     volumes:
       - ${DOCKER_VOL_DATA:-./env/data}:/arcanecore/data:ro
       - ${DOCKER_VOL_LOGS:-./env/logs}:/arcanecore/logs
@@ -113,6 +129,10 @@ services:
     networks: [arcane-network]
     environment:
       <<: *arcane-db
+      # arcane-db resolves each component on its own (a component without its own section falls back to Database:ConnectionString), and its
+      # default --component is all three: every schema is named explicitly. arcane-account reads the auth one.
+      Database__Auth__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_auth;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
+      Database__Characters__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_characters;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
       Database__World__ConnectionString: "Server=arcane-database;Port=3306;Database=arcanecore_world;User=${DOCKER_DB_USER:?set DOCKER_DB_USER in .env (apps/docker/.env.example)};Password=${DOCKER_DB_PASSWORD:?set DOCKER_DB_PASSWORD in .env (apps/docker/.env.example)};"
     volumes:
       - ${DOCKER_VOL_IMPORT:-./env/import}:/arcanecore/import

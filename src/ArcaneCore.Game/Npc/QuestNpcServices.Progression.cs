@@ -124,9 +124,14 @@ public sealed partial class QuestNpcServices
         => data.Status is QuestStatus.Incomplete or QuestStatus.Complete && (!data.Rewarded || quest.IsRepeatable);
 
     /// <summary>Items in the player's bags (not the bank); <see cref="IItemService"/> wins when present.</summary>
-    private uint InventoryCount(Player player, uint entry, bool inBankAlso = false)
-        => Deps.Items?.GetItemCount(player, entry, inBankAlso)
-            ?? (player.Inventory.IsLoaded ? player.Inventory.GetItemCount(entry, inBankAlso) : 0);
+    private uint InventoryCount(Player player, uint entry, bool inBankAlso = false, IReadOnlySet<ObjectGuid>? offered = null)
+        => Deps.Items?.GetItemCount(player, entry, inBankAlso, offered) ?? InventoryCountOf(player, entry, inBankAlso, offered);
+
+    /// <summary>The player's own <see cref="PlayerInventory"/> count, not counting stacks in <paramref name="offered"/> (an open trade offer).</summary>
+    private static uint InventoryCountOf(Player player, uint entry, bool inBankAlso, IReadOnlySet<ObjectGuid>? offered)
+        => player.Inventory.IsLoaded
+            ? player.Inventory.GetItemCount(entry, inBankAlso, exclude: offered is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null)
+            : 0;
 
     private static uint SourceItemCount(Quest quest) => quest.Template.SrcItemCount == 0 ? 1u : quest.Template.SrcItemCount;
 

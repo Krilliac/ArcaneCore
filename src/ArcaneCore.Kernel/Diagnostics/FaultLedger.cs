@@ -118,6 +118,9 @@ public sealed class FaultLedger
         _crashJournalOwner = string.IsNullOrWhiteSpace(owner) ? null : owner;
     }
 
+    /// <summary>The terminating-crash journal set by <see cref="ConfigureCrashJournal"/>, or null when none is configured.</summary>
+    public string? CrashJournalPath => _crashJournalPath;
+
     /// <summary>
     /// Raised on the recording thread, after the counts are updated, for each fault whose recording says the caller should log it (so a fault
     /// storm raises it as rarely as it logs: the first <c>FaultLogLimit</c> occurrences of a signature, then at most once a minute). Handlers must

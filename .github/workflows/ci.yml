@@ -26,8 +26,16 @@ jobs:
         # Each suite's test projects are a solution filter of ArcaneCore.slnx (tests/ci/*.slnf). Together they cover every
         # test project in the solution exactly once; ContributingGuideTests fails when a project is left out or doubled.
         suite: [Game, World, Data, Rest]
+        # Spell batching window for the run (ARCANECORE_TEST_SPELL_BATCH_MS, SpellBatchingTestSwitch). 0 is the server
+        # default (off); the two extra lanes run the Game and World suites with retail-like 400 ms batching on.
+        batch: ["0"]
+        include:
+          - suite: Game
+            batch: "400"
+          - suite: World
+            batch: "400"
 
-    name: test (${{ matrix.suite }})
+    name: test (${{ matrix.suite }}${{ matrix.batch != '0' && ', spell batching' || '' }})
 
     # The data-layer tests run against every supported engine (charter §2 + ROADMAP):
     # SQLite in-process, MariaDB and PostgreSQL as service containers.
@@ -53,6 +61,7 @@ jobs:
     env:
       ARCANECORE_TEST_MARIADB: "Server=127.0.0.1;Port=3306;User=root;Password=arcane;"
       ARCANECORE_TEST_POSTGRES: "Host=127.0.0.1;Port=5432;Username=arcane;Password=arcane;"
+      ARCANECORE_TEST_SPELL_BATCH_MS: ${{ matrix.batch }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,7 +100,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-results-${{ matrix.suite }}
+          name: test-results-${{ matrix.suite }}${{ matrix.batch != '0' && '-batched' || '' }}
           path: TestResults/**/*.trx
           if-no-files-found: warn
           retention-days: 7

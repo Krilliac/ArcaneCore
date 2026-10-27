@@ -92,6 +92,19 @@ public sealed class FormMountCastCheckTests : IDisposable
 
     public void Dispose() => _kit.Dispose();
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private SpellCastResult Cast(Player caster, uint spell, Unit? target = null)
     {
         _kit.Advance(1500);
@@ -149,6 +162,7 @@ public sealed class FormMountCastCheckTests : IDisposable
         _session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, Cast(_player, Fireball));
+        FlushSpellBatch(_kit);
 
         Assert.False(IsMounted(_player));
         Assert.False(_kit.System.HasAura(_player, MountSpell));                       // RemoveSpellsCausingAura(MOUNTED)

@@ -143,6 +143,7 @@ public sealed class DurabilitySpellTests
         Assert.Equal(20u, rig.Sword.Durability);
         Assert.True(held.EndQuestSettlement(operation));
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.HandleCastRequest(caster, DurabilityRig.SpellId, SpellCastTargets.ForUnit(rig.Player.Guid)));
+        rig.FlushSpellBatch();
         Assert.Equal(15u, rig.Sword.Durability);
     }
 }
@@ -232,7 +233,15 @@ internal sealed class DurabilityRig : IDisposable
     public Item BankBag => Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.BankBagStart)!;
     public Item BankBagContent => Player.Inventory.GetItem(InventorySlots.BankBagStart, 0)!;
     public Item Key => Player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.KeyringStart)!;
-    public SpellCastResult Cast() => Kit.System.HandleCastRequest(Player, SpellId, SpellCastTargets.ForSelf());
+    public SpellCastResult Cast()
+    {
+        SpellCastResult result = Kit.System.HandleCastRequest(Player, SpellId, SpellCastTargets.ForSelf());
+        FlushSpellBatch();
+        return result;
+    }
+
+    /// <summary>With spell batching on, the held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    public void FlushSpellBatch() => Kit.Advance(Kit.System.SpellBatchWindowMs);
     public void Dispose() => Kit.Dispose();
 
     private static InventoryItemData Row(uint guid, uint entry, byte slot, uint container = 0, uint durability = 20)

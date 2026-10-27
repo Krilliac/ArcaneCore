@@ -12,6 +12,15 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// <summary>vmangos PetAI (AI/PetAI.cpp) on the pets, guardians and mini pets.</summary>
 public sealed class PetAiTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(Spells.SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static (PetTestKit Kit, Player Owner, FakeSession Session, Creature Pet) Summoned()
     {
         var kit = new PetTestKit();
@@ -286,6 +295,7 @@ public sealed class PetAiTests
             kit.Controller.HandleCommand(pet, CommandState.Attack, enemy);
             session.Clear();
             kit.Run(200);
+            ResolveSpellBatch(kit.Spells);
 
             // the bite goes at the victim and the owner hears the growl or the talk
             Assert.True(bites >= 1);

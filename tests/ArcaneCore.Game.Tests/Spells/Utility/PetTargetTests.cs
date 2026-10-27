@@ -76,6 +76,7 @@ public sealed class PetTargetTests
         kit.Spells.Spellbook.Teach(caster, PetTargetSpell);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.HandleCastRequest(caster, PetTargetSpell, SpellCastTargets.ForSelf()));
+        kit.Spells.Advance(kit.Spells.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         (uint _, Unit target) = Assert.Single(recorder.Outcomes);
         Assert.Same(pet, target);

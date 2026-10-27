@@ -27,6 +27,7 @@ public sealed class SpellCooldownInvalidTests : IDisposable
             Spell(NormalSpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster)) with { RecoveryTime = 30_000, StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             Spell(LongCategorySpell, Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.UnitCaster))
                 with { RecoveryTime = 0, Category = 77, CategoryRecoveryTime = tooLong, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
+        _kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: each cooldown is measured from the cast call
         (_player, _) = _kit.AddPlayer(1);
         _kit.Spellbook.Teach(_player, LongSpell, NormalSpell, LongCategorySpell);
     }

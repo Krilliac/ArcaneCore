@@ -66,6 +66,60 @@ public sealed class PlayerbotWaterTests
         }
     }
 
+    /// <summary>
+    /// Issue #1501 review: the mmap generator meshes only the liquid's surface over deep water, so a bot swimming 25 yards down is
+    /// found on its polygon only by the far box (<see cref="PathResult.StartFar"/>) and the mesh's route rises from it to the surface.
+    /// That route stays the bot's (the exit search plans from where the bot is under water); the off-mesh ledge refusal is for a bot
+    /// standing above or below the mesh on dry ground.
+    /// </summary>
+    [Fact]
+    public async Task DeepSubmergedStart_KeepsTheMeshRouteUpToTheSurface()
+    {
+        string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-water-deep-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
+        try
+        {
+            // Tile (32, 32): water at 88 over ground at 63 (25 yards deep); tile (31, 32): dry ground.
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), MapTileBytes(groundHeight: 63.0f, liquidLevel: 88f));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(groundHeight: 63.53f, liquidLevel: null));
+            await using WorldTestHost host = WorldTestHost.Start(configure: options => options.Maps.DataDirectory = dataDir);
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    const float Surface = 88f;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new SurfaceMeshPathfinder(Surface));
+                    Player player = session.Player!;
+                    player.Relocate(-10f, -30f, 63.0f, 0f, host.World.NowMs);
+                    Vector3 start = new(player.X, player.Y, player.Z);
+                    Assert.True(PlayerbotWater.Submerged(player.Map!, start, player.Locomotion.CollisionHeight));
+                    var options = new PlayerbotOptions { Enabled = true, MaxRouteYards = 300, MaxPathPoints = 128 };
+
+                    Assert.True(PlayerbotNavigation.TryPlan(player, new Vector3(40f, -30f, 63.53f), options, out PlayerbotRoute? route, trial: true));
+                    Assert.NotNull(route);
+                    Assert.True(route!.Navigated, "the route is the mesh's");
+                    Assert.Equal(Surface, route.Points[1].Z, 2);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    /// <summary>A mesh of the liquid's surface only: from the start straight up to it (the far box's start), then to the end.</summary>
+    private sealed class SurfaceMeshPathfinder(float surface) : IPathfinder
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, [start, start with { Z = surface }, end]) { StartFar = start.Z < surface - 5f };
+    }
+
     /// <summary>No route to anything within <paramref name="nearYards"/> (flat): a cliff band round the cove; straight lines beyond.</summary>
     private sealed class FarOnlyPathfinder(float nearYards) : IPathfinder
     {
