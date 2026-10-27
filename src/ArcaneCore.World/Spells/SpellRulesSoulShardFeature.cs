@@ -1,9 +1,11 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.GameObjects;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Spells;
@@ -19,7 +21,8 @@ public sealed class SpellRulesSoulShardFeature(IServiceProvider services) : IWor
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        SoulShardRules.UseTapSource(services.GetRequiredService<SpellFeature>().System, new LootSoulShardTapSource(LootOf));
+        SpellRuleOptions options = SpellRulesCoreFeature.BindOptions(services.GetService<IConfiguration>());
+        SoulShardRules.UseTapSource(services.GetRequiredService<SpellFeature>().System, new LootSoulShardTapSource(LootOf, options.SoulShardUntappedCountsAsTapped));
     }
 
     private LootService? LootOf(Creature creature)

@@ -7,9 +7,9 @@ namespace ArcaneCore.Game.Spells.Warlock;
 /// <summary>
 /// Who tapped a creature (vmangos Creature::IsTappedBy). The world ships one source: <c>LootSoulShardTapSource</c> (ArcaneCore.Game.Loot),
 /// which reads the loot tap through <c>LootService.IsTappedBy</c>, installed with <see cref="SoulShardRules.UseTapSource"/> by
-/// <c>SpellRulesSoulShardFeature</c> (ArcaneCore.World.Spells). A deliberate divergence from vmangos: a creature with no recorded tap (a scripted
-/// kill, or one no damage ever tapped) or on a map without a loot service counts as tapped, so those kills keep giving a shard as they did before
-/// the source shipped. With no source installed (a bare SpellSystem) every kill counts as tapped (docs/areas/warlock-mage-utility.md).
+/// <c>SpellRulesSoulShardFeature</c> (ArcaneCore.World.Spells). A creature with no recorded tap (a scripted
+/// kill, or one no damage ever tapped) is untapped and gives no shard, as in vmangos, unless SpellRules:SoulShardUntappedCountsAsTapped is set
+/// (default false); one on a map without a loot service counts as tapped, as it did before the source shipped. With no source installed (a bare SpellSystem) every kill counts as tapped (docs/areas/warlock-mage-utility.md).
 /// </summary>
 public interface ISoulShardTapSource
 {

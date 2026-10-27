@@ -36,7 +36,7 @@ public sealed partial class SummonService
     /// white swing is 125% / 75% rather than the field-and-bonus product. 1 for any unit that is not a hunter's pet (GetPetType() == HUNTER_PET).
     /// </summary>
     public static float HappinessDamageFactor(Unit unit)
-        => unit is Creature { Summon: { Kind: SummonKind.Pet } } pet && pet.GetOwner() is Player { Class: Class.Hunter }
+        => unit is Creature { Summon: { Kind: SummonKind.Pet, Charm: not null } } pet && pet.GetOwner() is Player { Class: Class.Hunter }
             ? StateOf(pet.GetUInt32(UpdateFields.UnitFieldPower5)) switch
             {
                 HappinessState.Happy => 1.25f,

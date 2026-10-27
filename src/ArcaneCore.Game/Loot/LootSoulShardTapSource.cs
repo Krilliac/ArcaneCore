@@ -7,10 +7,11 @@ namespace ArcaneCore.Game.Loot;
 /// <summary>
 /// The Soul Shard tap condition read from the loot tap (vmangos Aura::HandleChannelDeathItem, SpellAuras.cpp:2860-2861, through
 /// Creature::IsTappedBy, Creature.cpp:1615-1632, which <see cref="LootService.IsTappedBy"/> follows). <paramref name="lootOf"/> finds the loot
-/// service of the victim's map. A creature with no recorded tap (a scripted kill that never called <see cref="LootService.OnCreatureDamaged"/>),
-/// or one on a map without a loot service, still counts as tapped, as it did before any source was installed.
+/// service of the victim's map. A creature with no recorded tap (a scripted kill that never called <see cref="LootService.OnCreatureDamaged"/>)
+/// is untapped, as in vmangos: no shard, unless <paramref name="untappedCountsAsTapped"/> (SpellRules:SoulShardUntappedCountsAsTapped) keeps
+/// the shard for it. A creature on a map without a loot service counts as tapped, as it did before any source was installed.
 /// </summary>
-public sealed class LootSoulShardTapSource(Func<Creature, LootService?> lootOf) : ISoulShardTapSource
+public sealed class LootSoulShardTapSource(Func<Creature, LootService?> lootOf, bool untappedCountsAsTapped = false) : ISoulShardTapSource
 {
     public bool IsTappedBy(Creature victim, Player player)
     {
@@ -18,7 +19,7 @@ public sealed class LootSoulShardTapSource(Func<Creature, LootService?> lootOf) 
         ArgumentNullException.ThrowIfNull(player);
         if (victim.LootTapPlayerGuid.IsEmpty && victim.LootTapGroup is null)
         {
-            return true;
+            return untappedCountsAsTapped;
         }
 
         return lootOf(victim) is not { } loot || loot.IsTappedBy(player, victim);

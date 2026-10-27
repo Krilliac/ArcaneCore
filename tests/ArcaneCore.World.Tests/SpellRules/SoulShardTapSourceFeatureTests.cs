@@ -23,7 +23,7 @@ public sealed class SoulShardTapSourceFeatureTests
         {
             Player player = host.World.FindOnlinePlayer("Shardplayer")!;
             SpellFeature spells = ((WorldSession)player.Session).Services.GetRequiredService<SpellFeature>();
-            Assert.IsAssignableFrom<ISoulShardTapSource>(SoulShardRules.TapSourceOf(spells.System));
+            Assert.IsType<ArcaneCore.Game.Loot.LootSoulShardTapSource>(SoulShardRules.TapSourceOf(spells.System));
         });
     }
 }

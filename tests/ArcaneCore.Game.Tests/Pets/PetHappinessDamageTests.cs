@@ -70,4 +70,16 @@ public sealed class PetHappinessDamageTests
         Assert.Equal(expected, bonus.Modify(SpellAmountStage.DirectDamage, pet, victim, melee, 0, 100f, 1), 3);
         Assert.Equal(expected, bonus.Modify(SpellAmountStage.DamageOverTimeSnapshot, pet, victim, magic, 0, 100f, 1), 3);
     }
+
+    [Fact]
+    public void HappinessDamageFactor_IsOneForAPetWithoutCharmInfo()
+    {
+        using PetTestKit kit = Kit();
+        (Creature pet, _) = Tame(kit, 700_000u);
+        Assert.Equal(1.25f, SummonService.HappinessDamageFactor(pet));
+
+        pet.Summon!.Charm = null;
+
+        Assert.Equal(1.0f, SummonService.HappinessDamageFactor(pet));
+    }
 }

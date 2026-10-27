@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Tests.Loot;
 /// <summary>
 /// The shipped Soul Shard tap source (LootSoulShardTapSource) over the loot tap (Creature.LootTapPlayerGuid / LootTapGroup, Creature.cs:119-121;
 /// LootService.IsTappedBy, LootService.Special.cs:78, after vmangos Creature::IsTappedBy, Creature.cpp:1615-1632), and its fallback: no recorded
-/// tap or no loot service counts as tapped.
+/// tap is untapped unless the option is set, no loot service counts as tapped.
 /// </summary>
 public sealed class LootSoulShardTapSourceTests
 {
@@ -79,12 +79,22 @@ public sealed class LootSoulShardTapSourceTests
     }
 
     [Fact]
-    public void AnUntappedCreature_CountsAsTapped()
+    public void AnUntappedCreature_IsNotTappedByDefault()
     {
         using PetTestKit kit = Kit();
         (Player warlock, _) = kit.AddPlayer(1);
 
-        Assert.True(Source().Source.IsTappedBy(Victim(kit), warlock));
+        Assert.False(Source().Source.IsTappedBy(Victim(kit), warlock));
+    }
+
+    [Fact]
+    public void AnUntappedCreature_CountsAsTappedWithTheOption()
+    {
+        using PetTestKit kit = Kit();
+        (Player warlock, _) = kit.AddPlayer(1);
+        var loot = new LootService(new LootContent([], [])) { Groups = new FakeGroups() };
+
+        Assert.True(new LootSoulShardTapSource(_ => loot, untappedCountsAsTapped: true).IsTappedBy(Victim(kit), warlock));
     }
 
     [Fact]
