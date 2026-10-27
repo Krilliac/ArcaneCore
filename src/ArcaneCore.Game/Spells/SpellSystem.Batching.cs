@@ -33,7 +33,14 @@ public sealed partial class SpellSystem
     /// The spell batch window in ms (<c>SpellRules:SpellBatchWindowMs</c>); 0 (the default) resolves every cast the moment it goes off.
     /// Retail 1.12 and Blizzard's 1.13.6 Classic servers used 400.
     /// </summary>
-    public uint SpellBatchWindowMs { get; set; }
+    public uint SpellBatchWindowMs { get; set; } = DefaultSpellBatchWindowMs;
+
+    /// <summary>
+    /// The window a new <see cref="SpellSystem"/> starts with, and the one <c>SpellRules:SpellBatchWindowMs = 0</c> falls back to: 0, always,
+    /// in a server. Only a test assembly sets it (once, in its module initializer, from <c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) to run a whole
+    /// suite with batching on (docs/areas/spell-rules.md).
+    /// </summary>
+    internal static uint DefaultSpellBatchWindowMs { get; set; }
 
     /// <summary>Casts waiting for the next batch boundary.</summary>
     internal int PendingBatchedGoes => _batchedGoes.Count;
