@@ -69,6 +69,16 @@ public sealed class CombatOptions
     /// </summary>
     public float AuraCritSuppressionPercent { get; set; } = 1.8f;
 
+    /// <summary>
+    /// Whether a white swing's reach grows by the 2.66 yd movement leeway when a player is involved and both units move without
+    /// walking (vmangos Unit::GetCombatReachToTarget, Unit.cpp:10374-10394, and GetLeewayBonusRangeForTargets, Object.cpp:1890-1897).
+    /// Default true, retail: Blizzard ruled "Melee leeway is working as intended in both PvE and PvP" on its 1.12-reference WoW Classic
+    /// servers and "for players with low latency, the state of melee leeway is how they would have experienced the game in 2006"
+    /// (Kaivax, WoW Classic "Not A Bug" list, https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23).
+    /// False is the deviation without it. The melee abilities' leeway follows <c>Ranged:Range:Leeway</c> with every other spell range.
+    /// </summary>
+    public bool MeleeMovementLeeway { get; set; } = true;
+
     /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
 

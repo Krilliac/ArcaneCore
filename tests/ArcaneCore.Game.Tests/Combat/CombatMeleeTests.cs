@@ -131,6 +131,23 @@ public sealed class CombatMeleeTests
         Assert.False(MapCombat.CanReachWithMeleeAutoAttack(t.A, t.V));
     }
 
+    [Theory]
+    [InlineData(true, true)]   // retail default (Blizzard WoW Classic "Not A Bug" list: melee leeway works as intended)
+    [InlineData(false, false)] // Combat:MeleeMovementLeeway = false: no 2.66 yd
+    public void MeleeReach_TheLeewayFollowsTheCombatOption(bool leeway, bool reaches)
+    {
+        var t = TwoPlayers(vx: 6f);
+        using WorldRuntime world = t.World;
+        CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions { MeleeMovementLeeway = leeway }));
+
+        var running = new MovementInfo { Flags = MovementFlags.Forward, X = 0, Y = 0, Z = 83.5f };
+        t.A.ApplyMovement(running, 0);
+        t.V.ApplyMovement(running with { X = 6f }, 0);
+
+        Assert.Equal(reaches, MapCombat.CanReachWithMeleeAutoAttack(t.A, t.V));
+        Assert.Equal(reaches, MapCombat.CanReachWithMeleeSpellAttack(t.A, t.V));
+    }
+
     [Fact]
     public void FacingAway_SendsBadFacing()
     {

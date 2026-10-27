@@ -1519,7 +1519,7 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Spell::CheckRange: self-only range always passes; combat-range spells use melee
-    /// reach (5 yd + both combat reaches); otherwise the SpellRange maximum plus the player leeway
+    /// reach (5 yd + both combat reaches, plus the 2.66 yd movement leeway); otherwise the SpellRange maximum plus the player leeway
     /// (1.25 yd at cast start, 6.25 yd on landing) against the combat distance (3D distance minus
     /// both combat reaches), with the minimum range giving TOO_CLOSE.
     /// </summary>
@@ -1552,6 +1552,16 @@ public sealed partial class SpellSystem
             }
 
             float meleeRange = Math.Max(SpellConstants.AttackDistance, reach + rangeMod + (4.0f / 3.0f));
+
+            // The movement leeway is added after the ATTACK_DISTANCE floor (vmangos Unit::GetCombatReachToTarget with ability = true,
+            // Unit.cpp:10380-10392: "When both player and target has > 70% of normal runspeed, and are moving, the player gains an
+            // additional 2.66yd of melee range"). Retail: Blizzard ruled melee leeway "working as intended in both PvE and PvP" on its
+            // 1.12-reference WoW Classic servers (https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23).
+            if (movementLeeway)
+            {
+                meleeRange += RangeLeeway.Bonus(caster, target);
+            }
+
             float dx = caster.X - target.X;
             float dy = caster.Y - target.Y;
             return (dx * dx) + (dy * dy) < meleeRange * meleeRange ? SpellCastResult.CastOk : SpellCastResult.OutOfRange;

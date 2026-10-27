@@ -213,7 +213,7 @@ public sealed partial class MapCombat
     /// <summary>
     /// vmangos Unit::CanReachWithMeleeAutoAttack / GetCombatReachToTarget: reach =
     /// max(reach, 1.5) of both + 4/3, at least 5 yd, plus 2.66 yd leeway when a player and its
-    /// target both move without walking; 2D distance² &lt; reach², dz² &lt; 36.
+    /// target both move without walking (unless <see cref="CombatOptions.MeleeMovementLeeway"/> is off); 2D distance² &lt; reach², dz² &lt; 36.
     /// </summary>
     public static bool CanReachWithMeleeAutoAttack(Unit attacker, Unit victim)
     {
@@ -228,7 +228,7 @@ public sealed partial class MapCombat
             reach = CombatConstants.AttackDistance;
         }
 
-        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim))
+        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim) && MeleeLeewayEnabled(attacker))
         {
             reach += CombatConstants.LeewayBonusRange;
         }
@@ -257,7 +257,7 @@ public sealed partial class MapCombat
             reach = CombatConstants.AttackDistance;
         }
 
-        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim))
+        if ((attacker is Player || victim is Player) && IsMovingButNotWalking(attacker) && IsMovingButNotWalking(victim) && MeleeLeewayEnabled(attacker))
         {
             reach += CombatConstants.LeewayBonusRange;
         }
@@ -266,6 +266,14 @@ public sealed partial class MapCombat
         float dy = attacker.Y - victim.Y;
         return (dx * dx) + (dy * dy) < reach * reach;
     }
+
+    /// <summary>
+    /// <see cref="CombatOptions.MeleeMovementLeeway"/> of the attacker's world (retail on: Blizzard's WoW Classic "Not A Bug" list,
+    /// https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23). Read only once both units already qualify, so
+    /// the common standing-still check never looks the options up; a unit outside a map uses the default (retail).
+    /// </summary>
+    private static bool MeleeLeewayEnabled(Unit attacker)
+        => attacker.Map is not { } map || CombatEnvironment.For(map.World).Options.MeleeMovementLeeway;
 
     private static float MeleeReach(Unit unit)
     {

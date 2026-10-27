@@ -31,8 +31,13 @@ for 1.12), cmangos-classic as a cross-check.
   are sent only when the error changes. A failed check delays both hands by 100 ms. Source:
   vmangos `Unit::UpdateMeleeAttackingState`.
 - **Melee reach.** max(5, attacker combat reach + victim combat reach + 4/3), plus 2.66 yd
-  of leeway when both units move and neither walks. Source: vmangos `Unit::CanReachWithMeleeAutoAttack`
-  and `GetLeewayBonusRange`. Facing is a 2π/3 arc (`HasInArc`).
+  of leeway when a player is involved and both units move and neither walks. Source: vmangos `Unit::CanReachWithMeleeAutoAttack`
+  and `GetLeewayBonusRange`. Facing is a 2π/3 arc (`HasInArc`). The leeway is retail: Blizzard's WoW Classic
+  "Not A Bug" list says melee leeway "is working as intended in both PvE and PvP" and is "how they would have
+  experienced the game in 2006" ([Kaivax, 2019](https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23)).
+  `Combat:MeleeMovementLeeway` (default `true`) switches it off for white swings. Melee abilities get the same 2.66 yd
+  (speed-based test, added after the 5 yd floor) in `SpellSystem.CheckRange`, switched by `Ranged:Range:Leeway`.
+  The 2.66 yd value itself comes from vmangos (`ObjectDefines.h` `LEEWAY_BONUS_RANGE`); no Blizzard source states the number.
 - **Swing timers.** Per hand, from UNIT_FIELD_BASEATTACKTIME. The off hand is pushed to
   200 ms if both hands are ready together.
 - **Parry haste** (vmangos `Unit::DealMeleeDamage`). When a victim parries, its next swing
