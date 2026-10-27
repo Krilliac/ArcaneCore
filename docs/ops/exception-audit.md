@@ -884,11 +884,11 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Cluster/Tooling/ClusterNodeBridgeFeature.cs:441` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Creatures/AreaTriggerScriptsFeature.cs:74` | InvalidOperationException | by-design | documented in place: "The teleport feature is not attached (a bare test container); the player's position stands in for the centre." |
 | `src/ArcaneCore.World/Creatures/CreatureAiServicesBinder.cs:57` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:156` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "stopping" |
-| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:160` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:504` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:161` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "stopping" |
+| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:165` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:515` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:627` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:526` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Creatures/CreatureRespawnQueue.cs:638` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/AuctionBotConfigChecks.cs:23` | InvalidOperationException | by-design | reported to the operator / returned as a failure result using the exception message |
 | `src/ArcaneCore.World/Economy/AuctionBotFeature.cs:174` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/AuctionBotFeature.cs:185` | Exception | logged | logs the exception object |

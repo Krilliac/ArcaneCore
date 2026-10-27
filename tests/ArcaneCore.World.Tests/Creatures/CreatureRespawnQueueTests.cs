@@ -291,10 +291,10 @@ public sealed class CreatureRespawnQueueTests
     }
 
     /// <summary>A queue (no retry timer) whose store was down for spawns 1..<paramref name="count"/>, so all of them are retained; the store is healthy again on return.</summary>
-    private static async Task<CreatureRespawnQueue> RetainedQueueAsync(FakeStore store, ServiceProvider sp, uint count)
+    private static async Task<CreatureRespawnQueue> RetainedQueueAsync(FakeStore store, ServiceProvider sp, uint count, StopDrainBudget? lane = null)
     {
         store.Down = true;
-        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance, lane)
         {
             RetainedRetryInterval = Timeout.InfiniteTimeSpan,
         };
@@ -386,6 +386,61 @@ public sealed class CreatureRespawnQueueTests
         Assert.DoesNotContain("spawn 1 ", stopped.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("spawn 3 ", stopped.Message, StringComparison.Ordinal);
         Assert.Equal(2, store.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Stop_ABusyBatch_IsNotRetriedPerKey()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 3);
+        int before = store.Attempts;
+        store.Locked = true;
+
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Equal(1, store.Attempts - before); // one call for the whole batch: a locked database is not worth three more waits
+        Assert.Equal(3, queue.RetainedCount);
+        Assert.Contains("spawn 3 (instance 0)", stopped.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stop_ABatchThatStallsTheDrainAndFails_IsNotRetriedPerKey_AndKeepsItsRealFailure()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) };
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 3, lane);
+        int before = store.Attempts;
+        store.Reject = _ => true; // a non-busy failure ...
+        store.DelayMs = 500;      // ... that takes longer than the stall budget, so the drain is exhausted when the batch fails
+
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Equal(1, store.Attempts - before); // no per-key fallback
+        Assert.IsType<InvalidOperationException>(stopped.InnerException); // the batch's own failure, not a refusal
+        Assert.Equal(0, queue.StopRefusedKeysForTest);
+        Assert.Equal(0, lane.Refused);
+        Assert.Equal(3, queue.RetainedCount);
+    }
+
+    [Fact]
+    public async Task Stop_CountsRefusedKeys_NotRefusedStoreCalls()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        var lane = new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) };
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 503, lane); // two batches: 500 keys, then 3
+        int before = store.Attempts;
+        store.Locked = true;
+        store.DelayMs = 500; // the first batch stalls the drain past its budget, so the second is refused unattempted
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Equal(1, store.Attempts - before);
+        Assert.Equal(1, lane.Refused); // one refused store call ...
+        Assert.Equal(3, queue.StopRefusedKeysForTest); // ... carrying three keys
+        Assert.Equal(503, queue.RetainedCount);
     }
 
     [Fact]

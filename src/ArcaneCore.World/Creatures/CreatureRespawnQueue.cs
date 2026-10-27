@@ -29,7 +29,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
 {
     private const int MaxAttempts = 3;
 
-    /// <summary>Most spawn writes sent to the store in one call. Matches the store's own chunk size (EfCreatureRespawnStore.ChunkSize, 500), so a batch is one store transaction per instance.</summary>
+    /// <summary>Most spawn writes sent to the store in one call. Matches the store's own chunk size (EfCreatureRespawnStore.ChunkSize, 500), so a batch is one store transaction per instance per kind of write (the store commits its deletes and its upserts separately, so a mixed batch is two transactions per instance).</summary>
     private const int MaxBatch = 500;
 
     /// <summary>The marker the retry timer queues: not a store write, so the consumer sweeps the retained writes when it reaches it.</summary>
@@ -108,6 +108,11 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             }
         }
     }
+
+    private int _stopRefusedKeys;
+
+    /// <summary>Tests: how many retained keys the last <see cref="StopAsync"/> did not attempt because the stop drain had stalled (the figure its log line reports).</summary>
+    internal int StopRefusedKeysForTest => Volatile.Read(ref _stopRefusedKeys);
 
     /// <summary>Tests: queue one retained-write sweep now, as a timer tick would; false when one is already queued or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest()
@@ -314,6 +319,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
 
         // instance deletes first: a spawn write retained for the same instance is newer than it
+        int refusedKeys = 0;
         foreach ((Op op, Exception? failure) in await RetryRetainedAsync(retry, sweep: false).ConfigureAwait(false))
         {
             lock (_gate)
@@ -325,10 +331,15 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 else
                 {
                     _retained[op.Key] = new Retained(op, failure);
+                    if (failure is StopDrainExhaustedException)
+                    {
+                        refusedKeys++;
+                    }
                 }
             }
         }
 
+        _stopRefusedKeys = refusedKeys;
         string[] left;
         Exception? first;
         lock (_gate)
@@ -347,7 +358,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                     "writequeue-respawn-stop-drain",
                     refusal,
                     "creature respawn queue shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
-                    _drain.Refused,
+                    refusedKeys, // keys, not store calls: one refused batch of 500 keys is 500
                     left.Length,
                     _drain.Describe());
             }
