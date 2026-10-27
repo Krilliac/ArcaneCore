@@ -31,6 +31,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.Game.Maps.Collision.PathSearchCounters.s_processTileReads"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Maps.DefaultMapUpdaters.s_current"] = "volatile reference to an immutable set, swapped by a hot reload",
         ["ArcaneCore.Game.Spells.PersistentAreaAuras.DynamicObject.s_nextCounter"] = "GUID counter, Interlocked.Increment",
+        ["ArcaneCore.Game.Spells.SpellSystem.DefaultSpellBatchWindowMs (property)"] = "test seam: a uint (atomic write) set once by a test assembly's module initializer before any test runs; production never writes it",
         ["ArcaneCore.Game.Updates.BotLeanStats._ringBytes"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Updates.BotLeanStats._ringPackets"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Updates.BotLeanStats._updateBlocks"] = "process-wide counter, Interlocked",

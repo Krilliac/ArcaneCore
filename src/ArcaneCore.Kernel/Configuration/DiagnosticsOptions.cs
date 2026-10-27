@@ -89,6 +89,25 @@ public sealed class DiagnosticsOptions
     /// most one beep per second so a fault storm cannot stall or flood the terminal. Default off.
     /// </summary>
     public bool BeepOnException { get; set; }
+
+    /// <summary>
+    /// Show a dialog (a Win32 message box) when the process is about to end because of an unhandled exception, an unobserved task
+    /// exception under an <c>OnUnobservedTask</c> policy that terminates, or a world tick hang the watchdog ends. It names the exception, its
+    /// message and full stack with inner exceptions, the daemon and version, thread, time, fault-ledger site and signature, and the crash
+    /// report file (a <c>crash-report.*.txt</c> file written next to the daemon), crash journal and log file. It
+    /// appears after the crash is logged and recorded, and the exit policy runs when it is closed. Only a Windows console session with no
+    /// redirected standard stream, outside CI, opens one; a service, test run, redirected or non-Windows process is unaffected. Default off:
+    /// an unattended process must never wait on a dialog.
+    /// </summary>
+    public bool CrashDialog { get; set; }
+
+    /// <summary>
+    /// Also show a dialog the first time each fault signature is caught and survived (the fault ledger, <c>.server faults</c>), on a
+    /// background thread so the faulting thread never waits, at most one open at a time (faults while one is open are only logged).
+    /// Needs the same interactive Windows console session as <c>CrashDialog</c>; takes effect once the host has started. Default off: a
+    /// fault storm of new signatures still means one box after another.
+    /// </summary>
+    public bool FaultDialog { get; set; }
 }
 
 /// <summary>What a failed release-mode invariant does after it is logged and counted.</summary>

@@ -42,6 +42,13 @@ public sealed class BattlegroundOptions
     /// <summary>Groups larger than this are queued as individuals (vmangos BattleGround.GroupQueueLimit, default 40).</summary>
     public uint GroupQueueLimit { get; set; } = 40;
 
+    /// <summary>
+    /// End Alterac Valley in favour of the other side when a side's reinforcements reach 0 (the patch 2.3.0 rule; cmangos mangos-classic
+    /// BattleGroundAV.cpp UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the match, and vmangos removed the
+    /// reinforcement win (BattleGroundAV.cpp:782-787). The reinforcements are counted either way.
+    /// </summary>
+    public bool AlteracValleyReinforcementLoss { get; set; }
+
     /// <summary>The number of queues a player may use (the retail 1.12 value 3 when <see cref="QueuesCount"/> is 0).</summary>
     public uint EffectiveQueuesCount => QueuesCount == 0 ? MaxQueuesPerPlayer : Math.Min(QueuesCount, MaxQueuesPerPlayer);
 
