@@ -63,6 +63,20 @@ internal sealed class PlayerbotFightSocial(Guid botId, PlayerbotSocialMemoryOpti
         }
     }
 
+    /// <summary>World time the low-health window opened at; meaningful only while <see cref="WindowOpen"/> (tests).</summary>
+    internal uint WindowStartMs => _windowStartMs;
+
+    /// <summary>
+    /// Whether candidate <paramref name="guid"/> still qualifies after the window's latest re-check; null when it was not sampled as a candidate
+    /// (tests).
+    /// </summary>
+    internal bool? Holds(ulong guid)
+    {
+        for (int i = 0; i < _count; i++)
+            if (_candidates[i] == guid) return _holds[i];
+        return null;
+    }
+
     /// <summary>One look at the bot, every think. <paramref name="nowMs"/> is world time.</summary>
     internal void Observe(Player bot, WorldRuntime world, uint nowMs)
     {
