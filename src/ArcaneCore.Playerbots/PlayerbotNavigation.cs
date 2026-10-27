@@ -1036,6 +1036,13 @@ internal static class PlayerbotNavigation
         return ok;
     }
 
+    /// <summary>
+    /// Whether the mesh path's first leg (from <paramref name="start"/> to its first corner) climbs or drops at least
+    /// <see cref="FallDamageCalculator.MinFallDistance"/>: a height no walk covers and a fall that hurts (issue #1501).
+    /// </summary>
+    private static bool StartLegIsFall(PathResult path, Vector3 start)
+        => path.Points.Count >= 2 && MathF.Abs(path.Points[1].Z - start.Z) >= FallDamageCalculator.MinFallDistance;
+
     private static bool PlanDirectCore(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false,
         bool nearestEnd = false)
@@ -1083,7 +1090,11 @@ internal static class PlayerbotNavigation
         // 135.9, and the motion refused it as bot-motion/start-blocked on every think). Off the mesh, the stepped terrain line is the way
         // (as for the no-mmap answer above: at most a yard of climb or drop a yard); a refusal of it is no verdict on the goal, so the
         // route-plan watch is not charged (t_nonPathRefusal) and the fragment hop and the stall watch decide.
-        if (path.StartFar && path.HasPath)
+        // Scoped to that case: the first leg must climb or drop at least a harmful fall's height (FallDamageCalculator.MinFallDistance,
+        // vmangos Player::HandleFall), so a rock, a roof or a mesh-detail error a few yards off the polygon keeps its mesh route; and
+        // a submerged bot is exempt, because the mesh covers only the liquid's surface over deep water and its route rises to it.
+        if (path.StartFar && path.HasPath && StartLegIsFall(path, start)
+            && !PlayerbotWater.Submerged(map, start, player.Locomotion.CollisionHeight))
         {
             if (PlayerbotMoveCheck.TerrainRoute(map, start, destination, options, out route)) return true;
             route = null;

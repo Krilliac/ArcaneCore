@@ -628,6 +628,33 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Issue #1501 review: the off-mesh refusal is for a first leg no walk covers, a climb or drop of a harmful fall's height or more
+    /// (14.57 yards). A bot 10 yards above the floor polygon (a rock, a roof), past the near box but short of that, keeps the mesh's
+    /// route down, as it had before the fix.
+    /// </summary>
+    [Fact]
+    public async Task ABotAModerateHeightAboveTheMesh_KeepsTheMeshRoute()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        var options = new PlayerbotOptions { Enabled = true };
+        Vector3 destination = new(25, 5, 0);
+
+        Vector3 rock = new(5, 5, 10);
+        await world.PlaceAsync(rock);
+        Assert.True(MathF.Abs(world.Player.Z - rock.Z) < 1f, $"the bot stands on its rock (z {world.Player.Z})");
+
+        (bool planned, PlayerbotRoute? route) = await world.Host.OnWorldAsync(() =>
+        {
+            bool ok = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? planRoute);
+            return (ok, planRoute);
+        });
+        Assert.True(planned && route is not null, "a drop short of a harmful fall keeps its mesh route");
+        Assert.True(route!.Navigated, "the route is the mesh's");
+    }
+
     private sealed class Content(CreatureContent content) : ICreatureDataStore
     {
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
