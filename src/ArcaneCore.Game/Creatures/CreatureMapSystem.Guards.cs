@@ -148,6 +148,7 @@ public sealed partial class CreatureMapSystem
         float best = GuardPostTable.NearestGuardRadius * GuardPostTable.NearestGuardRadius;
         foreach (Creature candidate in _creatures.Values)
         {
+            AssistScanExamined++;
             if (ReferenceEquals(candidate, civilian) || !candidate.IsAlive || candidate.Combat.IsInCombat
                 || (candidate.Template.Behaviour & CreatureBehaviourFlags.Guard) == 0 || !_ai.Hostility.IsFriendly(candidate, civilian))
             {
