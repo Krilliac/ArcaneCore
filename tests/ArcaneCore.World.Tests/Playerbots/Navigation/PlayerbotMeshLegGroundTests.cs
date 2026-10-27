@@ -13,7 +13,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Navigation;
 /// The mesh-route ground check (<see cref="PlayerbotMotion.Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3, out string?)"/>)
 /// on legs whose straight chord runs far from every model floor while the mesh they were planned on has a polygon under the walk:
 /// a steep tunnel descent and a cliff switchback (<c>bot-motion/start-blocked</c> and <c>route-blocked</c> with
-/// <c>reason=NoGroundSupport moveMode=NavMesh</c>, issues #1485 and #1501), and a model floor below the terrain. The heights are the
+/// <c>reason=NoGroundSupport moveMode=NavMesh</c>, issue #1485), and a model floor below the terrain. Issue #1501 is not fixed here:
+/// main refuses that route at plan time (an unmeshed ledge whose first leg is a 60 yd drop, PlayerbotNavigation.cs:1129-1136). The heights are the
 /// issues' own; the collision is a fake (model floors, a mesh floor query, an unavailable mesh walk) so the cases run without client
 /// data. A real cliff, with no polygon within the leg's heights, is still refused.
 /// </summary>
@@ -30,7 +31,7 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
     }
 
     /// <summary>
-    /// #1501: the first stretch of a 4-point route from 9061.7,1896.3,1339.6 towards 9066.4,1892.8,1316.6 (23 yd down over 6 yd flat).
+    /// #1485: the first stretch of a 4-point route from 9061.7,1896.3,1339.6 towards 9066.4,1892.8,1316.6 (23 yd down over 6 yd flat).
     /// Half way the chord is 11.5 yd over the only model floor the probe finds (the storey below); the mesh's ramp is there. Before,
     /// NoGroundSupport.
     /// </summary>
@@ -62,8 +63,10 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
     }
 
     /// <summary>
-    /// #1501: a 2-point route on map 0 from -8165.9,-1449.7,195.6 towards -8154.9,-1446.9,135.9 (60 yd down over 11 yd flat): the
-    /// chord 20 yd over the ledge the model probe finds, the mesh's switchback 6 yd under it. Before, NoGroundSupport.
+    /// A cliff-switchback leg with the heights of the #1501 report (-8165.9,-1449.7,195.6 towards -8154.9,-1446.9,135.9, 60 yd down over
+    /// 11 yd flat): the chord 20 yd over the model floor, a mesh polygon 6 yd under it. This is a synthetic mesh-floor case, not the
+    /// #1501 fix: main diagnosed #1501 as a bot on an unmeshed ledge and refuses that route at plan time (36c3b9b44, 812878803;
+    /// PlayerbotNavigation.cs:1129-1136).
     /// </summary>
     [Fact]
     public async Task NavMeshLeg_CliffChord_BurningSteppes_UsesMeshFloor()
@@ -191,6 +194,7 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
             lineOfSight: lip ? SightAbove(half.Z + PlayerbotMoveCheck.ChestYards - 0.5f) : null, judge: true);
         // A mover that refuses everything must not pass: the rows with a floor it can stand on have to walk.
         if (mustWalk) Assert.True(walked is not null, $"refused: {reason}");
+        else if (walked is null) Assert.Equal("NoGroundSupport", reason); // the lip rows: the reason PlayerbotMotion.Validate sets
         Assert.True(walked is null || verdict == PlayerbotMotionAnomalies.GroundVerdict.Ok,
             $"returned {walked} ({reason}) but the judge says {verdict}");
     }
