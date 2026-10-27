@@ -114,8 +114,8 @@ public static partial class MovementObservers
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-before", ex);
-                logger?.LogFault("movement-observer-before", ex, "movement observer {Observer} failed before applying {Opcode}", observer.GetType().Name, context.Opcode);
+                // LogFault records the fault once (FaultLedger.Log); without a logger it is still recorded, silently.
+                (logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance).LogFault("movement.observer-before", ex, "movement observer {Observer} failed before applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }
     }
@@ -130,8 +130,8 @@ public static partial class MovementObservers
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("movement.observer-after", ex);
-                logger?.LogFault("movement-observer-after", ex, "movement observer {Observer} failed after applying {Opcode}", observer.GetType().Name, context.Opcode);
+                // LogFault records the fault once (FaultLedger.Log); without a logger it is still recorded, silently.
+                (logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance).LogFault("movement.observer-after", ex, "movement observer {Observer} failed after applying {Opcode}", observer.GetType().Name, context.Opcode);
             }
         }
     }

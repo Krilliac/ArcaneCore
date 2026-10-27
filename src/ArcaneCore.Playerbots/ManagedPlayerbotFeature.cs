@@ -2442,8 +2442,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 try { groups.Update(_groupBotsScratch, elapsedMs); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("playerbot.feature", ex);
-                    logger.LogFault(LogLevel.Warning, "playerbot-group-coordinator", ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                    // LogFault records under the feature's site (one record per fault).
+                    logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Playerbot group coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
                 }
             }
             // A group that stalled (PlayerbotGroupCoordinator.WatchStall) is reported like a brain's stall, on its leader: the brains do not
@@ -2476,8 +2476,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("playerbot.feature", ex);
-                    FaultLedger.Shared.Record("playerbot.bg-coordinator", ex);
-                    logger.LogFault(LogLevel.Warning, "playerbot-bg-coordinator", ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+                    // The narrower site, recorded by LogFault, on top of the feature-wide one (as before this lane).
+                    logger.LogFault(LogLevel.Warning, "playerbot.bg-coordinator", ex, "Playerbot battleground coordinator failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
                 }
             }
         }
