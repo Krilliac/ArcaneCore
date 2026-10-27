@@ -40,7 +40,7 @@ Everything defaults to the vmangos / retail 1.12.1 behaviour; every deliberate d
 - **Ammo check order.** The design note placed the ammo check after `CheckPower`; vmangos runs `CheckItems` before `CheckRange` and `CheckPower` (`Spell.cpp:5694-5721`). vmangos wins.
 - **START flags are 0x22, not 0x120.** Only SMSG_SPELL_GO carries `Unknown9` (0x100) with the ammo flag.
 - **No `FeignDeath:PlayerCanBeResisted`, `AutoShot:FireWhileMoving`, `RetargetOnSelection`, `Traps:PvpOwnerRule`, `Traps:OneActivePerSlot` options.** The pre-1.7 branches are compiled out in vmangos for this build and the others were invented. Retail behaviour only.
-- **Leeway** uses the speed-based ability branch (`Spell::CheckRange` always calls `GetLeewayBonusRange(target, true)`); the flags-only branch is for melee auto attacks and is not implemented.
+- **Leeway** uses the speed-based ability branch (`Spell::CheckRange` always calls `GetLeewayBonusRange(target, true)`), for ranged spells and for melee abilities (combat range, added after the 5 yd floor). The flags-only branch is the white swing's (`MapCombat.CanReachWithMeleeAutoAttack`, `Combat:MeleeMovementLeeway`).
 - **The attack time field.** `UNIT_FIELD_RANGEDATTACKTIME` is read as an unsigned integer (the repository stores attack times as integers); nothing writes it for players yet (stats lane).
 
 ## Limitations (left for other lanes or later)

@@ -315,7 +315,12 @@ public static class StatFormulas
         return value < 0.0f ? 0.0f : value;
     }
 
-    /// <summary>Player::GetShieldBlockValue (Player.cpp:5137-5144).</summary>
+    /// <summary>
+    /// Player::GetShieldBlockValue (Player.cpp:5137-5144): (shield and aura block value + Strength / 20 - 1) x the percent auras. The -1 is
+    /// retail: two Classic (2019) observations fit it and miss without it, a 6 block shield with 60 Strength blocking 8 and a 15 block shield
+    /// with 119 Strength showing 19 (https://us.forums.blizzard.com/en/wow/t/block-value-formula/283718 posts 1, 14, 22; the period formula
+    /// in https://wowwiki-archive.fandom.com/wiki/Enchant_Shield_-_Shield_Block).
+    /// </summary>
     public static uint ShieldBlockValue(float flat, float strength, float pct)
     {
         float value = (flat + (strength / 20) - 1) * pct;

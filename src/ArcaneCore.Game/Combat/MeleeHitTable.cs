@@ -71,6 +71,19 @@ public readonly record struct MeleeRollInput
     /// <summary>Attacker base crit before skill adjustments (PLAYER_CRIT_PERCENTAGE or 5 for creatures).</summary>
     public float BaseCritChance { get; init; }
 
+    /// <summary>
+    /// The part of <see cref="BaseCritChance"/> the attacker gains from its own MOD_CRIT_PERCENT auras (stances, talents, crit on gear),
+    /// percent: what <see cref="AuraCritSuppression"/> may take away.
+    /// </summary>
+    public float AttackerAuraCritChance { get; init; }
+
+    /// <summary>
+    /// The flat cut to <see cref="AttackerAuraCritChance"/> this attacker and victim pairing gets, percent (0: none). Resolved by
+    /// <see cref="MeleeHitTable.AuraCritSuppressionFor"/> from <c>Combat:AuraCritSuppressionPercent</c> for a player striking a creature
+    /// three or more levels above it.
+    /// </summary>
+    public float AuraCritSuppression { get; init; }
+
     public float DodgeChance { get; init; }
 
     public float ParryChance { get; init; }
@@ -140,10 +153,44 @@ public static class MeleeHitTable
         return Math.Clamp(miss, 0f, 60f);
     }
 
-    /// <summary>vmangos Unit::GetUnitCriticalChance (white swing), percent, floored at 0.</summary>
+    /// <summary>
+    /// Levels a creature must stand above a player before the player's aura crit is cut (Aggrend, Blizzard WoW Classic developer,
+    /// 2019-07-10: "Modifiers to Critical Strike chance are reduced against enemies 3 levels higher than the player-character",
+    /// https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414 posts 9 and 11).
+    /// </summary>
+    public const int AuraCritSuppressionLevelDiff = 3;
+
+    /// <summary>
+    /// The aura crit suppression of one attacker and victim pairing, percent: <paramref name="suppressionPercent"/> when a player strikes a
+    /// creature whose level as the player sees it (<paramref name="victimLevelForTarget"/>, world bosses count +3) is at least
+    /// <see cref="AuraCritSuppressionLevelDiff"/> above the player's, else 0. Retail 1.12 and Blizzard's Classic servers cut crit from
+    /// auras against +3 creatures on top of the 3% weapon-skill term; Blizzard confirmed the modifier, not its size (Aggrend,
+    /// https://us.forums.blizzard.com/en/wow/t/bug-berserker-stance/196414 post 11: "a single modifier placed on total Critical Strike
+    /// gained from auras ... separate than the 3% suppression that is baseline against +3 level creatures"). The 1.8% default is the
+    /// Classic 2019 combat-log estimate (about 72,000 auto attacks against +3 mobs, 4.84% total suppression minus the 3% skill term,
+    /// https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression and .../wiki/Attack-table). Players versus players and
+    /// pets are not covered by that evidence and are left alone.
+    /// </summary>
+    public static float AuraCritSuppressionFor(bool attackerIsPlayer, bool victimIsPlayer, int attackerLevel, int victimLevelForTarget, float suppressionPercent)
+        => attackerIsPlayer && !victimIsPlayer && suppressionPercent > 0f
+            && victimLevelForTarget - attackerLevel >= AuraCritSuppressionLevelDiff
+            ? suppressionPercent
+            : 0f;
+
+    /// <summary>
+    /// vmangos Unit::GetUnitCriticalChance (white swing), percent, floored at 0, less the aura crit suppression against +3 creatures
+    /// (<see cref="AuraCritSuppressionFor"/>): the cut never exceeds the crit the attacker has from auras (the Classic 1% aura crit tests were
+    /// suppressed entirely and "If you don't have any crit from auras you are not affected by this",
+    /// https://github.com/magey/classic-warrior/wiki/Crit-aura-suppression, .../wiki/Attack-table).
+    /// </summary>
     public static float CritChance(in MeleeRollInput input)
     {
         float crit = input.BaseCritChance + input.VictimAttackerCritBonus;
+        if (input.AuraCritSuppression > 0f && input.AttackerAuraCritChance > 0f)
+        {
+            crit -= Math.Min(input.AttackerAuraCritChance, input.AuraCritSuppression);
+        }
+
         int skillDiff = input.AttackerWeaponSkill - input.VictimDefenseSkill;
         int minSkill = Math.Min(input.AttackerMaxSkill, input.AttackerWeaponSkill);
         int cappedSkillDiff = minSkill - input.VictimDefenseSkill;

@@ -212,6 +212,7 @@ public sealed partial class MapCombat : IMapUpdater
         try
         {
             RemoveExpiredBones();
+            UpdateHeldSwings(); // the swings held for the spell batch resolve at its boundary (MapCombat.SwingBatch.cs)
             Player[] players = _map.RentPlayerSnapshot(out int playerCount);
             try
             {

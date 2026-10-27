@@ -156,6 +156,9 @@ public sealed class SpellCast
 
     internal bool StuckReported { get; set; }
 
+    /// <summary>The cast waits in the spell batch for its go (SpellSystem.Batching.cs); its go-time caster, range and sight checks are done.</summary>
+    internal bool BatchedGo { get; set; }
+
     internal bool ChannelOrphanReported { get; set; }
 
     internal float CastX { get; set; }
