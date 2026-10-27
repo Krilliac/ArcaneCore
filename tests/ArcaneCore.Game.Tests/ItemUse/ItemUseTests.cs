@@ -437,6 +437,38 @@ public sealed class ItemUseTests
     }
 
     [Fact]
+    public void WithSpellBatching_AnItemsSecondUseSpell_WaitsBehindItsHeldFirstSpell_AndBothGoInTemplateOrder()
+    {
+        using var rig = new Rig();
+        rig.Kit.System.SpellBatchWindowMs = 400;
+        Item item = rig.Give(TwoSpellItem);
+        SpellSystem.SetPower(rig.Player, PowerType.Rage, 100);
+        rig.Kit.Session.Clear();
+
+        rig.Service.UseItem(rig.Player, item.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf());
+
+        Assert.Equal(100u, SpellSystem.GetPower(rig.Player, PowerType.Rage));   // the second (energize) spell waits too
+        Assert.Equal(2, rig.Kit.System.PendingBatchedGoes);
+        Assert.Empty(SpellTestKit.Packets(rig.Kit.Session, WorldOpcode.SmsgSpellGo));
+
+        rig.Kit.Kit.Advance(400);
+
+        Assert.Equal(150u, SpellSystem.GetPower(rig.Player, PowerType.Rage));
+        Assert.Equal(0, rig.Kit.System.PendingBatchedGoes);
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);
+        uint[] goes = [.. SpellTestKit.Packets(rig.Kit.Session, WorldOpcode.SmsgSpellGo).Select(GoSpellId)];
+        Assert.Equal([PlainSpell, EnergizeSpell], goes);
+    }
+
+    private static uint GoSpellId(byte[] payload)
+    {
+        var go = new PacketReader(payload);
+        go.ReadPackedGuid();
+        go.ReadPackedGuid();
+        return go.ReadUInt32();
+    }
+
+    [Fact]
     public void ATriggeredCast_NeverTakesTheCastItem()
     {
         using var rig = new Rig();

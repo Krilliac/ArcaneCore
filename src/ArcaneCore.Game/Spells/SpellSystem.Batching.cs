@@ -20,7 +20,8 @@ namespace ArcaneCore.Game.Spells;
 /// </para>
 /// <para>
 /// Creature casts are batched too (<see cref="SpellBatchCreatures"/>), and white swings close with the same windows (<see cref="SpellBatchMelee"/>,
-/// <see cref="Combat.MapCombat"/>). Not batched: triggered casts (they resolve inside the cast that triggers them), game-object casts, channels
+/// <see cref="Combat.MapCombat"/>). Not batched: triggered casts (they resolve inside the cast that triggers them; the one exception is an item's later use spells, which wait
+/// behind its held first spell, <see cref="FollowsHeldItemUse"/>), game-object casts, channels
 /// (the channel keeps its cast slot), next-swing spells (they go with the swing), auto-repeat shots and item-equip casts. Thread affinity: the
 /// world thread, like the rest of <see cref="SpellSystem"/>.
 /// </para>
@@ -100,9 +101,34 @@ public sealed partial class SpellSystem
     }
 
     private bool IsBatchable(SpellCast cast)
-        => SpellBatchWindowMs != 0 && !cast.IsTriggered && (cast.Caster is Player || (SpellBatchCreatures && cast.Caster is Creatures.Creature))
+        => SpellBatchWindowMs != 0 && (!cast.IsTriggered || FollowsHeldItemUse(cast))
+            && (cast.Caster is Player || (SpellBatchCreatures && cast.Caster is Creatures.Creature))
             && _objectCastDepth == 0 && !cast.Spell.IsChanneled
             && !cast.Spell.IsNextMeleeSwing && !cast.AutoRepeatShot && !cast.IsItemEquipCast && !cast.IsItemTriggeredCast;
+
+    /// <summary>
+    /// Whether <paramref name="cast"/> is a later ON_USE spell of an item (cast triggered, ItemUseService.CastItemUseSpell) whose first spell is
+    /// waiting in the batch. It waits behind it, so the item's spells still go off together and in their template order: without this it
+    /// would resolve at once, before the held first spell.
+    /// </summary>
+    private bool FollowsHeldItemUse(SpellCast cast)
+    {
+        if (cast.CastItem is not { } item || _batchedGoes.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (SpellCast held in _batchedGoes)
+        {
+            if (!held.IsTriggered && ReferenceEquals(held.CastItem, item) && ReferenceEquals(held.Caster, cast.Caster)
+                && held.State != SpellCastState.Finished)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>The go of <paramref name="cast"/>: at once, or held for the batch when <see cref="IsBatchable"/> and its go-time check passes.</summary>
     private SpellCastResult GoOrBatch(SpellCast cast)
@@ -174,7 +200,7 @@ public sealed partial class SpellSystem
         }
 
         if (cast.CastItem is { } liveItem && caster is Player liveOwner
-            && !CanStartItemUse(liveOwner, liveItem, cast.ItemSpellIndex, out _, requireCharges: true))
+            && !CanStartItemUse(liveOwner, liveItem, cast.ItemSpellIndex, out _, requireCharges: !cast.IsTriggered))
         {
             return SpellCastResult.ItemNotReady;
         }
@@ -226,7 +252,8 @@ public sealed partial class SpellSystem
             // A held instant left its cast slot; while it goes off it is the caster's running cast again, as it was without batching,
             // for everything that looks it up there (procs, scripts, melee pauses). Finish clears the slot (Cast finishes on every path).
             // A slot the caster filled meanwhile stays as it is: _resolvingBatchedGo still names this cast (CurrentGenericCast).
-            if (GetOrCreateState(cast.Caster) is { CurrentCast: null } state)
+            // A triggered cast (an item's later use spell) never held the slot, so it does not take it now either.
+            if (!cast.IsTriggered && GetOrCreateState(cast.Caster) is { CurrentCast: null } state)
             {
                 state.CurrentCast = cast;
             }
