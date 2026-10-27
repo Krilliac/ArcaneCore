@@ -62,6 +62,19 @@ public sealed class ComboPointProcDeferralTests
         StartRecoveryTime = 0,
     };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         /// <param name="deferral">Install the combo point service (which turns the post-finish deferral on), or, off, only its point effect.</param>
@@ -125,7 +138,12 @@ public sealed class ComboPointProcDeferralTests
             ProcSpell = Kit.Store.Get(Eviscerate),
         });
 
-        public SpellCastResult Cast(uint spell) => Kit.System.CastSpell(Rogue, spell, SpellCastTargets.ForUnit(Enemy.Guid), triggered: false);
+        public SpellCastResult Cast(uint spell)
+        {
+            SpellCastResult result = Kit.System.CastSpell(Rogue, spell, SpellCastTargets.ForUnit(Enemy.Guid), triggered: false);
+            FlushSpellBatch(Kit);
+            return result;
+        }
 
         public void Dispose() => Kit.Dispose();
     }
@@ -194,5 +212,44 @@ public sealed class ComboPointProcDeferralTests
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(SinisterStrike));
 
         Assert.Equal(2, rig.Combos.GetComboPoints(rig.Rogue)); // the builder's point, then Seal Fate's 14189 once the cast ended
+    }
+
+    // --- spell batching ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Spell batching on (SpellSystem.Batching.cs): the instant is held and leaves its cast slot, so when the batch resolves it, the procs must
+    /// still find it as the running cast to take their point's target from, or the deferred point is lost.
+    /// </summary>
+    private static void CastHeldThenResolve(Rig rig, uint spell, int pointsWhileHeld)
+    {
+        rig.Kit.System.SpellBatchWindowMs = 400;
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Rogue, spell, SpellCastTargets.ForUnit(rig.Enemy.Guid), triggered: false));
+        Assert.Equal(pointsWhileHeld, rig.Combos.GetComboPoints(rig.Rogue)); // held: nothing happened yet
+
+        rig.Kit.Advance(400);
+    }
+
+    [Fact]
+    public void SpellBatching_Ruthlessness_ThePointOfAHeldFinisherStillLands()
+    {
+        using var rig = new Rig();
+        rig.Learn(Ruthlessness);
+        rig.Combos.AddComboPoints(rig.Rogue, rig.Enemy, 3);
+
+        CastHeldThenResolve(rig, Eviscerate, pointsWhileHeld: 3);
+
+        Assert.Equal(1, rig.Combos.GetComboPoints(rig.Rogue));
+        Assert.Equal(rig.Enemy.Guid, rig.Combos.GetComboTarget(rig.Rogue));
+    }
+
+    [Fact]
+    public void SpellBatching_SealFate_TheExtraPointOfAHeldBuilderStillLands()
+    {
+        using var rig = new Rig();
+        rig.Learn(SealFate);
+
+        CastHeldThenResolve(rig, SinisterStrike, pointsWhileHeld: 0);
+
+        Assert.Equal(2, rig.Combos.GetComboPoints(rig.Rogue));
     }
 }

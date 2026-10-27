@@ -29,6 +29,7 @@ public sealed partial class SpellSystem
 {
     private readonly List<SpellCast> _batchedGoes = [];
     private uint _batchIndex; // BatchIndex at which the held casts were held
+    private SpellCast? _resolvingBatchedGo; // the held cast FlushSpellBatch is sending through Cast, while it does
 
     /// <summary>
     /// The batch a moment falls in: <c>now / window</c>. Every system that batches (the casts here, the white swings in
@@ -217,6 +218,8 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            SpellCast? outer = _resolvingBatchedGo;
+            _resolvingBatchedGo = cast;
             try
             {
                 Cast(cast);
@@ -226,6 +229,10 @@ public sealed partial class SpellSystem
                 // Cast already recorded the fault ("spell.script") and finished the cast; the rest of the batch still goes off.
                 FaultLedger.Shared.Record("spell.batch", ex);
                 _logger.LogFault("spell-batch", ex, "spell {Spell} of {Caster} failed in the spell batch", cast.Spell.Id, cast.Caster.Guid);
+            }
+            finally
+            {
+                _resolvingBatchedGo = outer;
             }
         }
     }
