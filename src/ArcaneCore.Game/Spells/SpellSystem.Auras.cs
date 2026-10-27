@@ -493,7 +493,7 @@ public sealed partial class SpellSystem
     {
         if (state.Auras.Count == 0)
         {
-            state.TickingHolders = 0;
+            state.HasTickingHolders = false;
             return;
         }
 
@@ -503,9 +503,9 @@ public sealed partial class SpellSystem
         // fields that are already valid, so the rent/copy/clear/return is skipped. The count is a read-only scan over the live list rather
         // than a figure maintained at each add/remove: holder state (Duration, AreaParent, IsRemoved, heartbeat fields, an aura's period)
         // is mutated from many files, so a scan cannot go stale. Units that do tick take the unchanged path below, in the same order.
-        int ticking = CountTickingHolders(state);
-        state.TickingHolders = ticking;
-        if (ticking == 0)
+        bool ticking = AuraIdleFastPathEnabled ? AnyTickingHolder(state) : true;
+        state.HasTickingHolders = ticking;
+        if (!ticking)
         {
             AuraIdleSkips++;
             return;
@@ -538,9 +538,10 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// Whether <see cref="UpdateAuraHolder"/> could do anything for <paramref name="holder"/> this tick. False only for a live, permanent,
-    /// valid holder with no area parent, no stand-up cancel, no heartbeat and no periodic effect (a passive talent or racial): for that
-    /// holder UpdateAuraHolder only re-validates fields that are already valid. Every other holder (removed, timed, periodic, area child,
-    /// heartbeat, standing-cancels, or with a field the validator would repair or report) counts as ticking. Reads fields only.
+    /// holder with no area parent, no stand-up cancel, no heartbeat and no periodic effect (a passive talent or racial) whose duration,
+    /// stack and periodic fields already pass <see cref="ValidateAuraHolder"/> (or whose failure was already reported): for that holder
+    /// UpdateAuraHolder only re-validates fields that are already valid. Every other holder (removed, timed, periodic, area child,
+    /// heartbeat, standing-cancels, or with a field the validator would repair or report once) counts as ticking. Reads fields only.
     /// </summary>
     internal static bool HolderNeedsTick(SpellAuraHolder holder)
     {
@@ -548,6 +549,12 @@ public sealed partial class SpellSystem
             || (holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
             || holder.HeartbeatRandValue > 0f || holder.PveHeartbeatTimer >= 0
             || holder.InitialDurationArg < -1 || holder.Duration != -1 || holder.MaxDuration != -1)
+        {
+            return true;
+        }
+
+        // ValidateAuraHolder's stack check: a zero or over-max stack is reported and clamped once (StackOverflowReported).
+        if (!holder.StackOverflowReported && (holder.StackAmount == 0 || holder.StackAmount > Math.Max(holder.Spell.StackAmount, 1u)))
         {
             return true;
         }
@@ -572,21 +579,23 @@ public sealed partial class SpellSystem
         return false;
     }
 
-    /// <summary>The number of <paramref name="state"/>'s holders that <see cref="HolderNeedsTick"/> says need a tick (allocation-free scan, no copy).</summary>
-    internal static int CountTickingHolders(UnitSpellState state)
+    /// <summary>Whether any of <paramref name="state"/>'s holders needs a tick per <see cref="HolderNeedsTick"/> (allocation-free scan, no copy; stops at the first).</summary>
+    internal static bool AnyTickingHolder(UnitSpellState state)
     {
         List<SpellAuraHolder> holders = state.Auras;
-        int ticking = 0;
         for (int i = 0; i < holders.Count; i++)
         {
             if (holders[i] is null || HolderNeedsTick(holders[i]))
             {
-                ticking++;
+                return true;
             }
         }
 
-        return ticking;
+        return false;
     }
+
+    /// <summary>Test seam: false turns the idle fast path off so a scenario can be captured with the original always-snapshot behaviour.</summary>
+    internal bool AuraIdleFastPathEnabled { get; set; } = true;
 
     /// <summary>A unit holding more aura holders than this is reported as <c>aura/holders-excess</c> (a client shows 32 buffs and 16 debuffs; passives and hidden auras add a few hundred at most).</summary>
     internal const int AuraHoldersExcessBound = 512;

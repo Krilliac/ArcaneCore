@@ -21,7 +21,9 @@ public sealed class SpellAuraIdlePathTests
     private const uint Hot = 961010;
     private const uint Timed3s = 961011;
     private const uint Timed5s = 961012;
-    private const uint Stacker = 961013;
+    private const uint StandingPassive = 961014;
+    private const uint NoPeriodPassive = 961015;
+    private const uint StackPassive = 961016;
     private const uint FirstBulkPassive = 962000;
     private const int BulkPassives = 520;
 
@@ -53,6 +55,9 @@ public sealed class SpellAuraIdlePathTests
         var spells = new List<SpellInfo>
         {
             Passive(PassiveA), Passive(PassiveB), Passive(PassiveC), SelfHot(Hot), TimedDummy(Timed3s, 3000), TimedDummy(Timed5s, 5000),
+            Passive(StandingPassive) with { AuraInterruptFlags = SpellAuraInterruptFlags.StandingCancels },
+            Spell(NoPeriodPassive, Effect(SpellEffectName.ApplyAura, 3, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage)) with { Attributes = SpellAttributes.Passive, StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+            Passive(StackPassive),
         };
         for (int i = 0; i < bulk; i++)
         {
@@ -95,7 +100,7 @@ public sealed class SpellAuraIdlePathTests
 
         Assert.Equal(rentsBefore, kit.System.AuraSnapshotRents);
         Assert.True(kit.System.AuraIdleSkips >= skipsBefore + 10, $"idle skips {kit.System.AuraIdleSkips - skipsBefore}");
-        Assert.Equal(0, state.TickingHolders);
+        Assert.False(state.HasTickingHolders);
         Assert.Equal(3, state.Auras.Count);
     }
 
@@ -112,7 +117,7 @@ public sealed class SpellAuraIdlePathTests
         kit.Advance(1000);
 
         Assert.True(kit.System.AuraSnapshotRents >= rentsBefore + 10, $"rents {kit.System.AuraSnapshotRents - rentsBefore}");
-        Assert.Equal(1, kit.System.GetState(player.Guid)!.TickingHolders);
+        Assert.True(kit.System.GetState(player.Guid)!.HasTickingHolders);
     }
 
     // --- 2: golden tick and expiry sequence -----------------------------------------------------------------
@@ -160,43 +165,43 @@ public sealed class SpellAuraIdlePathTests
         CastSelf(kit, player, PassiveA);
         UnitSpellState state = kit.System.GetState(player.Guid)!;
         kit.Advance(100);
-        Assert.Equal(0, state.TickingHolders);
-        Assert.Equal(0, SpellSystem.CountTickingHolders(state));
+        Assert.False(state.HasTickingHolders);
+        Assert.False(SpellSystem.AnyTickingHolder(state));
 
         // add: a periodic and a timed aura turn the count on
         CastSelf(kit, player, Hot);
         CastSelf(kit, player, Timed3s);
         kit.Advance(100);
-        Assert.Equal(2, state.TickingHolders);
-        Assert.Equal(2, SpellSystem.CountTickingHolders(state));
+        Assert.True(state.HasTickingHolders);
+        Assert.True(SpellSystem.AnyTickingHolder(state));
 
         // refresh: the same holder keeps ticking, the count is unchanged
         SpellAuraHolder timed = state.Auras.Single(h => h.Spell.Id == Timed3s);
         CastSelf(kit, player, Timed3s);
         kit.Advance(100);
         Assert.Same(timed, state.Auras.Single(h => h.Spell.Id == Timed3s));
-        Assert.Equal(2, state.TickingHolders);
+        Assert.True(state.HasTickingHolders);
 
         // remove: dropping the periodic aura leaves the timed one
         kit.System.RemoveAuras(player, Hot);
         kit.Advance(100);
-        Assert.Equal(1, state.TickingHolders);
+        Assert.True(state.HasTickingHolders);
 
         // dispel: removing with the dispel mode leaves only the passive, so the unit goes idle
         kit.System.RemoveAuras(player, Timed3s, AuraRemoveMode.Dispel);
         long rents = kit.System.AuraSnapshotRents;
         kit.Advance(300);
-        Assert.Equal(0, state.TickingHolders);
+        Assert.False(state.HasTickingHolders);
         Assert.Equal(rents, kit.System.AuraSnapshotRents);
 
         // expiry: a timed aura added again ticks down, expires on schedule and the count returns to 0
         CastSelf(kit, player, Timed3s);
         kit.Advance(100);
-        Assert.Equal(1, state.TickingHolders);
+        Assert.True(state.HasTickingHolders);
         kit.Advance(3000);
         Assert.DoesNotContain(state.Auras, h => h.Spell.Id == Timed3s);
         kit.Advance(100);
-        Assert.Equal(0, state.TickingHolders);
+        Assert.False(state.HasTickingHolders);
         Assert.Single(state.Auras);
     }
 
@@ -211,7 +216,7 @@ public sealed class SpellAuraIdlePathTests
         SpellAuraHolder passive = state.Auras.Single();
 
         passive.IsRemoved = true;
-        Assert.Equal(1, SpellSystem.CountTickingHolders(state));
+        Assert.True(SpellSystem.AnyTickingHolder(state));
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/expired-not-removed" && n.Subject == $"spell {PassiveA}");
         kit.Advance(100);
 
@@ -257,5 +262,174 @@ public sealed class SpellAuraIdlePathTests
 
         Assert.Empty(capture.Notices);
         Assert.Equal(2, kit.System.MaxAuraCountSeen);
+    }
+
+    // --- stack validation, phased golden trace, re-arm, and every ticking reason ---------------------------
+
+    [Fact]
+    public void APassiveWithAZeroStack_IsRepairedAndReportedOnce_EvenOnAnOtherwiseIdleUnit()
+    {
+        using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0;
+        Player player = AddUnit(kit);
+        CastSelf(kit, player, StackPassive);
+        UnitSpellState state = kit.System.GetState(player.Guid)!;
+        SpellAuraHolder holder = state.Auras.Single();
+        kit.Advance(200);
+        Assert.False(state.HasTickingHolders);
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/stack-overflow" && n.Subject == $"spell {StackPassive}");
+
+        holder.StackAmount = 0;
+        Assert.True(SpellSystem.HolderNeedsTick(holder));
+        kit.Advance(300);
+
+        Assert.Single(capture.Notices);
+        Assert.Equal(1, holder.StackAmount);
+        Assert.False(SpellSystem.HolderNeedsTick(holder));
+        Assert.False(state.HasTickingHolders);
+    }
+
+    /// <summary>One run of the phased scenario: idle, timed aura added, expired (idle again), periodic aura added. Returns the trace and the snapshot counters.</summary>
+    private static (string Trace, long Rents, long Skips, int PassiveAnomalies) RunPhases(bool fastPath)
+    {
+        using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0;
+        kit.System.AuraIdleFastPathEnabled = fastPath;
+        Player player = AddUnit(kit);
+        CastSelf(kit, player, PassiveA);
+        SpellAuraHolder passive = kit.System.GetAuras(player).Single();
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subject == $"spell {PassiveA}");
+        var trace = new StringBuilder();
+        void Steps(string phase, int steps)
+        {
+            trace.Append('[').Append(phase).Append(']');
+            for (int i = 0; i < steps; i++)
+            {
+                kit.Advance(100);
+                SpellAuraHolder? hot = kit.System.GetAuras(player).SingleOrDefault(h => h.Spell.Id == Hot);
+                trace.Append(hot is null ? "-" : hot.AuraSpan[0]!.TickCount.ToString()).Append(':')
+                    .Append(Remaining(kit, player, Timed3s)).Append(':').Append(kit.System.GetAuras(player).Count).Append(':')
+                    .Append(passive.Duration).Append('/').Append(passive.MaxDuration).Append('/').Append(passive.StackAmount).Append(',');
+            }
+        }
+
+        Steps("idle", 10);
+        CastSelf(kit, player, Timed3s);
+        Steps("timed", 35);
+        Steps("idle2", 10);
+        CastSelf(kit, player, Hot);
+        Steps("periodic", 25);
+        return (trace.ToString(), kit.System.AuraSnapshotRents, kit.System.AuraIdleSkips, capture.Notices.Count);
+    }
+
+    [Fact]
+    public void PhasedIdleTimedIdlePeriodic_GiveTheSameTraceWithAndWithoutTheFastPath()
+    {
+        (string slow, long slowRents, long slowSkips, int slowAnomalies) = RunPhases(fastPath: false);
+        (string fast, long fastRents, long fastSkips, int fastAnomalies) = RunPhases(fastPath: true);
+
+        Assert.True(GoldenPhased == slow, "golden no longer matches the always-snapshot run: " + slow);
+        Assert.Equal(slow, fast);
+        Assert.Equal(0, slowSkips);
+        Assert.Equal(0, slowAnomalies);
+        Assert.Equal(0, fastAnomalies);
+        Assert.True(fastSkips >= 20, $"idle skips {fastSkips}");
+        Assert.True(fastRents < slowRents, $"rents fast {fastRents} slow {slowRents}");
+    }
+
+    // GoldenPhased was captured by running RunPhases(fastPath: false) (AuraIdleFastPathEnabled = false: the original always-snapshot behaviour).
+    private const string GoldenPhased = "[idle]-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,[timed]-:2900:2:-1/-1/1,-:2800:2:-1/-1/1,-:2700:2:-1/-1/1,-:2600:2:-1/-1/1,-:2500:2:-1/-1/1,-:2400:2:-1/-1/1,-:2300:2:-1/-1/1,-:2200:2:-1/-1/1,-:2100:2:-1/-1/1,-:2000:2:-1/-1/1,-:1900:2:-1/-1/1,-:1800:2:-1/-1/1,-:1700:2:-1/-1/1,-:1600:2:-1/-1/1,-:1500:2:-1/-1/1,-:1400:2:-1/-1/1,-:1300:2:-1/-1/1,-:1200:2:-1/-1/1,-:1100:2:-1/-1/1,-:1000:2:-1/-1/1,-:900:2:-1/-1/1,-:800:2:-1/-1/1,-:700:2:-1/-1/1,-:600:2:-1/-1/1,-:500:2:-1/-1/1,-:400:2:-1/-1/1,-:300:2:-1/-1/1,-:200:2:-1/-1/1,-:100:2:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,[idle2]-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,-:-:1:-1/-1/1,[periodic]0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,0:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,1:-:2:-1/-1/1,2:-:2:-1/-1/1,2:-:2:-1/-1/1,2:-:2:-1/-1/1,2:-:2:-1/-1/1,2:-:2:-1/-1/1,2:-:2:-1/-1/1,";
+
+    [Fact]
+    public void TheExcessAnomaly_ReArmsWhenTheCountFallsBack_AndFiresAgain()
+    {
+        using SpellTestKit kit = Kit(BulkPassives);
+        kit.System.SpellBatchWindowMs = 0;
+        Player player = AddUnit(kit, 79);
+        for (int i = 0; i < BulkPassives; i++)
+        {
+            CastSelf(kit, player, FirstBulkPassive + (uint)i);
+        }
+
+        UnitSpellState state = kit.System.GetState(player.Guid)!;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "aura/holders-excess" && n.Subject.Contains("79", StringComparison.Ordinal));
+        kit.Advance(200);
+        Assert.Single(capture.Notices);
+
+        int drop = state.Auras.Count - SpellSystem.AuraHoldersExcessBound;
+        for (int i = 0; i < drop; i++)
+        {
+            kit.System.RemoveAuras(player, FirstBulkPassive + (uint)i);
+        }
+
+        Assert.Equal(SpellSystem.AuraHoldersExcessBound, state.Auras.Count);
+        kit.Advance(200);
+        Assert.Single(capture.Notices);
+
+        for (int i = 0; i < drop; i++)
+        {
+            CastSelf(kit, player, FirstBulkPassive + (uint)i);
+        }
+
+        kit.Advance(200);
+        Assert.Equal(2, capture.Notices.Count);
+    }
+
+    [Fact]
+    public void APermanentHolderWithAStandingCancelsSpell_AnAreaParent_OrAHeartbeat_CountsAsTicking()
+    {
+        using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0;
+        Player player = AddUnit(kit);
+        CastSelf(kit, player, StandingPassive);
+        CastSelf(kit, player, PassiveA);
+        CastSelf(kit, player, Timed3s);
+        UnitSpellState state = kit.System.GetState(player.Guid)!;
+        SpellAuraHolder standing = state.Auras.Single(h => h.Spell.Id == StandingPassive);
+        SpellAuraHolder plain = state.Auras.Single(h => h.Spell.Id == PassiveA);
+        SpellAuraHolder other = state.Auras.Single(h => h.Spell.Id == Timed3s);
+        Assert.True(standing.IsPermanent && plain.IsPermanent);
+
+        Assert.True(SpellSystem.HolderNeedsTick(standing));
+        Assert.False(SpellSystem.HolderNeedsTick(plain));
+
+        plain.HeartbeatRandValue = 5f;
+        Assert.True(SpellSystem.HolderNeedsTick(plain));
+        plain.HeartbeatRandValue = 0f;
+        Assert.False(SpellSystem.HolderNeedsTick(plain));
+
+        plain.PveHeartbeatTimer = 0;
+        Assert.True(SpellSystem.HolderNeedsTick(plain));
+        plain.PveHeartbeatTimer = -1;
+        Assert.False(SpellSystem.HolderNeedsTick(plain));
+
+        plain.AreaParent = other;
+        Assert.True(SpellSystem.HolderNeedsTick(plain));
+        plain.AreaParent = null;
+        Assert.False(SpellSystem.HolderNeedsTick(plain));
+    }
+
+    [Fact]
+    public void APermanentHolderWhoseTimedAuraTypeHasNoPeriod_CountsAsTicking_UntilTheStallIsReported()
+    {
+        using SpellTestKit kit = Kit();
+        kit.System.SpellBatchWindowMs = 0;
+        Player player = AddUnit(kit);
+        CastSelf(kit, player, NoPeriodPassive);
+        UnitSpellState state = kit.System.GetState(player.Guid)!;
+        SpellAuraHolder holder = state.Auras.Single();
+        SpellAura aura = holder.AuraSpan.ToArray().Single(a => a is not null)!;
+        Assert.False(aura.IsPeriodic);
+
+        if (!aura.PeriodicStalledReported)
+        {
+            Assert.True(SpellSystem.HolderNeedsTick(holder));
+        }
+
+        kit.Advance(200);
+
+        Assert.True(aura.PeriodicStalledReported);
+        Assert.False(SpellSystem.HolderNeedsTick(holder));
+        Assert.False(state.HasTickingHolders);
     }
 }
