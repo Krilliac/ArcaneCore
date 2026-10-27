@@ -339,7 +339,7 @@ public sealed partial class Map
 
     private readonly ArcaneCore.Kernel.Logging.LogGate _orphanLogGate = new(TimeSpan.FromMinutes(1));
 
-    /// <summary>Orphan visible objects removed by <see cref="VerifyVisibleSetInvariants"/>; counts every heal, including those whose log line was throttled (map thread, diagnostics, tests).</summary>
+    /// <summary>Orphan visible objects removed by <see cref="VerifyVisibleSetInvariants"/>; counts every heal, including those whose log line was throttled (map thread; read by tests and diagnostics code, not yet exported as a metric).</summary>
     public long OrphanVisibleHeals { get; private set; }
 
     public bool VerifyVisibleSetInvariants(Player player)
