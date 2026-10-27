@@ -38,6 +38,25 @@ public sealed partial class SpellSystem
     /// <summary>Casts waiting for the next batch boundary.</summary>
     internal int PendingBatchedGoes => _batchedGoes.Count;
 
+    /// <summary>
+    /// Whether <paramref name="unit"/> has a cast waiting in the spell batch for its go: a held cast bar (also still in its cast slot) or an
+    /// instant (which already left it). A caller that acts on a cast's effect (a bot lighting a campfire, then cooking at it) waits while this
+    /// is true. Always false with batching off. No allocation.
+    /// </summary>
+    public bool HasPendingGo(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        foreach (SpellCast held in _batchedGoes)
+        {
+            if (ReferenceEquals(held.Caster, unit) && held.State != SpellCastState.Finished)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool IsBatchable(SpellCast cast)
         => SpellBatchWindowMs != 0 && !cast.IsTriggered && cast.Caster is Player && _objectCastDepth == 0 && !cast.Spell.IsChanneled
             && !cast.Spell.IsNextMeleeSwing && !cast.AutoRepeatShot && !cast.IsItemEquipCast && !cast.IsItemTriggeredCast;

@@ -639,7 +639,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
         if (!spellSystem.IsSpellReady(player, spell))
             return true;
-        return spellSystem.GetState(player.Guid)?.CurrentCast is
+        // With spell batching on, an instant the bot just cast (the campfire it cooks at) waits for its go out of the cast slot.
+        return spellSystem.HasPendingGo(player) || spellSystem.GetState(player.Guid)?.CurrentCast is
             { State: SpellCastState.Preparing or SpellCastState.Casting };
     }
 

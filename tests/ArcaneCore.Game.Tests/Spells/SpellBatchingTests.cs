@@ -45,6 +45,8 @@ public sealed class SpellBatchingTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid)));
         Assert.Equal(1, kit.System.PendingBatchedGoes);
+        Assert.True(kit.System.HasPendingGo(caster));
+        Assert.False(kit.System.HasPendingGo(target));
         Assert.Equal(60u, target.Health);
         Assert.Empty(Packets(targetSession, WorldOpcode.SmsgSpellGo));
 
@@ -53,6 +55,7 @@ public sealed class SpellBatchingTests
 
         kit.Advance(100);
         Assert.Equal(0, kit.System.PendingBatchedGoes);
+        Assert.False(kit.System.HasPendingGo(caster));
         Assert.True(target.Health < 60);
         Assert.Single(Packets(targetSession, WorldOpcode.SmsgSpellGo));
     }
