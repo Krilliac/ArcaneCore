@@ -55,6 +55,8 @@ internal sealed partial class PlayerbotStallWatch
     private uint _aliveSinceMs;
 
     private bool _started;
+    // Set by ReportExternal: the next look re-anchors the watch where the bot stands but keeps the external report (see there).
+    private bool _externalHeld;
     private Vector3 _anchor;
     private uint _anchorMap;
     private Fingerprint _fingerprint;
@@ -92,6 +94,7 @@ internal sealed partial class PlayerbotStallWatch
     internal void Reset()
     {
         _started = false;
+        _externalHeld = false;
         _stallReport = null;
     }
 
@@ -164,12 +167,15 @@ internal sealed partial class PlayerbotStallWatch
         if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
         {
+            // The first look after an external report only re-anchors: the report stands until the bot makes progress from here.
+            bool keepExternal = !_started && _externalHeld;
+            _externalHeld = false;
             _started = true;
             _anchor = position;
             _anchorMap = player.MapId;
             _fingerprint = current;
             _progressMs = nowMs;
-            _stallReport = null;
+            if (!keepExternal) _stallReport = null;
             return false;
         }
 
@@ -278,6 +284,8 @@ internal sealed partial class PlayerbotStallWatch
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
     /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
+    /// The watch restarts at the next look, where the bot then stands; before, that restart also cleared the report, so the next think
+    /// (100 ms later in the population tests) dropped it without any progress and a relocation pass that came after it saw no stall.
     /// </summary>
     internal void ReportExternal(string reason)
     {
@@ -287,6 +295,7 @@ internal sealed partial class PlayerbotStallWatch
         Count++;
         GiveUps++;
         _started = false;
+        _externalHeld = true;
     }
 
     private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers, uint Sequence);
