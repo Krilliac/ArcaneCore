@@ -37,6 +37,12 @@ appsettings.*.Local.json
 *.mmtile
 *.mmap
 
+# Docker VPS state (docs/guide/docker.md): ./env holds the compose bind mounts (client data, logs, imports), backups/ the database dumps
+# of tools/ops/deploy/backup-database.sh (accounts and characters). RepoHygieneTests rejects a committed *.sql.gz.
+/env/
+/backups/
+*.sql.gz
+
 # Reference cores are cloned outside the repo (/home/user/refs); never tracked.
 refs/
 
