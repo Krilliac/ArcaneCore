@@ -565,7 +565,7 @@ internal static class PlayerbotNavigation
         }
 
         // The outcome check (PlayerbotNavigationAnomalies): a pending tile read or a deferred async plan is no verdict, the rest is.
-        PlayerbotNavigationAnomalies.ObservePlan(player, goal, current, routed, inconclusive);
+        PlayerbotNavigationAnomalies.ObservePlan(player, goal, current, routed, inconclusive, route);
         return planned;
     }
 

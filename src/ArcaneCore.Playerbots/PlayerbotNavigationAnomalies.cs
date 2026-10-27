@@ -53,6 +53,7 @@ internal static class PlayerbotNavigationAnomalies
         internal Vector3 Origin;
         internal int Plans;
         internal uint FirstAt;
+        internal uint LastAt;
         internal int Refusals;
         internal bool LoopReported;
         internal bool RefusalReported;
@@ -98,25 +99,34 @@ internal static class PlayerbotNavigationAnomalies
     /// <summary>
     /// One finished plan toward <paramref name="goal"/> from <paramref name="origin"/> (<see cref="PlayerbotNavigation.TryPlanToward"/>).
     /// <paramref name="inconclusive"/>: no verdict (a tile being read, an async plan deferred): not counted at all. Reports
-    /// <c>nav/replan-loop</c> (<see cref="ReplanLoopPlans"/> successful plans from one spot over <see cref="ReplanLoopMinMs"/>, for a bot
-    /// that could move), <c>nav/goal-unreachable</c> (<see cref="RepeatedRefusals"/> refusals in a row within one episode of the route watch,
+    /// <c>nav/replan-loop</c> (<see cref="ReplanLoopPlans"/> successful plans from one spot over <see cref="ReplanLoopMinMs"/>, each made
+    /// while the bot could move), <c>nav/goal-unreachable</c> (<see cref="RepeatedRefusals"/> refusals in a row within one episode of the route watch,
     /// or a refusal after it has suppressed the goal more than once: <see cref="PlayerbotRoutePlanWatch.SuppressionEpoch"/>), and <c>nav/no-path-connected</c>
     /// besides when the region graph puts the bot and the goal in one component (the search refused a goal the mesh joins to the bot).
     /// Once per episode: the next report of a key needs the goal or the bot's place to change, or a success.
+    /// <para>
+    /// An episode is the one <see cref="PlayerbotRoutePlanWatch"/> watches (issue #1494): a plan more than
+    /// <see cref="PlayerbotRoutePlanWatch.WindowMs"/> after the last one starts a new episode (a bot back at one spot minutes later is
+    /// on a new visit, not in a loop), and a plan made while the bot cannot move (<see cref="CanMove"/>: dead, rooted, fighting) does
+    /// not count toward a loop. <paramref name="route"/>, the route the plan answered, is named in the report.
+    /// </para>
     /// </summary>
-    internal static void ObservePlan(Player player, Vector3 goal, Vector3 origin, bool routed, bool inconclusive)
+    internal static void ObservePlan(Player player, Vector3 goal, Vector3 origin, bool routed, bool inconclusive, PlayerbotRoute? route = null)
     {
         if (inconclusive || Silenced(player)) return;
         GoalWatch watch = Watches.GetValue(player, static _ => new GoalWatch());
         uint now = NowOf(player);
         int epoch = PlayerbotRoutePlanWatch.SuppressionEpoch(player);
-        if (!watch.Has || Vector3.DistanceSquared(watch.Goal, goal) > SameGoalYards * SameGoalYards)
+        bool canMove = CanMove(player);
+        if (!watch.Has || Vector3.DistanceSquared(watch.Goal, goal) > SameGoalYards * SameGoalYards
+            || unchecked(now - watch.LastAt) > PlayerbotRoutePlanWatch.WindowMs)
         {
             watch.Has = true;
             watch.Goal = goal;
             watch.Origin = origin;
-            watch.Plans = routed ? 1 : 0;
+            watch.Plans = routed && canMove ? 1 : 0;
             watch.FirstAt = now;
+            watch.LastAt = now;
             watch.Refusals = routed ? 0 : 1;
             watch.LoopReported = false;
             watch.RefusalReported = false;
@@ -146,26 +156,30 @@ internal static class PlayerbotNavigationAnomalies
         {
             // The bot moved since the first of these plans: progress, a new count (a long trip plans each leg from a new spot).
             watch.Origin = origin;
-            watch.Plans = routed ? 1 : 0;
+            watch.Plans = routed && canMove ? 1 : 0;
             watch.FirstAt = now;
             watch.LoopReported = false;
         }
-        else if (routed)
+        else if (routed && canMove)
         {
+            // The count's span starts at its first counted plan (plans made while the bot could not move are no part of it).
+            if (watch.Plans == 0) watch.FirstAt = now;
             watch.Plans++;
         }
+
+        watch.LastAt = now;
 
         if (routed)
         {
             watch.Refusals = 0;
             watch.RefusalReported = false;
             watch.Escalated = false;
-            if (!watch.LoopReported && watch.Plans >= ReplanLoopPlans && unchecked(now - watch.FirstAt) >= ReplanLoopMinMs && CanMove(player))
+            if (!watch.LoopReported && watch.Plans >= ReplanLoopPlans && unchecked(now - watch.FirstAt) >= ReplanLoopMinMs && canMove)
             {
                 watch.LoopReported = true;
                 PlayerbotAnomalies.Report(player, "nav", "replan-loop",
                     string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                        $"{watch.Plans} routes planned toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1} from within {SameOriginYards:F0} yd of {origin.X:F1},{origin.Y:F1},{origin.Z:F1} over {unchecked(now - watch.FirstAt) / 1000}s: the bot does not get closer"));
+                        $"{watch.Plans} routes planned toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1} from within {SameOriginYards:F0} yd of {origin.X:F1},{origin.Y:F1},{origin.Z:F1} over {unchecked(now - watch.FirstAt) / 1000}s: the bot does not get closer{RouteOf(route)}"));
             }
 
             return;
@@ -186,6 +200,15 @@ internal static class PlayerbotNavigationAnomalies
             PlayerbotAnomalies.Report(player, "nav", "no-path-connected",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,
                     $"the region graph joins the bot and {goal.X:F1},{goal.Y:F1},{goal.Z:F1} (component {fromComponent}) but {watch.Refusals} path searches found no way"));
+    }
+
+    /// <summary>The last route planned, for the <c>nav/replan-loop</c> detail: its first leg, its size, and whether the mesh made it.</summary>
+    private static string RouteOf(PlayerbotRoute? route)
+    {
+        if (route is not { Points.Count: >= 2 }) return string.Empty;
+        Vector3 a = route.Points[0], b = route.Points[1];
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $" (last route: first leg {a.X:F1},{a.Y:F1},{a.Z:F1} -> {b.X:F1},{b.Y:F1},{b.Z:F1} of {Vector3.Distance(a, b):F1} yd, {route.Points.Count} points, {route.Distance:F1} yd, {(route.Navigated ? "mesh" : "stepped")})");
     }
 
     /// <summary>Whether the bot could be walking at all: alive, not rooted, not in a fight.</summary>
