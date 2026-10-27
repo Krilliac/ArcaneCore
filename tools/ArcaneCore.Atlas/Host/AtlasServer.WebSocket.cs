@@ -262,7 +262,8 @@ public sealed partial class AtlasServer
                     commands.RemoveAll(t => t.IsCompleted);
                     if (commands.Count >= MaxCommandsInFlight)
                     {
-                        return RefuseCommand(connection, id, name, ct);
+                        RefuseCommand(connection, id, name, ct);
+                        return true;
                     }
 
                     JsonObject? args = (JsonObject?)message["args"]?.DeepClone();
@@ -308,18 +309,13 @@ public sealed partial class AtlasServer
 
     /// <summary>
     /// Answers a command past <see cref="MaxCommandsInFlight"/> with the <c>result</c> shape <see cref="RunCommandAsync"/> sends, failed
-    /// as <see cref="CommandException.Unavailable"/>; the answer is paid from the error budget (false, nothing sent, once it is spent).
+    /// as <see cref="CommandException.Unavailable"/>. A refusal is a well-formed command, not a bad message: it is never charged to the
+    /// error budget, so a user who keeps clicking while the world thread stalls is answered rather than disconnected.
     /// </summary>
-    private bool RefuseCommand(UiConnection connection, JsonNode? id, string name, CancellationToken ct)
+    private void RefuseCommand(UiConnection connection, JsonNode? id, string name, CancellationToken ct)
     {
-        if (!TakeMessageErrorToken(connection))
-        {
-            return false;
-        }
-
         var result = new CommandResult(name, false, null, CommandException.Unavailable, $"{MaxCommandsInFlight} commands are already running on this connection; send it again after one of their results arrives.", 0);
         _ = SendQuietlyAsync(connection, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString(), ct);
-        return true;
     }
 
     /// <summary>True when a bad message may be answered now. Runs on the connection's receive loop, the only writer of the bucket.</summary>
@@ -459,7 +455,7 @@ public sealed partial class AtlasServer
             await foreach (string json in connection.PendingEvents.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 await connection.SendAsync(json, ct).ConfigureAwait(false);
-                if (connection.TakeDroppedEvents() is var dropped and > 0)
+                if (connection.TryReportDroppedEvents(out long dropped))
                 {
                     _log.LogWarning("UI {Connection} reads events slowly: {Count} queued events were dropped, oldest first.", connection.Id, dropped);
                 }

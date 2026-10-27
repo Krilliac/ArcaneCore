@@ -108,7 +108,9 @@ public sealed class HostSocketBoundsTests
         await ui.SendAsync(Command(7, "status"));
         await ui.ReceiveUntilAsync(m => m.Str("op") == "result" && m.Num("id") == 7, "the status result while inside the budget");
 
-        // Past the budget the host stops answering and closes the socket.
+        // Past the budget the host stops answering and closes the socket: four refilled answers, then the close.
+        int refilled = 4;
+        time.Advance(AtlasServer.MessageErrorRefill * refilled);
         int flood = burst + 24;
         for (int i = 0; i < flood; i++)
         {
@@ -132,8 +134,101 @@ public sealed class HostSocketBoundsTests
             }
         }
 
-        Assert.True(errors <= burst, $"{errors} answers for {flood} bad messages; the budget is {burst}");
+        Assert.True(errors > 0, $"no answer was sent before the close; {refilled} answers were refilled");
+        Assert.True(errors <= refilled, $"{errors} answers for {flood} bad messages; {refilled} were refilled");
         Assert.Equal(WebSocketCloseStatus.PolicyViolation, ui.Socket.CloseStatus);
+    }
+
+    [Fact]
+    public async Task ThirtyRefusedCommandsDuringAStall_AreEachRefused_AndDoNotCloseTheSocket()
+    {
+        int started = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using HostRig rig = await HostRig.StartAsync(
+            new AtlasServerOptions { PresenceMinInterval = TimeSpan.Zero, Time = new ManualTime() },
+            register: context => context.Commands.Register(new CommandDefinition(
+                "test.stall",
+                "Holds until the test releases it, as a stalled world thread.",
+                [],
+                async (_, _) =>
+                {
+                    Interlocked.Increment(ref started);
+                    await release.Task.ConfigureAwait(false);
+                    return new JsonObject();
+                })));
+        await using UiClient ui = await UiClient.ConnectAsync(rig);
+        int cap = AtlasServer.MaxCommandsInFlight;
+        for (int i = 1; i <= cap; i++)
+        {
+            await ui.SendAsync(Command(i, "test.stall"));
+        }
+
+        await Wait.UntilAsync(() => Volatile.Read(ref started) == cap, "the stalled commands to start");
+        int clicks = 30;
+        for (int i = 0; i < clicks; i++)
+        {
+            await ui.SendAsync(Command(100 + i, "test.stall"));
+        }
+
+        await ui.SendTextAsync("""{"op":"barrier"}""");
+        int refused = 0;
+        while (true)
+        {
+            JsonNode m = await ui.ReceiveAsync();
+            if (m.Str("op") == "error")
+            {
+                break;
+            }
+
+            if (m.Str("op") == "result")
+            {
+                Assert.Equal(CommandException.Unavailable, m.Str("result.error.code"));
+                refused++;
+            }
+        }
+
+        Assert.Equal(clicks, refused);
+        Assert.Equal(WebSocketState.Open, ui.Socket.State);
+
+        release.SetResult();
+        int done = 0;
+        while (done < cap)
+        {
+            JsonNode m = await ui.ReceiveAsync();
+            if (m.Str("op") == "result")
+            {
+                Assert.True(m.At("result.ok")!.GetValue<bool>(), m.ToJsonString());
+                done++;
+            }
+        }
+    }
+
+    [Fact]
+    public void AStalledConsumer_GetsAtMostOneDroppedEventsWarningPerWindow_CarryingTheAccumulatedCount()
+    {
+        long now = 1_000;
+        using var socket = new ClientWebSocket();
+        var connection = new UiConnection(socket, "0123456789ab", 1, () => now);
+        int capacity = UiConnection.EventQueueCapacity;
+        for (int i = 0; i < capacity + 3; i++)
+        {
+            connection.EnqueueEvent("{}");
+        }
+
+        Assert.True(connection.TryReportDroppedEvents(out long first));
+        Assert.Equal(3, first);
+
+        // Still inside the window: more drops, and the pump asks after every send, but no further line is admitted.
+        for (int i = 0; i < 5; i++)
+        {
+            connection.EnqueueEvent("{}");
+            Assert.False(connection.TryReportDroppedEvents(out _));
+        }
+
+        now += (long)UiConnection.DroppedEventsLogInterval.TotalMilliseconds;
+        Assert.True(connection.TryReportDroppedEvents(out long second));
+        Assert.Equal(5, second);
+        Assert.False(connection.TryReportDroppedEvents(out _));
     }
 
     [Fact]

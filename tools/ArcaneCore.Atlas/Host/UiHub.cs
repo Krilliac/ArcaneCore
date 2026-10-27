@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Kernel.Logging;
 
 namespace ArcaneCore.Atlas.Host;
 
@@ -24,8 +25,11 @@ public sealed class UiConnection
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly Channel<string> _events;
     private long _droppedEvents;
+    private readonly LogGate _droppedEventsLog;
 
-    internal UiConnection(WebSocket socket, string id, long sequence)
+    internal static readonly TimeSpan DroppedEventsLogInterval = TimeSpan.FromSeconds(10);
+
+    internal UiConnection(WebSocket socket, string id, long sequence, Func<long>? clock = null)
     {
         _events = Channel.CreateBounded<string>(
             new BoundedChannelOptions(EventQueueCapacity)
@@ -35,6 +39,7 @@ public sealed class UiConnection
                 SingleWriter = false,
             },
             _ => Interlocked.Increment(ref _droppedEvents));
+        _droppedEventsLog = new LogGate(DroppedEventsLogInterval, clock);
         _socket = socket;
         Id = id;
         Sequence = sequence;
@@ -88,6 +93,22 @@ public sealed class UiConnection
 
     /// <summary>Events dropped from the full queue since the last call (the queue drops the oldest), then resets the count; the event pump logs it.</summary>
     internal long TakeDroppedEvents() => Interlocked.Exchange(ref _droppedEvents, 0);
+
+    /// <summary>
+    /// True at most once per <see cref="DroppedEventsLogInterval"/> when events were dropped; <paramref name="dropped"/> is every drop since the
+    /// previous admitted line. The count is taken only when the gate admits, so drops in between accumulate instead of being lost.
+    /// </summary>
+    internal bool TryReportDroppedEvents(out long dropped)
+    {
+        dropped = 0;
+        if (Interlocked.Read(ref _droppedEvents) == 0 || !_droppedEventsLog.TryEnter(out _))
+        {
+            return false;
+        }
+
+        dropped = TakeDroppedEvents();
+        return dropped > 0;
+    }
 
     /// <summary>Sends one text frame; only one frame is in flight at a time.</summary>
     internal async Task SendAsync(string json, CancellationToken cancellationToken)
