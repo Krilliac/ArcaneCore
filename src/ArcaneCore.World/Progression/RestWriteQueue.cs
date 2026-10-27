@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Progression;
 /// failing) all carry it. <see cref="CharacterKeyedWriteQueue{TValue}.FlushAsync"/> is a pure ordered barrier that never retries and never throws.
 /// Retention is in process only.
 /// </summary>
-public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger) : CharacterKeyedWriteQueue<CharacterRestState>(scopes, logger)
+public sealed class RestWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null) : CharacterKeyedWriteQueue<CharacterRestState>(scopes, logger, drain)
 {
     private protected override string QueueName => "RestWriteQueue";
 

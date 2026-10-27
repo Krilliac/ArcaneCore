@@ -14,6 +14,7 @@ using ArcaneCore.World.Progression;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.WorldState;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -85,17 +86,50 @@ internal sealed class StoreSwitch
 {
     public volatile bool Fail;
     public volatile bool Reject;
+
+    /// <summary>Every call throws SQLite's "database is locked" (error 5), as a foreign writer holding the file would cause.</summary>
+    public volatile bool Busy;
+
+    /// <summary>Every call sleeps this long before its verdict, as a slow or locked store does.</summary>
+    public volatile int DelayMs;
     private int _failNext;
     private int _attempts;
+    private int _inFlight;
 
     public int Attempts => Volatile.Read(ref _attempts);
+
+    /// <summary>Calls inside <see cref="Step"/> right now (the delay included): a slow write that has not reached its verdict.</summary>
+    public int InFlight => Volatile.Read(ref _inFlight);
 
     /// <summary>The next <paramref name="count"/> calls throw (a transient outage), then the store works again.</summary>
     public void FailNext(int count) => Volatile.Write(ref _failNext, count);
 
     public Task Step()
     {
+        Interlocked.Increment(ref _inFlight);
+        try
+        {
+            return StepCore();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
+
+    private Task StepCore()
+    {
         Interlocked.Increment(ref _attempts);
+        if (DelayMs > 0)
+        {
+            Thread.Sleep(DelayMs);
+        }
+
+        if (Busy)
+        {
+            throw new SqliteException("SQLite Error 5: 'database is locked'.", 5);
+        }
+
         if (Reject)
         {
             throw new CharacterOwnershipRejectedException("world", 1);
@@ -138,6 +172,23 @@ internal abstract class QueueRig : IAsyncDisposable
 
     public abstract Task StopAsync();
 
+    /// <summary>The queue's <c>FlushCharacterAsync</c> raw: after a stop it reports the retained failure of the character without any attempt.</summary>
+    public abstract Task FlushCharacterRawAsync(int characterId);
+
+    /// <summary>The failure the queue still retains for <paramref name="characterId"/> (the inner exception of the not-durable fault), or null when it is durable.</summary>
+    public async Task<Exception?> RetainedFailureAsync(int characterId)
+    {
+        try
+        {
+            await FlushCharacterRawAsync(characterId).WaitAsync(Budget);
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ex.InnerException ?? ex;
+        }
+    }
+
     /// <summary>Completes with the exception the queue raised through its <c>FatalFailure</c> event.</summary>
     public Task<Exception> Fatal => FatalSource.Task;
 
@@ -152,15 +203,15 @@ internal abstract class QueueRig : IAsyncDisposable
     /// <summary>The login barrier (<c>FlushCharacterAsync</c>): retries a retained write and faults while it is still not durable; the fault is swallowed here.</summary>
     public abstract Task RetryAsync(int characterId);
 
-    public static QueueRig Create(string name) => name switch
+    public static QueueRig Create(string name, StopDrainBudget? drain = null, TimeSpan? retryDelay = null) => name switch
     {
-        nameof(HonorWriteQueue) => new HonorRig(),
-        nameof(ReputationWriteQueue) => new ReputationRig(),
-        nameof(RestWriteQueue) => new RestRig(),
-        nameof(ExploredZonesWriteQueue) => new ExploredRig(),
-        nameof(TaxiFlightWriteQueue) => new TaxiRig(),
-        nameof(InstanceWriteQueue) => new InstanceRig(),
-        nameof(SocialWriteQueue) => new SocialRig(),
+        nameof(HonorWriteQueue) => new HonorRig(drain, retryDelay),
+        nameof(ReputationWriteQueue) => new ReputationRig(drain, retryDelay),
+        nameof(RestWriteQueue) => new RestRig(drain, retryDelay),
+        nameof(ExploredZonesWriteQueue) => new ExploredRig(drain, retryDelay),
+        nameof(TaxiFlightWriteQueue) => new TaxiRig(drain, retryDelay),
+        nameof(InstanceWriteQueue) => new InstanceRig(drain, retryDelay),
+        nameof(SocialWriteQueue) => new SocialRig(drain, retryDelay),
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
     };
 
@@ -196,10 +247,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly HonorWriteQueue _queue;
 
-        public HonorRig()
+        public HonorRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IHonorStore>(new FakeHonorStore(Store)));
-            _queue = new HonorWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new HonorWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -208,6 +259,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.SaveState(characterId, CharacterHonorState.Empty with { RankPoints = 12f });
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -229,10 +281,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly ReputationWriteQueue _queue;
 
-        public ReputationRig()
+        public ReputationRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterReputationStore>(new FakeReputationStore(Store)));
-            _queue = new ReputationWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new ReputationWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -241,6 +293,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.SaveFactions(characterId, [new CharacterReputationRow(characterId, 21, 3100, 0x03)]);
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -262,10 +315,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly RestWriteQueue _queue;
 
-        public RestRig()
+        public RestRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterRestStore>(new FakeRestStore(Store)));
-            _queue = new RestWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new RestWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -274,6 +327,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.Save(characterId, new CharacterRestState(50f, 1000, true));
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -295,10 +349,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly ExploredZonesWriteQueue _queue;
 
-        public ExploredRig()
+        public ExploredRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IExploredZonesStore>(new FakeExploredStore(Store)));
-            _queue = new ExploredZonesWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new ExploredZonesWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -307,6 +361,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.Save(characterId, new uint[ExploredZonesText.WordCount]);
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -328,10 +383,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly TaxiFlightWriteQueue _queue;
 
-        public TaxiRig()
+        public TaxiRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ICharacterTaxiFlightStore>(new FakeTaxiStore(Store)));
-            _queue = new TaxiFlightWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new TaxiFlightWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -340,6 +395,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.Save(characterId, new TaxiFlightRoute([1, 2], [10], [50]));
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -361,10 +417,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly InstanceWriteQueue _queue;
 
-        public InstanceRig()
+        public InstanceRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<IInstanceStore>(new FakeInstanceStore(Store)));
-            _queue = new InstanceWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance) { RetryDelay = TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new InstanceWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, drain: drain) { RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(1), RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -373,6 +429,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.PlayerBound((uint)characterId, 900, permanent: true);
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)
@@ -394,10 +451,10 @@ internal abstract class QueueRig : IAsyncDisposable
         private readonly ServiceProvider _provider;
         private readonly SocialWriteQueue _queue;
 
-        public SocialRig()
+        public SocialRig(StopDrainBudget? drain, TimeSpan? retryDelay)
         {
             _provider = Services(s => s.AddSingleton<ISocialStore>(new FakeSocialStore(Store)));
-            _queue = new SocialWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = 1 }) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
+            _queue = new SocialWriteQueue(_provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = (int)(retryDelay?.TotalMilliseconds ?? 1) }, drain) { RetainedRetryInterval = Timeout.InfiniteTimeSpan };
             _queue.FatalFailure += ex => FatalSource.TrySetResult(ex);
             _queue.Start();
         }
@@ -406,6 +463,7 @@ internal abstract class QueueRig : IAsyncDisposable
         public override void Write(int characterId) => _queue.SetSocial(characterId, 20, SocialFlags.Friend);
         public override Task FlushAsync() => _queue.FlushAsync();
         public override Task StopAsync() => _queue.StopAsync();
+        public override Task FlushCharacterRawAsync(int characterId) => _queue.FlushCharacterAsync(characterId);
         public override bool PostSweep() => _queue.PostRetainedSweepForTest();
         public override bool HasRetained(int characterId) => _queue.HasRetainedFailure(characterId);
         public override async Task RetryAsync(int characterId)

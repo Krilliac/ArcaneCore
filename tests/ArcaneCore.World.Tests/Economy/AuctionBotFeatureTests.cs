@@ -43,6 +43,90 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task Tick_before_the_items_are_loaded_does_not_run_the_item_load_on_the_calling_thread()
+    {
+        var source = new ThreadRecordingTemplates();
+        await using var fixture = await Fixture.CreateAsync(templateSource: source, loadItems: false);
+
+        fixture.Bot.Tick(); // stands for the world thread: SQLite runs async calls inline, so the load must be handed to the pool
+
+        int loadThread = await source.LoadThread.WaitAsync(Fixture.Budget);
+        Assert.NotEqual(Environment.CurrentManagedThreadId, loadThread);
+    }
+
+    [Fact]
+    public async Task Reload_reads_the_ahbot_items_off_the_world_thread_and_replies_on_it()
+    {
+        var itemStore = new ThreadRecordingItemStore();
+        await using var fixture = await Fixture.CreateAsync(itemStore: itemStore);
+        var replied = new TaskCompletionSource<(int Thread, int Overrides)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int worldThread = await fixture.OnWorld(() => Environment.CurrentManagedThreadId);
+
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, _) => replied.TrySetResult((Environment.CurrentManagedThreadId, fixture.Bot.Overrides.Count)));
+            return true;
+        });
+
+        (int thread, int overrides) = await replied.Task.WaitAsync(Fixture.Budget);
+        Assert.Equal(worldThread, thread);
+        Assert.Equal(1, overrides);
+        Assert.NotEqual(worldThread, itemStore.LastLoadThread);
+    }
+
+    [Fact]
+    public async Task Reload_that_read_its_rows_before_a_SetItemData_does_not_overwrite_the_change()
+    {
+        var itemStore = new GatedItemStore();
+        await using var fixture = await Fixture.CreateAsync(itemStore: itemStore);
+        itemStore.Hold = true;
+        ItemTemplate template = fixture.Items.Templates.Find(Fixture.Entry)!;
+        var reloaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => reloaded.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(0).Started.WaitAsync(Fixture.Budget);
+        await fixture.OnWorld(() => fixture.Bot.SetItemData(template, new AuctionBotItemOverride(Fixture.Entry, 999, 50, 1, 1)));
+        itemStore.Read(0).Release([new AuctionBotItemOverride(Fixture.Entry, 7, 100, 1, 1)]);
+
+        Assert.False(await reloaded.Task.WaitAsync(Fixture.Budget)); // superseded: reported, not silently applied
+        Assert.Equal(999u, await fixture.OnWorld(() => fixture.Bot.Overrides[Fixture.Entry].Value));
+    }
+
+    [Fact]
+    public async Task Two_reloads_finishing_in_reverse_order_apply_only_the_later_started_one()
+    {
+        var itemStore = new GatedItemStore();
+        await using var fixture = await Fixture.CreateAsync(itemStore: itemStore);
+        itemStore.Hold = true;
+        var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => first.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(0).Started.WaitAsync(Fixture.Budget);
+        await fixture.OnWorld(() =>
+        {
+            fixture.Bot.Reload((_, applied) => second.TrySetResult(applied));
+            return true;
+        });
+        await itemStore.Read(1).Started.WaitAsync(Fixture.Budget);
+
+        itemStore.Read(1).Release([new AuctionBotItemOverride(Fixture.Entry, 22, 100, 1, 1)]);
+        Assert.True(await second.Task.WaitAsync(Fixture.Budget));
+        itemStore.Read(0).Release([new AuctionBotItemOverride(Fixture.Entry, 11, 100, 1, 1)]);
+        Assert.False(await first.Task.WaitAsync(Fixture.Budget));
+
+        Assert.Equal(22u, await fixture.OnWorld(() => fixture.Bot.Overrides[Fixture.Entry].Value));
+    }
+
+    [Fact]
     public async Task Sell_mints_each_listing_once_as_seller_zero_and_the_ledger_balances()
     {
         await using var fixture = await Fixture.CreateAsync(extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
@@ -413,6 +497,94 @@ public sealed class AuctionBotFeatureTests
         public void Advance(TimeSpan by) => Interlocked.Add(ref _ticks, by.Ticks);
     }
 
+    /// <summary>A template source that records the thread its load ran on (the calling thread when the load is started inline).</summary>
+    private sealed class ThreadRecordingTemplates : IItemTemplateSource
+    {
+        private readonly TaskCompletionSource<int> _loadThread = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<int> LoadThread => _loadThread.Task;
+
+        public Task<IReadOnlyList<ItemTemplate>> LoadTemplatesAsync(CancellationToken cancellationToken = default)
+        {
+            _loadThread.TrySetResult(Environment.CurrentManagedThreadId);
+            return Task.FromResult<IReadOnlyList<ItemTemplate>>([]);
+        }
+
+        public Task<IReadOnlyList<StartingItem>> LoadStartingItemsAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<StartingItem>>([]);
+    }
+
+    /// <summary>An <c>ahbot_items</c> store with one row that records the thread of its latest load.</summary>
+    private sealed class ThreadRecordingItemStore : IAuctionBotItemStore
+    {
+        private int _lastLoadThread;
+
+        public int LastLoadThread => Volatile.Read(ref _lastLoadThread);
+
+        public Task<IReadOnlyList<AuctionBotItemOverride>> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _lastLoadThread, Environment.CurrentManagedThreadId);
+            return Task.FromResult<IReadOnlyList<AuctionBotItemOverride>>([new AuctionBotItemOverride(Fixture.Entry, 7, 100, 1, 1)]);
+        }
+
+        public Task SaveAsync(AuctionBotItemOverride value, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> DeleteAsync(uint item, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// An <c>ahbot_items</c> store whose loads are answered at once until <see cref="Hold"/> is set, then each load waits for the
+    /// test to release it with the rows to return (so a test chooses the order the reads finish in).
+    /// </summary>
+    private sealed class GatedItemStore : IAuctionBotItemStore
+    {
+        private readonly object _gate = new();
+        private readonly List<HeldRead> _reads = [];
+
+        public volatile bool Hold;
+
+        /// <summary>The held read number <paramref name="index"/> (created on first use, so the test can wait for a read that has not started).</summary>
+        public HeldRead Read(int index)
+        {
+            lock (_gate)
+            {
+                while (_reads.Count <= index)
+                {
+                    _reads.Add(new HeldRead());
+                }
+
+                return _reads[index];
+            }
+        }
+
+        private int _next;
+
+        public async Task<IReadOnlyList<AuctionBotItemOverride>> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            if (!Hold)
+            {
+                return [new AuctionBotItemOverride(Fixture.Entry, 7, 100, 1, 1)];
+            }
+
+            HeldRead read = Read(Interlocked.Increment(ref _next) - 1);
+            read.StartedSource.TrySetResult();
+            return await read.Rows.Task.ConfigureAwait(false);
+        }
+
+        public Task SaveAsync(AuctionBotItemOverride value, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> DeleteAsync(uint item, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public sealed class HeldRead
+        {
+            public TaskCompletionSource StartedSource { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource<IReadOnlyList<AuctionBotItemOverride>> Rows { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public Task Started => StartedSource.Task;
+
+            public void Release(IReadOnlyList<AuctionBotItemOverride> rows) => Rows.TrySetResult(rows);
+        }
+    }
+
     private sealed class Templates(IReadOnlyList<ItemTemplate> templates) : IItemTemplateSource
     {
         public Task<IReadOnlyList<ItemTemplate>> LoadTemplatesAsync(CancellationToken cancellationToken = default) => Task.FromResult(templates);
@@ -508,7 +680,7 @@ public sealed class AuctionBotFeatureTests
         private readonly DbContextOptions<CharacterDbContext> _options;
         private readonly ServiceProvider _services;
 
-        private Fixture(string path, DbContextOptions<CharacterDbContext> options, ServiceProvider services, int sellerId, TimeProvider? clock)
+        private Fixture(string path, DbContextOptions<CharacterDbContext> options, ServiceProvider services, int sellerId, TimeProvider? clock, bool loadItems)
         {
             _path = path;
             _options = options;
@@ -517,7 +689,11 @@ public sealed class AuctionBotFeatureTests
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
                 services.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance);
             Items = services.GetRequiredService<ItemsFeature>();
-            Items.EnsureLoadedAsync().GetAwaiter().GetResult();
+            if (loadItems)
+            {
+                Items.EnsureLoadedAsync().GetAwaiter().GetResult();
+            }
+
             Economy = services.GetRequiredService<EconomyFeature>();
             Economy.Options.ExpirySweepSeconds = 0;
             Economy.Attach(World);
@@ -622,7 +798,8 @@ public sealed class AuctionBotFeatureTests
         }
 
         public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
-            Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null)
+            Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null,
+            IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -688,13 +865,18 @@ public sealed class AuctionBotFeatureTests
                 services.AddScoped<IAuctionBotCustodyStore>(provider => new EfAuctionBotCustodyStore(provider.GetRequiredService<CharacterDbContext>()));
             }
 
-            services.AddSingleton<IItemTemplateSource>(new Templates([template]));
+            services.AddSingleton(templateSource ?? new Templates([template]));
+            if (itemStore is not null)
+            {
+                services.AddSingleton(itemStore);
+            }
+
             services.AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(),
                 NullLogger<CharacterSaveQueue>.Instance));
             services.AddSingleton<ItemsFeature>();
             services.AddSingleton(provider => new EconomyFeature(provider, provider.GetRequiredService<IServiceScopeFactory>(),
                 NullLogger<EconomyFeature>.Instance, clock));
-            return new Fixture(path, options, services.BuildServiceProvider(), sellerId, clock);
+            return new Fixture(path, options, services.BuildServiceProvider(), sellerId, clock, loadItems);
         }
 
         public async ValueTask DisposeAsync()

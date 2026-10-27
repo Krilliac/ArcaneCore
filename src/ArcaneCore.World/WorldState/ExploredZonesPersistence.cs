@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -19,10 +20,10 @@ namespace ArcaneCore.World.WorldState;
 /// the login instead of showing a re-explored map. With no <see cref="IExploredZonesStore"/>
 /// registered the words live in memory only.
 /// </summary>
-public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers, ShutdownDrain? drain = null)
     : IWorldFeature, ICharacterHooks, IExploredZonesSink
 {
-    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>());
+    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>(), drain?.Features);
 
     public ExploredZonesWriteQueue Writes => _writes;
 

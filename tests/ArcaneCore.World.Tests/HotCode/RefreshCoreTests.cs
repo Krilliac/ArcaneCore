@@ -221,6 +221,7 @@ public sealed class RefreshCoreTests : IDisposable
     public void Dispose()
     {
         _world.Dispose();
+        HotCodeAudit.FlushAll(); // the background audit appender must be done with audit.log before the directory goes
         if (Directory.Exists(_dir))
         {
             Directory.Delete(_dir, recursive: true);
@@ -398,6 +399,7 @@ public sealed class RefreshCoreTests : IDisposable
         _state.SetFrozen(true);
         await _refresh.RunAsync(2, "frozen");
 
+        HotCodeAudit.FlushAll(); // the audit lines are written by a background appender
         string[] kinds = File.ReadAllLines(Path.Combine(_dir, "audit.log")).Select(l => l.Split('\t')[1]).ToArray();
         Assert.Equal(["refresh-applied", "refresh-alreadyapplied", "refresh-frozen"], kinds);
     }

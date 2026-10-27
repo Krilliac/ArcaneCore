@@ -98,6 +98,73 @@ public sealed class MovementFlagControlTests
         Assert.Equal(MovementChangePackets.BuildEnforced(player.Guid.Value), payload);
     }
 
+    [Fact]
+    public void ATimedOutTurnRateOrder_TellsEveryone_WithTheSplinePacket_ThroughMovementControlEnforce()
+    {
+        (Player player, FakeSession session, _) = InWorld();
+        UnitSpeed.SetTurnRate(player, 2.0f); // taken at once, recorded in the ledger as TurnRate
+        float turn = player.TurnRate;
+        session.Clear();
+
+        player.Locomotion.Pending.Age(4001);
+        PendingMovementChange? timedOut = player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _);
+        Assert.NotNull(timedOut);
+        Assert.Equal(MovementChangeType.TurnRate, timedOut.Type);
+
+        // Without the TurnRate guard in Enforce this reaches ApplyReal -> MovementChangeInfo.FlagOf, which throws.
+        MovementControl.Enforce(player, timedOut, sendToClient: true);
+
+        // vmangos resolves a timed-out turn rate with SetSpeedRateReal + SendSpeedChangeToAll (Unit.cpp:6772-6774): the rate is already taken, everyone is told.
+        Assert.Equal(turn, player.TurnRate);
+        (WorldOpcode opcode, byte[] payload) = session.Next();
+        Assert.Equal(WorldOpcode.SmsgSplineSetTurnRate, opcode);
+        Assert.Equal(SpeedPackets.BuildSpline(player.Guid.Value, turn), payload);
+        Assert.Empty(session.Sent);
+        Assert.False(player.Locomotion.Pending.HasPending);
+    }
+
+    [Fact]
+    public void ALateTurnRateAck_AfterTheTimeout_IsIgnored_AndNotCountedAsWrong()
+    {
+        (Player player, _, _) = InWorld();
+        UnitSpeed.SetTurnRate(player, 2.0f); // counter 0
+        float first = player.TurnRate;
+        UnitSpeed.SetTurnRate(player, 3.0f); // counter 1
+        float second = player.TurnRate;
+        player.Locomotion.Pending.Age(4001);
+        while (player.Locomotion.Pending.HasPending)
+        {
+            player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _); // the older order is dropped as superseded, the newer one times out
+        }
+
+        // vmangos counts a wrong ack only for counter 0 or one above the current (next) counter (MovementHandler.cpp:468-469, :481-482).
+        Assert.False(MovementControl.AcknowledgeTurnRate(player, 1, second));
+        Assert.Equal(0, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeTurnRate(player, 2, second));  // the next counter: not above the current one, so not counted
+        Assert.Equal(0, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeTurnRate(player, 3, second));  // above the current counter: counted
+        Assert.Equal(1, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeTurnRate(player, 0, first));  // counter 0 is always counted
+        Assert.Equal(2, player.Locomotion.WrongAckCount);
+    }
+
+    [Fact]
+    public void ATimedOutTurnRateOrder_SendsNothing_WhenTheCallerDoesNotSendToClient()
+    {
+        (Player player, FakeSession session, _) = InWorld();
+        UnitSpeed.SetTurnRate(player, 2.0f);
+        float turn = player.TurnRate;
+        session.Clear();
+        player.Locomotion.Pending.Age(4001);
+        PendingMovementChange? timedOut = player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _);
+        Assert.NotNull(timedOut);
+
+        MovementControl.Enforce(player, timedOut, sendToClient: false);
+
+        Assert.Equal(turn, player.TurnRate);
+        Assert.Empty(session.Sent);
+    }
+
     // --- CorrectData ---------------------------------------------------------------------
 
     [Theory]

@@ -142,6 +142,7 @@ internal sealed class RotationStateBuilder
     public RotationUnit? TameCandidate { get; set; }
     public bool AutoRepeatActive { get; set; }
     public bool HasRangedWeapon { get; set; }
+    public bool KiteHolding { get; set; }
     public bool HasWand { get; set; }
     public RotationItem? HealingPotion { get; set; }
     public RotationItem? Bandage { get; set; }
@@ -154,7 +155,7 @@ internal sealed class RotationStateBuilder
         Party = Party, Attackers = Attackers, ComboPoints = ComboPoints, Form = Form, IsStealthed = IsStealthed, WearsShield = WearsShield,
         IsMoving = IsMoving, Pet = Pet, PetUnit = PetUnit, PetFighting = PetFighting, PetFightingCrowdControlled = PetFightingCrowdControlled,
         CanCallPet = CanCallPet, TameCandidate = TameCandidate, AutoRepeatActive = AutoRepeatActive,
-        HasRangedWeapon = HasRangedWeapon, HasWand = HasWand, HealingPotion = HealingPotion, Bandage = Bandage, Totems = Totems,
+        HasRangedWeapon = HasRangedWeapon, KiteHolding = KiteHolding, HasWand = HasWand, HealingPotion = HealingPotion, Bandage = Bandage, Totems = Totems,
         InGroup = Party.Count > 0, CanCast = CanCast,
     };
 }

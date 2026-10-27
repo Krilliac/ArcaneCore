@@ -32,12 +32,14 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     private Task? _stop;
     private RetainedRetryTimer? _retry;
     private volatile bool _stopped;
+    private readonly StopDrainBudget _drain;
     private int _pending;
 
-    private protected CharacterKeyedWriteQueue(IServiceScopeFactory scopes, ILogger logger)
+    private protected CharacterKeyedWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null)
     {
         _scopes = scopes;
         Logger = logger;
+        _drain = drain ?? new StopDrainBudget();
     }
 
     private protected ILogger Logger { get; }
@@ -253,6 +255,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     private async Task StopCoreAsync()
     {
         _stopped = true;
+        _drain.Begin();
         if (_retry is not null)
         {
             await _retry.StopAsync().ConfigureAwait(false);
@@ -282,8 +285,21 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                 "persist",
                 "write-dropped-on-shutdown",
                 $"queue {QueueName}",
-                $"queue={QueueName} undrainedCharacters={failed.Length} firstCharacter={failed[0]}",
+                $"queue={QueueName} undrainedCharacters={failed.Length} firstCharacter={failed[0]} refusedByStopDrain={_drain.Refused} stalledMs={(long)_drain.StalledMs}",
                 AnomalySeverity.Error);
+            if (_drain.LastRefusal is { } refusal)
+            {
+                FaultLedger.Shared.Record($"{SitePrefix}-stop-drain", refusal);
+                Logger.LogFault(
+                    $"{SitePrefix.Replace('.', '-')}-stop-drain",
+                    refusal,
+                    "{Queue} shutdown drain stalled; {Refused} of {Undrained} retained writes were not attempted: {Summary}",
+                    QueueName,
+                    _drain.Refused,
+                    failed.Length,
+                    _drain.Describe());
+            }
+
             throw new InvalidOperationException($"{WritesNoun} writes did not drain for characters {string.Join(", ", failed)}", first);
         }
 
@@ -517,14 +533,26 @@ public abstract class CharacterKeyedWriteQueue<TValue>
             version = unsaved.Version;
         }
 
-        int attempts = sweep ? 1 : MaxAttempts;
+        int attempts = sweep || _stopped ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
+        int attemptsMade = 0;
+        bool refused = false;
         Exception? failure = null;
         for (int attempt = 1; attempt <= attempts; attempt++)
         {
+            if (attempt == 1 && _stopped && _drain.Refuse() is { } exhausted)
+            {
+                failure = exhausted; // shutdown drain only: nothing is attempted, the write stays retained
+                refused = true;
+                break;
+            }
+
+            attemptsMade = attempt;
             using IServiceScope scope = _scopes.CreateScope();
             try
             {
+                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
                 await SaveToStoreAsync(scope.ServiceProvider, characterId, value).ConfigureAwait(false);
+                progress.Succeeded();
                 failure = null;
                 break;
             }
@@ -550,6 +578,11 @@ public abstract class CharacterKeyedWriteQueue<TValue>
 
                 if (attempt < attempts)
                 {
+                    if (_stopped && _drain.Exhausted)
+                    {
+                        break; // the lane has stalled: no retry, the write stays retained with its real failure
+                    }
+
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
                 }
             }
@@ -571,7 +604,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
             }
         }
 
-        if (failure is not null && !sweep)
+        if (failure is not null && !sweep && !refused)
         {
             if (newEpisode && failure is not CharacterOwnershipRejectedException)
             {
@@ -579,11 +612,11 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                     "persist",
                     "write-retry-exhausted",
                     $"character {characterId}",
-                    $"queue={QueueName} character={characterId} attempts={attempts} error={failure.GetType().Name}",
+                    $"queue={QueueName} character={characterId} attempts={attemptsMade} error={failure.GetType().Name}",
                     AnomalySeverity.Error);
             }
 
-            LogRetryExhausted(Logger, failure, characterId, attempts);
+            LogRetryExhausted(Logger, failure, characterId, attemptsMade);
         }
 
         return failure;
