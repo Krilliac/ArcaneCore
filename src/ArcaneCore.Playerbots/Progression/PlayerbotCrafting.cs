@@ -560,7 +560,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
 
         // Back off briefly if the cast was immediately rejected (not preparing/casting and reagents unchanged).
-        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
+        if (CastNotUnderway(player)
             && (reagentId == 0 || player.Inventory.GetItemCount(reagentId) >= reagentBefore))
         {
             _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
@@ -653,6 +653,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return false;
     }
 
+    /// <summary>
+    /// Right after the bot sent a cast: true when nothing of it is underway, neither a cast in the slot nor (spell batching on) a go waiting
+    /// in the batch. Only then does an unchanged inventory mean the server refused the cast.
+    /// </summary>
+    private bool CastNotUnderway(Player player)
+        => _session.Services.GetService<SpellFeature>()?.System is not { } spells
+            || (spells.GetState(player.Guid)?.CurrentCast is null && !spells.HasPendingGo(player));
+
     private static bool ShouldDeferCraftCast(Player player, SpellInfo spell, SpellSystem? spellSystem)
     {
         if (player.IsQuestSettlementPending)
@@ -661,7 +669,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             return false;
         if (!spellSystem.IsSpellReady(player, spell))
             return true;
-        return spellSystem.GetState(player.Guid)?.CurrentCast is
+        // With spell batching on, an instant the bot just cast (the campfire it cooks at) waits for its go out of the cast slot.
+        return spellSystem.HasPendingGo(player) || spellSystem.GetState(player.Guid)?.CurrentCast is
             { State: SpellCastState.Preparing or SpellCastState.Casting };
     }
 
@@ -859,7 +868,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (!_session.TryManagedAction(WorldOpcode.CmsgCastSpell, writer.ToArray()))
             return false;
 
-        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
+        if (CastNotUnderway(player)
             && bestTarget.GetUInt32(UpdateFields.ItemFieldEnchantment) == 0)
         {
             _refusedUntil[SpellKey(bestSpell.Id)] = unchecked(now + RefusalBackoffMs);
@@ -1219,7 +1228,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         }
 
         handled = true;
-        if (_session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is null
+        if (CastNotUnderway(player)
             && player.Inventory.GetItemCount(SimpleWoodItem) >= woodBefore)
         {
             // Retail refuses a campfire in several ordinary places (indoors, in a city, on a transport, swimming): not a fault, so the

@@ -958,12 +958,14 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         if (!forMoney && FreeBagSlots(player) >= JunkReserveSlots)
             return null;
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        // With no free slot at all, an unbound bind-on-equip green that is no upgrade is junk too (#1442): greens never come off a mob as grays.
+        bool full = FreeBagSlots(player) == 0;
         return player.Inventory.AllItems
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
                 || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
-            .Where(candidate => candidate.Template.Quality <= 1 && candidate.Template.SellPrice > 0
+            .Where(candidate => (candidate.Template.Quality <= 1 || (full && candidate.Template.Quality == 2)) && candidate.Template.SellPrice > 0
                 && !_unsellable.Contains(candidate.Guid)
-                && !IsProtected(player, candidate, services) && IsJunk(player, candidate, weights))
+                && !IsProtected(player, candidate, services, allowUnboundBindOnEquip: full) && IsJunk(player, candidate, weights))
             .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
             .FirstOrDefault();
     }
@@ -1446,7 +1448,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     internal bool IsProtected(Player player, Item item)
         => session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || IsProtected(player, item, services);
 
-    private bool IsProtected(Player player, Item item, QuestNpcServices services)
+    /// <param name="allowUnboundBindOnEquip">An unbound bind-on-equip item (Bonding 2, not yet soulbound) is not protected by its binding alone.</param>
+    private bool IsProtected(Player player, Item item, QuestNpcServices services, bool allowUnboundBindOnEquip = false)
     {
         if (session.Services.GetService<SpellFeature>()?.System is { } spells
             && PlayerbotConsumables.TryClassify(item.Template, spells, out _)) return true;
@@ -1459,7 +1462,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return item.Entry == 117 || item.Template.BagFamily != 0 || item.Template.StartQuest != 0 || questRequired
             || item.Template.FoodType != 0 || item.Template.RequiredSkill != 0
             || (ItemClass)item.Template.Class is ItemClass.Quest or ItemClass.Reagent
-            || item.Template.Bonding != 0;
+            || (item.Template.Bonding != 0 && !(allowUnboundBindOnEquip && item.Template.Bonding == 2 && !item.IsSoulBound));
     }
 
     private static byte[] BuyPayload(ObjectGuid vendor, uint item)

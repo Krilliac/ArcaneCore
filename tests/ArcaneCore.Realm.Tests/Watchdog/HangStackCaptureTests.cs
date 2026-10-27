@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using Xunit;
 
@@ -163,6 +164,66 @@ public sealed class HangStackCaptureTests : IDisposable
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, line.Level);
         Assert.Contains("empty", line.Message);
         Assert.DoesNotContain("were written", line.Message);
+    }
+
+    private static long CaptureFaults()
+        => FaultLedger.Shared.Snapshot().Where(f => f.Site == HangStackCapture.FaultSite).Sum(f => f.Count);
+
+    [Fact]
+    public async Task AnEmptyCapture_IsRecordedInTheFaultLedger()
+    {
+        long before = CaptureFaults();
+        var capture = new HangStackCapture(Options(), new RecordingLogger<TickMonitor>(), new EmptyRunner(), fileExists: _ => true, processId: 4242);
+
+        Assert.True(capture.TryCapture(0, "hang"));
+        await capture.Last;
+
+        Assert.True(CaptureFaults() > before);
+    }
+
+    private sealed class EmptyThenStacksRunner : IHangStackRunner
+    {
+        public int Calls;
+
+        public Task<(int ExitCode, string Output)> RunAsync(string tool, IReadOnlyList<string> arguments, TimeSpan timeout)
+            => Task.FromResult(Interlocked.Increment(ref Calls) == 1 ? (0, "") : (0, "Thread (0x1):\n  ArcaneCore.Game.Maps.WorldRuntime.RunTick\n"));
+    }
+
+    [Fact]
+    public async Task AnExitZeroEmptyCapture_IsRetriedOnce_AndKeepsTheRetryStacks()
+    {
+        var runner = new EmptyThenStacksRunner();
+        var capture = new HangStackCapture(Options(), new RecordingLogger<TickMonitor>(), runner, fileExists: _ => true, processId: 4242);
+
+        Assert.True(capture.TryCapture(0, "hang"));
+        await capture.Last;
+
+        string text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_directory)));
+        Assert.Equal(2, runner.Calls);
+        Assert.Contains(HangStackCapture.ThreadMarker, text);
+        Assert.Contains("RETRIED", text);
+        Assert.DoesNotContain("EMPTY CAPTURE", text);
+    }
+
+    private sealed class ThrowingRunner : IHangStackRunner
+    {
+        public Task<(int ExitCode, string Output)> RunAsync(string tool, IReadOnlyList<string> arguments, TimeSpan timeout)
+            => throw new InvalidOperationException("diagnostics port refused");
+    }
+
+    [Fact]
+    public async Task ARunnerFault_StillWritesAFileThatSaysWhy_AndIsRecorded()
+    {
+        long before = CaptureFaults();
+        var capture = new HangStackCapture(Options(), new RecordingLogger<TickMonitor>(), new ThrowingRunner(), fileExists: _ => true, processId: 4242);
+
+        Assert.True(capture.TryCapture(0, "hang"));
+        await capture.Last;
+
+        string text = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_directory)));
+        Assert.Contains("CAPTURE FAILED", text);
+        Assert.Contains("diagnostics port refused", text);
+        Assert.True(CaptureFaults() > before);
     }
 
     private sealed class WhitespaceFailedRunner : IHangStackRunner

@@ -147,6 +147,11 @@ public sealed class SpellAuraHolder
 
     internal bool ExpiredReported { get; set; }
 
+
+    /// <summary>The spell batch this aura ran out in while its expiry is held for the batch boundary (SpellSystem.Batching.cs); null otherwise.</summary>
+
+    internal uint? ExpiryBatchIndex { get; set; }
+
     internal bool DurationInvalidReported { get; set; }
 
     internal bool StackOverflowReported { get; set; }

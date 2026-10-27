@@ -31,6 +31,8 @@ public sealed class DiagnosticsWiringTests
             ("Diagnostics:FirstChanceExceptions", "false"),
             ("Diagnostics:BeepOnStartup", "true"),
             ("Diagnostics:BeepOnException", "false"),
+            ("Diagnostics:CrashDialog", "true"),
+            ("Diagnostics:FaultDialog", "False"),
             ("Diagnostics:InvariantLogLimit", "0"))));
     }
 
@@ -42,6 +44,8 @@ public sealed class DiagnosticsWiringTests
     [InlineData("Diagnostics:BreakOnInvariant", "yes")]
     [InlineData("Diagnostics:BeepOnStartup", "1")]
     [InlineData("Diagnostics:BeepOnException", "maybe")]
+    [InlineData("Diagnostics:CrashDialog", "on")]
+    [InlineData("Diagnostics:FaultDialog", "1")]
     [InlineData("Diagnostics:InvariantLogLimit", "-1")]
     [InlineData("Diagnostics:InvariantLogLimit", "ten")]
     public void DiagnosticsCheck_RejectsAnUnknownValue_NamingTheKey_AndTheDaemonValidationSeesIt(string key, string value)
