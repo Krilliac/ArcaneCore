@@ -53,6 +53,9 @@ public sealed class CreatureRespawnQueueTests
 
         public int Attempts;
 
+        /// <summary>When set and it returns true for a save call, that call fails (one bad key in a batch).</summary>
+        public volatile Func<IReadOnlyCollection<CreatureRespawnRecord>, bool>? Reject;
+
         /// <summary>Saves inside <see cref="SaveAsync"/> right now (a slow write that has not reached its verdict).</summary>
         public int InFlight;
 
@@ -97,7 +100,7 @@ public sealed class CreatureRespawnQueueTests
                 throw new Microsoft.Data.Sqlite.SqliteException("SQLite Error 5: 'database is locked'.", 5);
             }
 
-            if (Down || Interlocked.Decrement(ref _failuresLeft) >= 0)
+            if (Down || Interlocked.Decrement(ref _failuresLeft) >= 0 || (Reject is { } reject && reject(upserts)))
             {
                 throw new InvalidOperationException("simulated outage");
             }
@@ -238,7 +241,8 @@ public sealed class CreatureRespawnQueueTests
         await queue.FlushAsync().WaitAsync(HangGuard);
 
         Assert.Equal(1, store.Attempts);
-        Assert.Equal(["save:0:0:2:" + (Now + 200), "save:0:0:4:" + (Now + 400), "save:0:5:1:" + (Now + 500), "delete:0:1"], store.Log);
+        string[] expected = ["save:0:0:2:" + (Now + 200), "save:0:0:4:" + (Now + 400), "save:0:5:1:" + (Now + 500), "delete:0:1"];
+        Assert.Equal(expected.Order(StringComparer.Ordinal), store.Log.Order(StringComparer.Ordinal)); // the order inside one batch is not part of the contract
         Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 3)] = Now, [(0, 2)] = Now + 200, [(0, 4)] = Now + 400, [(5, 1)] = Now + 500 }, store.Rows);
         await queue.StopAsync().WaitAsync(HangGuard);
     }
@@ -284,6 +288,174 @@ public sealed class CreatureRespawnQueueTests
         store.Down = false;
         await queue.StopAsync().WaitAsync(HangGuard);
         Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 1)] = Now + 150, [(0, 2)] = Now + 200 }, store.Rows);
+    }
+
+    /// <summary>A queue (no retry timer) whose store was down for spawns 1..<paramref name="count"/>, so all of them are retained; the store is healthy again on return.</summary>
+    private static async Task<CreatureRespawnQueue> RetainedQueueAsync(FakeStore store, ServiceProvider sp, uint count)
+    {
+        store.Down = true;
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+        };
+        for (uint guid = 1; guid <= count; guid++)
+        {
+            queue.Save(0, 0, guid, Now + guid);
+        }
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal((int)count, queue.RetainedCount);
+        store.Down = false;
+        return queue;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, string because)
+    {
+        DateTime deadline = DateTime.UtcNow + HangGuard;
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, because);
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task ASweep_RetriesHealthyRetainedKeys_AsOneStoreCall()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 4);
+        int before = store.Attempts;
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await WaitUntilAsync(() => queue.RetainedCount == 0, "the sweep never cleared the retained writes");
+
+        Assert.Equal(1, store.Attempts - before);
+        Assert.Equal(4, store.Rows.Count);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task ASweep_WhoseBatchFails_FallsBackPerKey_AndLandsEveryGoodKey()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 3);
+        int before = store.Attempts;
+        store.Reject = upserts => upserts.Any(u => u.SpawnGuid == 2); // a bad key: any call carrying spawn 2 fails
+
+        Assert.True(queue.PostRetainedSweepForTest());
+        await WaitUntilAsync(() => queue.RetainedCount == 1 && store.Rows.Count == 2, "the good keys never landed");
+
+        Assert.Equal(["spawn:0/2"], queue.RetainedKeys);
+        Assert.Equal(1 + 3, store.Attempts - before); // the batch, then each key alone
+        Assert.True(store.Rows.ContainsKey((0, 1)) && store.Rows.ContainsKey((0, 3)));
+
+        store.Reject = null;
+        await queue.StopAsync().WaitAsync(HangGuard);
+        Assert.Equal(3, store.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Stop_RetriesHealthyRetainedKeys_AsOneStoreCall()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 4);
+        int before = store.Attempts;
+
+        await queue.StopAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(1, store.Attempts - before);
+        Assert.Equal(4, store.Rows.Count);
+        Assert.Equal(0, queue.RetainedCount);
+    }
+
+    [Fact]
+    public async Task Stop_WhoseBatchFails_FallsBackPerKey_AndNamesOnlyTheBadKey()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 3);
+        store.Reject = upserts => upserts.Any(u => u.SpawnGuid == 2);
+
+        InvalidOperationException stopped = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(HangGuard));
+
+        Assert.Contains("spawn 2 (instance 0)", stopped.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("spawn 1 ", stopped.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("spawn 3 ", stopped.Message, StringComparison.Ordinal);
+        Assert.Equal(2, store.Rows.Count);
+    }
+
+    [Fact]
+    public async Task AFailedBatchsKey_OverwrittenByANewerWriteInALaterBatch_IsNoLongerRetained()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+        };
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 200);
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        Assert.Equal(["spawn:0/1", "spawn:0/2"], queue.RetainedKeys);
+
+        store.Down = false;
+        queue.Save(0, 0, 1, Now + 500); // a later batch
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(["spawn:0/2"], queue.RetainedKeys);
+        await queue.StopAsync().WaitAsync(HangGuard);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 1)] = Now + 500, [(0, 2)] = Now + 200 }, store.Rows);
+    }
+
+    [Fact]
+    public async Task ASameKeyWriteQueuedWhileABatchIsInFlight_LandsAfterIt()
+    {
+        var store = new FakeStore { HoldSaves = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 100);
+        queue.Start();
+        await store.SaveHeld.Task.WaitAsync(HangGuard); // the batch of spawns 1 and 2 is in the store
+
+        queue.Save(0, 0, 1, Now + 200); // not part of that batch: it is a later one
+        store.HoldSaves.SetResult();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(2, store.Attempts);
+        Assert.Equal(["save:0:0:1:" + (Now + 100), "save:0:0:2:" + (Now + 100), "save:0:0:1:" + (Now + 200)], store.Log);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 1)] = Now + 200, [(0, 2)] = Now + 100 }, store.Rows);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task ARetrySweepMarker_EndsABatch_SoTheSweepRunsBetweenTheTwoBatches()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 1); // spawn 1 retained, store healthy again
+        store.HoldSaves = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Save(0, 0, 10, Now + 100);
+        await store.SaveHeld.Task.WaitAsync(HangGuard); // batch of spawn 10 is in the store
+
+        queue.Save(0, 0, 11, Now + 100);
+        Assert.True(queue.PostRetainedSweepForTest());
+        queue.Save(0, 0, 12, Now + 100);
+        store.HoldSaves.SetResult();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+        await WaitUntilAsync(() => store.Log.Count == 4, "the batch after the sweep marker never landed");
+
+        // spawn 11's batch ended at the marker; the sweep retried spawn 1; spawn 12 is its own batch after it.
+        Assert.Equal(
+            ["save:0:0:10:" + (Now + 100), "save:0:0:11:" + (Now + 100), "save:0:0:1:" + (Now + 1), "save:0:0:12:" + (Now + 100)],
+            store.Log);
+        Assert.Equal(0, queue.RetainedCount);
+        await queue.StopAsync().WaitAsync(HangGuard);
     }
 
     [Fact]
@@ -790,11 +962,11 @@ public sealed class CreatureRespawnQueueTests
 
         await stopping.StopAsync().WaitAsync(HangGuard);
 
-        Assert.Equal(5, stoppingStore.Attempts - before);
+        Assert.Equal(1, stoppingStore.Attempts - before); // the five retained spawns are one batch call
         Assert.Equal(0, lane.Refused);
         Assert.Equal(0, stopping.RetainedCount);
         await slow.FlushAsync().WaitAsync(HangGuard);
-        Assert.True(lane.Succeeded >= 6, lane.Describe());
+        Assert.True(lane.Succeeded >= 2, lane.Describe());
         await slow.StopAsync().WaitAsync(HangGuard);
     }
 

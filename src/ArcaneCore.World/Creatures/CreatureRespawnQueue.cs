@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.Diagnostics;
@@ -29,6 +28,9 @@ namespace ArcaneCore.World.Creatures;
 public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null) : ICreatureRespawnPersistence
 {
     private const int MaxAttempts = 3;
+
+    /// <summary>Most spawn writes sent to the store in one call. Matches the store's own chunk size (EfCreatureRespawnStore.ChunkSize, 500), so a batch is one store transaction per instance.</summary>
+    private const int MaxBatch = 500;
 
     /// <summary>The marker the retry timer queues: not a store write, so the consumer sweeps the retained writes when it reaches it.</summary>
     private static readonly Op RetrySweep = new(default, 0, null, null, IsSweep: true);
@@ -177,9 +179,8 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         int failed = 0;
         bool locked = false;
         Exception? firstFailure = null;
-        foreach (Op op in retry)
+        foreach ((Op op, Exception? failure) in await RetryRetainedAsync(retry, sweep: true).ConfigureAwait(false))
         {
-            Exception? failure = await TryWriteAsync(op, sweep: true).ConfigureAwait(false);
             lock (_gate)
             {
                 if (!_retained.TryGetValue(op.Key, out Retained? current) || !ReferenceEquals(current.Op, op))
@@ -199,7 +200,6 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                     if (DatabaseTransience.IsBusy(failure))
                     {
                         locked = true;
-                        break;
                     }
                 }
             }
@@ -313,9 +313,9 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
             retry = [.. _retained.Values.Select(r => r.Op).OrderByDescending(o => o.Key.InstanceWide).ThenBy(o => o.Key.InstanceId).ThenBy(o => o.Key.SpawnGuid)];
         }
 
-        foreach (Op op in retry) // instance deletes first: a spawn write retained for the same instance is newer than it
+        // instance deletes first: a spawn write retained for the same instance is newer than it
+        foreach ((Op op, Exception? failure) in await RetryRetainedAsync(retry, sweep: false).ConfigureAwait(false))
         {
-            Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
             lock (_gate)
             {
                 if (failure is null)
@@ -399,8 +399,68 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     private Task<Exception?> TryWriteAsync(Op op, bool sweep = false)
         => TryWriteAsync(store => op.ExecuteAsync(store), sweep);
 
+    /// <summary>
+    /// Retry the retained writes <paramref name="retry"/> (instance deletes first, then spawn writes, as ordered by the caller): each instance delete
+    /// on its own, the spawn writes as coalesced batch calls of up to <see cref="MaxBatch"/> so a lone failure does not turn them back into one
+    /// transaction each. Only when a batch fails (and not because the database is busy, which a per-key retry would wait out again, nor once the
+    /// stop drain has stalled) are its keys retried one by one, which isolates a bad key from the good ones. A sweep stops after the first busy
+    /// verdict, so the writes not yet tried are absent from the result.
+    /// </summary>
+    private async Task<List<(Op Op, Exception? Failure)>> RetryRetainedAsync(Op[] retry, bool sweep)
+    {
+        List<(Op Op, Exception? Failure)> results = [];
+        List<Op> spawns = [];
+        foreach (Op op in retry)
+        {
+            if (!op.Key.InstanceWide)
+            {
+                spawns.Add(op);
+                continue;
+            }
+
+            Exception? failure = await TryWriteAsync(op, sweep).ConfigureAwait(false);
+            results.Add((op, failure));
+            if (sweep && failure is not null && DatabaseTransience.IsBusy(failure))
+            {
+                return results;
+            }
+        }
+
+        foreach (Op[] chunk in spawns.Chunk(MaxBatch))
+        {
+            Exception? failure = await TryWriteAsync(store => SaveBatchAsync(store, chunk), sweep, chunk.Length).ConfigureAwait(false);
+            bool busy = failure is not null && DatabaseTransience.IsBusy(failure);
+            if (failure is null || chunk.Length == 1 || busy || (_stopping && _drain.Exhausted))
+            {
+                foreach (Op op in chunk)
+                {
+                    results.Add((op, failure));
+                }
+
+                if (sweep && busy)
+                {
+                    return results;
+                }
+
+                continue;
+            }
+
+            foreach (Op op in chunk)
+            {
+                Exception? single = await TryWriteAsync(op, sweep).ConfigureAwait(false);
+                results.Add((op, single));
+                if (sweep && single is not null && DatabaseTransience.IsBusy(single))
+                {
+                    return results;
+                }
+            }
+        }
+
+        return results;
+    }
+
     /// <summary>The store call of a batch of spawn writes that were already coalesced by key (no key is in both lists).</summary>
-    private static Task SaveBatchAsync(ICreatureRespawnStore store, List<Op> batch)
+    private static Task SaveBatchAsync(ICreatureRespawnStore store, IReadOnlyCollection<Op> batch)
     {
         List<CreatureRespawnRecord> upserts = [];
         List<CreatureRespawnKey> deletes = [];
@@ -419,7 +479,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         return store.SaveAsync(upserts, deletes);
     }
 
-    private async Task<Exception?> TryWriteAsync(Func<ICreatureRespawnStore, Task> write, bool sweep = false)
+    private async Task<Exception?> TryWriteAsync(Func<ICreatureRespawnStore, Task> write, bool sweep = false, int keys = 1)
     {
         int attempts = sweep || _stopping ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; ; attempt++)
@@ -461,7 +521,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 else
                 {
                     ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("writequeue.respawn", ex);
-                    logger.LogError(ex, "creature respawn write failed; retained for retry");
+                    logger.LogError(ex, "creature respawn write of {Keys} key(s) failed; retained for retry", keys);
                 }
 
                 return ex;
@@ -539,7 +599,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 // delete or a sweep marker ends the batch, so order around it is kept.
                 Dictionary<OpKey, Op> latest = new() { [op.Key] = op };
                 int consumed = 1;
-                while (consumed < EfCreatureRespawnStore.ChunkSize && reader.TryRead(out Op? next))
+                while (consumed < MaxBatch && reader.TryRead(out Op? next))
                 {
                     if (next.IsSweep || next.Key.InstanceWide)
                     {
@@ -552,7 +612,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 }
 
                 List<Op> batch = [.. latest.Values];
-                Exception? failure = await TryWriteAsync(store => SaveBatchAsync(store, batch)).ConfigureAwait(false);
+                Exception? failure = await TryWriteAsync(store => SaveBatchAsync(store, batch), keys: batch.Count).ConfigureAwait(false);
                 lock (_gate)
                 {
                     foreach (Op settled in batch)
