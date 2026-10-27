@@ -412,8 +412,8 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(expectedB, p => p.Z > Ground + 1f);
 
         const int Readers = 4;
-        const int Rounds = 400;
-        const int Cycles = 300;
+        const int Rounds = 3000;
+        const int Cycles = 2000;
         long aHits = 0;
         long bHits = 0;
         long bAborts = 0;
