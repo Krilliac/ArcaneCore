@@ -270,6 +270,31 @@ public sealed class SpellReagentTests
         Assert.Equal(10u, player.Health);
     }
 
+    [Fact]
+    public void WithSpellBatching_AnEquippedReagentThatMayNotBeUnequipped_FailsTheRequestAtOnce_AndHoldsNothing()
+    {
+        // The go stages the reagents after CheckCast; with a batch window the held go must run that check before it is held, so the
+        // request is answered ItemNotReady as without batching instead of CastOk followed by a failure at the boundary.
+        using var kit = new SpellTestKit(CostSpell());
+        kit.System.SpellBatchWindowMs = 400;
+        Player player = AddPlayer(kit, 0);
+        player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate
+        {
+            Entry = Ankh, Name = "Synthetic equipped reagent", Class = 4, InventoryType = 5, Stackable = 20,
+        }]);
+        player.Inventory.Load([new InventoryItemData(0, InventorySlots.Chest, new ItemInstanceData { Guid = 100, Entry = Ankh, Count = 1 })]);
+        player.UnitFlags |= UnitFlags.InCombat;
+        player.Health = 10;
+
+        Assert.Equal(SpellCastResult.ItemNotReady, Cast(kit, player));
+        Assert.Equal(0, kit.System.PendingBatchedGoes);
+        Assert.False(kit.System.HasPendingGo(player));
+
+        kit.Advance(400);
+        Assert.Equal(1u, player.Inventory.GetItemCount(Ankh));
+        Assert.Equal(10u, player.Health);
+    }
+
     internal static Player AddPlayer(SpellTestKit kit, uint ankhs, bool bank = false)
     {
         (Player player, _) = kit.AddPlayer(1);

@@ -160,7 +160,11 @@ public sealed partial class SpellSystem
         return false;
     }
 
-    /// <summary>The checks <see cref="Cast"/> runs before it pays, without their replies: the cast item is still owned and usable, and CheckCast passes.</summary>
+    /// <summary>
+    /// The checks <see cref="Cast"/> runs before it pays, without their replies: the cast item is still owned and usable, CheckCast passes,
+    /// and the reagents can be taken (<see cref="StageCastReagents"/>, a detached dry run: an equipped reagent the caster may not unequip now
+    /// fails here, so the request fails at once instead of answering CastOk and failing at the boundary).
+    /// </summary>
     private SpellCastResult PrecheckGo(SpellCast cast)
     {
         Unit caster = cast.Caster;
@@ -176,8 +180,9 @@ public sealed partial class SpellSystem
         }
 
         UnitSpellState state = GetOrCreateState(caster);
-        return CheckCast(state, cast.Spell, cast.Targets, ResolveUnitTarget(caster, cast.Targets, cast.Spell), cast.IsTriggered, strict: false,
-            skipCooldown: true, castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
+        SpellCastResult result = CheckCast(state, cast.Spell, cast.Targets, ResolveUnitTarget(caster, cast.Targets, cast.Spell), cast.IsTriggered,
+            strict: false, skipCooldown: true, castItem: cast.CastItem, triggeringSpell: cast.TriggeringSpell, itemCategory: cast.ItemCategory);
+        return result == SpellCastResult.CastOk ? StageCastReagents(cast, out _) : result;
     }
 
     /// <summary>At the first update in a later batch (or at once when batching was switched off with casts held) the held casts go off.</summary>
