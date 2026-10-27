@@ -196,11 +196,18 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
         ElevatorLift tbLift = Lift(network, -1297f, 188f);
         var options = new PlayerbotOptions();
 
-        // Two spots on the mesa top, 42 and 61 yards from the top landing, each with a mesh route to it. The test used to start at
-        // (-1284.7, 250.3, 129.0) and (-1254.0, 224.2, 130.8): those lie past the mesa's north edge, in the air over Mulgore (ground at 23.5
-        // and 49.7, the nearest walkable polygon 75 yards below), and their "route" was a first leg dropping straight down to it, which #1501
-        // refuses on purpose (PathResult.StartFar and a fall-height first leg). From there no landing is reachable, rightly.
-        foreach (Vector3 botPos in (Vector3[])[new(-1252.0f, 155.5f, 133.5f), new(-1222.0f, 175.5f, 133.8f)])
+        // Two spots on the mesa top, 42 and 61 yards from the top landing, each with a mesh route to it: a landing is reachable. And the
+        // two spots the test used to start from, (-1284.7, 250.3, 129.0) and (-1254.0, 224.2, 130.8): they lie beyond the mesa's western
+        // edge (+Y is west), in the air over Mulgore (ground at 23.5 and 49.7, the nearest walkable polygon 75 yards below). Their only
+        // "route" was a first leg dropping straight down to that polygon, which #1501 refuses on purpose (PathResult.StartFar and a
+        // fall-height first leg): no landing is reachable from there.
+        foreach ((Vector3 botPos, bool onMesa) in (ValueTuple<Vector3, bool>[])
+        [
+            (new(-1252.0f, 155.5f, 133.5f), true),
+            (new(-1222.0f, 175.5f, 133.8f), true),
+            (new(-1284.7f, 250.3f, 129.0f), false),
+            (new(-1254.0f, 224.2f, 130.8f), false),
+        ])
         {
             await world.PlaceAsync(botPos);
             // The nav tiles round the lift are read on the pool (NonBlockingTiles): a query that needs one still being read answers
@@ -234,6 +241,13 @@ public sealed class PlayerbotElevatorRealTerrainTests(ITestOutputHelper output)
 
             output.WriteLine($"TB from {botPos} -> landing {reachable}; attempts {attempts}, tiles pending in the last call {pendingTiles}");
             Assert.Equal(0, pendingTiles);
+            if (!onMesa)
+            {
+                Assert.Null(reachable);
+                Assert.False(await world.OnWorldAsync(() => PlayerbotNavigation.OnWalkableMesh(world.Host.World.GetMap(1), botPos)));
+                continue;
+            }
+
             Assert.NotNull(reachable);
             Assert.True(onMesh, $"Landing {reachable} is not on walkable mesh");
             Assert.True(canPlan, $"Cannot plan from {botPos} to {reachable}");
