@@ -2194,7 +2194,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
             void Quiesce()
             {
-                if (_world is { } stopping) _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); return true; });
+                if (_world is { } stopping)
+                {
+                    ulong stoppedGuid = active.Session.Player?.Guid.Value ?? 0;
+                    _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); if (stoppedGuid != 0) Combat.PlayerbotCombatView.ForgetTameScan(stoppedGuid); return true; });
+                }
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
                 _chat?.Abandon(bot.BotId); // replies still being written for it are no longer wanted
@@ -3303,7 +3307,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         await ReleaseDefendFlagAsync(active).ConfigureAwait(false);
-        if (_world is { } world) _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); return true; });
+        if (_world is { } world)
+        {
+            ulong droppedGuid = active.Session.Player?.Guid.Value ?? 0;
+            _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); if (droppedGuid != 0) Combat.PlayerbotCombatView.ForgetTameScan(droppedGuid); return true; });
+        }
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted
         Social.Untrack(active.Record.CharacterId);
