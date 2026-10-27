@@ -55,6 +55,8 @@ public sealed class SpellRulesFeatureTests
             ["SpellRules:DiminishingReturns"] = "false",
             ["SpellRules:DiminishingResetMs"] = "9000",
             ["SpellRules:ImmunityEnforcement"] = "false",
+            ["SpellRules:DiminishingResetSweepMs"] = "5000",
+            ["SpellRules:FrostShockDiminishesAsRoot"] = "true",
         }).Build();
 
         SpellRuleOptions bound = SpellRulesCoreFeature.BindOptions(configuration);
@@ -63,6 +65,8 @@ public sealed class SpellRulesFeatureTests
         Assert.Equal((1f, 2, true, false, 9000u, false), (bound.MagicHitFloorPercent, bound.WorldBossLevelDiff, bound.IgnoreHolyResistance, bound.DiminishingReturns, bound.DiminishingResetMs, bound.ImmunityEnforcement));
         Assert.Equal((22f, 3, false, true, 15_000u, true), (defaults.MagicHitFloorPercent, defaults.WorldBossLevelDiff, defaults.IgnoreHolyResistance, defaults.DiminishingReturns, defaults.DiminishingResetMs, defaults.ImmunityEnforcement));
         Assert.False(defaults.CreatureSpellCrit);
+        Assert.Equal((5000u, true), (bound.DiminishingResetSweepMs, bound.FrostShockDiminishesAsRoot));
+        Assert.Equal((0u, false), (defaults.DiminishingResetSweepMs, defaults.FrostShockDiminishesAsRoot));
     }
 
     [Fact]

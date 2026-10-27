@@ -15,9 +15,24 @@ public sealed class DiminishingRule : ISpellApplicationRule
     private readonly ConditionalWeakTable<Unit, DiminishingTracker> _trackers = new();
     private readonly ConditionalWeakTable<SpellAuraHolder, GroupBox> _holderGroups = new();
     private readonly uint _resetMs;
+    private readonly uint _resetSweepMs;
+    private readonly bool _frostShockDiminishesAsRoot;
     private SpellSystem? _system;
 
-    public DiminishingRule(uint resetMs = 15_000) => _resetMs = resetMs;
+    public DiminishingRule(uint resetMs = 15_000)
+        : this(resetMs, resetSweepMs: 0, frostShockDiminishesAsRoot: false)
+    {
+    }
+
+    /// <param name="resetMs"><see cref="SpellRuleOptions.DiminishingResetMs"/>.</param>
+    /// <param name="resetSweepMs"><see cref="SpellRuleOptions.DiminishingResetSweepMs"/> (0: retail, exact window).</param>
+    /// <param name="frostShockDiminishesAsRoot"><see cref="SpellRuleOptions.FrostShockDiminishesAsRoot"/> (false: retail, own slowing group).</param>
+    public DiminishingRule(uint resetMs, uint resetSweepMs, bool frostShockDiminishesAsRoot)
+    {
+        _resetMs = resetMs;
+        _resetSweepMs = resetSweepMs;
+        _frostShockDiminishesAsRoot = frostShockDiminishesAsRoot;
+    }
 
     /// <summary>Install the rule on <paramref name="system"/> (after the mechanic-resist rule, which narrows the effect mask first).</summary>
     public void Attach(SpellSystem system)
@@ -45,20 +60,20 @@ public sealed class DiminishingRule : ISpellApplicationRule
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
         if (_system is null || !_trackers.TryGetValue(target, out DiminishingTracker? tracker)) return false;
-        DiminishingGroup group = DiminishingClassifier.GetGroup(spell, false);
+        DiminishingGroup group = DiminishingClassifier.GetGroup(spell, false, _frostShockDiminishesAsRoot);
         if (group == DiminishingGroup.None || _system.Relations.IsFriendly(caster, target)) return false;
         DiminishingType type = DiminishingGroups.TypeOf(group);
         bool applies = type == DiminishingType.All || (type == DiminishingType.Player && target.IsLikePlayer() && caster.IsLikePlayer());
-        return applies && tracker.GetLevel(group, _system.NowMs, _resetMs) == DiminishingLevel.Immune;
+        return applies && tracker.GetLevel(group, _system.NowMs, _resetMs, _resetSweepMs) == DiminishingLevel.Immune;
     }
 
     public void Begin(SpellApplication application)
     {
         ArgumentNullException.ThrowIfNull(application);
         SpellSystem system = application.System;
-        DiminishingGroup group = DiminishingClassifier.GetGroup(application.Cast.Spell, application.Cast.IsTriggered);
+        DiminishingGroup group = DiminishingClassifier.GetGroup(application.Cast.Spell, application.Cast.IsTriggered, _frostShockDiminishesAsRoot);
         DiminishingTracker tracker = GetTracker(application.Target);
-        DiminishingLevel level = tracker.GetLevel(group, system.NowMs, _resetMs);
+        DiminishingLevel level = tracker.GetLevel(group, system.NowMs, _resetMs, _resetSweepMs);
         application.SetState(this, new Hit(group, level));
 
         if (AppliesAura(application.Cast.Spell, application.EffectMask))

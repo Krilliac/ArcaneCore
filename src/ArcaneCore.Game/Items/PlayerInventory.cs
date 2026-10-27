@@ -152,6 +152,11 @@ public sealed partial class PlayerInventory
 
             while (true)
             {
+                if (_slot >= items.Length)
+                {
+                    return false; // already ended: MoveNext keeps answering false (IEnumerator contract), never reads past the slots
+                }
+
                 if (_slot >= 0 && items[_slot] is Container bag)
                 {
                     while (++_inner < bag.Size)
