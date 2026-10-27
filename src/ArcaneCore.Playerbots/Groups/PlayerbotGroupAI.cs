@@ -480,7 +480,7 @@ internal sealed class PlayerbotGroupAI
     {
         Goal = PlayerbotGoalKind.Group;
         Step = "lead:" + group.State.ToString().ToLowerInvariant();
-        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
             case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
@@ -512,9 +512,13 @@ internal sealed class PlayerbotGroupAI
                 if (!approaching) NoteUnpathableApproachNear(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
-                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; Hold(player); return; }
-                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
-                Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "lead:walk-entrance" : "lead:no-path-entrance";
+                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
+                // A way to the entrance that stays unplanned ends the group at the no-path bound, not at the enter step's timeout: a group let
+                // on from near an approach point it could not reach (NoteUnpathableApproachNear) often has no way to the entrance either.
+                bool entering = WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                Step = entering ? "lead:walk-entrance" : "lead:no-path-entrance";
+                NoteRunProgress(group, entering);
                 return;
             case PlayerbotGroupState.Engaging:
                 if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
@@ -649,7 +653,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// A leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the group: a run
-    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c> or <c>no-path-to-approach</c>
+    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c>, <c>no-path-to-approach</c> or
+    /// (a dungeon quest group walking to the entrance) <c>no-path-to-entrance</c>
     /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
     /// </summary>
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
@@ -658,7 +663,7 @@ internal sealed class PlayerbotGroupAI
         if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
         bool engaging = group.State == PlayerbotGroupState.Engaging;
         group.RunFault ??= group.Run is null
-            ? (engaging ? "no-path-to-objective" : "no-path-to-approach")
+            ? (engaging ? "no-path-to-objective" : group.State == PlayerbotGroupState.Entering ? "no-path-to-entrance" : "no-path-to-approach")
             : (engaging ? "no-path-to-boss" : "no-path-to-entrance");
     }
 
