@@ -198,9 +198,10 @@ internal sealed partial class PlayerbotBattlegroundAI
 
     /// <summary>
     /// One think of the walk to a battlemaster: towards <paramref name="at"/>, stopping in interaction range. Out of combat only; a fight on
-    /// the way is answered (the bot is attacked) before it walks on. True while it walks or fights.
+    /// the way is answered (the bot is attacked) before it walks on. True while it walks or fights. A bot that stands at <paramref name="at"/>
+    /// for 5 s without the master refuses the walk, unless <paramref name="refuseEmptySpot"/> is false (a master that walks waypoints).
     /// </summary>
-    internal bool Travel(Player player, Vector3 at, uint elapsedMs)
+    internal bool Travel(Player player, Vector3 at, uint elapsedMs, bool refuseEmptySpot = true)
     {
         if (!Think(player, elapsedMs, out uint interval)) return true;
         TravelRefused = false;
@@ -218,7 +219,8 @@ internal sealed partial class PlayerbotBattlegroundAI
         {
             Hold(player);
             _atMasterMs = unchecked(_atMasterMs + interval);
-            if (_atMasterMs >= 5_000)
+            // A master that walks waypoints may be out of the bot's sight for a moment: only the progress watch and the walk's timeout end that wait.
+            if (refuseEmptySpot && _atMasterMs >= 5_000)
             {
                 TravelRefused = true;
                 ReportObjectiveUnreachable(player, $"no living battlemaster at {at}");
@@ -710,10 +712,17 @@ internal sealed partial class PlayerbotBattlegroundAI
             // A civilian (a villager, a vendor) is not picked from a scan; one that attacks the bot (requireHostile false) is fought back.
             && (deliberate || !requireHostile || !PlayerbotTargetFilter.IsCivilian(creature));
 
-    /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked).</summary>
+    /// <summary>Whether a unit attacks the bot that it may hit back: exactly when the walk to a battlemaster answers it first (<see cref="Travel"/>), and so when the walk's progress watch stands still.</summary>
+    internal static bool IsAttacked(Player player) => FirstAttacker(player) is not null;
+
+    /// <summary>A unit attacking the bot that it may hit back (the walk to a battlemaster, a carrier that is blocked). A plain loop: no closure is allocated per call.</summary>
     private static Unit? FirstAttacker(Player player)
-        => player.Combat.Attackers.FirstOrDefault(u => u.IsAlive && u.IsInWorld && ReferenceEquals(u.Map, player.Map)
-            && player.Map is { } map && map.Combat.Hooks.CanAttack(player, u));
+    {
+        if (player.Map is not { } map) return null;
+        foreach (Unit u in player.Combat.Attackers)
+            if (u.IsAlive && u.IsInWorld && ReferenceEquals(u.Map, map) && map.Combat.Hooks.CanAttack(player, u)) return u;
+        return null;
+    }
 
     /// <summary>A carrier does not stop to fight; it only keeps hitting a target it already fights in melee reach.</summary>
     private Unit? FirstAttackerIfStill(Player player)

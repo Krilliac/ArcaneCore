@@ -70,7 +70,7 @@ internal static class PlayerbotCombatView
     }
 
     internal static RotationState Build(WorldSession session, SpellFeature feature, Player player, Unit? victim,
-        PlayerbotAbilities spells, PlayerbotRole role, Func<SpellInfo, bool> blocked)
+        PlayerbotAbilities spells, PlayerbotRole role, Func<SpellInfo, bool> blocked, bool kiteHolding = false)
     {
         SpellSystem system = feature.System;
         Map? map = player.Map;
@@ -230,6 +230,7 @@ internal static class PlayerbotCombatView
             CanCallPet = canCallPet,
             TameCandidate = tameCandidate,
             AutoRepeatActive = system.HasAutoRepeat(player),
+            KiteHolding = kiteHolding,
             HasRangedWeapon = ranged?.Template is { Class: ItemClassWeapon } rangedTemplate && rangedTemplate.SubClass != SubClassWand
                 && !(ranged.MaxDurability > 0 && ranged.Durability == 0),
             HasWand = ranged?.Template is { Class: ItemClassWeapon, SubClass: SubClassWand }

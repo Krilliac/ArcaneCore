@@ -16,7 +16,7 @@
 // ref: tools/ArcaneCore.Atlas/Core/GeometryChunk.cs:260  flags bit0 triangles, bit1 lines, bit2 points
 // ref: tools/ArcaneCore.Atlas/Core/GeometryChunk.cs:261  header fields in order, little-endian, through offset 44
 // ref: tools/ArcaneCore.Atlas/Core/GeometryChunk.cs:272  arrays in order, then u32 JSON length and the UTF-8 JSON (:279)
-// ref: D:/ArcaneCore-lanes/_wf/ATLAS-2026-10-18.md:285   tile envelope: u32 partCount, per part u32 length + ATG1 bytes
+// ref: ATLAS-2026-10-18.md:285   tile envelope: u32 partCount, per part u32 length + ATG1 bytes
 // All little-endian. Typed-array views need 4-byte alignment, so a part that starts on an odd offset of the response
 // is copied once; otherwise the arrays are views onto the response buffer.
 

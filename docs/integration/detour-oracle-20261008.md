@@ -7,10 +7,10 @@
 `MmapTileHeader`, passes the remaining v7 bytes to `DtMeshDataReader.Read(buf, 6,
 is32Bit: false)`, and initializes DotRecast with the map origin, tile dimensions, tile
 capacity and `maxPolys = 65536`. The stored vmangos value is zero because the generator
-uses 64-bit polygon refs (`D:/refs/vmangos/contrib/mmap/src/MapBuilder.cpp:462`);
+uses 64-bit polygon refs (`<refs-root>/vmangos/contrib/mmap/src/MapBuilder.cpp:462`);
 `MMapManager::loadMapData` reads those parameters and `MMapManager::loadMap` reads the
-tile prefix (`D:/refs/vmangos/src/game/Maps/MoveMap.cpp`). Polygon flags follow
-`PathInfo::createFilter` (`D:/refs/vmangos/src/game/Maps/PathFinder.cpp`). The
+tile prefix (`<refs-root>/vmangos/src/game/Maps/MoveMap.cpp`). Polygon flags follow
+`PathInfo::createFilter` (`<refs-root>/vmangos/src/game/Maps/PathFinder.cpp`). The
 ArcaneCore side uses `NavMeshQuery.FindCorridor` and `StringPull`, then also checks the
 public `NavMeshPathfinder.FindPath` on the same loaded tiles.
 
@@ -63,7 +63,7 @@ was chosen: NavMeshQuery did not pick the one that the Detour `findPath` in vman
 picks.
 
 The cause was NavMeshQuery's A* node handling. It differed from `dtNavMeshQuery::findPath`
-(`D:/refs/vmangos/dep/recastnavigation/Detour/Source/DetourNavMeshQuery.cpp`) in five ways:
+(`<refs-root>/vmangos/dep/recastnavigation/Detour/Source/DetourNavMeshQuery.cpp`) in five ways:
 
 * NavMeshQuery made one node per polygon. Detour makes one node per polygon and tile side
   crossed (`getNode(neighbourRef, crossSide)`).
@@ -156,7 +156,7 @@ to be marked as altered. It would also need its own non-test project.
 
 * `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false` reported 0 warnings
   and 0 errors.
-* The oracle tests with `ARCANECORE_TEST_TERRAIN_DIR=D:/ArcaneCore-data/terrain-5875`:
+* The oracle tests with `ARCANECORE_TEST_TERRAIN_DIR=<data-root>/terrain-5875`:
   3 passed. Without the variable, 2 passed and 1 was skipped (the real-tile test).
 * Full `ArcaneCore.Game.Tests` with terrain data: 7,283 passed, 1 skipped, 0 failed.
 * Full `ArcaneCore.World.Tests`: 2,963 passed, 14 skipped, 1 failed. The failure is the

@@ -32,6 +32,7 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
 {
     public const string BanAuthor = "Warden";
 
+
     private const string StaffPrefix = "|cffff4040[Warden]|r ";
 
     private readonly ConcurrentDictionary<WorldSession, Tracked> _sessions = new(ReferenceEqualityComparer.Instance);
@@ -79,15 +80,37 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
             _usable ? "enabled" : "disabled", _options.Action, _options.ProtocolAction, _options.Checks.Count);
     }
 
-    /// <summary>Report every session's held protocol verdicts, so no count is lost at shutdown.</summary>
-    public Task StopAsync()
+    /// <summary>How long <see cref="StopAsync"/> waits for ban writes still in flight (tests shorten it).</summary>
+    internal TimeSpan PendingBanStopWait { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Report every session's held protocol verdicts, so no count is lost at shutdown, then wait (bounded by <see cref="PendingBanStopWait"/>) for the ban
+    /// writes in flight. A write still pending at the bound is recorded as <c>warden.ban-stop</c> (it may be lost with the process). A ban that starts
+    /// after this call took its snapshot (a verdict on a session task racing the shutdown) is not waited for.
+    /// </summary>
+    public async Task StopAsync()
     {
         foreach ((WorldSession session, Tracked tracked) in _sessions)
         {
             Drive(session, tracked, static (w, _) => w.Flush(), 0u);
         }
 
-        return Task.CompletedTask;
+        Task[] bans = [.. _pendingBans.Keys];
+        if (bans.Length == 0)
+        {
+            return;
+        }
+
+        Task all = Task.WhenAll(bans);
+        if (await Task.WhenAny(all, Task.Delay(PendingBanStopWait)).ConfigureAwait(false) == all)
+        {
+            return;
+        }
+
+        int[] accounts = [.. _pendingBans.Where(b => !b.Key.IsCompleted).Select(b => b.Value).Distinct()];
+        var ex = new TimeoutException($"{accounts.Length} Warden ban write(s) still pending after {PendingBanStopWait.TotalSeconds:0.###} s at stop (account(s) {string.Join(", ", accounts)}); the ban(s) may be lost");
+        FaultLedger.Shared.Record("warden.ban-stop", ex);
+        logger.LogFault("warden.ban-stop", ex, "Warden: {Count} ban write(s) still pending at stop (account(s) {Accounts}); the ban(s) may be lost", accounts.Length, string.Join(", ", accounts));
     }
 
     /// <summary>The scans new sessions run: the table's for build 5875 merged with <c>Warden:Checks</c>.</summary>
@@ -276,8 +299,12 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 break;
             case WardenAction.Ban:
                 Announce(session, action, reason, "Warden banned an account", AnnounceSeverity.Error);
-                _ = BanAsync(session.AccountId, reason);
+                // The kick is immediate (vmangos Warden::ApplyPenalty): a banned client must not keep sending opcodes (trade, mail, auction)
+                // while the ban commits, which is unbounded when the database stalls. The write runs off this thread (SQLite completes the
+                // async write synchronously, and this can be the world tick); BanAsync records its failure. Limit: an instant reconnect can
+                // authenticate before the ban row exists (docs/areas/warden.md).
                 session.Kick();
+                StartBan(session.AccountId, reason);
                 break;
         }
     }
@@ -359,6 +386,18 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 return items;
             }
         }
+    }
+
+    // Bans still writing; StopAsync waits (bounded) so a ban started just before shutdown is not abandoned with the process.
+    private readonly ConcurrentDictionary<Task, int> _pendingBans = new();
+
+    /// <summary>Start the ban write on the pool and return at once, whatever the store does with its calling thread.</summary>
+    internal void StartBan(int accountId, string reason)
+    {
+        Task write = Task.Run(() => BanAsync(accountId, reason)); // BanAsync records its own failures and never throws
+        _pendingBans.TryAdd(write, accountId);
+        _ = write.ContinueWith(static (done, state) => ((ConcurrentDictionary<Task, int>)state!).TryRemove(done, out _), _pendingBans,
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     private async Task BanAsync(int accountId, string reason)

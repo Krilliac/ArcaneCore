@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Chat;
 public sealed class PlayerbotChatLiveTests
 {
     private static readonly BotChatPrompt Prompt = new(PlayerbotChatPrompts.StaticSystem,
-        "You are Livetest, a level 12 male dwarf hunter. You are in Loch Modan. You are speaking with Nathan by whisper.",
+        "You are Livetest, a level 12 male dwarf hunter. You are in Loch Modan. You are speaking with Testplayer by whisper.",
         [new BotChatTurn(true, "hi, what are you up to?")]);
 
     private sealed class LiveFactAttribute : FactAttribute

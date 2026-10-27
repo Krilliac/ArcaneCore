@@ -3,7 +3,7 @@
 Lane "death-persistence" of the vanilla-fidelity round. It makes the state that death and the
 recovery from it depend on survive a logout: health, power and experience, the recent-death window,
 and the ghost with its body. Behaviour follows vmangos `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`
-(`D:\refs\vmangos`); every rule below cites the file and line it was read from. Nothing was copied
+(`<refs-root>\vmangos`); every rule below cites the file and line it was read from. Nothing was copied
 from the references; all code is a clean-room C# re-expression. Everything defaults to retail
 behaviour; there is no deviation switch in this lane (the deviations that exist are limits, below).
 

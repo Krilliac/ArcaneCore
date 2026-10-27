@@ -456,6 +456,34 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotCombat_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The brains, party AIs and group AIs read World:Playerbots:Combat from this options object at every decision (PlayerbotKite).
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Combat": { "Kite": { "Enabled": false, "HealthPct": 30, "StepYards": 6, "MaxStepsPerFight": 3 } } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotKiteOptions kite = playerbots.Combat.Kite;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(kite, playerbots.Combat.Kite); // changed in place: the running bots hold these objects
+        Assert.False(kite.Enabled);
+        Assert.Equal(30f, kite.HealthPct);
+        Assert.Equal(6f, kite.StepYards);
+        Assert.Equal(3, kite.MaxStepsPerFight);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Combat": { "Kite": { "HealthPct": 1 } } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(30f, kite.HealthPct);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(kite.Enabled);
+        Assert.Equal(50f, kite.HealthPct);
+        Assert.Equal(10f, kite.StepYards);
+        Assert.Equal(8, kite.MaxStepsPerFight);
+    }
+
+    [Fact]
     public async Task PlayerbotRivalry_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
     {
         // The rivalry lane and the party AIs read World:Playerbots:Social:Rivalry from this options object at every pass and every emote.
@@ -769,6 +797,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
+        }
+
+        // Kiting is live key by key (docs/areas/playbots-combat.md, Kiting).
+        foreach (PropertyInfo property in typeof(PlayerbotKiteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Combat)}:{nameof(PlayerbotCombatOptions.Kite)}:{property.Name}");
         }
 
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()

@@ -22,7 +22,7 @@ public sealed record LiveOptions
     public TimeSpan HelloTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>How long a <c>live.query</c> waits for its result.</summary>
-    // ref: D:\ArcaneCore-lanes\_wf\ATLAS-2026-10-18.md:220-221 (query id echoed in the result) and the lane brief ("correlated by id, 5 s timeout")
+    // ref: ATLAS-2026-10-18.md:220-221 (query id echoed in the result) and the lane brief ("correlated by id, 5 s timeout")
     public TimeSpan QueryTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>How long a write to the pipe may take before the connection is treated as stuck.</summary>

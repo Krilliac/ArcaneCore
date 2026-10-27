@@ -451,7 +451,8 @@ public sealed class KernelFuzzAndExceptionTests
         await Assert.ThrowsAsync<ArgumentNullException>(() => cooperativeTimeout.ExecuteAsync<int>(null!, 0).AsTask());
 
         TimeoutRejectedException coopEx = await Assert.ThrowsAsync<TimeoutRejectedException>(
-            () => cooperativeTimeout.ExecuteAsync(static async (_, ct) => await Task.Delay(TimeSpan.FromSeconds(5), ct), 0).AsTask());
+            // Only the deadline can end the operation: a finite delay raced the 20 ms timer on a stalled CI runner and won (no exception thrown).
+            () => cooperativeTimeout.ExecuteAsync(static async (_, ct) => await Task.Delay(Timeout.InfiniteTimeSpan, ct), 0).AsTask());
         Assert.Equal(TimeSpan.FromMilliseconds(20), coopEx.Timeout);
 
         var pessimisticTimeout = new TimeoutPolicy(TimeSpan.FromMilliseconds(20), strategy: TimeoutStrategy.Pessimistic);

@@ -1,12 +1,12 @@
 # ArcaneCore live sweep: handoff, Oct 17–18, 2026 (updated 01:36 CT Oct 18)
 
-Branch `grok/live-sweep` (Krilliac/ArcaneCore). Sweep started Oct 17 18:20 CT at `9b39adcf`. The first handoff was written at `c2ed52676` (after `8b46a2a7`, 144 commits), and the follow-up wave completed all remaining items across 11 additional commits (`c2ed52676..7379464f2`, **156 commits total** since `9b39adcf`). Work was coordinated in `D:\ArcaneCore-sweep\` (`LEAD-LOG.md`, `ISSUES.md`, `CLAIMS.md`, and per-lane worktrees). Live keeps running.
+Branch `grok/live-sweep` (Krilliac/ArcaneCore). Sweep started Oct 17 18:20 CT at `9b39adcf`. The first handoff was written at `c2ed52676` (after `8b46a2a7`, 144 commits), and the follow-up wave completed all remaining items across 11 additional commits (`c2ed52676..7379464f2`, **156 commits total** since `9b39adcf`). Work was coordinated in `<sweep-root>\` (`LEAD-LOG.md`, `ISSUES.md`, `CLAIMS.md`, and per-lane worktrees). Live keeps running.
 
 ## 1. Live state (final redeploy #10, 01:26 CT Oct 18)
 
-- Deployed **`7379464f2`** (`D:\ArcaneCore-live\bin\arcanecore-deploy.json`). Snapshot `bin-20261018-0126`. Previous runs (#8 and #9) stopped cleanly (`World saved and stopped`).
+- Deployed **`7379464f2`** (`<live-home>\bin\arcanecore-deploy.json`). Snapshot `bin-20261018-0126`. Previous runs (#8 and #9) stopped cleanly (`World saved and stopped`).
 - **Realm PID 44612, World PID 41720.** Listening on `127.0.0.1:8085` (305 opcode handlers). Debug build, unoptimized.
-- **Remote admin: on** at `127.0.0.1:3443` (loopback only). Token for `@token` login is in `D:\ArcaneCore-live\bin\ra-token.txt`.
+- **Remote admin: on** at `127.0.0.1:3443` (loopback only). Token for `@token` login is in `<live-home>\bin\ra-token.txt`.
 - **Health & Performance on #8 / #9 / #10 (`Stage 2` + `PathJobsFollow=true`):**
   - **Crashes / Hangs / Faults:** 0 crashes, 0 dumps, 0 `TickHang`s, 0 `nav.job` faults, 0 `ObjectDisposedException` / pool / fence errors.
   - **Population & Memory:** 1,000 running bots (1,633 registered). World working set ~2.45 GB (`PrivateMemorySize64` 2.40 GB), Realm working set 87 MB.
@@ -26,12 +26,12 @@ Branch `grok/live-sweep` (Krilliac/ArcaneCore). Sweep started Oct 17 18:20 CT at
     - `bot-motion/under-map` (`LS-004`): dropped from thousands/h to **~160/h**.
 
 ### Redeploy recipe
-1. `cd D:\ArcaneCore-sweep\lead`, then `git pull --rebase`.
-2. Build all three projects through `D:\ArcaneCore-sweep\build-slot.ps1 build src\<P>\<P>.csproj -c Debug`, where P is `ArcaneCore.World`, `ArcaneCore.Realm`, and **`ArcaneCore.Playerbots`**. Without the Playerbots build the pack is stale (`LS-016`).
-3. Set `ARCANECORE_LIVE_HOME=D:\ArcaneCore-live` and `ARCANECORE_LIVE_PROFILE=C:\Users\Nathan\Documents\Codex\2026-10-04\c\work\ArcaneCore-playable-standard-20261005-r3`.
+1. `cd <sweep-root>\lead`, then `git pull --rebase`.
+2. Build all three projects through `<sweep-root>\build-slot.ps1 build src\<P>\<P>.csproj -c Debug`, where P is `ArcaneCore.World`, `ArcaneCore.Realm`, and **`ArcaneCore.Playerbots`**. Without the Playerbots build the pack is stale (`LS-016`).
+3. Set `ARCANECORE_LIVE_HOME=<live-home>` and `ARCANECORE_LIVE_PROFILE=<live-profile>`.
 4. Run `pwsh -NoProfile -File tools\ops\live\redeploy.ps1 -ForceRestart`.
 
-To monitor, run `powershell -NoProfile -File D:\ArcaneCore-sweep\cycle.ps1 -Minutes N`.
+To monitor, run `powershell -NoProfile -File <sweep-root>\cycle.ps1 -Minutes N`.
 
 ## 2. Multithreading settings and status
 

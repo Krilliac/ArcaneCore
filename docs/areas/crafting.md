@@ -4,7 +4,7 @@ Lane `claude/vw5-crafting-professions`, base `claude/vw4-integration` (7313b9e: 
 behaviour changes the integrator must know) is in [docs/integration/crafting.md](../integration/crafting.md).
 
 Standing directive: as close to vanilla 1.12.1 as possible, taken from the references, every deviation behind a configuration option that defaults to
-retail or listed under **Limits**. References, in order of authority: **vmangos** (`D:\refs\vmangos`, the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD`
+retail or listed under **Limits**. References, in order of authority: **vmangos** (`<refs-root>\vmangos`, the 1.12.1 branch of its `#if SUPPORTED_CLIENT_BUILD`
 blocks), **mangos-classic**, **gtker wow_messages**, **classic-db** (read only: ids and numbers as fixtures, nothing copied). Each piece of code cites
 file:line; where vmangos and another reference disagree the choice is stated.
 
@@ -116,8 +116,8 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 
 ## Verified against real data
 
-- `D:\server-Zero\run\dbc` holds 1.12-shaped client DBCs: `SpellItemEnchantment.dbc` is 24 fields / 1,460 rows and decodes completely
-  (`RealDbcProbe`, run with `ARCANECORE_TEST_DBC_DIR=D:\server-Zero\run\dbc`). All 373 enchant effects of classic-db (274 ENCHANT_ITEM, 86 ENCHANT_ITEM_TEMPORARY, 13 ENCHANT_HELD_ITEM), naming 272 distinct enchant ids, name an id that exists in it.
+- `<server-zero-run>\dbc` holds 1.12-shaped client DBCs: `SpellItemEnchantment.dbc` is 24 fields / 1,460 rows and decodes completely
+  (`RealDbcProbe`, run with `ARCANECORE_TEST_DBC_DIR=<server-zero-run>\dbc`). All 373 enchant effects of classic-db (274 ENCHANT_ITEM, 86 ENCHANT_ITEM_TEMPORARY, 13 ENCHANT_HELD_ITEM), naming 272 distinct enchant ids, name an id that exists in it.
 - The referenced enchants are overwhelmingly EQUIP_SPELL (178 effects; their spells are `MOD_STAT` 65, `MOD_RESISTANCE` 36, `MOD_HEALING_DONE` 20, `MOD_SKILL` 17, `MOD_DAMAGE_DONE` 15,
   `MOD_ATTACK_POWER` 10 ...), then COMBAT_SPELL (62), DAMAGE (23) and RESISTANCE (11): no referenced enchant uses the STAT type. Most enchantments therefore work through the aura
   engine; which aura types are registered is that lane's (`aura-engine-completeness`) coverage.

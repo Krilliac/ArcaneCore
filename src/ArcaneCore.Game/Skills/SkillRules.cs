@@ -44,10 +44,17 @@ public static class SkillRules
 
     /// <summary>
     /// The chance of UpdateCraftSkill for one SkillLineAbility row (Player.cpp:5214-5243): the recipe's
-    /// "trivial high" (max_value) is grey, the mean of high and low is green and the low (min_value) is yellow.
+    /// "trivial high" (max_value) is grey, the mean of high and low is green and the low (min_value) is yellow. With
+    /// <see cref="SkillOptions.CraftingChanceCurve"/> the yellow-to-grey band is <c>(grey - skill) * 1000 / (grey - yellow)</c> per mille
+    /// instead (orange and grey keep their configured chances); a recipe whose grey is not above its yellow keeps the colour steps.
     /// </summary>
     public static int CraftChance(uint skillValue, uint maxValue, uint minValue, SkillOptions options)
-        => GainChance(skillValue, maxValue, (maxValue + minValue) / 2, minValue, options);
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.CraftingChanceCurve && maxValue > minValue && skillValue >= minValue && skillValue < maxValue)
+            return (int)((maxValue - skillValue) * 1000 / (maxValue - minValue));
+        return GainChance(skillValue, maxValue, (maxValue + minValue) / 2, minValue, options);
+    }
 
     /// <summary>
     /// The chance of UpdateGatherSkill (Player.cpp:5247-5281), or null for a skill the function does not

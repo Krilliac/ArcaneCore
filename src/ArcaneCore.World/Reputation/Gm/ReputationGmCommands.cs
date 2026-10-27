@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Reputation.Gm;
 /// <summary>
 /// The reply texts and the shared helpers of the reputation GM commands. Texts are the English rows of the vmangos
 /// <c>mangos_string</c> table as the cmangos classic-db dump ships them (ids 305-327,
-/// D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz); localisation is not provided (a documented limit). Every
+/// classic-db Full_DB\ClassicDB_1_12_1_z2815.sql.gz); localisation is not provided (a documented limit). Every
 /// command answers with an explicit line, never silently, when no Faction.dbc is loaded.
 /// </summary>
 internal static class ReputationGmText

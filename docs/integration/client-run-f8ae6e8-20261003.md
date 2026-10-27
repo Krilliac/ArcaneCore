@@ -18,7 +18,7 @@ are therefore **reported passes**, not additional verification by this lane.
 |---|---|
 | Date/timezone | 2026-10-03, `America/Chicago` (CDT). |
 | Displayed client | `1.12.1 (5875) Release`, with displayed date `Sep 19, 2006`. |
-| Server checkout | Clean detached checkout `D:\ArcaneCore-client-acceptance-f8ae6e8`. |
+| Server checkout | Clean detached checkout `<client-acceptance-checkout>`. |
 | Exact tested server SHA | `f8ae6e8b5f805e94f145194a82f80e876fa2dec3`. |
 | Build | .NET SDK 10.0.401; Release, zero warnings/errors. |
 | Databases | Fresh SQLite; auth schema 2, characters schema 6, world schema 6. |
@@ -33,7 +33,7 @@ automated qualification and setup commands remain in
 [quest UI follow-up](quest-ui-acceptance.md) is a separately selected future run.
 
 The supplied run reference is
-`C:\Users\Nathan\Documents\Codex\2026-10-03\t\work\ArcaneCore-client-f8ae6e8`.
+`<work-dir>\ArcaneCore-client-f8ae6e8`.
 It was outside this documentation lane's permitted inspection scope and was not
 accessed or copied. Auth storage contains disposable authentication material;
 exclude it from a shared evidence bundle. No client assets belong in the repository.

@@ -10,7 +10,7 @@ namespace ArcaneCore.Atlas.Reference.Mpq;
 public static class MpqCompression
 {
     // The methods are undone in this order, each one's output feeding the next.
-    // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:911-920 (dcmp_table) and :1001-1025 (the loop)
+    // ref: StormLib src/SCompression.cpp:911-920 (dcmp_table) and :1001-1025 (the loop)
     private static readonly byte[] UndoOrder =
     [
         MpqCompressionMask.Bzip2,
@@ -25,7 +25,7 @@ public static class MpqCompression
     // Archives of format version 1 and newer use SCompDecompress2's fixed method set instead of the format-0 table. Masks:
     // zlib 0x02, pkware 0x08, bzip2 0x10, lzma 0x12, sparse 0x20, sparse+zlib 0x22, sparse+bzip2 0x30, huffman+adpcm-mono 0x41,
     // huffman+adpcm-stereo 0x81.
-    // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:1066-1115 (the switch) and :1155-1161 (SCompDecompressX picks it
+    // ref: StormLib src/SCompression.cpp:1066-1115 (the switch) and :1155-1161 (SCompDecompressX picks it
     // for wFormatVersion >= MPQ_FORMAT_VERSION_2, which StormLib.h:304 defines as 1)
     private const byte LzmaMask = 0x12;
 
@@ -42,7 +42,7 @@ public static class MpqCompression
     /// <exception cref="NotSupportedException">A method in the mask is not implemented; the message names it.</exception>
     public static void Decompress(ReadOnlyMemory<byte> stored, Span<byte> output, int formatVersion = 0)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:945-955 (equal sizes mean stored as is; empty or larger input is an error)
+        // ref: StormLib src/SCompression.cpp:945-955 (equal sizes mean stored as is; empty or larger input is an error)
         if (stored.Length == output.Length)
         {
             stored.Span.CopyTo(output);
@@ -131,7 +131,7 @@ public static class MpqCompression
 
     private static int Inflate(ReadOnlyMemory<byte> input, Span<byte> target)
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:155-180 (Decompress_ZLIB: inflateInit = a zlib-wrapped deflate stream)
+        // ref: StormLib src/SCompression.cpp:155-180 (Decompress_ZLIB: inflateInit = a zlib-wrapped deflate stream)
         if (!MemoryMarshal.TryGetArray(input, out ArraySegment<byte> segment) || segment.Array is null)
         {
             segment = new ArraySegment<byte>(input.ToArray());

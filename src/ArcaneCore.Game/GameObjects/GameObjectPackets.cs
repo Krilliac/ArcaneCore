@@ -58,7 +58,7 @@ public static class GameObjectPackets
     }
 
     /// <summary>
-    /// SMSG_GAMEOBJECT_DESPAWN_ANIM: u64 guid (D:\refs\wow_messages ...\smsg_gameobject_despawn_anim.wowm, opcode 0x0215);
+    /// SMSG_GAMEOBJECT_DESPAWN_ANIM: u64 guid (wow_messages ...\smsg_gameobject_despawn_anim.wowm, opcode 0x0215);
     /// vmangos GameObject::SendObjectDeSpawnAnim sends it before the object is destroyed so the client plays the despawn animation.
     /// </summary>
     public static byte[] DespawnAnim(ObjectGuid guid)

@@ -109,6 +109,15 @@ public sealed partial class CreatureMapSystem
         TrySubscribeCombat();
     }
 
+    /// <summary>The map is unloading (world thread): drop the subscription on the shared spell caster, which outlives every instance and would otherwise root this system, its Map and every creature (no vmangos analogue: its spell hooks are not shared event lists). The Map-owned events die with the Map.</summary>
+    public void Detach()
+    {
+        if (_ai.Spells is { } spells)
+        {
+            spells.SpellHit -= OnSpellHit;
+        }
+    }
+
     private void OnObjectRelocated(WorldObject obj)
     {
         if (_options.AggroScanMode == AggroScanMode.Relocation)
