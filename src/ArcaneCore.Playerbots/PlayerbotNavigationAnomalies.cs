@@ -118,8 +118,7 @@ internal static class PlayerbotNavigationAnomalies
         uint now = NowOf(player);
         int epoch = PlayerbotRoutePlanWatch.SuppressionEpoch(player);
         bool canMove = CanMove(player);
-        if (!watch.Has || Vector3.DistanceSquared(watch.Goal, goal) > SameGoalYards * SameGoalYards
-            || unchecked(now - watch.LastAt) > PlayerbotRoutePlanWatch.WindowMs)
+        if (!watch.Has || Vector3.DistanceSquared(watch.Goal, goal) > SameGoalYards * SameGoalYards)
         {
             watch.Has = true;
             watch.Goal = goal;
@@ -133,6 +132,18 @@ internal static class PlayerbotNavigationAnomalies
             watch.Epoch = epoch;
             watch.Escalated = false;
             return;
+        }
+
+        if (unchecked(now - watch.LastAt) > PlayerbotRoutePlanWatch.WindowMs)
+        {
+            // The route watch forgets a goal left alone for WindowMs (issue #1494): a plan after that starts a new count of plans and
+            // refusals. What a suppression established (Escalated, issue #1492) and the once-per-goal report stay until a success or a
+            // goal change, as they would without the gap.
+            watch.Origin = origin;
+            watch.Plans = 0;
+            watch.FirstAt = now;
+            watch.Refusals = 0;
+            watch.LoopReported = false;
         }
 
         if (watch.Epoch != epoch)
