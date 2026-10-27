@@ -18,6 +18,14 @@ public sealed class ItemUseTests
     /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
     private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
 
+    private static uint GoSpellId(byte[] payload)
+    {
+        var go = new ArcaneCore.Protocol.PacketReader(payload);
+        go.ReadPackedGuid();
+        go.ReadPackedGuid();
+        return go.ReadUInt32();
+    }
+
     [Fact]
     public void UseItem_ConsumesOnePositiveCharge_AndDoesNotRequireSpellbookKnowledge()
     {
@@ -129,8 +137,20 @@ public sealed class ItemUseTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf()));
         Assert.Single(SpellTestKit.Packets(session, ArcaneCore.Protocol.WorldOpcode.SmsgSpellStart));
-        Assert.True(kit.System.HasAura(player, second)); // triggered: applied in the call (its zero-duration aura ends at the next update)
+        if (kit.System.SpellBatchWindowMs == 0)
+        {
+            Assert.True(kit.System.HasAura(player, second)); // triggered: applied in the call (its zero-duration aura ends at the next update)
+        }
+        else
+        {
+            // Batched: the triggered second spell waits behind the held first one, and both go off at the boundary, in template order.
+            Assert.False(kit.System.HasAura(player, second));
+            Assert.Equal(2, kit.System.PendingBatchedGoes);
+        }
+
         FlushSpellBatch(kit);
+        uint[] goes = [.. SpellTestKit.Packets(session, ArcaneCore.Protocol.WorldOpcode.SmsgSpellGo).Select(GoSpellId)];
+        Assert.Equal([UseSpell, second], goes);
         Assert.Equal(charges < 0 ? 0u : 1u, player.Inventory.GetItemCount(ChargedItem));
         if (charges > 0) Assert.Equal(0, item.GetInt32(UpdateFields.ItemFieldSpellCharges));
     }

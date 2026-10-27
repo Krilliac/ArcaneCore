@@ -546,6 +546,7 @@ public sealed partial class SpellSystem
             { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura,
               CasterGameObject = TakeCastingObject(caster) };
         cast.AutoRepeatShot = autoRepeatShot;
+        cast.InItemUseDispatch = castItem is not null && CurrentItemUseDispatch(castItem) is not null;
         if (!triggered)
         {
             OnGenericCastStarted(state, spell); // ranged (autorepeat lane): a wand is broken, Auto Shot gets a new wind-up (Unit::SetCurrentCastedSpell)

@@ -230,50 +230,94 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// The held casts go off in arrival order. One whose caster left the world (logout, a far teleport) ends without effect; a dead or stunned
-    /// caster's still goes off (it was committed before the window closed). A fault in one cast does not stop the others.
+    /// caster's still goes off (it was committed before the window closed). A fault in one cast does not stop the others. An item use's
+    /// first spell and the later use spells held behind it (<see cref="FollowsHeldItemUse"/>, always next to it: one item use prepares them
+    /// in one call) go off as one use: from <see cref="HandleItemUse"/>, the item is consumed once, after the last of them, as without batching.
     /// </summary>
     private void FlushSpellBatch()
     {
         SpellCast[] batch = [.. _batchedGoes];
         _batchedGoes.Clear();
-        foreach (SpellCast cast in batch)
+        for (int i = 0; i < batch.Length; i++)
         {
-            if (cast.State == SpellCastState.Finished)
+            SpellCast cast = batch[i];
+            int last = i;
+            while (last + 1 < batch.Length && IsHeldFollowUpOf(batch[last + 1], cast))
             {
-                continue;
+                last++;
             }
 
-            if (!cast.Caster.IsInWorld)
+            if (last == i || !cast.InItemUseDispatch || cast.Caster is not Player player || cast.CastItem is not { } item)
             {
-                Finish(cast);
-                continue;
+                for (int j = i; j <= last; j++)
+                {
+                    GoHeld(batch[j]);
+                }
+            }
+            else
+            {
+                var dispatch = new ItemUseDispatch(item);
+                _itemUseDispatches.Push(dispatch);
+                try
+                {
+                    for (int j = i; j <= last; j++)
+                    {
+                        GoHeld(batch[j]);
+                    }
+                }
+                finally
+                {
+                    _itemUseDispatches.Pop();
+                    SettleItemUseDispatch(player, dispatch);
+                }
             }
 
-            // A held instant left its cast slot; while it goes off it is the caster's running cast again, as it was without batching,
-            // for everything that looks it up there (procs, scripts, melee pauses). Finish clears the slot (Cast finishes on every path).
-            // A slot the caster filled meanwhile stays as it is: _resolvingBatchedGo still names this cast (CurrentGenericCast).
-            // A triggered cast (an item's later use spell) never held the slot, so it does not take it now either.
-            if (!cast.IsTriggered && GetOrCreateState(cast.Caster) is { CurrentCast: null } state)
-            {
-                state.CurrentCast = cast;
-            }
+            i = last;
+        }
+    }
 
-            SpellCast? outer = _resolvingBatchedGo;
-            _resolvingBatchedGo = cast;
-            try
-            {
-                Cast(cast);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                // Cast already recorded the fault ("spell.script") and finished the cast; the rest of the batch still goes off.
-                FaultLedger.Shared.Record("spell.batch", ex);
-                _logger.LogFault("spell-batch", ex, "spell {Spell} of {Caster} failed in the spell batch", cast.Spell.Id, cast.Caster.Guid);
-            }
-            finally
-            {
-                _resolvingBatchedGo = outer;
-            }
+    private static bool IsHeldFollowUpOf(SpellCast cast, SpellCast first)
+        => cast.IsTriggered && !first.IsTriggered && first.CastItem is { } item && ReferenceEquals(cast.CastItem, item)
+            && ReferenceEquals(cast.Caster, first.Caster);
+
+    /// <summary>One held cast's go, at the batch boundary.</summary>
+    private void GoHeld(SpellCast cast)
+    {
+        if (cast.State == SpellCastState.Finished)
+        {
+            return;
+        }
+
+        if (!cast.Caster.IsInWorld)
+        {
+            Finish(cast);
+            return;
+        }
+
+        // A held instant left its cast slot; while it goes off it is the caster's running cast again, as it was without batching,
+        // for everything that looks it up there (procs, scripts, melee pauses). Finish clears the slot (Cast finishes on every path).
+        // A slot the caster filled meanwhile stays as it is: _resolvingBatchedGo still names this cast (CurrentGenericCast).
+        // A triggered cast (an item's later use spell) never held the slot, so it does not take it now either.
+        if (!cast.IsTriggered && GetOrCreateState(cast.Caster) is { CurrentCast: null } state)
+        {
+            state.CurrentCast = cast;
+        }
+
+        SpellCast? outer = _resolvingBatchedGo;
+        _resolvingBatchedGo = cast;
+        try
+        {
+            Cast(cast);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Cast already recorded the fault ("spell.script") and finished the cast; the rest of the batch still goes off.
+            FaultLedger.Shared.Record("spell.batch", ex);
+            _logger.LogFault("spell-batch", ex, "spell {Spell} of {Caster} failed in the spell batch", cast.Spell.Id, cast.Caster.Guid);
+        }
+        finally
+        {
+            _resolvingBatchedGo = outer;
         }
     }
 }
