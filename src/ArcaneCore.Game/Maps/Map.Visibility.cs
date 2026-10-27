@@ -328,13 +328,6 @@ public sealed partial class Map
         // VisibilityCandidates looks the visible GUIDs up itself.
         bool ownsResolved = !_resolvedVisibleInUse;
         List<WorldObject>? resolved = null;
-        if (ShouldScanVisibleSet(player))
-        {
-            resolved = ownsResolved ? _resolvedVisibleScratch : [];
-            resolved.Clear();
-            _resolvedVisibleInUse |= ownsResolved;
-            ScanVisibleSet(player, resolved);
-        }
 
         // vmangos Map::UpdateObjectVisibility / Player::UpdateVisibilityOf: same candidates and join order.
         // A visibility rule may recursively refresh a different player; that call must not reuse our active list.
@@ -343,6 +336,15 @@ public sealed partial class Map
         _visibilityScratchInUse |= ownsScratch;
         try
         {
+            // Inside the try: a throwing scan must still release the resolved list in the finally.
+            if (ShouldScanVisibleSet(player))
+            {
+                resolved = ownsResolved ? _resolvedVisibleScratch : [];
+                resolved.Clear();
+                _resolvedVisibleInUse |= ownsResolved;
+                ScanVisibleSet(player, resolved);
+            }
+
             VisibilityCandidates(player, candidates, resolved);
             PlayerVisibilityCandidates += candidates.Count;
             foreach (WorldObject other in candidates)
@@ -378,7 +380,11 @@ public sealed partial class Map
     /// <summary>Every 64th visibility update of a player runs the invariant pass even when nothing was removed.</summary>
     internal const int VisibleSetBackstopInterval = 64;
 
-    /// <summary>Bumped whenever an object leaves the map or any player's visible set (<see cref="NoteRemoval"/>). World thread.</summary>
+    /// <summary>
+    /// Bumped whenever an object leaves the map (<see cref="NoteRemoval"/>). Not bumped when a player merely loses sight of
+    /// something: <see cref="RemoveVisible"/> keeps the observer index consistent and cannot leave an orphan, and on a busy map it
+    /// would bump nearly every tick and defeat the gate. Map owner thread.
+    /// </summary>
     private long _removalEpoch;
 
     private readonly List<WorldObject> _resolvedVisibleScratch = [];
@@ -552,7 +558,6 @@ public sealed partial class Map
         }
 
         viewer.VisibilityVersion++;
-        NoteRemoval();
 
         if (_observers.TryGetValue(target, out HashSet<Player>? observers))
         {
