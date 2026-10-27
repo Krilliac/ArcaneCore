@@ -29,6 +29,22 @@ public sealed partial class AtlasServer
     /// </summary>
     internal const int PresenceErrorBurst = 16;
 
+    /// <summary>
+    /// Commands one connection may have running at once; a command past the cap is not started and is answered at once with a
+    /// <c>result</c> whose error code is <see cref="CommandException.Unavailable"/>, so a client can retry it after a result arrives.
+    /// </summary>
+    internal const int MaxCommandsInFlight = 8;
+
+    /// <summary>
+    /// Answers to bad messages (not a JSON object with a string <c>op</c>, an unknown op, a malformed <c>command</c>, or a command
+    /// refused by <see cref="MaxCommandsInFlight"/>) come from a token bucket of this many per connection, refilled by one per
+    /// <see cref="MessageErrorRefill"/>. A bad message with the bucket empty closes the socket with a policy-violation status.
+    /// </summary>
+    internal const int MessageErrorBurst = 16;
+
+    /// <summary>The time that refills one answer of the <see cref="MessageErrorBurst"/> bucket.</summary>
+    internal static readonly TimeSpan MessageErrorRefill = TimeSpan.FromSeconds(1);
+
     private async Task WebSocketAsync(HttpContext http)
     {
         if (!http.WebSockets.IsWebSocketRequest)
@@ -108,7 +124,14 @@ public sealed partial class AtlasServer
                     break;
                 }
 
-                HandleMessage(connection, text, commands, ct);
+                if (!HandleMessage(connection, text, commands, ct))
+                {
+                    _log.LogWarning("UI {Connection} closed: it sent more bad messages than its error budget of {Burst} answers.", connection.Id, MessageErrorBurst);
+                    await connection.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, "too many bad messages").ConfigureAwait(false);
+                    await AwaitCloseReplyAsync(ReceiveUntilCloseAsync(socket, aborted)).ConfigureAwait(false);
+                    break;
+                }
+
                 commands.RemoveAll(t => t.IsCompleted);
             }
         }
@@ -221,12 +244,12 @@ public sealed partial class AtlasServer
         }
     }
 
-    private void HandleMessage(UiConnection connection, string text, List<Task> commands, CancellationToken ct)
+    /// <summary>Handles one message on the receive loop; false when it was bad and the connection's error budget is spent, so the socket must close.</summary>
+    private bool HandleMessage(UiConnection connection, string text, List<Task> commands, CancellationToken ct)
     {
         if (TryParseObject(text) is not { } message || message["op"] is not JsonValue opValue || !opValue.TryGetValue(out string? op))
         {
-            _ = SendErrorAsync(connection, "bad-request", "Messages are JSON objects with a string 'op'.", ct);
-            return;
+            return AnswerBadMessage(connection, "Messages are JSON objects with a string 'op'.", ct);
         }
 
         switch (op)
@@ -236,12 +259,18 @@ public sealed partial class AtlasServer
                     && (message["args"] is null || message["args"] is JsonObject))
                 {
                     JsonNode? id = message["id"]?.DeepClone();
+                    commands.RemoveAll(t => t.IsCompleted);
+                    if (commands.Count >= MaxCommandsInFlight)
+                    {
+                        return RefuseCommand(connection, id, name, ct);
+                    }
+
                     JsonObject? args = (JsonObject?)message["args"]?.DeepClone();
                     commands.Add(Task.Run(() => RunCommandAsync(connection, id, name, args, ct), CancellationToken.None));
                 }
                 else
                 {
-                    _ = SendErrorAsync(connection, "bad-request", "A command message needs a string 'name' and an object 'args'.", ct);
+                    return AnswerBadMessage(connection, "A command message needs a string 'name' and an object 'args'.", ct);
                 }
 
                 break;
@@ -259,9 +288,55 @@ public sealed partial class AtlasServer
             case "auth":
                 break;
             default:
-                _ = SendErrorAsync(connection, "bad-request", $"Unknown op '{op}'.", ct);
-                break;
+                return AnswerBadMessage(connection, $"Unknown op '{op}'.", ct);
         }
+
+        return true;
+    }
+
+    /// <summary>Answers a bad message with <c>bad-request</c> while the error budget lasts; false (nothing sent) once it is spent.</summary>
+    private bool AnswerBadMessage(UiConnection connection, string message, CancellationToken ct)
+    {
+        if (!TakeMessageErrorToken(connection))
+        {
+            return false;
+        }
+
+        _ = SendErrorAsync(connection, "bad-request", message, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Answers a command past <see cref="MaxCommandsInFlight"/> with the <c>result</c> shape <see cref="RunCommandAsync"/> sends, failed
+    /// as <see cref="CommandException.Unavailable"/>; the answer is paid from the error budget (false, nothing sent, once it is spent).
+    /// </summary>
+    private bool RefuseCommand(UiConnection connection, JsonNode? id, string name, CancellationToken ct)
+    {
+        if (!TakeMessageErrorToken(connection))
+        {
+            return false;
+        }
+
+        var result = new CommandResult(name, false, null, CommandException.Unavailable, $"{MaxCommandsInFlight} commands are already running on this connection; send it again after one of their results arrives.", 0);
+        _ = SendQuietlyAsync(connection, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString(), ct);
+        return true;
+    }
+
+    /// <summary>True when a bad message may be answered now. Runs on the connection's receive loop, the only writer of the bucket.</summary>
+    private bool TakeMessageErrorToken(UiConnection connection)
+    {
+        TimeProvider time = _options.Time;
+        long now = time.GetTimestamp();
+        double tokens = connection.MessageErrorTokens;
+        if (connection.LastMessageErrorStamp is { } last)
+        {
+            tokens = Math.Min(MessageErrorBurst, tokens + (time.GetElapsedTime(last, now) / MessageErrorRefill));
+        }
+
+        connection.LastMessageErrorStamp = now;
+        bool allowed = tokens >= 1;
+        connection.MessageErrorTokens = allowed ? tokens - 1 : tokens;
+        return allowed;
     }
 
     /// <summary>
@@ -361,11 +436,14 @@ public sealed partial class AtlasServer
         }
     }
 
-    private static async Task SendErrorAsync(UiConnection connection, string code, string message, CancellationToken ct)
+    private static Task SendErrorAsync(UiConnection connection, string code, string message, CancellationToken ct)
+        => SendQuietlyAsync(connection, new JsonObject { ["op"] = "error", ["code"] = code, ["message"] = message }.ToJsonString(), ct);
+
+    /// <summary>Sends one frame nobody awaits; a connection that is going away is not an error.</summary>
+    private static async Task SendQuietlyAsync(UiConnection connection, string json, CancellationToken ct)
     {
         try
         {
-            string json = new JsonObject { ["op"] = "error", ["code"] = code, ["message"] = message }.ToJsonString();
             await connection.SendAsync(json, ct).ConfigureAwait(false);
         }
         catch (Exception e) when (e is OperationCanceledException or WebSocketException or ObjectDisposedException or InvalidOperationException)
@@ -374,19 +452,33 @@ public sealed partial class AtlasServer
         }
     }
 
-    private static async Task PumpEventsAsync(UiConnection connection, CancellationToken ct)
+    private async Task PumpEventsAsync(UiConnection connection, CancellationToken ct)
     {
         try
         {
             await foreach (string json in connection.PendingEvents.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 await connection.SendAsync(json, ct).ConfigureAwait(false);
+                if (connection.TakeDroppedEvents() is var dropped and > 0)
+                {
+                    _log.LogWarning("UI {Connection} reads events slowly: {Count} queued events were dropped, oldest first.", connection.Id, dropped);
+                }
             }
         }
         catch (Exception e) when (e is OperationCanceledException or WebSocketException or ObjectDisposedException or InvalidOperationException)
         {
             // The connection ended; the receive loop does the cleanup.
         }
+    }
+
+    /// <summary>Reads and discards messages until the peer's close frame (null), after the server has sent its own close.</summary>
+    private static async Task<string?> ReceiveUntilCloseAsync(WebSocket socket, CancellationToken ct)
+    {
+        while (await ReceiveTextAsync(socket, ct).ConfigureAwait(false) is not null)
+        {
+        }
+
+        return null;
     }
 
     /// <summary>One complete text message, or null when the peer sent a close frame.</summary>

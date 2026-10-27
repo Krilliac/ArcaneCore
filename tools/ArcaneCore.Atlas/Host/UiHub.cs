@@ -10,7 +10,8 @@ namespace ArcaneCore.Atlas.Host;
 /// <summary>
 /// One authenticated UI WebSocket. Control messages (hello, results, capture requests) are sent directly; event pushes go
 /// through a bounded queue that drops the oldest entry when the browser reads slowly, because every view event carries
-/// the complete view and live frames are superseded by the next frame.
+/// the complete view and live frames are superseded by the next frame. Dropped entries are counted and the event pump logs
+/// the count, so a lost lifecycle or presence event leaves a warning rather than vanishing silently.
 /// </summary>
 public sealed class UiConnection
 {
@@ -21,15 +22,19 @@ public sealed class UiConnection
     private string _name;
     private UiPresence? _presence;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
-    private readonly Channel<string> _events = Channel.CreateBounded<string>(new BoundedChannelOptions(EventQueueCapacity)
-    {
-        FullMode = BoundedChannelFullMode.DropOldest,
-        SingleReader = true,
-        SingleWriter = false,
-    });
+    private readonly Channel<string> _events;
+    private long _droppedEvents;
 
     internal UiConnection(WebSocket socket, string id, long sequence)
     {
+        _events = Channel.CreateBounded<string>(
+            new BoundedChannelOptions(EventQueueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false,
+            },
+            _ => Interlocked.Increment(ref _droppedEvents));
         _socket = socket;
         Id = id;
         Sequence = sequence;
@@ -69,11 +74,20 @@ public sealed class UiConnection
     /// <summary>Answers left in the invalid-presence bucket (refilled by elapsed time); only the receive loop touches it.</summary>
     internal double PresenceErrorTokens { get; set; } = AtlasServer.PresenceErrorBurst;
 
+    /// <summary><see cref="TimeProvider.GetTimestamp"/> of the last bad message seen (the bucket's last update), null before the first; only the receive loop touches it.</summary>
+    internal long? LastMessageErrorStamp { get; set; }
+
+    /// <summary>Answers left in the bad-message bucket (refilled by elapsed time); only the receive loop touches it.</summary>
+    internal double MessageErrorTokens { get; set; } = AtlasServer.MessageErrorBurst;
+
     internal ChannelReader<string> PendingEvents => _events.Reader;
 
     internal void EnqueueEvent(string json) => _events.Writer.TryWrite(json);
 
     internal void CompleteEvents() => _events.Writer.TryComplete();
+
+    /// <summary>Events dropped from the full queue since the last call (the queue drops the oldest), then resets the count; the event pump logs it.</summary>
+    internal long TakeDroppedEvents() => Interlocked.Exchange(ref _droppedEvents, 0);
 
     /// <summary>Sends one text frame; only one frame is in flight at a time.</summary>
     internal async Task SendAsync(string json, CancellationToken cancellationToken)
