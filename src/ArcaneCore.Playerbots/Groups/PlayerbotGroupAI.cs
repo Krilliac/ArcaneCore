@@ -499,7 +499,7 @@ internal sealed class PlayerbotGroupAI
     {
         Goal = PlayerbotGoalKind.Group;
         Step = "lead:" + group.State.ToString().ToLowerInvariant();
-        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
             case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
@@ -528,11 +528,16 @@ internal sealed class PlayerbotGroupAI
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
                 NoteRunProgress(group, approaching);
                 NoteApproachProgress(player, group, approach);
+                if (!approaching) NoteUnpathableApproachNear(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
-                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; Hold(player); return; }
-                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
-                Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "lead:walk-entrance" : "lead:no-path-entrance";
+                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
+                // A way to the entrance that stays unplanned ends the group at the no-path bound, not at the enter step's timeout: a group let
+                // on from near an approach point it could not reach (NoteUnpathableApproachNear) often has no way to the entrance either.
+                bool entering = WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                Step = entering ? "lead:walk-entrance" : "lead:no-path-entrance";
+                NoteRunProgress(group, entering);
                 return;
             case PlayerbotGroupState.Engaging:
                 if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
@@ -667,7 +672,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// A leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the group: a run
-    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c> or <c>no-path-to-approach</c>
+    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c>, <c>no-path-to-approach</c> or
+    /// (a dungeon quest group walking to the entrance) <c>no-path-to-entrance</c>
     /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
     /// </summary>
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
@@ -676,7 +682,7 @@ internal sealed class PlayerbotGroupAI
         if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
         bool engaging = group.State == PlayerbotGroupState.Engaging;
         group.RunFault ??= group.Run is null
-            ? (engaging ? "no-path-to-objective" : "no-path-to-approach")
+            ? (engaging ? "no-path-to-objective" : group.State == PlayerbotGroupState.Entering ? "no-path-to-entrance" : "no-path-to-approach")
             : (engaging ? "no-path-to-boss" : "no-path-to-entrance");
     }
 
@@ -708,6 +714,23 @@ internal sealed class PlayerbotGroupAI
         uint idle = unchecked(now - _approachProgressMs);
         if (idle > ApproachNoProgressMs && idle <= int.MaxValue) group.ApproachReached = true;
     }
+
+    /// <summary>
+    /// The leader can plan no way to the approach point but already stands within <see cref="UnpathableApproachYards"/> of it (3D) and no more than
+    /// <see cref="PlayerbotGroupCoordinator.ApproachHeightYards"/> above or below it: the point counts as reached
+    /// (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) instead of the group waiting at it until the travel timeout. The approach point
+    /// can lie off the mesh or in a pocket the mesh does not join to the leader's ground (the mesh is snapped at formation, from where the leader stood
+    /// then); the height bound keeps another floor from counting, and the group is never let through from beyond the radius.
+    /// </summary>
+    private static void NoteUnpathableApproachNear(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
+    {
+        if (group.ApproachReached) return;
+        if (MathF.Abs(player.Z - approach.Z) > PlayerbotGroupCoordinator.ApproachHeightYards) return;
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach) <= UnpathableApproachYards) group.ApproachReached = true;
+    }
+
+    /// <summary>How near the approach point (yards) a leader that can plan no way to it counts as arrived (<see cref="NoteUnpathableApproachNear"/>).</summary>
+    internal const float UnpathableApproachYards = 15f;
 
     /// <summary>How long a leader walks to the approach point without getting nearer before the point counts as reached.</summary>
     internal const uint ApproachNoProgressMs = 45_000;
@@ -1527,7 +1550,7 @@ internal sealed class PlayerbotGroupAI
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
         if (spells is null || player.Combat.IsInCombat
             || spells.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting }
-            || PlayerbotConsumables.HasActiveFoodDrink(player, spells.System)
+            || PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System)
             || !PlayerbotConsumables.TryFindRecovery(player, spells.System, RestBelowPct, RestBelowPct, out PlayerbotConsumable consumable)) return false;
         Goal = PlayerbotGoalKind.Rest;
         if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
@@ -1554,7 +1577,7 @@ internal sealed class PlayerbotGroupAI
     {
         if (!PlayerbotMovementControl.Stop(_session, player)) return true;
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
-        bool eating = spells is not null && PlayerbotConsumables.HasActiveFoodDrink(player, spells.System);
+        bool eating = spells is not null && PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System);
         if (!endNow && !player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
             && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
         {

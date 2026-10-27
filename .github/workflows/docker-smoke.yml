@@ -1,6 +1,8 @@
 name: Docker smoke
 
-# Builds every target of apps/docker/Dockerfile and validates docker-compose.yml, so the container images cannot go stale silently.
+# Builds every target of apps/docker/Dockerfile and validates both compose files, so the container images cannot go stale silently.
+# The "stack" job also RUNS the images: it starts the database, realm and world with docker compose and checks the realm listens, the
+# schema was created, an account can be made with the tools image and the containers report healthy, then tears everything down.
 # They did once: the SDK moved to .NET 11 (global.json, Directory.Build.props) while the Dockerfile still built on the .NET 10 images,
 # and nothing noticed. Pull requests run it when a file the image build depends on changes; every push to main runs it.
 on:
@@ -12,12 +14,15 @@ on:
       - "apps/docker/**"
       - ".dockerignore"
       - "docker-compose.yml"
+      - "docker-compose.prod.yml"
       - "global.json"
       - "Directory.Build.props"
       - "Directory.Packages.props"
       - ".editorconfig"
       - "**/*.csproj"
       - ".github/workflows/docker-smoke.yml"
+      - ".github/workflows/docker-publish.yml"
+      - "tools/ops/deploy/backup-database.sh"
   workflow_dispatch:
 
 concurrency:
@@ -43,7 +48,14 @@ jobs:
           DOCKER_DB_ROOT_PASSWORD: smoke-only
           DOCKER_DB_USER: smoke
           DOCKER_DB_PASSWORD: smoke-only
-        run: docker compose --profile tools --profile monitoring config --quiet
+        run: |
+          docker compose --profile tools --profile monitoring config --quiet
+          ARCANE_IMAGE_TAG=smoke ARCANE_REALM_ADDRESS=203.0.113.7:8085 docker compose -f docker-compose.prod.yml --profile tools --profile monitoring config --quiet
+          # The production file must refuse to start without a release tag, and without the public realm address.
+          if out=$(ARCANE_REALM_ADDRESS=203.0.113.7:8085 docker compose -f docker-compose.prod.yml config --quiet 2>&1); then echo "docker-compose.prod.yml accepted a missing ARCANE_IMAGE_TAG"; exit 1; fi
+          echo "$out" | grep -q ARCANE_IMAGE_TAG
+          if out=$(ARCANE_IMAGE_TAG=smoke docker compose -f docker-compose.prod.yml config --quiet 2>&1); then echo "docker-compose.prod.yml accepted a missing ARCANE_REALM_ADDRESS"; exit 1; fi
+          echo "$out" | grep -q ARCANE_REALM_ADDRESS
 
       # The three targets share the build stage, so the second and third reuse its cached layers.
       - name: Build world image
@@ -63,4 +75,100 @@ jobs:
           docker run --rm --entrypoint test arcanecore/realm:smoke -f ArcaneCore.Realm.dll
           docker run --rm --entrypoint test arcanecore/tools:smoke -f arcane-content-importer.dll
           docker run --rm --entrypoint test arcanecore/tools:smoke -f /arcanecore/dbupgrade/arcane-db.dll
+          docker run --rm --entrypoint test arcanecore/tools:smoke -f /arcanecore/account/arcane-account.dll
+          # The compose healthchecks use bash and /dev/tcp (no curl in the runtime image).
+          docker run --rm --entrypoint bash arcanecore/world:smoke -c 'echo bash-ok'
+          docker run --rm --entrypoint bash arcanecore/realm:smoke -c 'echo bash-ok'
           docker run --rm --entrypoint dotnet arcanecore/world:smoke --list-runtimes
+
+  # Starts the real stack. Compose builds the images itself from the same Dockerfile; the job is independent of "build" so a failure in
+  # one does not hide a failure in the other.
+  stack:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOCKER_DB_ROOT_PASSWORD: smoke-root-only
+      DOCKER_DB_USER: smoke
+      DOCKER_DB_PASSWORD: smoke-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare data and log directories
+        # No client data ships and CI has none: the world must start with an empty data directory (it logs a warning per missing DBC; only
+        # ClientData:Strict makes that fatal). The containers run as uid 1000, the runner is not: the log directory must be writable.
+        run: |
+          mkdir -p env/data env/logs
+          chmod 777 env/logs
+
+      - name: Build the images
+        run: docker compose build arcane-realm arcane-world arcane-tools
+
+      - name: Start database, realm and world
+        run: docker compose up -d arcane-database arcane-realm arcane-world
+
+      - name: Wait for the containers to report healthy
+        run: |
+          for name in arcane-database arcane-realm arcane-world; do
+            status=starting
+            for i in $(seq 1 90); do
+              status=$(docker inspect -f '{{if .State.Running}}{{.State.Health.Status}}{{else}}exited{{end}}' "$name")
+              if [ "$status" = healthy ] || [ "$status" = exited ]; then break; fi
+              sleep 5
+            done
+            echo "$name: $status"
+            if [ "$status" != healthy ]; then
+              docker compose logs --no-color "$name" | tail -n 150
+              exit 1
+            fi
+          done
+
+      - name: Realm listens on 3724 (from the host, through the published port)
+        run: timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3724' && echo "3724 open"
+
+      - name: World listens on 8085
+        run: timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8085' && echo "8085 open"
+
+      - name: The three schemas were created and hold tables
+        # The daemons create the tables at start (Database:Upgrade); db-init only creates the empty schemas.
+        run: |
+          for db in arcanecore_auth arcanecore_characters arcanecore_world; do
+            n=$(docker compose exec -T arcane-database sh -c "MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" mariadb -uroot -N -B -e \"select count(*) from information_schema.tables where table_schema='$db'\"")
+            echo "$db: $n tables"
+            if [ "$n" -lt 1 ]; then echo "no tables in $db"; exit 1; fi
+          done
+
+      - name: Create an account with the tools image
+        env:
+          ARCANE_ACCOUNT_PASSWORD: smoke-account-pw
+        run: |
+          docker compose --profile tools run --rm -T -e ARCANE_ACCOUNT_PASSWORD --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll create smokeacct
+          docker compose --profile tools run --rm -T --entrypoint dotnet arcane-tools /arcanecore/account/arcane-account.dll list | tee list.txt
+          grep -qi smokeacct list.txt
+
+      - name: arcane-db sees each component in its own database
+        # arcane-db resolves a connection string per component; one without its own falls back to Database:ConnectionString. If the tools
+        # service named only some of them, a component would be checked (or upgraded) against the wrong schema.
+        run: |
+          docker compose --profile tools run --rm -T --entrypoint dotnet arcane-tools /arcanecore/dbupgrade/arcane-db.dll status --json --no-fail-on-pending | tee status.json
+          for c in auth characters world; do
+            target=$(jq -r --arg c "$c" '[.components[] | select(.component == $c)] | if length == 1 then .[0].target else "MISSING" end' status.json)
+            echo "$c -> $target"
+            case "$target" in */arcanecore_"$c") ;; *) echo "arcane-db reports $c against '$target', expected a database named arcanecore_$c"; exit 1 ;; esac
+          done
+
+      - name: Back up the database with the ops script
+        run: |
+          BACKUP_DIR="$RUNNER_TEMP/backups" bash tools/ops/deploy/backup-database.sh
+          ls -l "$RUNNER_TEMP/backups"
+          test -n "$(find "$RUNNER_TEMP/backups" -name '*.sql.gz' -size +1k)"
+
+      - name: Container logs
+        if: always()
+        run: docker compose logs --no-color --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -314,6 +314,8 @@ internal sealed class PlayerbotConsumableWatch
     {
         if (_pending is not { } pending) return;
         if (unchecked((int)(pending.DueMs - nowMs)) > 0) return;
+        // With spell batching on, the use may still wait in the batch for its go (nothing consumed, nothing applied yet): judged after it.
+        if (system is not null && player.IsInWorld && system.HasPendingGo(player)) return;
         _pending = null;
         if (system is null || !player.IsInWorld || !player.IsAlive) return;
         Judge(player, pending, system, unchecked(nowMs - pending.DueMs) <= EffectWindowMs);

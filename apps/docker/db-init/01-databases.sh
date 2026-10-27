@@ -2,7 +2,8 @@
 # First start of the database volume only (MariaDB docker-entrypoint-initdb.d): the three ArcaneCore schemas, owned by
 # the application user. The daemons create and upgrade the tables themselves (Database:Upgrade:Policy).
 set -euo pipefail
-mariadb -uroot -p"${MARIADB_ROOT_PASSWORD}" <<SQL
+# The password goes through the environment, not argv (a process list shows argv).
+MYSQL_PWD="${MARIADB_ROOT_PASSWORD}" mariadb -uroot <<SQL
 CREATE DATABASE IF NOT EXISTS arcanecore_auth CHARACTER SET utf8mb4;
 CREATE DATABASE IF NOT EXISTS arcanecore_characters CHARACTER SET utf8mb4;
 CREATE DATABASE IF NOT EXISTS arcanecore_world CHARACTER SET utf8mb4;

@@ -45,7 +45,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         if (carrier || player.Combat.IsInCombat || ArcaneCore.Game.Locomotion.MountService.IsMounted(player)
             || _session.Services.GetService<SpellFeature>() is not { } spells
             || spells.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting }
-            || PlayerbotConsumables.HasActiveFoodDrink(player, spells.System)
+            || PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System)
             || !PlayerbotConsumables.TryFindRecovery(player, spells.System, RestBelowPct, RestBelowPct, out PlayerbotConsumable consumable))
             return false;
 
@@ -74,7 +74,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     private bool ContinueRest(Player player)
     {
         if (player.Combat.IsInCombat || Now >= _restUntilMs || !PlayerbotConsumables.NeedsRecovery(player, _restKind)
-            || _session.Services.GetService<SpellFeature>() is not { } spells || !PlayerbotConsumables.HasActiveFoodDrink(player, spells.System))
+            || _session.Services.GetService<SpellFeature>() is not { } spells || !PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System))
             return false;
 
         Activity = "resting";

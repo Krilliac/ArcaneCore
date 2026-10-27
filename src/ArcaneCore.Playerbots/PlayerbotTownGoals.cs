@@ -197,6 +197,22 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     return TravelToRepair(player, services, elapsedMs);
                 }
                 _routeTarget = npc.Guid;
+                _visitAnchor = new(player.X, player.Y, player.Z);
+                _visitStuckMs = 0;
+            }
+            // A route that was planned but is not walked (the bot never leaves its place) is given up like a refused plan; before, only the
+            // stall watch ended it, 120 s later (GitHub #1476).
+            if (VisitStuck(player, elapsedMs))
+            {
+                uint now = session.World.NowMs;
+                _visitRefused = npc.Guid;
+                _visitRefusedUntil = unchecked(now + VisitRefusedMs);
+                Suspensions?.SuspendEntryEscalating(npc.Entry, now);
+                _route = null;
+                _routeTarget = default;
+                _visitStuckMs = 0;
+                PlayerbotMovementControl.Stop(session, player);
+                return TravelToRepair(player, services, elapsedMs);
             }
             ClearRepairTrip();
             return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
@@ -381,6 +397,35 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// </summary>
     internal const int MaxRepairPlansPerThink = 3;
 
+    /// <summary>
+    /// The longest a visit leg (the walk to a service NPC in sight) goes without the bot leaving its place before the NPC is set aside.
+    /// Longer than <see cref="RepairTripStuckMs"/>: a visit's route may start by walking away from the NPC (a ramp), which the repair
+    /// trip's "closing on it" clock would count as stuck, so this clock counts only not moving at all.
+    /// </summary>
+    internal const uint VisitStuckMs = 10_000;
+
+    /// <summary>The distance (yards) from its anchor that counts as the visiting bot moving.</summary>
+    internal const float VisitProgressYards = 2f;
+
+    private Vector3 _visitAnchor;
+    private uint _visitStuckMs;
+
+    /// <summary>Ticks the visit leg's stuck clock once per think (never while a mount step holds the bot); true once <see cref="VisitStuckMs"/> passed without the bot moving <see cref="VisitProgressYards"/>.</summary>
+    private bool VisitStuck(Player player, uint elapsedMs)
+    {
+        OpenThinkIfClockMoved(session.World.NowMs);
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (Vector3.DistanceSquared(here, _visitAnchor) >= VisitProgressYards * VisitProgressYards)
+        {
+            _visitAnchor = here;
+            _visitStuckMs = 0;
+        }
+        else if (!_visitClockedThisThink && !PlayerbotMount.IsBusy(session)) _visitStuckMs += elapsedMs;
+        _visitClockedThisThink = true;
+        return _visitStuckMs >= VisitStuckMs;
+    }
+
+    private bool _visitClockedThisThink;
     private int _repairPlansThisThink;
     private bool _repairClockedThisThink;
     private bool _thinksAreAnnounced;
@@ -396,6 +441,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _thinksAreAnnounced = true;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _visitClockedThisThink = false;
         _cooldownClockedThisThink = false;
         MarkThinkQueries();
     }
@@ -407,6 +453,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _thinkStampMs = now;
         _repairPlansThisThink = 0;
         _repairClockedThisThink = false;
+        _visitClockedThisThink = false;
         MarkThinkQueries();
     }
 
@@ -462,6 +509,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private uint _repairTripBackoffUntil;
     private uint _repairStuckMs;
     private float _repairBest = float.PositiveInfinity;
+    private bool _repairToLift; // _repairBest measures to a lift's landing (PlayerbotRoute.ToLiftLanding), not to the NPC
 
     /// <summary>
     /// The trip worth starting to a service NPC out of sight, as the service it is for (<see cref="NpcFlags.None"/>: none). A repair
@@ -596,6 +644,10 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             && PlayerbotWorldDestinations.TryResolveSpawnPosition(player, current.Spawn, requireLivePatroller: true, out Vector3 at))
         {
             float left = Vector3.Distance(here, at);
+            // The walk to a lift's landing may lead away from the NPC: the stuck clock measures to the landing then, and starts over when it switches.
+            bool toLift = _repairRoute is { ToLiftLanding: true };
+            float walked = toLift ? Vector3.Distance(here, _repairRoute!.LiftLanding) : left;
+            if (toLift != _repairToLift) { _repairToLift = toLift; _repairBest = walked; _repairStuckMs = 0; }
             // Arrived at the repair NPC's own spawn point with no live creature of that entry there: the NPC is not there.
             if (left <= RepairArrivedYards && current.Spawn.MovementType != 2 && _repairMissReported != _repairSpawn
                 && !HasVisibleEntry(player, current.Entry)
@@ -608,7 +660,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                 // not back to this one when the trip rests and the blocked spawns are forgotten (Timbermaw Hold, issues #1478 and #1479).
                 Suspensions?.SuspendEntryEscalating(current.Entry, now);
             }
-            if (left < _repairBest - 0.5f) { _repairBest = left; _repairStuckMs = 0; }
+            if (walked < _repairBest - 0.5f) { _repairBest = walked; _repairStuckMs = 0; }
             else if (!_repairClockedThisThink && !PlayerbotMount.IsBusy(session)) _repairStuckMs += elapsedMs; // a second Update of one think does not run the clock twice
             _repairClockedThisThink = true;
             if (_repairStuckMs < RepairTripStuckMs && Suspensions?.IsEntrySuspended(current.Entry, now) != true)
@@ -745,6 +797,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         _repairMissReported = 0;
         _repairStuckMs = 0;
         _repairBest = float.PositiveInfinity;
+        _repairToLift = false;
     }
 
     /// <summary>
@@ -958,12 +1011,14 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         if (!forMoney && FreeBagSlots(player) >= JunkReserveSlots)
             return null;
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        // With no free slot at all, an unbound bind-on-equip green that is no upgrade is junk too (#1442): greens never come off a mob as grays.
+        bool full = FreeBagSlots(player) == 0;
         return player.Inventory.AllItems
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
                 || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
-            .Where(candidate => candidate.Template.Quality <= 1 && candidate.Template.SellPrice > 0
+            .Where(candidate => (candidate.Template.Quality <= 1 || (full && candidate.Template.Quality == 2)) && candidate.Template.SellPrice > 0
                 && !_unsellable.Contains(candidate.Guid)
-                && !IsProtected(player, candidate, services) && IsJunk(player, candidate, weights))
+                && !IsProtected(player, candidate, services, allowUnboundBindOnEquip: full) && IsJunk(player, candidate, weights))
             .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
             .FirstOrDefault();
     }
@@ -1446,7 +1501,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     internal bool IsProtected(Player player, Item item)
         => session.Services.GetService<QuestNpcFeature>()?.Services is not { } services || IsProtected(player, item, services);
 
-    private bool IsProtected(Player player, Item item, QuestNpcServices services)
+    /// <param name="allowUnboundBindOnEquip">An unbound bind-on-equip item (Bonding 2, not yet soulbound) is not protected by its binding alone.</param>
+    private bool IsProtected(Player player, Item item, QuestNpcServices services, bool allowUnboundBindOnEquip = false)
     {
         if (session.Services.GetService<SpellFeature>()?.System is { } spells
             && PlayerbotConsumables.TryClassify(item.Template, spells, out _)) return true;
@@ -1459,7 +1515,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return item.Entry == 117 || item.Template.BagFamily != 0 || item.Template.StartQuest != 0 || questRequired
             || item.Template.FoodType != 0 || item.Template.RequiredSkill != 0
             || (ItemClass)item.Template.Class is ItemClass.Quest or ItemClass.Reagent
-            || item.Template.Bonding != 0;
+            || (item.Template.Bonding != 0 && !(allowUnboundBindOnEquip && item.Template.Bonding == 2 && !item.IsSoulBound));
     }
 
     private static byte[] BuyPayload(ObjectGuid vendor, uint item)

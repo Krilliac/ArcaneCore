@@ -12,7 +12,8 @@ namespace ArcaneCore.World.Playerbots;
 /// (within <see cref="SameOriginYards"/>) without closing flat distance to the goal by at least
 /// <see cref="MinProgressYards"/> over <see cref="MinLoopSpanMs"/> (or when consecutive timestamped plan
 /// attempts for the same origin/goal pair are definitively refused <see cref="MaxConsecutiveRefusals"/> times),
-/// the <c>(origin, goal)</c> pair is suppressed for <see cref="SuppressMs"/> and blacklisted in
+/// the <c>(origin, goal)</c> pair is suppressed for <see cref="SuppressMs"/> (doubled per earlier strike of the same pair,
+/// <see cref="SuppressionSpanMs"/>) and blacklisted in
 /// <see cref="PlayerbotMotion"/> so callers abandon the unproductive goal instead of entering a replan loop
 /// (<c>bot-nav/replan-loop</c>) or hammering refused path searches (<c>bot-nav/goal-unreachable</c>,
 /// <c>bot-nav/no-path-connected</c>).
@@ -45,15 +46,47 @@ internal static partial class PlayerbotRoutePlanWatch
     /// <summary>Sliding window (ms) after which an idle watch entry resets.</summary>
     internal const uint WindowMs = 180_000;
 
-    /// <summary>Duration (ms) for which a suppressed origin/goal pair is held in the negative cache.</summary>
+    /// <summary>
+    /// Duration (ms) for which an origin/goal pair is held in the negative cache the first time it is suppressed. A pair suppressed again
+    /// while its strike is remembered is held for twice as long per strike (<see cref="SuppressionSpanMs"/>), up to <see cref="MaxSuppressMs"/>.
+    /// </summary>
     internal const uint SuppressMs = 180_000;
+
+    /// <summary>The longest a pair is held in the negative cache however often it was suppressed (ms): 30 minutes.</summary>
+    internal const uint MaxSuppressMs = 1_800_000;
+
+    /// <summary>
+    /// How long (ms) after its suppression expires a pair's strike count is remembered: a pair suppressed again within it is held longer
+    /// (<see cref="SuppressionSpanMs"/>); after it, the next suppression is a first one again.
+    /// </summary>
+    internal const uint StrikeMemoryMs = MaxSuppressMs;
 
     private const int MaxSuppressedEntries = 8;
 
-    private readonly record struct SuppressedPair(uint MapId, Vector3 Origin, Vector3 Goal, uint UntilMs);
+    /// <summary>A suppressed pair: refused until <see cref="UntilMs"/>, its <see cref="Strikes"/> remembered until <see cref="ForgetAtMs"/>.</summary>
+    private readonly record struct SuppressedPair(uint MapId, Vector3 Origin, Vector3 Goal, uint UntilMs, int Strikes, uint ForgetAtMs);
+
+    /// <summary>The span (ms) of a pair's <paramref name="strikes"/>-th suppression: <see cref="SuppressMs"/> doubled per earlier strike, at most <see cref="MaxSuppressMs"/>.</summary>
+    internal static uint SuppressionSpanMs(int strikes)
+    {
+        ulong span = (ulong)SuppressMs << Math.Clamp(strikes - 1, 0, 16);
+        return (uint)Math.Min(span, MaxSuppressMs);
+    }
+
+    /// <summary>
+    /// A number that changes each time the watch suppresses a pair for <paramref name="player"/> (0 before the first). Callers that keep
+    /// their own count of plans or refusals (<see cref="PlayerbotNavigationAnomalies.ObservePlan"/>) start it over when it changes: the
+    /// plans refused by the negative cache never reach them, so a count kept across a suppression joins two episodes into one.
+    /// </summary>
+    internal static int SuppressionEpoch(Player player) => States.TryGetValue(player, out WatchState? state) ? state.Epoch : 0;
+
+    /// <summary>How many times in a row (strikes remembered) the pair of the latest suppression for <paramref name="player"/> has been suppressed (0 when none).</summary>
+    internal static int SuppressionStrikes(Player player) => States.TryGetValue(player, out WatchState? state) ? state.LastStrikes : 0;
 
     private sealed class WatchState
     {
+        internal int Epoch;
+        internal int LastStrikes;
         internal bool Has;
         internal uint MapId;
         internal Vector3 Origin;
@@ -82,7 +115,8 @@ internal static partial class PlayerbotRoutePlanWatch
         for (int i = 0; i < state.Suppressed.Count; i++)
         {
             SuppressedPair entry = state.Suppressed[i];
-            if (entry.MapId == mapId
+            if (IsActive(entry, now)
+                && entry.MapId == mapId
                 && FlatDistanceSquared(entry.Origin, origin) <= SameOriginYards * SameOriginYards
                 && FlatDistanceSquared(entry.Goal, goal) <= SameGoalYards * SameGoalYards)
             {
@@ -181,7 +215,8 @@ internal static partial class PlayerbotRoutePlanWatch
 
     private static void Suppress(Player player, WatchState state, uint mapId, Vector3 origin, Vector3 goal, Vector3 routeEnd, uint now)
     {
-        uint until = unchecked(now + SuppressMs);
+        // A pair suppressed before (its strike still remembered) is held longer each time: the goal did not become reachable meanwhile.
+        int strikes = 1;
         for (int i = state.Suppressed.Count - 1; i >= 0; i--)
         {
             SuppressedPair existing = state.Suppressed[i];
@@ -189,16 +224,22 @@ internal static partial class PlayerbotRoutePlanWatch
                 && FlatDistanceSquared(existing.Origin, origin) <= SameOriginYards * SameOriginYards
                 && FlatDistanceSquared(existing.Goal, goal) <= SameGoalYards * SameGoalYards)
             {
+                strikes = Math.Max(strikes, existing.Strikes + 1);
                 state.Suppressed.RemoveAt(i);
             }
         }
 
         if (state.Suppressed.Count >= MaxSuppressedEntries)
         {
-            state.Suppressed.RemoveAt(0);
+            // Make room: a remembered strike (no longer refusing) goes before a pair still held, the oldest first.
+            int evict = state.Suppressed.FindIndex(entry => !IsActive(entry, now));
+            state.Suppressed.RemoveAt(evict >= 0 ? evict : 0);
         }
 
-        state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until));
+        uint until = unchecked(now + SuppressionSpanMs(strikes));
+        state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until, strikes, unchecked(until + StrikeMemoryMs)));
+        state.Epoch = unchecked(state.Epoch + 1);
+        state.LastStrikes = strikes;
         state.Has = false;
         if (player.IsAlive)
         {
@@ -210,12 +251,15 @@ internal static partial class PlayerbotRoutePlanWatch
     {
         for (int i = state.Suppressed.Count - 1; i >= 0; i--)
         {
-            if (unchecked((int)(state.Suppressed[i].UntilMs - now)) <= 0)
+            if (unchecked((int)(state.Suppressed[i].ForgetAtMs - now)) <= 0)
             {
                 state.Suppressed.RemoveAt(i);
             }
         }
     }
+
+    /// <summary>Whether <paramref name="entry"/> still refuses its pair at <paramref name="now"/> (past it, only its strike count is remembered).</summary>
+    private static bool IsActive(SuppressedPair entry, uint now) => unchecked((int)(entry.UntilMs - now)) > 0;
 
     private static bool CanMove(Player player)
         => player.IsAlive && (player.Movement.Flags & MovementFlags.Root) == 0 && !player.Combat.IsInCombat;

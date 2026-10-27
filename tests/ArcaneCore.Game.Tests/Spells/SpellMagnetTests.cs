@@ -228,6 +228,7 @@ public sealed class SpellMagnetTests
         Assert.Equal(1, Assert.Single(kit.System.GetAuras(victim)).Charges);
         kit.System.RemoveAuras(victim, Protection);
         kit.Advance(1000);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Equal(85u, victim.Health);
         Assert.Equal(100u, magnet.Health);
     }
@@ -241,6 +242,7 @@ public sealed class SpellMagnetTests
         var los = new FakeLineOfSight { WallX = 20 };
         WorldCollision.Of(kit.World).Install(los);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, SpellCastTargets.ForUnit(victim.Guid), false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Equal(100u, victim.Health);
         Assert.Equal(85u, magnet.Health);
     }

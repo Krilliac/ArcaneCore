@@ -13,6 +13,15 @@ namespace ArcaneCore.Game.Tests.Locomotion;
 
 public sealed class MountCastRulesTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private const uint Mount = 961001;
     private const uint Other = 961002;
 
@@ -117,6 +126,7 @@ public sealed class MountCastRulesTests
         kit.Advance(1499);
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
         kit.Advance(1);
+        ResolveSpellBatch(kit);
         Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
     }
 

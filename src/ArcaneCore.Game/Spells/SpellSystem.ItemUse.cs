@@ -83,15 +83,22 @@ public sealed partial class SpellSystem
         finally
         {
             _itemUseDispatches.Pop();
-            if (dispatch.PendingConsume && !dispatch.ReagentCleared && ReferenceEquals(item.Inventory, player.Inventory))
+            SettleItemUseDispatch(player, dispatch);
+        }
+    }
+
+    /// <summary>The one consumption of an item use whose spells have all gone (or been held): see <see cref="ItemUseDispatch"/>.</summary>
+    private void SettleItemUseDispatch(Player player, ItemUseDispatch dispatch)
+    {
+        Item item = dispatch.Item;
+        if (dispatch.PendingConsume && !dispatch.ReagentCleared && ReferenceEquals(item.Inventory, player.Inventory))
+        {
+            player.Inventory.ConsumeItemUse(item);
+            if (!ReferenceEquals(item.Inventory, player.Inventory)
+                && GetState(player.Guid)?.CurrentCast is { } currentCast
+                && ReferenceEquals(currentCast.CastItem, item))
             {
-                player.Inventory.ConsumeItemUse(item);
-                if (!ReferenceEquals(item.Inventory, player.Inventory)
-                    && GetState(player.Guid)?.CurrentCast is { } currentCast
-                    && ReferenceEquals(currentCast.CastItem, item))
-                {
-                    currentCast.CastItem = null;
-                }
+                currentCast.CastItem = null;
             }
         }
     }

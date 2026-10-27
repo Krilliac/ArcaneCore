@@ -96,7 +96,7 @@ internal sealed class PlayerbotMount
         if (_casting)
         {
             if (MountService.IsMounted(player)) { _casting = false; _activeSpellId = 0; _failures = 0; return false; }
-            if (IsCasting(spells, player, _activeSpellId)) return true;
+            if (IsCasting(spells, player, _activeSpellId) || spells.System.HasPendingGo(player)) return true; // a held go has not landed yet
             _casting = false;
             _activeSpellId = 0;
             bool moved = Vector3.DistanceSquared(new Vector3(player.X, player.Y, player.Z), _castStartPos) > 0.01f;
@@ -164,7 +164,9 @@ internal sealed class PlayerbotMount
         if (!sent) return true; // no budget left this think: ask again at the next
         if (MountService.IsMounted(player)) { _failures = 0; return false; }
         uint expectedSpell = attempted.Kind == PlayerbotMountKind.Spell ? attempted.SpellId : 0;
-        if (IsCasting(spells, player, expectedSpell))
+        // With spell batching on, an instant mount-up (or a mount item's use) that passed its checks waits in the batch for its go,
+        // out of the cast slot: it is underway, not refused (SpellSystem.HasPendingGo).
+        if (IsCasting(spells, player, expectedSpell) || spells.System.HasPendingGo(player))
         {
             _casting = true;
             _castStartPos = new Vector3(player.X, player.Y, player.Z);

@@ -333,6 +333,15 @@ public sealed record PathResult(PathType Type, IReadOnlyList<Vector3> Points)
     /// <summary>The last point of the path (the destination, or the closest reachable point).</summary>
     public Vector3 End => Points.Count > 0 ? Points[^1] : default;
 
+    /// <summary>
+    /// With <see cref="PathOptions.EndTolerance"/> 0 only: the start lies more than <see cref="MMaps.NavMeshPathfinder.NearExtents"/>.Y
+    /// (5 yd) above or below the polygon the search started from, which only the tall <see cref="MMaps.NavMeshPathfinder.FarExtents"/>
+    /// box (200 yd) finds. The path still begins at the start itself, so its first leg climbs or drops that far (a mover on an unmeshed
+    /// ledge, issue #1501). Information only: the classification and the points are what they were; a caller that walks the path
+    /// decides. Never set with an end tolerance (the start is graded there, <c>farFromPoly</c>) or when no polygon search ran.
+    /// </summary>
+    public bool StartFar { get; init; }
+
     /// <summary>The path's length along its corners.</summary>
     public float Length
     {

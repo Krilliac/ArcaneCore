@@ -51,7 +51,7 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
-| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
+| a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
 template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
@@ -72,7 +72,7 @@ client opcode through its world handler and never waits for the shared action bu
 
 | Phase | Driven by | What happens |
 |---|---|---|
-| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards (a fight on the way is answered first); 10 minutes at most |
+| `travel` | the coordinator | walk to the chosen battlemaster until within 4 yards of the master as it stands now (a fight on the way is answered first); at most the walk's timeout (10 minutes, longer by the walk's estimated length up to 60), and given up (set aside for that bot alone, which also leaves that master alone for an hour (longer than the set-aside, so it does not walk to it again): a stall is about the bot, so the master is not refused for its zone, unlike a refused route or the timeout, which refuse it for the zones the walk started and failed in) when the bot gets no 10 yards closer in 3 minutes (longer for a long way; the clock restarts on every tick the bot is attacked by a unit it may hit back; the goal follows the live master, and the best distance the watch holds moves with the goal's change of distance while its clock runs on, so a master pacing away and back from a bot that stands still is still a stall) |
 | `join` | the coordinator | CMSG_BATTLEMASTER_HELLO (the server answers SMSG_BATTLEFIELD_LIST), then CMSG_BATTLEMASTER_JOIN (map, instance 0, not as a group); no queue slot within 15 seconds sets the type aside for this bot for 10 minutes |
 | `queued` | the brain | the bot carries on with what it was doing; after `MaxQueueWaitMinutes` it leaves the queue (CMSG_BATTLEFIELD_PORT action 0) and sets the type aside for 10 minutes |
 | `invited` | the brain | an invitation the bot cannot answer yet (dead, between maps); answered when it can |
@@ -247,6 +247,17 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   GetNPCIfCanInteractWith; cmangos/mangosbot queue with the guid from anywhere, which this server refuses), so a bot walks. The Undercity's
   battlemasters are reached by its elevators, which the navigation mesh does not join: the route is refused, and that battlemaster is
   left alone from the bot's zone for an hour (live: Gitrol in Silverpine Forest, 62 refusals before).
+* **Waypoint-walking battlemasters.** The walk's goal follows a living master that moved, and a master that stands still is preferred to one that
+  walks. In classic-db z2815 (ClassicDB_1_12_1_z2815.sql.gz, table creature joined with battlemaster_entry), 2 of the 34 spawns of the Warsong
+  emissary 14991 (game event 20) have MovementType 2 (waypoint): spawn 190500 (map 1, 9952 / 2089) and spawn 190516 (map 0, -5007 / -1178); the
+  other 32 have MovementType 0. 15 of the 228 battlemaster spawns have MovementType 2. A walking master is judged where it stands (its distance and walking region are taken from the creature when the map has it, not from its spawn point), and a bot at its goal does not take an empty spot for a missing walker (the 5 second refusal is for masters that stand still; a walker missing from the map for a minute is refused like one that stands still, so a missing walker costs a bot up to about a minute at the empty spot (often about 5 s)). The preference and the follow cover those spawns and any other that walks.
+* **The walk's progress watch is approximate in two corners.** (1) The watch moves its best distance by the change in the goal's distance from
+  the bot's current position, not from the position where the best was recorded. A bot stuck and bouncing between two points while a
+  waypoint-walking master moves in step can in theory gain up to about twice the bounce width per cycle, enough over many cycles to count as
+  10 yards of progress and hide the stall; the walk's timeout (10 to 60 minutes) is the backstop. (2) The best distance is clamped at zero when
+  the goal moves far toward the bot's old position; after that the watch can no longer register progress (it would need the distance to fall
+  below zero), so only arrival or the stall ends that walk. The same holds after a fight pulls the bot far off the road. Both need a bot far
+  from a master that moved a long way.
 * No premade groups: every bot queues alone (CMSG_BATTLEMASTER_JOIN with the group flag off).
 * **A real player's party bot in a group queue.** A real player who queues as a group (CMSG_BATTLEMASTER_JOIN with the group flag) queues
   the party bot with it (the server's rule). That bot is not free, so the coordinator neither follows nor ports it: its invitation lapses after

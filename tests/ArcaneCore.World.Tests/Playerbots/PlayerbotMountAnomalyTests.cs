@@ -109,22 +109,30 @@ public sealed class PlayerbotMountAnomalyTests
     [Fact]
     public async Task SummonFailed_Silent_WhenTheBotMounts_AndWhenItIsIndoorsAndDefers()
     {
-        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        await RunAsync(new MountFixture(), async (host, session) =>
         {
-            InstallMountSpell(host);
             Player player = session.Player!;
-            player.Inventory.AddItem(98003, 1, out _);
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            var options = new PlayerbotOptions { Enabled = true };
-            session.ManagedBudget = new ManagedActionBudget(5);
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                InstallMountSpell(host);
+                player.Inventory.AddItem(98003, 1, out _);
+                var options = new PlayerbotOptions { Enabled = true };
+                session.ManagedBudget = new ManagedActionBudget(5);
 
-            // Healthy: the item use mounts the bot at once.
-            PlayerbotMount.BeforeStep(session, player, LongRoute(player), options);
-            Assert.True(MountService.IsMounted(player));
-            Assert.Equal(0, PlayerbotMount.For(session).Failures);
-            Assert.False(capture.Any(SummonFailed), capture.Describe());
-            return true;
-        }));
+                // Healthy: the item use mounts the bot (at once, or at its go when spell batching holds it).
+                PlayerbotMount.BeforeStep(session, player, LongRoute(player), options);
+                return true;
+            });
+            await host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(player), "the batched mount-up went off");
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(MountService.IsMounted(player));
+                Assert.Equal(0, PlayerbotMount.For(session).Failures);
+                Assert.False(capture.Any(SummonFailed), capture.Describe());
+                return true;
+            });
+        });
 
         await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
         {

@@ -106,6 +106,12 @@ public sealed class SpellCast
     /// </summary>
     internal bool IsItemTriggeredCast { get; set; }
 
+    /// <summary>
+    /// Prepared inside SpellSystem.HandleItemUse, whose item use consumes the item once, after all its spells (ItemUseDispatch). A held
+    /// batched go keeps that when it goes off (SpellSystem.Batching.cs).
+    /// </summary>
+    internal bool InItemUseDispatch { get; set; }
+
     /// <summary>Template spell slot selected by CMSG_USE_ITEM.</summary>
     public byte ItemSpellIndex { get; }
 
@@ -155,6 +161,9 @@ public sealed class SpellCast
     internal long ElapsedMs { get; set; }
 
     internal bool StuckReported { get; set; }
+
+    /// <summary>The cast waits in the spell batch for its go (SpellSystem.Batching.cs); its go-time caster, range and sight checks are done.</summary>
+    internal bool BatchedGo { get; set; }
 
     internal bool ChannelOrphanReported { get; set; }
 
