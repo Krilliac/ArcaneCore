@@ -175,13 +175,13 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
     /// mesh-floor cases (F1's lip included, where it used to return the chord and the judge convicted it).
     /// </summary>
     [Theory]
-    [InlineData(4.5f, false)]
-    [InlineData(6f, false)]
-    [InlineData(8.1f, false)]
-    [InlineData(8.1f, true)]
-    [InlineData(10.5f, true)]
-    [InlineData(-3f, true)]
-    public async Task SharedFloor_AnyPointTheMoverReturns_IsNotAirwalk(float underChord, bool lip)
+    [InlineData(4.5f, false, true)]
+    [InlineData(6f, false, true)]
+    [InlineData(8.1f, false, true)]
+    [InlineData(8.1f, true, false)]
+    [InlineData(10.5f, true, false)]
+    [InlineData(-3f, true, true)]
+    public async Task SharedFloor_AnyPointTheMoverReturns_IsNotAirwalk(float underChord, bool lip, bool mustWalk)
     {
         Vector3 from = new(X, Y, 1339.6f);
         Vector3 to = new(X + 4.7f, Y - 3.5f, 1316.6f);
@@ -189,6 +189,8 @@ public sealed class PlayerbotMeshLegGroundTests : IDisposable
         (Vector3? walked, string? reason, PlayerbotMotionAnomalies.GroundVerdict verdict) = await ValidateAsync(from, to, half,
             modelFloor: 1300f, meshFloors: (_, _) => [half.Z - underChord], terrainHeight: null,
             lineOfSight: lip ? SightAbove(half.Z + PlayerbotMoveCheck.ChestYards - 0.5f) : null, judge: true);
+        // A mover that refuses everything must not pass: the rows with a floor it can stand on have to walk.
+        if (mustWalk) Assert.True(walked is not null, $"refused: {reason}");
         Assert.True(walked is null || verdict == PlayerbotMotionAnomalies.GroundVerdict.Ok,
             $"returned {walked} ({reason}) but the judge says {verdict}");
     }
