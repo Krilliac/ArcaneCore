@@ -15,6 +15,9 @@ public sealed class ItemUseTests
     private const uint ChargedItem = 99011;
     private const uint ExpendableItem = 99012;
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     [Fact]
     public void UseItem_ConsumesOnePositiveCharge_AndDoesNotRequireSpellbookKnowledge()
     {
@@ -27,6 +30,7 @@ public sealed class ItemUseTests
         Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(ChargedItem, 1, out Item? item));
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
         Assert.Equal(1, item.GetInt32(UpdateFields.ItemFieldSpellCharges));
     }
 
@@ -42,6 +46,7 @@ public sealed class ItemUseTests
         Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(ExpendableItem, 2, out Item? item));
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
         Assert.Equal(1u, player.Inventory.GetItemCount(ExpendableItem));
     }
 
@@ -124,7 +129,8 @@ public sealed class ItemUseTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf()));
         Assert.Single(SpellTestKit.Packets(session, ArcaneCore.Protocol.WorldOpcode.SmsgSpellStart));
-        Assert.True(kit.System.HasAura(player, second));
+        Assert.True(kit.System.HasAura(player, second)); // triggered: applied in the call (its zero-duration aura ends at the next update)
+        FlushSpellBatch(kit);
         Assert.Equal(charges < 0 ? 0u : 1u, player.Inventory.GetItemCount(ChargedItem));
         if (charges > 0) Assert.Equal(0, item.GetInt32(UpdateFields.ItemFieldSpellCharges));
     }
@@ -151,6 +157,7 @@ public sealed class ItemUseTests
         Item castItem = player.Inventory.GetItem(InventorySlots.Bag0, (byte)(InventorySlots.ItemStart + 1))!;
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, castItem.BagSlot, castItem.Slot, 0, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
         Assert.Same(castItem, player.Inventory.GetItem(InventorySlots.Bag0, (byte)(InventorySlots.ItemStart + 1)));
         Assert.Equal(-1, castItem.GetInt32(UpdateFields.ItemFieldSpellCharges));
         Assert.Equal(1u, player.Inventory.GetItemCount(reagentEntry));
@@ -176,6 +183,7 @@ public sealed class ItemUseTests
         Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(ChargedItem, 1, out Item? item));
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
         SpellStateSnapshot snapshot = kit.System.CaptureState(player, nowUnixMs: 1_000_000);
         Assert.Contains(snapshot.Cooldowns, c => c.Kind == SpellCooldownKind.Spell && c.Id == UseSpell);
         Assert.Contains(snapshot.Cooldowns, c => c.Kind == SpellCooldownKind.Category && c.Id == 77);

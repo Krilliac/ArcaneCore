@@ -305,6 +305,7 @@ public sealed class DiminishingTests
 
         Hit(kit, caster, victim, Stun);
         kit.Advance(4100); // the 4 s stun ends at about t = 14 s (the kit clock starts at 10 s)
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the stun that ran out ends at the next boundary (0: no-op)
         Assert.DoesNotContain(kit.System.GetAuras(victim), h => h.Spell.Id == Stun);
         kit.Advance(15_500); // t is about 29.6 s: more than 15 s after the end, but the next sweep is at 40 s
         Hit(kit, caster, victim, Stun);
@@ -336,6 +337,7 @@ public sealed class DiminishingTests
 
         Hit(kit, caster, victim, Stun);
         kit.Advance(4100); // the 4 s stun expires at about t = 4 s
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the stun that ran out ends at the next boundary (0: no-op)
         Assert.DoesNotContain(kit.System.GetAuras(victim), h => h.Spell.Id == Stun);
         kit.Advance(10_000);
         Hit(kit, caster, victim, Stun);
