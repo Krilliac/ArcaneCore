@@ -49,8 +49,11 @@ public sealed class PlayerbotTraceRaceTests
             return Volatile.Read(ref built) >= Target;
         };
         Task<bool> running = world.RunUntilAsync(AdvanceMs, flip);
-        Stopwatch wall = Stopwatch.StartNew();
-        while (Volatile.Read(ref built) < Target && wall.Elapsed < TimeSpan.FromSeconds(60))
+        // Stuck means no trace for stallLimit, not "300 traces took over a minute": how long 300 lockstep round trips take is machine speed,
+        // and a loaded run can spend a fixed total budget while every trace still comes through. The watchdog restarts at every trace.
+        TimeSpan stallLimit = TimeSpan.FromSeconds(60);
+        Stopwatch sinceProgress = Stopwatch.StartNew();
+        while (Volatile.Read(ref built) < Target && sinceProgress.Elapsed < stallLimit)
         {
             if (running.IsCompleted)
             {
@@ -72,9 +75,10 @@ public sealed class PlayerbotTraceRaceTests
             Assert.True(seen > lastSeen, $"trace {built} was built in the same tick as the previous one (world-side flips {seen}, previous {lastSeen}, {restarts} advance restarts)");
             lastSeen = seen;
             Interlocked.Increment(ref built);
+            sinceProgress.Restart();
         }
 
-        // Fails only if the real-time cap was hit, i.e. the world is stuck.
+        // Fails only if no trace came for stallLimit, i.e. the world is stuck.
         Assert.Equal(Target, built);
         await running;
     }

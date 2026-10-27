@@ -95,13 +95,15 @@ public sealed class TransportWorldTests
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, heartbeat.ToArray());
         await host.WaitForWorldAsync(() => ReferenceEquals(player.Transport, ferry), "the player boards the ferry");
         Assert.Equal((2f, 1f, 4f), await host.PlayerStateAsync("Sailor", p => (p.Movement.TransportX, p.Movement.TransportY, p.Movement.TransportZ)));
-        await client.CollectAsync();
+        await client.CollectRepliesAsync();
 
         var skipped = new PacketWriter(12);
         skipped.WriteUInt64(player.Guid.Value);
         skipped.WriteUInt32(250);
         await client.SendAsync(WorldOpcode.CmsgMoveTimeSkipped, skipped.ToArray());
-        List<(WorldOpcode Opcode, byte[] Payload)> resent = (await client.CollectAsync(TimeSpan.FromMilliseconds(300)))
+        // The handler re-sends the ship synchronously, so the PLAYED_TIME barrier queued behind the time skip comes after both blocks however late
+        // the world thread runs it. A 300 ms quiet window missed the re-send on a loaded machine.
+        List<(WorldOpcode Opcode, byte[] Payload)> resent = (await client.CollectThroughBarrierAsync())
             .Where(p => p.Opcode == WorldOpcode.SmsgUpdateObject && p.Payload[4] == 1).ToList();
 
         Assert.Equal(2, resent.Count);
