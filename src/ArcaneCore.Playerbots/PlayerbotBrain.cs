@@ -789,7 +789,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
             SpellFeature? restingSpells = _session.Services.GetService<SpellFeature>();
             bool activeRecovery = restingSpells is not null
-                && PlayerbotConsumables.HasActiveFoodDrink(player, restingSpells.System);
+                && PlayerbotConsumables.IsEatingOrAboutTo(player, restingSpells.System);
             if (!player.Combat.IsInCombat && activeRecovery && PlayerbotConsumables.NeedsRecovery(player, _restKind)
                 && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
                 return;
@@ -2338,7 +2338,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (spellFeature is null || player.Combat.IsInCombat
             || spellFeature.System.GetState(player.Guid)?.CurrentCast is
                 { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }
-            || PlayerbotConsumables.HasActiveFoodDrink(player, spellFeature.System)
+            || PlayerbotConsumables.IsEatingOrAboutTo(player, spellFeature.System)
             || !PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wantedPct == 0 ? 45 : wantedPct,
                 wantedPct == 0 ? 35 : wantedPct, out PlayerbotConsumable consumable))
         { _needsRest = false; return; }

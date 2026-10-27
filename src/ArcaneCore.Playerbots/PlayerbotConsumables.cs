@@ -105,6 +105,14 @@ internal static class PlayerbotConsumables
         return false;
     }
 
+    /// <summary>
+    /// A food or drink is running (<see cref="HasActiveFoodDrink"/>), or the bot's use of one may still be waiting in the spell batch for its
+    /// go (<see cref="SpellSystem.HasPendingGo"/>; always false with batching off). A rest that has just begun is not over, and a second
+    /// item is not used, while the first has not landed: standing up then would cancel the food the moment it lands.
+    /// </summary>
+    internal static bool IsEatingOrAboutTo(Player player, SpellSystem spells)
+        => HasActiveFoodDrink(player, spells) || spells.HasPendingGo(player);
+
     internal static bool HasActiveFoodDrink(Player player, SpellSystem spells)
         => spells.GetAuras(player).Any(holder => !holder.IsRemoved
             && holder.Spell.SpellFamilyName == 0
