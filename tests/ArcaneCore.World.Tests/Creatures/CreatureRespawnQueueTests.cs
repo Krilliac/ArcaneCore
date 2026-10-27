@@ -160,12 +160,12 @@ public sealed class CreatureRespawnQueueTests
         var store = new FakeStore();
         await using ServiceProvider sp = Build(store);
         CreatureRespawnQueue queue = NewQueue(sp);
-        queue.Start();
 
         queue.Save(0, 0, 1, Now + 100);
         queue.Save(409, 7, 2, Now + 200);
         queue.Save(0, 0, 1, Now + 300); // replaces the first
         queue.Delete(409, 7, 2);
+        queue.Start(); // started after the writes are queued, so they are one batch
 
         // Memory answers at once, before any write has landed.
         Assert.Equal(new Dictionary<uint, long> { [1] = Now + 300 }, queue.GetPending(0, 0));
@@ -173,8 +173,136 @@ public sealed class CreatureRespawnQueueTests
         Assert.Empty(queue.GetPending(1, 1));
 
         await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(["save:0:0:1:" + (Now + 100), "save:409:7:2:" + (Now + 200), "save:0:0:1:" + (Now + 300), "delete:7:2"], store.Log);
+        Assert.Equal(["save:0:0:1:" + (Now + 300), "delete:7:2"], store.Log); // queued together: one batch, the last write of each spawn wins
         await queue.StopAsync();
+    }
+
+    // --- batching: what is already queued goes to the store in one call --------------------------
+
+    [Fact]
+    public async Task QueuedWrites_BecomeOneStoreCall()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        for (uint guid = 1; guid <= 40; guid++)
+        {
+            queue.Save(0, 0, guid, Now + guid); // queued before the consumer exists: all 40 are in the channel when it starts
+        }
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(1, store.Attempts);
+        Assert.Equal(40, store.Rows.Count);
+        Assert.Equal(0, queue.Pending);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task ABatch_IsCappedAtTheStoreChunkSize()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        for (uint guid = 1; guid <= 501; guid++)
+        {
+            queue.Save(0, 0, guid, Now + guid);
+        }
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(2, store.Attempts); // 500 + 1
+        Assert.Equal(501, store.Rows.Count);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task Coalescing_TheLastWriteOfASpawnWins()
+    {
+        var store = new FakeStore();
+        store.Rows[(0, 1)] = Now; // stored rows: 1 is deleted by the batch, 3 stays
+        store.Rows[(0, 3)] = Now;
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Save(0, 0, 1, Now + 100);   // upsert then delete: a delete
+        queue.Delete(0, 0, 1);
+        queue.Delete(0, 0, 2);            // delete then upsert: an upsert
+        queue.Save(0, 0, 2, Now + 200);
+        queue.Save(0, 0, 4, Now + 300);   // two upserts: the later one
+        queue.Save(0, 0, 4, Now + 400);
+        queue.Save(0, 5, 1, Now + 500);   // the same guid in another instance is another key
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(1, store.Attempts);
+        Assert.Equal(["save:0:0:2:" + (Now + 200), "save:0:0:4:" + (Now + 400), "save:0:5:1:" + (Now + 500), "delete:0:1"], store.Log);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 3)] = Now, [(0, 2)] = Now + 200, [(0, 4)] = Now + 400, [(5, 1)] = Now + 500 }, store.Rows);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task AnInstanceDelete_SplitsTheBatch_SoOrderAroundItIsKept()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Save(409, 7, 1, Now + 100);
+        queue.ForgetInstance(7);
+        queue.Save(409, 7, 1, Now + 200); // the instance's next life
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(["save:409:7:1:" + (Now + 100), "deleteinstance:7", "save:409:7:1:" + (Now + 200)], store.Log);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(7, 1)] = Now + 200 }, store.Rows);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task AFailedBatch_RetainsEveryCoalescedSpawn_AndTheSweepLandsThem()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance)
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+        };
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 1, Now + 150);
+        queue.Save(0, 0, 2, Now + 200);
+
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(3, store.Attempts); // the batch was tried as a whole, three times
+        Assert.Equal(["spawn:0/1", "spawn:0/2"], queue.RetainedKeys);
+        Assert.Equal(0, queue.Pending);
+
+        store.Down = false;
+        await queue.StopAsync().WaitAsync(HangGuard);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 1)] = Now + 150, [(0, 2)] = Now + 200 }, store.Rows);
+    }
+
+    [Fact]
+    public async Task StopFlush_WritesEverythingStillQueued_InBatches()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        for (uint guid = 1; guid <= 1200; guid++)
+        {
+            queue.Save(0, 0, guid, Now + guid);
+        }
+
+        queue.Start();
+        await queue.StopAsync().WaitAsync(HangGuard);
+
+        Assert.Equal(1200, store.Rows.Count);
+        Assert.Equal(3, store.Attempts); // 500 + 500 + 200
+        Assert.Equal(0, queue.Pending);
     }
 
     [Fact]
@@ -233,6 +361,7 @@ public sealed class CreatureRespawnQueueTests
         queue.Start();
 
         queue.Save(0, 0, 1, Now + 100);
+        await queue.FlushAsync().WaitAsync(HangGuard); // one write per store call: each is its own batch
         queue.Save(0, 0, 2, Now + 100);
         await queue.FlushAsync().WaitAsync(HangGuard);
         // An inline retry would have been 3 attempts each, with 600 ms of back-off.
@@ -299,7 +428,9 @@ public sealed class CreatureRespawnQueueTests
         queue.Start();
 
         queue.Save(0, 0, 1, Now + 100);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30)); // one write per store call: each is its own batch
         queue.Save(0, 0, 2, Now + 200);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
         queue.Save(0, 0, 3, Now + 300);
         await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(3, store.Attempts);
@@ -553,21 +684,26 @@ public sealed class CreatureRespawnQueueTests
     [Fact]
     public async Task Stop_HealthySlowDrain_IsNeverCut()
     {
-        var store = new FakeStore { DelayMs = 40 };
+        var store = new FakeStore { DelayMs = 600 };
         await using ServiceProvider sp = Build(store);
         CreatureRespawnQueue queue = NewLaneQueue(sp, new StopDrainBudget { StallBudget = TimeSpan.FromMilliseconds(300) });
         queue.Start();
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        for (uint guid = 1; guid <= 30; guid++)
+        queue.Save(0, 0, 1, Now + 100);
+        DateTime inFlightDeadline = DateTime.UtcNow + HangGuard;
+        while (Volatile.Read(ref store.InFlight) != 1) // the first batch is in the store; the second is queued behind it
         {
-            queue.Save(0, 0, guid, Now + 100);
+            Assert.True(DateTime.UtcNow < inFlightDeadline, "the first write never started");
+            await Task.Delay(5);
         }
 
-        await queue.StopAsync().WaitAsync(HangGuard); // 30 landed writes cost more than the stall budget in wall time, and none is cut
+        queue.Save(0, 0, 2, Now + 100);
+
+        await queue.StopAsync().WaitAsync(HangGuard); // two slow batches cost more than the stall budget in wall time, and none is cut
         elapsed.Stop();
 
-        Assert.Equal(30, store.Attempts);
-        Assert.Equal(30, store.Rows.Count);
+        Assert.Equal(2, store.Attempts);
+        Assert.Equal(2, store.Rows.Count);
         Assert.Equal(0, queue.RetainedCount);
         Assert.True(elapsed.Elapsed >= TimeSpan.FromSeconds(1), $"the drain took {elapsed.Elapsed}");
     }

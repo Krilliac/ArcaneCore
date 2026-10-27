@@ -159,7 +159,7 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
     }
 
     /// <summary>Keys per set-based statement: bounds statement size and per-statement work (SQLite and PostgreSQL pass the list as one parameter; 500 also stays far under every per-key parameter limit).</summary>
-    private const int ChunkSize = 500;
+    public const int ChunkSize = 500;
 
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
     {

@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Kernel.Diagnostics;
@@ -395,7 +396,30 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
     /// Attempt <paramref name="op"/> up to <see cref="MaxAttempts"/> times (once on a retained <paramref name="sweep"/>); null when it landed (or there is
     /// no store), else the last failure.
     /// </summary>
-    private async Task<Exception?> TryWriteAsync(Op op, bool sweep = false)
+    private Task<Exception?> TryWriteAsync(Op op, bool sweep = false)
+        => TryWriteAsync(store => op.ExecuteAsync(store), sweep);
+
+    /// <summary>The store call of a batch of spawn writes that were already coalesced by key (no key is in both lists).</summary>
+    private static Task SaveBatchAsync(ICreatureRespawnStore store, List<Op> batch)
+    {
+        List<CreatureRespawnRecord> upserts = [];
+        List<CreatureRespawnKey> deletes = [];
+        foreach (Op op in batch)
+        {
+            if (op.SaveRecord is { } record)
+            {
+                upserts.Add(record);
+            }
+            else if (op.DeleteKey is { } key)
+            {
+                deletes.Add(key);
+            }
+        }
+
+        return store.SaveAsync(upserts, deletes);
+    }
+
+    private async Task<Exception?> TryWriteAsync(Func<ICreatureRespawnStore, Task> write, bool sweep = false)
     {
         int attempts = sweep || _stopping ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; ; attempt++)
@@ -411,7 +435,7 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ICreatureRespawnStore>() is { } store)
                 {
-                    await op.ExecuteAsync(store).ConfigureAwait(false);
+                    await write(store).ConfigureAwait(false);
                 }
 
                 progress.Succeeded();
@@ -445,12 +469,46 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
         }
     }
 
+    /// <summary>Under <see cref="_gate"/>, on the consumer: record the verdict of the write that settled <paramref name="op"/>'s key.</summary>
+    private void Settle(Op op, Exception? failure)
+    {
+        if (failure is null)
+        {
+            _retained.Remove(op.Key); // the consumer is in order: this write is newer than anything retained for its key
+        }
+        else if (op.Key.InstanceWide || !_forgottenAt.TryGetValue(op.Key.InstanceId, out long forgotten) || forgotten < op.Sequence)
+        {
+            _retained[op.Key] = new Retained(op, failure); // a spawn write older than its instance's delete is moot: that delete removes the row
+        }
+    }
+
     private async Task ConsumeAsync()
     {
         try
         {
-            await foreach (Op op in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
+            ChannelReader<Op> reader = _channel.Reader;
+            Op? carried = null; // the op that ended a batch (a sweep marker or an instance delete): handled next, after the batch
+            while (true)
             {
+                Op op;
+                if (carried is not null)
+                {
+                    op = carried;
+                    carried = null;
+                }
+                else if (!await reader.WaitToReadAsync().ConfigureAwait(false))
+                {
+                    break; // completed and drained
+                }
+                else if (!reader.TryRead(out Op? read))
+                {
+                    continue;
+                }
+                else
+                {
+                    op = read;
+                }
+
                 if (op.IsSweep)
                 {
                     try
@@ -465,20 +523,45 @@ public sealed class CreatureRespawnQueue(IServiceScopeFactory scopes, ILogger lo
                     continue; // not a counted write
                 }
 
-                Exception? failure = await TryWriteAsync(op).ConfigureAwait(false);
+                if (op.Key.InstanceWide)
+                {
+                    Exception? deleteFailure = await TryWriteAsync(op).ConfigureAwait(false);
+                    lock (_gate)
+                    {
+                        Settle(op, deleteFailure);
+                    }
+
+                    Interlocked.Decrement(ref _pending);
+                    continue;
+                }
+
+                // Drain what is already queued (never waiting for more) into one store call. The last write of a spawn wins; an instance
+                // delete or a sweep marker ends the batch, so order around it is kept.
+                Dictionary<OpKey, Op> latest = new() { [op.Key] = op };
+                int consumed = 1;
+                while (consumed < EfCreatureRespawnStore.ChunkSize && reader.TryRead(out Op? next))
+                {
+                    if (next.IsSweep || next.Key.InstanceWide)
+                    {
+                        carried = next;
+                        break;
+                    }
+
+                    latest[next.Key] = next;
+                    consumed++;
+                }
+
+                List<Op> batch = [.. latest.Values];
+                Exception? failure = await TryWriteAsync(store => SaveBatchAsync(store, batch)).ConfigureAwait(false);
                 lock (_gate)
                 {
-                    if (failure is null)
+                    foreach (Op settled in batch)
                     {
-                        _retained.Remove(op.Key); // the consumer is in order: this write is newer than anything retained for its key
-                    }
-                    else if (op.Key.InstanceWide || !_forgottenAt.TryGetValue(op.Key.InstanceId, out long forgotten) || forgotten < op.Sequence)
-                    {
-                        _retained[op.Key] = new Retained(op, failure); // a spawn write older than its instance's delete is moot: that delete removes the row
+                        Settle(settled, failure);
                     }
                 }
 
-                Interlocked.Decrement(ref _pending);
+                Interlocked.Add(ref _pending, -consumed);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
