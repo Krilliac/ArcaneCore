@@ -927,6 +927,11 @@ public sealed partial class SpellSystem
 
     private void UpdateCast(SpellCast cast, uint diffMs)
     {
+        if (cast.BatchedGo)
+        {
+            return; // waiting in the spell batch for its go (SpellSystem.Batching.cs)
+        }
+
         if (cast.Timer < 0)
         {
             if (!cast.StuckReported)
@@ -1052,9 +1057,9 @@ public sealed partial class SpellSystem
     /// </summary>
     private void Cancel(SpellCast cast)
     {
-        if (cast.State == SpellCastState.Finished)
+        if (cast.State == SpellCastState.Finished || cast.BatchedGo)
         {
-            return;
+            return; // a cast held in the spell batch is committed (SpellSystem.Batching.cs)
         }
 
         UnitSpellState state = GetOrCreateState(cast.Caster);

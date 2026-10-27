@@ -12,8 +12,8 @@ namespace ArcaneCore.Game.Spells;
 /// version 1.12"; 1.13.7 PTR notes, https://us.forums.blizzard.com/en/wow/t/838945: "a reduction from the 1.13.6 live window of 400 milliseconds").
 /// <para>
 /// A player's non-triggered cast that reaches its go (an instant from <see cref="Prepare"/>, a finished cast bar from <see cref="UpdateCast"/>)
-/// is checked as <see cref="Cast"/> would check it, then held: it leaves the caster's cast slot, so an interrupt, a stun or a move arriving in the
-/// same window can no longer stop it. At each window boundary <see cref="FlushSpellBatch"/> sends the held casts through <see cref="Cast"/> in
+/// is checked as <see cref="Cast"/> would check it, then held: an interrupt, a stun, a cancel or a move arriving in the same window can no
+/// longer stop it (a finished cast bar stays in the cast slot until its go, so the unit still reads as casting; an instant leaves it). At each window boundary <see cref="FlushSpellBatch"/> sends the held casts through <see cref="Cast"/> in
 /// the order they arrived; their go re-checks everything but the caster's own state, range and line of sight (<c>batchedGo</c>), which were
 /// judged when the window opened. So two players who kill, charge or interrupt each other in one window both get their action. A cast that
 /// fails its check is not held: it fails at once, as without batching.
@@ -50,9 +50,12 @@ public sealed partial class SpellSystem
             return Cast(cast); // a failing go fails now, with its own replies
         }
 
-        if (_states.TryGetValue(cast.Caster.Guid, out UnitSpellState? state) && ReferenceEquals(state.CurrentCast, cast))
+        // An instant leaves the cast slot (a second off-GCD instant in the same window still goes through, as on retail); a finished
+        // cast bar keeps it, so everything that asks whether the unit is casting (bots, creature AI, melee pauses) still sees it until
+        // its go. Either way it is committed: Cancel, UpdateCast and the interrupt effect leave a held cast alone.
+        if (cast.CastTime == 0 && _states.TryGetValue(cast.Caster.Guid, out UnitSpellState? state) && ReferenceEquals(state.CurrentCast, cast))
         {
-            state.CurrentCast = null; // committed: nothing in the window can interrupt it
+            state.CurrentCast = null;
         }
 
         cast.BatchedGo = true;

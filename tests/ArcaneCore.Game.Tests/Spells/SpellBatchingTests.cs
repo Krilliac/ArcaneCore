@@ -118,14 +118,18 @@ public sealed class SpellBatchingTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, SlowBolt, SpellCastTargets.ForUnit(kicker.Guid)));
         kit.Advance(1500); // the bar is done at 1500; the boundaries fall at 400, 800, 1200 and 1600
-        Assert.Null(kit.System.GetState(caster.Guid)?.CurrentCast); // out of its slot (an idle state may be pruned altogether)
+        SpellCast held = Assert.IsType<SpellCast>(kit.System.GetState(caster.Guid)!.CurrentCast); // still reads as casting until its go
+        Assert.Equal(SpellCastState.Preparing, held.State);
         Assert.Equal(1, kit.System.PendingBatchedGoes);
+        kit.System.CancelCast(caster, SlowBolt); // too late to cancel: it is committed
+        Assert.Same(held, kit.System.GetState(caster.Guid)!.CurrentCast);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(kicker, Kick, SpellCastTargets.ForUnit(caster.Guid)));
         kit.Advance(100);
 
         Assert.True(kicker.Health < 60);
         Assert.False(kit.System.IsSchoolLocked(caster, SpellSchool.Fire));
+        Assert.Null(kit.System.GetState(caster.Guid)?.CurrentCast);
     }
 
     [Fact]
