@@ -64,6 +64,35 @@ public sealed class EconomyMailSendRecheckTests
             control.Release.TrySetResult(true);
         }
     }
+    [Theory]
+    [InlineData("dead")]
+    [InlineData("out-of-reach")]
+    public async Task Send_answers_internal_error_when_the_mailbox_check_fails_before_the_box_size_read(string change)
+    {
+        // vmangos@0e3ff01 MailHandler.cpp:131-134: a failed CheckMailBox before the count query answers MAIL_ERR_INTERNAL_ERROR.
+        var mailbox = new ToggleMailbox();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: false, services => services.AddSingleton<IMailboxAccess>(mailbox));
+        await rig.Server.World.InvokeAsync(() =>
+        {
+            if (change == "dead")
+            {
+                rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.Health = 0;
+            }
+            else
+            {
+                mailbox.InReach = false;
+            }
+
+            return true;
+        }).WaitAsync(rig.Token);
+
+        await rig.SendAsync("Mailrecv", "hello", "body", money: 0, cod: 0);
+        (MailAction action, MailResult result) = await rig.ReadResultAsync();
+        Assert.Equal(MailAction.Send, action);
+        Assert.Equal(MailResult.InternalError, result);
+        Assert.Empty(await rig.ReceiverMailAsync());
+    }
+
 
     /// <summary>The retail check's two conditions (alive, mailbox in reach), with reach switchable by the test.</summary>
     private sealed class ToggleMailbox : IMailboxAccess
