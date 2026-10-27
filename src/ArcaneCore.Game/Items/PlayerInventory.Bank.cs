@@ -92,6 +92,14 @@ public sealed partial class PlayerInventory
             return;
         }
 
+        // Same banker-range rule as every other bank move (AutoBankItem, ItemHandlers swap/split); vmangos has no check here
+        // (ItemHandler.cpp:92-105), but this server refuses remote bank access everywhere else.
+        if (InventorySlots.IsBankPos(item.BagSlot, item.Slot) && !BankUsable)
+        {
+            SendEquipError(InventoryResult.TooFarAwayFromBank, item, null);
+            return;
+        }
+
         SwapItem(item.BagSlot, item.Slot, InventorySlots.Bag0, dstSlot);
     }
 
