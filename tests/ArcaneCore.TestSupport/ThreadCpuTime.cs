@@ -19,8 +19,11 @@ public static class ThreadCpuTime
         {
             try
             {
+                // "<ns on cpu> <ns waiting> <timeslices>"; a line of another shape gives no CPU time rather than an exception.
                 string text = File.ReadAllText("/proc/thread-self/schedstat");
-                return TimeSpan.FromTicks(long.Parse(text.AsSpan(0, text.IndexOf(' ')), CultureInfo.InvariantCulture) / 100);
+                int space = text.IndexOf(' ');
+                return space > 0 && long.TryParse(text.AsSpan(0, space), NumberStyles.None, CultureInfo.InvariantCulture, out long ns)
+                    ? TimeSpan.FromTicks(ns / 100) : null;
             }
             catch (IOException)
             {
