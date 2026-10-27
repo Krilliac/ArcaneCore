@@ -321,14 +321,16 @@ public sealed partial class AtlasServer
     /// </summary>
     private void RefuseCommand(UiConnection connection, JsonNode? id, string name, CancellationToken ct)
     {
+        // Built before the slot is taken, so nothing that can throw runs while the slot is held.
+        var result = new CommandResult(name, false, null, CommandException.Unavailable, $"{MaxCommandsInFlight} commands are already running on this connection; send it again after one of their results arrives.", 0);
+        string json = new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString();
         if (!connection.TryBeginRefusalSend())
         {
             connection.CountDroppedRefusal();
             return;
         }
 
-        var result = new CommandResult(name, false, null, CommandException.Unavailable, $"{MaxCommandsInFlight} commands are already running on this connection; send it again after one of their results arrives.", 0);
-        _ = SendRefusalAsync(connection, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString(), ct);
+        _ = SendRefusalAsync(connection, json, ct);
     }
 
     /// <summary>Sends a refusal and frees the connection's single refusal slot when the send ends, however it ends.</summary>

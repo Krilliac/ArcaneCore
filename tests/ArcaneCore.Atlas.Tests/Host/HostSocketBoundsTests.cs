@@ -50,8 +50,11 @@ public sealed class HostSocketBoundsTests
             await ui.SendAsync(Command(i, "test.gate"));
         }
 
-        // An unknown op after the flood is a barrier: one connection is read in order, so its error follows every refusal. That relies on
-        // SemaphoreSlim releasing waiters FIFO: each refusal takes its place at the send gate on the receive loop before the barrier's error does.
+        // An unknown op after the flood is a barrier: the receive loop handles one connection's messages in order, so the barrier's error is
+        // sent after every refusal was answered or counted. SemaphoreSlim does not document FIFO for its waiters, so the barrier is only sent
+        // once no refusal send is waiting at the gate; the error then cannot be overtaken by a queued refusal.
+        UiConnection flooded = rig.Server!.Hub.Find(ui.ConnectionId)!;
+        await Wait.UntilAsync(() => flooded.PendingRefusalSends == 0, "the refusal sends to finish");
         await ui.SendTextAsync("""{"op":"barrier"}""");
         int refused = 0;
         while (true)
@@ -70,9 +73,8 @@ public sealed class HostSocketBoundsTests
         }
 
         // Only one refusal send is outstanding at a time, so a refusal that finds the previous one still sending is counted instead of answered.
-        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
         Assert.True(refused > 0, "no refusal was answered");
-        Assert.Equal(flood - cap, refused + connection.DroppedRefusals);
+        Assert.Equal(flood - cap, refused + flooded.DroppedRefusals);
         await Wait.UntilAsync(() => Volatile.Read(ref started) == cap, "the capped commands to start");
         Assert.True(Volatile.Read(ref peak) <= cap, $"{Volatile.Read(ref peak)} commands ran at once; the cap is {cap}");
 
@@ -113,8 +115,8 @@ public sealed class HostSocketBoundsTests
         await ui.ReceiveUntilAsync(m => m.Str("op") == "result" && m.Num("id") == 7, "the status result while inside the budget");
 
         // Past the budget the host stops answering and closes the socket: four refilled answers, then the close.
-        // errors <= refilled is the bound, not an equality: the server closes as soon as the budget is spent while the client is still sending, and
-        // the client may see the socket end before it has read every answer, so the number it reads is not deterministic.
+        // The manual clock makes the refill exact, and the close frame is sent through the same gate as the answers, after them, so the client reads
+        // exactly the refilled number of answers before the close.
         int refilled = 4;
         time.Advance(AtlasServer.MessageErrorRefill * refilled);
         int flood = burst + 24;
@@ -140,8 +142,7 @@ public sealed class HostSocketBoundsTests
             }
         }
 
-        Assert.True(errors > 0, $"no answer was sent before the close; {refilled} answers were refilled");
-        Assert.True(errors <= refilled, $"{errors} answers for {flood} bad messages; {refilled} were refilled");
+        Assert.Equal(refilled, errors);
         Assert.Equal(WebSocketCloseStatus.PolicyViolation, ui.Socket.CloseStatus);
     }
 
@@ -176,7 +177,9 @@ public sealed class HostSocketBoundsTests
             await ui.SendAsync(Command(100 + i, "test.stall"));
         }
 
-        // The barrier's error follows every refusal reply because SemaphoreSlim releases send-gate waiters FIFO.
+        // As in the flood test, the barrier waits until no refusal send is queued, so its error is not overtaken (the gate's wake order is not documented).
+        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
+        await Wait.UntilAsync(() => connection.PendingRefusalSends == 0, "the refusal sends to finish");
         await ui.SendTextAsync("""{"op":"barrier"}""");
         int refused = 0;
         while (true)
@@ -194,7 +197,6 @@ public sealed class HostSocketBoundsTests
             }
         }
 
-        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
         Assert.True(refused > 0, "no refusal was answered");
         Assert.Equal(clicks, refused + connection.DroppedRefusals);
         Assert.Equal(WebSocketState.Open, ui.Socket.State);
