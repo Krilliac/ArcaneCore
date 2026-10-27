@@ -39,8 +39,9 @@ RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATIO
 FROM mcr.microsoft.com/dotnet/runtime:11.0.0-rc.2@sha256:c2fe4a619dab039d442e63ca56ed3ab1c10d0a0a59b778741d002bbb53c6c637 AS runtime
 ARG USER_ID=1000
 ARG GROUP_ID=1000
-ENV DOTNET_gcServer=0 \
-    DOTNET_TieredPGO=1 \
+# No DOTNET_gcServer here: an environment setting overrides runtimeconfig.json, and the World ships Server GC on purpose
+# (ArcaneCore.World.csproj, measured in docs/integration/perf-limits-20261008.md). Set DOTNET_gcServer=0 per service to opt out.
+ENV DOTNET_TieredPGO=1 \
     TZ=Etc/UTC
 RUN (getent group ${GROUP_ID} || groupadd -g ${GROUP_ID} arcane) \
  && (getent passwd ${USER_ID} || useradd -u ${USER_ID} -g ${GROUP_ID} -m arcane) \
