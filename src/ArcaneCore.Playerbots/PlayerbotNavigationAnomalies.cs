@@ -56,6 +56,12 @@ internal static class PlayerbotNavigationAnomalies
         internal int Refusals;
         internal bool LoopReported;
         internal bool RefusalReported;
+
+        /// <summary>The route watch's suppression epoch these counts belong to (<see cref="PlayerbotRoutePlanWatch.SuppressionEpoch"/>).</summary>
+        internal int Epoch;
+
+        /// <summary>The route watch has suppressed this goal's pair more than once and it is still refused: the next refusal is reported.</summary>
+        internal bool Escalated;
     }
 
     private static readonly ConditionalWeakTable<Player, GoalWatch> Watches = [];
@@ -93,7 +99,8 @@ internal static class PlayerbotNavigationAnomalies
     /// One finished plan toward <paramref name="goal"/> from <paramref name="origin"/> (<see cref="PlayerbotNavigation.TryPlanToward"/>).
     /// <paramref name="inconclusive"/>: no verdict (a tile being read, an async plan deferred): not counted at all. Reports
     /// <c>nav/replan-loop</c> (<see cref="ReplanLoopPlans"/> successful plans from one spot over <see cref="ReplanLoopMinMs"/>, for a bot
-    /// that could move), <c>nav/goal-unreachable</c> (<see cref="RepeatedRefusals"/> refusals in a row), and <c>nav/no-path-connected</c>
+    /// that could move), <c>nav/goal-unreachable</c> (<see cref="RepeatedRefusals"/> refusals in a row within one episode of the route watch,
+    /// or a refusal after it has suppressed the goal more than once: <see cref="PlayerbotRoutePlanWatch.SuppressionEpoch"/>), and <c>nav/no-path-connected</c>
     /// besides when the region graph puts the bot and the goal in one component (the search refused a goal the mesh joins to the bot).
     /// Once per episode: the next report of a key needs the goal or the bot's place to change, or a success.
     /// </summary>
@@ -102,6 +109,7 @@ internal static class PlayerbotNavigationAnomalies
         if (inconclusive || Silenced(player)) return;
         GoalWatch watch = Watches.GetValue(player, static _ => new GoalWatch());
         uint now = NowOf(player);
+        int epoch = PlayerbotRoutePlanWatch.SuppressionEpoch(player);
         if (!watch.Has || Vector3.DistanceSquared(watch.Goal, goal) > SameGoalYards * SameGoalYards)
         {
             watch.Has = true;
@@ -112,7 +120,26 @@ internal static class PlayerbotNavigationAnomalies
             watch.Refusals = routed ? 0 : 1;
             watch.LoopReported = false;
             watch.RefusalReported = false;
+            watch.Epoch = epoch;
+            watch.Escalated = false;
             return;
+        }
+
+        if (watch.Epoch != epoch)
+        {
+            // The route watch suppressed a pair since the last plan counted here (bot QA #1492): the plans its negative cache refused never
+            // came here, so a count kept across the suppression would join two episodes and report the first refusal after it expired as
+            // the RepeatedRefusals-th in a row. The count starts over. A goal whose pair the watch has suppressed more than once (each time
+            // for longer) and that is still refused is reported on its next refusal: the suppressions did not make it reachable.
+            watch.Epoch = epoch;
+            watch.Origin = origin;
+            watch.Plans = 0;
+            watch.FirstAt = now;
+            watch.Refusals = 0;
+            watch.LoopReported = false;
+            watch.Escalated = PlayerbotRoutePlanWatch.SuppressionStrikes(player) >= 2;
+            // A refusal seen with a new epoch is the one that made the watch suppress (RecordOutcome runs first): not one after it.
+            if (!routed) return;
         }
 
         if (Vector3.DistanceSquared(watch.Origin, origin) > SameOriginYards * SameOriginYards)
@@ -132,6 +159,7 @@ internal static class PlayerbotNavigationAnomalies
         {
             watch.Refusals = 0;
             watch.RefusalReported = false;
+            watch.Escalated = false;
             if (!watch.LoopReported && watch.Plans >= ReplanLoopPlans && unchecked(now - watch.FirstAt) >= ReplanLoopMinMs && CanMove(player))
             {
                 watch.LoopReported = true;
@@ -143,12 +171,14 @@ internal static class PlayerbotNavigationAnomalies
             return;
         }
 
-        if (++watch.Refusals < RepeatedRefusals || watch.RefusalReported) return;
+        if ((++watch.Refusals < RepeatedRefusals && !watch.Escalated) || watch.RefusalReported) return;
         watch.RefusalReported = true;
         int fromComponent = -1, toComponent = -1;
         PlayerbotNavigation.IsUnreachableOnFoot(player, goal, out fromComponent, out toComponent);
-        PlayerbotAnomalies.Report(player, "nav", "goal-unreachable",
-            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        PlayerbotAnomalies.Report(player, "nav", "goal-unreachable", watch.Escalated
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"plans toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1} are still refused after the route watch suppressed the goal {PlayerbotRoutePlanWatch.SuppressionStrikes(player)} times (region components bot {fromComponent}, goal {toComponent})")
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"{watch.Refusals} plans in a row toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1} were refused (region components bot {fromComponent}, goal {toComponent})"));
         // A far goal (hung in the air or on excluded ground) that snaps into the bot's own component reports goal-unreachable with goal -1,
         // not no-path-connected: it has no region of its own, so the graph says nothing about it.
