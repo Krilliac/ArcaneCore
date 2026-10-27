@@ -14,6 +14,15 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// <summary>The pet opcodes: vmangos PetHandler.cpp, Unit::HandlePetCommand, Player::PetSpellInitialize.</summary>
 public sealed class PetControlTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static byte[] Action(ObjectGuid pet, uint action, ActionType type, ObjectGuid target = default)
     {
         var w = new PacketWriter(20);
@@ -348,6 +357,7 @@ public sealed class PetControlTests
             session.Clear();
             uint health = enemy.Health;
             kit.Controller.HandleAction(owner, PetPackets.ReadAction(Action(pet.Guid, PetBiteSpell, ActionType.Disabled, enemy.Guid)));
+            ResolveSpellBatch(kit.Spells);
             Assert.Empty(Packets(session, WorldOpcode.SmsgPetCastFailed).Select(p => $"{p[4]}/{p[5]:X}"));
             Assert.Equal(health - 8, enemy.Health);
 
@@ -382,6 +392,7 @@ public sealed class PetControlTests
 
             pet.Summon!.Charm!.LearnSpell(PetBiteSpell);
             kit.Controller.HandleCast(owner, PetPackets.ReadCast(Cast(pet.Guid, PetBiteSpell)));
+            ResolveSpellBatch(kit.Spells);
             Assert.Equal(health - 8, enemy.Health);
 
             // a guardian is not the "current pet" (UNIT_FIELD_SUMMON): refused

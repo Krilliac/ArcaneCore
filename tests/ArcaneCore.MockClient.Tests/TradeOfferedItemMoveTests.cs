@@ -313,7 +313,7 @@ public sealed class TradeOfferedItemMoveTests
         // The bank 5-stack is not offered, but CanStoreItem(NullBag, NullSlot) picks the offered 17-stack first: 17 -> 20.
         await RefusedAsync(rig, WorldOpcode.CmsgAutostoreBankItem, [InventorySlots.Bag0, bankSlot], scored: false);
 
-        await AssertSenderAsync(rig, offered.Guid, expectedCount: 17, expectedTotal: 25);
+        await AssertSenderAsync(rig, offered.Guid, expectedCount: 17, expectedTotal: 20); // the 5-stack stays in the bank, which GetItemCount does not count
         await CompleteAsync(rig);
         Assert.Equal(17u, await ReceiverCountAsync(rig));
     }

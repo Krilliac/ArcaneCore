@@ -11,7 +11,8 @@ namespace ArcaneCore.Kernel.Diagnostics;
 /// <c>Diagnostics:FirstChanceExceptions</c> on, <see cref="AppDomain.FirstChanceException"/>. Each writes a
 /// <see cref="CrashReport"/> (exception and managed stack, process and runtime, thread, GC and working
 /// set, the invariant counters, the daemon's <see cref="ICrashContextProvider"/>s) and then honours
-/// <c>Diagnostics:OnUnhandled</c> / <c>Diagnostics:OnUnobservedTask</c> (docs/ops/invariants.md).
+/// <c>Diagnostics:OnUnhandled</c> / <c>Diagnostics:OnUnobservedTask</c> (docs/ops/invariants.md). On a terminating path the opt-in
+/// <see cref="CrashDialog"/> (<c>Diagnostics:CrashDialog</c>) runs between the fault record and the policy; it never changes the policy.
 /// <para>
 /// Ownership: one instance per process (<see cref="Install"/> is idempotent and <see cref="Reconfigure"/>
 /// swaps the sink, options and providers, so the host installs a standard-error sink before it is built
@@ -152,43 +153,76 @@ public sealed class CrashHandler : IDisposable
     private void OnUnhandled(object? sender, UnhandledExceptionEventArgs e)
     {
         var exception = e.ExceptionObject as Exception;
-        Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
-        RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
-        Terminate(_options.OnUnhandled == UnhandledExceptionPolicy.FailFast, exception);
+        DiagnosticsOptions options = _options;
+        string? report = Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
+        string? faultId = RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
+        bool failFast = options.OnUnhandled == UnhandledExceptionPolicy.FailFast;
+        ShowDialog(options, CrashKind.Unhandled, exception, failFast, "Diagnostics:OnUnhandled = " + options.OnUnhandled, "unhandled", faultId, report);
+        Terminate(failFast, exception);
     }
 
     private void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        UnobservedTaskPolicy policy = _options.OnUnobservedTask;
+        DiagnosticsOptions options = _options;
+        UnobservedTaskPolicy policy = options.OnUnobservedTask;
         bool terminating = policy != UnobservedTaskPolicy.Log;
         // Critical either way in the log: an unobserved fault is an exception nobody handled, whether or not the policy
         // ends the process. The fault ledger carries whether it terminates, so the staff announcement is Critical only then.
-        Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating);
-        RecordFault("unobserved-task", e.Exception, terminating);
+        string? report = Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating);
+        string? faultId = RecordFault("unobserved-task", e.Exception, terminating);
         if (!terminating)
         {
             e.SetObserved();
             return;
         }
 
-        Terminate(policy == UnobservedTaskPolicy.FailFast, e.Exception);
+        bool failFast = policy == UnobservedTaskPolicy.FailFast;
+        ShowDialog(options, CrashKind.UnobservedTask, e.Exception, failFast, "Diagnostics:OnUnobservedTask = " + policy, "unobserved-task", faultId, report);
+        Terminate(failFast, e.Exception);
     }
 
-    /// <summary>Count the fault in the ledger after the report is written and before the policy runs. Any failure here, out-of-memory included, is swallowed: the crash report and the termination policy must not be skipped (and the unobserved-task hook runs on the finalizer thread).</summary>
-    private static void RecordFault(string site, Exception? exception, bool terminating)
+    /// <summary>
+    /// Show the opt-in crash dialog for a terminating crash this process is about to end with, after the report and the fault record:
+    /// <see cref="CrashDialog.TryShowFatal"/> returns at once when <c>Diagnostics:CrashDialog</c> is off or the session is not interactive, and
+    /// never throws. Used by the hooks here and by the tick watchdog's fatal path. The re-entrancy guard of the report covers it.
+    /// </summary>
+    public void ShowFatalDialog(CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? report)
+        => ShowDialog(_options, kind, exception, failFast, decidedBy, faultSite: null, faultId: null, report);
+
+    private static void ShowDialog(DiagnosticsOptions options, CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, string? report)
     {
-        if (exception is null)
+        if (!options.CrashDialog || _reporting)
         {
             return;
         }
 
+        _reporting = true;
         try
         {
-            FaultLedger.Shared.Record(site, exception, terminating);
+            CrashDialog.TryShowFatal(enabled: true, kind, exception, failFast, decidedBy, faultSite, faultId, report);
+        }
+        finally
+        {
+            _reporting = false;
+        }
+    }
+
+    /// <summary>Count the fault in the ledger after the report is written and before the policy runs, and return its signature id (null when nothing was recorded). Any failure here, out-of-memory included, is swallowed: the crash report and the termination policy must not be skipped (and the unobserved-task hook runs on the finalizer thread).</summary>
+    private static string? RecordFault(string site, Exception? exception, bool terminating)
+    {
+        if (exception is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return FaultLedger.Shared.Record(site, exception, terminating).Id;
         }
         catch
         {
             // Deliberately a catch-all; see the summary.
+            return null;
         }
     }
 
@@ -203,7 +237,7 @@ public sealed class CrashHandler : IDisposable
             return;
         }
 
-        Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false);
+        _ = Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false);
     }
 
     /// <summary>
@@ -288,11 +322,12 @@ public sealed class CrashHandler : IDisposable
             || exception.Message.Contains("Cannot bind to the target method", StringComparison.Ordinal);
     }
 
-    private void Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating)
+    /// <summary>Write the report through the sink; returns its text (null when nested on this thread or rendering failed).</summary>
+    private string? Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating)
     {
         if (_reporting)
         {
-            return;
+            return null;
         }
 
         _reporting = true;
@@ -321,10 +356,13 @@ public sealed class CrashHandler : IDisposable
                 Console.Error.WriteLine(report);
                 Console.Error.Flush();
             }
+
+            return report;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Console.Error.WriteLine($"crash report failed: {ex}");
+            return null;
         }
         finally
         {

@@ -209,6 +209,17 @@ public sealed class StatFormulaTests
         Assert.Equal(37u, StatFormulas.ShieldBlockValue(30, 100, 1.1f));   // 34 * 1.1 = 37.4
     }
 
+    /// <summary>
+    /// Two block values observed on Blizzard's Classic servers (2019), which the -1 term reproduces and its absence (9 and 20) does not:
+    /// a 6 block shield with 60 Strength blocked 8, a 15 block shield with 119 Strength showed 19
+    /// (https://us.forums.blizzard.com/en/wow/t/block-value-formula/283718 posts 1, 14 and 22).
+    /// </summary>
+    [Theory]
+    [InlineData(6f, 60f, 8u)]
+    [InlineData(15f, 119f, 19u)]
+    public void ShieldBlockValue_MatchesTheClassicObservations(float shield, float strength, uint expected)
+        => Assert.Equal(expected, StatFormulas.ShieldBlockValue(shield, strength, 1));
+
     // ---- weapon damage composition ---------------------------------------------------
 
     private static DamageInputs Warrior60(WeaponAttackType type = WeaponAttackType.BaseAttack, int index = 0) => new(

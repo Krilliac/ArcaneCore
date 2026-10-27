@@ -5,7 +5,8 @@ namespace ArcaneCore.Game.Spells.Rules.Diminishing;
 /// SpellEntry.cpp:281-390, the branch for client builds above 1.9.4, which is 1.12): explicit family and
 /// spell cases first, then the strongest mechanic present. The family flag values are bit indices of
 /// vmangos SpellClassMask.h (kidney shot 21, blind 24, freezing trap effect 3, warlock misc debuffs 31,
-/// hamstring 1, frost shock 31).
+/// hamstring 1, frost shock 31). One deliberate difference from vmangos: Frost Shock is in its own
+/// <see cref="DiminishingGroup.Slowing"/> group, as patch 1.4.0 says, not in the root group (see that member).
 /// </summary>
 public static class DiminishingClassifier
 {
@@ -30,7 +31,15 @@ public static class DiminishingClassifier
 
     /// <param name="spell">The spell.</param>
     /// <param name="triggeredByAura">Whether an aura (a proc or a periodic trigger) cast the spell: stuns and roots then form their own "trigger" groups.</param>
-    public static DiminishingGroup GetGroup(SpellInfo spell, bool triggeredByAura)
+    public static DiminishingGroup GetGroup(SpellInfo spell, bool triggeredByAura) => GetGroup(spell, triggeredByAura, frostShockDiminishesAsRoot: false);
+
+    /// <param name="spell">The spell.</param>
+    /// <param name="triggeredByAura">Whether an aura (a proc or a periodic trigger) cast the spell: stuns and roots then form their own "trigger" groups.</param>
+    /// <param name="frostShockDiminishesAsRoot">
+    /// <see cref="SpellRuleOptions.FrostShockDiminishesAsRoot"/>: true files Frost Shock under <see cref="DiminishingGroup.ControlRoot"/> as vmangos does;
+    /// false (retail, patch 1.4.0) under <see cref="DiminishingGroup.Slowing"/>.
+    /// </param>
+    public static DiminishingGroup GetGroup(SpellInfo spell, bool triggeredByAura, bool frostShockDiminishesAsRoot)
     {
         ArgumentNullException.ThrowIfNull(spell);
         switch (spell.SpellFamilyName)
@@ -79,9 +88,12 @@ public static class DiminishingClassifier
 
                 break;
             case FamilyShaman:
+                // Patch 1.4.0 (2005-04-19), Shaman: "Frost Shock - Now subject to diminishing returns in PvP. This is considered a slowing effect."
+                // Entangling Roots and Frost Nova are "an immobilizing effect" in the same notes, a different category
+                // (https://vanilla-wow-archive.fandom.com/wiki/Patch_1.4.0). vmangos SpellEntry.cpp:333-343 returns DIMINISHING_CONTROL_ROOT here.
                 if ((spell.SpellFamilyFlags & FrostShock) != 0)
                 {
-                    return DiminishingGroup.ControlRoot;
+                    return frostShockDiminishesAsRoot ? DiminishingGroup.ControlRoot : DiminishingGroup.Slowing;
                 }
 
                 break;

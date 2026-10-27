@@ -175,6 +175,7 @@ public sealed class SpellScriptTests
         SpellSystem.SetPower(player, PowerType.Rage, 100);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, CostSpell, SpellCastTargets.ForSelf()));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.Equal("script-check", Log[0]);
         Assert.Equal(["cast:rage=90", "effect:rage=90"], Log.Where(l => !l.StartsWith("script-check", StringComparison.Ordinal)).Take(2));

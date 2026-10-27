@@ -46,6 +46,9 @@ public sealed class ManaSpendRuleTests
         SpellVisual = 1,
     };
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static Player CasterWithMana(SpellTestKit kit, uint mana = 500)
     {
         (Player player, _) = kit.AddPlayer(1);
@@ -65,6 +68,7 @@ public sealed class ManaSpendRuleTests
         Player player = CasterWithMana(kit);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, ManaHeal, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
 
         Assert.Equal(400u, SpellSystem.GetPower(player, PowerType.Mana));
         Assert.Equal(CombatConstants.ManaRegenInterruptMs, player.Combat.LastManaUseTimer);
@@ -104,6 +108,7 @@ public sealed class ManaSpendRuleTests
         using SpellTestKit kit = NewKit();
         Player player = CasterWithMana(kit);
         kit.System.HandleCastRequest(player, ManaHeal, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
         Assert.Equal(400u, SpellSystem.GetPower(player, PowerType.Mana));
 
         kit.World.RunTick(2000);
@@ -123,11 +128,13 @@ public sealed class ManaSpendRuleTests
         using SpellTestKit kit = NewKit();
         Player player = CasterWithMana(kit);
         kit.System.HandleCastRequest(player, ManaHeal, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
         kit.World.RunTick(3000);
         Assert.Equal(2000u, player.Combat.LastManaUseTimer);
 
         kit.Advance(2000);
         kit.System.HandleCastRequest(player, ManaHeal, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
 
         Assert.Equal(CombatConstants.ManaRegenInterruptMs, player.Combat.LastManaUseTimer);
     }

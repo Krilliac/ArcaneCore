@@ -17,6 +17,8 @@ public sealed class DiminishingTests
     private const uint Fear = 930_003;
     private const uint Silence = 930_004;
     private const uint KidneyShotShape = 930_005;
+    private const uint Root = 930_006;
+    private const uint FrostShockShape = 930_007;
 
     private static SpellInfo WithMechanic(uint id, SpellMechanic mechanic, params AuraType[] auras) =>
         SpellTestKit.Spell(id, [.. auras.Select(a => SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, a))])
@@ -43,17 +45,19 @@ public sealed class DiminishingTests
             stunAndDamage,
             WithMechanic(Fear, SpellMechanic.Fear, AuraType.ModFear),
             WithMechanic(Silence, SpellMechanic.Silence, AuraType.ModSilence),
-            WithMechanic(KidneyShotShape, SpellMechanic.Stun, AuraType.ModStun) with { SpellFamilyName = 8, SpellFamilyFlags = 1UL << 21 });
+            WithMechanic(KidneyShotShape, SpellMechanic.Stun, AuraType.ModStun) with { SpellFamilyName = 8, SpellFamilyFlags = 1UL << 21 },
+            WithMechanic(Root, SpellMechanic.Root, AuraType.ModRoot),
+            WithMechanic(FrostShockShape, SpellMechanic.Snare, AuraType.ModDecreaseSpeed) with { SpellFamilyName = 11, SpellFamilyFlags = 1UL << 31 });
     }
 
-    private static (Player Caster, Player Victim, DiminishingRule Rule) Setup(SpellTestKit kit)
+    private static (Player Caster, Player Victim, DiminishingRule Rule) Setup(SpellTestKit kit, DiminishingRule? rule = null)
     {
         (Player caster, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         var relations = new FakeRelations();
         relations.Hostile.Add(victim.Guid);
         kit.System.Relations = relations;
-        var rule = new DiminishingRule();
+        rule ??= new DiminishingRule();
         rule.Attach(kit.System);
         return (caster, victim, rule);
     }
@@ -112,7 +116,7 @@ public sealed class DiminishingTests
         Assert.Equal(DiminishingGroup.WarlockFear, DiminishingClassifier.GetGroup(SpellTestKit.Spell(6358) with { SpellFamilyName = 5 }, false)); // Seduction (inside the warlock family case)
         Assert.Equal(DiminishingGroup.LimitOnly, DiminishingClassifier.GetGroup(SpellTestKit.Spell(1) with { SpellFamilyName = 5, SpellFamilyFlags = 1UL << 31 }, false)); // curses
         Assert.Equal(DiminishingGroup.LimitOnly, DiminishingClassifier.GetGroup(SpellTestKit.Spell(1) with { SpellFamilyName = 4, SpellFamilyFlags = 1UL << 1 }, false)); // hamstring
-        Assert.Equal(DiminishingGroup.ControlRoot, DiminishingClassifier.GetGroup(SpellTestKit.Spell(1) with { SpellFamilyName = 11, SpellFamilyFlags = 1UL << 31 }, false)); // frost shock
+        Assert.Equal(DiminishingGroup.Slowing, DiminishingClassifier.GetGroup(SpellTestKit.Spell(1) with { SpellFamilyName = 11, SpellFamilyFlags = 1UL << 31 }, false)); // frost shock (patch 1.4.0)
         Assert.Equal(DiminishingGroup.None, DiminishingClassifier.GetGroup(stun with { SpellFamilyName = 3, SpellVisual = 4325 }, false)); // ice block
         Assert.Equal(DiminishingGroup.TriggerStun, DiminishingClassifier.GetGroup(SpellTestKit.Spell(12355), false)); // impact
         Assert.Equal(DiminishingGroup.TriggerStun, DiminishingClassifier.GetGroup(SpellTestKit.Spell(18093), false)); // pyroclasm
@@ -129,6 +133,7 @@ public sealed class DiminishingTests
         Assert.Equal(DiminishingType.All, DiminishingGroups.TypeOf(DiminishingGroup.KidneyShot));
         Assert.Equal(DiminishingType.Player, DiminishingGroups.TypeOf(DiminishingGroup.Fear));
         Assert.Equal(DiminishingType.Player, DiminishingGroups.TypeOf(DiminishingGroup.Freeze));
+        Assert.Equal(DiminishingType.Player, DiminishingGroups.TypeOf(DiminishingGroup.Slowing)); // patch 1.4.0: "in PvP"
         Assert.Equal(DiminishingType.None, DiminishingGroups.TypeOf(DiminishingGroup.LimitOnly));
         Assert.Equal(DiminishingType.None, DiminishingGroups.TypeOf(DiminishingGroup.None));
         Assert.Equal([1.0f, 0.5f, 0.25f, 0.0f], new[] { DiminishingLevel.Level1, DiminishingLevel.Level2, DiminishingLevel.Level3, DiminishingLevel.Immune }.Select(DiminishingGroups.RateOf));
@@ -151,6 +156,15 @@ public sealed class DiminishingTests
         Assert.True(rule.WouldBeImmune(caster, victim, fear));
         Assert.True(kit.System.IsFullyDiminished(caster, victim, fear));
         Assert.False(rule.WouldBeImmune(caster, caster, fear)); // no tracker hits on the caster
+    }
+
+    [Fact]
+    public void FrostShock_IsASlowingEffect_NotARoot_UnlessTheVmangosOptionIsSet()
+    {
+        SpellInfo frostShock = SpellTestKit.Spell(1) with { SpellFamilyName = 11, SpellFamilyFlags = 1UL << 31 };
+
+        Assert.Equal(DiminishingGroup.Slowing, DiminishingClassifier.GetGroup(frostShock, false, frostShockDiminishesAsRoot: false));
+        Assert.Equal(DiminishingGroup.ControlRoot, DiminishingClassifier.GetGroup(frostShock, false, frostShockDiminishesAsRoot: true));
     }
 
     // --- tracker ----------------------------------------------------------------------------------
@@ -207,6 +221,25 @@ public sealed class DiminishingTests
         Assert.Equal(DiminishingLevel.Level1, tracker.GetLevel(DiminishingGroup.Silence, 2, 15_000));
     }
 
+    [Fact]
+    public void Tracker_WithAResetSweep_ResetsOnlyAtTheFirstSweepMoreThanTheWindowAfterTheEnd()
+    {
+        var tracker = new DiminishingTracker();
+        const DiminishingGroup g = DiminishingGroup.Fear;
+        tracker.Increment(g, 0);
+        tracker.AuraChanged(g, applied: true, 0);
+        tracker.AuraChanged(g, applied: false, 10_000); // the window ends after 25 000; sweeps run at multiples of 5 000
+
+        Assert.Equal(DiminishingLevel.Level1, tracker.GetLevel(g, 25_100, 15_000, resetSweepMs: 0)); // retail: right after the window (read-only until it resets)
+        var swept = new DiminishingTracker();
+        swept.Increment(g, 0);
+        swept.AuraChanged(g, applied: true, 0);
+        swept.AuraChanged(g, applied: false, 10_000);
+        Assert.Equal(DiminishingLevel.Level2, swept.GetLevel(g, 25_100, 15_000, 5_000)); // the 25 000 sweep was not more than 15 s after the end
+        Assert.Equal(DiminishingLevel.Level2, swept.GetLevel(g, 29_900, 15_000, 5_000));
+        Assert.Equal(DiminishingLevel.Level1, swept.GetLevel(g, 30_000, 15_000, 5_000)); // the 30 000 sweep resets it
+    }
+
     // --- through the spell system -----------------------------------------------------------------
 
     [Fact]
@@ -230,6 +263,53 @@ public sealed class DiminishingTests
 
         Assert.Empty(added); // fully diminished: no new holder
         Assert.True(DurationOf(kit, victim, Stun) <= 1000); // the third stun was not refreshed
+    }
+
+    [Fact]
+    public void FrostShock_AfterARoot_LandsAtFullDuration_AndDiminishesOnlyWithItself()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, Player victim, DiminishingRule rule) = Setup(kit);
+
+        (SpellAuraHolder root, SpellApplication rootApp) = Apply(kit, rule, caster, victim, Root); // a controlled (not aura-triggered) root
+        Assert.True(rule.AcceptHolder(rootApp, root));
+        Assert.Equal(DiminishingLevel.Level2, rule.GetTracker(victim).GetLevel(DiminishingGroup.ControlRoot, kit.Now, 15_000));
+
+        (SpellAuraHolder first, SpellApplication firstApp) = Apply(kit, rule, caster, victim, FrostShockShape);
+        Assert.True(rule.AcceptHolder(firstApp, first));
+        Assert.Equal(4000, first.MaxDuration); // patch 1.4.0: "a slowing effect", not "an immobilizing effect" like the roots
+        (SpellAuraHolder second, SpellApplication secondApp) = Apply(kit, rule, caster, victim, FrostShockShape);
+        Assert.True(rule.AcceptHolder(secondApp, second));
+        Assert.Equal(2000, second.MaxDuration); // the second slowing effect in PvP: 50%
+    }
+
+    [Fact]
+    public void FrostShock_SharesTheRootGroup_WhenTheVmangosOptionIsSet()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, Player victim, DiminishingRule rule) = Setup(kit, new DiminishingRule(15_000, resetSweepMs: 0, frostShockDiminishesAsRoot: true));
+
+        (SpellAuraHolder root, SpellApplication rootApp) = Apply(kit, rule, caster, victim, Root);
+        Assert.True(rule.AcceptHolder(rootApp, root));
+        (SpellAuraHolder shock, SpellApplication shockApp) = Apply(kit, rule, caster, victim, FrostShockShape);
+        Assert.True(rule.AcceptHolder(shockApp, shock));
+
+        Assert.Equal(2000, shock.MaxDuration);
+    }
+
+    [Fact]
+    public void TheResetSweepOption_DelaysTheResetToTheNextSweep()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, Player victim, _) = Setup(kit, new DiminishingRule(15_000, resetSweepMs: 20_000, frostShockDiminishesAsRoot: false));
+
+        Hit(kit, caster, victim, Stun);
+        kit.Advance(4100); // the 4 s stun ends at about t = 14 s (the kit clock starts at 10 s)
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the stun that ran out ends at the next boundary (0: no-op)
+        Assert.DoesNotContain(kit.System.GetAuras(victim), h => h.Spell.Id == Stun);
+        kit.Advance(15_500); // t is about 29.6 s: more than 15 s after the end, but the next sweep is at 40 s
+        Hit(kit, caster, victim, Stun);
+        Assert.Equal(2000, DurationOf(kit, victim, Stun)); // the retail rule would have reset it (TheLevelResets_FifteenSecondsAfterTheStunEnds_NotAfterTheHit)
     }
 
     [Fact]
@@ -257,6 +337,7 @@ public sealed class DiminishingTests
 
         Hit(kit, caster, victim, Stun);
         kit.Advance(4100); // the 4 s stun expires at about t = 4 s
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the stun that ran out ends at the next boundary (0: no-op)
         Assert.DoesNotContain(kit.System.GetAuras(victim), h => h.Spell.Id == Stun);
         kit.Advance(10_000);
         Hit(kit, caster, victim, Stun);

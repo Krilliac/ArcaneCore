@@ -46,6 +46,19 @@ public sealed class ImprovedScorpidStingTests
             Duration = new SpellDuration(20_000, 0, 20_000),
         }));
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static (SpellTestKit Kit, Player Hunter, Player Victim) Rig(uint talentSpell, int classScript, ulong stingFlags = 0x8000)
     {
         SpellTestKit kit = Kit(talentSpell, classScript, stingFlags);
@@ -69,6 +82,7 @@ public sealed class ImprovedScorpidStingTests
             int before = victim.GetInt32(StaminaField);
 
             Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, ScorpidSting, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+            FlushSpellBatch(kit);
 
             Assert.True(kit.System.HasAura(victim, ScorpidSting));
             Assert.True(kit.System.HasAura(victim, Stamina));
@@ -90,6 +104,7 @@ public sealed class ImprovedScorpidStingTests
             int before = victim.GetInt32(StaminaField);
 
             Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, ScorpidSting, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+            FlushSpellBatch(kit);
 
             Assert.True(kit.System.HasAura(victim, ScorpidSting));
             Assert.False(kit.System.HasAura(victim, Stamina));
@@ -104,6 +119,7 @@ public sealed class ImprovedScorpidStingTests
         using (kit)
         {
             Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, ScorpidSting, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+            FlushSpellBatch(kit);
 
             Assert.True(kit.System.HasAura(victim, ScorpidSting));
             Assert.False(kit.System.HasAura(victim, Stamina));

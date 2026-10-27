@@ -33,10 +33,14 @@ public sealed class RuntimeTickHangActuator(IHostApplicationLifetime? lifetime =
         try
         {
             var timeout = new TimeoutException(reason);
-            string report = CrashHandler.Current?.Render(CrashKind.Unhandled, timeout)
+            CrashHandler? handler = CrashHandler.Current;
+            string report = handler?.Render(CrashKind.Unhandled, timeout)
                 ?? $"FATAL TICK HANG: {reason}";
             Console.Error.WriteLine(report);
             Console.Error.Flush();
+
+            // Opt-in (Diagnostics:CrashDialog); returns at once when off or headless, never throws, and the exit below still runs.
+            handler?.ShowFatalDialog(CrashKind.Unhandled, timeout, failFast: false, "the world tick watchdog: Ops:Watchdog:TickMonitor:Action = FailFast", report);
         }
         catch
         {

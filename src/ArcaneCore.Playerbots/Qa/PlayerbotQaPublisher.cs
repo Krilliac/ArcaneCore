@@ -284,6 +284,9 @@ internal sealed class PlayerbotQaPublisher
         if (f.Kind == QaSignalKind.SpellUnsupported && QaSpellGaps.IsAdvisory(f.Reason)) return false; // a DUMMY aura nothing seems to read: a lead, listed only
         if (f.Kind == QaSignalKind.Anomaly && f.Goal == PlayerbotQaSpellMonitor.HeldTargetGoal
             && f.Reason.StartsWith(PlayerbotQaSpellMonitor.HeldTargetReason, StringComparison.Ordinal)) return false; // a creature held at its threshold: report-only
+        // An invincible target the brain gave up on is a deliberate abandonment (PlayerbotInvincibleWatch sets the creature aside by design), not a fault: report-only.
+        if (f.Kind == QaSignalKind.Anomaly && f.Goal == PlayerbotAnomalies.Subsystem("combat")
+            && string.Equals(f.Reason, Combat.PlayerbotInvincibleWatch.AnomalyCode, StringComparison.Ordinal)) return false;
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (f.Kind == QaSignalKind.SharedSetAside && !f.Publication.HoldsIssue && CoveredByStall(f, all)) return false; // the stall finding carries the rich samples
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;

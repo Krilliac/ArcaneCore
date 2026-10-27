@@ -1,0 +1,202 @@
+name: Release binaries
+
+# Builds the runnable, self-contained server binaries (world with the Playerbots pack, realm, content importer, arcane-db, arcane-account)
+# for Windows and Linux in BOTH configurations and attaches one archive per runtime and configuration to a GitHub release, with a SHA-256 file:
+#
+#   nightly   rolling pre-release, rebuilt every night when main has a new commit since the last successful scheduled run; Debug and Release
+#   v*        a release per version tag, Debug and Release
+#
+# Asset names never change, so a link such as .../releases/download/nightly/arcanecore-win-x64-release.zip stays valid. One archive per runtime:
+#   arcanecore-win-x64-debug.zip    arcanecore-win-x64-release.zip
+#   arcanecore-linux-x64-debug.tar.gz    arcanecore-linux-x64-release.tar.gz
+#   arcanecore-win-arm64-debug.zip  arcanecore-win-arm64-release.zip
+#   arcanecore-linux-arm64-debug.tar.gz  arcanecore-linux-arm64-release.tar.gz      SHA256SUMS
+# A pull request that changes this workflow or the publish script only builds and smoke-checks (no release); a manual run does the same.
+# The arm64 builds are best effort: when one fails the run stays green, the run summary and an annotation name the missing archives, and the
+# release step removes the assets an earlier run attached, so a release never mixes new x64 archives with a stale arm64 one. The nightly
+# release is deleted (with its tag) and recreated at the built commit every run, so the tag is made by the release API rather than moved by
+# a ref update; for the few seconds of the swap the release is absent. UNVERIFIED until the first scheduled run. A v* release that already
+# exists is never overwritten: the run fails instead. Skip check: the last run must also have had no failed job (an arm64 miss is retried).
+on:
+  schedule:
+    - cron: "47 2 * * *"
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release-binaries.yml"
+      - "tools/ops/deploy/publish-binaries.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changed:
+    name: new commit since the last nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      EVENT: ${{ github.event_name }}
+      SHA: ${{ github.sha }}
+    steps:
+      # Only the scheduled run is skipped, and only when the last successful scheduled run built this very commit. Hand runs, tags and
+      # pull requests always build. If the lookup fails, build (a wasted run is better than a missed one).
+      - name: Compare with the last successful nightly
+        id: check
+        run: |
+          build=true
+          if [ "$EVENT" = "schedule" ]; then
+            last=$(gh api "repos/$GH_REPO/actions/workflows/release-binaries.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""' || true)
+            run_id=$(gh api "repos/$GH_REPO/actions/workflows/release-binaries.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].id // ""' || true)
+            # A best-effort arm64 job that failed leaves the run green but the job itself failed: such a run does not count (retry).
+            bad=1
+            if [ -n "$run_id" ]; then
+              bad=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped")] | length' || echo 1)
+            fi
+            if [ -n "$last" ] && [ "$last" = "$SHA" ] && [ "$bad" = "0" ]; then
+              build=false
+              echo "main has not moved since the last nightly ($SHA); skipping." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.rid }} ${{ matrix.configuration }}
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, linux-x64, linux-arm64, win-arm64]
+        configuration: [Debug, Release]
+        include:
+          - { rid: win-x64, runner: windows-latest, archive: zip, experimental: false }
+          - { rid: linux-x64, runner: ubuntu-latest, archive: tar.gz, experimental: false }
+          # Native arm64 runners, so the --help start check runs on the real architecture. A failure here does not block the release.
+          - { rid: linux-arm64, runner: ubuntu-24.04-arm, archive: tar.gz, experimental: true }
+          - { rid: win-arm64, runner: windows-11-arm, archive: zip, experimental: true }
+    env:
+      CONFIGURATION: ${{ matrix.configuration }}
+      # Lower-case configuration, used in the archive and artifact names.
+      CFG: ${{ matrix.configuration == 'Debug' && 'debug' || 'release' }}
+      RID: ${{ matrix.rid }}
+      ARCHIVE: ${{ matrix.archive }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: "11.0.x"
+          dotnet-quality: "preview"
+
+      - name: Publish
+        run: bash tools/ops/deploy/publish-binaries.sh "$RID" "$CONFIGURATION" "$RUNNER_TEMP/publish"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$env:RUNNER_TEMP/publish/arcanecore-$env:RID" -DestinationPath "dist/arcanecore-$env:RID-$env:CFG.zip" -CompressionLevel Optimal
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          tar -C "$RUNNER_TEMP/publish" -czf "dist/arcanecore-$RID-$CFG.tar.gz" "arcanecore-$RID"
+
+      - name: Archive size
+        run: ls -l dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arcanecore-${{ matrix.rid }}-${{ env.CFG }}
+          path: dist/arcanecore-${{ matrix.rid }}-${{ env.CFG }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+      # A best-effort (arm64) failure leaves the job green (continue-on-error), so say it where a reader looks: annotation and summary.
+      - name: Best-effort failure notice
+        if: failure() && matrix.experimental
+        run: |
+          echo "::warning title=${RID} ${CONFIGURATION} missing::The best-effort ${RID} ${CONFIGURATION} build failed; this run has no such archive."
+          echo "- **${RID} ${CONFIGURATION}: build FAILED (best effort), no archive from this run.**" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: attach to the release
+    needs: [changed, build]
+    if: needs.changed.outputs.build == 'true' && (github.event_name == 'schedule' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF_NAME: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: arcanecore-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          ls -l
+          sha256sum arcanecore-* > SHA256SUMS
+          cat SHA256SUMS
+          # Name every expected archive that this run did not produce.
+          for rid in win-x64 linux-x64 win-arm64 linux-arm64; do
+            for cfg in debug release; do
+              if ! ls arcanecore-"$rid"-"$cfg".* > /dev/null 2>&1; then
+                echo "::warning title=missing archive::arcanecore-$rid-$cfg is not in this release."
+                echo "- missing from this release: arcanecore-$rid-$cfg" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          done
+
+      - name: Nightly pre-release (scheduled run)
+        if: github.event_name == 'schedule'
+        run: |
+          # Delete the release and its tag, then create both again at this commit (the release API creates the tag from --target).
+          # The URL stays the same. UNVERIFIED until the first scheduled run.
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release delete nightly --cleanup-tag --yes
+          fi
+          notes="Rolling pre-release, rebuilt nightly when main has a new commit. Debug and Release archives for every runtime. Built from commit $SHA. Not a stable release: use a v* release for a version. Verify downloads against SHA256SUMS."
+          gh release create nightly --prerelease --target "$SHA" --title "Nightly (Debug and Release)" --notes "$notes" dist/*
+
+      - name: Versioned release (v* tag)
+        if: github.ref_type == 'tag'
+        run: |
+          # A release that already exists is never overwritten (its assets are what users verified against).
+          if gh release view "$REF_NAME" > /dev/null 2>&1; then
+            echo "::error::Release $REF_NAME already exists; refusing to replace its assets. Delete the release first if that is intended."
+            exit 1
+          fi
+          gh release create "$REF_NAME" dist/* --verify-tag --title "$REF_NAME" --generate-notes

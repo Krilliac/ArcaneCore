@@ -87,6 +87,76 @@ public sealed class QuestTurnInTests
     }
 
     [Fact]
+    public void AutocompleteDeliver_IgnoresItemsOfferedInAnOpenTrade_AndLeavesTheOfferedStackAlone()
+    {
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0, special: (byte)QuestSpecialFlags.Repeatable,
+            reqItem: ItemTestData.ToughJerky, reqItemCount: 2);
+        using QuestFlowTestKit kit = AutoKit(quest);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        uint before = kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky);
+        HashSet<ObjectGuid> offered = [.. kit.Player.Inventory.AllItems.Where(i => i.Entry == ItemTestData.ToughJerky).Select(i => i.Guid)];
+        kit.Session.Clear();
+
+        // Every jerky is in the trade window, so the delivery is short and nothing is taken.
+        Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _, offered));
+        Assert.Contains("missing required delivery item", kit.Services.DiagnoseTurnInRefusal(kit.Player, kit.Creature.Guid, Id, 0, offered));
+
+        Assert.Equal(before, kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky));
+
+        // Without a trade the same turn-in works.
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
+    }
+
+    [Fact]
+    public void DeliveryCounts_GoThroughAnInjectedItemService_WhichIsToldWhichStacksAreOffered()
+    {
+        QuestTemplate quest = QuestFlowTestKit.Task(Id, method: 0, special: (byte)(QuestSpecialFlags.Repeatable | QuestSpecialFlags.Deliver),
+            reqItem: ItemTestData.ToughJerky, reqItemCount: 2);
+        var items = new CountingItemService();
+        using QuestFlowTestKit kit = new([quest], starters: [quest.Entry], enders: [quest.Entry], items: items);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        ItemTestData.Give(kit.Player.Inventory, ItemTestData.ToughJerky);
+        HashSet<ObjectGuid> offered = [.. kit.Player.Inventory.AllItems.Where(i => i.Entry == ItemTestData.ToughJerky).Select(i => i.Guid)];
+
+        Assert.True(kit.Services.MeetsTurnInRequirements(kit.Player, kit.Services.Quests.Get(Id)!));
+        Assert.Null(items.LastExclude);
+
+        Assert.False(kit.Services.MeetsTurnInRequirements(kit.Player, kit.Services.Quests.Get(Id)!, offered));
+        Assert.Same(offered, items.LastExclude);
+        Assert.Contains("missing required delivery item", kit.Services.DiagnoseTurnInRefusal(kit.Player, kit.Creature.Guid, Id, 0, offered));
+        Assert.Same(offered, items.LastExclude);
+    }
+
+    /// <summary>The player's own count, remembering the exclusion it was last asked with.</summary>
+    private sealed class CountingItemService : IItemService
+    {
+        public IReadOnlySet<ObjectGuid>? LastExclude { get; private set; }
+
+        public ItemInfo? GetItem(uint itemId) => null;
+
+        public uint GetItemCount(Player player, uint itemId, bool inBankAlso, IReadOnlySet<ObjectGuid>? exclude = null)
+        {
+            LastExclude = exclude;
+            return player.Inventory.GetItemCount(itemId, inBankAlso, exclude: exclude is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null);
+        }
+
+        public ArcaneCore.Game.Items.InventoryResult CanStoreNewItem(Player player, uint itemId, uint count) => ArcaneCore.Game.Items.InventoryResult.Ok;
+
+        public bool StoreNewItem(Player player, uint itemId, uint count) => false;
+
+        public void DestroyItemCount(Player player, uint itemId, uint count)
+        {
+        }
+
+        public ItemSale SellToVendor(Player player, ObjectGuid vendor, ObjectGuid item, byte count) => ItemSale.Ignored;
+
+        public void SendEquipError(Player player, ArcaneCore.Game.Items.InventoryResult result, uint itemId)
+        {
+        }
+    }
+
+    [Fact]
     public void AutocompleteQuest_FailingTheClassCheck_IsNotRewardable()
     {
         // CanTakeQuest(skipStatusCheck) still applies the class gate (Player.cpp:12684-12698): packet editing cannot help.
@@ -222,5 +292,7 @@ public sealed class QuestTurnInTests
         };
         var singleQuest = new Quest(singleRewardTemplate);
         Assert.True(QuestNpcServices.CanFitQuestRewards(kit.Player, singleQuest, 0));
+        HashSet<ObjectGuid> offered = [.. kit.Player.Inventory.AllItems.Where(i => i.Entry == ItemTestData.ToughJerky).Select(i => i.Guid)];
+        Assert.False(QuestNpcServices.CanFitQuestRewards(kit.Player, singleQuest, 0, offered: offered));
     }
 }

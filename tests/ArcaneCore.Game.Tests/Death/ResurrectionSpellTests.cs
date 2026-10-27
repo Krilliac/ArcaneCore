@@ -18,6 +18,15 @@ namespace ArcaneCore.Game.Tests.Death;
 /// </summary>
 public sealed class ResurrectionSpellTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private const uint Percentage = 990180;
     private const uint Flat = 990113;
 
@@ -72,6 +81,7 @@ public sealed class ResurrectionSpellTests
         Assert.Equal(SpellCastResult.LineOfSight, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForUnit(near.Guid), triggered: false));
         WorldCollision.Of(kit.World).Install(new FakeLineOfSight());
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Flat, SpellCastTargets.ForUnit(near.Guid), triggered: false));
+        ResolveSpellBatch(kit);
         Assert.Single(nearSession.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
     }
 
@@ -95,6 +105,7 @@ public sealed class ResurrectionSpellTests
         Assert.DoesNotContain(casterSession.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
         var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.CorpseAlly, Corpse = target.Combat.Corpse!.Guid };
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Flat, targets, triggered: false));
+        ResolveSpellBatch(kit);
         Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
     }
 
@@ -284,6 +295,7 @@ public sealed class ResurrectionSpellTests
         Assert.Null(ResurrectionRequests.Get(target));
 
         kit.Advance(100);
+        ResolveSpellBatch(kit);
 
         Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
         Assert.IsType<ResurrectionRequest>(ResurrectionRequests.Get(target));

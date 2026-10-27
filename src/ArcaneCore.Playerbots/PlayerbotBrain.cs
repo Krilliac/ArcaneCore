@@ -789,7 +789,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!PlayerbotMovementControl.Stop(_session, player)) return;
             SpellFeature? restingSpells = _session.Services.GetService<SpellFeature>();
             bool activeRecovery = restingSpells is not null
-                && PlayerbotConsumables.HasActiveFoodDrink(player, restingSpells.System);
+                && PlayerbotConsumables.IsEatingOrAboutTo(player, restingSpells.System);
             if (!player.Combat.IsInCombat && activeRecovery && PlayerbotConsumables.NeedsRecovery(player, _restKind)
                 && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
                 return;
@@ -1819,7 +1819,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     _suspensions.SuspendEntry(TargetEntry, now);
                 }
                 break;
-            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount:
+            case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather:
                 if (deadEndPin) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                 else _suspensions.SuspendEntry(TargetEntry, now);
                 break;
@@ -2144,7 +2144,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
     {
-        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Mount && (entry != 0 || quest != 0))
+        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather && (entry != 0 || quest != 0))
             _errand = (goal, entry, quest, _session.World.NowMs);
     }
 
@@ -2338,7 +2338,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (spellFeature is null || player.Combat.IsInCombat
             || spellFeature.System.GetState(player.Guid)?.CurrentCast is
                 { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }
-            || PlayerbotConsumables.HasActiveFoodDrink(player, spellFeature.System)
+            || PlayerbotConsumables.IsEatingOrAboutTo(player, spellFeature.System)
             || !PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, wantedPct == 0 ? 45 : wantedPct,
                 wantedPct == 0 ? 35 : wantedPct, out PlayerbotConsumable consumable))
         { _needsRest = false; return; }
@@ -3806,6 +3806,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // Within sight but FindTargets found nothing to fight: this patch is depleted, gated, or unavailable.
                 BlockExploreCell(current);
             }
+            else if (_route is { Complete: true, ToLiftLanding: true })
+            {
+                // A leg of the walk to a lift's landing ends where one route reaches, which may be farther from the cell (the lift can lie away
+                // from it) and is no dead end: each accepted leg closes at least PlayerbotElevator.ApproachProgressYards on the lift.
+            }
             else if (_route is { Complete: true })
             {
                 // A previous route leg finished outside the 65-yard sight radius: if it failed to reduce flat distance by at least 4 yards,
@@ -3888,7 +3893,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _route is not { Points.Count: > 0 } plannedRoute
             || (System.Numerics.Vector3.DistanceSquared(new(player.X, player.Y, player.Z), plannedRoute.Points[^1]) <= 4f * 4f
                 && flatDistSq > 65f * 65f)
-            || (plannedRoute.Navigated && flatDistSq <= 175f * 175f
+            || (!plannedRoute.ToLiftLanding && plannedRoute.Navigated && flatDistSq <= 175f * 175f
                 && (System.Numerics.Vector2.DistanceSquared(new(destination.X, destination.Y), new(plannedRoute.Points[^1].X, plannedRoute.Points[^1].Y)) > 15f * 15f
                     || MathF.Abs(destination.Z - plannedRoute.Points[^1].Z) > 8f)))
         {

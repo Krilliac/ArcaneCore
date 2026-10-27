@@ -16,7 +16,7 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(spell);
-        return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell);
+        return GetState(unit.Guid) is { } state ? IsSpellReady(state, spell) : !WaitsForCreatedObject(unit, spell);
     }
 
     /// <summary>
@@ -27,14 +27,20 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(spell);
-        return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell, includeGlobal: false);
+        return GetState(unit.Guid) is { } state ? IsSpellReady(state, spell, includeGlobal: false) : !WaitsForCreatedObject(unit, spell);
     }
+
+    /// <summary>
+    /// Ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject). The object, not the
+    /// unit's spell state, holds this, so it is asked even when the state was dropped as idle (an event spell starts no cooldown at its go).
+    /// </summary>
+    private bool WaitsForCreatedObject(Unit unit, SpellInfo spell)
+        => spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(unit, spell.Id);
 
     private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null, Item? castItem = null, bool includeGlobal = true)
     {
         ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(spell, castItem);
-        // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
-        if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
+        if (WaitsForCreatedObject(state.Unit, spell))
         {
             return false;
         }
@@ -48,6 +54,12 @@ public sealed partial class SpellSystem
         // crafting lane: an item spell may carry its own category (Player.cpp:22139-22160); an explicit item use passes it.
         uint category = itemCategory ?? cooldown.Category;
         if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && until > now)
+        {
+            return false;
+        }
+
+        // Spell batching: a held cast has not started its cooldown yet (that happens at its go); it blocks a second request meanwhile.
+        if (_batchedGoes.Count != 0 && HasBatchedGoOnCooldown(state.Unit, spell, category))
         {
             return false;
         }

@@ -23,6 +23,7 @@ public sealed class GmCheatSpellTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));
         kit.Advance(100);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.True(target.Health < health);
         Assert.Equal(100u, SpellSystem.GetPower(caster, PowerType.Rage));
@@ -53,6 +54,7 @@ public sealed class GmCheatSpellTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CooldownSpell, SpellCastTargets.ForSelf()));
         kit.Advance(100);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.True(kit.System.IsSpellReady(caster, spell));
         Assert.Empty(kit.System.GetActiveCooldowns(caster));
@@ -61,6 +63,7 @@ public sealed class GmCheatSpellTests
         caster.Cheats = PlayerCheats.None;
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CooldownSpell, SpellCastTargets.ForSelf()));
         kit.Advance(100);
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.False(kit.System.IsSpellReadyIgnoringGlobalCooldown(caster, spell));
     }
 }
