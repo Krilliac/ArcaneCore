@@ -399,6 +399,22 @@ public sealed class PlayerbotGroupBoundedWaitTests
     }
 
     [Fact]
+    public async Task ADungeonGroupLetOnFromNearAnUnreachableApproachPoint_ThatCanPlanNoWayToTheEntrance_EndsAtTheNoPathBound()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 600, dungeon: true);
+        var tank = await world.AddBotAsync("Gatewar", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Gateprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Gatemage", Human, Mage, 12, [Fireball], EntranceArea);
+        PlayerbotGroupCoordinator.BotGroup group = await TravellingNearAnUnreachableApproachAsync(world, [tank, healer, mage], 10f, 0f);
+        Assert.True(await world.RunUntilAsync(10_000, () => group.State == PlayerbotGroupState.Entering), await world.TraceAsync());
+
+        // The way to the entrance stays unplanned: the group ends at the 30 s no-path bound, not at the 300 s enter step timeout.
+        Assert.True(await world.RunUntilAsync((uint)PlayerbotGroupAI.RunStuckMs + 15_000, () => group.Reason is not null), await world.TraceAsync());
+        Assert.Equal("no-path-to-entrance", group.Reason);
+        Assert.False(group.Succeeded);
+    }
+
+    [Fact]
     public async Task ADungeonLeaderThatCanPlanNoWayToTheApproachPoint_AndStandsOnAnotherFloorOfIt_DoesNotArrive()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 600, dungeon: true);
