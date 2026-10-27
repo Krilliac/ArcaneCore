@@ -903,7 +903,8 @@ public sealed partial class MapCombat
 
         if (direct && combatLink)
         {
-            if (attacker.Combat.Victim is null && attacker is Player)
+            // Not for a held swing of the batch (MapCombat.SwingBatch.cs): its player sent CMSG_ATTACKSTOP within the window, and stays stopped.
+            if (attacker.Combat.Victim is null && attacker is Player && !_resolvingHeldSwings)
             {
                 Attack(attacker, victim, melee: meleeDamage);
             }
