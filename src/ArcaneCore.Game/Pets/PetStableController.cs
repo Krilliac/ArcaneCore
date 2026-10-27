@@ -36,6 +36,11 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
     private readonly Dictionary<int, Entry> _entries = [];
     private readonly HashSet<int> _gmStables = [];
 
+    // Slot purchases whose database write was issued but whose world-thread continuation (charge or take back) has not run yet, per
+    // character. Kept outside the entries so it survives Forget. A load issued while one is outstanding is queued behind that write and
+    // reads the purchased slot, which nobody has paid for yet: its state is never installed (see LoadAsync).
+    private readonly Dictionary<int, int> _unchargedPurchases = [];
+
     /// <summary>The characters-database stable; without one every request is refused.</summary>
     public IPetStableStore? Store { get; set; }
 
@@ -165,9 +170,11 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             // Charged only once the slot is saved, so a failed write has nothing to refund and a save taken while the write is in
             // flight never holds the deducted money. If the player can no longer pay at commit (spent it, logged out, or a quest
             // settlement holds the character), the saved slot is taken back instead.
+            _unchargedPurchases[id] = _unchargedPurchases.GetValueOrDefault(id) + 1;
             Write(player, id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; },
                 _ =>
                 {
+                    PurchaseSettled(id);
                     if (!TryCharge(player, price))
                     {
                         TakeSlotBack(player, id, store, state.PurchasedSlots);
@@ -177,8 +184,21 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
                     SetState(id, state with { PurchasedSlots = slots });
                     Send(player, StableResult.SuccessBuySlot);
                 },
-                static () => { });
+                () => PurchaseSettled(id));
         });
+    }
+
+    private void PurchaseSettled(int id)
+    {
+        int left = _unchargedPurchases.GetValueOrDefault(id) - 1;
+        if (left > 0)
+        {
+            _unchargedPurchases[id] = left;
+        }
+        else
+        {
+            _unchargedPurchases.Remove(id);
+        }
     }
 
     /// <summary>vmangos SendStablePet: u64 npc, u8 count, u8 bought slots, then per pet u32 number, u32 entry, u32 level, cstring name, u32 loyalty, u8 slot (1 = current).</summary>
@@ -400,10 +420,10 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
 
         entry.Busy = true;
-        _ = LoadAsync(player, id, entry, store, next);
+        _ = LoadAsync(player, id, entry, store, next, behindUnchargedPurchase: _unchargedPurchases.ContainsKey(id), answerWhenDropped: failWhenBusy);
     }
 
-    private async Task LoadAsync(Player player, int id, Entry entry, IPetStableStore store, Action<PetStableState> next)
+    private async Task LoadAsync(Player player, int id, Entry entry, IPetStableStore store, Action<PetStableState> next, bool behindUnchargedPurchase, bool answerWhenDropped)
     {
         PetStableState? loaded = null;
         try
@@ -426,11 +446,29 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
                 return;
             }
 
-            entry.State = loaded;
             foreach (StabledPet stabled in loaded.Pets)
             {
                 summons.ReservePetNumber(stabled.Pet.PetNumber);
             }
+
+            if (behindUnchargedPurchase)
+            {
+                // Queued behind a slot purchase that was not yet charged: it read the purchased slot, which may be taken back. Whatever
+                // order the continuations run in, drop the entry so the next use reloads after the purchase is settled.
+                if (ReferenceEquals(_entries.GetValueOrDefault(id), entry))
+                {
+                    _entries.Remove(id);
+                }
+
+                if (answerWhenDropped)
+                {
+                    Send(player, StableResult.ErrStable);
+                }
+
+                return;
+            }
+
+            entry.State = loaded;
 
             if (player.IsInWorld && ReferenceEquals(_entries.GetValueOrDefault(id), entry))
             {

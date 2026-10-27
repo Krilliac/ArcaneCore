@@ -60,7 +60,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
 
         // Every packet is a passive anticheat event in the anomaly ledger (vmangos reports a passive action per packet); the warning line
         // is throttled per session so a client sending this at frame rate cannot flood the log.
-        AnomalyLedger.Shared.Report("anticheat", "battlefield-join", invalidType ? "invalid-bg-type" : "invalid-creature",
+        AnomalyLedger.Shared.Report("anticheat", "battlefield-join", $"character {player.Guid.Low}",
             $"CMSG_BATTLEFIELD_JOIN map {mapId}: {reason}");
         JoinLogState state = JoinLogs.GetValue(session, static _ => new JoinLogState());
         long now = Environment.TickCount64;

@@ -67,7 +67,9 @@ public sealed class AreaSpiritHealerHandlerTests
         await host.OnWorldAsync(() => true);
 
         Assert.Single(logs.Lines, l => l.Contains("CMSG_BATTLEFIELD_JOIN", StringComparison.Ordinal));
+        uint low = await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Ashflood")!.Guid.Low);
         Assert.Equal(Packets, anomalies.Notices.Count(n => n.Detail.Contains("map 489", StringComparison.Ordinal)));
+        Assert.All(anomalies.Notices, n => Assert.Equal($"character {low}", n.Subject)); // the report names the offending character
     }
 
     [Fact]

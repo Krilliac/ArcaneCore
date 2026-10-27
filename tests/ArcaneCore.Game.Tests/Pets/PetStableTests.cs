@@ -23,18 +23,37 @@ public sealed class PetStableTests
     /// </summary>
     private sealed class WorldPump
     {
-        private readonly ConcurrentQueue<Action> _posts = new();
+        private readonly List<Action> _posts = [];
 
-        public void Post(Action action) => _posts.Enqueue(action);
+        public void Post(Action action)
+        {
+            lock (_posts) _posts.Add(action);
+        }
 
         /// <summary>Continuations posted and not yet run.</summary>
-        public int Pending => _posts.Count;
+        public int Pending
+        {
+            get { lock (_posts) return _posts.Count; }
+        }
 
         /// <summary>Runs the oldest posted continuation; the test decides the order the world thread sees them in.</summary>
-        public void RunOne()
+        public void RunOne() => Run(oldest: true);
+
+        /// <summary>Runs the newest posted continuation ahead of the older ones.</summary>
+        public void RunNewest() => Run(oldest: false);
+
+        private void Run(bool oldest)
         {
-            Assert.True(_posts.TryDequeue(out Action? action));
-            action!();
+            Action action;
+            lock (_posts)
+            {
+                Assert.NotEmpty(_posts);
+                int at = oldest ? 0 : _posts.Count - 1;
+                action = _posts[at];
+                _posts.RemoveAt(at);
+            }
+
+            action();
         }
 
         /// <summary>Waits (without running anything) until <paramref name="count"/> continuations are posted.</summary>
@@ -53,7 +72,7 @@ public sealed class PetStableTests
             using CancellationTokenSource timeout = new(HangBound);
             while (true)
             {
-                while (_posts.TryDequeue(out Action? action)) action();
+                while (Pending > 0) RunOne();
                 if (done()) return;
                 if (timeout.IsCancellationRequested) throw new TimeoutException("the stable never reached the awaited state");
                 await Task.Delay(1).ConfigureAwait(false);
@@ -70,14 +89,32 @@ public sealed class PetStableTests
         public List<string>? Log { get; set; }
         public Task? UnstableGate { get; set; }
 
-        public Task<PetStableState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
-            => Task.FromResult(new PetStableState(Slots, Stabled.Select(p => new StabledPet(p.Key, p.Value)).ToArray()));
+        /// <summary>When set, the next load waits on it before reading, so a test can decide when the load finishes relative to other work.</summary>
+        public TaskCompletionSource? LoadGate { get; set; }
+
+        public async Task<PetStableState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
+        {
+            if (LoadGate is { } gate)
+            {
+                LoadGate = null;
+                await gate.Task.ConfigureAwait(false);
+            }
+
+            return new PetStableState(Slots, Stabled.Select(p => new StabledPet(p.Key, p.Value)).ToArray());
+        }
+
+        private int _slotEntries;
+        private int _slotCalls;
+
+        /// <summary>Slot writes that have started (before any gate), so a test can tell the write really is in flight.</summary>
+        public int SlotEntries => Volatile.Read(ref _slotEntries);
 
         /// <summary>When set, the next slot write waits on it (and fails if it faults) so a test can act while the write is in flight.</summary>
         public TaskCompletionSource? SlotGate { get; set; }
 
         public async Task SetPurchasedSlotsAsync(int characterId, byte slots, CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref _slotEntries);
             if (SlotGate is { } gate)
             {
                 SlotGate = null;
@@ -88,7 +125,7 @@ public sealed class PetStableTests
         }
 
         /// <summary>Slot writes seen so far (the purchase is call 1).</summary>
-        public int SlotCalls { get; private set; }
+        public int SlotCalls => Volatile.Read(ref _slotCalls);
 
         /// <summary>Slot writes numbered <see cref="FailSlotCallsFrom"/> through <see cref="FailSlotCallsThrough"/> fault (0 = none).</summary>
         public int FailSlotCallsFrom { get; set; }
@@ -96,7 +133,7 @@ public sealed class PetStableTests
 
         private Task SetPurchasedSlotsCoreAsync(byte slots)
         {
-            int call = ++SlotCalls;
+            int call = Interlocked.Increment(ref _slotCalls);
             if (FailSlotCallsFrom > 0 && call >= FailSlotCallsFrom && call <= FailSlotCallsThrough) return Task.FromException(new InvalidOperationException("down"));
             if (Fail) return Task.FromException(new InvalidOperationException("down"));
             Slots = slots;
@@ -232,6 +269,23 @@ public sealed class PetStableTests
         Assert.Equal((500u, (byte)0), (hunter.Money, store.Slots));
     }
 
+    /// <summary>Loads the character's stable into the cache, so a following buy issues its slot write straight away.</summary>
+    private static async Task PrimeAsync(PetStableController stable, WorldPump pump, Player hunter)
+    {
+        stable.Prefetch(hunter);
+        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+    }
+
+    /// <summary>Starts a purchase whose slot write is held open at <paramref name="gate"/>, and waits until the store has really been entered.</summary>
+    private static async Task BuyInFlightAsync(PetStableController stable, MemoryStableStore store, WorldPump pump, Player hunter, TaskCompletionSource gate)
+    {
+        int before = store.SlotEntries;
+        store.SlotGate = gate;
+        stable.HandleBuySlot(hunter, StableMaster);
+        await pump.UntilAsync(() => store.SlotEntries == before + 1);
+        Assert.Equal((byte)0, store.Slots); // gated: nothing is saved yet
+    }
+
     [Fact]
     public async Task BuySlot_FailedWrite_LeavesTheMoneyUntouchedWhileInFlightAndAfter()
     {
@@ -239,11 +293,11 @@ public sealed class PetStableTests
         (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, FakeSession session) = Hunter(kit);
         hunter.Money = ArcaneCore.Game.Economy.EconomyOptions.MaxMoney;
+        await PrimeAsync(stable, pump, hunter);
         var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
 
         session.Clear();
-        stable.HandleBuySlot(hunter, StableMaster);
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
         // Deducted only once the write commits: a save taken while it is in flight still holds the full amount.
         Assert.Equal(ArcaneCore.Game.Economy.EconomyOptions.MaxMoney, hunter.Money);
 
@@ -260,17 +314,39 @@ public sealed class PetStableTests
         (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, FakeSession session) = Hunter(kit);
         hunter.Money = 500;
+        await PrimeAsync(stable, pump, hunter);
         var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
 
         session.Clear();
-        stable.HandleBuySlot(hunter, StableMaster);
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
         hunter.Money = 100;
         gate.SetResult();
 
         Assert.Equal(StableResult.ErrMoney, await ResultAsync(pump, session));
-        await pump.UntilAsync(() => store.Slots == 0);
-        Assert.Equal((100u, (byte)0), (hunter.Money, stable.CachedState(1)?.PurchasedSlots ?? 0));
+        await pump.UntilAsync(() => store.SlotCalls == 2 && store.Slots == 0); // saved, then taken back
+        Assert.Equal((100u, 0), (hunter.Money, stable.CachedState(1)?.PurchasedSlots ?? 0));
+    }
+
+    [Fact]
+    public async Task BuySlot_QuestSettlementPendingAtCommit_TakesTheSlotBackWithoutCharging()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        hunter.Money = 500;
+        await PrimeAsync(stable, pump, hunter);
+        var gate = new TaskCompletionSource();
+        int saves = 0;
+        stable.MoneyChanged += _ => saves++;
+
+        session.Clear();
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
+        Assert.True(hunter.BeginQuestSettlement(System.Guid.NewGuid())); // the character is held by a quest settlement when the write commits
+        gate.SetResult();
+
+        Assert.Equal(StableResult.ErrMoney, await ResultAsync(pump, session));
+        await pump.UntilAsync(() => store.SlotCalls == 2 && store.Slots == 0);
+        Assert.Equal((500u, 0), (hunter.Money, saves));
     }
 
     [Fact]
@@ -280,46 +356,65 @@ public sealed class PetStableTests
         (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, _) = Hunter(kit);
         hunter.Money = 500;
+        await PrimeAsync(stable, pump, hunter);
         var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
         int saves = 0;
         stable.MoneyChanged += _ => saves++;
 
-        stable.HandleBuySlot(hunter, StableMaster);
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
         kit.Map.RemoveObject(hunter);
         stable.Forget(1);
         gate.SetResult();
 
-        await pump.UntilAsync(() => store.Slots == 0);
+        await pump.UntilAsync(() => store.SlotCalls == 2 && store.Slots == 0); // saved, then taken back
         Assert.Equal((500u, 0), (hunter.Money, saves));
     }
 
-    [Fact]
-    public async Task BuySlot_RevertAfterLogoutAndRelogin_DoesNotLeaveTheUnpaidSlotCached()
+    /// <summary>
+    /// Purchase write in flight, logout, relogin: the relogin's load is queued behind the purchase (ahead of the revert) and reads the purchased
+    /// slot. The two world-thread continuations (the purchase commit, which cannot charge the logged-out player and takes the slot back, and that
+    /// load) may run in either order; the unpaid slot must never be cached, not even between them.
+    /// </summary>
+    private static async Task RelogRaceAsync(bool loadContinuationFirst)
     {
         using PetTestKit kit = Kit();
         (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
         (Player hunter, _) = Hunter(kit);
         hunter.Money = 500;
-        stable.Prefetch(hunter);
-        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+        await PrimeAsync(stable, pump, hunter);
         var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
-
-        stable.HandleBuySlot(hunter, StableMaster); // purchase write in flight
-        kit.Map.RemoveObject(hunter);               // logout: the player can no longer pay at commit
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
+        kit.Map.RemoveObject(hunter);   // logout
         stable.Forget(1);
-        stable.Prefetch(hunter);                    // relogin: its load is queued behind the purchase and ahead of the revert
+        var loadGate = new TaskCompletionSource();
+        store.LoadGate = loadGate;
+        stable.Prefetch(hunter);        // relogin: its load is queued behind the purchase write
         gate.SetResult();
+        await pump.PostedAsync(1);      // the purchase commit continuation; the load is still held
 
-        await pump.PostedAsync(2);                  // the purchase commit, then the load that read the purchased slot
-        pump.RunOne();                              // commit finds no payer and takes the slot back
-        pump.RunOne();                              // the relogin load completes
-        Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0); // the stable the database no longer has must not be cached
+        if (loadContinuationFirst)
+        {
+            loadGate.SetResult();
+            await pump.PostedAsync(2);
+            pump.RunNewest();           // the relogin load finishes before the commit continuation runs
+            Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0);
+            pump.RunOne();              // the commit takes the slot back
+        }
+        else
+        {
+            pump.RunOne();              // the commit takes the slot back first
+            loadGate.SetResult();       // then the load that read the purchased slot finishes
+        }
 
-        await pump.UntilAsync(() => store.Slots == 0);
-        Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0);
+        await pump.UntilAsync(() => store.SlotCalls == 2 && store.Slots == 0);
+        Assert.Equal(0, stable.CachedState(1)?.PurchasedSlots ?? 0); // the stable the database no longer has is not cached
     }
+
+    [Fact]
+    public Task BuySlot_RelogLoadFinishesAfterTheRevertWasQueued_DoesNotLeaveTheUnpaidSlotCached() => RelogRaceAsync(loadContinuationFirst: false);
+
+    [Fact]
+    public Task BuySlot_RelogLoadFinishesBeforeTheCommitContinuation_NeverCachesTheUnpaidSlot() => RelogRaceAsync(loadContinuationFirst: true);
 
     [Fact]
     public async Task BuySlot_RollbackWriteFailsOnce_IsRetried()
@@ -330,14 +425,11 @@ public sealed class PetStableTests
         hunter.Money = 500;
         store.FailSlotCallsFrom = 2;
         store.FailSlotCallsThrough = 2;
-        var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
+        await PrimeAsync(stable, pump, hunter);
+        var gate = new TaskCompletionSource();
 
-        stable.Prefetch(hunter);
-        await pump.UntilAsync(() => stable.CachedState(1) is not null);
-        store.SlotGate = gate;
-        stable.HandleBuySlot(hunter, StableMaster);
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
         hunter.Money = 100;
         gate.SetResult();
 
@@ -356,12 +448,10 @@ public sealed class PetStableTests
         store.FailSlotCallsFrom = 2;
         store.FailSlotCallsThrough = 9;
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
-
-        stable.Prefetch(hunter);
-        await pump.UntilAsync(() => stable.CachedState(1) is not null);
+        await PrimeAsync(stable, pump, hunter);
         var gate = new TaskCompletionSource();
-        store.SlotGate = gate;
-        stable.HandleBuySlot(hunter, StableMaster);
+
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
         hunter.Money = 100;
         gate.SetResult();
 
