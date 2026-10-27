@@ -15,9 +15,11 @@ namespace ArcaneCore.World.Tests.Economy;
 /// <summary>
 /// Every mail opcode must prove the player is at a real mailbox (vmangos WorldSession::CheckMailBox):
 /// the GUID names a spawned mailbox game object in the player's map within interaction distance.
-/// A fabricated GUID, another kind of game object and a mailbox out of range are refused (no reply,
-/// no state change) for each of the eight opcodes; an in-range mailbox works; Permissive restores
-/// the old accept-any-GameObject-GUID behaviour.
+/// A fabricated GUID, another kind of game object and a mailbox out of range are refused (no state change;
+/// CMSG_SEND_MAIL answers MAIL_ERR_INTERNAL_ERROR with mail id 0, the other seven stay silent) for each of the eight
+/// opcodes; an in-range mailbox works; Permissive restores the old accept-any-GameObject-GUID behaviour. This host
+/// has no economy store, so an allowed CMSG_SEND_MAIL answers the same result as a refused one; the CMSG_SEND_MAIL
+/// refusal is told apart from an allowed request in EconomyMailSendRecheckTests, which runs against a real store.
 /// </summary>
 public sealed class MailboxAccessTests
 {

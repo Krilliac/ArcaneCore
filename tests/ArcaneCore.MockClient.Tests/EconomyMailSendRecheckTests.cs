@@ -34,6 +34,7 @@ public sealed class EconomyMailSendRecheckTests
             services.AddScoped<IEconomyStore>(provider => new PausedReadStore(
                 new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), control));
         });
+        control.Token = rig.Token;
         control.TargetId = checked((int)rig.ReceiverGuid);
         try
         {
@@ -57,6 +58,9 @@ public sealed class EconomyMailSendRecheckTests
 
             control.Release.TrySetResult(true);
             (MailAction action, MailResult result) = await rig.ReadResultAsync();
+
+            // The read must have resumed normally: a read abandoned by the settlement budget would also answer InternalError without ever reaching the re-check.
+            Assert.True(control.Resumed, "the paused box-size read did not resume normally");
             Assert.Equal(MailAction.Send, action);
             Assert.Equal(MailResult.InternalError, result);
             Assert.Empty(await rig.ReceiverMailAsync());
@@ -73,6 +77,8 @@ public sealed class EconomyMailSendRecheckTests
     public async Task Send_answers_internal_error_when_the_mailbox_check_fails_before_the_box_size_read(string change)
     {
         // vmangos@0e3ff01 MailHandler.cpp:131-134: a failed CheckMailBox before the count query answers MAIL_ERR_INTERNAL_ERROR.
+        // The receiver is unknown, so a send that got past the first check would answer RecipientNotFound: the post-read re-check cannot
+        // stand in for the first check here, because the letter never reaches the box-size read.
         var mailbox = new ToggleMailbox();
         await using Rig rig = await Rig.StartAsync(loginReceiver: false, services => services.AddSingleton<IMailboxAccess>(mailbox));
         await rig.Server.World.InvokeAsync(() =>
@@ -89,7 +95,7 @@ public sealed class EconomyMailSendRecheckTests
             return true;
         }).WaitAsync(rig.Token);
 
-        await rig.SendAsync("Mailrecv", "hello", "body", money: 0, cod: 0);
+        await rig.SendAsync("Nobodyhere", "hello", "body", money: 0, cod: 0);
         (MailAction action, MailResult result) = await rig.ReadResultAsync();
         Assert.Equal(MailAction.Send, action);
         Assert.Equal(MailResult.InternalError, result);
@@ -111,6 +117,11 @@ public sealed class EconomyMailSendRecheckTests
         internal TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal volatile int TargetId = -1;
         internal int Paused;
+
+        /// <summary>The test's own token: the paused read waits on it, not on the store's settlement budget, so the budget cannot end the pause early.</summary>
+        internal CancellationToken Token;
+
+        internal volatile bool Resumed;
     }
 
     /// <summary>Holds the first read of the receiver's box until the test releases it.</summary>
@@ -122,7 +133,8 @@ public sealed class EconomyMailSendRecheckTests
             if (id == control.TargetId && Interlocked.Exchange(ref control.Paused, 1) == 0)
             {
                 control.Captured.TrySetResult(true);
-                await control.Release.Task.WaitAsync(cancellationToken);
+                await control.Release.Task.WaitAsync(control.Token);
+                control.Resumed = true;
             }
 
             return result;
