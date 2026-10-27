@@ -218,6 +218,14 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // A held instant left its cast slot; while it goes off it is the caster's running cast again, as it was without batching,
+            // for everything that looks it up there (procs, scripts, melee pauses). Finish clears the slot (Cast finishes on every path).
+            // A slot the caster filled meanwhile stays as it is: _resolvingBatchedGo still names this cast (CurrentGenericCast).
+            if (GetOrCreateState(cast.Caster) is { CurrentCast: null } state)
+            {
+                state.CurrentCast = cast;
+            }
+
             SpellCast? outer = _resolvingBatchedGo;
             _resolvingBatchedGo = cast;
             try
