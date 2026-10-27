@@ -101,6 +101,7 @@ public sealed class PickpocketLootTests
             StartRecoveryTime = 0,
         };
         var spells = new SpellSystem(new SpellStore([spell], [], []), () => rig.Now, units: new CreatureResolver(system), random: new Random(1));
+        spells.SpellBatchWindowMs = 0; // these tests are about the loot window and assume the pick resolves in the cast call
         new PickpocketSpells(_ => pockets).Register(spells);
         return new Rig { World = world, Map = map, Creatures = system, Loot = service, Pockets = pockets, Quests = quests, Groups = groups, Spells = spells };
     }

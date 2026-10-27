@@ -19,6 +19,15 @@ public sealed class ReagentTests
     private const uint NoRequirements = 91004;
     private const uint SelfReagentItem = 90100;
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(CraftingTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private static CraftingTestKit Rig(Func<Player, Item, bool>? isInTrade = null)
     {
         var rig = new CraftingTestKit(
@@ -57,6 +66,7 @@ public sealed class ReagentTests
         Assert.NotEqual(offered.Guid, freeCloth.Guid);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsCloth));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(20u, offered.Count);
         Assert.Null(rig.Inventory.GetItemByGuid(freeCloth.Guid));
@@ -81,6 +91,7 @@ public sealed class ReagentTests
         rig.Give(CraftingTestKit.CopperBar, 5);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsCloth));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(0u, rig.Inventory.GetItemCount(CraftingTestKit.LinenCloth));
         Assert.Equal(5u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
@@ -94,6 +105,7 @@ public sealed class ReagentTests
         rig.Give(CraftingTestKit.CopperBar, 2);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsMany));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(2u, rig.Inventory.GetItemCount(CraftingTestKit.LinenCloth));
         Assert.Equal(0u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
@@ -123,6 +135,7 @@ public sealed class ReagentTests
 
         rig.Give(CraftingTestKit.BlacksmithHammer);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsTool));
+        ResolveSpellBatch(rig);
         Assert.Equal(1u, rig.Inventory.GetItemCount(CraftingTestKit.BlacksmithHammer));   // tools are not consumed
         Assert.Equal(0u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
     }
@@ -141,6 +154,7 @@ public sealed class ReagentTests
         using CraftingTestKit rig = Rig();
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NoRequirements));
+        ResolveSpellBatch(rig);
     }
 
     [Fact]
@@ -196,6 +210,7 @@ public sealed class ReagentTests
         rig.System.RegisterEffect(SpellEffectName.Dummy, ctx => clothAtEffect = ((Player)ctx.Caster).Inventory.GetItemCount(CraftingTestKit.LinenCloth));
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsCloth));
+        ResolveSpellBatch(rig);
 
         Assert.Equal(0u, clothAtEffect);
     }

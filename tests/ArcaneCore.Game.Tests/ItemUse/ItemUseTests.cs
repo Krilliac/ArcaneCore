@@ -110,6 +110,16 @@ public sealed class ItemUseTests
         {
             Kit.Session.Clear();
             Service.UseItem(Player, item.BagSlot, item.Slot, spellIndex, targets ?? SpellCastTargets.ForSelf());
+            ResolveSpellBatch();
+        }
+
+        /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a use that goes off is held: advance past the boundary so it resolves.</summary>
+        public void ResolveSpellBatch()
+        {
+            if (Kit.System.SpellBatchWindowMs != 0)
+            {
+                Kit.Kit.Advance(Kit.System.SpellBatchWindowMs);
+            }
         }
 
         public InventoryResult? LastEquipError()

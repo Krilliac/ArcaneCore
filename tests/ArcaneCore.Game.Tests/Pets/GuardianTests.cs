@@ -12,6 +12,15 @@ public sealed class GuardianTests
 {
     private static List<Creature> GuardiansOf(PetTestKit kit, Unit owner) => [.. kit.Map.Pets!.GuardiansOf(owner)];
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(Spells.SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Fact]
     public void Guardians_AreHighGuidPetsLinkedToTheirOwner_ButNeverItsPet()
     {
@@ -75,23 +84,28 @@ public sealed class GuardianTests
         (Player caster, _) = kit.AddPlayer(1);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(caster, GuardianSpell, SpellCastTargets.ForSelf(), triggered: false));
+        ResolveSpellBatch(kit.Spells);
         Assert.Single(GuardiansOf(kit, caster));
 
         kit.Spells.Advance(2_000);
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(caster, GuardianSpell, SpellCastTargets.ForSelf(), triggered: false));
+        ResolveSpellBatch(kit.Spells);
         Assert.Empty(GuardiansOf(kit, caster)); // found one, no cooldown: it only dismissed
 
         kit.Spells.Advance(2_000);
         kit.Spells.System.CastSpell(caster, GuardianSpell, SpellCastTargets.ForSelf(), triggered: false);
+        ResolveSpellBatch(kit.Spells);
         Assert.Single(GuardiansOf(kit, caster));
 
         // a spell with a duration and a category (a cooldown spell) dismisses and summons anew
         kit.Spells.Advance(2_000);
         kit.Spells.System.CastSpell(caster, CooldownGuardianSpell, SpellCastTargets.ForSelf(), triggered: false);
+        ResolveSpellBatch(kit.Spells);
         Assert.Single(GuardiansOf(kit, caster));
         Creature first = GuardiansOf(kit, caster)[0];
         kit.Spells.Advance(2_000);
         kit.Spells.System.CastSpell(caster, CooldownGuardianSpell, SpellCastTargets.ForSelf(), triggered: false);
+        ResolveSpellBatch(kit.Spells);
         Creature second = Assert.Single(GuardiansOf(kit, caster));
         Assert.NotSame(first, second);
     }

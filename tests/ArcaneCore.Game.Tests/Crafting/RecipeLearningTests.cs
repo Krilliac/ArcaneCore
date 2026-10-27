@@ -96,7 +96,17 @@ public sealed class RecipeLearningTests
             Assert.Equal(InventoryResult.Ok, Kit.Inventory.AddItem(entry, 1, out Item? item));
             Kit.Session.Clear();
             Service.UseItem(Kit.Player, item!.BagSlot, item.Slot, 0, SpellCastTargets.ForSelf());
+            ResolveSpellBatch();
             return item;
+        }
+
+        /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+        public void ResolveSpellBatch()
+        {
+            if (Kit.System.SpellBatchWindowMs != 0)
+            {
+                Kit.Kit.Advance(Kit.System.SpellBatchWindowMs);
+            }
         }
 
         public InventoryResult? EquipError()
@@ -186,6 +196,7 @@ public sealed class RecipeLearningTests
         rig.Use(Plans);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.HandleCastRequest(rig.Kit.Player, CraftSpell, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
         Assert.Equal(1u, rig.Kit.Inventory.GetItemCount(CraftingTestKit.LinenBandage));
         Assert.Equal(1u, rig.Kit.Inventory.GetItemCount(CraftingTestKit.LinenCloth));
     }

@@ -102,7 +102,18 @@ public sealed class EnchantSpellTests
             Kit.Session.Clear();
             Kit.Kit.Spellbook.Teach(Player, spell);
             var targets = item is null ? SpellCastTargets.ForSelf() : new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = item.Guid };
-            return Kit.Kit.System.HandleCastRequest(Player, spell, targets);
+            SpellCastResult result = Kit.Kit.System.HandleCastRequest(Player, spell, targets);
+            ResolveSpellBatch();
+            return result;
+        }
+
+        /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+        public void ResolveSpellBatch()
+        {
+            if (Kit.System.SpellBatchWindowMs != 0)
+            {
+                Kit.Kit.Advance(Kit.System.SpellBatchWindowMs);
+            }
         }
 
         public byte[] LastCastResult() => SpellTestKit.Packets(Kit.Session, WorldOpcode.SmsgCastResult).Last();
@@ -251,6 +262,7 @@ public sealed class EnchantSpellTests
 
         rig.Kit.Kit.Now += 5000;
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, Bracer, tradeTarget));
+        rig.ResolveSpellBatch();
         Assert.Equal(StrengthEnchant, ItemEnchantments.Id(offered!, EnchantSlots.Permanent));   // the other player's item
     }
 
@@ -294,10 +306,12 @@ public sealed class EnchantSpellTests
 
         // Nothing worn: the effect does nothing (and the held-item attribute lets the cast through without an item target).
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
         Item sword = rig.Equip(Weapon, InventorySlots.MainHand);
         rig.Kit.Kit.Now += 5000;
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
 
         Assert.Equal(StrengthEnchant, ItemEnchantments.Id(sword, EnchantSlots.Temporary));
         Assert.Equal(600_000u, ItemEnchantments.Duration(sword, EnchantSlots.Temporary));
@@ -312,8 +326,10 @@ public sealed class EnchantSpellTests
         rig.Kit.Kit.Spellbook.Teach(rig.Player, HeldOil);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
         rig.Kit.Kit.Now += 5000;
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
 
         Assert.Equal(StrengthEnchant, ItemEnchantments.Id(sword, EnchantSlots.Temporary));
         Assert.Equal(before + 4, rig.Strength);   // the engine applies a slot once (PlayerEnchantments.Apply), so the refresh is +4, never +8
@@ -329,6 +345,7 @@ public sealed class EnchantSpellTests
         rig.Kit.Kit.Spellbook.Teach(rig.Player, HeldOil);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
 
         // vmangos EffectEnchantHeldItem passes GetSpellEnchantCharges to SetEnchantment (SpellEffects.cpp:5044, :5054).
         Assert.Equal(3u, ItemEnchantments.Charges(sword, EnchantSlots.Temporary));
@@ -343,6 +360,7 @@ public sealed class EnchantSpellTests
         rig.Kit.Kit.Spellbook.Teach(rig.Player, HeldOil);
 
         rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf());
+        rig.ResolveSpellBatch();
 
         Assert.Equal(SoulboundEnchant, ItemEnchantments.Id(sword, EnchantSlots.Temporary));
     }

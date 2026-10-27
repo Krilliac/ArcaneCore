@@ -9,6 +9,15 @@ namespace ArcaneCore.Game.Tests.Death;
 
 public sealed class TwistingNetherTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Theory]
     [InlineData(0, 23700u)]
     [InlineData(9, 23700u)]
@@ -71,6 +80,7 @@ public sealed class TwistingNetherTests
         Die(kit, player);
         Assert.Equal(expected, player.GetUInt32(UpdateFields.PlayerSelfResSpell));
         Assert.True(kit.System.TrySelfResurrect(player));
+        ResolveSpellBatch(kit);
         Assert.Equal(ankhs, player.Inventory.GetItemCount(17030));
     }
 

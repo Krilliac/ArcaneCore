@@ -13,6 +13,15 @@ namespace ArcaneCore.Game.Tests.Death;
 /// <summary>SPELL_EFFECT_SELF_RESURRECT (94) through the cast pipeline (vmangos SpellEffects.cpp:5334-5370).</summary>
 public sealed class SelfResurrectEffectTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private const uint SpellId = 990094;
 
     private static SpellInfo Spell(int value, int mana = 0) => SpellTestKit.Spell(SpellId,
@@ -47,6 +56,7 @@ public sealed class SelfResurrectEffectTests
         kit.Spellbook.Teach(player, SpellId);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, SpellId, SpellCastTargets.ForSelf()));
+        ResolveSpellBatch(kit);
 
         Assert.True(player.IsAlive);
         Assert.Equal(health, player.Health);

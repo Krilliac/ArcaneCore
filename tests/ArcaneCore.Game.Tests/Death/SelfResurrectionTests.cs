@@ -19,6 +19,15 @@ namespace ArcaneCore.Game.Tests.Death;
 /// </summary>
 public sealed class SelfResurrectionTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     private const long T = 1_700_000_000;
 
     private static readonly SpellInfo SoulstoneBuff = SpellTestKit.Spell(20707, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
@@ -119,6 +128,7 @@ public sealed class SelfResurrectionTests
         Assert.NotNull(rig.Player.Combat.Corpse);
 
         Assert.True(SelfResurrection.Use(rig.Kit.System, rig.Player));
+        ResolveSpellBatch(rig.Kit);
 
         Assert.True(rig.Player.IsAlive);
         Assert.Equal(400u, rig.Player.Health); // -(-400)
@@ -216,6 +226,7 @@ public sealed class SelfResurrectionTests
 
         // used: 20% of the maximum, an Ankh gone, and the hour of cooldown running
         Assert.True(SelfResurrection.Use(rig.Kit.System, rig.Player));
+        ResolveSpellBatch(rig.Kit);
         Assert.Equal(200u, rig.Player.Health);
         Assert.Equal(1u, rig.Player.Inventory.GetItemCount(SelfResurrection.Ankh));
         rig.Die();

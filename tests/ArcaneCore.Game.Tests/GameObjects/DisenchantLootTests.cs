@@ -101,7 +101,13 @@ public sealed class DisenchantLootTests
             var targets = item is null
                 ? SpellCastTargets.ForSelf()
                 : new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = item.Guid };
-            return Kit.System.HandleCastRequest(Player, DisenchantSpell, targets);
+            SpellCastResult result = Kit.System.HandleCastRequest(Player, DisenchantSpell, targets);
+            if (Kit.System.SpellBatchWindowMs != 0)
+            {
+                Kit.Advance(Kit.System.SpellBatchWindowMs); // a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) holds the go until its boundary
+            }
+
+            return result;
         }
 
         public void Dispose() => Kit.Dispose();
