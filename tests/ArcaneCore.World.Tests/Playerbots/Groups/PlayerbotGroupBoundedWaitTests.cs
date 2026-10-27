@@ -352,4 +352,75 @@ public sealed class PlayerbotGroupBoundedWaitTests
         Assert.Equal("completed", group.Reason);
         Assert.Equal(0, world.Coordinator.Totals.Failed);
     }
+
+    // --- B5: a leader that cannot plan the last yards to the approach point but stands near it has arrived ------------------
+
+    /// <summary>
+    /// A dungeon group in the Travelling state on a map with no way anywhere, its bots moved <paramref name="yards"/> past the approach
+    /// point (on the side away from the entrance) and <paramref name="rise"/> above it: out of the approach ring, near the approach point.
+    /// </summary>
+    private static async Task<PlayerbotGroupCoordinator.BotGroup> TravellingNearAnUnreachableApproachAsync(GroupTestWorld world, (Guid Id, string Name)[] bots, float yards, float rise)
+    {
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        await world.OnWorldAsync(() =>
+        {
+            Block(world);
+            Vector3 away = Vector3.Normalize(new Vector3(group.Approach.X - group.Goal.Meeting.X, group.Approach.Y - group.Goal.Meeting.Y, 0));
+            Vector3 spot = group.Approach + (away * yards) + new Vector3(0, 0, rise);
+            foreach ((Guid id, _) in bots)
+                world.Player(id).Relocate(spot.X, spot.Y, spot.Z, 0, NowMs(world));
+            return true;
+        });
+        return group;
+    }
+
+    [Fact]
+    public async Task ADungeonLeaderThatCanPlanNoWayToTheApproachPoint_ButStandsNearIt_StartsEntering()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 600, dungeon: true);
+        var tank = await world.AddBotAsync("Nearwar", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Nearprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Nearmage", Human, Mage, 12, [Fireball], EntranceArea);
+        PlayerbotGroupCoordinator.BotGroup group = await TravellingNearAnUnreachableApproachAsync(world, [tank, healer, mage], 10f, 0f);
+        await world.OnWorldAsync(() =>
+        {
+            Player leader = world.Player(group.LeaderBotId);
+            float ring = PlayerbotGroupCoordinator.ApproachYards + PlayerbotGroupCoordinator.ApproachSlackYards;
+            Assert.True(MathF.Sqrt(((leader.X - group.Goal.Meeting.X) * (leader.X - group.Goal.Meeting.X)) + ((leader.Y - group.Goal.Meeting.Y) * (leader.Y - group.Goal.Meeting.Y))) > ring, "outside the ring");
+            Assert.True(Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Approach) > 5f, "outside the arrival radius");
+            return true;
+        });
+
+        // Well inside the 30 s no-path bound: the group goes on as soon as the refusal is seen, it does not wait for the bound or the travel timeout.
+        Assert.True(await world.RunUntilAsync(10_000, () => group.State is not (PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling)), await world.TraceAsync());
+        Assert.Equal(PlayerbotGroupState.Entering, group.State);
+        Assert.Null(group.Reason);
+    }
+
+    [Fact]
+    public async Task ADungeonLeaderThatCanPlanNoWayToTheApproachPoint_AndStandsOnAnotherFloorOfIt_DoesNotArrive()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 600, dungeon: true);
+        var tank = await world.AddBotAsync("Floorwar", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Floorprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Floormage", Human, Mage, 12, [Fireball], EntranceArea);
+        PlayerbotGroupCoordinator.BotGroup group = await TravellingNearAnUnreachableApproachAsync(world, [tank, healer, mage], 10f, PlayerbotGroupCoordinator.ApproachHeightYards + 5f);
+
+        await world.RunAsync(10_000);
+        Assert.Equal(PlayerbotGroupState.Travelling, group.State);
+    }
+
+    [Fact]
+    public async Task ADungeonLeaderThatCanPlanNoWayToTheApproachPoint_AndStandsFarFromIt_DoesNotArrive()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], options => options.StallSeconds = 600, dungeon: true);
+        var tank = await world.AddBotAsync("Distwar", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Distprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Distmage", Human, Mage, 12, [Fireball], EntranceArea);
+        PlayerbotGroupCoordinator.BotGroup group = await TravellingNearAnUnreachableApproachAsync(world, [tank, healer, mage], PlayerbotGroupCoordinator.ApproachYards + 15f, 0f);
+
+        await world.RunAsync(10_000);
+        Assert.Equal(PlayerbotGroupState.Travelling, group.State);
+    }
 }

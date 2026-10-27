@@ -528,6 +528,7 @@ internal sealed class PlayerbotGroupAI
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
                 NoteRunProgress(group, approaching);
                 NoteApproachProgress(player, group, approach);
+                if (!approaching) NoteUnpathableApproachNear(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
                 if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; Hold(player); return; }
@@ -708,6 +709,23 @@ internal sealed class PlayerbotGroupAI
         uint idle = unchecked(now - _approachProgressMs);
         if (idle > ApproachNoProgressMs && idle <= int.MaxValue) group.ApproachReached = true;
     }
+
+    /// <summary>
+    /// The leader can plan no way to the approach point but already stands within <see cref="UnpathableApproachYards"/> of it (3D) and no more than
+    /// <see cref="PlayerbotGroupCoordinator.ApproachHeightYards"/> above or below it: the point counts as reached
+    /// (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) instead of the group waiting at it until the travel timeout. The approach point
+    /// can lie off the mesh or in a pocket the mesh does not join to the leader's ground (the mesh is snapped at formation, from where the leader stood
+    /// then); the height bound keeps another floor from counting, and the group is never let through from beyond the radius.
+    /// </summary>
+    private static void NoteUnpathableApproachNear(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
+    {
+        if (group.ApproachReached) return;
+        if (MathF.Abs(player.Z - approach.Z) > PlayerbotGroupCoordinator.ApproachHeightYards) return;
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach) <= UnpathableApproachYards) group.ApproachReached = true;
+    }
+
+    /// <summary>How near the approach point (yards) a leader that can plan no way to it counts as arrived (<see cref="NoteUnpathableApproachNear"/>).</summary>
+    internal const float UnpathableApproachYards = 15f;
 
     /// <summary>How long a leader walks to the approach point without getting nearer before the point counts as reached.</summary>
     internal const uint ApproachNoProgressMs = 45_000;
