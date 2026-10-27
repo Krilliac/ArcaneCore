@@ -13,7 +13,7 @@ public sealed class PacketCaptureCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new("capture", AccountSecurity.Administrator,
-            "Syntax: .debug capture on|off <player>\nStart or stop an opt-in PKT 3.1 trace for an online player's client session.", Capture, RetailLevel: 6),
+            "Syntax: .debug capture on|off <player>\nStart or stop an opt-in PKT 3.1 trace for an online player's client session. The trace stops by itself at the size limit or when the disk writer falls 8192 records behind; the file is finished asynchronously after a stop.", Capture, RetailLevel: 6),
     ];
 
     private static bool Capture(CommandContext context, string args)

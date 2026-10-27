@@ -77,6 +77,11 @@ public sealed partial class PlayerInventory
     /// <summary>Skill/spell/dual-wield answers (replaced by the skills/spells areas).</summary>
     public IItemRequirements Requirements { get; set; } = DefaultItemRequirements.Instance;
 
+    /// <summary>
+    /// The guid of the loot window the player has open (vmangos Player::GetLootGuid), kept by the loot service; empty when none.
+    /// </summary>
+    public ObjectGuid LootingGuid { get; set; } = ObjectGuid.Empty;
+
     /// <summary>The stat application hook (replaceable by the combat/spells areas).</summary>
     public IItemStatsApplier StatsApplier { get; set; } = EquipmentStatsApplier.Instance;
 
@@ -204,7 +209,8 @@ public sealed partial class PlayerInventory
     {
         if (bag == InventorySlots.Bag0)
         {
-            return slot < InventorySlots.KeyringEnd ? _items[slot] : null;
+            // vmangos GetItemByPos (Player.cpp:8475): the buyback slots are not reachable by position.
+            return slot < InventorySlots.BankBagEnd || (slot >= InventorySlots.KeyringStart && slot < InventorySlots.KeyringEnd) ? _items[slot] : null;
         }
 
         if ((bag >= InventorySlots.BagStart && bag < InventorySlots.BagEnd) || (bag >= InventorySlots.BankBagStart && bag < InventorySlots.BankBagEnd))

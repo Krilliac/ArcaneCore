@@ -276,7 +276,7 @@ public sealed class MpqCodecTests
     [Fact]
     public void Compression_Format1_RefusesLzmaByName()
     {
-        // ref: D:\mangos-unified\dep\StormLib\src\SCompression.cpp:1066-1115 (0x12 is LZMA in SCompDecompress2) and :1155-1161
+        // ref: StormLib src/SCompression.cpp:1066-1115 (0x12 is LZMA in SCompDecompress2) and :1155-1161
         byte[] stored = [0x12, 1, 2, 3, 4, 5, 6, 7, 8];
         NotSupportedException e = Assert.Throws<NotSupportedException>(() => MpqCompression.Decompress(stored, new byte[100], formatVersion: 1));
         Assert.Contains("lzma", e.Message, StringComparison.Ordinal);

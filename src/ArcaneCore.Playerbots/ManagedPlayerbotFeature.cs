@@ -130,6 +130,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>The longest silence (ms of world time) of any running bot after the last tick: the first think lane yields time to the main lane as it nears the starvation bound (<see cref="PlayerbotThinkStarvation.PriorityScale"/>).</summary>
     private uint _oldestSilentMs;
+
+    // World-stall time (PlayerbotThinkStarvation.StallMs of the gap between two Update calls' world clock) summed since the feature started; a bot's
+    // silence is judged less the part of it that fell after its last think (ActiveBot.StalledAtThink). World thread only.
+    private ulong _stalledMs;
+    private uint _lastTickNowMs;
+    private bool _tickNowPrimed;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
     private readonly PlayerbotThinkProbe _probe = new();
     private PlayerbotPathJobs? _pathJobs;
@@ -2340,6 +2346,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
         uint now = world.NowMs;
+        if (_tickNowPrimed) _stalledMs += PlayerbotThinkStarvation.StallMs(unchecked(now - _lastTickNowMs));
+        _lastTickNowMs = now;
+        _tickNowPrimed = true;
         if (_pathJobs is { } pathJobs && unchecked(now - _lastPathJobSweepMs) >= 1_000)
         {
             _lastPathJobSweepMs = now;
@@ -2495,7 +2504,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (active.Paused || !active.GapPrimed || active.Session.State != SessionState.InWorld) continue;
             uint silentMs = unchecked(now - active.LastUpdateMs);
             if (silentMs > oldest && silentMs <= int.MaxValue) oldest = silentMs;
-            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, reportBound, ref active.StarvedReported)) continue;
+            if (!PlayerbotThinkStarvation.ShouldReport(now, active.LastUpdateMs, reportBound, ref active.StarvedReported, _stalledMs - active.StalledAtThink)) continue;
             if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
             PlayerbotAnomalies.Report(player, "cadence", "think-starved",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,
@@ -2560,6 +2569,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         {
             uint sinceLast = unchecked(world.NowMs - active.LastUpdateMs);
             active.LastUpdateMs = world.NowMs;
+            active.StalledAtThink = _stalledMs;
             // The motion lease follows the scheduler's pass, also for a bot with no gap of its own yet (its first think skips the gap below).
             Player? measured = active.Session.Player;
             if (measured is not null) PlayerbotMotion.NoteSchedulerPass(measured, _mainPass.Ms);
@@ -4010,6 +4020,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public string AnomalySubject = entry.Session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {entry.BotId:D}";
         public uint MapId = entry.Session.Player?.Map?.MapId ?? entry.Session.Player?.MapId ?? 0;
         public uint LastUpdateMs = entry.Session.World.NowMs;
+        /// <summary>The feature's world-stall total at this bot's last think: the stall since is not silence (<see cref="PlayerbotThinkStarvation.ShouldReport(uint, uint, uint, ref bool, ulong)"/>).</summary>
+        public ulong StalledAtThink;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>
         public bool GapPrimed;
         /// <summary>Whether the current silence of this bot was reported as a starved think gap (cleared by its next think).</summary>

@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Characters;
@@ -192,6 +193,125 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         string key = PlayerbotAnomalies.Key("nav", "goal-unreachable");
         Assert.Equal(1, cap.Count(key));
         Assert.Contains($"(region components bot {own}, goal -1)", cap.Notices.Single(n => n.Key == key).Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #1497: a goal 6.5 yards above the floor, within three yards of it flat, is found only by the far box and snaps to the floor
+    /// beside the bot. It is far, has no component of its own (no verdict), and five refused plans toward it report no
+    /// <c>bot-nav/no-path-connected</c>.
+    /// </summary>
+    [Fact]
+    public async Task AGoalAboveTheFloor_FoundOnlyByTheFarBox_HasNoComponent_AndIsNotReportedNoPathConnected()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 floor = new(20, 20, 0), inTheAir = new(20, 20, 6.5f);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        (int floorRegion, bool floorFar, int airRegion, bool airFar, int airPlain, int own, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int onFloor = nav.RegionAt(graph, floor, locate, out bool onFloorFar);
+            int inAir = nav.RegionAt(graph, inTheAir, locate, out bool inAirFar);
+            PlayerbotNavigation.IsUnreachableOnFoot(world.Player, inTheAir, out int fromComponent, out int toComponent);
+            return (onFloor, onFloorFar, inAir, inAirFar, nav.RegionAt(graph, inTheAir, locate), fromComponent, toComponent);
+        });
+        Assert.True(floorRegion >= 0, "the control: the floor is on a region");
+        Assert.False(floorFar, "the control: a point on the floor is not far");
+        Assert.True(airRegion >= 0, "the far box snaps the goal to the floor polygon");
+        Assert.True(airFar);
+        Assert.Equal(airRegion, airPlain);
+        Assert.True(own >= 0, $"the bot's component {own}");
+        Assert.Equal(-1, to);
+
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        await world.Host.OnWorldAsync(() =>
+        {
+            for (int i = 0; i < PlayerbotNavigationAnomalies.RepeatedRefusals; i++)
+                PlayerbotNavigationAnomalies.ObservePlan(world.Player, inTheAir, PlayerbotMotion.CurrentPosition(world.Player), routed: false, inconclusive: false);
+            return true;
+        });
+        Assert.Equal(1, cap.Count(PlayerbotAnomalies.Key("nav", "goal-unreachable")));
+        Assert.Equal(0, cap.Count(PlayerbotAnomalies.Key("nav", "no-path-connected")));
+    }
+
+    /// <summary>
+    /// Issue #1497 review: a goal inside the near box but past the edge of the walkable cells of the unjoined tile is still told unreachable, and its
+    /// component is the tile's own (on the real mesh, eroded by the agent radius, spawns lie just past the walkable cells; this synthetic mesh is not eroded).
+    /// </summary>
+    [Fact]
+    public async Task AGoalJustOutsideAWalkableCellOfTheUnjoinedTile_IsStillToldUnreachable_WithItsOwnComponent()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 besideTheHole = new(69.5f, 5, 0);
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        (bool unreachable, int from, int to, int spawnComponent, int located, bool far) = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out int spawn), "the control");
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, besideTheHole, out int fromComponent, out int toComponent);
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int region = nav.RegionAt(graph, besideTheHole, locate, out bool isFar);
+            return (answer, fromComponent, toComponent, spawn, region, isFar);
+        });
+        Assert.True(located >= 0, "the near box finds the tile's floor");
+        Assert.False(far, "0.5 yd off a walkable cell horizontally is not a vertical miss: far is vertical only");
+        Assert.True(unreachable, "a goal 0.5 yd past the walkable cells is still on the unjoined tile");
+        Assert.True(from >= 0 && from != to, $"bot {from}, goal {to}");
+        Assert.Equal(spawnComponent, to);
+    }
+
+    /// <summary>
+    /// A tolerance query (EndTolerance above 0: the single {5, 10, 5} box) 7.5 yd above the floor finds it and is never far, where the same
+    /// query without a tolerance is far.
+    /// </summary>
+    [Fact]
+    public async Task ATolerantQueryAboveTheFloor_IsNeverFar_WhereAPlainOneIs()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 high = new(20, 20, 7.5f);
+        var plain = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        var tolerant = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true, EndTolerance = 1f };
+        (int plainRegion, bool plainFar, int tolerantRegion, bool tolerantFar) = await world.Host.OnWorldAsync(() =>
+        {
+            var nav = (NavMeshPathfinder)world.Player.Map!.Collision.Pathfinder!;
+            NavRegionGraph graph = nav.RegionGraph(world.Player.Map!.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!;
+            int a = nav.RegionAt(graph, high, plain, out bool aFar);
+            int b = nav.RegionAt(graph, high, tolerant, out bool bFar);
+            return (a, aFar, b, bFar);
+        });
+        Assert.True(plainRegion >= 0, "the plain query snaps to the floor");
+        Assert.True(plainFar, "the control: 7.5 yd over the floor is a vertical miss");
+        Assert.Equal(plainRegion, tolerantRegion);
+        Assert.False(tolerantFar, "the tolerance box has no far box");
+    }
+
+    /// <summary>
+    /// Issue #1497: a far goal (6.5 yd above the walkable cells) that snaps into ANOTHER component than the bot's gets no verdict either: a snap
+    /// to the floor under or over the goal says nothing about the goal's own place (it may be walkable on excluded or upper ground), so the path
+    /// search decides. The control, a goal on the unjoined tile itself, is still told unreachable.
+    /// </summary>
+    [Fact]
+    public async Task AFarGoalSnappingIntoAnotherComponent_GivesNoVerdict()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        Vector3 aboveTheTile = new(75, 5, 6.5f);
+        (bool unreachable, int from, int to) = await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(PlayerbotNavigation.IsUnreachableOnFoot(world.Player, UnreachableSpawn, out _, out _), "the control");
+            bool answer = PlayerbotNavigation.IsUnreachableOnFoot(world.Player, aboveTheTile, out int fromComponent, out int toComponent);
+            return (answer, fromComponent, toComponent);
+        });
+        Assert.False(unreachable, "a far goal over the unjoined tile gives no verdict");
+        Assert.True(from >= 0, $"bot {from}");
+        Assert.Equal(-1, to);
     }
 
     [Fact]

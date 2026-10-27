@@ -150,6 +150,8 @@ internal static class PlayerbotNavigationAnomalies
         PlayerbotAnomalies.Report(player, "nav", "goal-unreachable",
             string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"{watch.Refusals} plans in a row toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1} were refused (region components bot {fromComponent}, goal {toComponent})"));
+        // A far goal (hung in the air or on excluded ground) that snaps into the bot's own component reports goal-unreachable with goal -1,
+        // not no-path-connected: it has no region of its own, so the graph says nothing about it.
         if (fromComponent >= 0 && fromComponent == toComponent)
             PlayerbotAnomalies.Report(player, "nav", "no-path-connected",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,

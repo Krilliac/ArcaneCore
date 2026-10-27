@@ -254,6 +254,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         if (_instanceSystems.Remove(map, out CreatureMapSystem? system))
         {
             system.SaveRespawnTimes();
+            system.Detach();
         }
     }
 

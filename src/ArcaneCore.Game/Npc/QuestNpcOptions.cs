@@ -72,10 +72,12 @@ public sealed class QuestNpcOptions
     /// <summary>
     /// Seconds one reward settlement may take end to end (save, drains, the reward transaction)
     /// before it is abandoned and reconciled from the stored rows. Operational, not a gameplay
-    /// rule: 15 is the shipped value. It covers three lock waits of the shipped 5 s
+    /// rule: 15 is the shipped value. It covers three typical lock waits of the shipped 5 s
     /// Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the
     /// character save queue's one consumer, the settlement's own save, the reward transaction), so one
-    /// locked write ahead of it cannot use up the budget. A test that deliberately holds a settlement
+    /// locked write ahead of it cannot use up the budget. A write-gate wait is not capped at one bound: it gives up
+    /// after 5 s without a hand-off or 20 s of active waiting, but the settlement's budget token ends any wait it is
+    /// passed to earlier. A test that deliberately holds a settlement
     /// open raises it so its observation window is not a race against this deadline.
     /// </summary>
     public int SettlementBudgetSeconds { get; set; } = 15;

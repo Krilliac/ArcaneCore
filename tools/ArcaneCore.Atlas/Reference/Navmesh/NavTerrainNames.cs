@@ -8,7 +8,7 @@ namespace ArcaneCore.Atlas.Reference.Navmesh;
 /// </summary>
 public static class NavTerrainNames
 {
-    // ref: D:\refs\vmangos@0e3ff01\src\game\Maps\MoveMapSharedDefines.h:40-52 (NAV_GROUND 0x01, NAV_MAGMA 0x02, NAV_SLIME 0x04,
+    // ref: vmangos@0e3ff01 src/game/Maps/MoveMapSharedDefines.h:40-52 (NAV_GROUND 0x01, NAV_MAGMA 0x02, NAV_SLIME 0x04,
     // NAV_WATER 0x08, NAV_STEEP_SLOPES 0x10, the rest unused) and this repo's src/ArcaneCore.Game/Maps/Collision/CollisionContracts.cs:204.
     private const ushort KnownMask = (ushort)(NavTerrain.Ground | NavTerrain.Magma | NavTerrain.Slime | NavTerrain.Water | NavTerrain.SteepSlopes);
 

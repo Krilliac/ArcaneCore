@@ -22,6 +22,12 @@ public enum MovementChangeType
 
     /// <summary>A knock back order (vmangos KNOCK_BACK); it carries <see cref="PendingMovementChange.Knockback"/> and is never enforced.</summary>
     KnockBack,
+
+    /// <summary>
+    /// A new turn rate (vmangos RATE_CHANGE_TURN, UnitDefines.h:52); it carries <see cref="PendingMovementChange.NewValue"/>. The server took the rate when it sent the
+    /// order, so the ledger entry only gates the ack and a timeout only announces the rate (MovementControl.Enforce). It sits after the five speeds, outside <see cref="UnitSpeed.IsSpeedChange"/>.
+    /// </summary>
+    TurnRate,
 }
 
 /// <summary>The four numbers of SMSG_MOVE_KNOCK_BACK that the client must echo in its ack (vmangos knockbackInfo): direction cosine and sine, horizontal speed and vertical speed (sent negated).</summary>
@@ -139,7 +145,7 @@ public sealed partial class PendingMovementChanges
     }
 
     /// <summary>
-    /// Match a speed acknowledgement (vmangos FindPendingMovementSpeedChange, Unit.cpp:6893-6925): the same counter and
+    /// Match a speed acknowledgement (vmangos FindPendingMovementSpeedChange, Unit.cpp:6870): the same counter and
     /// type, and a speed within 0.01 of the one that was sent. The matching change is removed.
     /// </summary>
     public bool TryAcknowledgeSpeed(uint counter, MovementChangeType type, float speed)
