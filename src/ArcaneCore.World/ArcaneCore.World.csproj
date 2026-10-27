@@ -12,6 +12,13 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The platforms of the self-contained release archives (tools/ops/deploy/publish-binaries.sh). Declared here so a restore records
+         every runtime-specific target in packages.lock.json and the script can restore each rid in locked mode. The script selects one with
+         -p:ReleaseRid=<rid> rather than -r: a global RuntimeIdentifier would also reach every referenced library, whose lock files carry no
+         rid targets (NU1004). A property of this project alone does not. Without ReleaseRid the project builds exactly as before. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;win-arm64;linux-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(ReleaseRid)' != ''">$(ReleaseRid)</RuntimeIdentifier>
+    <SelfContained Condition="'$(ReleaseRid)' != ''">true</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>

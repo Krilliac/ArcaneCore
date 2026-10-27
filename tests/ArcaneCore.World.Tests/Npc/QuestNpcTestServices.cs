@@ -102,6 +102,9 @@ internal sealed class MemoryQuestStore : ICharacterQuestStore
 
     public CharacterQuestStatus Stored(int characterId, uint quest) => _quests[(characterId, quest)];
 
+    public bool TryGetStored(int characterId, uint quest, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CharacterQuestStatus? row)
+        => _quests.TryGetValue((characterId, quest), out row);
+
     public Task<CharacterQuestData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
     {
         if (FailRead)

@@ -35,7 +35,8 @@ public sealed class InventoryItemService(
             t.Bonding, t.RequiredReputationFaction, t.RequiredReputationRank, t.RequiredHonorRank, t.RequiredLevel)
         : null;
 
-    public uint GetItemCount(Player player, uint itemId, bool inBankAlso) => player.Inventory.GetItemCount(itemId, inBankAlso);
+    public uint GetItemCount(Player player, uint itemId, bool inBankAlso, IReadOnlySet<ObjectGuid>? exclude = null)
+        => player.Inventory.GetItemCount(itemId, inBankAlso, exclude: exclude is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null);
 
     public ItemsResult CanStoreNewItem(Player player, uint itemId, uint count)
         => player.Inventory.CanStoreNewItem(itemId, count, [], out _);
