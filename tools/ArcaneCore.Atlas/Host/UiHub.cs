@@ -26,6 +26,8 @@ public sealed class UiConnection
     private readonly Channel<string> _events;
     private long _droppedEvents;
     private readonly LogGate _droppedEventsLog;
+    private int _refusalSendPending;
+    private long _droppedRefusals;
 
     internal static readonly TimeSpan DroppedEventsLogInterval = TimeSpan.FromSeconds(10);
 
@@ -85,6 +87,24 @@ public sealed class UiConnection
     /// <summary>Answers left in the bad-message bucket (refilled by elapsed time); only the receive loop touches it.</summary>
     internal double MessageErrorTokens { get; set; } = AtlasServer.MessageErrorBurst;
 
+    /// <summary>Refusal replies (a command past the in-flight cap) currently waiting on or in a send: 0 or 1.</summary>
+    internal int PendingRefusalSends => Volatile.Read(ref _refusalSendPending);
+
+    /// <summary>Refusal replies dropped because the previous one was still being sent, over the connection's life.</summary>
+    internal long DroppedRefusals => Interlocked.Read(ref _droppedRefusals);
+
+    /// <summary>Takes the connection's single refusal slot; false when a refusal send is still outstanding.</summary>
+    internal bool TryBeginRefusalSend() => Interlocked.CompareExchange(ref _refusalSendPending, 1, 0) == 0;
+
+    /// <summary>Frees the refusal slot taken by <see cref="TryBeginRefusalSend"/>.</summary>
+    internal void EndRefusalSend() => Volatile.Write(ref _refusalSendPending, 0);
+
+    /// <summary>Counts a refusal reply that was dropped instead of queued.</summary>
+    internal void CountDroppedRefusal() => Interlocked.Increment(ref _droppedRefusals);
+
+    /// <summary>The gate every frame is sent under; tests hold it to stall the connection's sends.</summary>
+    internal SemaphoreSlim SendGate => _sendGate;
+
     internal ChannelReader<string> PendingEvents => _events.Reader;
 
     internal void EnqueueEvent(string json) => _events.Writer.TryWrite(json);
@@ -97,6 +117,8 @@ public sealed class UiConnection
     /// <summary>
     /// True at most once per <see cref="DroppedEventsLogInterval"/> when events were dropped; <paramref name="dropped"/> is every drop since the
     /// previous admitted line. The count is taken only when the gate admits, so drops in between accumulate instead of being lost.
+    /// The pump asks only after a successful send, so drops at the end of a burst (no further event follows) are reported on the next
+    /// successful send, not when the burst ends.
     /// </summary>
     internal bool TryReportDroppedEvents(out long dropped)
     {
@@ -364,6 +386,9 @@ public sealed class UiHub
 
         public long LastActiveStamp { get; set; } = activeStamp;
     }
+
+    /// <summary>The registered connection with this id, or null.</summary>
+    internal UiConnection? Find(string id) => _connections.GetValueOrDefault(id);
 
     internal UiConnection Add(WebSocket socket, string id)
     {

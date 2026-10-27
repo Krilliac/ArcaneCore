@@ -36,8 +36,8 @@ public sealed partial class AtlasServer
     internal const int MaxCommandsInFlight = 8;
 
     /// <summary>
-    /// Answers to bad messages (not a JSON object with a string <c>op</c>, an unknown op, a malformed <c>command</c>, or a command
-    /// refused by <see cref="MaxCommandsInFlight"/>) come from a token bucket of this many per connection, refilled by one per
+    /// Answers to bad messages (not a JSON object with a string <c>op</c>, an unknown op, or a malformed <c>command</c>) come from a
+    /// token bucket of this many per connection, refilled by one per
     /// <see cref="MessageErrorRefill"/>. A bad message with the bucket empty closes the socket with a policy-violation status.
     /// </summary>
     internal const int MessageErrorBurst = 16;
@@ -154,6 +154,10 @@ public sealed partial class AtlasServer
             if (connection is not null)
             {
                 _hub.Remove(connection);
+                if (connection.DroppedRefusals > 0)
+                {
+                    _log.LogWarning("UI {Connection} had {Count} command refusals dropped: it kept sending commands past the cap of {Cap} while a refusal was still being sent.", connection.Id, connection.DroppedRefusals, MaxCommandsInFlight);
+                }
 
                 // The follower left: the host stops moving the shared camera for it.
                 _context.View.ReleaseFollow($"{UiHub.OriginPrefix}{connection.Id}");
@@ -310,12 +314,34 @@ public sealed partial class AtlasServer
     /// <summary>
     /// Answers a command past <see cref="MaxCommandsInFlight"/> with the <c>result</c> shape <see cref="RunCommandAsync"/> sends, failed
     /// as <see cref="CommandException.Unavailable"/>. A refusal is a well-formed command, not a bad message: it is never charged to the
-    /// error budget, so a user who keeps clicking while the world thread stalls is answered rather than disconnected.
+    /// error budget, so a user who keeps clicking while the world thread stalls is answered rather than disconnected. At most one
+    /// refusal send is outstanding per connection: while one is still waiting for the socket, a further refusal is dropped without a
+    /// reply and counted in <see cref="UiConnection.DroppedRefusals"/>, so a client that floods commands cannot queue unbounded
+    /// frames behind a stalled send. A dropped refusal never closes the socket; the client's next command is answered again.
     /// </summary>
     private void RefuseCommand(UiConnection connection, JsonNode? id, string name, CancellationToken ct)
     {
+        if (!connection.TryBeginRefusalSend())
+        {
+            connection.CountDroppedRefusal();
+            return;
+        }
+
         var result = new CommandResult(name, false, null, CommandException.Unavailable, $"{MaxCommandsInFlight} commands are already running on this connection; send it again after one of their results arrives.", 0);
-        _ = SendQuietlyAsync(connection, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString(), ct);
+        _ = SendRefusalAsync(connection, new JsonObject { ["op"] = "result", ["id"] = id, ["result"] = result.ToJson() }.ToJsonString(), ct);
+    }
+
+    /// <summary>Sends a refusal and frees the connection's single refusal slot when the send ends, however it ends.</summary>
+    private static async Task SendRefusalAsync(UiConnection connection, string json, CancellationToken ct)
+    {
+        try
+        {
+            await SendQuietlyAsync(connection, json, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            connection.EndRefusalSend();
+        }
     }
 
     /// <summary>True when a bad message may be answered now. Runs on the connection's receive loop, the only writer of the bucket.</summary>

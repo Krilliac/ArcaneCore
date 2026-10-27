@@ -17,7 +17,7 @@ public sealed class HostSocketBoundsTests
     private static JsonObject Command(int id, string name) => new() { ["op"] = "command", ["id"] = id, ["name"] = name, ["args"] = new JsonObject() };
 
     [Fact]
-    public async Task ACommandFlood_NeverRunsMoreThanTheCapAtOnce_AndEachRefusedCommandIsAnswered()
+    public async Task ACommandFlood_NeverRunsMoreThanTheCapAtOnce_AndEachRefusedCommandIsAnsweredOrCounted()
     {
         int running = 0;
         int peak = 0;
@@ -50,7 +50,8 @@ public sealed class HostSocketBoundsTests
             await ui.SendAsync(Command(i, "test.gate"));
         }
 
-        // An unknown op after the flood is a barrier: one connection is read in order, so its error follows every refusal.
+        // An unknown op after the flood is a barrier: one connection is read in order, so its error follows every refusal. That relies on
+        // SemaphoreSlim releasing waiters FIFO: each refusal takes its place at the send gate on the receive loop before the barrier's error does.
         await ui.SendTextAsync("""{"op":"barrier"}""");
         int refused = 0;
         while (true)
@@ -68,7 +69,10 @@ public sealed class HostSocketBoundsTests
             }
         }
 
-        Assert.Equal(flood - cap, refused);
+        // Only one refusal send is outstanding at a time, so a refusal that finds the previous one still sending is counted instead of answered.
+        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
+        Assert.True(refused > 0, "no refusal was answered");
+        Assert.Equal(flood - cap, refused + connection.DroppedRefusals);
         await Wait.UntilAsync(() => Volatile.Read(ref started) == cap, "the capped commands to start");
         Assert.True(Volatile.Read(ref peak) <= cap, $"{Volatile.Read(ref peak)} commands ran at once; the cap is {cap}");
 
@@ -109,6 +113,8 @@ public sealed class HostSocketBoundsTests
         await ui.ReceiveUntilAsync(m => m.Str("op") == "result" && m.Num("id") == 7, "the status result while inside the budget");
 
         // Past the budget the host stops answering and closes the socket: four refilled answers, then the close.
+        // errors <= refilled is the bound, not an equality: the server closes as soon as the budget is spent while the client is still sending, and
+        // the client may see the socket end before it has read every answer, so the number it reads is not deterministic.
         int refilled = 4;
         time.Advance(AtlasServer.MessageErrorRefill * refilled);
         int flood = burst + 24;
@@ -140,7 +146,7 @@ public sealed class HostSocketBoundsTests
     }
 
     [Fact]
-    public async Task ThirtyRefusedCommandsDuringAStall_AreEachRefused_AndDoNotCloseTheSocket()
+    public async Task ThirtyRefusedCommandsDuringAStall_AreAnsweredOrCounted_AndDoNotCloseTheSocket()
     {
         int started = 0;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -170,6 +176,7 @@ public sealed class HostSocketBoundsTests
             await ui.SendAsync(Command(100 + i, "test.stall"));
         }
 
+        // The barrier's error follows every refusal reply because SemaphoreSlim releases send-gate waiters FIFO.
         await ui.SendTextAsync("""{"op":"barrier"}""");
         int refused = 0;
         while (true)
@@ -187,7 +194,9 @@ public sealed class HostSocketBoundsTests
             }
         }
 
-        Assert.Equal(clicks, refused);
+        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
+        Assert.True(refused > 0, "no refusal was answered");
+        Assert.Equal(clicks, refused + connection.DroppedRefusals);
         Assert.Equal(WebSocketState.Open, ui.Socket.State);
 
         release.SetResult();
@@ -201,6 +210,64 @@ public sealed class HostSocketBoundsTests
                 done++;
             }
         }
+    }
+
+    [Fact]
+    public async Task ARefusalFloodWhileSendsAreStalled_KeepsOneRefusalPending_DropsTheRest_AndLeavesTheSocketOpen()
+    {
+        int started = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using HostRig rig = await HostRig.StartAsync(
+            new AtlasServerOptions { PresenceMinInterval = TimeSpan.Zero, Time = new ManualTime() },
+            register: context => context.Commands.Register(new CommandDefinition(
+                "test.hold",
+                "Holds until the test releases it.",
+                [],
+                async (_, _) =>
+                {
+                    Interlocked.Increment(ref started);
+                    await release.Task.ConfigureAwait(false);
+                    return new JsonObject();
+                })));
+        await using UiClient ui = await UiClient.ConnectAsync(rig);
+        UiConnection connection = rig.Server!.Hub.Find(ui.ConnectionId)!;
+        int cap = AtlasServer.MaxCommandsInFlight;
+        for (int i = 1; i <= cap; i++)
+        {
+            await ui.SendAsync(Command(i, "test.hold"));
+        }
+
+        await Wait.UntilAsync(() => Volatile.Read(ref started) == cap, "the held commands to start");
+
+        // Stall every send on the connection by holding its send gate, then flood past the cap.
+        await connection.SendGate.WaitAsync();
+        int clicks = 40;
+        try
+        {
+            for (int i = 0; i < clicks; i++)
+            {
+                await ui.SendAsync(Command(100 + i, "test.hold"));
+            }
+
+            // The first refusal waits for the gate and holds the single slot; every later one is dropped and counted.
+            await Wait.UntilAsync(() => connection.DroppedRefusals == clicks - 1, "the surplus refusals to be dropped");
+            Assert.Equal(1, connection.PendingRefusalSends);
+            Assert.True(connection.DroppedRefusals > 0);
+            Assert.Equal(WebSocketState.Open, ui.Socket.State);
+        }
+        finally
+        {
+            connection.SendGate.Release();
+        }
+
+        // Once sends resume, exactly the one pending refusal is answered and the slot is free again.
+        JsonNode answer = await ui.ReceiveUntilAsync(m => m.Str("op") == "result", "the one pending refusal");
+        Assert.Equal(CommandException.Unavailable, answer.Str("result.error.code"));
+        await Wait.UntilAsync(() => connection.PendingRefusalSends == 0, "the refusal slot to free");
+        Assert.Equal(WebSocketState.Open, ui.Socket.State);
+        Assert.Equal(clicks - 1, connection.DroppedRefusals);
+
+        release.SetResult();
     }
 
     [Fact]
