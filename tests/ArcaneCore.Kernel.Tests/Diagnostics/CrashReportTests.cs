@@ -174,6 +174,19 @@ public sealed class CrashReportTests
     }
 
     [Fact]
+    public void ShouldIgnoreFirstChance_SkipsAggregateOfOnlyCancellations_ButKeepsOneHoldingARealFault()
+    {
+        // Task.WaitAll / Task.Wait at shutdown wrap the cancelled tasks' OperationCanceledException (TaskCanceledException) in an
+        // AggregateException: the same expected cancellation signal as the bare exception, thrown once per stopping wait.
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new TaskCanceledException())));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new OperationCanceledException(), new TaskCanceledException())));
+        Assert.True(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new AggregateException(new OperationCanceledException()))));
+
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new AggregateException()));
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new OperationCanceledException(), new InvalidOperationException("real bug"))));
+        Assert.False(CrashHandler.ShouldIgnoreFirstChance(new AggregateException(new InvalidOperationException("real bug"))));
+    }
+    [Fact]
     public void ShouldIgnoreFirstChance_IoExceptionInnerChainIsDepthCapped()
     {
         static IOException Wrap(int wrappers)
