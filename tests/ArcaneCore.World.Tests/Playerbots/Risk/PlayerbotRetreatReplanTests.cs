@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Playerbots;
 using Xunit;
@@ -94,6 +95,40 @@ public sealed class PlayerbotRetreatReplanTests
         Assert.True(await world.ThinkUntilAsync(5_000, () => world.Brain.Risk.Retreat.Outcome == "cornered"),
             await world.OnWorldAsync(() => $"{world.Brain.Risk.Retreat.Trace} | {world.Brain.RiskReport}"));
         Assert.False(capture.Any(PlayerbotAnomalies.Key("nav", "goal-unreachable")), capture.Describe());
+    }
+
+    /// <summary>
+    /// Review of #1492: the route plan watch suppresses a retreat's repeated refusals by blacklisting the goal, which marks a loop pending
+    /// (PlayerbotMotion.Blacklist). The brain's loop remedy runs before the retreat update, so it must not drop the fight and send the bot
+    /// exploring: the retreat still ends cornered and the bot fights its pursuer back instead of standing idle in combat.
+    /// </summary>
+    [Fact]
+    public async Task ARetreatWithNoWayOut_WhoseReplanIsSuppressed_StillEndsCorneredAndFightsBack()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(992104, health: 5000, minDamage: 1, maxDamage: 1), -3, 0));
+        await world.SeeAsync(mob);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            WorldCollision.Of(world.Host.World).Install(pathfinder: new NoWayEast(float.NegativeInfinity));
+            world.Engage(mob);
+            world.Brain.Risk.Track(player);
+            world.Brain.Risk.StartRetreat(player, [mob], "losing");
+            // What the watch's suppression does mid-retreat (PlayerbotRoutePlanWatch.Suppress): refuse the goal, mark a loop pending.
+            PlayerbotMotion.Blacklist(player, [new Vector3(player.X + 30, player.Y, player.Z)], world.Host.World.NowMs);
+            return true;
+        });
+
+        // The first think consumes the pending loop (PlayerbotBrain ConsumeLoop), so the remedy really ran mid-retreat.
+        await world.ThinkAsync();
+        Assert.False(await world.OnWorldAsync(() => PlayerbotMotion.ConsumeLoop(world.Player)), "the brain left the loop pending");
+        Assert.True(await world.OnWorldAsync(() => world.Brain.Risk.Retreat.Active || world.Brain.Risk.Retreat.Outcome == "cornered"), "the loop remedy ended the retreat");
+
+        Assert.True(await world.ThinkUntilAsync(5_000, () => world.Brain.Risk.Retreat.Outcome == "cornered"),
+            await world.OnWorldAsync(() => $"goal={world.Brain.Goal} | {world.Brain.Risk.Retreat.Trace} | {world.Brain.RiskReport}"));
+        Assert.True(await world.ThinkUntilAsync(3_000, () => ReferenceEquals(world.Player.Combat.Victim, mob) && world.Brain.Goal != PlayerbotGoalKind.Explore),
+            await world.OnWorldAsync(() => $"goal={world.Brain.Goal} victim={world.Player.Combat.Victim?.Guid} combat={world.Player.Combat.IsInCombat} | {world.Brain.Risk.Retreat.Trace}"));
     }
 
     /// <summary>No path to anything east of <paramref name="limitX"/>; straight lines elsewhere (a cliff edge east of the bot).</summary>
