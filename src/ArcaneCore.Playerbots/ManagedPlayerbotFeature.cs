@@ -112,17 +112,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private bool _stopping;
     private readonly PlayerbotThinkRotation _rotation = new();
     private readonly PlayerbotCadenceStats _cadence = new();
-    /// <summary>The main lane's measured full-pass time (<see cref="PlayerbotMainPass"/>): sizes the motion lease cap and the think-starved bound.</summary>
+    /// <summary>The main lane's measured full-pass time (<see cref="PlayerbotMainPass"/>) from the raw think gaps: sizes the motion lease cap.</summary>
     private readonly PlayerbotMainPass _mainPass = new();
+
+    /// <summary>
+    /// The same estimate from the think gaps less the world-stall time inside them (<see cref="PlayerbotThinkStarvation.WithoutStall"/>): sizes
+    /// the think-starved report bound, so a stall does not raise it for the passes after (a straggler behind the rotation is still reported).
+    /// The lease keeps the raw pass: a bot's motion must outlast the gap it really waits, stall or not.
+    /// </summary>
+    private readonly PlayerbotMainPass _reportPass = new();
 
     /// <summary>The main lane's measured full-pass time in ms, 0 before the first main-lane gap (tests).</summary>
     internal uint MainPassMs => _mainPass.Ms;
 
-    /// <summary>Test seam: sets the main-lane pass estimate; with <paramref name="pin"/> it is then held there (the samples change nothing).</summary>
+    /// <summary>The stall-free main-lane pass estimate the think-starved report bound follows, in ms, 0 before the first main-lane gap (tests).</summary>
+    internal uint ReportPassMs => _reportPass.Ms;
+
+    /// <summary>Test seam: sets both main-lane pass estimates; with <paramref name="pin"/> they are then held there (the samples change nothing).</summary>
     internal void SeedMainPassForTests(uint ms, bool pin = false)
     {
         _mainPass.Seed(ms);
         _mainPass.Pinned = pin;
+        _reportPass.Seed(ms);
+        _reportPass.Pinned = pin;
     }
     private readonly PlayerbotThinkBudget _thinkBudget = new();
     private double _lastOwnMs;
@@ -132,8 +144,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private uint _oldestSilentMs;
 
     // World-stall time (PlayerbotThinkStarvation.StallMs of the gap between two Update calls' world clock) summed since the feature started; a bot's
-    // silence is judged less the part of it that fell after its last think (ActiveBot.StalledAtThink). World thread only.
+    // silence is judged less the part of it that fell after its last think (ActiveBot.StalledAtThink). A think longer than the stall threshold is
+    // credited at once, as it ends (_inFrameStallMs), so the bots thought after it in the same tick are not credited it; the next Update adds only
+    // the part of the gap it does not explain. World thread only.
     private ulong _stalledMs;
+    // The stall the thinks of the tick since the last Update credited (TickLaneDriver.Visit), and the threshold they were judged against
+    // (PlayerbotThinkStarvation.StallThresholdMs of the real tick). World thread only.
+    private ulong _inFrameStallMs;
+    private uint _stallThresholdMs = PlayerbotThinkStarvation.StallTickMs;
     private uint _lastTickNowMs;
     private bool _tickNowPrimed;
     // Per-think attribution (PlayerbotThinkProbe, PlayerbotSlowThinkLog): which bot, goal and phase a slow think spent its time in.
@@ -182,6 +200,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// on how loaded the machine is.
     /// </summary>
     internal double? ThinkBudgetMs { get; set; }
+
+    /// <summary>
+    /// Test seam (null in production): the bot the main lane passes over without a think, as if it were behind the rotation (a straggler).
+    /// World thread only.
+    /// </summary>
+    internal Guid? HeldBackForTests { get; set; }
 
     /// <summary>The action budgets the last tick gave the combat lane and the main lane (tests).</summary>
     internal (int Combat, int Main) LastLaneActions { get; private set; }
@@ -656,7 +680,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Takes the main-lane pass estimate over from the previous feature (it is a property of the population, not of the code).</summary>
     private void RestoreMainPass(FeatureHandover handover)
     {
-        if (handover.TryGet(HandoverMainPass, out uint mainPassMs)) _mainPass.Seed(mainPassMs);
+        if (!handover.TryGet(HandoverMainPass, out uint mainPassMs)) return;
+        _mainPass.Seed(mainPassMs);
+        _reportPass.Seed(mainPassMs);
     }
 
     /// <summary>Test seam: <see cref="RestoreMainPass"/> alone.</summary>
@@ -2322,12 +2348,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return false;
             }
 
+            if (lane == PlayerbotThinkRotation.ThinkLane.Normal && feature.HeldBackForTests is { } held && bots[index].Record.BotId == held) return true;
+
             // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
             long visitStarted = Stopwatch.GetTimestamp();
             feature.Think(bots[index], budget, index);
             double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
             if (lane == PlayerbotThinkRotation.ThinkLane.Normal) feature._thinkBudget.ObserveVisit(visitMs);
             else CombatMs += visitMs;
+            // A think longer than the stall threshold stood the world still: credited now, so the bots thought after it are not (Update).
+            if (visitMs > feature._stallThresholdMs)
+            {
+                ulong excess = (ulong)Math.Min(int.MaxValue, visitMs - feature._stallThresholdMs);
+                feature._stalledMs += excess;
+                feature._inFrameStallMs += excess;
+            }
             Thinks++;
             return true;
         }
@@ -2346,7 +2381,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
         uint now = world.NowMs;
-        if (_tickNowPrimed) _stalledMs += PlayerbotThinkStarvation.StallMs(unchecked(now - _lastTickNowMs));
+        double realTickMs = _thinkBudget.RealTickMs(world.Options.TickIntervalMs);
+        if (_tickNowPrimed)
+        {
+            // The thinks of the last tick credited their own stall already (TickLaneDriver.Visit): the gap adds what they do not explain.
+            ulong gapStall = PlayerbotThinkStarvation.StallMs(unchecked(now - _lastTickNowMs), realTickMs);
+            if (gapStall > _inFrameStallMs) _stalledMs += gapStall - _inFrameStallMs;
+        }
+        _inFrameStallMs = 0;
+        _stallThresholdMs = PlayerbotThinkStarvation.StallThresholdMs(realTickMs);
         _lastTickNowMs = now;
         _tickNowPrimed = true;
         if (_pathJobs is { } pathJobs && unchecked(now - _lastPathJobSweepMs) >= 1_000)
@@ -2462,7 +2505,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         LastLaneActions = (combatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : reserve + combatBudget.Remaining);
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
         _cadence.EndTick(laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, budgetMs);
-        ReportStarvedBots(bots, now, starvedBoundMs, PlayerbotThinkStarvation.ReportBoundMs(starvedBoundMs, _mainPass.Ms));
+        ReportStarvedBots(bots, now, starvedBoundMs, PlayerbotThinkStarvation.ReportBoundMs(starvedBoundMs, _reportPass.Ms));
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
             logger.LogInformation(
@@ -2490,7 +2533,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>
     /// Reports each bot that has gone longer than <paramref name="reportBound"/> without a think (<see cref="PlayerbotThinkStarvation.ReportBoundMs"/>:
-    /// <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> raised to 1.5 x the measured full pass, so a bot behind the rotation is reported and a
+    /// <see cref="PlayerbotOptions.ThinkStarvedGapMs"/> raised to 1.5 x the measured stall-free full pass, so a bot behind the rotation is reported and a
     /// uniformly slow rotation is not), once per episode (<see cref="PlayerbotThinkStarvation"/>; the episode ends at its next think). The oldest
     /// silence it records for the first lane's yield is judged against the unraised <paramref name="bound"/>. One compare per bot per tick.
     /// </summary>
@@ -2508,7 +2551,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (active.Session.Player is not { } player || active.Session.IsInChaosProbe) continue;
             PlayerbotAnomalies.Report(player, "cadence", "think-starved",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {reportBound} ms, configured {bound} ms, full pass {_mainPass.Ms} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
+                    $"no think for {unchecked(now - active.LastUpdateMs)} ms (bound {reportBound} ms, configured {bound} ms, full pass {_reportPass.Ms} ms; {bots.Length} bots, think budget {_lastBudgetMs:F1} ms per tick)"));
         }
 
         _oldestSilentMs = oldest;
@@ -2568,6 +2611,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (!active.Paused && active.Session.State == SessionState.InWorld && _world is { } world)
         {
             uint sinceLast = unchecked(world.NowMs - active.LastUpdateMs);
+            ulong stalledSince = _stalledMs - active.StalledAtThink;
             active.LastUpdateMs = world.NowMs;
             active.StalledAtThink = _stalledMs;
             // The motion lease follows the scheduler's pass, also for a bot with no gap of its own yet (its first think skips the gap below).
@@ -2578,7 +2622,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 bool combatLane = IsCombatLane(active);
                 _cadence.RecordGap(sinceLast, combatLane);
-                if (!combatLane) _mainPass.Note(sinceLast);
+                if (!combatLane)
+                {
+                    _mainPass.Note(sinceLast);
+                    _reportPass.Note(PlayerbotThinkStarvation.WithoutStall(sinceLast, stalledSince));
+                }
                 if (measured is not null) PlayerbotMotion.NoteThinkGap(measured, sinceLast, combatLane);
             }
 

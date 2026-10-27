@@ -881,6 +881,29 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    public void SteadyTicksOverASecond_AreSlowness_NotAStallEveryTick()
+    {
+        // A world whose every tick runs 1.2 s: once the real tick is measured, the stall threshold is twice it (the real tick is held at
+        // MaxRealTickMs, so 2 s) and no tick gap of that world is a stall, so its silence and its pass are judged alike.
+        var budget = new PlayerbotThinkBudget();
+        for (int i = 0; i < 50; i++) budget.ObserveTickInterval(1200);
+        double realTickMs = budget.RealTickMs(50);
+        Assert.Equal(PlayerbotThinkBudget.MaxRealTickMs, realTickMs);
+        Assert.Equal(2000u, PlayerbotThinkStarvation.StallThresholdMs(realTickMs));
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(1200, realTickMs));
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(2000, realTickMs));
+        // A real stall in that world is still one, less the threshold.
+        Assert.Equal(14_500u, PlayerbotThinkStarvation.StallMs(16_500, realTickMs));
+        // Ticks at the nominal rate keep the fixed threshold.
+        Assert.Equal(PlayerbotThinkStarvation.StallTickMs, PlayerbotThinkStarvation.StallThresholdMs(new PlayerbotThinkBudget().RealTickMs(50)));
+        Assert.Equal(200u, PlayerbotThinkStarvation.StallMs(1200, 50));
+        Assert.Equal(0u, PlayerbotThinkStarvation.StallMs(uint.MaxValue, realTickMs)); // a clock that went backwards
+        // The report pass is fed the gap less the stall inside it, never below 0.
+        Assert.Equal(1150u, PlayerbotThinkStarvation.WithoutStall(20_150, 19_000));
+        Assert.Equal(0u, PlayerbotThinkStarvation.WithoutStall(1_000, 5_000));
+    }
+
+    [Fact]
     public async Task AWorldStall_ReportsNoStarvedBot()
     {
         // A zero budget thinks one bot per tick, in rotation (about 150 ms between the thinks of one bot): none is behind it. A 3 s command
@@ -951,6 +974,44 @@ public sealed class PlayerbotThinkLanesTests
             (int thinksNow, int reportsNow, string described) = await host.World.InvokeAsync(() => (thinks.Values.Sum(), capture.Notices.Count, capture.Describe()));
             Assert.True(thinksNow >= thinksAtWarm + 9, "the bots did not think three more cycles");
             Assert.True(reportsNow == reportsAtWarm, $"{reportsNow - reportsAtWarm} bots were reported starved though every bot waited the same: {described}");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AStragglerShortlyAfterAStall_IsStillReported()
+    {
+        // A zero budget thinks one bot per tick and each think takes 50 ms: the three bots are thought in rotation, about 150 ms apart for one bot,
+        // against a 2 s bound. The main lane then passes one bot over (a straggler) and the world thread stands still for 20 s. The first thinks
+        // after the stall come 20 s after the ones before it: taken raw, they lift the pass estimate to about 4.7 s and the report bound (1.5 x the
+        // pass) to about 7 s, where it stays for seconds while the estimate falls at 1/64 a sample (20 samples a second). The stall is not rotation
+        // time, so the report bound must not learn it: 2 s after the stall the straggler is about 3 s behind the rotation (stall excluded, the
+        // StallTickMs of the gap counted) and must be reported.
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: 0, boundMs: 2000, burnMs: 50, "Laggard");
+        try
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < deadline && !await host.World.InvokeAsync(() => feature.MainPassMs > 0 && thinks.Count == 3 && thinks.Values.All(n => n >= 5)))
+                await Task.Delay(50);
+            Guid straggler = await host.World.InvokeAsync(() =>
+            {
+                Assert.True(thinks.Count == 3 && thinks.Values.All(n => n >= 5), "the bots did not warm up");
+                Assert.Empty(capture.Notices);
+                Guid id = feature.Snapshot().Single(s => s.Name == "Laggardc").BotId;
+                feature.HeldBackForTests = id;
+                return id;
+            });
+            await host.World.InvokeAsync(() => { Thread.Sleep(20_000); return true; });
+            DateTime stallEnded = DateTime.UtcNow;
+            while (DateTime.UtcNow < stallEnded.AddSeconds(2)) await Task.Delay(50);
+            (bool reported, uint pass, string described) = await host.World.InvokeAsync(() => (
+                capture.Notices.Any(n => n.Subject.Contains("Laggardc", StringComparison.Ordinal)), feature.MainPassMs, capture.Describe()));
+            Assert.True(reported, $"the straggler {straggler} was not reported 2 s after the stall (raw pass {pass} ms): {described}");
         }
         finally
         {
