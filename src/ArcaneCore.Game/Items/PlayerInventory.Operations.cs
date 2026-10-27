@@ -94,6 +94,13 @@ public sealed partial class PlayerInventory
             return false;
         }
 
+        // Equipping from the bank needs a banker in range, like every other bank move.
+        if (InventorySlots.IsBankPos(srcBag, srcSlot) && !BankUsable)
+        {
+            SendEquipError(InventoryResult.TooFarAwayFromBank, src, null);
+            return false;
+        }
+
         InventoryResult msg = CanEquipItem(InventorySlots.NullSlot, out byte dest, src.Template, src, swap: !src.IsBag);
         if (msg != InventoryResult.Ok)
         {

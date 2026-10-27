@@ -24,6 +24,7 @@ public sealed class ItemConsumableTargetTests
 
         Assert.Equal(SpellCastResult.CastOk,
             kit.System.HandleItemUse(caster, item.BagSlot, item.Slot, 0, SpellCastTargets.ForUnit(target.Guid)));
+            kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.True(target.Health > before);
         Assert.Equal(0, item.GetInt32(UpdateFields.ItemFieldSpellCharges));
     }

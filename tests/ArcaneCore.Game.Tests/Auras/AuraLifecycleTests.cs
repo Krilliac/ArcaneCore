@@ -137,6 +137,7 @@ public sealed class AuraLifecycleTests
 
         calls.Clear();
         kit.System.HandleCastRequest(caster, DispelOne, SpellCastTargets.ForUnit(owner.Guid));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         SpellAuraHolder holder = kit.System.GetAuras(owner).Single();
         Assert.Equal(2, holder.StackAmount);

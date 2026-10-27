@@ -331,8 +331,9 @@ public static class AuctionSearch
     {
         // vmangos keeps OrderedAuctionMap keyed by buyout price (AuctionHouseMgr.cpp:71-75, 711-790), insertion order
         // (the auction id) within a key, so which rows a page shows follows the buyout price.
-        List<AuctionRecord> matches = auctions.OrderBy(a => a.Buyout).ThenBy(a => a.Id)
-            .Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable)).ToList();
+        // Filter first and sort only the matches: a narrow search over a large house no longer sorts every auction on the world thread.
+        List<AuctionRecord> matches = auctions.Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable))
+            .OrderBy(a => a.Buyout).ThenBy(a => a.Id).ToList();
         int from = (int)Math.Min(query.ListFrom, (uint)matches.Count);
         return (matches.Skip(from).Take(AuctionHouseRules.PageSize).ToList(), matches.Count);
     }

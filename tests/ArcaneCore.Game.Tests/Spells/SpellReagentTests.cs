@@ -36,6 +36,7 @@ public sealed class SpellReagentTests
         kit.System.RegisterEffect(SpellEffectName.Heal, c => countAtEffect = player.Inventory.GetItemCount(Ankh));
 
         Assert.Equal(SpellCastResult.CastOk, Cast(kit, player));
+        FlushSpellBatch(kit);
 
         Assert.Equal(1u, countAtEffect);
         Assert.Equal(1u, player.Inventory.GetItemCount(Ankh));
@@ -143,6 +144,7 @@ public sealed class SpellReagentTests
         Player player = AddPlayer(kit, 1);
         player.Health = 10;
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, master.Id, SpellCastTargets.ForSelf(), triggered: false));
+        FlushSpellBatch(kit);
         Assert.Equal(0u, player.Inventory.GetItemCount(Ankh));
         Assert.Equal(60u, player.Health);
     }
@@ -197,6 +199,7 @@ public sealed class SpellReagentTests
             notifications++;
         };
         Assert.Equal(SpellCastResult.CastOk, Cast(kit, player));
+        FlushSpellBatch(kit);
         Assert.Equal(1u, seenCount);
         Assert.Equal(1, notifications);
     }
@@ -213,6 +216,7 @@ public sealed class SpellReagentTests
         Player player = AddPlayer(kit, 1);
         player.Health = 10;
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, aura.Id, SpellCastTargets.ForSelf(), triggered: false));
+        FlushSpellBatch(kit);
         kit.Advance(1000);
         Assert.Equal(60u, player.Health);
         Assert.Equal(0u, player.Inventory.GetItemCount(Ankh));
@@ -241,6 +245,7 @@ public sealed class SpellReagentTests
             notifications++;
         };
         Assert.Equal(SpellCastResult.CastOk, Cast(kit, player));
+        FlushSpellBatch(kit);
         Assert.Equal(2, notifications);
     }
 
@@ -265,6 +270,31 @@ public sealed class SpellReagentTests
         Assert.Equal(10u, player.Health);
     }
 
+    [Fact]
+    public void WithSpellBatching_AnEquippedReagentThatMayNotBeUnequipped_FailsTheRequestAtOnce_AndHoldsNothing()
+    {
+        // The go stages the reagents after CheckCast; with a batch window the held go must run that check before it is held, so the
+        // request is answered ItemNotReady as without batching instead of CastOk followed by a failure at the boundary.
+        using var kit = new SpellTestKit(CostSpell());
+        kit.System.SpellBatchWindowMs = 400;
+        Player player = AddPlayer(kit, 0);
+        player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate
+        {
+            Entry = Ankh, Name = "Synthetic equipped reagent", Class = 4, InventoryType = 5, Stackable = 20,
+        }]);
+        player.Inventory.Load([new InventoryItemData(0, InventorySlots.Chest, new ItemInstanceData { Guid = 100, Entry = Ankh, Count = 1 })]);
+        player.UnitFlags |= UnitFlags.InCombat;
+        player.Health = 10;
+
+        Assert.Equal(SpellCastResult.ItemNotReady, Cast(kit, player));
+        Assert.Equal(0, kit.System.PendingBatchedGoes);
+        Assert.False(kit.System.HasPendingGo(player));
+
+        kit.Advance(400);
+        Assert.Equal(1u, player.Inventory.GetItemCount(Ankh));
+        Assert.Equal(10u, player.Health);
+    }
+
     internal static Player AddPlayer(SpellTestKit kit, uint ankhs, bool bank = false)
     {
         (Player player, _) = kit.AddPlayer(1);
@@ -280,6 +310,9 @@ public sealed class SpellReagentTests
     {
         Reagents = [new((int)Ankh, 1)], StartRecoveryCategory = 0, StartRecoveryTime = 0,
     };
+
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
 
     private static SpellCastResult Cast(SpellTestKit kit, Player player)
         => kit.System.HandleCastRequest(player, SpellId, SpellCastTargets.ForSelf());

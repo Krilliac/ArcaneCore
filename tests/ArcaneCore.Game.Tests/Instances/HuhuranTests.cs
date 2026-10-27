@@ -16,6 +16,15 @@ namespace ArcaneCore.Game.Tests.Instances;
 
 public sealed class HuhuranTests
 {
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Fact]
     public void HuhuranStartsCombatWhenAnAttackablePlayerEntersHerScriptedSightRange()
     {
@@ -154,6 +163,7 @@ public sealed class HuhuranTests
         Assert.True(ai.AttackStart(targets[0]));
 
         ai.OnUpdate(40_000);
+        ResolveSpellBatch(kit);
         Assert.True(kit.System.HasAura(boss, 26051));
         kit.Advance(1000);
 

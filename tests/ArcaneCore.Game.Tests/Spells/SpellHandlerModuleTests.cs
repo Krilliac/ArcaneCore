@@ -40,6 +40,7 @@ public sealed class SpellHandlerModuleTests
         kit.System.RegisterModules([typeof(GoodFixtureModule)]);
 
         kit.System.HandleCastRequest(player, 900, SpellCastTargets.ForSelf());
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.Equal(7, GoodFixtureModule.Seen);
     }

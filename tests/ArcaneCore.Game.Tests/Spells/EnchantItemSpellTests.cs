@@ -34,6 +34,7 @@ public sealed class EnchantItemSpellTests
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, spellId,
             new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = target.Guid }, triggered: false));
+            kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Equal(enchantId, target.EnchantmentId(0));
         Assert.Same(target, player.Inventory.GetItemByGuid(target.Guid));
         Assert.Null(player.Inventory.GetItemByGuid(reagent.Guid));

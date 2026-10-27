@@ -22,6 +22,15 @@ public sealed class DebugDrawOptions
     /// <summary>Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns).</summary>
     public bool Glow { get; set; } = true;
 
+    /// <summary>Milliseconds between two reads of a followed unit's path (<c>.debug vis follow</c>); it is redrawn only when it changed. 100..10000.</summary>
+    public int FollowIntervalMs { get; set; } = 500;
+
+    /// <summary>Most units one GM follows at once (<c>.debug vis follow</c>, <c>follow nearby</c>); they share <see cref="MaxMarkersPerGm"/>. 1..50.</summary>
+    public int MaxFollowedUnits { get; set; } = 10;
+
+    /// <summary>Widest <c>.debug vis follow nearby</c> radius in yards (a larger request is cut to it). 5..533.</summary>
+    public float FollowNearbyMaxRadius { get; set; } = 100f;
+
     /// <summary>
     /// The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is shipped). When set, every marker model (built-in
     /// and overridden) is checked against it at startup: an override the client does not have falls back to the built-in model with a
@@ -46,6 +55,9 @@ public sealed class DebugDrawOptions
         options.MaxMarkersPerGm = Math.Clamp(options.MaxMarkersPerGm, 1, 2000);
         options.LifetimeSeconds = Math.Clamp(options.LifetimeSeconds, 5, 3600);
         options.Spacing = float.IsFinite(options.Spacing) ? Math.Clamp(options.Spacing, 0.5f, 50f) : 2.0f;
+        options.FollowIntervalMs = Math.Clamp(options.FollowIntervalMs, 100, 10_000);
+        options.MaxFollowedUnits = Math.Clamp(options.MaxFollowedUnits, 1, 50);
+        options.FollowNearbyMaxRadius = float.IsFinite(options.FollowNearbyMaxRadius) ? Math.Clamp(options.FollowNearbyMaxRadius, 5f, 533f) : 100f;
         return options;
     }
 }

@@ -301,7 +301,8 @@ internal sealed partial class PlayerbotNavigationExecutor : IDisposable, IAsyncD
             // mutable list or a tile-backed object through the world-side completion queue.
             if (path.Points.Count > Math.Max(2, options.MaxPoints))
                 throw new InvalidOperationException("navigation answer exceeds the requested point limit");
-            var detached = new PathResult(path.Type, Array.AsReadOnly(path.Points.ToArray()));
+            // `with` keeps the answer's other facts (PathResult.StartFar, issue #1501) along with the copied points.
+            PathResult detached = path with { Points = Array.AsReadOnly(path.Points.ToArray()) };
             job.Complete(new(PlayerbotNavigationResultStatus.Completed, detached, queryDestination, regionLeg,
                 search.Capped > 0, search, watch.Elapsed));
         }

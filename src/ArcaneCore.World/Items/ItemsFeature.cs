@@ -219,8 +219,10 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         }
 
         IItemTemplateStore templates = await EnsureLoadedAsync().ConfigureAwait(false);
+        Dictionary<int, Class> classes = characters.ToDictionary(c => c.Id, c => (Class)c.Class);
         IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>> equipped =
-            await store.GetEquippedEntriesAsync(characters.Select(c => c.Id).ToList()).ConfigureAwait(false);
+            await store.GetEquippedEntriesAsync(characters.Select(c => c.Id).ToList(), (characterId, entry, slot) =>
+                templates.Find(entry) is { } template && PlayerInventory.CanOccupyOwnSlot(template, classes[characterId], slot)).ConfigureAwait(false);
         var result = new Dictionary<int, CharEnumItem[]>();
         foreach ((int id, IReadOnlyDictionary<byte, uint> slots) in equipped)
         {

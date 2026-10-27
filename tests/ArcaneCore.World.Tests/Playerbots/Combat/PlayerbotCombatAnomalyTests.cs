@@ -859,6 +859,56 @@ public sealed class PlayerbotCombatAnomalyTests
     }
 
     [Fact]
+    public async Task FoodHeldInTheSpellBatch_IsJudgedAfterItsGo_NotAsNeverConsumed()
+    {
+        // With a spell batch window the food's go waits for the boundary: a poll before it must not judge the use (nothing consumed yet),
+        // or the next real failure would already be the second one and reported.
+        await using WorldTestHost host = StartWithFood(out _);
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            AnomalyCapture cap = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(session.Player!));
+            try
+            {
+                var watch = new PlayerbotConsumableWatch();
+                SpellSystem system = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                await host.OnWorldAsync(() =>
+                {
+                    system.SpellBatchWindowMs = 400;
+                    InstallFood(host);
+                    Player player = session.Player!;
+                    Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(FoodItem, 3, out _));
+                    player.Health = 20;
+                    Item food = player.Inventory.AllItems.Single(item => item.Entry == FoodItem);
+                    PlayerbotConsumableWatch.Use use = PlayerbotConsumableWatch.Begin(player, food, system.Store.Get(FoodSpell));
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    Assert.True(session.TryManagedAction(WorldOpcode.CmsgUseItem, PlayerbotNavigation.UseItemPayload(food.BagSlot, food.Slot)));
+                    Assert.True(system.HasPendingGo(player));
+                    watch.Sent(player, use, system, 1000);
+                    watch.Poll(player, system, 2000); // the go is still held
+                    return true;
+                });
+                await host.WaitForWorldAsync(() => system.HasAura(session.Player!, FoodSpell), "the batched food landed");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    watch.Poll(player, system, 2500); // judged now: consumed, with its aura
+                    Assert.Empty(cap.OfSubsystem(PlayerbotAnomalies.Subsystem("gear")));
+
+                    // One use the server never took is a race, not yet a pattern: the batched use above was no failure.
+                    Item food = player.Inventory.AllItems.Single(item => item.Entry == FoodItem);
+                    watch.Sent(player, PlayerbotConsumableWatch.Begin(player, food, system.Store.Get(FoodSpell)), system, 5000);
+                    watch.Poll(player, system, 6000);
+                    Assert.False(cap.Any(Key("gear", "consumable-not-consumed")), cap.Describe());
+                    return true;
+                });
+            }
+            finally { cap.Dispose(); }
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
     public async Task FoodUsedTwiceButNeverConsumed_IsReported_OnceItIsASecondTime()
     {
         await using WorldTestHost host = StartWithFood(out _);

@@ -134,8 +134,8 @@ public interface IItemService
     /// <summary>The item prototype, or null when the item does not exist.</summary>
     ItemInfo? GetItem(uint itemId);
 
-    /// <summary>vmangos Player::GetItemCount.</summary>
-    uint GetItemCount(Player player, uint itemId, bool inBankAlso);
+    /// <summary>vmangos Player::GetItemCount; stacks whose guid is in <paramref name="exclude"/> (an open trade offer) do not count.</summary>
+    uint GetItemCount(Player player, uint itemId, bool inBankAlso, IReadOnlySet<ObjectGuid>? exclude = null);
 
     /// <summary>vmangos Player::CanStoreNewItem(NULL_BAG, NULL_SLOT, …).</summary>
     Items.InventoryResult CanStoreNewItem(Player player, uint itemId, uint count);

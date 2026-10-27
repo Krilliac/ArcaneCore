@@ -15,6 +15,15 @@ public sealed class EffectHandlerSharingTests
 {
     private const uint TransDoorSpell = 7700;
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     [Fact]
     public void FishingSpells_HandsAnObjectItDoesNotOwn_ToTheHandlerInstalledBefore()
     {
@@ -27,6 +36,7 @@ public sealed class EffectHandlerSharingTests
         kit.Spellbook.Teach(player, TransDoorSpell);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, TransDoorSpell, SpellCastTargets.ForSelf()));
+        ResolveSpellBatch(kit);
 
         Assert.Equal(1, ritualCalls);
     }

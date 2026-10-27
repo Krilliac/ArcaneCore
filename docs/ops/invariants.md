@@ -48,6 +48,8 @@ binds or touches a database.
 | `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows, a dump when `DOTNET_DbgEnableMiniDump=1`. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), no dump, an exit code a supervisor can match |
 | `Diagnostics:OnUnobservedTask` | `Log` | `Log`, `Exit`, `FailFast` | `Log` is the runtime's own behaviour (the exception is marked observed) made visible at Error level. `Exit`/`FailFast` as above. Default stays `Log` so a fire-and-forget task that faulted silently before this lane does not start killing production servers |
 | `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Logs every throw, caught or not, at Debug level; the hook is re-entrancy guarded |
+| `Diagnostics:CrashDialog` | `false` | `true`, `false` | a Windows message box for a crash that ends the process, after the report and the fault record and before the exit policy, which it never changes ([the crash dialog](#the-crash-dialog)). Only an interactive Windows console session opens one; anywhere else the key does nothing |
+| `Diagnostics:FaultDialog` | `false` | `true`, `false` | also a message box for the first occurrence of each new fault-ledger signature, on a background thread, one box at a time ([the crash dialog](#the-crash-dialog)) |
 
 Exit code **70** is new in `src/ArcaneCore.Kernel/Ops/ExitCodes.cs` (summary on the constant); the table in
 `docs/reference/exit-codes.md` is generated from that class by the Docs tests
@@ -83,6 +85,61 @@ committed bytes, collection counts, total allocated bytes, handle count; the inv
 Everything it reads is a volatile field or lock-free, except the statistics snapshot, whose lock `TickStats` holds only to copy
 its ring and never while calling out; nothing can wait on the world thread, so a wedged world thread still reports. The realm
 daemon has no context provider.
+
+## The crash dialog
+
+For interactive local runs, where a console scrolling past a crash is easy to miss. Both keys are off by default, because an
+unattended process must never wait on a dialog. Source: `src/ArcaneCore.Kernel/Diagnostics/CrashDialog.cs`.
+
+**When it opens.** `Diagnostics:CrashDialog` covers the crashes that end the process: an unhandled exception, an unobserved task
+exception under `OnUnobservedTask` `Exit` or `FailFast` (not under the default `Log`, where the process goes on), and a world tick
+hang that the watchdog ends with exit 70. The order on the crashing thread is unchanged except for one added step: the crash report
+(standard error and the log), then the fault-ledger record, then the dialog, then the `OnUnhandled` / `OnUnobservedTask` policy once
+the box is closed. Exit 70 stays exit 70 and `FailFast` still aborts.
+
+**Where it opens.** A dialog opens only when every one of these holds; otherwise the crash path is exactly what it was without the
+key (nothing is probed and no file is written):
+
+- the platform is Windows (the dialog is a Win32 `MessageBoxW` from user32.dll: no WinForms, no WPF, nothing that affects the Linux build);
+- `Environment.UserInteractive` is true (a Windows service is not);
+- none of standard input, output or error is redirected (a test runner, a launcher script, `> file` or `| tee`);
+- neither `CI` nor `TF_BUILD` is set in the environment.
+
+When the host starts with either key on, the `ArcaneCore.Diagnostics.Crash` log says whether dialogs can open in this session, and
+why not.
+
+**What it shows.** The daemon (`ArcaneCore.World`, `ArcaneCore.Realm`), its informational version (with the commit when the build
+stamped one) and pid; what happens when the box is closed and which key decided it; the exception type and message; the crashing
+thread's id and name; the time in UTC and local time; the fault-ledger site and signature id (`.server faults show ID` after a
+restart, from the crash journal); the paths of the crash report file, the crash journal (`crash-faults.<daemon>.jsonl`), the text log
+when `Logging:ArcaneCore:File:Enabled` is on, and the dump location when `DOTNET_DbgEnableMiniDump=1` is set; then the full stack
+trace, outer exception first and every inner exception after it. The box shows at most 40 lines of 400 characters, so its OK button
+stays on the screen; Ctrl+C in the box copies its text. Before the box opens, its full text and the whole crash report are written to
+`crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` next to the daemon (beside the crash journal); the file is written only when a dialog
+opens.
+
+**When it fails.** A dialog or report file that fails (the P/Invoke returns 0, a full disk) is recorded in the fault ledger under
+`diagnostics.crash-dialog`, a line goes to standard error, and the crash path carries on to its policy. Nothing in it can throw into
+the crash hook.
+
+**New faults.** `Diagnostics:FaultDialog` adds a box the first time each fault signature is caught and survived. The fault ledger's
+notice starts it on a background thread, so the faulting thread (the world tick, a session) never waits. At most one box is open at a
+time, and a new fault that arrives while one is open is only logged and counted. Repeats of a signature, the overflow bucket,
+terminating faults (the crash dialog has those) and the dialog's own failures never open one. The box names the exception, message,
+site, signature, thread, time, log file and the condensed `ArcaneCore.*` frames; the full exception is in the log. It takes effect
+when the host has started. The tradeoff: a burst of new signatures still means one box after another, which is why it is a separate
+key from the crash dialog.
+
+**Configuration timing.** `UseArcaneDiagnostics` binds the section before it installs the hooks, so the key applies from the first
+moment a hook exists. A crash before that call (in the world daemon, before the start-up configuration validation has finished)
+has no ArcaneCore hook at all and gets the runtime's own output. The log file path is filled in when the host starts.
+
+**Trying it on Windows.** Start a daemon from a console window (not redirected) with `--Diagnostics:CrashDialog=true`, or
+`Diagnostics.CrashDialog = true` in its `.conf`. No command crashes a server on purpose, so the probe in the Kernel test assembly does
+it: from `tests/ArcaneCore.Kernel.Tests/bin/Release/net11.0` in a console window, run
+`dotnet ArcaneCore.Kernel.Tests.dll --diagnostics-probe unhandled-dialog-live`. It installs the hooks with the crash dialog on and
+`OnUnhandled` `Exit`, throws on a thread named `probe-thrower`, shows the box, and exits 70 when it is closed. Run with redirected
+output (as `CrashProcessTests` does) it opens nothing and exits 70.
 
 ## Every invariant, and why it holds
 
@@ -178,8 +235,13 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   binding, bootstrap hooks before `Build`, the swap to the host logger at start, defaults without a section);
   `CrashProcessTests`, which start this assembly as a child process (`Program.Main`, `--diagnostics-probe`) and watch: invariant
   under `FailFast` aborts after logging the site; unhandled exception aborts (default) or exits 70; unobserved task is logged and
-  survived (default), exits 70, or aborts; an unknown policy name exits 78 before the host is built. The suite is run in both
-  `-c Debug` and `-c Release`.
+  survived (default), exits 70, or aborts; an unknown policy name exits 78 before the host is built; with the crash dialog on in a
+  forced interactive session, the dialog follows the report, the report file is written, and the process still exits 70 or aborts,
+  also when the dialog throws (the failure is recorded under `diagnostics.crash-dialog`); with the real environment and redirected
+  streams, no dialog and no file. `CrashDialogTests` cover the decision (option, platform, interactive session, each redirection,
+  CI), the composed text (inner exceptions, context, the cut to fit a screen), the report file, a failing presenter or file, the
+  new-fault dialog's first-occurrence and one-at-a-time rules, and its hosted subscription. No test opens a real window: each swaps
+  in a recording presenter. The suite is run in both `-c Debug` and `-c Release`.
 - `tests/ArcaneCore.Cryptography.Tests/Security/Srp6InvariantTests.cs`, `tests/ArcaneCore.Data.Tests/SchemaVersionInvariantTests.cs`,
   `tests/ArcaneCore.World.Tests/Ops/DiagnosticsWiringTests.cs` (config check, world context),
   `tests/ArcaneCore.World.Tests/Security/WorldAuthSessionKeyShapeTests.cs`. The existing Realm, Cryptography (8019 KATs) and
@@ -192,8 +254,8 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   `Microsoft.Extensions.Options.ConfigurationExtensions` 9.0.0 (already pulled in by `Microsoft.Extensions.Hosting` in both
   daemons) to bind the section. `ArcaneCore.Cryptography` and `ArcaneCore.Protocol` gained a project reference to the Kernel (which
   references no project) for `Invariant`; their csproj comments say so.
-- Pure C#: `Debugger.Break`, `Environment.FailFast`, `GC`, `Process` and `RuntimeInformation` are cross-platform; nothing
-  P/Invokes.
+- Pure C#: `Debugger.Break`, `Environment.FailFast`, `GC`, `Process` and `RuntimeInformation` are cross-platform. The one
+  P/Invoke is the opt-in crash dialog's `MessageBoxW` (user32.dll), reached only behind `OperatingSystem.IsWindows()`.
 
 ## Limits
 
@@ -207,3 +269,6 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   Windows reports a different code.
 - A dump on abort needs `DOTNET_DbgEnableMiniDump=1` (and `DOTNET_DbgMiniDumpName`) in the daemon's environment; this lane does
   not set it.
+- The crash dialog exists only on Windows. CI runs on Linux and every test swaps in a recording presenter, so the real message box
+  is verified by hand only (the probe in [the crash dialog](#the-crash-dialog)). A crash on a thread that is already reporting a crash
+  shows no second dialog.

@@ -169,6 +169,49 @@ public sealed class RangeLeewayTests
         Assert.Equal(expected, kit.System.CastSpell(caster, 910100, SpellCastTargets.ForUnit(target.Guid), triggered: true));
     }
 
+    // --- melee abilities (combat range) -------------------------------------------------------
+
+    private static readonly SpellInfo Strike = new()
+    {
+        Id = 2,
+        RangeIndex = SpellConstants.RangeIndexCombat,
+    };
+
+    // Two players: reach = 1.5 + 1.5 + 1.0 + 4/3 = 5.33 yd; both running adds 2.66 yd (vmangos Unit::GetCombatReachToTarget(ability = true),
+    // Unit.cpp:10380-10392; Blizzard: melee leeway works as intended, https://us.forums.blizzard.com/en/wow/t/wow-classic-not-a-bug-list/175887/23).
+    [Fact]
+    public void AMeleeAbility_GetsTheMovementLeewayWhenBothRun_AndTheOptionSwitchesItOff()
+    {
+        (Player caster, Player target) = Pair(7.5f);
+        Assert.Equal(SpellCastResult.OutOfRange, SpellSystem.CheckRange(caster, Strike, target, strict: true)); // 7.5 > 5.33
+
+        Move(caster, MovementFlags.Forward);
+        Assert.Equal(SpellCastResult.OutOfRange, SpellSystem.CheckRange(caster, Strike, target, strict: true)); // one runner is not enough
+
+        Move(target, MovementFlags.Forward);
+        Assert.Equal(SpellCastResult.CastOk, SpellSystem.CheckRange(caster, Strike, target, strict: true));     // 7.5 < 5.33 + 2.66
+        Assert.Equal(SpellCastResult.CastOk, SpellSystem.CheckRange(caster, Strike, target, strict: false));
+        Assert.Equal(SpellCastResult.OutOfRange, SpellSystem.CheckRange(caster, Strike, target, strict: true, movementLeeway: false));
+
+        target.Relocate(8.1f, 0, 83.5f, 0, 0);
+        Move(target, MovementFlags.Forward);
+        Assert.Equal(SpellCastResult.OutOfRange, SpellSystem.CheckRange(caster, Strike, target, strict: true)); // 8.1 > 7.99
+    }
+
+    [Fact]
+    public void AMeleeAbility_TheLeewayIsAddedAfterTheFiveYardFloor()
+    {
+        // A creature with a tiny combat reach casting at a player: reaches 0.1 + 1.5 + 1.0 + 4/3 = 3.93 < 5, so the floor is 5;
+        // 7.5 yd is inside 5 + 2.66 (it would not be inside 3.93 + 2.66 = 6.59).
+        Player player = TestWorld.CreatePlayer(2, 7.5f, 0, new FakeSession(2));
+        var creature = new TestUnit(1, 0, 0, 83.5f);
+        creature.SetFloat(UpdateFields.UnitFieldCombatreach, 0.1f);
+        Move(creature, MovementFlags.Forward);
+        Move(player, MovementFlags.Forward);
+
+        Assert.Equal(SpellCastResult.CastOk, SpellSystem.CheckRange(creature, Strike, player, strict: true));
+    }
+
     // --- dead zone (characterization: already correct before this lane; kept as guards) -------
 
     [Fact]

@@ -103,6 +103,9 @@ public sealed class PetPowerTests
         unit.SetUInt32(UpdateFields.UnitFieldPower1, current);
     }
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(PetTestKit kit) => kit.Spells.Advance(kit.Spells.System.SpellBatchWindowMs);
+
     private static uint Mana(Unit unit) => SpellSystem.GetPower(unit, PowerType.Mana);
 
     private static (Player Warlock, Creature Pet, FakeSession Session) WarlockWithPet(PetTestKit kit)
@@ -278,6 +281,7 @@ public sealed class PetPowerTests
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
 
         Assert.Equal(970u, warlock.Health);
         Assert.Equal(30u, Mana(warlock));
@@ -315,6 +319,7 @@ public sealed class PetPowerTests
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
 
         Assert.Equal(1u, warlock.Health);
         Assert.Equal(30u, Mana(warlock));
@@ -330,6 +335,7 @@ public sealed class PetPowerTests
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
         kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
 
         Assert.Equal(970u, warlock.Health);
         Assert.Equal(33u, Mana(warlock)); // (10 + 100) * 30 / 100
@@ -346,6 +352,7 @@ public sealed class PetPowerTests
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
         kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
 
         uint lost = 1000 - warlock.Health;
         Assert.InRange(lost, 72u, 73u); // 30 + 100 * 1.5/3.5 = 72.86, dithered

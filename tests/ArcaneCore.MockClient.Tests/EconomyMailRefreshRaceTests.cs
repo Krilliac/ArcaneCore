@@ -11,6 +11,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
+using System.Reflection;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.MockClient.Tests;
 
@@ -63,6 +66,120 @@ public sealed class EconomyMailRefreshRaceTests
         }
     }
 
+    [Fact]
+    public async Task AFloodOfMailListRequests_SharesOneMailboxRead_AndStillAnswers()
+    {
+        var gate = new ListReadGate();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            services => services.AddScoped<IEconomyStore>(provider => new GatedReadStore(
+                new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), gate)));
+        EconomyFeature economy = rig.Server.Services.GetRequiredService<EconomyFeature>();
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        int baseline = Volatile.Read(ref gate.Calls);
+        gate.Armed = true;
+        try
+        {
+            const int Requests = 20;
+            for (int i = 0; i < Requests; i++)
+            {
+                await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+            }
+
+            // Packets are handled in order, so the answer to this one means every list request above has been handled.
+            await rig.Receiver!.SendAsync(WorldOpcode.MsgQueryNextMailTime, [], rig.Token);
+            await rig.Receiver.ReadUntilAsync(WorldOpcode.MsgQueryNextMailTime, rig.Token);
+        }
+        finally
+        {
+            gate.Release.TrySetResult(true);
+        }
+
+        await economy.DrainAsync().WaitAsync(rig.Token);
+        await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token);
+        Assert.Equal(1, Volatile.Read(ref gate.Calls) - baseline);
+    }
+
+    [Fact]
+    public async Task LaterNonListReadBumpingReadGeneration_DoesNotDropOriginalListReply()
+    {
+        var gate = new ListReadGate();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            services => services.AddScoped<IEconomyStore>(provider => new GatedReadStore(
+                new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), gate)));
+        EconomyFeature economy = rig.Server.Services.GetRequiredService<EconomyFeature>();
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        await SeedAsync(rig);
+
+        gate.Armed = true;
+        try
+        {
+            // 1. Client requests mail list: starts a background DB read with sendList = true (generation 1).
+            await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+
+            // Wait until the list read has started and entered the store.
+            await gate.FirstReadEntered.Task.WaitAsync(rig.Token);
+
+            // 2. A later non-list read arrives (login / delete cleanup path) and bumps ReadGeneration to 2.
+            await rig.Server.World.InvokeAsync(() =>
+            {
+                Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+                typeof(EconomyFeature).GetMethod("LoadMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(economy, [receiver, false]); return true;
+            }).WaitAsync(rig.Token);
+        }
+        finally
+        {
+            gate.Release.TrySetResult(true);
+        }
+
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        // Even though generation was bumped by the non-list read, the original requester still gets their mail list.
+        byte[] result = await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token);
+        Assert.Equal(2, result[0]);
+    }
+
+    [Fact]
+    public async Task FailedNonListReadSupersedingTheListRead_StillAnswersTheWaitingListRequest()
+    {
+        var gate = new ListReadGate();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            services => services.AddScoped<IEconomyStore>(provider => new GatedReadStore(
+                new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), gate)));
+        EconomyFeature economy = rig.Server.Services.GetRequiredService<EconomyFeature>();
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        await SeedAsync(rig);
+
+        // The list read is the next store call, the superseding non-list read the one after it (it throws), and the list is read again after that.
+        gate.ThrowOnCall = Volatile.Read(ref gate.Calls) + 2;
+        gate.Armed = true;
+        try
+        {
+            await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+            await gate.FirstReadEntered.Task.WaitAsync(rig.Token);
+
+            await rig.Server.World.InvokeAsync(() =>
+            {
+                Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+                typeof(EconomyFeature).GetMethod("LoadMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(economy, [receiver, false]); return true;
+            }).WaitAsync(rig.Token);
+        }
+        finally
+        {
+            gate.Release.TrySetResult(true);
+        }
+
+        await economy.DrainAsync().WaitAsync(rig.Token);
+
+        byte[] result = await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token);
+        Assert.Equal(2, result[0]);
+        Assert.Equal(gate.ThrowOnCall + 1, Volatile.Read(ref gate.Calls));
+    }
+
     private static async Task SeedAsync(Rig rig)
     {
         await using (AsyncServiceScope itemScope = rig.Server.Services.CreateAsyncScope())
@@ -95,6 +212,48 @@ public sealed class EconomyMailRefreshRaceTests
         internal TaskCompletionSource<bool> FirstReadCaptured { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> ReleaseFirstRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int FirstReceiverId = -1;
+    }
+
+    private sealed class ListReadGate
+    {
+        internal volatile bool Armed;
+        internal int Calls;
+
+        /// <summary>The 1-based store call that throws instead of reading (0: none).</summary>
+        internal int ThrowOnCall;
+        internal TaskCompletionSource<bool> FirstReadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<bool> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class GatedReadStore(IEconomyStore inner, ListReadGate gate) : IEconomyStore
+    {
+        public async Task<IReadOnlyList<MailRecord>> GetMailsAsync(int id, CancellationToken cancellationToken = default)
+        {
+            int call = Interlocked.Increment(ref gate.Calls);
+            if (call == gate.ThrowOnCall)
+            {
+                throw new InvalidOperationException("injected mail read failure");
+            }
+
+            IReadOnlyList<MailRecord> result = await inner.GetMailsAsync(id, cancellationToken);
+            if (gate.Armed)
+            {
+                gate.FirstReadEntered.TrySetResult(true);
+                await gate.Release.Task.WaitAsync(cancellationToken);
+            }
+
+            return result;
+        }
+
+        public Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest r, CancellationToken c = default) => inner.CommitAsync(r, c);
+        public Task<bool> IsCommittedAsync(Guid id, CancellationToken c = default) => inner.IsCommittedAsync(id, c);
+        public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long n, int m, CancellationToken c = default) => inner.GetExpiredMailsAsync(n, m, c);
+        public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int id, CancellationToken c = default) => inner.GetMailsInvolvingAsync(id, c);
+        public Task<string?> GetItemTextAsync(uint id, CancellationToken c = default) => inner.GetItemTextAsync(id, c);
+        public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken c = default) => inner.GetAuctionsAsync(c);
+        public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> ids, CancellationToken c = default) => inner.GetEscrowItemsAsync(ids, c);
+        public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter f, CancellationToken c = default) => inner.GetAuctionSnapshotAsync(f, c);
+        public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken c = default) => inner.GetIdSeedAsync(c);
     }
 
     private sealed class DelayedReadStore(IEconomyStore inner, DelayedReadControl control) : IEconomyStore

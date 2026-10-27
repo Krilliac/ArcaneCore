@@ -73,6 +73,13 @@ public sealed class PlayerbotCraftingAnomalyTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS), a craft that went off waits in the batch for its go: the world runs on to the
+    /// batch boundary before the bags are read. Without batching nothing is held and this returns at once.
+    /// </summary>
+    private static Task SpellBatchGoneAsync(WorldTestHost host, Player player)
+        => host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(player), "the batched craft went off");
+
     private static bool Step(WorldSession session, PlayerbotCrafting crafting, Player player)
     {
         session.ManagedBudget = new ManagedActionBudget(5);
@@ -121,15 +128,23 @@ public sealed class PlayerbotCraftingAnomalyTests
     public async Task CraftFailed_Silent_WhenTheCastLandsAtOnce_AndWhenItIsUnderway()
     {
         // An instant recipe is over before the bot looks: the reagent is gone and the product is in the bags, not a rejected cast.
-        await RunAsync(CraftSpell(), (host, session, crafting, player) => host.OnWorldAsync(() =>
+        await RunAsync(CraftSpell(), async (host, session, crafting, player) =>
         {
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            Assert.True(Step(session, crafting, player));
-            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
-            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
-            Assert.False(capture.Any(CraftFailed), capture.Describe());
-            return true;
-        }));
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(Step(session, crafting, player));
+                return true;
+            });
+            await SpellBatchGoneAsync(host, player);
+            await host.OnWorldAsync(() =>
+            {
+                Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+                Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+                Assert.False(capture.Any(CraftFailed), capture.Describe());
+                return true;
+            });
+        });
 
         // A cast with a cast bar is in progress when the bot looks: still not a rejection.
         await RunAsync(CraftSpell(castTimeMs: 2000), (host, session, crafting, player) => host.OnWorldAsync(() =>
@@ -144,19 +159,27 @@ public sealed class PlayerbotCraftingAnomalyTests
     [Fact]
     public async Task CraftFailed_Silent_WhenBotIsSittingOrInDisallowedShapeshiftForm()
     {
-        await RunAsync(CraftSpell(), (host, session, crafting, player) => host.OnWorldAsync(() =>
+        await RunAsync(CraftSpell(), async (host, session, crafting, player) =>
         {
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            player.StandState = StandState.Sit;
-            player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Cat);
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                player.StandState = StandState.Sit;
+                player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Cat);
 
-            Assert.True(Step(session, crafting, player));
-            Assert.Equal(StandState.Stand, player.StandState);
-            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
-            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
-            Assert.False(capture.Any(CraftFailed), capture.Describe());
-            return true;
-        }));
+                Assert.True(Step(session, crafting, player));
+                return true;
+            });
+            await SpellBatchGoneAsync(host, player);
+            await host.OnWorldAsync(() =>
+            {
+                Assert.Equal(StandState.Stand, player.StandState);
+                Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+                Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+                Assert.False(capture.Any(CraftFailed), capture.Describe());
+                return true;
+            });
+        });
     }
 
     [Fact]
@@ -172,28 +195,35 @@ public sealed class PlayerbotCraftingAnomalyTests
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = Product, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
         };
 
-        await RunAsync(stealthBlockedRecipe, (host, session, crafting, player) => host.OnWorldAsync(() =>
+        await RunAsync(stealthBlockedRecipe, async (host, session, crafting, player) =>
         {
-            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            SpellSystem spellSystem = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            using AnomalyCapture capture = await host.OnWorldAsync(() => PlayerbotAnomalies.CaptureFor(player));
+            await host.OnWorldAsync(() =>
+            {
+                // 1. When the bot is in Stealth and the recipe forbids Stealth via StancesNot, EnsureReadyForCraftCast clears the form
+                // (using real SpellShapeshiftForm flags so GetErrorAtShapeshiftedCast detects the restriction) and crafts cleanly.
+                player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Stealth);
+                Assert.True(Step(session, crafting, player));
+                return true;
+            });
+            await SpellBatchGoneAsync(host, player);
+            await host.OnWorldAsync(() =>
+            {
+                SpellSystem spellSystem = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                Assert.Equal(0, player.GetByte(UpdateFields.UnitFieldBytes1, 2));
+                Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+                Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+                Assert.False(capture.Any(CraftFailed), capture.Describe());
 
-            // 1. When the bot is in Stealth and the recipe forbids Stealth via StancesNot, EnsureReadyForCraftCast clears the form
-            // (using real SpellShapeshiftForm flags so GetErrorAtShapeshiftedCast detects the restriction) and crafts cleanly.
-            player.SetByte(UpdateFields.UnitFieldBytes1, 2, (byte)ShapeshiftForm.Stealth);
-            Assert.True(Step(session, crafting, player));
-            Assert.Equal(0, player.GetByte(UpdateFields.UnitFieldBytes1, 2));
-            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
-            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
-            Assert.False(capture.Any(CraftFailed), capture.Describe());
-
-            // 2. While the recipe's 5s cooldown is active after the first craft, TryCraft skips it without casting or reporting craft-failed.
-            Assert.False(spellSystem.IsSpellReady(player, stealthBlockedRecipe));
-            Assert.False(Step(session, crafting, player));
-            Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
-            Assert.Equal(1u, player.Inventory.GetItemCount(Product));
-            Assert.False(capture.Any(CraftFailed), capture.Describe());
-            return true;
-        }));
+                // 2. While the recipe's 5s cooldown is active after the first craft, TryCraft skips it without casting or reporting craft-failed.
+                Assert.False(spellSystem.IsSpellReady(player, stealthBlockedRecipe));
+                Assert.False(Step(session, crafting, player));
+                Assert.Equal(2u, player.Inventory.GetItemCount(Reagent));
+                Assert.Equal(1u, player.Inventory.GetItemCount(Product));
+                Assert.False(capture.Any(CraftFailed), capture.Describe());
+                return true;
+            });
+        });
 
         SpellInfo equippedWeaponRecipe = new()
         {

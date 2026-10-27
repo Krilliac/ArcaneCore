@@ -92,7 +92,7 @@ public sealed class CraftingFeatureTests
         await using (WorldTestClient crafter = await host.EnterWorldAsync("CRAFTER", "Crafter"))
         await using (WorldTestClient partner = await host.EnterWorldAsync("PARTNER", "Partner"))
         {
-            (SpellCastResult offered, SpellCastResult shown, uint clothLeft, uint made) = await host.OnWorldAsync(() =>
+            (SpellCastResult offered, SpellCastResult shown) = await host.OnWorldAsync(() =>
             {
                 Player player = host.World.FindOnlinePlayer("Crafter")!;
                 Player other = host.World.FindOnlinePlayer("Partner")!;
@@ -114,7 +114,16 @@ public sealed class CraftingFeatureTests
                 trade.SideOf(player)[TradeRules.NonTradedSlot] = stack.Guid;
                 Assert.False(spells.System.ReagentTradeFilter!(player, stack));
                 SpellCastResult shownOnly = spells.System.HandleCastRequest(player, spellId, SpellCastTargets.ForSelf());
-                return (inTrade, shownOnly, player.Inventory.GetItemCount(cloth), player.Inventory.GetItemCount(bandage));
+                return (inTrade, shownOnly);
+            });
+
+            // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the craft goes off at the batch boundary: the bags are read after it.
+            await host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System
+                .HasPendingGo(host.World.FindOnlinePlayer("Crafter")!), "the batched craft went off");
+            (uint clothLeft, uint made) = await host.OnWorldAsync(() =>
+            {
+                Player player = host.World.FindOnlinePlayer("Crafter")!;
+                return (player.Inventory.GetItemCount(cloth), player.Inventory.GetItemCount(bandage));
             });
 
             Assert.Equal(SpellCastResult.ItemNotReady, offered);

@@ -52,7 +52,10 @@ internal sealed partial class PlayerbotBrain
             agent.Request(player.MapId, _policyFeatures, open, now, ThinkCount);
         }
         if (verdict.Promote is not { } goal) return false;
+        Opportunities.ScanDeferred = false;
         if (TryPromotedGoal(player, goal, interval)) return true;
+        // A find's route is still being searched: no verdict yet, so nothing is refused and the promotion stands for the next think.
+        if (goal == PlayerbotPolicyGoal.Opportunity && Opportunities.ScanDeferred) return false;
         // Its rules said no (sickness, a quest target in sight, nothing to do there): the ladder decides for the rest of this snapshot.
         agent.Refuse();
         return false;

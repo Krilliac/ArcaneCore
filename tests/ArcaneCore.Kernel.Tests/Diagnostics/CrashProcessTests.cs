@@ -107,6 +107,94 @@ public sealed class CrashProcessTests
         Assert.Contains("UnhandledExceptionPolicy", result.StandardError, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CrashDialog_InAnInteractiveSession_ShowsAfterTheReport_WritesTheReportFile_AndStillExits70()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("unhandled-dialog", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        Assert.DoesNotContain(Program.SurvivedMarker, result.StandardOutput, StringComparison.Ordinal);
+        AssertReport(result.StandardError, "unhandled exception (AppDomain.UnhandledException)", "probe-unhandled-message");
+        string stderr = result.StandardError.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int reportEnd = stderr.IndexOf("==== end of crash report ====", StringComparison.Ordinal);
+        int dialog = stderr.IndexOf("CRASH-DIALOG title=", StringComparison.Ordinal);
+        Assert.True(reportEnd >= 0 && dialog > reportEnd, "the dialog must come after the crash report is written");
+        Assert.Contains("CRASH-DIALOG title=ArcaneCore.Kernel.Tests crashed: InvalidOperationException", stderr, StringComparison.Ordinal);
+        Assert.Contains("When you close this box the process exits with code 70 (Diagnostics:OnUnhandled = Exit).", stderr, StringComparison.Ordinal);
+        Assert.Contains("Fault ledger: site unhandled, signature ", stderr, StringComparison.Ordinal);
+        Assert.Contains("Thread: ", stderr, StringComparison.Ordinal);
+        Assert.Contains("\"probe-thrower\"", stderr, StringComparison.Ordinal);
+        Assert.Contains("System.FormatException: probe-inner-message", stderr[dialog..], StringComparison.Ordinal);
+
+        string file = Assert.Single(Directory.GetFiles(directory.Path, "crash-report.ArcaneCore.Kernel.Tests.*Z.txt"));
+        Assert.Contains("Full report: " + file, stderr, StringComparison.Ordinal);
+        string written = File.ReadAllText(file);
+        Assert.Contains("System.FormatException: probe-inner-message", written, StringComparison.Ordinal);
+        Assert.Contains("==== ArcaneCore crash report: unhandled exception", written, StringComparison.Ordinal);
+        Assert.Contains("[probe]\n  probe context line: 4711", written, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDialog_UnderTheFailFastPolicy_StillAborts()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("unhandled-dialog-failfast", directory.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.NotEqual(ExitCodes.UnhandledException, result.ExitCode);
+        Assert.Contains("When you close this box the process aborts (Environment.FailFast; Diagnostics:OnUnhandled = FailFast).", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(Program.SurvivedMarker, result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDialog_ThatThrows_IsRecordedAndReported_AndTheCrashStillExits70()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("unhandled-dialog-throws", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        AssertReport(result.StandardError, "unhandled exception (AppDomain.UnhandledException)", "probe-unhandled-message");
+        Assert.Contains("FAULT-NOTICED site=unhandled type=System.InvalidOperationException", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("FAULT-NOTICED site=diagnostics.crash-dialog type=System.InvalidOperationException", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("crash dialog: the crash dialog failed: InvalidOperationException: probe-dialog-failure", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDialog_WithTheRealEnvironment_AndRedirectedStreams_OpensNothing_AndExits70AsBefore()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("unhandled-dialog-live", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        AssertReport(result.StandardError, "unhandled exception (AppDomain.UnhandledException)", "probe-unhandled-message");
+        Assert.DoesNotContain("crash dialog:", result.StandardError, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(directory.Path));
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "arcanecore-crash-dialog-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A file still held open is left for the temp cleaner.
+            }
+        }
+    }
+
     private static void AssertReport(string stderr, string title, string message)
     {
         Assert.Contains("==== ArcaneCore crash report: " + title, stderr, StringComparison.Ordinal);
