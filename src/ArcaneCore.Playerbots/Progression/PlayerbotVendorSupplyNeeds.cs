@@ -1,4 +1,6 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Bots.Progression;
@@ -27,9 +29,77 @@ internal sealed class PlayerbotVendorSupplyNeeds
 
     private bool _hasBook;
 
+    /// <summary>The time-to-live backstop of a read: a change no stamp covers (a skill, an enchant) is seen within it.</summary>
+    internal const uint CacheTtlMs = 10_000;
+
+    /// <summary>How many times the spellbook was read (<see cref="Refresh"/>): the cache's test seam.</summary>
+    internal int Refreshes { get; private set; }
+
+    /// <summary>
+    /// <see cref="Refresh"/> when what the answer depends on may have changed since the last read; otherwise keep the last read.
+    /// </summary>
+    /// <para>
+    /// The stamps: the spell store and spellbook instances; the bot's known-spell snapshot (<see cref="SpellbookCache.GetSpells"/> hands out
+    /// the same instance until the book changes, so a learned or forgotten spell is a new reference); its level and money; and a hash of
+    /// every stored item (guid, entry, stack count, permanent enchantment, in walk order) plus the equipped slots, which covers a buy,
+    /// a sale, a craft, a loot, an equip and an enchant. <see cref="CacheTtlMs"/> is the backstop for what no stamp covers (a skill rank
+    /// that changes whether an item can be used).
+    /// </para>
+    internal bool RefreshIfChanged(Player player, SpellStore? store, SpellbookCache? spellbook, uint nowMs)
+    {
+        IReadOnlyList<uint>? spells = store is not null && spellbook is not null ? spellbook.GetSpells(player) : null;
+        ulong inventory = InventoryStamp(player);
+        if (_stamped && ReferenceEquals(_stampStore, store) && ReferenceEquals(_stampBook, spellbook) && ReferenceEquals(_stampSpells, spells)
+            && _stampLevel == player.Level && _stampMoney == player.Money && _stampInventory == inventory
+            && unchecked(nowMs - _stampAt) < CacheTtlMs)
+            return false;
+
+        Refresh(player, store, spellbook);
+        _stamped = true;
+        _stampStore = store;
+        _stampBook = spellbook;
+        _stampSpells = spells;
+        _stampLevel = player.Level;
+        _stampMoney = player.Money;
+        _stampInventory = inventory;
+        _stampAt = nowMs;
+        return true;
+    }
+
+    private bool _stamped;
+    private SpellStore? _stampStore;
+    private SpellbookCache? _stampBook;
+    private IReadOnlyList<uint>? _stampSpells;
+    private byte _stampLevel;
+    private uint _stampMoney, _stampAt;
+    private ulong _stampInventory;
+
+    /// <summary>
+    /// A hash of the bot's stored items (<see cref="PlayerInventory.AllItems"/>: guid, entry, stack count and permanent enchantment of
+    /// each, in walk order) and of which item sits in each equipment slot. One pass over the bags, no allocation: far cheaper than the
+    /// spellbook read it guards (every known recipe weighed against the inventory).
+    /// </summary>
+    internal static ulong InventoryStamp(Player player)
+    {
+        const ulong Prime = 1099511628211UL;
+        ulong hash = 14695981039346656037UL;
+        foreach (Item item in player.Inventory.AllItems)
+        {
+            hash = (hash ^ item.Guid.Value) * Prime;
+            hash = (hash ^ item.Entry) * Prime;
+            hash = (hash ^ item.Count) * Prime;
+            hash = (hash ^ item.GetUInt32(UpdateFields.ItemFieldEnchantment)) * Prime;
+        }
+
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+            hash = (hash ^ (player.Inventory.GetItem(InventorySlots.Bag0, slot)?.Guid.Value ?? 0UL) ^ ((ulong)slot << 56)) * Prime;
+        return hash;
+    }
+
     /// <summary>Read the bot's spellbook as of now (world thread). Without a store or a spellbook only the common tools count.</summary>
     internal void Refresh(Player player, SpellStore? store, SpellbookCache? spellbook)
     {
+        Refreshes++;
         _tools.Clear();
         _reagents.Clear();
         _hasBook = store is not null && spellbook is not null;

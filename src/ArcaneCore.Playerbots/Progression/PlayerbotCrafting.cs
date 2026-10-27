@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -638,19 +639,47 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return 0f;
     }
 
+    /// <summary>Spellbook walks for <see cref="IsReagentForKnownRecipe"/> on this thread: the test seam of its index.</summary>
+    [ThreadStatic] private static int t_reagentIndexBuilds;
+
+    internal static int ReagentIndexBuilds => t_reagentIndexBuilds;
+
+    /// <summary>
+    /// Per known-spell snapshot (<see cref="SpellbookCache.GetSpells"/> hands out one instance per bot until its book changes, so a learned or
+    /// forgotten spell is a new key): the items any of those spells uses as a reagent, with the spell store it was read from.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IReadOnlyList<uint>, KnownRecipeReagents> ReagentIndex = new();
+
+    private sealed record KnownRecipeReagents(SpellStore Store, HashSet<uint> Items);
+
+    /// <summary>
+    /// Whether a known spell uses <paramref name="reagentItemId"/> as a reagent (count above 0). The spellbook is walked once per book
+    /// snapshot and spell store into a set: <see cref="CraftPriority"/> asked this of every craftable recipe on every think, a spellbook walk
+    /// per recipe (live 2026-10-27, H1: CraftPriority/IsReagentForKnownRecipe 6.5% of think time).
+    /// </summary>
     private static bool IsReagentForKnownRecipe(Player player, uint reagentItemId, SpellStore store, SpellbookCache spellbook)
     {
-        foreach (uint spellId in spellbook.GetSpells(player))
+        IReadOnlyList<uint> spells = spellbook.GetSpells(player);
+        if (!ReagentIndex.TryGetValue(spells, out KnownRecipeReagents? index) || !ReferenceEquals(index.Store, store))
         {
-            if (store.Get(spellId) is not { } spell)
-                continue;
-            for (int r = 0; r < spell.Reagents.Count; r++)
+            t_reagentIndexBuilds++;
+            var items = new HashSet<uint>();
+            foreach (uint spellId in spells)
             {
-                if (spell.Reagents[r].ItemId == reagentItemId && spell.Reagents[r].Count > 0)
-                    return true;
+                if (store.Get(spellId) is not { } spell)
+                    continue;
+                for (int r = 0; r < spell.Reagents.Count; r++)
+                {
+                    if (spell.Reagents[r].Count > 0)
+                        items.Add(spell.Reagents[r].ItemId);
+                }
             }
+
+            index = new KnownRecipeReagents(store, items);
+            ReagentIndex.AddOrUpdate(spells, index);
         }
-        return false;
+
+        return index.Items.Contains(reagentItemId);
     }
 
     /// <summary>

@@ -1359,7 +1359,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         SpellbookCache? spellbook = spellFeature?.Spellbook;
         if (store is null || spellbook is null)
             return null;
-        _supplyNeeds.Refresh(player, store, spellbook);
+        _supplyNeeds.RefreshIfChanged(player, store, spellbook, session.World.NowMs);
         return _supplyNeeds;
     }
 
