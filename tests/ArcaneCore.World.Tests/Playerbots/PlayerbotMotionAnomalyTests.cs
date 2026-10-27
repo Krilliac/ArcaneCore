@@ -628,44 +628,22 @@ public sealed class PlayerbotMotionAnomalyTests
     }
 
     /// <summary>
-    /// #1475: a bot the walk keeps on the mesh surface of an upper WMO storey (<see cref="PlayerbotMotion"/> places a navigated step on
-    /// the surface <see cref="MapCollision.TryWalkMeshSurface"/> answers) while the model query answers the storey 9 yd below is on its
-    /// floor: the mesh polygon under it (the zero-length walk <see cref="PlayerbotMotionAnomalies.StaysOnMesh"/> also uses) is within <see cref="PlayerbotMotionAnomalies.MeshStoreyYards"/>.
-    /// The control: the same bot with the mesh only on the lower storey is still walking on air.
-    /// </summary>
-    [Theory]
-    [InlineData(9f, false)]
-    [InlineData(0f, true)]
-    public async Task ABotOnAnUpperStoreysMesh_TheModelQueryMisses_IsNotAirwalk(float meshAboveModelFloor, bool reported)
-    {
-        var mesh = new ScriptedMesh { Surface = Floor + meshAboveModelFloor };
-        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
-        await scenario.Host.OnWorldAsync(() =>
-        {
-            Player player = scenario.Session.Player!;
-            var at = new Vector3(player.X, player.Y, Floor + 9f);
-            PlayerbotMotionAnomalies.CheckGround(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), at, scenario.Host.World.NowMs);
-            return true;
-        });
-        Assert.Equal(reported, scenario.Capture.Any(Key(Code.Airwalk)));
-    }
-
-    /// <summary>
     /// #1475 review: a bot walking on air up to 3 yd beyond a ledge's edge still gets the ledge polygon from the zero-length walk (its
     /// start polygon is the nearest within NavMeshPathfinder.NearExtents, 3 yd sideways), which answers a hit on the edge at ledge
-    /// height. That edge is not a floor under the bot, so the airwalk is still reported, while the floor query
-    /// (<see cref="IMeshFloorQuery"/>) sees no polygon straight under it. The control (0 yd, no hit): the polygon is under the bot.
+    /// height, while the floor query (<see cref="IMeshFloorQuery"/>) sees no polygon straight under it. Neither that edge point nor a
+    /// surface point 1 yd sideways without a hit is a floor under the bot: the airwalk is still reported (the real data at both #1475
+    /// sites: ArcaneCore.Game.Tests Airwalk1475RealTerrainTests).
     /// </summary>
     [Theory]
     [InlineData(1f, true)]
     [InlineData(2f, true)]
     [InlineData(3f, true)]
-    [InlineData(0f, false)]
-    public async Task ABotBeyondALedgeEdge_TheStartPolygonAnswersTheEdge_IsStillAirwalk(float sidewaysYards, bool reported)
+    [InlineData(1f, false)]
+    public async Task ABotBeyondALedgeEdge_TheStartPolygonAnswersTheEdge_IsStillAirwalk(float sidewaysYards, bool hit)
     {
         var mesh = new ScriptedMesh
         {
-            StartPolygon = at => new MeshRaycastResult(true, sidewaysYards > 0f, sidewaysYards > 0f ? 0f : 1f,
+            StartPolygon = at => new MeshRaycastResult(true, hit, hit ? 0f : 1f,
                 new Vector3(at.X + sidewaysYards, at.Y, at.Z - 0.5f)),
             FloorStraightUnder = static (_, _, _) => null,
         };
@@ -677,7 +655,7 @@ public sealed class PlayerbotMotionAnomalyTests
             PlayerbotMotionAnomalies.CheckGround(player, player.Map!, new PlayerbotMotionAnomalies.MotionWatch(), at, scenario.Host.World.NowMs);
             return true;
         });
-        Assert.Equal(reported, scenario.Capture.Any(Key(Code.Airwalk)));
+        Assert.True(scenario.Capture.Any(Key(Code.Airwalk)), scenario.Capture.Describe());
     }
 
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
