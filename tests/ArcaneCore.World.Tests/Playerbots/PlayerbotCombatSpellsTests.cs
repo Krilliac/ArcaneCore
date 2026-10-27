@@ -46,7 +46,8 @@ public sealed class PlayerbotCombatSpellsTests
 
             await host.World.AdvanceClockAsync(450);
             Assert.Equal(before, await host.World.InvokeAsync(() => target.Health));
-            await host.World.AdvanceClockAsync(50);
+            // The cast bar ends here; with spell batching on its go waits for the batch boundary, at most one window later.
+            await host.World.AdvanceClockAsync(50 + host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs);
             Assert.Equal(before - 7, await host.World.InvokeAsync(() => target.Health));
         }
         finally
