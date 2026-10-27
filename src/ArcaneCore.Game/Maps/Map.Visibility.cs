@@ -339,6 +339,9 @@ public sealed partial class Map
 
     private readonly ArcaneCore.Kernel.Logging.LogGate _orphanLogGate = new(TimeSpan.FromMinutes(1));
 
+    /// <summary>Orphan visible objects removed by <see cref="VerifyVisibleSetInvariants"/>; counts every heal, including those whose log line was throttled (map thread, diagnostics, tests).</summary>
+    public long OrphanVisibleHeals { get; private set; }
+
     public bool VerifyVisibleSetInvariants(Player player)
     {
         if (player.VisibleObjects.Count == 0)
@@ -362,6 +365,7 @@ public sealed partial class Map
 
         foreach (ObjectGuid orphan in orphans)
         {
+            OrphanVisibleHeals++;
             // Checked on every visibility tick: one line per window; the held-back heals are counted on the next admitted line.
             if (_orphanLogGate.TryEnter(out int suppressed))
             {

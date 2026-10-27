@@ -103,5 +103,22 @@ public sealed class LogSpamThrottleTests
         FieldInfo? field = typeof(Map).GetField("_orphanLogGate", BindingFlags.NonPublic | BindingFlags.Instance);
         var gate = Assert.IsType<LogGate>(field?.GetValue(map));
         Assert.Equal(Repeats - 1, gate.Suppressed);
+        Assert.Equal(Repeats, map.OrphanVisibleHeals);
+    }
+
+    [Fact]
+    public void OrphanVisibleHeal_TwoHealsInOneWindow_AreBothCounted_ThoughOnlyOneLineIsLogged()
+    {
+        (WorldRuntime world, Player player, CapturingLogger logger) = Scene();
+        Map map = world.GetMap(0);
+        long before = map.OrphanVisibleHeals;
+        for (uint i = 0; i < 2; i++)
+        {
+            player.VisibleObjects.Add(ObjectGuid.WithEntry(HighGuid.Unit, 9999, 800_000 + i));
+            Assert.True(map.VerifyVisibleSetInvariants(player));
+        }
+
+        Assert.Equal(2, map.OrphanVisibleHeals - before);
+        Assert.Single(logger.Lines, l => l.Text.Contains("visibility invariant healed", StringComparison.Ordinal));
     }
 }
