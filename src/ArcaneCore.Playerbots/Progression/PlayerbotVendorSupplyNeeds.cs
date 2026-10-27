@@ -38,19 +38,19 @@ internal sealed class PlayerbotVendorSupplyNeeds
     /// <summary>
     /// <see cref="Refresh"/> when what the answer depends on may have changed since the last read; otherwise keep the last read.
     /// </summary>
-    /// <para>
+    /// <remarks>
     /// The stamps: the spell store and spellbook instances; the bot's known-spell snapshot (<see cref="SpellbookCache.GetSpells"/> hands out
-    /// the same instance until the book changes, so a learned or forgotten spell is a new reference); its level and money; and a hash of
-    /// every stored item (guid, entry, stack count, permanent enchantment, in walk order) plus the equipped slots, which covers a buy,
-    /// a sale, a craft, a loot, an equip and an enchant. <see cref="CacheTtlMs"/> is the backstop for what no stamp covers (a skill rank
-    /// that changes whether an item can be used).
-    /// </para>
+    /// the same instance until the book changes, so a learned or forgotten spell is a new reference); its level; and a hash of every stored
+    /// item (position, guid, entry, stack count, permanent enchantment), which covers a buy, a sale, a craft, a loot, an equip, an enchant
+    /// and a bank move. Money is not stamped: <see cref="Refresh"/> and what it calls never read it. <see cref="CacheTtlMs"/> is the
+    /// backstop for what no stamp covers (a skill rank that changes whether an item can be used).
+    /// </remarks>
     internal bool RefreshIfChanged(Player player, SpellStore? store, SpellbookCache? spellbook, uint nowMs)
     {
         IReadOnlyList<uint>? spells = store is not null && spellbook is not null ? spellbook.GetSpells(player) : null;
         ulong inventory = InventoryStamp(player);
         if (_stamped && ReferenceEquals(_stampStore, store) && ReferenceEquals(_stampBook, spellbook) && ReferenceEquals(_stampSpells, spells)
-            && _stampLevel == player.Level && _stampMoney == player.Money && _stampInventory == inventory
+            && _stampLevel == player.Level && _stampInventory == inventory
             && unchecked(nowMs - _stampAt) < CacheTtlMs)
             return false;
 
@@ -60,7 +60,6 @@ internal sealed class PlayerbotVendorSupplyNeeds
         _stampBook = spellbook;
         _stampSpells = spells;
         _stampLevel = player.Level;
-        _stampMoney = player.Money;
         _stampInventory = inventory;
         _stampAt = nowMs;
         return true;
@@ -71,12 +70,13 @@ internal sealed class PlayerbotVendorSupplyNeeds
     private SpellbookCache? _stampBook;
     private IReadOnlyList<uint>? _stampSpells;
     private byte _stampLevel;
-    private uint _stampMoney, _stampAt;
+    private uint _stampAt;
     private ulong _stampInventory;
 
     /// <summary>
-    /// A hash of the bot's stored items (<see cref="PlayerInventory.AllItems"/>: guid, entry, stack count and permanent enchantment of
-    /// each, in walk order) and of which item sits in each equipment slot. One pass over the bags, no allocation: far cheaper than the
+    /// A hash of the bot's stored items (<see cref="PlayerInventory.AllItems"/>, which walks the equipment slots first: position, guid,
+    /// entry, stack count and permanent enchantment of each). The position is mixed in because a move between two slots (a bank
+    /// deposit) can leave the walk order unchanged while changing what counts. One pass over the bags, no allocation: far cheaper than the
     /// spellbook read it guards (every known recipe weighed against the inventory).
     /// </summary>
     internal static ulong InventoryStamp(Player player)
@@ -85,14 +85,13 @@ internal sealed class PlayerbotVendorSupplyNeeds
         ulong hash = 14695981039346656037UL;
         foreach (Item item in player.Inventory.AllItems)
         {
+            hash = (hash ^ (((ulong)item.BagSlot << 8) | item.Slot)) * Prime;
             hash = (hash ^ item.Guid.Value) * Prime;
             hash = (hash ^ item.Entry) * Prime;
             hash = (hash ^ item.Count) * Prime;
             hash = (hash ^ item.GetUInt32(UpdateFields.ItemFieldEnchantment)) * Prime;
         }
 
-        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
-            hash = (hash ^ (player.Inventory.GetItem(InventorySlots.Bag0, slot)?.Guid.Value ?? 0UL) ^ ((ulong)slot << 56)) * Prime;
         return hash;
     }
 
