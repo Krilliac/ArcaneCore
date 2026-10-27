@@ -18,11 +18,21 @@ public sealed class CreatureAssistScanTests
     private const float Radius = 10f;
     private const int FarCrowd = 200;
 
+    /// <summary>Every creature is friendly to every unit (the guard search needs the guards friendly to the civilian) and hostile to none.</summary>
+    private sealed class FriendlyTown : ICreatureHostility
+    {
+        public bool IsHostile(Creature creature, Unit target) => false;
+
+        public bool CanAssist(Creature helper, Creature caller) => helper.FactionTemplate == caller.FactionTemplate;
+
+        public bool IsFriendly(Creature creature, Unit other) => true;
+    }
+
     private static CreatureTemplate GuardTemplate()
         => Template(GuardEntry) with { ExtraFlags = 0x400, ExtraFlagsDialect = CreatureExtraFlagsDialect.CMangos };
 
     /// <summary>A caller at (10, 0) with creatures inside, on and outside its call radius, and a crowd of the same faction far away.</summary>
-    private static (WorldRuntime World, CreatureMapSystem System, Player Player, Creature Caller) Seeded(IEnumerable<CreatureSpawn> nearby, params CreatureTemplate[] extra)
+    private static (WorldRuntime World, CreatureMapSystem System, Player Player, Creature Caller) Seeded(IEnumerable<CreatureSpawn> nearby, CreatureAiServices? services = null, params CreatureTemplate[] extra)
     {
         var spawns = new List<CreatureSpawn> { Spawn(1, WolfEntry, 10, 0) };
         spawns.AddRange(nearby);
@@ -32,7 +42,7 @@ public sealed class CreatureAssistScanTests
         }
 
         CreatureContent content = Content([Template(), .. extra], spawns);
-        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content, services);
         (Player player, _) = AddPlayer(world, 1, 0, 0);
         Creature caller = system.Creatures.Single(c => c.Spawn!.Guid == 1);
         return (world, system, player, caller);
@@ -79,7 +89,7 @@ public sealed class CreatureAssistScanTests
             Spawn(4, GuardEntry, 10, -25), // 25 yd, spawned later: a tie, the later one in map order wins (distance <= best)
             Spawn(5, GuardEntry, 75, 0),   // 65 yd: past the 50 yd search
             Spawn(6, WolfEntry, 12, 0),    // not a guard
-        ], GuardTemplate());
+        ], new CreatureAiServices { Hostility = new FriendlyTown() }, GuardTemplate());
         using WorldRuntime world = s.World;
 
         Creature? bruteForce = null;
@@ -97,6 +107,7 @@ public sealed class CreatureAssistScanTests
             }
         }
 
+        // The same filters as the system: not the caller, alive, out of combat, a guard, friendly (FriendlyTown: always), in sight (no geometry: always).
         Assert.NotNull(bruteForce);
         Assert.Equal(4u, bruteForce!.Spawn!.Guid);
         long before = s.System.AssistScanExamined;
