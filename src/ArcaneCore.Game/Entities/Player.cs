@@ -412,6 +412,9 @@ public sealed partial class Player : Unit
     /// <summary>Counter for forced movement changes (SMSG_FORCE_MOVE_ROOT etc.).</summary>
     public uint NextMovementCounter() => _movementCounter++;
 
+    /// <summary>The counter the next forced movement change will carry (vmangos Unit::GetMovementCounter); every counter already sent is below it.</summary>
+    public uint MovementCounter => _movementCounter;
+
     // --- logout (vmangos HandleLogoutRequestOpcode / HandleLogoutCancelOpcode) -----
 
     /// <summary>

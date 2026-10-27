@@ -21,13 +21,15 @@ public sealed class SqliteSingleWriterOptions
     /// <summary>
     /// Whether the gate is attached (always, outside tests). Not a setting: the gate is a fix and ships on (2026-10-17). With it, the dozen background write queues of the
     /// characters database are handed SQLite's single write lock in arrival order instead of polling for it from SQLite's busy handler, which removes the "database is locked"
-    /// failures that came from unfair polling. A waiter is bounded by its connection's write bound and then fails with SQLite's own busy error.
+    /// failures that came from unfair polling. An async waiter gives up when the gate has handed off to no one for its connection's write bound, or after the hard cap (four times the bound, at most 30 s unless the bound is larger) of
+    /// active waiting; a blocking waiter keeps the single bound as its total. A caller's cancellation token or budget supersedes both. It then fails with SQLite's own busy error.
     /// </summary>
     internal bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// How long (milliseconds, 0..3600000) a writer waits for the gate before it fails as busy (a test seam, not a setting). 0 (default) uses the connection's own lock-wait bound
-    /// (<c>Database:SqliteWriteTimeoutMs</c> on the characters database, the connection string's Default Timeout elsewhere), so the wait a caller sees is the one it had before.
+    /// The bound (milliseconds, 0..3600000) of a writer's wait for the gate: how long the gate may hand off to no one before the writer fails as busy, and for a blocking writer its total wait
+    /// (a test seam, not a setting). An async writer in a moving queue may wait up to the hard cap (four times the bound, at most 30 s unless the bound is larger) of active time. 0 (default)
+    /// uses the connection's own lock-wait bound (<c>Database:SqliteWriteTimeoutMs</c> on the characters database, the connection string's Default Timeout elsewhere, 30 s without one).
     /// </summary>
     internal int WaitMs { get; set; }
 

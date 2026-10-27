@@ -70,6 +70,7 @@ internal sealed class PlayerbotGroupAI
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
+    private readonly PlayerbotKite _kite;
     private readonly PlayerbotEquipment _equipment;
     private readonly PlayerbotRecovery _recovery;
     private readonly PlayerbotRisk _risk;
@@ -159,6 +160,7 @@ internal sealed class PlayerbotGroupAI
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _spells = new PlayerbotCombatSpells(session);
+        _kite = new PlayerbotKite(session, options, _spells);
         _equipment = equipment ?? new PlayerbotEquipment(session);
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _spells) { AvoidsStrongCreatures = false };
@@ -191,6 +193,21 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>What the bot did at its last think (inspection, the group stall line): <c>lead:hold-not-ready</c>, <c>fight:114:hold</c>, ...</summary>
     internal string Step { get; private set; } = "none";
+
+    private string _kiteStepLabel = "";
+    private string _kiteStep = "";
+
+    /// <summary>The kite step text for a target label, built once per label (a kite think repeats for the whole fight).</summary>
+    private string KiteStep(string targetLabel)
+    {
+        if (!string.Equals(_kiteStepLabel, targetLabel, StringComparison.Ordinal))
+        {
+            _kiteStepLabel = targetLabel;
+            _kiteStep = string.Create(CultureInfo.InvariantCulture, $"fight:{targetLabel}:kite");
+        }
+
+        return _kiteStep;
+    }
 
     /// <summary>This AI's own risk (inspection, tests): it keeps no hazards of creatures beyond a solo bot's strength.</summary>
     internal PlayerbotRisk Risk => _risk;
@@ -247,6 +264,7 @@ internal sealed class PlayerbotGroupAI
         _lootOpened = ObjectGuid.Empty;
         _spells.GroupRole = null;
         _spells.Reset();
+        _kite.Reset(_session.Player);
         _recovery.Reset();
         ForgetFight();
         _unreachable.Clear();
@@ -302,6 +320,7 @@ internal sealed class PlayerbotGroupAI
             _restUntilMs = 0;
             _lootActions.Clear();
             _spells.Reset();
+            _kite.Reset(_session.Player);
             ForgetFight();
             _wipeExitFails = 0; // revived, it stands somewhere else (the landing): a give-up on the exit from where it died does not hold there
             _deathRetired = true;
@@ -441,8 +460,8 @@ internal sealed class PlayerbotGroupAI
             // the point (the commander's own "at the rally point"), or the chase takes it off the point and the raid flaps back into a retreat.
             // A rally where the leader stands only because it found no path (RetreatNoPath) has no point to hold.
             PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
-            if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards);
-            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+            if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards, leader);
+            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards, leader);
             if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
@@ -480,7 +499,7 @@ internal sealed class PlayerbotGroupAI
     {
         Goal = PlayerbotGoalKind.Group;
         Step = "lead:" + group.State.ToString().ToLowerInvariant();
-        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
         switch (group.State)
         {
             case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
@@ -509,11 +528,16 @@ internal sealed class PlayerbotGroupAI
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
                 NoteRunProgress(group, approaching);
                 NoteApproachProgress(player, group, approach);
+                if (!approaching) NoteUnpathableApproachNear(player, group, approach);
                 return;
             case PlayerbotGroupState.Entering:
-                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; Hold(player); return; }
-                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
-                Step = WalkTo(player, group.Goal.Meeting, interval, toward: true) ? "lead:walk-entrance" : "lead:no-path-entrance";
+                if (player.MapId == group.Goal.MapId) { Step = "lead:hold-inside"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
+                // A way to the entrance that stays unplanned ends the group at the no-path bound, not at the enter step's timeout: a group let
+                // on from near an approach point it could not reach (NoteUnpathableApproachNear) often has no way to the entrance either.
+                bool entering = WalkTo(player, group.Goal.Meeting, interval, toward: true);
+                Step = entering ? "lead:walk-entrance" : "lead:no-path-entrance";
+                NoteRunProgress(group, entering);
                 return;
             case PlayerbotGroupState.Engaging:
                 if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
@@ -648,7 +672,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// A leader reports that it could (or could not) plan a way; a way that stays unplanned for <see cref="RunStuckMs"/> ends the group: a run
-    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c> or <c>no-path-to-approach</c>
+    /// with <c>no-path-to-boss</c> or <c>no-path-to-entrance</c>, a quest group with <c>no-path-to-objective</c>, <c>no-path-to-approach</c> or
+    /// (a dungeon quest group walking to the entrance) <c>no-path-to-entrance</c>
     /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
     /// </summary>
     private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
@@ -657,7 +682,7 @@ internal sealed class PlayerbotGroupAI
         if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
         bool engaging = group.State == PlayerbotGroupState.Engaging;
         group.RunFault ??= group.Run is null
-            ? (engaging ? "no-path-to-objective" : "no-path-to-approach")
+            ? (engaging ? "no-path-to-objective" : group.State == PlayerbotGroupState.Entering ? "no-path-to-entrance" : "no-path-to-approach")
             : (engaging ? "no-path-to-boss" : "no-path-to-entrance");
     }
 
@@ -689,6 +714,23 @@ internal sealed class PlayerbotGroupAI
         uint idle = unchecked(now - _approachProgressMs);
         if (idle > ApproachNoProgressMs && idle <= int.MaxValue) group.ApproachReached = true;
     }
+
+    /// <summary>
+    /// The leader can plan no way to the approach point but already stands within <see cref="UnpathableApproachYards"/> of it (3D) and no more than
+    /// <see cref="PlayerbotGroupCoordinator.ApproachHeightYards"/> above or below it: the point counts as reached
+    /// (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) instead of the group waiting at it until the travel timeout. The approach point
+    /// can lie off the mesh or in a pocket the mesh does not join to the leader's ground (the mesh is snapped at formation, from where the leader stood
+    /// then); the height bound keeps another floor from counting, and the group is never let through from beyond the radius.
+    /// </summary>
+    private static void NoteUnpathableApproachNear(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
+    {
+        if (group.ApproachReached) return;
+        if (MathF.Abs(player.Z - approach.Z) > PlayerbotGroupCoordinator.ApproachHeightYards) return;
+        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach) <= UnpathableApproachYards) group.ApproachReached = true;
+    }
+
+    /// <summary>How near the approach point (yards) a leader that can plan no way to it counts as arrived (<see cref="NoteUnpathableApproachNear"/>).</summary>
+    internal const float UnpathableApproachYards = 15f;
 
     /// <summary>How long a leader walks to the approach point without getting nearer before the point counts as reached.</summary>
     internal const uint ApproachNoProgressMs = 45_000;
@@ -1197,7 +1239,8 @@ internal sealed class PlayerbotGroupAI
 
     /// <param name="leashCentre">The waypoint of a waiting siege leader, or the retreat point of a rallying one: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent; <see cref="PlayerbotSiegeCommander.RallyYards"/> at a rally.</param>
-    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards)
+    private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards,
+        Player? leader = null)
     {
         _noPathToTarget = false;
         if (!ReferenceEquals(_target, target))
@@ -1215,6 +1258,19 @@ internal sealed class PlayerbotGroupAI
         LastTargetGuid = target.Guid;
         LastTargetEntry = targetEntry;
         if (_restUntilMs != 0) { _restUntilMs = 0; Act(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u), budgeted: false); }
+
+        // A hurt ranged bot kites within the leash of the siege waypoint or rally point, else of its leader.
+        Vector3? kiteCentre = leashCentre;
+        if (kiteCentre is null && leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map))
+            kiteCentre = new Vector3(leader.X, leader.Y, leader.Z);
+        if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk, grouped: true))
+        {
+            _route = null;
+            _rangedIdleMs = 0;
+            Step = KiteStep(targetLabel);
+            return;
+        }
+
         if (_spells.Update(player, target, interval))
         {
             _rangedIdleMs = 0;
@@ -1227,7 +1283,7 @@ internal sealed class PlayerbotGroupAI
         // while nobody fights the target closes in after RangedIdleLimitMs, as the brain does (PlayerbotBrain.Update). Before, the
         // group AI never did: a healer leading a pair stood 15-22 yards from the objective for good (replays 2026-10-11, quest 9).
         bool engaged = player.Combat.ThreatenedBy.Contains(target) || target.Combat.Victim is not null;
-        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_spells.PreferredRange(player), distance,
+        PlayerbotFightPosition position = PlayerbotBrain.DecidePosition(_kite.HoldRange(player, _spells.PreferredRange(player)), distance,
             player.Class == Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
             idleTooLong: _rangedIdleMs >= PlayerbotBrain.RangedIdleLimitMs && !engaged,
             inMeleeReach: MapCombat.CanReachWithMeleeAutoAttack(player, target));

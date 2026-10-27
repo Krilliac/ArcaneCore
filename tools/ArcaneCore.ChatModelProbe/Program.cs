@@ -56,7 +56,7 @@ using (engine)
 
     var persona = new BotChatPersona("Thorgar", Race.Dwarf, Class.Paladin, Gender.Male, 12, "Dun Morogh", "Kharanos", PlayerbotGoalKind.Quest,
         "The Troll Cave", null, false, ["gained a level"]);
-    var ask = new BotChatAsk(Guid.NewGuid(), new ObjectGuid(7), persona, new ObjectGuid(42), "Nathan", ChatType.Whisper,
+    var ask = new BotChatAsk(Guid.NewGuid(), new ObjectGuid(7), persona, new ObjectGuid(42), "Testplayer", ChatType.Whisper,
         "hey, what are you up to?", FromMaster: false, InviteAllowed: false);
     BotChatPrompt prompt = PlayerbotChatPrompts.Build(ask, []);
     var greedy = new ChatGenerationSettings(MaxNewTokens: 48, BudgetMs: 600_000, Temperature: 0f, TopK: 1, TopP: 1f, RepetitionPenalty: 1.1f, Seed: 1);

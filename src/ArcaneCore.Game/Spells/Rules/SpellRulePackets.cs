@@ -4,7 +4,7 @@ namespace ArcaneCore.Game.Spells.Rules;
 
 /// <summary>
 /// Packet builders for the spell-rule results the base <see cref="SpellPackets"/> do not cover. Layouts
-/// are the 1.12 forms in D:\refs\wow_messages\wowm_language\src\docs (cited per member); bodies only,
+/// are the 1.12 forms in wow_messages wowm_language/src/docs (cited per member); bodies only,
 /// the session adds the opcode header.
 /// </summary>
 public static class SpellRulePackets

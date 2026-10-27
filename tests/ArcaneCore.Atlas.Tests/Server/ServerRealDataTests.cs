@@ -126,8 +126,8 @@ public sealed class ServerRealDataTests(ITestOutputHelper output) : IDisposable
     {
         byte[] raw = File.ReadAllBytes(FilePath("mmaps", $"{Goldshire.MapId:D3}{Goldshire.X:D2}{Goldshire.Y:D2}.mmtile"));
 
-        // ref: D:\refs\vmangos\src\game\Maps\MoveMapSharedDefines.h:28-35 MmapTileHeader is five u32 (20 bytes), then the dtMeshHeader whose
-        // seventh int is polyCount (D:\refs\vmangos\dep\recastnavigation\Detour\Include\DetourNavMesh.h:261-269); NavMeshTile.cs:224 reads the same.
+        // ref: vmangos@0e3ff01 src/game/Maps/MoveMapSharedDefines.h:28-35 MmapTileHeader is five u32 (20 bytes), then the dtMeshHeader whose
+        // seventh int is polyCount (vmangos@0e3ff01 dep/recastnavigation/Detour/Include/DetourNavMesh.h:261-269); NavMeshTile.cs:224 reads the same.
         int headerPolys = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(20 + (6 * 4)));
         LayerBuild build = Build(LayerIds.NavPoly, Goldshire);
 
@@ -415,7 +415,7 @@ public sealed class ServerRealDataTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("passed the server's verification", bv.Status.Detail, StringComparison.Ordinal);
     }
 
-    // ref: D:\refs\vmangos\src\game\vmap\WorldModel.cpp:158-204 WmoLiquid::GetLiquidHeight
+    // ref: vmangos@0e3ff01 src/game/vmap/WorldModel.cpp:158-204 WmoLiquid::GetLiquidHeight
     internal static bool TryGetWmoLiquidHeight(ArcaneCore.Game.Maps.Collision.VMaps.WmoLiquid liquid, Vector3 pos, out float liqHeight)
     {
         liqHeight = 0;

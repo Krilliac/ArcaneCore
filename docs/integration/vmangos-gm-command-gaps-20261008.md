@@ -1,6 +1,6 @@
 # vmangos GM command paths absent from ArcaneCore
 
-Exact path comparison of `D:/refs/vmangos/src/game/Chat/Chat.cpp`'s `ChatHandler::getCommandTable` against `docs/reference/gm-commands.md` on this worktree. Parent groups are included; an equivalent operation under another path is still listed. vmangos bot, debug, console and later-era extensions are included because they are in its table. This is a name inventory, not a claim that all commands suit a 1.12.1 public realm.
+Exact path comparison of `<refs-root>/vmangos/src/game/Chat/Chat.cpp`'s `ChatHandler::getCommandTable` against `docs/reference/gm-commands.md` on this worktree. Parent groups are included; an equivalent operation under another path is still listed. vmangos bot, debug, console and later-era extensions are included because they are in its table. This is a name inventory, not a claim that all commands suit a 1.12.1 public realm.
 
 vmangos named paths: 816; current ArcaneCore paths: 205; exact paths absent: 649. (Revised after `.cheat fly`, `.cheat fixedz`, `.cheat wallclimb`, `.gm fly` and `.knockback` were added; the table below no longer lists them.)
 

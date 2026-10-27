@@ -139,10 +139,10 @@ public sealed class NavRealDataTests(ITestOutputHelper output)
             linkSizes16 += dot.LinkSize == 16 ? 1 : 0;
 
             // The terrain tile named by the file and the Detour tile inside it. The generator names a tile NNN + its tileY + its tileX
-            // (D:\refs\vmangos@0e3ff01\contrib\mmap\src\TileWorker.cpp:358), so the server's NNNXXYY key has X = generator tileY and
+            // (vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:358), so the server's NNNXXYY key has X = generator tileY and
             // Y = generator tileX; the tile spans Recast x up to (32 - tileX) * G and z up to (32 - tileY) * G (MapBuilder.cpp:503-506),
             // and the Detour coordinates are its centre's offset from the map's .mmap origin in whole tiles, truncated to int
-            // (D:\refs\vmangos@0e3ff01\contrib\mmap\src\TileWorker.cpp:813-814; the origin is the corner of the map's largest tile,
+            // (vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:813-814; the origin is the corner of the map's largest tile,
             // MapBuilder.cpp:449-460).
             float g = parameters.TileWidth;
             int expectX = (int)((((32 - key.Y) * g) - (g / 2) - parameters.Origin.X) / g);
@@ -457,7 +457,7 @@ public sealed class NavRealDataTests(ITestOutputHelper output)
 
     /// <summary>
     /// Both engines' findNearestPoly score (Detour: over the polygon only the height beyond walkableClimb counts, else the squared
-    /// distance; D:\refs\vmangos@0e3ff01\dep\recastnavigation\Detour\Source\DetourNavMesh.cpp:781-800) for the server's polygon
+    /// distance; vmangos@0e3ff01 dep/recastnavigation/Detour/Source/DetourNavMesh.cpp:781-800) for the server's polygon
     /// and the reference's, when both lie in one tile: which engine sees a different closest point.
     /// </summary>
     private static string ScoreBoth(ReferenceNavMap reference, TileKey[] tiles, NavPolyRef server, NavLocate dot, Vector3 queryRc)

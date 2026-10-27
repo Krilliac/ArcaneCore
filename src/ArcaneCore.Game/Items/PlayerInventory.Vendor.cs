@@ -70,6 +70,12 @@ public sealed partial class PlayerInventory
             return VendorSellError.CantSellItem;
         }
 
+        // vmangos refuses to sell the item being looted (ItemHandler.cpp:485-490: GetLootGuid() == pItem->GetObjectGuid()).
+        if (LootingGuid == item.Guid)
+        {
+            return VendorSellError.CantSellItem;
+        }
+
         if (count == 0)
         {
             count = item.Count;

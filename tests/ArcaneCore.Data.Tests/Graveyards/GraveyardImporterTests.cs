@@ -14,7 +14,7 @@ namespace ArcaneCore.Data.Tests.Graveyards;
 /// <summary>
 /// <c>world_safe_locs</c> and <c>game_graveyard_zone</c> import (vmangos ObjectMgr::LoadGraveyardZones,
 /// ObjectMgr.cpp:7453-7510, and LoadWorldSafeLocsFacing, ObjectMgr.cpp:7669-7704). The dumps are hand-written; nothing
-/// depends on D:\refs (the real classic-db z2815 has 122 safe locations and 191 links, checked by hand when this was written).
+/// depends on the reference checkout (the real classic-db z2815 has 122 safe locations and 191 links, checked by hand when this was written).
 /// </summary>
 public sealed class GraveyardImporterTests
 {

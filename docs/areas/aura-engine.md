@@ -1,6 +1,6 @@
 # Aura engine
 
-Status: wave 4, lane `aura-engine-completeness`. Reference: D:\refs\vmangos (primary). Everything defaults to retail 1.12.1;
+Status: wave 4, lane `aura-engine-completeness`. Reference: `<refs-root>`\vmangos (primary). Everything defaults to retail 1.12.1;
 every deliberate difference sits behind the `Auras` configuration section (class `AuraOptions`, bound by
 `SpellRulesAuraEngineFeature`).
 

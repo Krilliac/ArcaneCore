@@ -1,7 +1,7 @@
 namespace ArcaneCore.Game.Spells.Druid;
 
 /// <summary>
-/// Frenzied Regeneration's periodic conversion (D:\refs\vmangos\src\game\Spells\SpellAuras.cpp:1417-1433,
+/// Frenzied Regeneration's periodic conversion (vmangos@0e3ff01 src/game/Spells/SpellAuras.cpp:1417-1433,
 /// spell ids 22842, 22895, 22896; heal spell 22845). Each tick consumes up to 100 stored rage (10 rage; rage is
 /// stored x10) and heals stored * amount / 10 where amount is the aura amount (10/15/20 for ranks 1-3). The source
 /// dithers the float result to an integer (rand_dither); this returns the exact float.

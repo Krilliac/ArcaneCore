@@ -16,9 +16,9 @@ public enum SpellBonusKind
 /// The 1.12 spell power coefficient maths of vmangos, as pure functions of <see cref="SpellInfo"/>:
 /// cast time used for the bonus, default coefficient, number of periodic ticks and the low level
 /// penalty. Nothing here reads a unit; the entity side supplies the benefit (+damage/+healing).
-/// Sources: D:\refs\vmangos\src\game\Spells\SpellEntry.cpp:517-634 (GetCastTimeForBonus,
+/// Sources: vmangos@0e3ff01 src/game/Spells/SpellEntry.cpp:517-634 (GetCastTimeForBonus,
 /// CalculateDefaultCoefficient), :756-777 (GetAuraMaxTicks) and
-/// D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:1737-1812 (SpellBonusWithCoeffs, CalculateLevelPenalty).
+/// vmangos@0e3ff01 src/game/Objects/SpellCaster.cpp:1737-1812 (SpellBonusWithCoeffs, CalculateLevelPenalty).
 /// </summary>
 public static class SpellCoefficients
 {

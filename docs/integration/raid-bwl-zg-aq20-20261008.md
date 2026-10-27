@@ -5,7 +5,7 @@ This delivers five boss AI implementations and their supporting scripts, **not t
 
 ## Implemented and provenance
 
-Reference paths below are relative to the read-only `D:/refs/mangos-classic` (MC) or `D:/refs/vmangos` (VM) checkout.
+Reference paths below are relative to the read-only `<refs-root>/mangos-classic` (MC) or `<refs-root>/vmangos` (VM) checkout.
 The implementations are C# adaptations of the cited behavior. Where the references differ, the chosen source is explicit.
 
 | Encounter or seam | Delivered behavior | Reference file and functions |
@@ -88,7 +88,7 @@ objects, with content IDs/layouts checked against references. No multiplayer pla
 
 ## Content and limits
 
-A read-only streaming probe of `D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz` confirmed:
+A read-only streaming probe of `<refs-root>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz` confirmed:
 
 - All five creature templates: 12017, 11983, 11981, 15348, 14834.
 - Door 179365 and Sand Trap 180647. The trap has radius 0, spell 25656 and one charge; timed activation is necessary.

@@ -18,14 +18,14 @@ public sealed record SkippedArchive(string Path, string Reason);
 /// <para>Load order, lowest to highest priority:</para>
 /// <list type="number">
 /// <item>The base archives in the order the client chain lists them: <c>base, dbc, interface, misc, model, sound, speech,
-/// terrain, texture, wmo</c>. (Same list in D:\WoW-RE-Research\specs\asset-path-scheme.md:144 and D:\New folder\Worldforge\src\client_data.cpp:10-15; the vmangos
+/// terrain, texture, wmo</c>. (Same list in WoW-RE-Research specs/asset-path-scheme.md:144 and Worldforge src/client_data.cpp:10-15; the vmangos
 /// extractors open <c>model, dbc, terrain, patch, patch-2</c> and <c>terrain, model, texture, wmo, base, misc, patch, patch-2</c>
-/// with each archive searched before the ones opened earlier, D:\refs\vmangos\contrib\extractor\System.cpp:102-109,
-/// D:\refs\vmangos\contrib\vmap_extractor\vmapextract\vmapexport.cpp:331-347, D:\refs\vmangos\dep\libmpq\libmpq\mpq_libmpq.cpp:54,69.)
+/// with each archive searched before the ones opened earlier, vmangos@0e3ff01 contrib/extractor/System.cpp:102-109,
+/// vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:331-347, vmangos@0e3ff01 dep/libmpq/libmpq/mpq_libmpq.cpp:54,69.)
 /// Any other archive that is not a patch (this client also has <c>fonts.MPQ</c>) follows, by name. The base archives of the
 /// retail client hold disjoint file sets (scan in the Atlas tests), so their relative order never changes a result.</item>
 /// <item>The patch archives by level: <c>patch.MPQ</c> (level 1), then <c>patch-2.MPQ</c>, <c>patch-3.MPQ</c> and so on up to 99
-/// (D:\refs\vmangos\contrib\vmap_extractor\vmapextract\vmapexport.cpp:294-317, the same naming and range).</item>
+/// (vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:294-317, the same naming and range).</item>
 /// </list>
 /// <para>
 /// <c>backup.MPQ</c> is not mounted. It is an installer copy of the launcher payload (executables, DLLs, the Documentation
@@ -43,7 +43,7 @@ public sealed record SkippedArchive(string Path, string Reason);
 /// </remarks>
 public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
 {
-    // ref: D:\WoW-RE-Research\specs\asset-path-scheme.md:144 ; D:\New folder\Worldforge\src\client_data.cpp:10-15
+    // ref: WoW-RE-Research specs/asset-path-scheme.md:144 ; Worldforge src/client_data.cpp:10-15
     private static readonly string[] BaseChain =
     [
         "base.MPQ", "dbc.MPQ", "interface.MPQ", "misc.MPQ", "model.MPQ", "sound.MPQ", "speech.MPQ", "terrain.MPQ", "texture.MPQ", "wmo.MPQ",
@@ -279,7 +279,7 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
     }
 
     // Level 1 is patch.MPQ, level N (2-99) is patch-N.MPQ.
-    // ref: D:\refs\vmangos\contrib\vmap_extractor\vmapextract\vmapexport.cpp:294-317
+    // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:294-317
     private static int? PatchLevel(string fileName)
     {
         if (string.Equals(fileName, "patch.MPQ", StringComparison.OrdinalIgnoreCase))
@@ -375,7 +375,7 @@ public sealed partial class MpqFileSystem : IClientFileSource, IDisposable
         return new FileIndex([.. keys], [.. keys.Select(k => names[k])]);
     }
 
-    // ref: D:\mangos-unified\dep\StormLib\src\SFileListFile.cpp:338 ; D:\New folder\Worldforge\src\mpq.cpp:108 (internal "(name)" entries are not files)
+    // ref: StormLib src/SFileListFile.cpp:338 ; Worldforge src/mpq.cpp:108 (internal "(name)" entries are not files)
     private static bool IsInternalName(string name) => name.Length > 2 && name[0] == '(' && name[^1] == ')' && !name.Contains('\\');
 
     private sealed record FileIndex(string[] Keys, string[] Names);

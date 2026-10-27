@@ -1,31 +1,31 @@
 # Combat table audit (1.12.1)
 
 This audit covers the integrated white melee and magic spell tables. The primary
-reference is the read-only vmangos clone at `D:/refs/vmangos`. Its GPL source and
+reference is the read-only vmangos clone at `<refs-root>/vmangos`. Its GPL source and
 resistance rows were not copied into ArcaneCore. The arithmetic tests are in
 `tests/ArcaneCore.Game.Tests/Combat/CombatTableReferenceTests.cs`, alongside the older
 `CombatHitTableTests`, `SpellRules/*`, and `CombatMechanics/PowerRulesTests`.
 
 Full reference locations (line ranges are from this clone):
 
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:336-412` — white miss and dual wield.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:446-725` — swing roll order, avoidance, glancing and crushing.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:795-925` — magic hit and resistance conversion.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:958-993` — spell critical damage.
-- `D:\refs\vmangos\src\game\Objects\SpellCaster.cpp:1121-1145` — armor reduction.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1364-1565` — melee damage schools, block, absorb and hit flags.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1571-1601` — glancing damage range.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1875-1918` and `:2397-2458` — resistance buckets and interpolation.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:1920-2083` — school and mana shields.
-- `D:\refs\vmangos\src\game\Objects\Unit.cpp:2552-2595` and `:5212-5327` — melee and spell critical chance.
-- `D:\refs\vmangos\src\game\Objects\Player.cpp:2243-2267` — rage from damage.
-- `D:\refs\wow_messages\wow_message_parser\wowm\world\combat\smsg_attackerstateupdate.wowm:1-52` — 1.12 hit flags and per-school damage/absorb/resist packet fields.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:336-412` — white miss and dual wield.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:446-725` — swing roll order, avoidance, glancing and crushing.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:795-925` — magic hit and resistance conversion.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:958-993` — spell critical damage.
+- `<refs-root>\vmangos\src\game\Objects\SpellCaster.cpp:1121-1145` — armor reduction.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1364-1565` — melee damage schools, block, absorb and hit flags.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1571-1601` — glancing damage range.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1875-1918` and `:2397-2458` — resistance buckets and interpolation.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:1920-2083` — school and mana shields.
+- `<refs-root>\vmangos\src\game\Objects\Unit.cpp:2552-2595` and `:5212-5327` — melee and spell critical chance.
+- `<refs-root>\vmangos\src\game\Objects\Player.cpp:2243-2267` — rage from damage.
+- `<refs-root>\wow_messages\wow_message_parser\wowm\world\combat\smsg_attackerstateupdate.wowm:1-52` — 1.12 hit flags and per-school damage/absorb/resist packet fields.
 
 | Stage | Retail behavior and reference | ArcaneCore status |
 | --- | --- | --- |
 | White swing roll | One 0–9999 roll: miss, dodge, parry, glancing, block, crit, crushing, normal (`src/game/Objects/SpellCaster.cpp:446-725`). | `MeleeHitTable.Roll` matches the order. Ranged swings skip the avoidance, glancing, block and crushing entries (`:532-541`). |
 | Skill and miss | Player victim: 0.04% per skill; creature victim: 0.1% per point until the deficit exceeds ten, then 0.2%; dual wield white swings add 19%; the first 1% positive hit bonus is lost at a deficit above ten (`SpellCaster.cpp:336-412`). | The pure `MeleeHitTable` matches. This lane fixes the live off-hand input: attached learned skill now takes precedence over the stat source's level maximum. Generic `MOD_HIT_CHANCE` auras now reach white swings through the spell system. Weapon-restricted aura filtering (`SpellCaster.cpp:389-390`) is not yet represented. |
-| Avoidance and crit | Dodge/block use 4 basis points per skill versus players and 10 versus creatures; creature parry uses 20, or 60 past a ten-point deficit (`SpellCaster.cpp:455-468,585-679`). Crit uses 0.04% versus players or while ahead, otherwise 0.2% of the capped deficit (`Unit.cpp:2552-2595`). | The pure table implements these branches. The player crit field is supplied by the stats area; creature/victim crit auras are not in the white-swing input. |
+| Avoidance and crit | Dodge/block use 4 basis points per skill versus players and 10 versus creatures; creature parry uses 20, or 60 past a ten-point deficit (`SpellCaster.cpp:455-468,585-679`). Crit uses 0.04% versus players or while ahead, otherwise 0.2% of the capped deficit (`Unit.cpp:2552-2595`). Against creatures three or more levels above a player, crit from auras is cut further (Blizzard, 2019; 1.8% estimated from Classic logs, see [combat](combat.md)). | The pure table implements these branches, plus `Combat:AuraCritSuppressionPercent` (default 1.8). The player crit field is supplied by the stats area; creature/victim crit auras are not in the white-swing input. |
 | Glancing | Player-controlled attacker versus non-player-controlled victim: `clamp((10 + 2 × (defense − min(skill, level maximum))) × 100, 0, 4000)` roll slots (`SpellCaster.cpp:627-654`). Damage range is the Baeza low/high formula, with a caster penalty (`Unit.cpp:1571-1601`). | Pure table and damage range match. Pet ownership is not represented in `BuildRollInput`, so pet glancing eligibility remains limited. |
 | Crushing | Creature attacker with eligible flags, when its level maximum exceeds the victim's capped defense by at least 15: `200 × difference − 1500` slots; damage is 150% (`SpellCaster.cpp:695-724`, `Unit.cpp:1496-1504`). | Formula matches for creatures represented by `ICombatCreature`. The reference's always-crush extra flag is not represented. |
 | Armor and block | Armor reduction is `(0.1 × armor / (8.5 × attacker level + 40)) / (1 + that ratio)`, capped at 75%, with at least one damage left (`SpellCaster.cpp:1121-1145`). A block removes at most shield block value after armor and marks a full block when it consumes the hit (`Unit.cpp:1463-1479`). | Both formulas are present. This lane connects white physical swings to school and mana shields after block, reports absorbed damage in the hit packet, and preserves damage-interrupt behavior even for full absorbs (`Unit.cpp:1510-1565,1920-2083`). Non-physical weapon school slices and their partial resists remain unmodelled. |

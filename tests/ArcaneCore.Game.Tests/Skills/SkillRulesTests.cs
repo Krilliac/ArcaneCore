@@ -51,6 +51,19 @@ public sealed class SkillRulesTests
     }
 
     [Fact]
+    public void CraftChance_WithTheOptInCurve_SlidesFromCertainAtYellowToNothingAtGrey()
+    {
+        var curve = Defaults with { CraftingChanceCurve = true };
+        Assert.False(Defaults.CraftingChanceCurve);
+        Assert.Equal(1000, SkillRules.CraftChance(24, 100, 25, curve));   // orange: the configured chance
+        Assert.Equal(1000, SkillRules.CraftChance(25, 100, 25, curve));   // yellow: (100 - 25) / (100 - 25)
+        Assert.Equal(506, SkillRules.CraftChance(62, 100, 25, curve));    // (100 - 62) * 1000 / 75 = 506
+        Assert.Equal(13, SkillRules.CraftChance(99, 100, 25, curve));     // 1 * 1000 / 75 = 13
+        Assert.Equal(0, SkillRules.CraftChance(100, 100, 25, curve));     // grey: the configured chance
+        Assert.Equal(0, SkillRules.CraftChance(25, 25, 25, curve));       // grey not above yellow: the colour steps (grey here)
+    }
+
+    [Fact]
     public void GatherChance_GoldenValues()
     {
         // Herbalism req 1, skill 1: red level 1 -> orange -> 1000 (no steps).

@@ -5,8 +5,8 @@ public readonly record struct LooterSelection(ObjectGuid Looter, bool Changed);
 
 /// <summary>
 /// The group's round-robin looter pointer, a pure port of vmangos Group::UpdateLooterGuid
-/// (D:\refs\vmangos\src\game\Group\Group.cpp:2474-2543) and of the master looter fallback in
-/// Unit::Kill (D:\refs\vmangos\src\game\Objects\Unit.cpp:1041-1063).
+/// (vmangos@0e3ff01 src/game/Group/Group.cpp:2474-2543) and of the master looter fallback in
+/// Unit::Kill (vmangos@0e3ff01 src/game/Objects/Unit.cpp:1041-1063).
 /// Retail calls the selection twice per creature kill (Unit.cpp:1037 and 1078): first with
 /// <c>ifNeeded</c> to settle who loots THIS kill (the current looter keeps the turn while still in
 /// reach), then without it to advance the pointer for the NEXT kill.

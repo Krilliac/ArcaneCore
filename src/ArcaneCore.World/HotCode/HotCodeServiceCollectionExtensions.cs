@@ -45,7 +45,7 @@ public static class HotCodeServiceCollectionExtensions
     public static IServiceCollection AddHotCode(this IServiceCollection services)
     {
         services.AddSingleton<HotCodeState>();
-        services.AddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath));
+        services.AddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath, logger: sp.GetService<ILogger<HotCodeAudit>>()));
         services.AddSingleton<IHotCodeCatalog, AssemblyHotCodeCatalog>();
         services.AddSingleton<IHotCodeWorld>(sp => new WorldRuntimeHotCodeWorld(sp.GetRequiredService<WorldRuntime>()));
         services.AddSingleton(sp => new HotCodeRefresh(

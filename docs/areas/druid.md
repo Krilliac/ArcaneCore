@@ -6,7 +6,7 @@ Branch `claude/vw2-class-druid`. Code: `src/ArcaneCore.Game/Spells/Druid/` (pure
 `tests/ArcaneCore.Game.Tests/Druid/`, plus two taxi cases in `Npc/NpcTravelServiceTests.cs`.
 
 **Superseded in part by docs/areas/druid-forms.md (wave 4): aura 36, the form engine, feral stats, the druid scripts and the mount gates are\nnow wired; the 'not wired' and 'not delivered' lists below describe the wave-2 state.**\n\nDirective: as close to vanilla 1.12.1 as possible, verified against the references. Primary reference is
-vmangos (`D:\refs\vmangos`); mangos-classic differs in several druid details (below) and is not followed.
+vmangos (`<refs-root>\vmangos`); mangos-classic differs in several druid details (below) and is not followed.
 Nothing from the references was copied into the repository, only numeric constants and behaviour with a
 `file:line` citation in the source comment.
 
@@ -116,7 +116,7 @@ Merge point with the npc-services-quests lane.
 
 ## Provenance
 
-Constants and formulas: `D:\refs\vmangos\src\game\` files named in each source comment. Spell ids and base points
+Constants and formulas: `<refs-root>\vmangos\src\game\` files named in each source comment. Spell ids and base points
 were checked in the classic-db 1.12.1 `spell_template` dump read outside the repository (not committed). Test spell
 ids in comments (768, 783, 1066, 1079, 16975, 17056..17061, 22842, 22896, 3025, 24932) are cited from that dump.
 No code or data was copied from the GPL references.

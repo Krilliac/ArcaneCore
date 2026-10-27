@@ -136,7 +136,7 @@ public sealed class PlayerbotBuiltinChatTests
         var seen = new HashSet<string>();
         for (int seed = 0; seed < 200; seed++)
             seen.Add(PlayerbotBuiltinChat.Answer(ChatSamples.Ask("hello", ChatSamples.Persona(race: Race.Orc)), null, true, new Random(seed)).Text!);
-        Assert.Contains("Lok'tar, Nathan.", seen);
+        Assert.Contains("Lok'tar, Testplayer.", seen);
 
         var veteran = new HashSet<string>();
         for (int seed = 0; seed < 200; seed++)
@@ -159,7 +159,7 @@ public sealed class PlayerbotBuiltinChatTests
         };
         var topic = new BotChatTopic("t", string.Empty, new Dictionary<string, string>
         {
-            ["askedquest"] = "The Fargodeep Mine", ["who"] = "Nathan", ["boss"] = "Edwin VanCleef", ["count"] = "5", ["loot"] = "Cruel Barb",
+            ["askedquest"] = "The Fargodeep Mine", ["who"] = "Testplayer", ["boss"] = "Edwin VanCleef", ["count"] = "5", ["loot"] = "Cruel Barb",
             ["newlevel"] = "12", ["price"] = "1 silver", ["wanted"] = "water", ["item"] = "Cruel Barb", ["instance"] = "The Deadmines",
             ["dungeon"] = "The Deadmines", ["guild"] = "Lazy Raiders", ["place"] = "Goldshire",
         }, string.Empty);

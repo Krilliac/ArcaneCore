@@ -69,6 +69,9 @@ internal sealed class MemoryHonorStore : IHonorStore
     /// <summary>The number of upcoming writes that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
     public int LockedWrites;
 
+    /// <summary>Milliseconds every write call blocks before it succeeds or fails (a store that is slow because the database is contended).</summary>
+    public int WriteDelayMs;
+
     /// <summary>Write calls made so far, failed or not.</summary>
     public int WriteAttempts => Volatile.Read(ref _writeAttempts);
 
@@ -114,6 +117,12 @@ internal sealed class MemoryHonorStore : IHonorStore
     private void BeforeWrite(string what)
     {
         Interlocked.Increment(ref _writeAttempts);
+        int delay = Volatile.Read(ref WriteDelayMs);
+        if (delay > 0)
+        {
+            Thread.Sleep(delay);
+        }
+
         int left;
         do
         {

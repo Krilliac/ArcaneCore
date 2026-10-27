@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -40,6 +41,8 @@ public static class WorldFeatures
                 services.AddSingleton(seam, provider => provider.GetRequiredService(type));
             }
         }
+
+        services.TryAddSingleton<ShutdownDrain>(); // shared by the feature write queues; a host that only calls AddWorldFeatures still gets one lane set
 
         // The lifecycle seams (docs/design/hot-reload-tiers.md, section 4): the host that attaches and detaches features, the
         // startup/shutdown hooks and the teleport waiver registry (a discovered feature itself, registered above).
