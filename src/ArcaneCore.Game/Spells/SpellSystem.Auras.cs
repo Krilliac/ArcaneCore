@@ -493,11 +493,27 @@ public sealed partial class SpellSystem
     {
         if (state.Auras.Count == 0)
         {
+            state.TickingHolders = 0;
+            return;
+        }
+
+        ObserveAuraCount(state);
+
+        // Idle fast path: when every holder is a valid permanent passive with nothing to tick, UpdateAuraHolder would only re-validate
+        // fields that are already valid, so the rent/copy/clear/return is skipped. The count is a read-only scan over the live list rather
+        // than a figure maintained at each add/remove: holder state (Duration, AreaParent, IsRemoved, heartbeat fields, an aura's period)
+        // is mutated from many files, so a scan cannot go stale. Units that do tick take the unchanged path below, in the same order.
+        int ticking = CountTickingHolders(state);
+        state.TickingHolders = ticking;
+        if (ticking == 0)
+        {
+            AuraIdleSkips++;
             return;
         }
 
         // A pooled snapshot (handlers may add or remove holders); reentrant, unlike a shared list.
         int count = state.Auras.Count;
+        AuraSnapshotRents++;
         SpellAuraHolder[] snapshot = System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Rent(count);
         state.Auras.CopyTo(snapshot);
         try
@@ -518,6 +534,98 @@ public sealed partial class SpellSystem
         {
             System.Buffers.ArrayPool<SpellAuraHolder>.Shared.Return(snapshot, clearArray: true);
         }
+    }
+
+    /// <summary>
+    /// Whether <see cref="UpdateAuraHolder"/> could do anything for <paramref name="holder"/> this tick. False only for a live, permanent,
+    /// valid holder with no area parent, no stand-up cancel, no heartbeat and no periodic effect (a passive talent or racial): for that
+    /// holder UpdateAuraHolder only re-validates fields that are already valid. Every other holder (removed, timed, periodic, area child,
+    /// heartbeat, standing-cancels, or with a field the validator would repair or report) counts as ticking. Reads fields only.
+    /// </summary>
+    internal static bool HolderNeedsTick(SpellAuraHolder holder)
+    {
+        if (holder.IsRemoved || !holder.IsPermanent || holder.AreaParent is not null
+            || (holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
+            || holder.HeartbeatRandValue > 0f || holder.PveHeartbeatTimer >= 0
+            || holder.InitialDurationArg < -1 || holder.Duration != -1 || holder.MaxDuration != -1)
+        {
+            return true;
+        }
+
+        ReadOnlySpan<SpellAura?> auras = holder.AuraSpan;
+        for (int i = 0; i < auras.Length; i++)
+        {
+            if (auras[i] is not { } aura)
+            {
+                continue;
+            }
+
+            // Mirrors ValidateAuraPeriodicState and the periodic loop: a periodic aura ticks; a non-periodic aura of a type that should
+            // have a period is reported once (PeriodicStalledReported), after which it is inert again.
+            if (aura.IsPeriodic
+                || (PeriodicTiming.TakesActivationTimeMod(aura.Type) && aura.Type != AuraType.ObsModMana && !aura.PeriodicStalledReported))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The number of <paramref name="state"/>'s holders that <see cref="HolderNeedsTick"/> says need a tick (allocation-free scan, no copy).</summary>
+    internal static int CountTickingHolders(UnitSpellState state)
+    {
+        List<SpellAuraHolder> holders = state.Auras;
+        int ticking = 0;
+        for (int i = 0; i < holders.Count; i++)
+        {
+            if (holders[i] is null || HolderNeedsTick(holders[i]))
+            {
+                ticking++;
+            }
+        }
+
+        return ticking;
+    }
+
+    /// <summary>A unit holding more aura holders than this is reported as <c>aura/holders-excess</c> (a client shows 32 buffs and 16 debuffs; passives and hidden auras add a few hundred at most).</summary>
+    internal const int AuraHoldersExcessBound = 512;
+
+    /// <summary>Test seam and cost counter: how many times <see cref="UpdateAuras"/> rented and filled a snapshot (one per unit per tick that had something to tick).</summary>
+    internal long AuraSnapshotRents { get; private set; }
+
+    /// <summary>Test seam: how many <see cref="UpdateAuras"/> passes skipped the snapshot because no holder needed ticking.</summary>
+    internal long AuraIdleSkips { get; private set; }
+
+    /// <summary>The largest <c>state.Auras.Count</c> any unit had at an aura update (a leak check; also named in the <c>aura/holders-excess</c> detail).</summary>
+    internal int MaxAuraCountSeen { get; private set; }
+
+    private void ObserveAuraCount(UnitSpellState state)
+    {
+        int held = state.Auras.Count;
+        if (held > MaxAuraCountSeen)
+        {
+            MaxAuraCountSeen = held;
+        }
+
+        if (held <= AuraHoldersExcessBound)
+        {
+            state.AuraExcessReported = false;
+            return;
+        }
+
+        if (state.AuraExcessReported)
+        {
+            return;
+        }
+
+        state.AuraExcessReported = true;
+        AnomalyLedger.Shared.Report(
+            "aura",
+            "holders-excess",
+            FormatUnitSubject(state.Unit),
+            $"holders={held} bound={AuraHoldersExcessBound} maxSeen={MaxAuraCountSeen}",
+            AnomalySeverity.Warning);
     }
 
     private void UpdateAuraHolder(UnitSpellState state, SpellAuraHolder holder, uint diffMs)

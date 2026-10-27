@@ -277,6 +277,12 @@ public sealed class UnitSpellState
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
+    /// <summary>Holders that needed a tick at the last <see cref="SpellSystem"/> aura update (see <c>SpellSystem.CountTickingHolders</c>); 0 means the update skipped the snapshot.</summary>
+    internal int TickingHolders { get; set; }
+
+    /// <summary>Whether the <c>aura/holders-excess</c> anomaly was already reported for this unit's current excess (re-armed when the count falls back under the bound).</summary>
+    internal bool AuraExcessReported { get; set; }
+
     /// <summary>
     /// Milliseconds until the channel fields of a channel that ended normally are cleared (vmangos ChannelResetEvent and
     /// UNIT_STATE_PENDING_CHANNEL_RESET, Spell.cpp:4814-4820); 0 when no reset is pending.
