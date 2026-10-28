@@ -400,6 +400,36 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         Assert.Equal((long)Drapes, system.DrapedPaths);
     }
 
+    [Fact]
+    public void ASharedDrape_HoldsTheVmapReadLockOnce_ForAllItsSamples_AndANestedScopeJoinsIt()
+    {
+        using Scene scene = Build();
+        ReaderWriterLockSlim gate = scene.Vmaps.SharedLock;
+        Assert.Equal(0, gate.CurrentReadCount);
+        using (VMapSharedReader.Enter(gate))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                scene.Vmaps.GetModelHeight(0, XA + i, YA, Ground + 4f, 8f);
+                Assert.Equal(1, gate.CurrentReadCount); // one reader for the whole drape, not one per sample
+            }
+
+            using (VMapSharedReader.Enter(gate)) // nested on the same lock: joins, takes nothing
+            {
+                Assert.Equal(1, gate.CurrentReadCount);
+                Assert.True(VMapSharedReader.HoldsLock(gate));
+            }
+
+            Assert.True(VMapSharedReader.HoldsLock(gate)); // the outer scope still holds it
+            Assert.Equal(1, gate.CurrentReadCount);
+        }
+
+        Assert.Equal(0, gate.CurrentReadCount);
+        Assert.False(VMapSharedReader.HoldsLock(gate));
+        Assert.NotNull(Shared(scene.Collision, StartA, LegA, Models(), out _));
+        Assert.Equal(0, gate.CurrentReadCount);
+    }
+
     // --- 4b. every change of the loaded tiles takes the write side of the lock a shared read holds ---------------------------------
 
     [Theory]

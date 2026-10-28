@@ -70,7 +70,7 @@ public sealed partial class CreatureMapSystem
         List<Vector3> draped;
         if (_ungatedMotion)
         {
-            // First from what is loaded, outside the gate (GroundHeight.TryDrapePathShared: bit-identical when it answers). It gives up, and the
+            // First from what is loaded, outside the gate (GroundHeight.TryDrapePathShared: every sample equals the gated answer for the model and terrain snapshot and the navmesh state at that moment). It gives up, and the
             // drape is repeated inside the gate as before, when a tile it needs is not in memory or the navmesh is not one a shared query may use.
             List<Vector3>? shared = GroundHeight.TryDrapePathShared(Map.Collision, start, corners, out SharedDrapeAbort abort, step: GroundSampleYards,
                 tolerance: GroundToleranceYards, query: query, modelTolerance: GroundModelToleranceYards, cornersOnMesh: cornersOnMesh);

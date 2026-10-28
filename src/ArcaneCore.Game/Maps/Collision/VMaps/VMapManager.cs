@@ -446,7 +446,7 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     private float? GetModelHeightShared(uint mapId, Vector3 point, float maxSearchDistance)
     {
         // A shared drape takes the read lock once for all its samples (VMapSharedReader.Scope); a bare shared-mode caller takes it per call.
-        bool take = !VMapSharedReader.LockHeld;
+        bool take = !VMapSharedReader.HoldsLock(_sharedLock);
         if (take)
         {
             _sharedLock.EnterReadLock();

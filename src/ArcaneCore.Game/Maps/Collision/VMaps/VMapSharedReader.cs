@@ -70,7 +70,7 @@ public static class SharedDrapeStats
 /// A shared read that finds a needed piece not loaded does not wait and does not load: it records the reason here, and the drape
 /// returns null so the caller repeats it inside the gate, where loading is allowed. Every sample the shared drape returns was therefore
 /// read from fully loaded tiles by the same arithmetic as the gated drape. The vmap read lock is held once for the whole drape, so the
-/// model data is one snapshot; the terrain tiles do not change during the maps phase. The navmesh read lock is taken per query (it is also
+/// model data is one snapshot; the terrain tiles are not freed during the maps phase. The navmesh read lock is taken per query (it is also
 /// what in-flight path jobs hold, and holding it across a drape would make every tile change cancel them), so a navmesh tile added or
 /// removed mid-drape can make two samples reflect two mesh states: each sample equals the gated answer for the mesh state at that moment.
 /// </para>
@@ -99,10 +99,10 @@ internal static class VMapSharedReader
     }
 
     [ThreadStatic]
-    private static bool t_lockHeld;
+    private static ReaderWriterLockSlim? t_heldLock;
 
-    /// <summary>Whether this thread's shared drape already holds the vmap read lock (it takes it once for the whole drape).</summary>
-    internal static bool LockHeld => t_lockHeld;
+    /// <summary>Whether this thread's shared drape already holds <paramref name="vmapLock"/> for reading (it takes it once for the whole drape).</summary>
+    internal static bool HoldsLock(ReaderWriterLockSlim vmapLock) => ReferenceEquals(t_heldLock, vmapLock);
 
     /// <summary>Enter shared mode on this thread; dispose to restore the previous mode.</summary>
     internal static Scope Enter(ReaderWriterLockSlim? vmapLock = null) => new(t_active, t_abort, vmapLock);
@@ -114,17 +114,21 @@ internal static class VMapSharedReader
     {
         private readonly bool _wasActive;
         private readonly SharedDrapeAbort _wasAbort;
-        private readonly ReaderWriterLockSlim? _lock;
+        private readonly ReaderWriterLockSlim? _entered;
+        private readonly ReaderWriterLockSlim? _wasHeld;
 
+        // Nesting: a scope opened inside another on the same thread and the same lock joins the outer one (it does not take the lock again,
+        // which the non-recursive lock would refuse) and restores the outer state when it ends; the outer scope releases the lock.
         internal Scope(bool wasActive, SharedDrapeAbort wasAbort, ReaderWriterLockSlim? vmapLock)
         {
             _wasActive = wasActive;
             _wasAbort = wasAbort;
-            _lock = vmapLock;
-            if (vmapLock is not null)
+            _wasHeld = t_heldLock;
+            if (vmapLock is not null && !ReferenceEquals(t_heldLock, vmapLock))
             {
                 vmapLock.EnterReadLock(); // once for the whole drape: one vmap snapshot, one acquire/release pair instead of one per sample
-                t_lockHeld = true;
+                _entered = vmapLock;
+                t_heldLock = vmapLock;
             }
 
             t_active = true;
@@ -135,11 +139,8 @@ internal static class VMapSharedReader
         {
             t_active = _wasActive;
             t_abort = _wasAbort;
-            if (_lock is not null)
-            {
-                t_lockHeld = false;
-                _lock.ExitReadLock();
-            }
+            t_heldLock = _wasHeld;
+            _entered?.ExitReadLock();
         }
     }
 }
