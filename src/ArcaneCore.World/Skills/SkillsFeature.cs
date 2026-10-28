@@ -116,6 +116,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         Saves.Start();
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -241,6 +242,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         {
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
         }
 
         if (_spells is { } spells)
@@ -273,6 +275,11 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
     private void OnLevelChanged(Player player) => player.Skills?.UpdateSkillsForLevel();
 
     private void OnPlayerLoggingOut(Player player) => EnqueueSnapshot(player);
+
+    /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
+    internal int TrackedMapCount => _maps.Count;
+
+    private void OnMapUnloading(Map map) => _maps.Remove(map);
 
     private void OnMapCreated(Map map)
     {
