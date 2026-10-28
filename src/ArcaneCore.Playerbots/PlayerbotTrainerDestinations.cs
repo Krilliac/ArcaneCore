@@ -30,6 +30,12 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly Dictionary<uint, (uint Until, uint Level, uint Money, uint Limit)> _noTrainerOffer = [];
 
+    /// <summary>
+    /// Trainers that had an affordable spell, per entry: kept for <see cref="TrainerQuoteMemoMs"/> while the bot's level, money, spend
+    /// limit and known-spell snapshot (a new instance once a spell is learned) are unchanged; the counterpart of <see cref="_noTrainerOffer"/>.
+    /// </summary>
+    private readonly Dictionary<uint, (uint Until, uint Level, uint Money, uint Limit, IReadOnlyList<uint>? Spells)> _trainerOffer = [];
+
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>) of this controller's plans.</summary>
     private TileWait _tileWait;
     private PlayerbotRoute? _route;
@@ -46,6 +52,9 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private Vector3 _lastPosition;
 
     internal uint TargetEntry { get; private set; }
+
+    /// <summary>Trainer quotes asked by <see cref="HasAffordableSpell"/>: the memo's test seam.</summary>
+    internal int QuotesAsked { get; private set; }
 
     /// <summary>Trainers a stalled bot set aside (<see cref="PlayerbotStallWatch"/>).</summary>
     internal PlayerbotSuspensions? Suspensions { get; set; }
@@ -188,7 +197,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
     private void Refresh(Player player, uint mapId, NpcTemplateMetadataLookup? metadata, QuestNpcServices services)
     {
         CreatureContent? content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
-        if (content is null) { ClearRoute(); _destinations.Clear(); _noTrainerOffer.Clear(); return; }
+        if (content is null) { ClearRoute(); _destinations.Clear(); _noTrainerOffer.Clear(); _trainerOffer.Clear(); return; }
         if (_metadataRead && _mapId == mapId && ReferenceEquals(_content, content)
             && _contentVersion == content.DefinitionsVersion && ReferenceEquals(_metadata, metadata)
             && _eventStamp == PlayerbotTownGoals.ActiveEventStamp(_session.Services)) return;
@@ -196,7 +205,7 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
         ClearRoute();
         _mapId = mapId; _content = content; _contentVersion = content.DefinitionsVersion; _metadata = metadata; _metadataRead = true;
         _eventStamp = PlayerbotTownGoals.ActiveEventStamp(_session.Services);
-        _destinations.Clear(); _blockedSpawns.Clear(); _noTrainerOffer.Clear(); TargetEntry = 0;
+        _destinations.Clear(); _blockedSpawns.Clear(); _noTrainerOffer.Clear(); _trainerOffer.Clear(); TargetEntry = 0;
         // The trainer fields are the imported creature_template columns (CreatureNpcMetadataDataModule), with a configured
         // NpcServices:NpcTemplates row replacing an entry's. Filter class compatibility before the bounded spawn cap; unrelated
         // trainer rows must not crowd a valid class trainer out of the route index.
@@ -280,13 +289,25 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             destination.Spawn.Guid, NpcFlags.Trainer, destination.Spawn.MapId, destination.Spawn.X, destination.Spawn.Y,
             destination.Spawn.Z, 0, true, false, false, false, 0,
             TrainerType.Class, destination.TrainerClass, 0, 0, destination.FactionId);
+        IReadOnlyList<uint>? spells = _session.Services.GetService<SpellFeature>()?.Spellbook is { } book ? book.GetSpells(player) : null;
+        if (_trainerOffer.TryGetValue(destination.Entry, out var offer)
+            && unchecked((int)(offer.Until - now)) > 0
+            && offer.Level == player.Level && offer.Money == player.Money && offer.Limit == limit && ReferenceEquals(offer.Spells, spells))
+        {
+            return true;
+        }
+
+        QuotesAsked++;
         if (services.GetClassTrainerQuote(player, hint, 0, spendable) is
             { TeachingSpell: not 0, LearnedSpell: not 0, Cost: var cost } && player.Money >= cost)
         {
             _noTrainerOffer.Remove(destination.Entry);
+            if (_trainerOffer.Count >= MaxQuoteMemos) _trainerOffer.Clear();
+            _trainerOffer[destination.Entry] = (unchecked(now + TrainerQuoteMemoMs), player.Level, player.Money, limit, spells);
             return true;
         }
 
+        _trainerOffer.Remove(destination.Entry);
         if (_noTrainerOffer.Count >= MaxQuoteMemos) _noTrainerOffer.Clear();
         _noTrainerOffer[destination.Entry] = (unchecked(now + TrainerQuoteMemoMs), player.Level, player.Money, limit);
         return false;

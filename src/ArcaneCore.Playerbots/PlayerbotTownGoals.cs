@@ -1162,7 +1162,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         private byte _repair, _consumables, _ammo, _grays, _junk, _supply;
         private bool _food, _drink;
 
-        /// <summary>The bot's crafting supply needs (<see cref="PlayerbotVendorSupplyNeeds"/>), read from its spellbook once per call.</summary>
+        /// <summary>The bot's crafting supply needs (<see cref="PlayerbotVendorSupplyNeeds"/>), read from its spellbook when something it depends on changed (<see cref="PlayerbotVendorSupplyNeeds.RefreshIfChanged"/>).</summary>
         internal PlayerbotVendorSupplyNeeds? Supply(PlayerbotTownGoals goals, Player player)
         {
             if (_supply == 0) _supply = (byte)(goals.SupplyNeeds(player) is not null ? 2 : 1);
@@ -1345,7 +1345,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return bought;
     }
 
-    /// <summary>The bot's crafting supply needs, read once per <see cref="FindNpc"/> call or per purchase (<see cref="SupplyNeeds"/>).</summary>
+    /// <summary>The bot's crafting supply needs, memoized per bot: re-read from its spellbook when its spells, level or items change or <see cref="PlayerbotVendorSupplyNeeds.CacheTtlMs"/> passes (<see cref="SupplyNeeds"/>).</summary>
     private readonly PlayerbotVendorSupplyNeeds _supplyNeeds = new();
 
     /// <summary>
@@ -1359,7 +1359,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         SpellbookCache? spellbook = spellFeature?.Spellbook;
         if (store is null || spellbook is null)
             return null;
-        _supplyNeeds.Refresh(player, store, spellbook);
+        _supplyNeeds.RefreshIfChanged(player, store, spellbook, session.World.NowMs);
         return _supplyNeeds;
     }
 
