@@ -16,18 +16,29 @@ namespace ArcaneCore.World.Playerbots;
 /// <list type="number">
 /// <item><description><b>Clearance</b>: a corner is moved away from the obstacle on the inside of the turn until
 /// <see cref="Settings.ClearanceYards"/> separate them (measured with a mesh raycast, so what counts is where the walkable mesh ends).</description></item>
-/// <item><description><b>Centring</b>: where the corridor is bounded on both sides (a road between walls), the corner moves toward its middle by at most
-/// <see cref="Settings.CentringMaxYards"/>.</description></item>
-/// <item><description><b>Rounding</b>: a turn sharper than <see cref="MaxHeadingStepRadians"/> is replaced by a circular arc that starts
-/// <see cref="Settings.TurnLeadYards"/> before the corner, so no vertex turns more than about <see cref="MaxHeadingStepRadians"/>.</description></item>
+/// <item><description><b>Centring</b>: where the corridor is bounded on both sides (a road between walls), the corner moves toward its middle; the
+/// centring move is at most <see cref="Settings.CentringMaxYards"/>, and the push is the larger of that and the clearance still missing, so
+/// the cap never reduces the clearance push.</description></item>
+/// <item><description><b>Rounding</b>: a turn sharper than <see cref="MaxHeadingStepRadians"/> is replaced, where the legs and the clearance
+/// leave room for it, by a circular arc that starts <see cref="Settings.TurnLeadYards"/> (at most 40% of the shorter leg) before the corner.
+/// The arc has up to <see cref="MaxArcInteriorPoints"/> interior points spread evenly in angle, so no interior vertex of a rounded corner turns
+/// more than <see cref="MaxHeadingStepRadians"/> (the two tangent points turn half as much). A corner whose arc is not possible keeps the
+/// sharp turn it has, moved off the obstacle.</description></item>
 /// </list>
 /// Nothing is squeezed: a corner whose far side leaves less than <see cref="EdgeMarginYards"/> after the move (a doorway, a bridge) keeps
-/// its mesh position, and so does a corner whose new legs fail <see cref="SegmentSafe(Map, Vector3, Vector3)"/>. The start and the destination are never moved.
+/// its mesh position. A new leg must pass <see cref="SegmentSafe(Map, Vector3, Vector3)"/> or, only where the mesh leg it replaces
+/// (<c>points[i-1]</c> to <c>points[i]</c> or <c>points[i]</c> to <c>points[i+1]</c> of the input, never a shaped neighbour) fails that too,
+/// the bounded relative contract of <see cref="SegmentAcceptable(Map, Vector3, Vector3, Vector3, Vector3, ref OriginalLeg, ref ShapeStats)"/>;
+/// otherwise the corner keeps its mesh position. The start and the destination are never moved.
 /// <para>
 /// Cost, per plan of a navigated route: nothing when disabled or when no corner turns sharply enough; otherwise a few mesh raycasts per
-/// corner plus <see cref="SegmentSafe(Map, Vector3, Vector3)"/> on the new legs, bounded by <see cref="MaxShapedCornersPerPath"/>,
-/// <see cref="MaxQueriesPerPath"/> and <see cref="PlayerbotRouteSmoothing.MaxSmoothHorizonYards"/>. The only allocation of a path that
-/// changes is its point list. World thread; the process-wide totals use <see cref="Interlocked"/> and may be read from any thread.
+/// corner plus the leg checks, bounded by <see cref="MaxShapedCornersPerPath"/>, <see cref="PlayerbotRouteSmoothing.MaxSmoothHorizonYards"/>
+/// and the query budget: every probe, ground snap, leg check and measurement of a mesh leg is charged to <see cref="ShapeStats.Queries"/>
+/// before it is made and refused (the corner keeps its mesh position, <see cref="ShapeStats.FallbackBudget"/>) when it would take the path
+/// past <see cref="MaxQueriesPerPath"/>. The count is an estimate of collision and mesh queries (<see cref="SegmentBaseQueries"/> for the fixed
+/// part of a leg check, two or four height lookups per 3 yards of leg); the budget therefore holds for the estimate, not for a hardware counter.
+/// The only allocation of a path that changes is its point list. World thread; the process-wide totals use <see cref="Interlocked"/> and may be
+/// read from any thread.
 /// </para>
 /// </summary>
 internal static class PlayerbotPathShaping
@@ -45,8 +56,11 @@ internal static class PlayerbotPathShaping
     internal const int MaxShapedCornersPerPath = 12;
 
     /// <summary>
-    /// The query budget of one path (mesh raycasts count 1, a <see cref="SegmentSafe(Map, Vector3, Vector3)"/> its estimated cost,
-    /// <see cref="SegmentBaseQueries"/> plus two height lookups per 3 yards). It is checked before each corner, so a path can overshoot it by one corner.
+    /// The query budget of one path (mesh raycasts count 1, a ground snap 3, a <see cref="SegmentSafe(Map, Vector3, Vector3)"/> its estimated cost,
+    /// <see cref="SegmentBaseQueries"/> plus two height lookups per 3 yards, and the same again for the reverse chord check when it is needed).
+    /// Each is charged before it is made and refused past this limit; the only charge made after the fact is the reverse chord check of a leg
+    /// that failed its forward check, so the estimate of a path never exceeds the limit by more than one such check (at most 40 queries for
+    /// legs of <see cref="MaxShapedLegYards"/> plus the largest push).
     /// </summary>
     internal const int MaxQueriesPerPath = 192;
 
@@ -55,6 +69,13 @@ internal static class PlayerbotPathShaping
 
     /// <summary>The shortest flat leg (yards) beside a corner that is shaped.</summary>
     internal const float MinLegYards = 1f;
+
+    /// <summary>
+    /// The longest flat leg (yards) beside a corner that is shaped. The floor check of a leg costs two lookups per 3 yards of it (more for
+    /// the relative contract), so a corner next to a longer leg keeps its mesh position: that bounds the cost of any one leg check and
+    /// lets the budget below pay for a whole corner.
+    /// </summary>
+    internal const float MaxShapedLegYards = 40f;
 
     /// <summary>The shortest arc tangent length (yards) worth walking.</summary>
     internal const float MinLeadYards = 1f;
@@ -69,7 +90,10 @@ internal static class PlayerbotPathShaping
     /// </summary>
     internal const int SegmentBaseQueries = 6;
 
-    private const int MaxCornerPoints = 5;
+    /// <summary>The most interior points of a rounding arc; with them a turn of up to pi radians stays at or below <see cref="MaxHeadingStepRadians"/> per interior vertex.</summary>
+    internal const int MaxArcInteriorPoints = 4;
+
+    private const int MaxCornerPoints = MaxArcInteriorPoints + 2;
 
     /// <summary>Margin on the planned arc excursion for the widening of the turn when the corner is pushed outward.</summary>
     private const float ArcWidenMargin = 1.25f;
@@ -89,7 +113,7 @@ internal static class PlayerbotPathShaping
     /// </summary>
     private static float ArcReach(float theta)
     {
-        int interior = Math.Clamp((int)MathF.Ceiling(theta / MaxHeadingStepRadians) - 1, 1, 3);
+        int interior = Math.Clamp((int)MathF.Ceiling(theta / MaxHeadingStepRadians) - 1, 1, MaxArcInteriorPoints);
         float step = theta / (interior + 1);
         return MathF.Tan(theta * 0.25f) + ((1f - MathF.Cos(step * 0.5f)) / MathF.Tan(theta * 0.5f));
     }
@@ -136,7 +160,7 @@ internal static class PlayerbotPathShaping
         /// <summary>Estimated collision and mesh queries: <see cref="Probes"/> plus the height lookups of snapping plus the estimated cost of every segment.</summary>
         public int Queries;
 
-        /// <summary>Corners kept because the move needed more room than the far side leaves (<see cref="Fallbacks"/> is the total of the three reasons).</summary>
+        /// <summary>Corners kept because the move needed more room than the far side leaves (<see cref="Fallbacks"/> is the total of the room, ground, segment, budget and arc reasons).</summary>
         public int FallbackRoom;
 
         /// <summary>Corners kept because the moved corner had no acceptable mesh surface or floor height.</summary>
@@ -144,6 +168,15 @@ internal static class PlayerbotPathShaping
 
         /// <summary>Corners kept because a new leg around the moved corner failed <see cref="PlayerbotPathShaping.SegmentSafe(Map, Vector3, Vector3, ref ShapeStats)"/>.</summary>
         public int FallbackSegment;
+
+        /// <summary>Corners kept because the query budget (<see cref="PlayerbotPathShaping.MaxQueriesPerPath"/>) could not pay for the next probe, snap or leg check.</summary>
+        public int FallbackBudget;
+
+        /// <summary>Corners left unchanged because the arc they were planned to get was rejected and there was no push to keep (a rounding-only corner).</summary>
+        public int FallbackArc;
+
+        /// <summary>Charges refused by the query budget (a corner can be refused several).</summary>
+        public int BudgetStops;
 
         /// <summary>Segments refused by the chest-height line of sight (doodads included).</summary>
         public int SegLineClear;
@@ -181,6 +214,9 @@ internal static class PlayerbotPathShaping
             Queries += other.Queries;
             ElapsedTicks += other.ElapsedTicks;
             FallbackRoom += other.FallbackRoom;
+            FallbackBudget += other.FallbackBudget;
+            FallbackArc += other.FallbackArc;
+            BudgetStops += other.BudgetStops;
             FallbackGround += other.FallbackGround;
             FallbackSegment += other.FallbackSegment;
             SegLineClear += other.SegLineClear;
@@ -276,7 +312,7 @@ internal static class PlayerbotPathShaping
     /// </summary>
     internal static bool SegmentSafe(Map map, Vector3 a, Vector3 b)
         => a.IsFinite() && b.IsFinite()
-            && ChordSafeEitherWay(map, a, b, out _)
+            && ChordSafeEitherWay(map, a, b, out _, out _)
             && PlayerbotMotionAnomalies.StaysOnMesh(map, a, b);
 
     /// <summary>
@@ -286,29 +322,68 @@ internal static class PlayerbotPathShaping
     /// fraction 0 for a leg the mesh itself produced; the motion's own on-mesh check asks both ways for the same reason
     /// (<see cref="PlayerbotMotionAnomalies.StaysOnMesh"/>). The second ask costs queries only after a failure; a genuine obstacle fails both ways.
     /// </summary>
-    private static bool ChordSafeEitherWay(Map map, Vector3 a, Vector3 b, out bool reversed)
+    private static bool ChordSafeEitherWay(Map map, Vector3 a, Vector3 b, out bool reversed, out bool askedReverse)
     {
         reversed = false;
+        askedReverse = false;
         if (PlayerbotRouteSmoothing.IsChordSafe(map, a, b))
             return true;
+        askedReverse = true;
         reversed = PlayerbotRouteSmoothing.IsChordSafe(map, b, a);
         return reversed;
     }
 
-    /// <summary><see cref="SegmentSafe(Map, Vector3, Vector3)"/> that also counts the call and its estimated queries in <paramref name="stats"/>.</summary>
+    /// <summary>Samples of the floor check along a leg (one every 3 yards, as <see cref="PlayerbotRouteSmoothing.IsChordSafe"/> takes them), 0 for a non-finite leg.</summary>
+    private static int SampleCount(Vector3 a, Vector3 b)
+    {
+        float flat = Vector2.Distance(Flat(a), Flat(b));
+        return float.IsFinite(flat) ? (int)MathF.Min(MathF.Ceiling(flat / 3f), 1000f) : 0;
+    }
+
+    /// <summary>The estimated queries of a strict leg check: <see cref="SegmentBaseQueries"/> plus two height lookups per interior sample.</summary>
+    private static int StrictCost(Vector3 a, Vector3 b) => SegmentBaseQueries + (2 * Math.Max(0, SampleCount(a, b) - 1));
+
+    /// <summary>The estimated queries of one chord check (line of sight, mesh ray and the attribution ask, two lookups per interior sample): the reverse ask of a strict check.</summary>
+    private static int ChordCost(Vector3 a, Vector3 b) => 3 + (2 * Math.Max(0, SampleCount(a, b) - 1));
+
+    /// <summary>The estimated queries of <see cref="MeasureLeg"/>: the floor, then the snap's terrain and floor lookups, per interior sample.</summary>
+    private static int MeasureCost(Vector3 a, Vector3 b) => 4 * Math.Max(0, SampleCount(a, b) - 1);
+
+    /// <summary>
+    /// Charge <paramref name="cost"/> estimated queries to the path before they are made: false (and <see cref="ShapeStats.BudgetStops"/>
+    /// counted) when that, plus <paramref name="reserve"/> that a check may still add, would take the path past <see cref="MaxQueriesPerPath"/>.
+    /// </summary>
+    private static bool TryCharge(ref ShapeStats stats, int cost, int reserve = 0)
+    {
+        if (stats.Queries + cost + reserve > MaxQueriesPerPath)
+        {
+            stats.BudgetStops++;
+            return false;
+        }
+
+        stats.Queries += cost;
+        return true;
+    }
+
+    /// <summary><see cref="SegmentSafe(Map, Vector3, Vector3)"/> that also counts the call and its estimated queries in <paramref name="stats"/>; refused (false) when the query budget cannot pay for it.</summary>
     internal static bool SegmentSafe(Map map, Vector3 a, Vector3 b, ref ShapeStats stats)
     {
+        // The reverse chord check is charged when it is made, after this charge: a leg can take the path past the budget by that one check.
+        if (!TryCharge(ref stats, StrictCost(a, b)))
+            return false;
+
         stats.Segments++;
-        float flat = Vector2.Distance(Flat(a), Flat(b));
-        int samples = float.IsFinite(flat) ? (int)MathF.Min(MathF.Ceiling(flat / 3f), 1000f) : 0;
-        stats.Queries += SegmentBaseQueries + (2 * Math.Max(0, samples - 1));
         if (!a.IsFinite() || !b.IsFinite())
         {
             stats.SegChord++;
             return false;
         }
 
-        if (!ChordSafeEitherWay(map, a, b, out bool reversed))
+        bool chordSafe = ChordSafeEitherWay(map, a, b, out bool reversed, out bool askedReverse);
+        if (askedReverse)
+            stats.Queries += ChordCost(a, b);
+
+        if (!chordSafe)
         {
             // The chord check includes the line of sight; asking it again on a failure only attributes the refusal (no change of semantics).
             if (!PlayerbotMoveCheck.LineClear(map.Collision, a, b))
@@ -361,8 +436,10 @@ internal static class PlayerbotPathShaping
         if (!float.IsFinite(flat) || !float.IsFinite(dz))
             return new LegMetrics(float.PositiveInfinity, float.PositiveInfinity);
 
-        int samples = (int)MathF.Min(MathF.Ceiling(flat / 3f), 1000f);
-        stats.Queries += 4 * Math.Max(0, samples - 1); // per sample: the floor, then the snap's terrain and floor lookups
+        int samples = SampleCount(a, b);
+        // Per sample: the floor, then the snap's terrain and floor lookups. A measurement the budget cannot pay for is an unknown leg.
+        if (!TryCharge(ref stats, MeasureCost(a, b)))
+            return new LegMetrics(float.PositiveInfinity, dz);
         float worst = 0f;
         for (int s = 1; s < samples; s++)
         {
@@ -387,8 +464,12 @@ internal static class PlayerbotPathShaping
     /// check demand the floor to follow the straight line within 0.75 yd, which a mesh leg over steps or a ramp does not) and the new leg is
     /// no worse than it: its largest floor mismatch and its height step exceed the mesh leg's by at most <see cref="RelativeSlackYards"/>,
     /// the chest-height line of sight is clear, the mesh ray back from its end stays on the mesh, and the motion's on-mesh check passes.
-    /// The mesh leg is measured through <paramref name="original"/> once per corner and its queries are charged to <paramref name="stats"/>.
-    /// A leg is never accepted for what the mesh leg does not already do, or where it leaves the mesh or is blocked.
+    /// <paramref name="origA"/> to <paramref name="origB"/> is always the mesh's own leg of the input route, never a leg of an already shaped
+    /// neighbour, so the allowance does not add up from corner to corner. When that leg passes the strict check, a new leg must pass it too.
+    /// The mesh leg is measured through <paramref name="original"/> once per corner; every query is charged to <paramref name="stats"/>
+    /// before it is made, and a check the query budget (<see cref="MaxQueriesPerPath"/>) cannot pay for refuses the leg
+    /// (<see cref="ShapeStats.BudgetStops"/>). A leg is never accepted for what the mesh leg does not already do, or where it leaves the
+    /// mesh or is blocked.
     /// </summary>
     internal static bool SegmentAcceptable(Map map, Vector3 a, Vector3 b, Vector3 origA, Vector3 origB, ref OriginalLeg original, ref ShapeStats stats)
     {
@@ -399,16 +480,25 @@ internal static class PlayerbotPathShaping
 
         if (!original.Measured)
         {
-            original.Strict = SegmentSafe(map, origA, origB, ref stats);
-            original.Metrics = original.Strict ? default : MeasureLeg(map, origA, origB, ref stats);
+            // A measurement the budget refused says nothing about the mesh leg: it is not recorded and the new leg is refused.
+            int stops = stats.BudgetStops;
+            bool strict = SegmentSafe(map, origA, origB, ref stats);
+            LegMetrics measured = strict ? default : MeasureLeg(map, origA, origB, ref stats);
+            if (stats.BudgetStops != stops)
+                return false;
+
+            original.Strict = strict;
+            original.Metrics = measured;
             original.Measured = true;
         }
 
         if (original.Strict || float.IsInfinity(original.Metrics.MaxFloorMismatchYards))
             return false;
 
+        if (!TryCharge(ref stats, SegmentBaseQueries + 1)) // the line of sight, the on-mesh walks and the back ray
+            return false;
+
         stats.Segments++;
-        stats.Queries += SegmentBaseQueries;
         LegMetrics metrics = MeasureLeg(map, a, b, ref stats);
         if (!(metrics.MaxFloorMismatchYards <= original.Metrics.MaxFloorMismatchYards + RelativeSlackYards)
             || !(metrics.AbsDeltaZYards <= original.Metrics.AbsDeltaZYards + RelativeSlackYards)
@@ -458,13 +548,15 @@ internal static class PlayerbotPathShaping
 
             bool shapedHere = false;
             if (v.IsFinite() && next.IsFinite() && prev.IsFinite()
-                && (output?.Count ?? i) + (n - i) + 4 <= MaxShapedPoints)
+                && (output?.Count ?? i) + (n - i) + (MaxCornerPoints - 1) <= MaxShapedPoints)
             {
                 Vector2 inVec = Flat(v) - Flat(prev);
                 Vector2 outVec = Flat(next) - Flat(v);
                 float lenIn = inVec.Length();
                 float lenOut = outVec.Length();
-                if (lenIn >= MinLegYards && lenOut >= MinLegYards && float.IsFinite(lenIn) && float.IsFinite(lenOut))
+                if (lenIn >= MinLegYards && lenOut >= MinLegYards && float.IsFinite(lenIn) && float.IsFinite(lenOut)
+                    && lenIn <= MaxShapedLegYards && lenOut <= MaxShapedLegYards
+                    && Vector2.Distance(Flat(points[i - 1]), Flat(v)) <= MaxShapedLegYards)
                 {
                     Vector2 dirIn = inVec / lenIn;
                     Vector2 dirOut = outVec / lenOut;
@@ -472,7 +564,7 @@ internal static class PlayerbotPathShaping
                     if (theta >= MinShapeTurnRadians)
                     {
                         stats.CornersConsidered++;
-                        int count = ShapeCorner(map, mesh, prev, v, next, in s, theta, lenIn, lenOut, dirIn, dirOut, ref stats, buffer, out bool rounded);
+                        int count = ShapeCorner(map, mesh, prev, points[i - 1], v, next, in s, theta, lenIn, lenOut, dirIn, dirOut, ref stats, buffer, out bool rounded);
                         if (count > 0 && AllFinite(buffer[..count]))
                         {
                             if (output is null)
@@ -518,6 +610,7 @@ internal static class PlayerbotPathShaping
         Map map,
         IMeshPointQuery mesh,
         Vector3 prev,
+        Vector3 meshPrev,
         Vector3 v,
         Vector3 next,
         in Settings s,
@@ -531,6 +624,7 @@ internal static class PlayerbotPathShaping
         out bool rounded)
     {
         rounded = false;
+        int stopsBefore = stats.BudgetStops;
         Vector2 diff = dirOut - dirIn;
         float diffLength = diff.Length();
         if (!(diffLength > 1e-3f))
@@ -551,11 +645,11 @@ internal static class PlayerbotPathShaping
 
         uint mapId = map.MapId;
         if (!Probe(mesh, mapId, v, inward, clearance + excursion + 0.5f, ref stats, out bool inwardHit, out float distIn))
-            return 0;
+            return KeepForBudget(ref stats, stopsBefore);
 
         float outLength = Math.Clamp((2f * MathF.Max(s.CentringMaxYards, clearance + excursion)) + 0.5f, 1f, 12f);
         if (!Probe(mesh, mapId, v, outward, outLength, ref stats, out bool outwardHit, out float distOut))
-            return 0;
+            return KeepForBudget(ref stats, stopsBefore);
 
         if (outwardHit && distOut < MinPushYards)
         {
@@ -642,7 +736,7 @@ internal static class PlayerbotPathShaping
             if (rung > 0 && stats.Queries >= MaxQueriesPerPath)
                 break;
 
-            placeResult = TryPlace(map, prev, v, next, outward, rungs[rung], ref legIn, ref legOut, ref stats, out placed);
+            placeResult = TryPlace(map, prev, meshPrev, v, next, outward, rungs[rung], ref legIn, ref legOut, ref stats, out placed);
             if (placeResult == PlaceResult.Placed)
             {
                 push = rungs[rung];
@@ -654,7 +748,9 @@ internal static class PlayerbotPathShaping
         if (!accepted)
         {
             stats.Fallbacks++;
-            if (placeResult == PlaceResult.Ground)
+            if (stats.BudgetStops != stopsBefore)
+                stats.FallbackBudget++;
+            else if (placeResult == PlaceResult.Ground)
                 stats.FallbackGround++;
             else
                 stats.FallbackSegment++;
@@ -666,7 +762,7 @@ internal static class PlayerbotPathShaping
 
         if (rounding)
         {
-            int arc = TryBuildArc(map, prev, placed, next, lead, distIn, push, clearance, inwardHit,
+            int arc = TryBuildArc(map, prev, meshPrev, placed, next, lead, distIn, push, clearance, inwardHit,
                 new Vector2(v.X + (inward.X * distIn), v.Y + (inward.Y * distIn)), v, ref legIn, ref legOut, ref stats, result);
             if (arc > 0)
             {
@@ -678,10 +774,30 @@ internal static class PlayerbotPathShaping
         }
 
         if (push == 0f)
+        {
+            // Nothing was moved and the arc this corner was planned to get is not possible: it keeps its mesh position, which is a fallback.
+            stats.Fallbacks++;
+            if (stats.BudgetStops != stopsBefore)
+                stats.FallbackBudget++;
+            else
+                stats.FallbackArc++;
             return 0;
+        }
 
         result[0] = placed;
         return 1;
+    }
+
+    /// <summary>A corner left alone after the query budget refused a probe: counted as a budget fallback when the budget was the reason.</summary>
+    private static int KeepForBudget(ref ShapeStats stats, int stopsBefore)
+    {
+        if (stats.BudgetStops != stopsBefore)
+        {
+            stats.Fallbacks++;
+            stats.FallbackBudget++;
+        }
+
+        return 0;
     }
 
     /// <summary>The most rungs of the push ladder.</summary>
@@ -763,8 +879,12 @@ internal static class PlayerbotPathShaping
     /// <summary>One mesh raycast from <paramref name="from"/> along <paramref name="direction"/> for <paramref name="length"/> yards; false when the mesh cannot answer.</summary>
     private static bool Probe(IMeshPointQuery mesh, uint mapId, Vector3 from, Vector2 direction, float length, ref ShapeStats stats, out bool hit, out float distance)
     {
+        hit = false;
+        distance = 0f;
+        if (!TryCharge(ref stats, 1))
+            return false;
+
         stats.Probes++;
-        stats.Queries++;
         Vector3 to = new(from.X + (direction.X * length), from.Y + (direction.Y * length), from.Z);
         MeshRaycastResult ray = mesh.Raycast(mapId, from, to, PlayerbotMoveCheck.MeshOptions);
         hit = ray.Available && ray.Hit;
@@ -773,7 +893,7 @@ internal static class PlayerbotPathShaping
     }
 
     /// <summary>The corner pushed <paramref name="push"/> yards along <paramref name="outward"/>, on the mesh surface and the floor, with both legs around it safe.</summary>
-    private static PlaceResult TryPlace(Map map, Vector3 prev, Vector3 v, Vector3 next, Vector2 outward, float push, ref OriginalLeg legIn, ref OriginalLeg legOut, ref ShapeStats stats, out Vector3 placed)
+    private static PlaceResult TryPlace(Map map, Vector3 prev, Vector3 meshPrev, Vector3 v, Vector3 next, Vector2 outward, float push, ref OriginalLeg legIn, ref OriginalLeg legOut, ref ShapeStats stats, out Vector3 placed)
     {
         placed = v;
         if (push > 0f)
@@ -783,7 +903,7 @@ internal static class PlayerbotPathShaping
                 return PlaceResult.Ground;
         }
 
-        return SegmentAcceptable(map, prev, placed, prev, v, ref legIn, ref stats) && SegmentAcceptable(map, placed, next, v, next, ref legOut, ref stats)
+        return SegmentAcceptable(map, prev, placed, meshPrev, v, ref legIn, ref stats) && SegmentAcceptable(map, placed, next, v, next, ref legOut, ref stats)
             ? PlaceResult.Placed
             : PlaceResult.Segment;
     }
@@ -798,8 +918,11 @@ internal static class PlayerbotPathShaping
     /// <summary>The point under <paramref name="raw"/>: the mesh surface walked from <paramref name="anchor"/> (kept at its own height when the walk fails), then the floor within the route smoothing tolerance.</summary>
     private static bool TryGround(Map map, Vector3 anchor, Vector3 raw, ref ShapeStats stats, out Vector3 grounded)
     {
+        grounded = raw;
+        if (!TryCharge(ref stats, 3)) // the mesh walk and the two height lookups of the snap
+            return false;
+
         stats.Probes++;
-        stats.Queries += 3; // the mesh walk and the two height lookups of the snap
         Vector3 candidate = map.Collision.TryWalkMeshSurface(anchor, raw, out float surface, PlayerbotMoveCheck.MeshOptions)
             ? raw with { Z = surface }
             : raw;
@@ -815,6 +938,7 @@ internal static class PlayerbotPathShaping
     private static int TryBuildArc(
         Map map,
         Vector3 prev,
+        Vector3 meshPrev,
         Vector3 v,
         Vector3 next,
         float lead,
@@ -846,7 +970,7 @@ internal static class PlayerbotPathShaping
         float cross = (dirIn.X * dirOut.Y) - (dirIn.Y * dirOut.X);
         float turn = cross >= 0f ? 1f : -1f; // +1: a left (counter-clockwise) turn
         Vector2 normalIn = turn > 0f ? new Vector2(-dirIn.Y, dirIn.X) : new Vector2(dirIn.Y, -dirIn.X); // toward the inside of the turn
-        int interior = Math.Clamp((int)MathF.Ceiling(theta / MaxHeadingStepRadians) - 1, 1, 3);
+        int interior = Math.Clamp((int)MathF.Ceiling(theta / MaxHeadingStepRadians) - 1, 1, MaxArcInteriorPoints);
         int count = interior + 2;
 
         float tangent = MathF.Min(lead, 0.4f * MathF.Min(lenIn, lenOut));
@@ -890,14 +1014,21 @@ internal static class PlayerbotPathShaping
             Vector2 flat = ArcFlatPoint(k, count, interior, start, end, centre, turn, theta);
             if (!TryGround(map, v, new Vector3(flat.X, flat.Y, v.Z), ref stats, out Vector3 point))
                 return 0;
+            // The sub-leg from the previous point to the first tangent point is part of the mesh leg's replacement as well; its end has a snapped height.
+            if (k == 0 && !SegmentAcceptable(map, prev, point, meshPrev, corner, ref legIn, ref stats))
+                return 0;
             if (k > 0 && !(k <= count / 2
-                    ? SegmentAcceptable(map, last, point, prev, corner, ref legIn, ref stats)
+                    ? SegmentAcceptable(map, last, point, meshPrev, corner, ref legIn, ref stats)
                     : SegmentAcceptable(map, last, point, corner, next, ref legOut, ref stats)))
                 return 0;
 
             result[k] = point;
             last = point;
         }
+
+        // ...and so is the sub-leg from the last tangent point to the next point.
+        if (!SegmentAcceptable(map, last, next, corner, next, ref legOut, ref stats))
+            return 0;
 
         return count;
     }

@@ -129,10 +129,16 @@ middle of a corridor bounded on both sides by at most `CornerCentringMaxYards` (
 35 degrees by an arc that starts `CornerTurnLeadYards` (2.5, 0 = off) before the corner. A corner moves only when the push fits the room
 on its outer side less half a yard (a doorway or bridge keeps its mesh position). When the full push's legs or ground fail, smaller
 pushes are tried down to half the clearance (counted as partial pushes), and every arc point keeps the clearance achieved at the corner.
-Every new leg must pass the chord check above and the motion's own on-mesh check; where the mesh's own leg already fails that check
-(stepped city ground), a new leg is accepted only if it is no worse than the leg it replaces (floor mismatch and height step within
-a quarter yard of the original's, line of sight clear, back on the mesh). Otherwise the corner keeps its mesh position. The start and the destination never move. Cost is bounded per plan: at most 12
-corners, within 120 yards of the start, about 192 estimated collision and mesh queries; a path with no sharp corner costs nothing.
+Every new leg must pass the chord check above (from either end, since a mesh ray that starts exactly on a mesh vertex can miss the leg
+it starts along) and the motion's own on-mesh check. Where the mesh's own leg beside the corner (the route's `points[i-1]` to
+`points[i]`, or `points[i]` to `points[i+1]`; never a leg of an already shaped neighbour) already fails that check (stepped city ground),
+a new leg is accepted only if it is no worse than that mesh leg: floor mismatch and height step within a quarter yard of the mesh leg's,
+line of sight clear, back on the mesh. A mesh leg that passes the check keeps the new leg to the same standard. Otherwise the corner
+keeps its mesh position. A rounding arc has up to four interior points, so no interior vertex of a rounded corner turns more than
+about 34 degrees (the tangent points turn half that); a corner whose arc is not possible keeps a sharp turn, moved off the obstacle. The
+start and the destination never move. Cost is bounded per plan: at most 12 corners, within 120 yards of the start, and the estimated
+collision and mesh queries (every probe, ground snap and leg check, charged before it is made) never pass 192; a check the budget cannot
+pay for leaves the corner at its mesh position. A path with no sharp corner costs nothing.
 `PlayerbotMotion` also gives up navigation loops. A mesh
 route's proof covers its own legs only: a bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed it
 again walks a straight line from where it stands to the next point, and when it starts more than `OffLegYards` (5) off the leg

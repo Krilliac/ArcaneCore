@@ -177,34 +177,59 @@ public sealed class PlayerbotPathShapingRealTerrainTests : RealTerrainNavigation
     }
 
     /// <summary>
-    /// Judge every leg of <paramref name="output"/> that is not a leg of <paramref name="input"/> by
+    /// Judge every leg of <paramref name="output"/> that the shaper made by
     /// <see cref="PlayerbotPathShaping.SegmentAcceptable(Map, Vector3, Vector3, Vector3, Vector3, ref PlayerbotPathShaping.ShapeStats)"/> against
-    /// the mesh leg on the same side of the corner it replaces: the points between two anchors (input points kept exactly) replace the
-    /// corners between them, the legs in the first half belong to the incoming mesh leg, the rest to the outgoing one (as the shaper pairs them).
+    /// the mesh leg of the corner it belongs to, as the shaper defines the baseline: the output points between two anchors (input points kept
+    /// exactly) are assigned, in order, to the nearest corner between them. For the corner at input index c with output block P (n points):
+    /// the leg into P[0] and the arc chords k up to n/2 are judged against the mesh leg input[c-1] -> input[c]; the chords after n/2 and the
+    /// leg out of P[n-1] against input[c] -> input[c+1]. A leg joining the blocks of two consecutive shaped corners is the outgoing leg of the
+    /// first and the incoming leg of the second, and both baselines are the one mesh leg between them, so it is judged once.
     /// </summary>
     private static (int NewLegs, int RelativeLegs) CheckNewLegs(Map map, IReadOnlyList<Vector3> input, IReadOnlyList<Vector3> output, List<int> anchors)
     {
         int newLegs = 0, relative = 0;
+        void Judge(Vector3 a, Vector3 b, Vector3 origA, Vector3 origB, string what)
+        {
+            newLegs++;
+            ShapeStats probe = default;
+            bool strict = PlayerbotPathShaping.SegmentSafe(map, a, b);
+            Assert.True(PlayerbotPathShaping.SegmentAcceptable(map, a, b, origA, origB, ref probe),
+                $"new leg {a} -> {b} ({what}, mesh leg {origA} -> {origB}) is not acceptable");
+            if (!strict) relative++;
+        }
+
         for (int g = 1; g < anchors.Count; g++)
         {
             int before = anchors[g - 1], after = anchors[g];
             if (after == before + 1) continue;
             int from = IndexOf(output, input[before]);
             int to = IndexOf(output, input[after]);
-            int replaced = to - from - 1;
-            Vector3 inA = input[before], inB = input[before + 1], outA = input[after - 1], outB = input[after];
-            for (int j = 0; j <= replaced; j++)
+
+            // Assign the replacing points to the corners, in order, each to the nearest corner not before the previous point's.
+            var blocks = new List<(int Corner, List<Vector3> Points)>();
+            int corner = before + 1;
+            for (int k = from + 1; k < to; k++)
             {
-                Vector3 a = output[from + j], b = output[from + j + 1];
-                bool incoming = j <= replaced / 2;
-                newLegs++;
-                ShapeStats probe = default;
-                bool strict = PlayerbotPathShaping.SegmentSafe(map, a, b);
-                bool acceptable = incoming
-                    ? PlayerbotPathShaping.SegmentAcceptable(map, a, b, inA, inB, ref probe)
-                    : PlayerbotPathShaping.SegmentAcceptable(map, a, b, outA, outB, ref probe);
-                Assert.True(acceptable, $"new leg {a} -> {b} ({(incoming ? "incoming" : "outgoing")} side of the corner) is not acceptable");
-                if (!strict) relative++;
+                int best = corner;
+                for (int c = corner; c < after; c++)
+                    if (Vector2.Distance(Flat(output[k]), Flat(input[c])) < Vector2.Distance(Flat(output[k]), Flat(input[best]))) best = c;
+                corner = best;
+                if (blocks.Count == 0 || blocks[^1].Corner != best) blocks.Add((best, new List<Vector3>()));
+                blocks[^1].Points.Add(output[k]);
+            }
+
+            Assert.True(blocks.Count == after - before - 1, $"{blocks.Count} blocks of replacing points for {after - before - 1} corners between input points {before} and {after}");
+            Vector3 last = output[from];
+            for (int b = 0; b < blocks.Count; b++)
+            {
+                (int c, List<Vector3> points) = blocks[b];
+                Vector3 meshIn0 = input[c - 1], meshOut1 = input[c + 1], v = input[c];
+                Judge(last, points[0], meshIn0, v, "incoming");
+                for (int k = 1; k < points.Count; k++)
+                    Judge(points[k - 1], points[k], k <= points.Count / 2 ? meshIn0 : v, k <= points.Count / 2 ? v : meshOut1, k <= points.Count / 2 ? "incoming" : "outgoing");
+                Vector3 following = b + 1 < blocks.Count ? blocks[b + 1].Points[0] : output[to];
+                Judge(points[^1], following, v, meshOut1, "outgoing");
+                last = points[^1];
             }
         }
 
@@ -297,13 +322,6 @@ public sealed class PlayerbotPathShapingRealTerrainTests : RealTerrainNavigation
         }
 
         return route;
-    }
-
-    private static bool IsInputLeg(IReadOnlyList<Vector3> input, Vector3 a, Vector3 b)
-    {
-        for (int i = 1; i < input.Count; i++)
-            if (input[i - 1] == a && input[i] == b) return true;
-        return false;
     }
 
     private static int IndexOf(IReadOnlyList<Vector3> points, Vector3 p)

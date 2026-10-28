@@ -122,11 +122,10 @@ public sealed class PlayerbotPathShapingTests
 
             Assert.Equal(1, stats.CornersRounded);
             Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + 0.02f, $"max heading change {MaxTurn(shaped):F3} rad");
-            // The clearance is the corner's (and the arc's apex's) from the wall corner; the two tangent points sit on the legs toward the
-            // corner and are closer by design (the leg from the start runs nearer the wall corner than its end does).
+            // Every emitted point keeps the clearance from the wall corner, the two tangent points included.
             Assert.True(shaped.Count >= 5, $"expected the tangent points and at least one arc point, got {shaped.Count} points");
-            for (int i = 2; i < shaped.Count - 2; i++)
-                Assert.True(Vector2.Distance(shaped[i].XY(), at(LCorner).XY()) >= 2f - Tolerance, $"arc point {i} {shaped[i]} is too close to the wall corner");
+            for (int i = 1; i < shaped.Count - 1; i++)
+                Assert.True(Vector2.Distance(shaped[i].XY(), at(LCorner).XY()) >= 2f - Tolerance, $"point {i} {shaped[i]} is too close to the wall corner");
             _output.WriteLine("distances to the wall corner: " + string.Join(" ", shaped.Select(p => Vector2.Distance(p.XY(), at(LCorner).XY()).ToString("F2"))));
             AssertInside(world, shaped);
             AssertSegmentsSafe(map, shaped);
@@ -501,6 +500,169 @@ public sealed class PlayerbotPathShapingTests
         Assert.True(new PlayerbotOptions().PathShaping);
     }
 
+    /// <summary>A floor that is flat except for small raised squares (centre, height): the legs whose floor samples land on one of them have a floor mismatch of that height.</summary>
+    private sealed class Bumps
+    {
+        public List<(Vector2 Centre, float Height)> Items { get; } = [];
+
+        public float Floor(float x, float y)
+        {
+            float z = PlayerbotPathShapingTests.Floor;
+            foreach ((Vector2 c, float h) in Items)
+            {
+                if (MathF.Abs(x - c.X) <= 0.15f && MathF.Abs(y - c.Y) <= 0.15f) z += h;
+            }
+
+            return z;
+        }
+    }
+
+    /// <summary>The first floor sample the chord check takes on the leg a to b (every 3 yards: the point at 1/n of the way, n = flat length / 3 rounded up).</summary>
+    private static Vector2 FirstSample(Vector3 a, Vector3 b)
+    {
+        int n = (int)MathF.Min(MathF.Ceiling(Vector2.Distance(a.XY(), b.XY()) / 3f), 1000f);
+        Assert.True(n >= 2, "the leg is too short to have a floor sample");
+        return Vector2.Lerp(a.XY(), b.XY(), 1f / n);
+    }
+
+    [Fact]
+    public async Task ALegBesideAShapedNeighbour_IsJudgedAgainstTheRealMeshLeg_NotAgainstTheLegOfTheShapedPrevious()
+    {
+        // An S-bend of two consecutive pushed corners v1 (8, 6) and v2 (14, 10) on a floor with raised squares at the floor samples of
+        // three legs: the mesh leg v1 -> v2 (0.9 yd of floor mismatch), the leg v1' -> v2 from the pushed first corner to the mesh's
+        // second (1.0), and the leg v1' -> v2' to the pushed second corner (1.2). All fail the strict check (0.75). The leg v1' -> v2'
+        // is 0.2 yd worse than the leg before it, within the 0.25 slack of the shaped previous leg, and 0.3 yd worse than the real mesh
+        // leg, over the slack: it must not be accepted, and the second corner must not be pushed where that leg ends.
+        Rect[] region = [new(0f, 0f, 14f, 6f), new(8f, 0f, 14f, 16f), new(8f, 10f, 40f, 16f)];
+        var bumps = new Bumps();
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector2 offset = at(Vector2.Zero).XY();
+            Vector3[] input = [at(new(1f, 5.5f)), at(new(8f, 6f)), at(new(14f, 10f)), at(new(39f, 10.5f))];
+            var settings = new PlayerbotPathShaping.Settings(true, 2f, CentringMaxYards: 0f, TurnLeadYards: 0f);
+
+            // On the flat floor both corners are pushed by the full clearance.
+            ShapeStats flatStats = default;
+            IReadOnlyList<Vector3> flat = PlayerbotPathShaping.ShapePoints(map, input, settings, ref flatStats);
+            Assert.Equal(4, flat.Count);
+            Vector3 v1Pushed = flat[1], v2Pushed = flat[2];
+            Assert.True(Vector2.Distance(v1Pushed.XY(), input[1].XY()) > 1.9f && Vector2.Distance(v2Pushed.XY(), input[2].XY()) > 1.9f, "both corners must be pushed on the flat floor");
+
+            bumps.Items.Add((FirstSample(input[1], input[2]) - offset, 0.9f));
+            bumps.Items.Add((FirstSample(v1Pushed, input[2]) - offset, 1.0f));
+            bumps.Items.Add((FirstSample(v1Pushed, v2Pushed) - offset, 1.2f));
+
+            ShapeStats m = default;
+            float mesh = PlayerbotPathShaping.MeasureLeg(map, input[1], input[2], ref m).MaxFloorMismatchYards;
+            float previous = PlayerbotPathShaping.MeasureLeg(map, v1Pushed, input[2], ref m).MaxFloorMismatchYards;
+            float shapedLeg = PlayerbotPathShaping.MeasureLeg(map, v1Pushed, v2Pushed, ref m).MaxFloorMismatchYards;
+            _output.WriteLine($"floor mismatch: mesh leg {mesh:F2}, leg from the shaped previous {previous:F2}, shaped leg {shapedLeg:F2}");
+            Assert.InRange(mesh, 0.89f, 0.91f);
+            Assert.InRange(previous, 0.99f, 1.01f);
+            Assert.InRange(shapedLeg, 1.19f, 1.21f);
+            Assert.False(PlayerbotPathShaping.SegmentSafe(map, input[1], input[2]));
+            Assert.False(PlayerbotPathShaping.SegmentSafe(map, v1Pushed, v2Pushed));
+
+            // The contract: against the shaped previous leg the 1.2 would pass (1.0 + 0.25), against the real mesh leg it does not (0.9 + 0.25).
+            ShapeStats probe = default;
+            Assert.True(PlayerbotPathShaping.SegmentAcceptable(map, v1Pushed, v2Pushed, v1Pushed, input[2], ref probe));
+            Assert.False(PlayerbotPathShaping.SegmentAcceptable(map, v1Pushed, v2Pushed, input[1], input[2], ref probe));
+
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+            LogCost("height step S bend", world, stats, shaped);
+            foreach (Vector3 p in shaped)
+                Assert.True(Vector2.Distance(p.XY(), v2Pushed.XY()) > 0.05f, $"the output holds {p}, the second corner pushed where its leg is 0.3 yd worse than the mesh leg");
+            // The first corner is unaffected: its leg to the mesh's second corner is 0.1 yd worse than the mesh leg (relative contract).
+            Assert.True(Vector2.Distance(shaped[1].XY(), v1Pushed.XY()) < 0.05f, $"the first corner moved to {shaped[1]}");
+            Assert.True(stats.RelativeSegments >= 1, "the first corner's leg should have been accepted by the relative contract");
+            // The second corner is held to what the mesh leg allows: a smaller push (a partial one) or its mesh position, never the full push.
+            Assert.True(stats.PartialPushes >= 1 || (stats.Fallbacks >= 1 && Vector2.Distance(shaped[2].XY(), input[2].XY()) < 0.05f),
+                "the second corner was neither partially pushed nor reported as a fallback");
+            AssertInside(world, shaped);
+            return true;
+        }, floorAt: (x, y) => bumps.Floor(x, y));
+    }
+
+    [Theory]
+    [InlineData(39.5f, 39.5f, true)]
+    [InlineData(40.5f, 10f, false)]
+    [InlineData(10f, 40.5f, false)]
+    public async Task ACornerWithALegLongerThanTheShapedLegLimit_IsNotShaped_AndNothingIsProbed(float lenIn, float lenOut, bool shaped)
+    {
+        // An L with 8 yd wide legs, the corner on the inner wall corner (the string-pulled vertex), legs of the given lengths.
+        Rect[] region = [new(0f, 0f, 90f, 8f), new(82f, 0f, 90f, 90f)];
+        Assert.Equal(40f, PlayerbotPathShaping.MaxShapedLegYards);
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector2 corner = new(82f, 8f);
+            Vector3[] input = [at(new(corner.X - lenIn, 7.5f)), at(corner), at(new(corner.X + 1f, corner.Y + lenOut))];
+            world.ResetCounters();
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> result = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost($"legs {lenIn} and {lenOut}", world, stats, result);
+
+            if (shaped)
+            {
+                Assert.NotSame(input, result);
+                Assert.Equal(1, stats.CornersConsidered);
+                Assert.Equal(1, stats.CornersShaped);
+            }
+            else
+            {
+                // Not considered at all: no probe, no fallback of any reason, no budget stop; the list comes back untouched.
+                Assert.Same(input, result);
+                Assert.Equal(0, stats.CornersConsidered);
+                Assert.Equal(0, stats.Probes);
+                Assert.Equal(0, stats.Queries);
+                Assert.Equal(0, stats.Fallbacks);
+                Assert.Equal(0, stats.FallbackBudget);
+                Assert.Equal(0, stats.BudgetStops);
+                Assert.Equal(0, world.TotalQueries);
+            }
+
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ARoundedCornerWhoseArcLegIsNotWalkable_StaysAtItsMeshPosition_AndIsCountedAsAnArcFallback()
+    {
+        // Open ground, a right angle at (30, 0) with 30 yd legs: it is rounded (push 0, an arc from 2.5 yd before the corner). A raised
+        // square under the first floor sample of the leg to the arc's first tangent point (27.5, 0) - at 2.75 yd, not at a sample of the
+        // mesh leg (3, 6, ...) - makes that leg fail the strict check while the mesh leg passes it, so the arc is rejected.
+        Rect[] open = [new(-10f, -10f, 100f, 100f)];
+        var bumps = new Bumps();
+        await RunAsync(open, (world, map, at) =>
+        {
+            Vector2 offset = at(Vector2.Zero).XY();
+            Vector3[] input = [at(new(0f, 0f)), at(new(30f, 0f)), at(new(30f, 30f))];
+            var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
+
+            ShapeStats clear = default;
+            IReadOnlyList<Vector3> rounded = PlayerbotPathShaping.ShapePoints(map, input, settings, ref clear);
+            Assert.Equal(1, clear.CornersRounded);
+            Assert.Equal(0, clear.FallbackArc);
+
+            bumps.Items.Add((new Vector2(2.75f, 0f), 1.0f));
+            Assert.True(PlayerbotPathShaping.SegmentSafe(map, input[0], input[1]), "the mesh leg must pass the strict check");
+            Assert.False(PlayerbotPathShaping.SegmentSafe(map, input[0], at(new(27.5f, 0f))), "the leg to the tangent point must fail it");
+
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> result = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+            LogCost("arc fallback", world, stats, result);
+            Assert.Same(input, result);
+            Assert.Equal(1, stats.CornersConsidered);
+            Assert.Equal(0, stats.CornersShaped);
+            Assert.Equal(1, stats.Fallbacks);
+            Assert.Equal(1, stats.FallbackArc);
+            Assert.True(stats.ArcRejected >= 1);
+            Assert.Equal(0, stats.FallbackBudget);
+            Assert.Equal(0, stats.FallbackRoom + stats.FallbackGround + stats.FallbackSegment);
+            return true;
+        }, floorAt: (x, y) => bumps.Floor(x, y));
+    }
+
     private void LogCost(string name, RegionWorld world, ShapeStats stats, IReadOnlyList<Vector3> shaped)
         => _output.WriteLine($"{name}: {shaped.Count} points; considered {stats.CornersConsidered} shaped {stats.CornersShaped} rounded {stats.CornersRounded} "
             + $"fallbacks {stats.Fallbacks}; probes {stats.Probes} segments {stats.Segments} estimated queries {stats.Queries}; "
@@ -551,7 +713,8 @@ public sealed class PlayerbotPathShapingTests
     /// one the host knows) and run <paramref name="body"/> on the world thread with a local-to-world point builder.
     /// </summary>
     private static async Task RunAsync(Rect[] rects, Func<RegionWorld, Map, Func<Vector2, Vector3>, bool> body,
-        Func<RegionWorld, WorldTestHost, WorldSession, Func<Vector2, Vector3>, Task>? planner = null)
+        Func<RegionWorld, WorldTestHost, WorldSession, Func<Vector2, Vector3>, Task>? planner = null,
+        Func<float, float, float>? floorAt = null)
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -565,8 +728,10 @@ public sealed class PlayerbotPathShapingTests
                 Player player = session.Player!;
                 map = player.Map!;
                 var offset = new Vector2(player.X, player.Y);
-                world = new RegionWorld(rects, offset, Floor);
-                at = local => new Vector3(offset.X + local.X, offset.Y + local.Y, Floor);
+                // floorAt takes the region's local x/y; the default is the flat floor.
+                Func<float, float, float> local = floorAt ?? ((_, _) => Floor);
+                world = new RegionWorld(rects, offset, (x, y) => local(x - offset.X, y - offset.Y));
+                at = p => new Vector3(offset.X + p.X, offset.Y + p.Y, local(p.X, p.Y));
                 WorldCollision.Of(host.World).Install(lineOfSight: world, pathfinder: world);
                 return true;
             });
@@ -595,10 +760,10 @@ public sealed class PlayerbotPathShapingTests
     {
         private const float Eps = 1e-4f;
         private readonly Rect[] _rects;
-        private readonly float _floor;
+        private readonly Func<float, float, float> _floor;
         private Vector3[] _waypoints = [];
 
-        public RegionWorld(Rect[] rects, Vector2 offset, float floor)
+        public RegionWorld(Rect[] rects, Vector2 offset, Func<float, float, float> floor)
         {
             _rects = [.. rects.Select(r => new Rect(r.MinX + offset.X, r.MinY + offset.Y, r.MaxX + offset.X, r.MaxY + offset.Y))];
             _floor = floor;
@@ -662,8 +827,9 @@ public sealed class PlayerbotPathShapingTests
             Raycasts++;
             if (!Contains(start.X, start.Y)) return MeshRaycastResult.Unavailable(end);
             float t = ExitFraction(start.X, start.Y, end.X, end.Y);
-            if (t >= 1f) return new(true, false, 1f, new Vector3(end.X, end.Y, _floor));
-            return new(true, true, t, new Vector3(start.X + ((end.X - start.X) * t), start.Y + ((end.Y - start.Y) * t), _floor));
+            if (t >= 1f) return new(true, false, 1f, new Vector3(end.X, end.Y, _floor(end.X, end.Y)));
+            float hx = start.X + ((end.X - start.X) * t), hy = start.Y + ((end.Y - start.Y) * t);
+            return new(true, true, t, new Vector3(hx, hy, _floor(hx, hy)));
         }
 
         public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
@@ -677,7 +843,7 @@ public sealed class PlayerbotPathShapingTests
         public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
         {
             HeightCalls++;
-            return _floor;
+            return _floor(x, y);
         }
 
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }

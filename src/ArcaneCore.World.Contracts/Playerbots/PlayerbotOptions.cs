@@ -117,8 +117,10 @@ public sealed class PlayerbotOptions
     public float CornerClearanceYards { get; set; } = 2f;
 
     /// <summary>
-    /// The farthest (yards, 0..10) <see cref="PathShaping"/> moves a corner toward the middle of a bounded corridor (a road between two
-    /// walls) beyond what its clearance needs; 0 turns road centring off. A corner is never moved closer than 0.5 yard to the far side.
+    /// The most (yards, 0..10) the centring part of a <see cref="PathShaping"/> move can be: a corner in a corridor bounded on both sides
+    /// (a road between two walls) is pushed away from the inside of the turn by the larger of the clearance still missing and its way to
+    /// the middle of the corridor, and this caps that way to the middle only, so it never lowers the clearance push. 0 turns road centring
+    /// off. A corner is never moved closer than 0.5 yard to the far side.
     /// </summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 10 ('.' is the decimal point); 0 turns road centring off")]
     public float CornerCentringMaxYards { get; set; } = 4f;
