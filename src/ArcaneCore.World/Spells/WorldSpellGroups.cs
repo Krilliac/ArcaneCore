@@ -12,18 +12,60 @@ namespace ArcaneCore.World.Spells;
 /// </summary>
 public sealed class WorldSpellGroups(Func<GroupManager?> groups) : ISpellGroupResolver
 {
-    public IReadOnlyCollection<ObjectGuid> GetGroupMembers(Unit unit, bool raid)
+    private GroupManager? Manager()
     {
-        ArgumentNullException.ThrowIfNull(unit);
-        GroupManager? manager;
         try
         {
-            manager = groups();
+            return groups();
         }
         catch (InvalidOperationException)
         {
-            manager = null;
+            return null;
         }
+    }
+
+    public bool IsMember(Unit unit, ObjectGuid other, bool raid)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (Manager()?.GetGroup(unit.Guid) is not { } group)
+        {
+            return unit.Guid == other;
+        }
+
+        // Manual scans (no Find lambda): this runs on map threads and must not allocate.
+        IReadOnlyList<GroupMemberSlot> members = group.Members;
+        GroupMemberSlot? self = null;
+        for (int i = 0; i < members.Count; i++)
+        {
+            if (members[i].Guid == unit.Guid)
+            {
+                self = members[i];
+                break;
+            }
+        }
+
+        if (self is null)
+        {
+            return unit.Guid == other;
+        }
+
+        bool anySubGroup = raid || !group.IsRaid;
+        for (int i = 0; i < members.Count; i++)
+        {
+            GroupMemberSlot m = members[i];
+            if (m.Guid == other && (anySubGroup || m.SubGroup == self.SubGroup))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public IReadOnlyCollection<ObjectGuid> GetGroupMembers(Unit unit, bool raid)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        GroupManager? manager = Manager();
 
         if (manager?.GetGroup(unit.Guid) is not { } group || group.Find(unit.Guid) is not { } self)
         {

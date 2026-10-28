@@ -100,7 +100,7 @@ public sealed class GhostVisibilityRule(Func<ISpellGroupResolver?>? groups = nul
         }
 
         // "Ghost visibility by raid members."
-        if (groups?.Invoke() is { } resolver && resolver.GetGroupMembers(target, raid: true).Contains(viewer.Guid))
+        if (groups?.Invoke() is { } resolver && resolver.IsMember(target, viewer.Guid, raid: true))
         {
             return true;
         }

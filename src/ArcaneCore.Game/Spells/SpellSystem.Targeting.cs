@@ -364,7 +364,7 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(reference);
         ArgumentNullException.ThrowIfNull(unit);
-        return ReferenceEquals(reference, unit) || Groups.GetGroupMembers(reference, raid).Contains(unit.Guid);
+        return ReferenceEquals(reference, unit) || Groups.IsMember(reference, unit.Guid, raid);
     }
 
     /// <summary>
