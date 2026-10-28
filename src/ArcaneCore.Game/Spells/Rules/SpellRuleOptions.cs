@@ -86,6 +86,13 @@ public sealed class SpellRuleOptions
     public bool FrostShockDiminishesAsRoot { get; init; }
 
     /// <summary>
+    /// Whether a creature nobody tapped (no damage ever called LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the
+    /// warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem, SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632):
+    /// false, an untapped creature gives no shard. true keeps the shard for such kills.
+    /// </summary>
+    public bool SoulShardUntappedCountsAsTapped { get; init; }
+
+    /// <summary>
     /// Whether immunities (aura-granted and creature static masks) are enforced. Retail: true; false disables every
     /// immunity check for development hosts.
     /// </summary>

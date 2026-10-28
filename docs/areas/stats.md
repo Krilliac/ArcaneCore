@@ -265,7 +265,13 @@ A refresh in place or a stack change that re-applies a changed amount without a 
 `CombatStatAuras` recomputes the same values on it as on an added or removed holder (a creature's damage fields after an attack power aura was
 refreshed with another amount, as vmangos' HandleStatModifier does).
 
-Limits: the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
+Reference divergence, hunter pet happiness: vmangos scales a hunter pet's damage fields by its happiness (StatSystem.cpp:1088-1107) and then scales
+again in `MeleeDamageBonusDone` (SpellCaster.cpp:1378-1390), so a happy white swing there is about 1.5625 times (1.25 x 1.25) and an unhappy one about
+0.5625. Here the factor (`SummonService.HappinessDamageFactor`: 125% happy, 100% content, 75% unhappy, happiness levels of 333 000) is applied once,
+in the done bonuses (melee, `SpellBonusModule`), and the pet's damage fields stay unscaled, which matches the retail tooltip. Retail wins. Tests:
+`tests/ArcaneCore.Game.Tests/Pets/PetHappinessDamageTests.cs`.
+
+Limits: pets' own damage recompute on a stat change belongs to the pets lane; the melee class
 SCHOOL_DAMAGE spells (Shield Slam and the like) still take only the DAMAGE spell mod, not the non-weapon branch of `MeleeDamageBonusDone`; creature
 damage fields are recomputed for the main hand only (creatures carry no off-hand data). Creatures hold their `creature_equip_template` items since world
 schema 56 (see [content import](content-import.md), creature equipment), so `CreatureDamageStats.HasWeapon` (main-hand virtual item of class weapon) is
