@@ -18,6 +18,7 @@ using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Data.World.PlayerStats;
+using ArcaneCore.Data.World.Pets;
 using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -381,6 +382,7 @@ public static partial class ContentImporterCli
         var battlegrounds = new BattlegroundDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
+        var pets = new PetDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -477,6 +479,12 @@ public static partial class ContentImporterCli
             pools.Read(reader);
         }
 
+        // pet_levelstats and petcreateinfo_spell (classic-db and vmangos column names).
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pets.Read(reader);
+        }
+
         IReadOnlyList<string> appliedStatsMigrations = [];
         if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
         {
@@ -550,6 +558,7 @@ public static partial class ContentImporterCli
         BattlegroundImportReport battlegroundReport = battlegrounds.BuildReport();
         SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
         PoolImportReport poolReport = pools.BuildReport();
+        PetImportReport petReport = pets.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -577,6 +586,7 @@ public static partial class ContentImporterCli
                     battlegroundReport = await battlegrounds.WriteAsync(db, replace, token).ConfigureAwait(false);
                     spawnGroupReport = await spawnGroups.WriteAsync(db, replace, token).ConfigureAwait(false);
                     poolReport = await pools.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    petReport = await pets.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -599,6 +609,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(battlegroundReport.Warnings);
         warnings.AddRange(spawnGroupReport.Warnings);
         warnings.AddRange(poolReport.Warnings);
+        warnings.AddRange(petReport.Warnings);
         if (poolReport.RowsOutsidePatch > 0)
         {
             warnings.Add($"pool tables: {poolReport.RowsOutsidePatch} vmangos row(s) outside patch 10 dropped");
@@ -668,6 +679,9 @@ public static partial class ContentImporterCli
         imported[PoolDataModule.GameObjectTable] = poolReport.GameObjects;
         imported[PoolDataModule.GameObjectTemplateTable] = poolReport.GameObjectTemplates;
         imported[PoolDataModule.PoolPoolTable] = poolReport.PoolPools;
+        imported["pet_levelstats"] = petReport.LevelStats;
+        imported["petcreateinfo_spell"] = petReport.CreateSpells;
+        skipped["pet_levelstats_rows"] = petReport.SkippedRows;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
@@ -1086,6 +1100,8 @@ public static partial class ContentImporterCli
                 ("areatrigger_involvedrelation", await db.Set<AreaTriggerQuestRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("totem_spell", await db.Set<TotemSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)

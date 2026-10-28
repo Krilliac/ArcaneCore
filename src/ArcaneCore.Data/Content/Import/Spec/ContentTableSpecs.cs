@@ -268,6 +268,9 @@ public static class ContentTableSpecs
         new("world_safe_locs", [new KeyColumn("id")], ["map", "x", "y", "z", "o", "name"], []),
         new("game_graveyard_zone", [new KeyColumn("id"), new KeyColumn("ghost_zone", "ghost_loc")], ["faction", "link_kind", "patch_min", "patch_max"], s_graveyardSignatures),
         new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
+        // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
+        new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
+        new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =
