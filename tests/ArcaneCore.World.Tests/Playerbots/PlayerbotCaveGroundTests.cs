@@ -101,6 +101,21 @@ public sealed class PlayerbotCaveGroundTests
         Assert.Equal(BotZ + 15f, recording.Ends[0].Z);
     }
 
+    /// <summary>
+    /// A hillside floor 15 yards over the bot that the region graph puts in another walking component (a ledge across a cliff) is not
+    /// snapped onto: the goal point stays where it was. The same hillside in the bot's own component is snapped onto.
+    /// </summary>
+    [Fact]
+    public void GroundNear_HillsideInAnotherWalkingComponent_IsNotSnappedOnto()
+    {
+        const float hillside = BotZ + 15f;
+        static float Hill(float x, float y, float probeFrom) => hillside;
+        Vector3 point = new(48f, 0f, BotZ);
+
+        Assert.Equal(point, PlayerbotNavigation.GroundNear(Hill, floor => floor.Z < hillside, BotZ, point));
+        Assert.Equal(hillside, PlayerbotNavigation.GroundNear(Hill, floor => floor.Z >= hillside, BotZ, point).Z);
+    }
+
     private static async Task<PlanOutcome> PlanWanderAsync(ILineOfSight los, IPathfinder pathfinder)
     {
         await using WorldTestHost host = WorldTestHost.Start();
