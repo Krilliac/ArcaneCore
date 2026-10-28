@@ -135,6 +135,7 @@ public sealed class ManagedPlayerbotPerfTests
         Assert.Equal(1.0, PlayerbotThinkStarvation.PriorityScale(20_000, effectiveBoundMs), precision: 3);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public void Rotation4500Bots_Completes200TicksWellUnderOneTickBudget()
     {

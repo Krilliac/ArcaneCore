@@ -62,6 +62,7 @@ public sealed class WorldRuntimeManualClockWakeTests
         }
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task RealClock_AStreamOfPosts_DoesNotRaiseTheTickRate()
     {
