@@ -13,6 +13,7 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Pools;
+using ArcaneCore.Data.World.Threat;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
@@ -75,6 +76,10 @@ public static partial class ContentImporterCli
                                 family masks) with the dump's rows for build 5875; vmangos rows outside
                                 the build range are dropped (--cooldown-unit ms|seconds: classic-db dumps
                                 before z2829 store seconds; --dry-run writes nothing)
+          spell-threat <dump>... replace spell_threat (flat spell threat and threat multipliers) with the dump's
+                                rows for build 5875: classic-db (entry, Threat, multiplier, ap_bonus) or vmangos
+                                (threat, multiplier, inverse_effect_mask, build_min, build_max); a non-zero ap_bonus is
+                                refused (--dry-run writes nothing)
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, instance_encounter (the dungeon
@@ -163,6 +168,7 @@ public static partial class ContentImporterCli
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "spell-threat" => await SpellThreatAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh-portals" => await RefreshPortalsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
@@ -331,6 +337,58 @@ public static partial class ContentImporterCli
         }
 
         o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_proc_event");
+        return ExitCodes.Ok;
+    }
+
+    // --- spell-threat ------------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>spell-threat</c>: <see cref="SpellThreatDumpImporter"/> from the command line. The whole dump is parsed (and the build filter applied)
+    /// before any database is opened, and the table is replaced in one transaction, so a malformed dump changes nothing.
+    /// </summary>
+    private static async Task<int> SpellThreatAsync(CliArguments a, TextWriter o, CancellationToken ct)
+    {
+        RequireInputs(a);
+        bool dryRun = a.Flag("--dry-run");
+        Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
+        if (!dryRun)
+        {
+            GuardPath(target!.FilePath);
+        }
+
+        (IReadOnlyList<DumpInput> inputs, _) = OpenInputs(a.Positional);
+        SpellThreatParseResult result;
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            result = SpellThreatDumpImporter.Parse(reader);
+        }
+
+        if (result.RowsRead == 0)
+        {
+            throw new CliException(ExitCodes.Schema, "the dump has no spell_threat rows (is it a classic-db or vmangos world dump?)");
+        }
+
+        string counts = $"spell_threat: {result.RowsRead} row(s) read, {result.RowsFilteredByBuild} outside build {SpellThreatDumpImporter.SupportedBuild}";
+        if (dryRun)
+        {
+            o.WriteLine($"{counts}, {result.Content.Count} to import (dry run: no database written)");
+            return ExitCodes.Ok;
+        }
+
+        o.WriteLine($"target: {target!.Describe}");
+        int written;
+        try
+        {
+            await using WorldDbContext db = OpenWorld(target);
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            written = await SpellThreatDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
+        {
+            throw DatabaseError(ex, target);
+        }
+
+        o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_threats");
         return ExitCodes.Ok;
     }
 

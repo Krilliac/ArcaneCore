@@ -376,6 +376,10 @@ feature reads:
   with the dump's rows for build 5875 in one transaction, by column name for both the classic-db and the vmangos layout; vmangos rows whose
   build range misses 5875 are dropped and counted. `--cooldown-unit seconds` reads classic-db dumps before z2829, whose `Cooldown` is in
   seconds; `--dry-run` parses and counts without a database. Two kept rows for one spell are an error. See [procs](procs.md).
+- **Spell threat.** `spell-threat <dump>... --database <file>` (or `--provider`/`--connection-string`) replaces `spell_threat` with the dump's
+  rows for build 5875 in one transaction, by column name for both the classic-db (`entry, Threat, multiplier, ap_bonus`) and the vmangos
+  layout; vmangos rows whose build range misses 5875 are dropped and counted, a non-zero `ap_bonus` or two rows for one spell is an error.
+  `--dry-run` parses and counts without a database. A running world applies the rows with `.reload spell_threats`. See [threat](threat.md).
 - **Refresh an existing world.** `refresh <dump>... --database <file> [--dbc-dir <dir>]` brings a world that an older importer built up
   to the tables the current world reads, and touches nothing else (creatures, objects, items, quests, loot and NPC services stay as they
   are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`
