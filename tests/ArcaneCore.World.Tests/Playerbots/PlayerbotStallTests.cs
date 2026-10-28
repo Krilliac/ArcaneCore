@@ -64,24 +64,39 @@ public sealed class PlayerbotStallTests
     }
 
     /// <summary>
-    /// A real stall (no terrain: every wander is refused, nothing changes) reported by the stall watch at the start of a think: the stalled
-    /// work is the previous think's, so <see cref="PlayerbotBrain.StalledWorkPhase"/> is the phase the previous think ended in, and the
-    /// snapshot the host takes after the stalling think (the probe already on "stall log") names that phase. The next think clears it.
+    /// A real stall (no terrain: every wander is refused, nothing changes) reported by the stall watch inside a think. The stalled work is
+    /// the last <em>real</em> think's: <see cref="PlayerbotBrain.StalledWorkPhase"/> is the phase that think ended in (a work phase, not
+    /// "brain"), although a call that returned at the think-interval gate (a 50 ms tick against the 500 ms interval, which does no work and
+    /// leaves "brain" behind) came in between. The snapshot the host takes with the probe on "stall log" names that work phase; the next
+    /// think clears it.
     /// </summary>
     [Fact]
-    public async Task ARealStall_ReportsThePreviousThinksPhase_AndTheSnapshotNamesIt()
+    public async Task ARealStall_ReportsTheLastRealThinksPhase_NotTheNoWorkCallsBrainPhase()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
         try
         {
-            string previousEnd = "start";
+            string lastRealEnd = "start";
             string? expected = null, work = null, snapshot = null;
-            for (int think = 0; think < 200 && work is null; think++)
+            for (int round = 0; round < 200 && work is null; round++)
             {
-                await host.World.AdvanceClockAsync(100);
-                string previous = previousEnd;
+                // A no-work call first: below the 500 ms think interval, it returns at the gate with the phase left at "brain".
+                await host.World.AdvanceClockAsync(50);
+                string noWorkPhase = await host.OnWorldAsync(() =>
+                {
+                    var probe = new PlayerbotThinkProbe();
+                    probe.Begin();
+                    try { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(50); return brain.LastThinkPhase; }
+                    finally { probe.End(); }
+                });
+                Assert.Equal("brain", noWorkPhase);
+                Assert.Null(await host.OnWorldAsync(() => brain.StalledWorkPhase));
+
+                // Then a real think.
+                await host.World.AdvanceClockAsync(450);
+                string previous = lastRealEnd;
                 (string? StalledWork, string? Snapshot, string ThisEnd) result = await host.OnWorldAsync(() =>
                 {
                     var probe = new PlayerbotThinkProbe();
@@ -89,7 +104,7 @@ public sealed class PlayerbotStallTests
                     try
                     {
                         session.ManagedBudget = new ManagedActionBudget(4);
-                        brain.Update(100);
+                        brain.Update(500);
                         string thisEnd = brain.LastThinkPhase;
                         if (brain.StalledWorkPhase is null) return ((string?)null, (string?)null, thisEnd);
                         PlayerbotThinkProbe.Phase("settle");
@@ -98,19 +113,23 @@ public sealed class PlayerbotStallTests
                     }
                     finally { probe.End(); }
                 });
-                previousEnd = result.ThisEnd;
+                lastRealEnd = result.ThisEnd;
                 if (result.StalledWork is null) continue;
                 (expected, work, snapshot) = (previous, result.StalledWork, result.Snapshot);
             }
 
             Assert.NotNull(work);
             Assert.Equal(expected, work);
-            Assert.Contains($"phase={expected!.Replace(' ', '-')}", snapshot);
+            Assert.NotEqual("brain", work);
+            Assert.NotEqual("start", work);
+            Assert.StartsWith("explore", work);
+            Assert.Contains($"phase={work!.Replace(' ', '-')}", snapshot);
+            Assert.DoesNotContain("phase=brain", snapshot);
             Assert.DoesNotContain("phase=stall-log", snapshot);
             Assert.DoesNotContain("phase=settle", snapshot);
 
-            await host.World.AdvanceClockAsync(100);
-            Assert.Null(await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return brain.StalledWorkPhase; }));
+            await host.World.AdvanceClockAsync(500);
+            Assert.Null(await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(500); return brain.StalledWorkPhase; }));
         }
         finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
     }

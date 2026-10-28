@@ -682,6 +682,73 @@ public sealed class PlayerbotExploreTests
     }
 
     /// <summary>
+    /// The mesh-point fallback keeps to the bot's home like the rays do: a sample beyond the explore radius, or (for a zone-clipped home)
+    /// outside the zone, is not taken. The lone mesh point lies 25 yd east; the home is centred on the bot.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 40u, 500f, true)]    // zone-clipped, the point is in the home's zone (Westfall): taken
+    [InlineData(true, 10u, 500f, false)]   // zone-clipped, the point is over the border (Duskwood): refused
+    [InlineData(false, 10u, 500f, true)]   // not zone-clipped: the zone is not judged
+    [InlineData(false, 40u, 20f, false)]   // radius 20 yd, explore radius 16 yd: 25 yd out is beyond it
+    public async Task WanderMeshPoint_KeepsToTheHomeRadiusAndZone(bool zoneClipped, uint zoneAtPoint, float radius, bool taken)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+                // Zone 40 up to x 110 (the home's centre at x 100), zone `zoneAtPoint` beyond it.
+                var lookup = new PlayerbotZoneLookup((x, y, z) => x <= 110f ? 40u : zoneAtPoint);
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(100f, 100f, 83.53f), radius, "Westfall", zoneClipped, zoneClipped ? lookup : null);
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                PlayerbotRoute? walked = null;
+                for (int think = 0; think < 8 && walked is null; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute route && route.Points[^1].X > 120f) walked = route;
+                }
+
+                if (taken) Assert.NotNull(walked);
+                else Assert.Null(walked);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>A stall give-up on Explore starts a new refusal episode: the next refusal is traced again.</summary>
+    [Fact]
+    public async Task GiveUpOnExplore_ClearsTheRefusalTracedFlag()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                FieldInfo traced = typeof(PlayerbotBrain).GetField("_exploreRefusalTraced", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, 0);
+                traced.SetValue(brain, true);
+                brain.GiveUpStalledGoal(player);
+                Assert.False((bool)traced.GetValue(brain)!);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// GiveUpStalledGoal presets the refusal count to 3 for Explore. Refusals were only traced at count 1, so after any give-up
     /// every later refusal was silent and the stall diagnostics showed a bare <c>moving:no dest:none</c>.
     /// </summary>

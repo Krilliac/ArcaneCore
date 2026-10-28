@@ -130,8 +130,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private int _roamDirection;
     private int _exploreRefusals;
 
-    /// <summary>The phase of the think before the running one (the stall watch fires at the start of a think, so this is where the stalled work was).</summary>
-    private string _previousThinkPhase = "start";
+    /// <summary>
+    /// The phase the last think that got past the think-interval gate ended in (the stall watch fires inside such a think, before its
+    /// decision, so this is where the stalled work was). An <see cref="Update"/> call that returns at the gate does no work and does not set it.
+    /// </summary>
+    private string _lastWorkPhase = "start";
+
+    /// <summary>The running <see cref="Update"/> call got past the think-interval gate (a real think).</summary>
+    private bool _ranWorkThink;
 
     /// <summary>Set by <see cref="ReportStall"/>: the phase the stalled work was in; cleared at the next think. Read by the stall diagnostic.</summary>
     private string? _stalledWorkPhase;
@@ -626,7 +632,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
         PlayerbotThinkProbe.Phase("brain");
         _stalledWorkPhase = null;
-        _previousThinkPhase = LastThinkPhase;
+        _ranWorkThink = false;
         LastThinkPhase = "brain";
         _trace.ObserveState(this, _session.World.NowMs);
         CheckThinkClock(player, _session.World.NowMs);
@@ -651,6 +657,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
 
             if (PlayerbotThinkProbe.CurrentPhase is { } currentPhase) LastThinkPhase = currentPhase;
+            if (_ranWorkThink) _lastWorkPhase = LastThinkPhase;
             _trace.ObserveState(this, _session.World.NowMs);
             CheckThinkOverran(player, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, _session.World.NowMs,
                 (GC.GetTotalPauseDuration() - gcPauseBefore).TotalMilliseconds);
@@ -832,6 +839,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
+        _ranWorkThink = true;
         NoteThink(_session.World.NowMs);
         ObserveDeferWakes(player);
 
@@ -1967,8 +1975,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private void ReportStall(Player player)
     {
-        // The stall watch runs before this think's decision, so the work that stalled is the previous think's: LastThinkPhase is already "brain".
-        _stalledWorkPhase = _previousThinkPhase;
+        // The stall watch runs before this think's decision, so the work that stalled is the last real think's (calls that returned at the
+        // think-interval gate did none).
+        _stalledWorkPhase = _lastWorkPhase;
         string detail = _stall.Report ?? "stalled (no report text)";
         bool repeated = _stall.LastGiveUpRepeated;
         PlayerbotAnomalies.Report(player, "brain", repeated ? "stall-unresolved" : "stall",
@@ -3497,6 +3506,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="point"/> lies outside the bot's home on this map: beyond <see cref="PlayerbotHomeArea.ExploreRadius"/>, or, for a
+    /// zone-clipped home, outside its zone. The mesh-point fallback keeps to the same limits as the rays (<see cref="WanderLegEnd"/>).
+    /// A bot with no home, or on another map than its home, is not limited.
+    /// </summary>
+    private bool OutsideHome(Player player, System.Numerics.Vector3 point)
+        => _home is { } area && area.MapId == (player.Map?.MapId ?? player.MapId)
+            && (area.DistanceTo(point.X, point.Y) > area.ExploreRadius
+                || (area.ZoneClipped && !area.InZone(point.X, point.Y, point.Z)));
+
     /// <summary>Records "wander-refused" once per refusal episode. A give-up presets the count (GiveUpStalledGoal), so a count test hid every later refusal.</summary>
     private void TraceWanderRefusal()
     {
@@ -3529,7 +3548,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!mesh.TryGetRandomPointAround(map.MapId, here, ExploreLegYards, _wanderRandom, PlayerbotMoveCheck.MeshOptions, out System.Numerics.Vector3 point)
                 || !point.IsFinite()
                 || System.Numerics.Vector2.Distance(new(point.X, point.Y), new(here.X, here.Y)) < minimum
-                || PlayerbotMotion.IsBlacklisted(player, point))
+                || PlayerbotMotion.IsBlacklisted(player, point)
+                || OutsideHome(player, point))
             {
                 continue;
             }
@@ -3538,7 +3558,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (outcome == PlanOutcome.Pending)
             {
                 AbandonRoute();
-                return true; // the tile is still being read: the same fallback again next think
+                return true; // a tile is still being read: this think ends here, the next one samples again (a new point)
             }
             if (outcome != PlanOutcome.Route || route is not { Points.Count: > 0 } found) continue;
             System.Numerics.Vector3 end = found.Points[^1];
