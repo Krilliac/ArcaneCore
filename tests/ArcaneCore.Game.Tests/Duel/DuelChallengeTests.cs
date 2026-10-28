@@ -67,6 +67,31 @@ public sealed class DuelChallengeTests
     }
 
     [Fact]
+    public void TheFlagCreate_ReachesEveryDuellist_BeforeTheDuelRequested()
+    {
+        using var rig = new DuelRig();
+        rig.World.Options.UpdateCompressionThreshold = 0; // plain SMSG_UPDATE_OBJECT, so the create block's guid can be read
+        rig.ClearPackets();
+
+        Assert.Equal(SpellCastResult.CastOk, CastDuel(rig, rig.A, rig.B));
+
+        GameObject flag = Assert.Single(Flags(rig));
+        var create = new PacketWriter(16);
+        create.WriteByte((byte)ObjectUpdateType.CreateObject);
+        create.WritePackedGuid(flag.Guid.Value);
+        byte[] marker = create.ToArray();
+        foreach (FakeSession session in new[] { rig.SessionA, rig.SessionB })
+        {
+            List<(WorldOpcode Opcode, byte[] Payload)> sent = [.. session.Sent.ToArray().Select(p => (p.Opcode, p.Payload))];
+            int created = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgUpdateObject && p.Payload.AsSpan().IndexOf(marker) >= 0);
+            int requested = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgDuelRequested);
+            Assert.True(created >= 0, "the flag create was never sent");
+            Assert.True(requested >= 0, "SMSG_DUEL_REQUESTED was never sent");
+            Assert.True(created < requested, $"flag create at {created} must precede SMSG_DUEL_REQUESTED at {requested}");
+        }
+    }
+
+    [Fact]
     public void TheCastCheck_RefusesNonPlayerTargets_AndSelf()
     {
         using var rig = new DuelRig();

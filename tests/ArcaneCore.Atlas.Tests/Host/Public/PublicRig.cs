@@ -331,17 +331,29 @@ internal static class SocketExtensions
     }
 
     /// <summary>
-    /// The next message that is not a pushed event (<c>op</c> "event", such as the live status a hub broadcasts on its own schedule, which may
-    /// already be on its way when the server decides to close), or null when the peer closed.
+    /// The next message that is not the pushed <c>live.status</c> event (<c>op</c> "event", <c>topic</c> "live.status": the live status a hub
+    /// broadcasts on its own schedule, which may already be on its way when the server decides to close), or null when the peer closed. Any
+    /// other event is returned, and the wait ends with a <see cref="TimeoutException"/> at the deadline even while events keep arriving.
     /// </summary>
     public static async Task<string?> ReceiveSkippingEventsAsync(this ClientWebSocket socket, int timeoutMs = 10_000)
     {
         DateTime end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (true)
+        while (DateTime.UtcNow < end)
         {
             string? text = await socket.ReceiveTextAsync(Math.Max(100, (int)(end - DateTime.UtcNow).TotalMilliseconds));
-            if (text is null || JsonNode.Parse(text)?["op"]?.GetValue<string>() != "event") return text;
+            if (text is null)
+            {
+                return null;
+            }
+
+            JsonNode node = JsonNode.Parse(text)!;
+            if (node["op"]?.GetValue<string>() != "event" || node["topic"]?.GetValue<string>() != "live.status")
+            {
+                return text;
+            }
         }
+
+        throw new TimeoutException("only live.status events arrived before the deadline");
     }
 
     /// <summary>Reads messages until one has this <c>op</c> (and <c>topic</c> when given); null when the socket closed first.</summary>
