@@ -30,17 +30,17 @@ public sealed class SelfResurrectionFeature : IWorldFeature, IDisposable
 
     private void Subscribe(Map map)
     {
-        if (_subscribed.Add(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _subscribed.Add(combat))
         {
-            map.Combat.PlayerSelfResurrected += Save;
+            combat.PlayerSelfResurrected += Save;
         }
     }
 
     private void Unsubscribe(Map map)
     {
-        if (_subscribed.Remove(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _subscribed.Remove(combat))
         {
-            map.Combat.PlayerSelfResurrected -= Save;
+            combat.PlayerSelfResurrected -= Save;
         }
     }
 
