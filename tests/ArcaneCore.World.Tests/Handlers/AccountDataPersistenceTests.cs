@@ -125,6 +125,36 @@ public sealed class AccountDataPersistenceTests
         await db.WaitForBlobAsync(accountId, 1, "second session");
     }
 
+    [Fact]
+    public async Task ASecondSession_ConnectingBeforeTheFirstOnesFlush_ServesTheLatestBlob()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        await using var host = db.StartHost(LongIntervalMs);
+        byte[] key = await host.AddAccountAsync("ADRACE");
+        int accountId = (await host.Accounts.FindByUsernameAsync("ADRACE"))!.Id;
+
+        WorldTestClient first = await host.ConnectAsync();
+        await first.AuthenticateAsync("ADRACE", key);
+        await first.CollectAsync();
+        await first.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 1"));
+        await first.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 2")); // held inside the interval
+        await first.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+        await first.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+        await WorldTestHost.WaitForAsync(() => db.DataWrites == 1, "the first change to be written at once");
+
+        // The first session is still open: its held value has not been flushed when the second one authenticates.
+        WorldTestClient second = await host.ConnectAsync();
+        await second.AuthenticateAsync("ADRACE", key);
+        await second.CollectAsync();
+        await second.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(0u));
+        byte[] reply = await second.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+        using var zlib = new System.IO.Compression.ZLibStream(new MemoryStream(reply, 8, reply.Length - 8), System.IO.Compression.CompressionMode.Decompress);
+        using var text = new MemoryStream();
+        await zlib.CopyToAsync(text);
+        Assert.Equal("SET a 2", Encoding.ASCII.GetString(text.ToArray()));
+        await db.WaitForBlobAsync(accountId, 0, "SET a 2");
+    }
+
     private static byte[] AccountData(uint type, string text)
     {
         byte[] data = Encoding.ASCII.GetBytes(text);

@@ -135,6 +135,29 @@ public sealed class ClientInputValidationTests
         Assert.Equal(string.Empty, stored);
     }
 
+    [Theory]
+    [InlineData(ChatType.Afk)]
+    [InlineData(ChatType.Dnd)]
+    public async Task AwayText_Refused_WhileAlreadyAway_KeepsTheStateAndTheOldText(ChatType type)
+    {
+        string name = type == ChatType.Afk ? "Keepafk" : "Keepdnd";
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("KEEP" + (int)type, name);
+        await client.CollectAsync();
+
+        await client.SendChatAsync(type, Language.Universal, "back soon");
+        await host.WaitForWorldAsync(() => type == ChatType.Afk ? host.World.FindOnlinePlayer(name)!.IsAfk : host.World.FindOnlinePlayer(name)!.IsDnd, "the state to be set");
+
+        host.WorldServices.GetRequiredService<ChatFeature>().Options.StrictLinkSeverity = 2;
+        await client.SendChatAsync(type, Language.Universal, "gone |Zbogus");
+        await client.SendChatAsync(ChatType.Say, Language.Common, "marker"); // handled after the refused text, on the same world thread queue
+        Assert.Equal("marker", (await client.ReadChatAsync()).Text);
+
+        (bool away, string text) = await host.PlayerStateAsync(name, p => type == ChatType.Afk ? (p.IsAfk, p.AfkMessage) : (p.IsDnd, p.DndMessage));
+        Assert.True(away);
+        Assert.Equal("back soon", text);
+    }
+
     [Fact]
     public async Task ChatMessage_OverTheConfiguredCap_IsDropped()
     {

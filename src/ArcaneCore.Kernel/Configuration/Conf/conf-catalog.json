@@ -10161,7 +10161,7 @@
       "default": "1000",
       "defaultEntries": [],
       "daemons": "World",
-      "reload": "start",
+      "reload": "live",
       "meaning": "ArcaneCore hardening: the shortest time (milliseconds) between two account data or tutorial writes of one account. A change inside it is kept in memory at once and written when the interval ends, coalesced to the latest value per type (never dropped). 0 = write every change at once. vmangos writes every CMSG_UPDATE_ACCOUNT_DATA (MiscHandler.cpp HandleUpdateAccountData).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#world",

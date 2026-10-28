@@ -37,10 +37,11 @@ public sealed class SocialOptions
 
     /// <summary>
     /// ArcaneCore hardening: the shortest time (milliseconds) between two ready-check answers of one member that are forwarded to the
-    /// leader; answers inside it are dropped, and a new ready check resets it. 0 = off. vmangos forwards every answer, pending check or not
-    /// (GroupHandler.cpp HandleRaidReadyCheckOpcode); a client answers once per check, so the default (1000) never drops a real answer.
+    /// leader; answers inside it are dropped (a dropped answer is not replayed, so the leader can keep a stale one), and a new ready check
+    /// resets it. Off (0) by default, as in vmangos, which forwards every answer, pending check or not (GroupHandler.cpp
+    /// HandleRaidReadyCheckOpcode): set it only to defend against a member spamming the leader.
     /// </summary>
-    public int ReadyCheckAnswerIntervalMs { get; set; } = 1000;
+    public int ReadyCheckAnswerIntervalMs { get; set; }
 
     /// <summary>AllowTwoSide.AddFriend.</summary>
     public bool AllowTwoSideAddFriend { get; set; }

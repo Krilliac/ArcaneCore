@@ -202,8 +202,20 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         else
         {
             // A text that fails the link check or the word filter is not spoken chat: dropping the packet would stop the player from going
-            // AFK/DND at all, so the state is toggled with the empty (client default) text instead.
-            message = SanitizeAwayText(message, chat.Options, session.Services.GetService<ChatWordFilterFeature>()?.Filter) ?? string.Empty;
+            // AFK/DND at all, so a player who is not yet AFK/DND goes AFK/DND with the empty (client default) text. A player who already is
+            // keeps the state and the old text: an empty text would toggle it off, which the player did not ask for.
+            if (SanitizeAwayText(message, chat.Options, session.Services.GetService<ChatWordFilterFeature>()?.Filter) is { } away)
+            {
+                message = away;
+            }
+            else if (type == ChatType.Afk ? player.IsAfk : player.IsDnd)
+            {
+                return;
+            }
+            else
+            {
+                message = string.Empty;
+            }
         }
 
         // AzerothCore PlayerScript::OnPlayerCanUseChat (docs/integration/script-hooks.md): after commands, before every feature and the core.
@@ -307,8 +319,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// cut by <see cref="ChatSanitizer.TruncateAtSafeBoundary"/> so it never lands inside a colour or hyperlink sequence or between the two
     /// halves of a surrogate pair; the result may be shorter than the cap), the link check (<see cref="ChatOptions.StrictLinkSeverity"/>)
     /// and the word filter (<see cref="ChatOptions.WordFilter"/>). Null when the text fails the link check or is blocked by the word
-    /// filter: the caller then toggles the state with an empty text rather than dropping the packet. Whether vmangos sanitises AFK
-    /// text is unverified; every step is behind an option.
+    /// filter: the caller then sets the state with an empty text rather than dropping the packet (or, if the player is already
+    /// AFK/DND, leaves state and text alone). vmangos does not sanitise AFK/DND text at all (ChatHandler.cpp:221, toggles at 611-645), so this
+    /// whole step goes beyond it; every part of it is behind an option.
     /// </summary>
     internal static string? SanitizeAwayText(string message, ChatOptions options, ChatWordFilter? filter)
     {

@@ -1016,6 +1016,13 @@ public sealed partial class WorldSession : IPlayerSession
             return false;
         }
 
+        // An earlier session of the account may still hold throttled values: queue and write them before reading, or this session
+        // would serve (and compare against) a stale blob and the earlier session's flush could land after this session's writes.
+        if (Services.GetService<AccountDataFeature>() is { IsAttached: true } accountData)
+        {
+            await accountData.DrainAccountAsync(stored.Id).ConfigureAwait(false);
+        }
+
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
             .GetAsync(stored.Id).ConfigureAwait(false);
 

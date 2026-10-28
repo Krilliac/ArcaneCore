@@ -103,6 +103,8 @@ public static class WorldConfigKeys
         Live("MaxCommandsPerTick", o => o.MaxCommandsPerTick, (o, v) => o.MaxCommandsPerTick = v,
             value => value > 0 ? null : "must be positive"),
         LiveNonNegative("CommandTimeBudgetMs", o => o.CommandTimeBudgetMs, (o, v) => o.CommandTimeBudgetMs = v),
+        // AccountDataFeature reads it at each account data or tutorial write (0 = write every change at once).
+        LiveNonNegative("AccountDataWriteIntervalMs", o => o.AccountDataWriteIntervalMs, (o, v) => o.AccountDataWriteIntervalMs = v),
         LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
         LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),

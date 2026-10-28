@@ -46,9 +46,28 @@ public sealed class SocialInputCapTests
     }
 
     [Fact]
-    public void ReadyCheckAnswers_AreStillForwarded_ButRateLimitedPerMember()
+    public void ReadyCheckAnswers_AreAllForwardedByDefault_LikeVmangos()
     {
         using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.Context.Groups.Invite(a, b.Name);
+        f.Context.Groups.Accept(b);
+        f.ClearAll();
+
+        Assert.Equal(0, new SocialOptions().ReadyCheckAnswerIntervalMs);
+        for (int i = 0; i < 5; i++)
+        {
+            f.Context.Groups.ReadyCheck(b, i % 2);
+        }
+
+        Assert.Equal(5, f.Sent(a, WorldOpcode.MsgRaidReadyCheck).Count());
+    }
+
+    [Fact]
+    public void ReadyCheckAnswers_WhenTheLimitIsSwitchedOn_AreRateLimitedPerMember()
+    {
+        using var f = new SocialFixture(new SocialOptions { ReadyCheckAnswerIntervalMs = 1000 });
         Player a = f.AddPlayer(1);
         Player b = f.AddPlayer(2);
         f.Context.Groups.Invite(a, b.Name);

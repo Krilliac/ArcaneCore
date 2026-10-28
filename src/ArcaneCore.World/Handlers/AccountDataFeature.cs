@@ -20,8 +20,13 @@ namespace ArcaneCore.World.Handlers;
 /// failure), which resolves <see cref="IAccountDataStore"/> from a scope of its own for each attempt. The store a session holds is scoped to
 /// its socket and wraps a pooled DbContext, which is not thread-safe and is returned when the session ends, so no write here ever touches it.
 /// </para>
+/// A reconnect resets the account's throttle (<see cref="FlushAccount"/> drops its state), so the first change of the new session is
+/// written at once. <see cref="DrainAccountAsync"/> runs at authentication, before the settings are loaded, so a new session never reads
+/// values an earlier session of the account still holds or has queued, and the earlier session's flush cannot land after the new one's writes.
+/// <para>
 /// Thread affinity: <see cref="SaveData"/>, <see cref="SaveTutorials"/> and <see cref="FlushAccount"/> may be called from any thread;
 /// all state is guarded by one lock and the queue calls made under it only enqueue.
+/// </para>
 /// </summary>
 public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature
 {
@@ -101,6 +106,16 @@ public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeF
         ScheduleFlush(accountId, state, delayMs);
     }
 
+    /// <summary>
+    /// Authentication of a new session of the account: queue everything an earlier session still holds, then wait until every write queued
+    /// so far has been attempted (never throws; a failed write stays retained in the queue), so the settings read next include it.
+    /// </summary>
+    public Task DrainAccountAsync(int accountId)
+    {
+        FlushAccount(accountId);
+        return FlushAsync();
+    }
+
     /// <summary>Queue everything the account still holds (a session ended). Does not wait for the database.</summary>
     public void FlushAccount(int accountId)
     {
@@ -139,7 +154,14 @@ public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeF
             _accounts.Clear();
         }
 
-        await writes.StopAsync().ConfigureAwait(false);
+        try
+        {
+            await writes.StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _stopping.Dispose();
+        }
     }
 
     private KeyedStoreWriteQueue<IAccountDataStore> Attached()
@@ -203,7 +225,7 @@ public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeF
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
         {
             // the world is stopping: StopAsync queues what is held
         }

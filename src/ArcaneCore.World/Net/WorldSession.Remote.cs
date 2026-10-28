@@ -100,6 +100,11 @@ public sealed partial class WorldSession
             return AuthResponseCode.Banned;
         }
 
+        if (Services.GetService<AccountDataFeature>() is { IsAttached: true } accountData)
+        {
+            await accountData.DrainAccountAsync(stored.Id).ConfigureAwait(false); // an earlier session's held values first (see WorldSession.HandleAuthSessionAsync)
+        }
+
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>().GetAsync(stored.Id).ConfigureAwait(false);
         lock (_sendLock)
         {
@@ -218,6 +223,7 @@ public sealed partial class WorldSession
         finally
         {
             Close();
+            Services.GetService<AccountDataFeature>()?.FlushAccount(AccountId); // queue the throttled values and drop the account's state
         }
     }
 

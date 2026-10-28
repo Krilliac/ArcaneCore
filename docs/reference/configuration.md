@@ -1025,7 +1025,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `World:AccountDataWriteIntervalMs` | `int` | `1000` | - | ArcaneCore hardening: the shortest time (milliseconds) between two account data or tutorial writes of one account. A change inside it is kept in memory at once and written when the interval ends, coalesced to the latest value per type (never dropped). 0 = write every change at once. vmangos writes every CMSG_UPDATE_ACCOUNT_DATA (MiscHandler.cpp HandleUpdateAccountData). |
+| `World:AccountDataWriteIntervalMs` | `int` | `1000` | live | ArcaneCore hardening: the shortest time (milliseconds) between two account data or tutorial writes of one account. A change inside it is kept in memory at once and written when the interval ends, coalesced to the latest value per type (never dropped). 0 = write every change at once. vmangos writes every CMSG_UPDATE_ACCOUNT_DATA (MiscHandler.cpp HandleUpdateAccountData). |
 | `World:AllowTwoSideChat` | `bool` | `false` | live | Allow whispers and custom emotes across factions, and send Common/Orcish as Universal (vmangos AllowTwoSide.Interaction.Chat, default off). |
 | `World:AllowTwoSideWhoList` | `bool` | `false` | live | Show the other faction in /who (vmangos AllowTwoSide.WhoList, default off). |
 | `World:AutosaveIntervalMs` | `int` | `900000` | live | Periodic save of online characters, in milliseconds (vmangos PlayerSave.Interval default 900000). 0 disables. |

@@ -8378,7 +8378,7 @@ Warden.StaffNoticeCooldownSeconds = 30
 #        Type: int
 #        Default: 1000
 #        Allowed: a whole number, -2147483648 to 2147483647
-#        Reload: Start-up (read once when the daemon starts)
+#        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#world
 #
 World.AccountDataWriteIntervalMs = 1000
