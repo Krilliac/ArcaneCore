@@ -17,6 +17,15 @@ public sealed class DuelEndToEndTests
 {
     private static byte[] Guid(ulong guid) => BitConverter.GetBytes(guid);
 
+    /// <summary>
+    /// Both duellists have the flag in their visible sets, so its create went out to them. The flag is spawned by the challenge and shown to
+    /// each player by that player's next visibility step: a cancel or a disconnect before that step removed it with no observer, and the
+    /// destroy the tests wait for was never sent (seen with spell batching on a loaded machine).
+    /// </summary>
+    private static Task FlagSeenAsync(WorldTestHost host, ulong flag)
+        => host.WaitForWorldAsync(() => new[] { "Duela", "Duelb" }.All(name => host.World.FindOnlinePlayer(name)?.VisibleObjects.Any(g => g.Value == flag) == true),
+            "both duellists see the duel flag");
+
     private static async Task<(WorldTestHost Host, ManualTimeProvider Clock, WorldTestClient A, WorldTestClient B, ulong GuidA, ulong GuidB)> StartAsync()
     {
         ManualTimeProvider clock = NewClock();
@@ -43,6 +52,7 @@ public sealed class DuelEndToEndTests
         byte[] requestedB = await b.ReadUntilAsync(WorldOpcode.SmsgDuelRequested);
         Assert.Equal(requestedA, requestedB);
         ulong flag = await host.PlayerStateAsync("Duela", p => p.DuelArbiter);
+        await FlagSeenAsync(host, flag);
         Assert.NotEqual(0ul, flag);
         Assert.Equal([.. Guid(flag), .. Guid(ga)], requestedA);
 
@@ -97,6 +107,7 @@ public sealed class DuelEndToEndTests
         await a.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(DuelSpell, gb));
         await a.ReadUntilAsync(WorldOpcode.SmsgDuelRequested);
         ulong flag = await host.PlayerStateAsync("Duela", p => p.DuelArbiter);
+        await FlagSeenAsync(host, flag);
         await b.SendAsync(WorldOpcode.CmsgDuelAccepted, Guid(flag));
         await b.ReadUntilAsync(WorldOpcode.SmsgDuelCountdown);
         clock.Advance(3);
@@ -121,6 +132,7 @@ public sealed class DuelEndToEndTests
         await a.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(DuelSpell, gb));
         await b.ReadUntilAsync(WorldOpcode.SmsgDuelRequested);
         ulong flag = await host.PlayerStateAsync("Duela", p => p.DuelArbiter);
+        await FlagSeenAsync(host, flag);
 
         await b.SendAsync(WorldOpcode.CmsgDuelCancelled, Guid(flag));
 
@@ -160,6 +172,7 @@ public sealed class DuelEndToEndTests
         await a.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(DuelSpell, gb));
         await b.ReadUntilAsync(WorldOpcode.SmsgDuelRequested);
         ulong flag = await host.PlayerStateAsync("Duela", p => p.DuelArbiter);
+        await FlagSeenAsync(host, flag);
         await b.SendAsync(WorldOpcode.CmsgDuelAccepted, Guid(flag));
         await b.ReadUntilAsync(WorldOpcode.SmsgDuelCountdown);
 
