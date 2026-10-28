@@ -16,8 +16,8 @@ namespace ArcaneCore.World.Rules;
 /// <c>.rules check</c>, <c>.rules vocab</c> and <c>.rules trace</c> read it (<see cref="RuleCommands"/>).
 /// <para>
 /// Phase P0: no host is wired yet, so nothing evaluates these rules in the world; the engine itself is proven by its unit tests. Spell and
-/// creature references are checked only for their sign until a host supplies those stores (the spell and creature features attach after
-/// this one).
+/// creature references are checked only for their sign until a host phase wires existence checks into <see cref="RuleBuildOptions"/> (and
+/// re-validates the rules when those stores reload).
 /// </para>
 /// </summary>
 public sealed class RuleFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<RuleFeature> logger) : IWorldFeature

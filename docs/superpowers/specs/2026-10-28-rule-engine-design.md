@@ -170,7 +170,7 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
 
 **Phase masks (verified against the references).** The rule `phase_mask` is positive: bit n set means the rule fires in phase n, and 0 means every phase. The two script systems the converters read differ from it:
 
-- EventAI (mangos-classic 8ec338a1704e7dcb1c0213eb7ed58f9231ade40f, `src/game/AI/EventAI/CreatureEventAI.cpp:263-264`) stores an *inverse* mask: an event is skipped when bit `m_Phase` is set, and phase 0 is an ordinary phase. The converter writes `phase_mask = ~event_inverse_phase_mask` (32 bits), and 0 when the inverse mask is 0.
+- EventAI (mangos-classic 8ec338a1704e7dcb1c0213eb7ed58f9231ade40f, `src/game/AI/EventAI/CreatureEventAI.cpp:263-264`) stores an *inverse* mask: an event is skipped when bit `m_Phase` is set, and phase 0 is an ordinary phase. The converter writes `phase_mask = ~event_inverse_phase_mask` (32 bits), and 0 when the inverse mask is 0. An inverse mask of all 32 bits (the event never fires) would invert to 0 (every phase): the converter writes such a row disabled instead.
 - SmartAI (TrinityCore 44b718c1d79260d417fbb8dd852586aec2d05f1e, `src/server/game/AI/SmartScripts/SmartScript.cpp:4364-4369`, used at :3181 and :3782) stores a positive mask in which bit n means phase n + 1; a zero mask always passes, and phase 0 matches no non-zero mask. The converter writes `phase_mask = event_phase_mask << 1` (and 0 for 0).
 
 ## 7. Phased roadmap
@@ -275,4 +275,7 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
 - Module vocabularies (`RuleVocabulary.WithModule`) are API only in P0: no module host feeds them yet, and `RuleFeature` builds from `RuleVocabulary.Default`.
 - No spell or creature existence check is wired at runtime (`RuleBuildOptions.SpellExists` and `CreatureEntryExists` are unit-tested), because the spell and creature features attach after `RuleFeature`. The first host phase that uses `cast` or creature entries wires them and re-validates on reload.
 - `ConditionTableGate` evaluates without a player or a source; a host that needs player conditions supplies its own `IRuleConditionGate`.
+- The evaluator calls host code (`RuleEvent.Matches`, `RuleTarget.Resolve`, `RuleAction.Execute`, the condition gate) without a try/catch. The first host wraps its `Fire`/`Update` calls in the fault-ledger idiom, and guards against an action that synchronously fires the same event again (`MaxListDepth` limits list nesting only).
+- A chain of more than 8 lists with no delay between them passes the catalog and is cut at run time (`DepthLimited`); the first host phase either rejects such chains at load or keeps this documented.
+- The 24-hour caps on `cooldown_max_ms` and `delay_ms` may reject converted EventAI/SmartAI/DB-script rows with longer timers; the P2 converters check their corpus against them.
 - The evaluator counters (`RuleEvaluatorCounters`) belong to each host's evaluator; P0 has none in the world, so no command prints them yet.

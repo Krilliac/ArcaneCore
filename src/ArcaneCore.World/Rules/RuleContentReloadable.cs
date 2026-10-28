@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Rules;
 /// a reload with any rejected row is rejected whole and the current rules stay, so a half-fixed edit never goes live; the notes name the
 /// first rejections and <c>.rules check</c> lists them after the next successful load. An empty set of tables empties the rules unless
 /// <c>HotReload:EmptyTables = KeepLoaded</c>. Hosts rebind their subjects to the new catalog (a subject's cooldowns and phase restart).
-/// In <c>.reload all</c>; after <c>conditions</c> when both are reloaded together.
+/// In <c>.reload all</c> (<c>conditions</c> is not, so reload conditions first when an edit adds conditions the rules use).
 /// </summary>
 public sealed class RuleContentReloadable(IServiceProvider services) : IContentReloadable
 {

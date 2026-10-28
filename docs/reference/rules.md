@@ -56,7 +56,7 @@ For each rule of the fired event, lowest `priority` first (ties by `id`), the ev
 
 `chance_pct` is a fresh roll per firing. With the StableShare flag it is instead a stable share of subjects, as `share_pct` is: a subject is selected when `bucket(seed, rule_id, guid) < pct`, where bucket is two SplitMix64 finalisations of the three inputs, mod 100 (`RuleShare.Bucket`). A filter uses its `share_seed`; the StableShare chance uses the filter's seed (0 without a filter) xor 0x5EED5EED, so the two shares are independent. The same subjects stay selected across ticks and restarts; a new seed reshuffles them.
 
-Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the sequence then waits in one of the subject's 4 pending slots. Lists nest at most 8 deep, and a list that starts itself again with no delay in between is rejected at load.
+Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the sequence then waits in one of the subject's 4 pending slots. Lists nest at most 8 deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.
 
 Ids below 1000000 are shipped or converted content; server-authored rows use 1000000 and up. `playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or 1000 and up for a custom goal.
 

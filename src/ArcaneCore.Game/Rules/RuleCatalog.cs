@@ -48,8 +48,8 @@ public sealed class RuleCatalog
     /// is a once-only rule), and the cap keeps the drawn cooldown and the subject's clock arithmetic far from overflow.</summary>
     public const int MaxCooldownMs = 86_400_000;
 
-    /// <summary>The default cap on an action's <c>delay_ms</c>: 24 hours. Delays of one sequence are summed while lists compile, so an
-    /// unbounded delay could overflow that sum.</summary>
+    /// <summary>The default cap on an action's <c>delay_ms</c>: 24 hours. A longer delay is a data error (a timed
+    /// event belongs to its host), and the cap keeps a pending run's due time far from the subject clock's limits.</summary>
     public const int MaxDelayMs = 86_400_000;
 
     private const RuleFlags KnownFlags = RuleFlags.Repeatable | RuleFlags.CombatOnly | RuleFlags.OutOfCombatOnly | RuleFlags.DebugTrace | RuleFlags.StableShare;

@@ -88,7 +88,7 @@ public static class RuleReference
             .Append("across ticks and restarts; a new seed reshuffles them.\n\n")
             .Append("Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the ")
             .Append($"sequence then waits in one of the subject's {RuleSubjectState.PendingCapacity} pending slots. Lists nest at most ")
-            .Append($"{RuleEvaluator.MaxListDepth} deep, and a list that starts itself again with no delay in between is rejected at load.\n\n")
+            .Append($"{RuleEvaluator.MaxListDepth} deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.\n\n")
             .Append($"Ids below {RuleCatalog.CustomIdStart} are shipped or converted content; server-authored rows use {RuleCatalog.CustomIdStart} and up. ")
             .Append($"`playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or {RuleCatalog.CustomGoalIdStart} and up for a custom goal.\n\n");
 

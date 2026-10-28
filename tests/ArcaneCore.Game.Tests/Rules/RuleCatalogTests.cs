@@ -83,6 +83,7 @@ public sealed class RuleCatalogTests
         { "spell id 0", Action(1, Cast, 0), "param1 (spell_id) = 0 is not a known spell" },
         { "negative delay", RecordOf(1, 5, delayMs: -1), "delay_ms -1 must not be negative" },
         { "delay of int.MaxValue", RecordOf(1, 5, delayMs: int.MaxValue), "delay_ms 2147483647 must be at most 86400000" },
+        { "delay one past the cap", RecordOf(1, 5, delayMs: RuleCatalog.MaxDelayMs + 1), "delay_ms 86400001 must be at most 86400000" },
         { "action flags", RecordOf(1, 5) with { Flags = 1 }, "flags 1 are not defined for actions" },
     };
 
