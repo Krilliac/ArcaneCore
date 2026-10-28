@@ -145,4 +145,25 @@ public sealed class TravelTriggerPortalPlanTests
             Assert.Empty(PlayerbotTravel.BuildFacts(world.Session, world.Player, options, PlayerbotShipNetwork.Routes(world.Host.World), excluded).TriggerPortals);
         });
     }
+
+    // --- requirements prefilter (BuildFacts leaves out a trigger the bot cannot pass) ------------------------------------
+
+    private static AreaTriggerTeleport Row(byte level = 0, uint item = 0, uint item2 = 0, uint quest = 0, uint condition = 0)
+        => new(527, "Test", "", level, 0, 0f, 0f, 0f, 0f, item, item2, quest, condition);
+
+    [Fact]
+    public void MeetsRequirements_PassesALevelAtOrBelowTheBots_AndNoOtherRequirement()
+    {
+        Assert.True(PlayerbotTravel.MeetsRequirements(Row(), 1));
+        Assert.True(PlayerbotTravel.MeetsRequirements(Row(level: 10), 10));
+        Assert.False(PlayerbotTravel.MeetsRequirements(Row(level: 11), 10));
+    }
+
+    [Theory]
+    [InlineData(1u, 0u, 0u, 0u)]
+    [InlineData(0u, 1u, 0u, 0u)]
+    [InlineData(0u, 0u, 1u, 0u)]
+    [InlineData(0u, 0u, 0u, 1u)]
+    public void MeetsRequirements_RefusesAnItemQuestOrConditionRequirement(uint item, uint item2, uint quest, uint condition)
+        => Assert.False(PlayerbotTravel.MeetsRequirements(Row(item: item, item2: item2, quest: quest, condition: condition), 60));
 }

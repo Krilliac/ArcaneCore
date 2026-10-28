@@ -36,14 +36,14 @@ internal static class TravelIslands
 
     public static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100, Risk = { Enabled = false } };
 
-    /// <summary>Install a same-map teleport trigger (a 3-yard sphere at <see cref="Entrance"/>, exit at <see cref="Exit"/>) in the world's tables.</summary>
-    public static Task InstallTriggerAsync(SyntheticNavWorld world, uint id, byte requiredLevel)
+    /// <summary>Install a same-map teleport trigger (a sphere of <paramref name="radius"/> yards at <see cref="Entrance"/>, exit at <see cref="Exit"/>) in the world's tables.</summary>
+    public static Task InstallTriggerAsync(SyntheticNavWorld world, uint id, byte requiredLevel, float radius = 3f)
         => world.Host.OnWorldAsync(() =>
         {
             WorldMaps maps = WorldMaps.Of(world.Host.World);
             maps.ReplaceAreaTriggerTables(maps.BuildAreaTriggerTables(InMemoryMapDataStore.Content with
             {
-                AreaTriggers = [new AreaTriggerTemplate(id, 0, Entrance.X, Entrance.Y, Entrance.Z, 3f, 0, 0, 0, 0, "Upper level portal")],
+                AreaTriggers = [new AreaTriggerTemplate(id, 0, Entrance.X, Entrance.Y, Entrance.Z, radius, 0, 0, 0, 0, "Upper level portal")],
                 AreaTriggerTeleports = [new AreaTriggerTeleport(id, "Upper level - lower landing", "", requiredLevel, 0, Exit.X, Exit.Y, Exit.Z, 0f)],
             }));
             return true;
@@ -140,7 +140,8 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
     public async Task ATriggerThatRefusesTheBot_FailsTheLegOnce_AndTheReplanHasNoRoute()
     {
         await using SyntheticNavWorld world = await StartAsync();
-        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60);
+        // Planned while the trigger lets the bot in; its level requirement is raised after (a content reload), so the plan could not foresee the refusal.
+        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0);
         await world.PlaceAsync(TravelIslands.Start);
         PlayerbotOptions options = TravelIslands.Options();
         var brain = new PlayerbotBrain(world.Session, options);
@@ -154,6 +155,7 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
                 Assert.True(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why), why);
                 Assert.Equal(["Walk", "AreaTrigger", "Walk"], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Select(l => l.Means.ToString()));
             });
+            await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60);
 
             JourneyState? state = await RunAsync(world, brain, 300_000, (_, _) => { });
             TravelJourney journey = await world.Host.OnWorldAsync(() => PlayerbotTravel.JourneyOf(world.Player)!);
@@ -167,5 +169,60 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
         {
             brain.Stop();
         }
+    }
+
+    /// <summary>
+    /// A trigger volume wider than the walk's arrival radius is entered while the walk before the trigger leg is under way. The refusal it
+    /// notes must still fail the trigger leg: the walk before the leg stops up to <see cref="PlayerbotTravel.HandOffYards"/> short of the
+    /// trigger, so the volume (30 yards here, entered at 70 yards out) is entered by the trigger leg itself, whose start the refusal is
+    /// not older than. Before, the walk went to within 10 yards, the refusal predated the leg and was discarded, and the journey stood
+    /// in the volume until its deadline.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalByAVolumeEnteredOnTheWayIn_StillFailsTheLeg()
+    {
+        await using SyntheticNavWorld world = await StartAsync();
+        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0, radius: 30f);
+        await world.PlaceAsync(TravelIslands.Start);
+        PlayerbotOptions options = TravelIslands.Options();
+        var brain = new PlayerbotBrain(world.Session, options);
+        var travel = new PlayerbotTravel(options);
+        using AnomalyCapture capture = BotAnomalyCapture.For(world.Player);
+        try
+        {
+            await world.Host.OnWorldAsync(() =>
+            {
+                Assert.True(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why), why);
+                Assert.Equal(["Walk", "AreaTrigger", "Walk"], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Select(l => l.Means.ToString()));
+            });
+            await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60, radius: 30f);
+
+            JourneyState? state = await RunAsync(world, brain, 120_000, (_, _) => { });
+            TravelJourney journey = await world.Host.OnWorldAsync(() => PlayerbotTravel.JourneyOf(world.Player)!);
+            output.WriteLine($"{journey.State} {journey.Failure}; {capture.Describe()}");
+            Assert.Equal(JourneyState.Failed, state);
+            Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key(PlayerbotTravel.AnomalyArea, "leg-failed")));
+        }
+        finally
+        {
+            brain.Stop();
+        }
+    }
+
+    /// <summary>A trigger whose level requirement the bot lacks is left out of the plan: no route, no leg walked into a refusal.</summary>
+    [Fact]
+    public async Task ATriggerWithALevelTheBotLacks_IsNotPlanned()
+    {
+        await using SyntheticNavWorld world = await StartAsync();
+        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60);
+        await world.PlaceAsync(TravelIslands.Start);
+        var travel = new PlayerbotTravel(TravelIslands.Options());
+        await world.Host.OnWorldAsync(() =>
+        {
+            Assert.True(world.Player.Level < 60);
+            Assert.False(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why));
+            Assert.NotNull(why);
+            Assert.Null(PlayerbotTravel.JourneyOf(world.Player));
+        });
     }
 }

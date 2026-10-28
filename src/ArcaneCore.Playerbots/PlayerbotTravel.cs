@@ -519,7 +519,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// failure then replans. The first <see cref="BlockingLocates"/> places read their tile at once, so a goal on a tile not read yet is placed.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
-    /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded.</item>
+    /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
+    /// lacks (<see cref="MeetsRequirements"/>).</item>
     /// <item>Flight (with <see cref="PlayerbotTaxiOptions.Enabled"/> on): a known departure node within
     /// <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/> of the start of a stretch of at least <see cref="PlayerbotTaxiOptions.MinRouteYards"/>,
     /// not backed off, and a known landing node the fare to which fits the spend cap (<see cref="TaxiIndex.TryRoute"/>, the search
@@ -566,7 +567,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         foreach ((AreaTriggerTemplate trigger, AreaTriggerTeleport teleport) in PlayerbotAreaTriggers.SameMapPortals(WorldMaps.Of(session.World), player.MapId))
         {
             if (excluded?.Triggers.Contains(trigger.Id) == true
-                || !PlayerbotMapPolicy.AllowsTrigger(options.AllowedMaps, teleport.TargetMap, optedIn: false, leadsToCorpse: false))
+                || !PlayerbotMapPolicy.AllowsTrigger(options.AllowedMaps, teleport.TargetMap, optedIn: false, leadsToCorpse: false)
+                || !MeetsRequirements(teleport, player.Level))
                 continue;
             var entrance = new TravelPlace(player.MapId, new Vector3(trigger.X, trigger.Y, trigger.Z));
             var exit = new TravelPlace(player.MapId, new Vector3(teleport.TargetX, teleport.TargetY, teleport.TargetZ));
@@ -590,6 +592,15 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
     }
+
+    /// <summary>
+    /// Whether a bot of <paramref name="level"/> can pass the entry requirements of a same-map teleport (<c>areatrigger_teleport</c>): the level, and
+    /// no item, quest or condition requirement at all (a bot's own bags, quest log and conditions are not read here, so a trigger that names one
+    /// is left out of the plan rather than planned and refused).
+    /// </summary>
+    internal static bool MeetsRequirements(AreaTriggerTeleport teleport, int level)
+        => teleport.RequiredLevel <= level
+            && teleport.RequiredItem == 0 && teleport.RequiredItem2 == 0 && teleport.RequiredQuestDone == 0 && teleport.RequiredCondition == 0;
 
     private static readonly PathOptions WalkingLocate = new()
     {
@@ -1115,13 +1126,17 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         return StepResult.Yield;
     }
 
-    /// <summary>One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too.</summary>
+    /// <summary>
+    /// One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too. A walk
+    /// before a same-map trigger leg hands off like one before a boat: it stops up to <see cref="HandOffYards"/> short, and the trigger leg walks
+    /// the rest, so a refusal by a trigger volume the bot enters on the way is noted after that leg began (and not discarded as older than it).
+    /// </summary>
     private static StepResult Walk(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
         uint now, out string? why)
     {
         why = null;
         bool handOff = journey.LegIndex + 1 < journey.Legs.Count
-            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal;
+            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal or TravelMeans.AreaTrigger;
         if (player.MapId != leg.To.MapId)
         {
             if (PlayerbotTram.IsTraveling(player) || (player.MapId == TramNetwork.TramMapId && leg.To.MapId != TramNetwork.TramMapId))
