@@ -778,6 +778,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             InviteStanding = (member, inviter) => InviteStandingOf(entry.BotId, member, inviter),
         };
         party.Social = Social;
+        party.TradeDesk = TradeDesk;
         Social.Track(entry.BotId, entry.Record.CharacterId);
         var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId), SavedTradeVersion = Social.Ledger?.Version(entry.BotId) ?? 0 };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)

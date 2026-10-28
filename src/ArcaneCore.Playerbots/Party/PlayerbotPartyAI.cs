@@ -96,6 +96,9 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The bots' social memory seam (set by the feature; null in a host or a test without it).</summary>
     internal BotSocial.PlayerbotSocialRecorder? Social { get; set; }
 
+    /// <summary>The world's trade desk, which drives the bot's deal windows (set by the feature; null in a host or a test without it).</summary>
+    internal BotSocial.PlayerbotTradeDesk? TradeDesk { get; set; }
+
     /// <summary>Who the bot is trading with, from the begin-trade packet or the bot's own request; empty when no trade is open.</summary>
     private ObjectGuid _tradePartner;
     private bool _tradeCounts; // the window with _tradePartner is worth a TradeCompleted note (set on the partner's accept, read on completion)
@@ -324,6 +327,8 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal void Intake(Player player)
     {
+        // A bot with a trade deal is driven on every tick, ahead of the idle-intake throttle below (the global fast path is one volatile read).
+        if (TradeDesk is { Count: > 0 } desk && desk.HasDeal(_botId)) DriveDeal(player, desk);
         if (_chat is { IsActive: true }) _chatEvents.Observe(player, Now);
         // A bot outside any group only needs invitations and strangers' whispers answered: once per think interval is soon enough,
         // and it keeps a large fleet of solo bots from draining their queues every tick (the invitation itself is read from the
@@ -929,6 +934,13 @@ internal sealed class PlayerbotPartyAI
             {
                 var trader = new ObjectGuid(BitConverter.ToUInt64(payload, 4));
                 if (trader.IsEmpty || trader == player.Guid) return;
+                // A trader the trade desk holds a deal with is answered, trusted or not; the window is the desk's (no _tradePartner: the gift rules never touch it).
+                if (TradeDesk?.Claims(_botId, trader, player) == true)
+                {
+                    Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
+                    return;
+                }
+
                 ObjectGuid master = ResolveMaster(player);
                 bool trusted = trader == _master || trader == master
                     || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
@@ -938,8 +950,13 @@ internal sealed class PlayerbotPartyAI
                 Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
                 break;
             }
+            case 2 or 7:
+                // The window opened (2) or changed (7, not a terminal status): a desk window reacts at once.
+                if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
+                break;
             case 4:
-                AnswerPartnerAccept(player);
+                if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
+                else AnswerPartnerAccept(player);
                 UpdateEquipment(player);
                 break;
             case 8:
@@ -949,13 +966,66 @@ internal sealed class PlayerbotPartyAI
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
+                if (TradeDesk?.WindowClosed(_botId, completed: true) is { Kind: BotSocial.PlayerbotDealOutcomeKind.Settled } settled) SpendPost(settled);
                 break;
             case 0 or 3 or 5 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
                 // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
+                TradeDesk?.WindowClosed(_botId, completed: false);
                 break;
         }
+    }
+
+    private TradeSession? LiveTrade(Player player) => _session.Services.GetService<EconomyFeature>()?.TradeOf(player);
+
+    /// <summary>Whether the bot's live trade is a window of the trade desk (an agreed deal with the other side).</summary>
+    private bool OwnsLiveTrade(Player player)
+        => TradeDesk is { Count: > 0 } desk && LiveTrade(player) is { } trade && desk.Owns(_botId, trade.OtherSide(player).Player.Guid);
+
+    /// <summary>
+    /// World thread: one step of the trade desk's deal for this bot (<see cref="BotSocial.PlayerbotTradeDesk.Drive"/>), carried out as the bot's own client packet,
+    /// never waiting for the action budget: CMSG_INITIATE_TRADE, CMSG_SET_TRADE_ITEM, CMSG_SET_TRADE_GOLD, CMSG_ACCEPT_TRADE or CMSG_CANCEL_TRADE. A line the step
+    /// carries is whispered to the partner.
+    /// </summary>
+    private void DriveDeal(Player player, BotSocial.PlayerbotTradeDesk desk)
+    {
+        BotSocial.PlayerbotDealStep step = desk.Drive(_botId, player, LiveTrade(player));
+        switch (step.Kind)
+        {
+            case BotSocial.PlayerbotDealStepKind.Initiate:
+                Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(step.Partner.Value), budgeted: false);
+                break;
+            case BotSocial.PlayerbotDealStepKind.PutItem:
+                Act(WorldOpcode.CmsgSetTradeItem, [step.TradeSlot, step.Bag, step.Slot], budgeted: false);
+                break;
+            case BotSocial.PlayerbotDealStepKind.PutGold:
+                Act(WorldOpcode.CmsgSetTradeGold, BitConverter.GetBytes(step.Gold), budgeted: false);
+                break;
+            case BotSocial.PlayerbotDealStepKind.Accept:
+                Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
+                break;
+            case BotSocial.PlayerbotDealStepKind.Cancel:
+                Act(WorldOpcode.CmsgCancelTrade, [], budgeted: false);
+                break;
+        }
+
+        if (step.SayKey is { } key && step.PartnerName is { Length: > 0 } name && !step.Partner.IsEmpty) SayDeal(player, key, step.Partner, name);
+    }
+
+    /// <summary>One built-in line (<paramref name="key"/>) whispered to the deal's partner; no chat service, no line, or a refusal by the speech limits: silent.</summary>
+    private void SayDeal(Player player, string key, ObjectGuid partner, string partnerName)
+    {
+        if (_chat is not { } chat) return;
+        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, ResolveMaster(player)), partner, partnerName, ChatType.Whisper, string.Empty, false, false);
+        if (Chat.PlayerbotBuiltinChat.Pick(key, ask, null, _random) is { } text)
+            chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.WhisperTo(partnerName, partner, text, "deal", Chat.BotSpeechPriority.High));
+    }
+
+    /// <summary>A settled desk deal spends the bot's board call for the same item (the WTS or WTB it made), so nobody is quoted a deal that is done.</summary>
+    private void SpendPost(BotSocial.PlayerbotDealOutcome settled)
+    {
+        if (_chat is { } chat && chat.Voice.Find(_botId, chat.NowMs, long.MaxValue) is { } post && post.ItemEntry == settled.Entry) chat.Voice.Forget(_botId);
     }
 
     /// <summary>
