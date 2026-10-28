@@ -34,11 +34,18 @@ public sealed class LogSpamCatchContractTests
     }
 
     [Theory]
-    [InlineData("src/ArcaneCore.World/Spells/SpellFeature.cs", "\"spell update failed\"", "\"spell.update\"", 1)]
-    [InlineData("src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs", "\"Playerbot group coordinator failed", "\"playerbot.feature\"", 1)]
-    [InlineData("src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs", "\"Playerbot battleground coordinator failed", "\"playerbot.bg-coordinator\"", 2)]
-    public void PerTickCatch_LogsThroughTheThrottledFaultLogger_WithoutARedundantRecord(string file, string anchor, string logSite, int ledgerWrites)
+    [InlineData("SpellFeature.cs", "\"spell update failed\"", "\"spell.update\"", 1)]
+    [InlineData("ManagedPlayerbotFeature.cs", "\"Playerbot group coordinator failed", "\"playerbot.feature\"", 1)]
+    [InlineData("ManagedPlayerbotFeature.cs", "\"Playerbot battleground coordinator failed", "\"playerbot.bg-coordinator\"", 2)]
+    public void PerTickCatch_LogsThroughTheThrottledFaultLogger_WithoutARedundantRecord(string fileName, string anchor, string logSite, int ledgerWrites)
     {
+        // A fixed lookup, so no test argument is ever used to build a path.
+        string file = fileName switch
+        {
+            "SpellFeature.cs" => "src/ArcaneCore.World/Spells/SpellFeature.cs",
+            "ManagedPlayerbotFeature.cs" => "src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs",
+            _ => throw new ArgumentOutOfRangeException(nameof(fileName), fileName, "not a known source file")
+        };
         string[] lines = File.ReadAllLines(Path.Combine(RepositorySource.RequireRoot(), file));
         int at = Array.FindIndex(lines, l => l.Contains(anchor, StringComparison.Ordinal));
         Assert.True(at >= 0, $"{file}: no line with {anchor}");

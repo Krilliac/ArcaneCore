@@ -38,7 +38,7 @@ Tools: Atlas → Game + tests/ThirdParty/DotRecast [#185]; Sniff → Protocol + 
 | ContentImporterCli | 2.3k lines | #126 |
 
 ### Cross-cutting conventions (measured)
-- Error idiom is `catch when (ex is not OutOfMemoryException)` followed by `FaultLedger` and `LogFault`. **Both writes are recorded on purpose** (#43, #55). Do not collapse them.
+- Error idiom is `catch when (ex is not OutOfMemoryException)` followed by one `LogFault`. **Superseded (#1618):** `LogFault` already records to the `FaultLedger`, so a same-key `Record` + `LogFault` pair double-counts; the original "both writes on purpose" rule (#43, #55) no longer applies. A separate `Record` is allowed only under a different, deliberately distinct key.
 - vmangos `file:line` citations are everywhere. Charter §1 freezes the wire format.
 
 ---

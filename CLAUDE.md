@@ -83,7 +83,7 @@ catch (Exception ex) when (ex is not OutOfMemoryException)
 
 `LogFault` already records the fault to the ledger once (`src/ArcaneCore.Kernel/Diagnostics/FaultLedger.cs`, example in
 `src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs`), so **don't pair it with `FaultLedger.Shared.Record` for the same site**: that double-counts. Add a separate
-`Record` only for a deliberately broader or narrower second key (the playerbot battleground coordinator is the example). Site names are dotted.
+`Record` only for a deliberately broader or narrower second key (the playerbot battleground coordinator is the example). Prefer dotted site names for new code; a few older `LogFault` tags are dashed.
 Cancellation is not a fault: skip `OperationCanceledException` before recording where a token is in play. Don't add empty catches. Policy and
 the catch census are in [docs/ops/exception-audit.md](docs/ops/exception-audit.md).
 

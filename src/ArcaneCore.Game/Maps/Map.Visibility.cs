@@ -380,7 +380,7 @@ public sealed partial class Map
     private readonly ArcaneCore.Kernel.Logging.LogGate _orphanLogGate = new(TimeSpan.FromMinutes(1));
 
     /// <summary>Orphan visible objects removed by <see cref="VerifyVisibleSetInvariants"/>; counts every heal, including those whose log line was throttled (map thread; read by tests and diagnostics code, not yet exported as a metric).</summary>
-    public long OrphanVisibleHeals { get; private set; }
+    internal long OrphanVisibleHeals { get; private set; }
 
     /// <summary>Every 64th visibility update of a player runs the invariant pass even when nothing was removed.</summary>
     internal const int VisibleSetBackstopInterval = 64;
@@ -455,7 +455,7 @@ public sealed partial class Map
         foreach (ObjectGuid orphan in orphans)
         {
             OrphanVisibleHeals++;
-            // Checked on every visibility tick: one line per window; the held-back heals are counted on the next admitted line.
+            // The scan runs on a removal-epoch change or every 64th update, and a persistent orphan can repeat: one line per window; the held-back heals are counted on the next admitted line.
             if (_orphanLogGate.TryEnter(out int suppressed))
             {
                 if (suppressed == 0)
