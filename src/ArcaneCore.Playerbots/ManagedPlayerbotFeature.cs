@@ -2198,7 +2198,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 if (_world is { } stopping)
                 {
                     ulong stoppedGuid = active.Session.Player?.Guid.Value ?? 0;
-                    _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); if (stoppedGuid != 0) Combat.PlayerbotCombatView.ForgetTameScan(stoppedGuid); return true; });
+                    _ = stopping.InvokeAsync(() => { coordinator?.Forget(bot.BotId); _pathJobs?.Forget(bot.BotId); battlegrounds?.Forget(bot.BotId); if (stoppedGuid != 0) { Combat.PlayerbotCombatView.ForgetTameScan(stoppedGuid); TradeOwners.Forget(new ArcaneCore.Game.ObjectGuid(stoppedGuid)); } return true; });
                 }
                 active.Brain.Stop();
                 if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
@@ -3311,7 +3311,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_world is { } world)
         {
             ulong droppedGuid = active.Session.Player?.Guid.Value ?? 0;
-            _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); if (droppedGuid != 0) Combat.PlayerbotCombatView.ForgetTameScan(droppedGuid); return true; });
+            _ = world.InvokeAsync(() => { coordinator?.Forget(botId); _pathJobs?.Forget(botId); battlegrounds?.Forget(botId); if (droppedGuid != 0) { Combat.PlayerbotCombatView.ForgetTameScan(droppedGuid); TradeOwners.Forget(new ArcaneCore.Game.ObjectGuid(droppedGuid)); } return true; });
         }
         active.Brain.Stop();
         _chat?.Abandon(botId); // replies still being written for it are no longer wanted

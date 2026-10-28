@@ -99,6 +99,9 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The world's trade desk, which drives the bot's deal windows (set by the feature; null in a host or a test without it).</summary>
     internal BotSocial.PlayerbotTradeDesk? TradeDesk { get; set; }
 
+    /// <summary>Who owns the bot's one trade slot (the feature's registry), or null in a host without the playerbot feature: each driver is then the sole owner.</summary>
+    private BotSocial.PlayerbotTradeOwners? Owners => BotSocial.PlayerbotTradeOwners.Of(_session);
+
     /// <summary>Who the bot is trading with, from the begin-trade packet or the bot's own request; empty when no trade is open.</summary>
     private ObjectGuid _tradePartner;
     private bool _tradeCounts; // the window with _tradePartner is worth a TradeCompleted note (set on the partner's accept, read on completion)
@@ -733,11 +736,16 @@ internal sealed class PlayerbotPartyAI
                 bool trusted = social?.Groups.AreInSameGroup(player.Guid, speaker.Guid) == true || TradeAllowed(player, speaker);
                 if (trusted)
                 {
+                    // An agreed deal with the speaker is the desk's: its own Drive initiates the window.
+                    if (TradeDesk?.StateOf(_botId, speaker.Guid) is BotSocial.PlayerbotDealState.Agreed) return;
+                    BotSocial.PlayerbotTradeOwners? owners = Owners;
+                    if (owners?.TryClaim(player, BotSocial.PlayerbotTradeOwner.Gift, speaker.Guid, LiveTrade(player)) == false) return;
                     if (Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false))
                     {
                         _tradePartner = speaker.Guid; // only a window this bot really asked for
                         _tradeCounts = false;
                     }
+                    else owners?.Release(player, BotSocial.PlayerbotTradeOwner.Gift);
                 }
                 return;
             }
@@ -935,9 +943,10 @@ internal sealed class PlayerbotPartyAI
                 var trader = new ObjectGuid(BitConverter.ToUInt64(payload, 4));
                 if (trader.IsEmpty || trader == player.Guid) return;
                 // A trader the trade desk holds a deal with is answered, trusted or not; the window is the desk's (no _tradePartner: the gift rules never touch it).
-                if (TradeDesk?.Claims(_botId, trader, player) == true)
+                BotSocial.PlayerbotTradeOwners? owners = Owners;
+                if (TradeDesk?.Claims(_botId, trader, player, LiveTrade(player)) == true)
                 {
-                    Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
+                    if (!Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false)) owners?.Release(player, BotSocial.PlayerbotTradeOwner.Desk);
                     return;
                 }
 
@@ -945,9 +954,10 @@ internal sealed class PlayerbotPartyAI
                 bool trusted = trader == _master || trader == master
                     || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
                 if (!trusted) return; // a stranger's request is not answered here, and never takes over the partner an open window is credited to
+                if (owners?.TryClaim(player, BotSocial.PlayerbotTradeOwner.Gift, trader, LiveTrade(player)) == false) return; // another driver owns the slot
                 _tradePartner = trader;
                 _tradeCounts = false;
-                Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false);
+                if (!Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false)) owners?.Release(player, BotSocial.PlayerbotTradeOwner.Gift);
                 break;
             }
             case 2 or 7:
@@ -968,13 +978,18 @@ internal sealed class PlayerbotPartyAI
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
+                Owners?.ReleaseClosed(player, LiveTrade(player));
                 if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.Settled) SpendPost(deskOutcome);
                 break;
             case 0 or 3 or 5 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
                 // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.
+                // The status arrives after the economy closed the trade, so a trade that is open now is a newer one (the status is a late cancel of an earlier trade, e.g. the
+                // old tip's) and must not close it: no partner or desk or claim change.
+                if (LiveTrade(player) is not null) break;
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
                 TradeDesk?.WindowClosed(_botId, completed: false);
+                Owners?.ReleaseClosed(player, LiveTrade(player));
                 break;
         }
     }
@@ -983,7 +998,7 @@ internal sealed class PlayerbotPartyAI
 
     /// <summary>Whether the bot's live trade is a window of the trade desk (an agreed deal with the other side).</summary>
     private bool OwnsLiveTrade(Player player)
-        => TradeDesk is { Count: > 0 } desk && LiveTrade(player) is { } trade && desk.Owns(_botId, trade.OtherSide(player).Player.Guid);
+        => TradeDesk is { Count: > 0 } desk && LiveTrade(player) is { } trade && desk.Owns(_botId, player, trade);
 
     /// <summary>
     /// World thread: one step of the trade desk's deal for this bot (<see cref="BotSocial.PlayerbotTradeDesk.Drive"/>), carried out as the bot's own client packet,
@@ -996,7 +1011,7 @@ internal sealed class PlayerbotPartyAI
         switch (step.Kind)
         {
             case BotSocial.PlayerbotDealStepKind.Initiate:
-                Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(step.Partner.Value), budgeted: false);
+                if (!Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(step.Partner.Value), budgeted: false)) Owners?.Release(player, BotSocial.PlayerbotTradeOwner.Desk);
                 break;
             case BotSocial.PlayerbotDealStepKind.PutItem:
                 Act(WorldOpcode.CmsgSetTradeItem, [step.TradeSlot, step.Bag, step.Slot], budgeted: false);
@@ -1048,6 +1063,7 @@ internal sealed class PlayerbotPartyAI
         if (_tradePartner.IsEmpty || _session.Services.GetService<EconomyFeature>()?.TradeOf(player) is not { Opened: true, Settling: false } trade) return;
         TradeSide mine = trade.SideOf(player), theirs = trade.OtherSide(player);
         if (theirs.Player.Guid != _tradePartner || !theirs.Accepted) return;
+        if (Owners?.Is(player, BotSocial.PlayerbotTradeOwner.Gift, _tradePartner, trade) == false) return; // another driver's window (a tip, a fee, a desk deal)
         bool gave = mine.Gold != 0;
         foreach (ObjectGuid _ in mine.TradedItems) { gave = true; break; }
         long received = 0;
