@@ -20,7 +20,6 @@ namespace ArcaneCore.World.Tests.Spells;
 /// <summary>
 /// <see cref="ISpellGroupResolver.AppendGroupMembers"/> must append exactly the GUIDs, in the order, of <c>GetGroupMembers(unit, raid)</c>
 /// (solo, party, raid sub-group, whole raid, no manager), keep what the list already held, and not allocate once the list has capacity.
-/// ENABLE by renaming this file to .cs once the fix adds the method.
 /// </summary>
 public sealed class WorldSpellGroupsAppendTests
 {

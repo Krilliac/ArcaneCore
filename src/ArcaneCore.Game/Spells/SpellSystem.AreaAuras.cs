@@ -103,13 +103,13 @@ public sealed partial class SpellSystem
 
     private void UpdateAreaAuraSource(UnitSpellState state, SpellAuraHolder source, Maps.Map map)
     {
-        // Max radius over the area effects (0 when none), as a plain loop.
+        // Max radius over the area effects (0 when none; a NaN is passed over as Enumerable.Max does), as a plain loop.
         float radius = 0;
         bool anyRadius = false;
         IReadOnlyList<SpellEffectInfo> effects = source.Spell.Effects;
         for (int i = 0; i < effects.Count; i++)
         {
-            if (effects[i].Effect == SpellEffectName.ApplyAreaAuraParty && (!anyRadius || effects[i].Radius > radius))
+            if (effects[i].Effect == SpellEffectName.ApplyAreaAuraParty && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
             {
                 radius = effects[i].Radius;
                 anyRadius = true;

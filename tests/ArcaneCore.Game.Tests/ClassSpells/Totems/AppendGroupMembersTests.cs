@@ -12,7 +12,6 @@ namespace ArcaneCore.Game.Tests.ClassSpells.Totems;
 /// <see cref="ISpellGroupResolver.AppendGroupMembers"/> through <see cref="OwnerAwareGroupResolver"/> (a totem appends its owner's group),
 /// <see cref="NoGroupResolver"/> and the default interface method of a resolver that implements only <c>GetGroupMembers</c>: always the
 /// same GUIDs in the same order as <c>GetGroupMembers</c>, appended after what the list held.
-/// ENABLE by renaming this file to .cs once the fix adds the method.
 /// </summary>
 public sealed class AppendGroupMembersTests
 {

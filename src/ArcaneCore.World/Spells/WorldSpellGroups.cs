@@ -72,7 +72,7 @@ public sealed class WorldSpellGroups(Func<GroupManager?> groups) : ISpellGroupRe
             return;
         }
 
-        // Manual scans (no Find/LINQ lambdas): this runs on map threads and must not allocate.
+        // Manual scans (no Find/LINQ lambdas): the area-aura tick calls this per source per tick and must not allocate.
         IReadOnlyList<GroupMemberSlot> members = group.Members;
         GroupMemberSlot? self = null;
         for (int i = 0; i < members.Count; i++)

@@ -61,7 +61,8 @@ public sealed class AreaAuraAllocationTests
     [Fact]
     public void UpdateAreaAuras_RealGroups_SpreadsAndRemovesChildren()
     {
-        // Behaviour through the real resolver (the Game tests use a fake): leaving the group drops the child, rejoining restores it.
+        // Behaviour through the real resolver (the Game tests use a fake): leaving the group drops the child, rejoining restores it,
+        // and moving out of range drops it again.
         using var kit = new AreaAuraGroupKit();
         kit.Cast();
         SpellAuraHolder source = Assert.Single(kit.Spells.GetAuras(kit.Paladin));
@@ -71,11 +72,76 @@ public sealed class AreaAuraAllocationTests
             Assert.Single(kit.Spells.GetAuras(kit.Players[id]));
         }
 
-        kit.Players[3].Relocate(500, 0, kit.Players[3].Z, 0, 0);
+        Player leaver = kit.Players[3];
+        kit.Groups.Leave(leaver);
+        Assert.Null(kit.Groups.GetGroup(leaver.Guid));
+        kit.Tick();
+        Assert.Empty(kit.Spells.GetAuras(leaver));
+        Assert.Equal(3, source.AreaChildren.Count);
+
+        kit.Groups.Invite(kit.Paladin, leaver.Name);
+        kit.Groups.Accept(leaver);
+        Assert.NotNull(kit.Groups.GetGroup(leaver.Guid));
+        kit.Tick();
+        Assert.Single(kit.Spells.GetAuras(leaver));
+        Assert.Equal(4, source.AreaChildren.Count);
+
+        leaver.Relocate(500, 0, leaver.Z, 0, 0);
         kit.Tick();
 
-        Assert.Empty(kit.Spells.GetAuras(kit.Players[3]));
+        Assert.Empty(kit.Spells.GetAuras(leaver));
         Assert.Equal(3, source.AreaChildren.Count);
+    }
+
+    [Fact]
+    public void UpdateAreaAuras_AfterNestedUpdatesOnAddAndRemove_ScratchIsReleased_AndSteadyStateAllocatesNothing()
+    {
+        using var kit = new AreaAuraGroupKit();
+        SpellSystem spells = kit.Spells;
+        Player paladin = kit.Paladin;
+        int nestedCalls = 0, budget = 1;
+        bool nestedFlagsHeld = false;
+
+        // A subscriber that re-enters the area aura update (the only way to nest) once per event kind, from inside the outer pass.
+        void Reenter(SpellAuraHolder holder)
+        {
+            if (holder.AreaParent is null || budget == 0)
+            {
+                return;
+            }
+
+            budget--;
+            nestedCalls++;
+            nestedFlagsHeld |= (bool)typeof(SpellSystem).GetField("_areaSourceScratchInUse", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(spells)!;
+            spells.UpdateAreaAurasOf(paladin);
+        }
+
+        spells.HolderAdded += Reenter;
+        kit.Cast();                                  // children are added; the first add re-enters
+        Assert.Equal(1, nestedCalls);
+        SpellAuraHolder source = Assert.Single(spells.GetAuras(paladin));
+        Assert.Equal(4, source.AreaChildren.Count);
+        spells.HolderAdded -= Reenter;
+
+        budget = 1;
+        spells.HolderRemoved += Reenter;
+        kit.Players[4].Relocate(500, 0, kit.Players[4].Z, 0, 0);
+        kit.Tick();                                  // one child is removed; the remove re-enters
+        spells.HolderRemoved -= Reenter;
+        Assert.Equal(2, nestedCalls);
+        Assert.True(nestedFlagsHeld, "the nested pass ran while the outer pass held the scratch, i.e. it took the fallback");
+        Assert.Empty(spells.GetAuras(kit.Players[4]));
+        Assert.Equal(3, source.AreaChildren.Count);
+
+        kit.Players[4].Relocate(8, 0, kit.Players[4].Z, 0, 0);
+        kit.Tick();
+        Assert.Equal(4, source.AreaChildren.Count);
+
+        // Steady state after the nested runs: a stuck in-use flag would make every pass allocate its fresh fallbacks.
+        void Window() { for (int i = 0; i < 1000; i++) { spells.UpdateAreaAurasOf(paladin); } }
+
+        AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "UpdateAreaAuras after nested updates");
+        Assert.Equal(4, source.AreaChildren.Count);
     }
 }
 

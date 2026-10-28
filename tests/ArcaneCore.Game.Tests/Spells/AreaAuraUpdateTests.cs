@@ -210,7 +210,8 @@ public sealed class AreaAuraUpdateTests
         (Player paladin, _) = kit.AddPlayer(1);
         (Player member, _) = kit.AddPlayer(2, 4, 0);
         groups.Parties.Add([paladin.Guid, member.Guid]);
-        // The member holds the same spell as its own area source (a second paladin in another group state).
+        // The member is itself a caster of the same spell (its own area source, cast before the paladin's), while sharing the paladin's party.
+        // So the paladin's pass finds the member already holding the spell and skips it.
         kit.System.CastSpell(member, Devotion, SpellCastTargets.ForSelf(), triggered: true);
         kit.System.CastSpell(paladin, Devotion, SpellCastTargets.ForSelf(), triggered: true);
 
@@ -291,6 +292,238 @@ public sealed class AreaAuraUpdateTests
         kit.Advance(100);
         SpellAuraHolder second = Assert.Single(kit.System.GetAuras(member));
         Assert.NotSame(first, second);
+    }
+
+    [Fact]
+    public void PartyAreaAura_TwoAreaEffectsWithDifferentRadii_UsesTheMaxRadius_InEitherEffectOrder()
+    {
+        foreach (bool smallFirst in new[] { true, false })
+        {
+            const uint Dual = 946021;
+            SpellEffectInfo small = Effect(SpellEffectName.ApplyAreaAuraParty, 5, aura: AuraType.ModResistance, misc: 1) with { Radius = 10 };
+            SpellEffectInfo large = Effect(SpellEffectName.ApplyAreaAuraParty, 5, aura: AuraType.ModResistance, misc: 2) with { Radius = 40 };
+            SpellInfo dual = Spell(Dual, smallFirst ? [small, large] : [large, small]) with
+            {
+                Duration = new SpellDuration(-1, 0, -1),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            };
+            using var kit = new SpellTestKit(dual);
+            var groups = new FakeGroups();
+            kit.System.Groups = groups;
+            (Player paladin, _) = kit.AddPlayer(1);
+            (Player near, _) = kit.AddPlayer(2, 5, 0);        // inside both radii
+            (Player between, _) = kit.AddPlayer(3, 25, 0);    // beyond the 10 radius, inside the 40 radius
+            (Player beyond, _) = kit.AddPlayer(4, 45, 0);     // beyond both
+            groups.Parties.Add([paladin.Guid, near.Guid, between.Guid, beyond.Guid]);
+
+            kit.System.CastSpell(paladin, Dual, SpellCastTargets.ForSelf(), triggered: true);
+            kit.Advance(100);
+
+            Assert.Single(kit.System.GetAuras(near));
+            Assert.True(Assert.Single(kit.System.GetAuras(between)).AreaParent is not null, $"smallFirst={smallFirst}: the member between the radii must get the child");
+            Assert.Empty(kit.System.GetAuras(beyond));
+        }
+    }
+
+    // ---- Nested area-aura updates -------------------------------------------------------------------------------------------------
+    // SpellSystem.UpdateAreaAuras keeps shared scratch collections with an in-use flag. HolderAdded/HolderRemoved fire inside AddAuraHolder/
+    // RemoveHolder, i.e. while the outer pass is mid-iteration; a subscriber that runs another area-aura update is the only way to re-enter.
+    // The nested pass must then use fresh locals (the fallback) and leave the outer pass's scratch alone.
+
+    private static readonly string[] ScratchFlags =
+        ["_areaSourceScratchInUse", "_areaMemberScratchInUse", "_areaInRangeScratchInUse", "_areaChildScratchInUse"];
+
+    private static bool[] Flags(SpellSystem system) => [.. ScratchFlags.Select(name =>
+        (bool)typeof(SpellSystem).GetField(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(system)!)];
+
+    /// <summary>Two paladins in two parties; A's party has B and C, D's party has E and F. A toggle moves B, C, E and F in or out of range.</summary>
+    private sealed class NestedScenario : IDisposable
+    {
+        public SpellTestKit Kit;
+        public Player A, B, C, D, E, F;
+        public SpellAuraHolder SourceA, SourceD;
+        private readonly bool _entering;
+
+        public NestedScenario(bool entering)
+        {
+            _entering = entering;
+            Kit = AreaAuraUpdateTests.Kit(out FakeGroups groups);
+            (A, _) = Kit.AddPlayer(1, 0, 0);
+            (B, _) = Kit.AddPlayer(2, 10, 0);
+            (C, _) = Kit.AddPlayer(3, 12, 0);
+            (D, _) = Kit.AddPlayer(4, 0, 200);
+            (E, _) = Kit.AddPlayer(5, 10, 200);
+            (F, _) = Kit.AddPlayer(6, 12, 200);
+            groups.Parties.Add([A.Guid, B.Guid, C.Guid]);
+            groups.Parties.Add([D.Guid, E.Guid, F.Guid]);
+            if (entering)
+            {
+                MoveMembers(inRange: false);
+            }
+
+            Kit.System.CastSpell(A, Devotion, SpellCastTargets.ForSelf(), triggered: true);
+            Kit.System.CastSpell(D, Devotion, SpellCastTargets.ForSelf(), triggered: true);
+            Kit.Advance(100);
+            SourceA = Assert.Single(Kit.System.GetAuras(A));
+            SourceD = Assert.Single(Kit.System.GetAuras(D));
+            // Precondition: the steady state before the transition is the opposite of the one under test.
+            Assert.Equal(entering ? 0 : 2, SourceA.AreaChildren.Count);
+            Assert.Equal(entering ? 0 : 2, SourceD.AreaChildren.Count);
+        }
+
+        /// <summary>Moves the four members across the radius boundary.</summary>
+        public void MoveMembers(bool inRange)
+        {
+            float x = inRange ? 10 : 100;
+            B.Relocate(x, 0, B.Z, 0, Kit.Now);
+            C.Relocate(x + 2, 0, C.Z, 0, Kit.Now);
+            E.Relocate(x, 200, E.Z, 0, Kit.Now);
+            F.Relocate(x + 2, 200, F.Z, 0, Kit.Now);
+        }
+
+        public void Transition() => MoveMembers(inRange: _entering);
+
+        public void Reverse() => MoveMembers(inRange: !_entering);
+
+        /// <summary>Per player, the sorted (spell, caster, is-child) of every live aura, plus each source's child guid set.</summary>
+        public string[] Snapshot()
+        {
+            string Of(string name, Player p) => $"{name}=" + string.Join(";", Kit.System.GetAuras(p).Where(h => !h.IsRemoved)
+                .Select(h => $"{h.Spell.Id}/{h.CasterGuid}/{(h.AreaParent is null ? "src" : "child")}").Order());
+            string Kids(string name, SpellAuraHolder s) => $"{name}.children=" + string.Join(";", s.AreaChildren.Keys.Select(g => g.ToString()).Order());
+            return
+            [
+                Of("A", A), Of("B", B), Of("C", C), Of("D", D), Of("E", E), Of("F", F),
+                Kids("SrcA", SourceA), Kids("SrcD", SourceD),
+            ];
+        }
+
+        public void Dispose() => Kit.Dispose();
+    }
+
+    /// <summary>
+    /// Runs A's pass after the transition. Nested: the handler (raised for A's own child, from inside the outer pass) runs
+    /// the target's pass once (the same caster, or the other source). Baseline: no handler; D's pass is run after A's, so both give the same end state.
+    /// </summary>
+    private static (string[] Snapshot, int NestedCalls, bool[] FlagsInNested) RunTransition(bool entering, bool nested, bool sameCaster, bool onAdd)
+    {
+        using var s = new NestedScenario(entering);
+        int calls = 0;
+        bool[] flagsInNested = [];
+        SpellSystem system = s.Kit.System;
+        void Handler(SpellAuraHolder holder)
+        {
+            if (!nested || holder.AreaParent is null || holder.CasterGuid != s.A.Guid || calls >= 1)
+            {
+                return;
+            }
+
+            calls++;
+            flagsInNested = Flags(system);
+            system.UpdateAreaAurasOf(sameCaster ? s.A : s.D);
+            // The nested pass must not release scratch the outer pass still holds.
+            Assert.Equal(flagsInNested, Flags(system));
+        }
+
+        if (onAdd)
+        {
+            system.HolderAdded += Handler;
+        }
+        else
+        {
+            system.HolderRemoved += Handler;
+        }
+
+        s.Transition();
+        system.UpdateAreaAurasOf(s.A);
+        if (!nested && !sameCaster)
+        {
+            system.UpdateAreaAurasOf(s.D);
+        }
+
+        if (nested)
+        {
+            Assert.Equal(1, calls); // the nested pass really ran, inside the outer one
+        }
+
+        // The flags are all released once the outer pass returns.
+        Assert.All(Flags(system), f => Assert.False(f));
+
+        if (onAdd)
+        {
+            system.HolderAdded -= Handler;
+        }
+        else
+        {
+            system.HolderRemoved -= Handler;
+        }
+
+        string[] snapshot = s.Snapshot();
+
+        // A later non-nested pass still works: everything moves back and the children are undone / regranted by plain passes.
+        s.Reverse();
+        system.UpdateAreaAurasOf(s.A);
+        system.UpdateAreaAurasOf(s.D);
+        Assert.Equal(entering ? 0 : 2, s.SourceA.AreaChildren.Count);
+        Assert.Equal(entering ? 0 : 2, s.SourceD.AreaChildren.Count);
+        Assert.All(Flags(system), f => Assert.False(f));
+        foreach (Player member in new[] { s.B, s.C, s.E, s.F })
+        {
+            Assert.Equal(entering ? 0 : 1, system.GetAuras(member).Count(h => !h.IsRemoved));
+        }
+
+        return (snapshot, calls, flagsInNested);
+    }
+
+    [Fact]
+    public void NestedAreaAuraUpdate_OtherSourceOnHolderAdded_MatchesTheNonNestedChildren()
+    {
+        var baseline = RunTransition(entering: true, nested: false, sameCaster: false, onAdd: true);
+        var nested = RunTransition(entering: true, nested: true, sameCaster: false, onAdd: true);
+
+        Assert.Equal(baseline.Snapshot, nested.Snapshot);
+        Assert.Contains("SrcA.children=", nested.Snapshot[6]);
+        Assert.Equal(2, nested.Snapshot[6].Split(';').Length); // both of A's members got a child
+        Assert.Equal(2, nested.Snapshot[7].Split(';').Length); // both of D's members, added by the nested pass
+        // The outer pass was in its member loop: source, in-range and member scratch were held, so the nested pass took the fallbacks.
+        Assert.Equal([true, true, true, false], nested.FlagsInNested);
+    }
+
+    [Fact]
+    public void NestedAreaAuraUpdate_OtherSourceOnHolderRemoved_MatchesTheNonNestedRemovals()
+    {
+        var baseline = RunTransition(entering: false, nested: false, sameCaster: false, onAdd: false);
+        var nested = RunTransition(entering: false, nested: true, sameCaster: false, onAdd: false);
+
+        Assert.Equal(baseline.Snapshot, nested.Snapshot);
+        Assert.Equal("SrcA.children=", nested.Snapshot[6]);
+        Assert.Equal("SrcD.children=", nested.Snapshot[7]);
+        // The outer pass was in its child-removal loop: source, in-range and child scratch were held, the member scratch was released.
+        Assert.Equal([true, false, true, true], nested.FlagsInNested);
+    }
+
+    [Fact]
+    public void NestedAreaAuraUpdate_SameCasterOnHolderAdded_MatchesTheNonNestedChildren()
+    {
+        var baseline = RunTransition(entering: true, nested: false, sameCaster: true, onAdd: true);
+        var nested = RunTransition(entering: true, nested: true, sameCaster: true, onAdd: true);
+
+        Assert.Equal(baseline.Snapshot, nested.Snapshot);
+        Assert.Equal(2, nested.Snapshot[6].Split(';').Length);
+        Assert.Equal([true, true, true, false], nested.FlagsInNested);
+    }
+
+    [Fact]
+    public void NestedAreaAuraUpdate_SameCasterOnHolderRemoved_MatchesTheNonNestedRemovals()
+    {
+        var baseline = RunTransition(entering: false, nested: false, sameCaster: true, onAdd: false);
+        var nested = RunTransition(entering: false, nested: true, sameCaster: true, onAdd: false);
+
+        Assert.Equal(baseline.Snapshot, nested.Snapshot);
+        Assert.Equal("SrcA.children=", nested.Snapshot[6]);
+        Assert.Equal([true, false, true, true], nested.FlagsInNested);
     }
 
     [Fact]
