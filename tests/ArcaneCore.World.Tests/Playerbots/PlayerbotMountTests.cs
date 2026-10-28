@@ -564,6 +564,42 @@ public sealed class PlayerbotMountTests
     }
 
     [Fact]
+    public async Task ServiceIndex_ReportsEveryItemAVendorStocks_NotOnlyMounts()
+    {
+        var fixture = new MountFixture();
+        await RunAsync(fixture, (host, session) => host.OnWorldAsync(() =>
+        {
+            InstallMountSpell(host);
+            Player player = session.Player!;
+            QuestNpcServices services = session.Services.GetRequiredService<QuestNpcFeature>().Services;
+            const uint plainGood = 98100, unsold = 98101;
+
+            PlayerbotServiceIndex index = PlayerbotServiceIndex.Get(session, services, player)!;
+            Assert.NotNull(index);
+            // The fixture's two vendors (both spawned) stock 98001-98004 and 98006 (98001 at both): five distinct entries.
+            foreach (uint mount in new uint[] { 98001, 98002, 98003, 98004, 98006 }) Assert.True(index.IsVendorStocked(mount), $"vendor item {mount}");
+            Assert.Equal(5, index.VendorStockedCount);
+            Assert.False(index.IsVendorStocked(98005), "a mount in the item table that no vendor stocks");
+            Assert.False(index.IsVendorStocked(plainGood));
+            Assert.False(index.IsVendorStocked(unsold));
+
+            // A reload gives the vendor a plain, non-mount item (a trade supply): the rebuilt index reports it; an item nobody sells stays unreported.
+            NpcContent content = ((INpcContentStore)fixture).LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+            services.ReplaceNpcs(new NpcStore(content with
+            {
+                VendorItems = [.. content.VendorItems, new VendorItem { Entry = MountFixture.Vendor, Item = plainGood, Slot = 6 }],
+            }));
+            index = PlayerbotServiceIndex.Get(session, services, player)!;
+            Assert.True(index.IsVendorStocked(plainGood), "a non-mount item a vendor stocks");
+            Assert.False(index.IsVendorStocked(unsold), "an item nobody sells");
+            Assert.False(index.IsVendorStocked(98005));
+            Assert.Equal(6, index.VendorStockedCount);
+            Assert.True(index.IsVendorStocked(98003), "mount stock is still reported");
+            return true;
+        }));
+    }
+
+    [Fact]
     public async Task BattleStance_DoesNotStopTheBotFromMountingWithAKnownMountSpell()
     {
         await RunAsync(new MountFixture(), async (host, session) =>

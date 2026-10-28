@@ -386,8 +386,8 @@ public sealed class PlayerbotEconomyPlannerTests
     private const uint ReagentCap = 200;
 
     private static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, Dictionary<uint, uint> missing, uint limit = 10_000,
-        Func<uint, bool>? refused = null, Func<uint, ItemTemplate?>? templates = null)
-        => PlayerbotEconomyPlanner.ChooseReagent(rows, Self, missing, limit, templates ?? (entry => ReagentTemplates.GetValueOrDefault(entry)), refused);
+        Func<uint, bool>? refused = null, Func<uint, ItemTemplate?>? templates = null, Func<uint, bool>? vendorStocked = null)
+        => PlayerbotEconomyPlanner.ChooseReagent(rows, Self, missing, limit, templates ?? (entry => ReagentTemplates.GetValueOrDefault(entry)), refused, vendorStocked);
 
     [Fact]
     public void ReagentUnitCap_IsTwiceTheReference_AndZeroWithoutAVendorPrice()
@@ -441,11 +441,11 @@ public sealed class PlayerbotEconomyPlannerTests
         // When nothing covers, the lowest price per unit wins.
         Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([single, cheapShort], missing)).Row.Id);
 
-        // The price per unit is compared exactly, not rounded down: 100/3 < 67/2 although both are 33 in integer division.
-        var one = new Dictionary<uint, uint> { [8000] = 1 };
+        // The price per unit is compared exactly, not rounded down: 100/3 < 67/2 although both are 33 in integer division (neither covers five).
+        var five = new Dictionary<uint, uint> { [8000] = 5 };
         PlayerbotAuctionRow threeFor100 = Row(5, 8000, 100, count: 3);
         PlayerbotAuctionRow twoFor67 = Row(6, 8000, 67, count: 2);
-        Assert.Equal(5u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([twoFor67, threeFor100], one)).Row.Id);
+        Assert.Equal(5u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([twoFor67, threeFor100], five)).Row.Id);
 
         // The missing count reported is the one of the chosen row's entry.
         var both = new Dictionary<uint, uint> { [8000] = 3, [8001] = 1 };
@@ -503,10 +503,74 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.Null(ChooseReagent([Row(1, 8000, ReagentCap + 1)], missing));
         Assert.NotNull(ChooseReagent([Row(1, 8000, 2 * ReagentCap, count: 2)], missing));
         Assert.Null(ChooseReagent([Row(1, 8000, (2 * ReagentCap) + 1, count: 2)], missing));
-        Assert.NotNull(ChooseReagent([Row(1, 8000, 3 * ReagentCap, count: 3)], missing));
-        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], missing));   // 200.33 per unit rounds up to 201
+        var three = new Dictionary<uint, uint> { [8000] = 3 };   // a stack of three is within the overbuy bound only for a shortfall of two or more
+        Assert.NotNull(ChooseReagent([Row(1, 8000, 3 * ReagentCap, count: 3)], three));
+        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], three));   // 200.33 per unit rounds up to 201
         // An over-cap row is passed over for a dearer-in-total but in-cap row.
         Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, 401, count: 2), Row(2, 8000, 400, count: 2)], missing)).Row.Id);
+    }
+
+    [Fact]
+    public void ChooseReagent_NeverChoosesAVendorStockedEntry_ButStillChoosesANeighbouringOne()
+    {
+        Assert.Equal(2u, PlayerbotEconomyPlanner.ReagentOverbuyFactor);
+        var missing = new Dictionary<uint, uint> { [8000] = 1, [8001] = 1 };
+        PlayerbotAuctionRow stocked = Row(1, 8000, 100);          // cheap and covering, but a vendor sells entry 8000
+        PlayerbotAuctionRow notStocked = Row(2, 8001, 190);       // dearer, but no vendor sells entry 8001
+        Func<uint, bool> isStocked = entry => entry == 8000;
+
+        Assert.Null(ChooseReagent([stocked], missing, vendorStocked: isStocked));
+        Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([stocked, notStocked], missing, vendorStocked: isStocked)).Row.Id);
+        Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([notStocked, stocked], missing, vendorStocked: isStocked)).Row.Id);
+        // Without the predicate (or when it says no) the cheap row is an ordinary candidate.
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([stocked, notStocked], missing)).Row.Id);
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([stocked, notStocked], missing, vendorStocked: _ => false)).Row.Id);
+        Assert.Null(ChooseReagent([stocked, notStocked], missing, vendorStocked: _ => true));
+    }
+
+    [Fact]
+    public void ChooseReagent_SkipsARowWhoseCountExceedsTwiceTheShortfall()
+    {
+        var lacking1 = new Dictionary<uint, uint> { [8000] = 1 };
+        PlayerbotAuctionRow two = Row(1, 8000, 100, count: 2);        // exactly lacking * 2: eligible
+        PlayerbotAuctionRow three = Row(2, 8000, 100, count: 3);      // one over the bound
+        PlayerbotAuctionRow twenty = Row(3, 8000, 100, count: 20);    // a whole stack for a shortfall of one
+
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([two], lacking1)).Row.Id);
+        Assert.Null(ChooseReagent([three], lacking1));
+        Assert.Null(ChooseReagent([twenty], lacking1));
+        Assert.Null(ChooseReagent([three, twenty], lacking1));
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([twenty, three, two], lacking1)).Row.Id);
+
+        // The bound scales with the shortfall: lacking 3 admits a stack of 6, not of 7.
+        var lacking3 = new Dictionary<uint, uint> { [8000] = 3 };
+        Assert.NotNull(ChooseReagent([Row(4, 8000, 100, count: 6)], lacking3));
+        Assert.Null(ChooseReagent([Row(5, 8000, 100, count: 7)], lacking3));
+    }
+
+    [Fact]
+    public void ChooseReagent_AmongCoveringRows_PrefersTheLowerTotalBuyout_OverTheLowerPricePerUnit()
+    {
+        var missing = new Dictionary<uint, uint> { [8000] = 2 };
+        PlayerbotAuctionRow pair = Row(1, 8000, 180, count: 2);       // 90 per unit, 180 in total
+        PlayerbotAuctionRow bigStack = Row(2, 8000, 200, count: 4);   // 50 per unit, 200 in total (covers, within twice the shortfall)
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([pair, bigStack], missing)).Row.Id);
+        Assert.Equal(1u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([bigStack, pair], missing)).Row.Id);
+
+        // A tie in the total goes to the lower price per unit, then to the lower auction id.
+        PlayerbotAuctionRow tieBig = Row(3, 8000, 160, count: 4);     // 40 per unit
+        PlayerbotAuctionRow tiePair = Row(4, 8000, 160, count: 2);    // 80 per unit
+        Assert.Equal(3u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([tiePair, tieBig], missing)).Row.Id);
+        Assert.Equal(5u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(9, 8000, 160, count: 2), Row(5, 8000, 160, count: 2)], missing)).Row.Id);
+
+        // Rows that do not cover keep the per-unit ranking: two single units of a shortfall of two, then rows of different sizes.
+        PlayerbotAuctionRow dearUnit = Row(6, 8000, 90);
+        PlayerbotAuctionRow cheapUnit = Row(7, 8000, 40);
+        Assert.Equal(7u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([dearUnit, cheapUnit], missing)).Row.Id);
+        var five = new Dictionary<uint, uint> { [8000] = 5 };
+        PlayerbotAuctionRow fewDear = Row(8, 8000, 100, count: 1);    // 100 per unit, 100 in total
+        PlayerbotAuctionRow manyCheap = Row(10, 8000, 160, count: 4); // 40 per unit, 160 in total: the lower price per unit wins when neither covers
+        Assert.Equal(10u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([fewDear, manyCheap], five)).Row.Id);
     }
 
     [Fact]
@@ -560,6 +624,35 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.True(wrapped.IsHeld(20, unchecked(boughtAt + PlayerbotBoughtMemory.HoldMs - 1)));
         Assert.False(wrapped.IsHeld(20, unchecked(boughtAt + PlayerbotBoughtMemory.HoldMs)));
         Assert.Equal(0, wrapped.Count);
+    }
+
+    [Fact]
+    public void BoughtMemory_CountsPurchasesAwaitingCollection_AndNeverGoesNegative()
+    {
+        var memory = new PlayerbotBoughtMemory();
+        memory.NoteBought(10, 1_000);
+        memory.NoteBought(10, 2_000);
+        memory.NoteCollected(10);
+        Assert.True(memory.IsAwaitingCollection(10, 3_000), "two bought, one collected: one letter still waits");
+        memory.NoteCollected(10);
+        Assert.False(memory.IsAwaitingCollection(10, 3_000), "the second collection clears it");
+        Assert.True(memory.IsHeld(10, 3_000), "collected, but still held against listing");
+
+        // Extra collections do not drive the count below zero: one later purchase and one collection leave nothing awaited.
+        memory.NoteCollected(10);
+        memory.NoteCollected(10);
+        memory.NoteBought(10, 4_000);
+        Assert.True(memory.IsAwaitingCollection(10, 4_000));
+        memory.NoteCollected(10);
+        Assert.False(memory.IsAwaitingCollection(10, 4_000), "a later purchase needs exactly one collection");
+
+        // The hold is unchanged: a purchase restarts it, and an uncollected count stops being awaited when the hold ends.
+        var held = new PlayerbotBoughtMemory();
+        held.NoteBought(20, 0);
+        held.NoteBought(20, 5_000);
+        Assert.True(held.IsAwaitingCollection(20, 5_000 + PlayerbotBoughtMemory.HoldMs - 1));
+        Assert.False(held.IsAwaitingCollection(20, 5_000 + PlayerbotBoughtMemory.HoldMs));
+        Assert.False(held.IsHeld(20, 5_000 + PlayerbotBoughtMemory.HoldMs));
     }
 
     [Fact]

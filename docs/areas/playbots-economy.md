@@ -37,7 +37,7 @@ shorter of the interval and five minutes.
 A visit begins only when the bot is in the world, alive, not a ghost, not in combat, not casting, the economy feature is on and the
 settlement layer can act (`Settlements.CanAct`: no settlement of this bot pending, its character save neither held nor quarantined), and there is something to do: a listable item and
 a successful listing roll, or a budget of at least 100 copper with a free bag slot (an upgrade to look for), or a reagent a wanted recipe uses that the bot carries fewer of
-than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and a free bag slot; an entry bought and not yet collected from its letter is not a shortfall), or an unread auction letter
+than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and a free bag slot; an entry bought and not yet collected from its letter, or one a vendor stocks, is not a shortfall), or an unread auction letter
 (`MSG_QUERY_NEXT_MAIL_TIME`). Otherwise the next visit is a full interval away. A visit lasts at most 300 s of world time.
 
 1. **Travel.** The nearest faction auctioneer the bot can see (alive, friendly, not in combat, `NpcFlags.Auctioneer`). Out of reach it walks
@@ -50,14 +50,17 @@ than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and
    and its deposit fits the budget left. It waits for the result (at most 30 s; the deadline drops the visit) before the next request.
 4. **Reagents** (only with `BuyReagents` on, a budget of at least 100 copper and a free bag slot). The reagents of the recipes the bot wants to craft (the same
    spellbook read as the vendor supply needs, `PlayerbotVendorSupplyNeeds.Reagents`: the largest count one craft uses) that it carries
-   fewer of than one craft uses are its shortfalls, except an entry it bought and has not yet collected (see below). For each, in item id
+   fewer of than one craft uses are its shortfalls, except an entry it bought and has not yet collected and an entry a vendor stocks (see below). For each, in item id
    order starting at a position that rotates with the visit number (so later entries get their turn) and at most four searches a visit, one a think, it asks the
    house for the listings of the item's name and class (`CMSG_AUCTION_LIST_ITEMS`). Of the rows it can pay (a buyout, not its own, within
-   the budget left, the money in hand and what the budget leaves spendable, not refused lately) whose buyout per unit, rounded up, is at
-   most twice the item's reference price (`PlayerbotEconomyPlanner.ReagentUnitCap`), it takes the one that covers the shortfall first,
-   then the lowest price per unit (compared exactly), then the lower buyout, then the lower auction id, and buys it out with a bid equal
-   to the buyout. At most two purchases a visit and two failed tries; a bid waits for its result like an upgrade's, then the visit
-   returns to this phase. The purchase is noted in `PlayerbotBoughtMemory`.
+   the budget left, the money in hand and what the budget leaves spendable, not refused lately, not a vendor-stocked item) whose count is at
+   most `ReagentOverbuyFactor` (2) times the shortfall and whose buyout per unit, rounded up, is at most twice the item's reference price
+   (`PlayerbotEconomyPlanner.ReagentUnitCap`), it takes the one that covers the shortfall first; among covering rows the lower total
+   buyout, then the lower price per unit (compared exactly), then the lower auction id; among rows that do not cover the shortfall the
+   lowest price per unit, then the lower buyout, then the lower auction id. It buys it out with a bid equal to the buyout. At most two
+   purchases a visit and two failed tries; a bid waits for its result like an upgrade's, then the visit returns to this phase. The
+   purchase is noted in `PlayerbotBoughtMemory`. `BuyReagents` is read again at this step, so a live reload that turns it off ends the
+   phase at once, mid-visit.
 5. **Buying** (only when the budget allows). One page of usable green-or-better weapons, one of armor; among the rows the bot can pay
    (a buyout, not its own, within the budget left and the money in hand, not refused lately) the one whose item gains the most for its
    slot, then the lower buyout, then the lower auction id; nothing gaining more than `PlayerbotItemScore.MinimumGain` is bought. It
@@ -81,10 +84,23 @@ once collected. The bot never buys to resell.
 Reagents are bought only to be used. The listing reservation also covers every reagent of a recipe the bot wants (whatever it carries,
 with `BuyReagents` on or off) and every entry the bot bought at the house in the last 24 hours (`PlayerbotBoughtMemory`: 64 entries, in
 memory, the oldest purchase goes first, lost on restart), so there is no buy-then-relist loop. The won item comes to the bot by mail,
-which the same visit collects. A purchase is also marked awaiting collection until the mail step takes the item of a "won" auction letter
-(`NoteCollected`); while it is awaiting, the entry is not a reagent shortfall, so a letter the visit did not collect (no mailbox in sight,
-walk failures, visit cap) does not make the next visit buy the same reagent again. The mark ends with the 24 hour hold, so a lost letter
+which the same visit collects. Each purchase also adds one to the entry's awaiting count, and each "won" auction letter the mail step takes the item
+of lowers it by one (`NoteCollected`, never below 0); while the count is above 0, the entry is not a reagent shortfall, so a letter the visit did not collect (no mailbox in sight,
+walk failures, visit cap) does not make the next visit buy the same reagent again. The count ends with the 24 hour hold, so a lost letter
 cannot block buying forever.
+
+Anti-exploit rules for reagents. Vendor-stocked items are never bought at the house: the index of the world data
+(`PlayerbotServiceIndex.IsVendorStocked`) holds every item any vendor with a spawn sells, and a vendor's goods (thread, flux, salt,
+vials) cost no more than the vendor's price, so a player listing them at twice the reference price would otherwise farm gold from the
+bots. A vendor-stocked entry is not a shortfall for the house, so no visit starts for it. Without the index (no creature content or
+spell table loaded) every reagent counts as vendor stocked: the bot buys no reagents at the house (fail closed). A row is eligible only
+when its count is at most twice the shortfall, so a shortfall of 1 never buys a stack of 20 whose surplus is then held back from
+listing. The per-unit cap (twice the reference price, never below 200 copper per unit) and the visit budget still apply.
+
+A bid whose settlement ends without a result packet is judged by the money: if the bot paid, the buyout counts as bought (a reagent
+is noted in the bought memory, a gear bid counts as a purchase); if it paid nothing, the auction is refused for a while. A reagent bid
+still unsettled at the operation deadline is noted as bought before the visit is dropped, so an unknown outcome cannot make the next
+visit buy the same reagent again.
 
 ## The bank
 
@@ -225,7 +241,7 @@ NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`
 | `VisitIntervalMinutes` | `30` | Minutes between two visits of one bot (1..1440). |
 | `BankDeposit` | `true` | Deposit goods the bot does not need at a banker while it stays at its capital home. |
 | `BuyBankSlots` | `true` | Buy the next bank bag slot when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold. |
-| `BuyReagents` | `true` | Buy the reagents of wanted recipes the bot carries fewer of than one craft uses: at most 2 auctions a visit, at most twice the reference price per unit, within the visit budget. Off: none is searched or bought. |
+| `BuyReagents` | `true` | Buy the reagents of wanted recipes the bot carries fewer of than one craft uses: at most 2 auctions a visit, never a vendor-stocked item, at most twice the shortfall in count, at most twice the reference price per unit, within the visit budget. Off: none is searched or bought, also when turned off mid-visit. |
 
 `World:Playerbots:Budget` (live):
 
@@ -257,4 +273,4 @@ upgrade choice and its tie-breaks, the reagent shortfalls and choice with its pe
 decoder against the bytes `EconomyPackets` writes, and `FormatException` on malformed replies), and `PlayerbotEconomyWorldTests` (bots in a
 real scenario world: a visit that lists up to the free slots, a sale and an expiry collected from the mailbox, COD and player letters left
 alone, a full bag leaving an item letter in the box, and two bots racing for one auction, once a seller-0 listing, with the item existing
-once and the AH bot's ledger audit clean; a visit that buys the in-cap reagent pair, passes over the over-cap pair and the single, and collects it in the same visit; none bought with `BuyReagents` off; a needed reagent never listed).
+once and the AH bot's ledger audit clean; a visit that buys the in-cap reagent pair, passes over the over-cap pair and the single, and collects it in the same visit; a visit that buys nothing when the only covering row is over the cap; a visit that buys nothing for a vendor-stocked entry with an in-cap covering row listed; a visit that buys nothing when `BuyReagents` is turned off after the visit started; none bought with `BuyReagents` off; a needed reagent never listed).

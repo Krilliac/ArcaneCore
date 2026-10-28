@@ -23,8 +23,9 @@ internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row, uint Miss
 
 /// <summary>
 /// Entries the bot bought at the auction house lately, which it does not list again for <see cref="HoldMs"/> (no buy-then-relist loop).
-/// A purchase also stays "awaiting collection" until the mail step takes the bought item from its letter, so a letter that was not
-/// collected does not make the next visit buy the same reagent again.
+/// A purchase also stays "awaiting collection" until the mail step has taken as many bought items from their letters as were bought
+/// (an awaiting count: each purchase adds one, each collected letter takes one), so a letter that was not collected does not make the
+/// next visit buy the same reagent again.
 /// In memory, bounded to <see cref="MaxEntries"/> (the oldest purchase goes first); lost on restart. World thread only.
 /// </summary>
 internal sealed class PlayerbotBoughtMemory
@@ -33,36 +34,38 @@ internal sealed class PlayerbotBoughtMemory
 
     internal const uint HoldMs = 86_400_000;
 
-    private readonly Dictionary<uint, (uint At, long Order, bool Awaiting)> _bought = [];
+    private readonly Dictionary<uint, (uint At, long Order, int Awaiting)> _bought = [];
     private long _next;
 
     /// <summary>How many entries are remembered.</summary>
     internal int Count => _bought.Count;
 
-    /// <summary>Notes a purchase of <paramref name="entry"/> at world time <paramref name="now"/>, (re)starting its hold and marking it awaiting collection.</summary>
+    /// <summary>Notes a purchase of <paramref name="entry"/> at world time <paramref name="now"/>: (re)starts its hold and adds one to its awaiting-collection count.</summary>
     internal void NoteBought(uint entry, uint now)
     {
+        int awaiting = _bought.TryGetValue(entry, out (uint At, long Order, int Awaiting) known) ? known.Awaiting : 0;
         if (!_bought.ContainsKey(entry) && _bought.Count >= MaxEntries) _bought.Remove(_bought.MinBy(pair => pair.Value.Order).Key);
-        _bought[entry] = (now, _next++, true);
+        _bought[entry] = (now, _next++, awaiting < int.MaxValue ? awaiting + 1 : awaiting);
     }
 
-    /// <summary>The bought item of <paramref name="entry"/> was taken from its letter: it is no longer awaiting collection (the listing hold stays).</summary>
+    /// <summary>One bought item of <paramref name="entry"/> was taken from its letter: the awaiting count falls by one, not below 0 (the listing hold stays).</summary>
     internal void NoteCollected(uint entry)
     {
-        if (_bought.TryGetValue(entry, out (uint At, long Order, bool Awaiting) known)) _bought[entry] = (known.At, known.Order, false);
+        if (_bought.TryGetValue(entry, out (uint At, long Order, int Awaiting) known))
+            _bought[entry] = (known.At, known.Order, Math.Max(0, known.Awaiting - 1));
     }
 
     /// <summary>Whether <paramref name="entry"/> was bought within <see cref="HoldMs"/> of <paramref name="now"/>; an entry past its hold is forgotten.</summary>
     internal bool IsHeld(uint entry, uint now)
     {
-        if (!_bought.TryGetValue(entry, out (uint At, long Order, bool Awaiting) known)) return false;
+        if (!_bought.TryGetValue(entry, out (uint At, long Order, int Awaiting) known)) return false;
         if (unchecked(now - known.At) < HoldMs) return true;
         _bought.Remove(entry);
         return false;
     }
 
-    /// <summary>Whether <paramref name="entry"/> is held (within <see cref="HoldMs"/>) and its bought item has not been collected; false after the hold, so a lost letter cannot block buying forever.</summary>
-    internal bool IsAwaitingCollection(uint entry, uint now) => IsHeld(entry, now) && _bought[entry].Awaiting;
+    /// <summary>Whether <paramref name="entry"/> is held (within <see cref="HoldMs"/>) and its awaiting count is above 0; false after the hold, so a lost letter cannot block buying forever.</summary>
+    internal bool IsAwaitingCollection(uint entry, uint now) => IsHeld(entry, now) && _bought[entry].Awaiting > 0;
 }
 
 /// <summary>
@@ -99,12 +102,23 @@ internal static class PlayerbotEconomyPlanner
     }
 
     /// <summary>
-    /// The reagent auction to buy out, or null: of the rows for a missing entry the bot can pay (a buyout, not its own, within
-    /// <paramref name="limit"/>, not refused, at most <see cref="ReagentUnitCap"/> per unit rounded up) the one that covers the shortfall
-    /// first, then the lowest price per unit (compared exactly), then the lower buyout, then the lower auction id.
+    /// How many times the shortfall a reagent row's count may be: a row is eligible only when <c>row.Count &lt;= lacking * ReagentOverbuyFactor</c>.
+    /// Bounds the surplus a purchase leaves (which is held back from listing and deposit) so a stack of 20 is never bought for a shortfall of 1.
     /// </summary>
+    internal const uint ReagentOverbuyFactor = 2;
+
+    /// <summary>
+    /// The reagent auction to buy out, or null: of the rows for a missing entry the bot can pay (a buyout, not its own, within
+    /// <paramref name="limit"/>, not refused, not a vendor-stocked item, a count of at most <see cref="ReagentOverbuyFactor"/> times the
+    /// shortfall, at most <see cref="ReagentUnitCap"/> per unit rounded up) the best. A row that covers the shortfall beats one that does
+    /// not; among covering rows the lower total buyout wins, then the lower price per unit (compared exactly), then the lower auction id;
+    /// among non-covering rows the lower price per unit, then the lower buyout, then the lower auction id.
+    /// </summary>
+    /// <param name="isRefused">Auctions the house refused to sell to the bot lately.</param>
+    /// <param name="isVendorStocked">Item entries a vendor sells: never bought at the house (the vendor price is the market, and a player could otherwise sell vendor goods to bots at twice the reference).</param>
     internal static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, ulong self,
-        IReadOnlyDictionary<uint, uint> missing, uint limit, Func<uint, ItemTemplate?> templates, Func<uint, bool>? isRefused = null)
+        IReadOnlyDictionary<uint, uint> missing, uint limit, Func<uint, ItemTemplate?> templates, Func<uint, bool>? isRefused = null,
+        Func<uint, bool>? isVendorStocked = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(missing);
@@ -116,6 +130,7 @@ internal static class PlayerbotEconomyPlanner
         {
             if (row.Buyout == 0 || row.Count == 0 || row.Buyout > limit || row.Owner == self) continue;
             if (!missing.TryGetValue(row.Entry, out uint lacking) || lacking == 0 || isRefused?.Invoke(row.Id) == true) continue;
+            if (isVendorStocked?.Invoke(row.Entry) == true || (ulong)row.Count > (ulong)lacking * ReagentOverbuyFactor) continue;
             if (templates(row.Entry) is not { } template) continue;
             uint cap = ReagentUnitCap(template);
             if (cap == 0 || (((ulong)row.Buyout + row.Count - 1) / row.Count) > cap) continue;
@@ -134,6 +149,13 @@ internal static class PlayerbotEconomyPlanner
         if (covers != currentCovers) return covers;
         ulong mine = (ulong)row.Buyout * current.Count;
         ulong theirs = (ulong)current.Buyout * row.Count;
+        if (covers)
+        {
+            if (row.Buyout != current.Buyout) return row.Buyout < current.Buyout;
+            if (mine != theirs) return mine < theirs;
+            return row.Id < current.Id;
+        }
+
         if (mine != theirs) return mine < theirs;
         if (row.Buyout != current.Buyout) return row.Buyout < current.Buyout;
         return row.Id < current.Id;

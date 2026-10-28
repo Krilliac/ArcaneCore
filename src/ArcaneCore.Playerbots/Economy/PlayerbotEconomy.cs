@@ -181,6 +181,13 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     /// </summary>
     internal Func<Player, IReadOnlyDictionary<uint, uint>>? ReagentNeeds { get; set; }
 
+    /// <summary>
+    /// Test seam: whether a vendor stocks an item entry (such an entry is never bought at the house). Null (default) asks the world's
+    /// <see cref="PlayerbotServiceIndex"/>; when that index is unavailable (no creature content or spell table, no NPC services) every
+    /// reagent counts as vendor stocked, so none is bought at the house (fail closed).
+    /// </summary>
+    internal Func<uint, bool>? VendorStocked { get; set; }
+
     internal int ItemsCollected { get; private set; }
 
     /// <summary>The copper the bot took from auction letters over its life (tests, inspection).</summary>
@@ -267,7 +274,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         uint visitMoney = Math.Min(PlayerbotEconomyPlanner.VisitBudget(player.Money, config.BuyUpgradeBudgetFraction), Spendable(player));
         bool buy = visitMoney >= PlayerbotEconomyPlanner.MinimumUpgradeBudget && PlayerbotTownGoals.FreeBagSlots(player) > 0;
         IReadOnlyDictionary<uint, uint> shortfalls = config.BuyReagents && visitMoney >= PlayerbotEconomyPlanner.MinimumUpgradeBudget && PlayerbotTownGoals.FreeBagSlots(player) > 0
-            ? WithoutAwaiting(PlayerbotEconomyPlanner.Shortfalls(wanted, entry => player.Inventory.GetItemCount(entry)), now)
+            ? WithoutAwaiting(PlayerbotEconomyPlanner.Shortfalls(wanted, entry => player.Inventory.GetItemCount(entry)), now, VendorStockedFor(player))
             : NoReagents;
         bool reagents = shortfalls.Count > 0;
         if (!list && !buy && !reagents && !(Reached(now, _nextMailTriggerAt) && HasUnreadMail(out bool known) && known))
@@ -635,14 +642,32 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
         if (!player.IsQuestSettlementPending)
         {
-            _spent = unchecked(_spent + (_moneyBefore >= player.Money ? _moneyBefore - player.Money : 0));
-            NoteBidFailed();
+            // The settlement finished without a result packet. Money gone means the buyout went through: book it as a purchase
+            // (a reagent must not be bought again by the next visit); no money gone means the house did not take the bid.
+            uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
+            _spent = unchecked(_spent + paid);
+            if (paid > 0 && reagent)
+            {
+                NoteReagentBought();
+            }
+            else if (paid > 0)
+            {
+                _purchases++;
+                PurchasesMade++;
+            }
+            else
+            {
+                NoteBidFailed();
+            }
+
             _phase = _bidReturn;
             return true;
         }
 
         if (Reached(now, _operationDeadline))
         {
+            // An unknown outcome of a reagent bid must not let the next visit buy the same reagent again (the hold lapses after HoldMs).
+            if (reagent) Bought.NoteBought(_bidEntry, now);
             Abort();
             return false;
         }
@@ -676,6 +701,13 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     private bool StepBuyingReagents(Player player, EconomyFeature economy, uint now)
     {
         if (!AuctioneerStillUsable(player, economy)) return Finish(now);
+        if (!options.Economy.BuyReagents)
+        {
+            // A live reload turned reagent buying off: leave the phase at once.
+            _phase = AfterReagents();
+            return true;
+        }
+
         uint limit = Math.Min(Math.Min(PlayerbotEconomyPlanner.Remaining(Budget, _spent), player.Money), Spendable(player));
         if (_reagentPurchases >= MaxReagentPurchasesPerVisit || _reagentFailures >= 2 || limit == 0
             || PlayerbotTownGoals.FreeBagSlots(player) == 0 || !economy.Settlements.CanAct(session, player))
@@ -703,7 +735,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         PlayerbotReagentChoice? choice = PlayerbotEconomyPlanner.ChooseReagent(_reagentScan.DistinctBy(row => row.Id), player.Guid.Value, _reagentMissing, limit,
-            entry => player.Inventory.Templates.Find(entry), IsRefused);
+            entry => player.Inventory.Templates.Find(entry), IsRefused, VendorStockedFor(player));
         if (choice is null)
         {
             _phase = AfterReagents();
@@ -1000,14 +1032,29 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         return false;
     }
 
-    /// <summary>The shortfalls without the entries the bot bought and has not yet collected from their letters (it must not buy them again).</summary>
-    private IReadOnlyDictionary<uint, uint> WithoutAwaiting(IReadOnlyDictionary<uint, uint> shortfalls, uint now)
+    /// <summary>
+    /// The shortfalls without the entries the bot bought and has not yet collected from their letters (it must not buy them again) and
+    /// without the entries a vendor stocks (never bought at the house, so no visit is started for them).
+    /// </summary>
+    private IReadOnlyDictionary<uint, uint> WithoutAwaiting(IReadOnlyDictionary<uint, uint> shortfalls, uint now, Func<uint, bool> isVendorStocked)
     {
         if (shortfalls.Count == 0) return shortfalls;
         var kept = new Dictionary<uint, uint>(shortfalls.Count);
         foreach ((uint entry, uint missing) in shortfalls)
-            if (!Bought.IsAwaitingCollection(entry, now)) kept[entry] = missing;
+            if (!Bought.IsAwaitingCollection(entry, now) && !isVendorStocked(entry)) kept[entry] = missing;
         return kept;
+    }
+
+    /// <summary>
+    /// The vendor-stocked predicate: the <see cref="VendorStocked"/> seam, else the world's service index (resolved once for the returned
+    /// predicate). Fail closed: without the index every entry counts as vendor stocked.
+    /// </summary>
+    private Func<uint, bool> VendorStockedFor(Player player)
+    {
+        if (VendorStocked is { } seam) return seam;
+        QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
+        PlayerbotServiceIndex? index = services is null ? null : PlayerbotServiceIndex.Get(session, services, player);
+        return index is null ? static _ => true : index.IsVendorStocked;
     }
 
     private IEnumerable<PlayerbotBagItem> BagItems(Player player, IReadOnlyDictionary<uint, uint> wanted)

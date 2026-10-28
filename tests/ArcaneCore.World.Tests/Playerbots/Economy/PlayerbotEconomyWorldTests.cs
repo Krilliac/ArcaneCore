@@ -282,6 +282,99 @@ public sealed class PlayerbotEconomyWorldTests
     }
 
     [Fact]
+    public async Task Visit_BuysNoReagent_WhenTheEntryIsStockedByAVendor_EvenWithAnInCapCoveringRowListed()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-vendor-stocked", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            // The in-cap pair is a covering row the bot could afford, but a vendor sells linen: a player must not be able to sell it to bots at the house.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver, entry => entry == LinenCloth);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of a vendor-stocked entry");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is { BidderId: 0 }), "the in-cap pair is still in the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.OverId) is { BidderId: 0 }), "the over-priced pair is still in the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.SingleId) is { BidderId: 0 }), "the single linen is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysNoReagent_WhenTheOnlyCoveringRowIsOverTheCap()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-over-cap-only", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, overCapOnly: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            // The house holds only a pair one copper per unit over the cap; the bot lacks two and can afford it, yet buys nothing.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.OverId) is { BidderId: 0 }), "the over-priced pair is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysNoReagent_WhenBuyReagentsIsTurnedOffAfterTheVisitStarted()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-off-mid-visit", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            PlayerbotOptions options = Options(listChance: 0, maxListings: 5, budget: 0.25f);
+            Driver driver = await AttachAsync(c, buyer, options);
+            await SetReagentNeedsAsync(c, driver);
+
+            // A live reload: the switch goes off on the world thread right after the visit has started (it planned its reagent shortfalls with the
+            // switch on), before any reagent bid. The first update after the request leaves Idle; the flip happens in that same tick.
+            PlayerbotEconomyPhase? flippedIn = null;
+            driver.PauseWhen = e =>
+            {
+                if (flippedIn is null && e.Phase != PlayerbotEconomyPhase.Idle)
+                {
+                    flippedIn = e.Phase;
+                    options.Economy.BuyReagents = false;
+                }
+                return false;
+            };
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            // The visit may enter the reagent phase in the tick that leaves Idle; the flip still precedes any bid (no AwaitBid yet).
+            ScenarioContext.Expect(flippedIn is not null && flippedIn != PlayerbotEconomyPhase.AwaitBid,
+                $"the switch was turned off before any reagent bid (flipped in {flippedIn})");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after the switch went off");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is { BidderId: 0 }), "the in-cap pair is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
     public async Task Visit_NeverListsAReagentTheBotNeeds()
     {
         await using ScenarioTestWorld world = await StartAsync();
@@ -401,6 +494,7 @@ public sealed class PlayerbotEconomyWorldTests
 
             Driver driver = await AttachAsync(c, bot, Options(listChance: 100, maxListings: 5, budget: 0.25f));
             ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.ReagentNeeds is null), "the default reader is in use");
+            await c.ReadAsync(() => { driver.Economy.VendorStocked = _ => false; return true; });
             await StartVisitAsync(c, driver);
             await FinishAsync(c, driver, 1);
 
@@ -414,10 +508,14 @@ public sealed class PlayerbotEconomyWorldTests
 
     private sealed record ReagentMarket(uint Cap, uint Within, uint WithinId, uint OverId, uint SingleId, uint ExtraId = 0);
 
-    /// <summary>Per craft the bot wants two linen cloth (set on the world thread, the seam the economy reads instead of the spellbook).</summary>
-    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver) => c.ReadAsync(() =>
+    /// <summary>
+    /// Per craft the bot wants two linen cloth (set on the world thread, the seam the economy reads instead of the spellbook). The vendor-stocked
+    /// seam is pinned too, so no scenario depends on whether the scenario world has a service index: by default no entry is vendor stocked.
+    /// </summary>
+    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver, Func<uint, bool>? vendorStocked = null) => c.ReadAsync(() =>
     {
         driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [LinenCloth] = 2 };
+        driver.Economy.VendorStocked = vendorStocked ?? (_ => false);
         return true;
     });
 
@@ -425,7 +523,7 @@ public sealed class PlayerbotEconomyWorldTests
     /// A seller lists linen cloth three ways: a pair exactly at the reagent cap per unit (the one to buy), a pair one copper per unit over the cap,
     /// and a single cheap cloth that does not cover a shortfall of two.
     /// </summary>
-    private static async Task<ReagentMarket> SeedReagentMarketAsync(ScenarioContext c, EconomyFeature economy, bool secondInCapPair = false)
+    private static async Task<ReagentMarket> SeedReagentMarketAsync(ScenarioContext c, EconomyFeature economy, bool secondInCapPair = false, bool overCapOnly = false)
     {
         ScenarioBot seller = await c.LoginAsync("Econseller");
         await c.GiveMoneyAsync(seller, 3000);
@@ -435,9 +533,10 @@ public sealed class PlayerbotEconomyWorldTests
         ScenarioContext.Expect(cap > 0 && over < 1000, $"the linen cap {cap} must leave the over-priced pair inside the 1000 copper visit budget");
 
         // One stack at a time: a second stack of the same entry would merge into the first one in the bags.
-        uint withinId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), within / 2, within, 480);
+        // With overCapOnly nothing but the over-priced pair is listed (the in-cap pair and the single have id 0).
+        uint withinId = overCapOnly ? 0 : await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), within / 2, within, 480);
         uint overId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), over / 2, over, 480);
-        uint singleId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 1), 10, cap / 4 + 1, 480);
+        uint singleId = overCapOnly ? 0 : await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 1), 10, cap / 4 + 1, 480);
         uint extraId = secondInCapPair ? await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), within / 2, within, 480) : 0;
         return new ReagentMarket(cap, within, withinId, overId, singleId, extraId);
     }
