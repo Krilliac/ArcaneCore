@@ -223,7 +223,7 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
 | 27 | Guard posts | `GuardPostTable.cs:33-45` | Data | P6 |
 | 28 | Profession specialization gossip | `ProfessionSpecializationGossip.cs` | Rules | P6 |
 | 29 | Bot BG buffs | `PlayerbotBattlegroundBuffs.cs:51-131` | Rules | P6 |
-| 30 | Loot `condition_id` (stored, evaluation unverified) | `GameObjectLootRows.cs:228` | Verify; wire to conditions | P0 |
+| 30 | Loot `condition_id` (verified in P0: evaluated per recipient by `LootService.Generate` through `ConditionFeature`, references included; `LootConditionsWorldTests`) | `GameObjectLootRows.cs:228` | Verified; nothing to wire | P0 (done) |
 
 The inventory is a living list. New candidates go in this table, and a test (`RuleInventoryTests`, added in P0) can later grep for known hard-coded patterns, such as magic SCRIPT_COMMAND switches, to catch regressions back into code.
 
