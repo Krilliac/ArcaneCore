@@ -202,6 +202,8 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
             output.WriteLine($"{journey.State} {journey.Failure}; {capture.Describe()}");
             Assert.Equal(JourneyState.Failed, state);
             Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key(PlayerbotTravel.AnomalyArea, "leg-failed")));
+            // The leg failed on the trigger's own refusal (not as a side effect of a walk that stood in the volume).
+            Assert.Contains("did not teleport the bot", capture.Describe());
         }
         finally
         {
