@@ -31,6 +31,7 @@ public sealed class PlayerbotSocialFaultCountTests
             finally { feature.Timings.PassIntervalMs = int.MaxValue; }
         });
         await feature.QuiesceAsync(default);
+        store.Failure = null;
 
         probe.AssertCountedOnce("the bot registry read catch");
     }

@@ -52,6 +52,38 @@ public sealed class FeatureFaultLedgerCountTests
     }
 
     [Fact]
+    public async Task EconomySettlements_AThrowingFinishedCallback_IsCountedOnce_UnderSettlementCallback()
+    {
+        var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("economy.settlement-callback");
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<IEconomyStore>(_ => new ProbeEconomyStore(failCommit: true, failExpiredMails: false));
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        IServiceScopeFactory scopes = provider.GetRequiredService<IServiceScopeFactory>();
+        var saves = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
+        var settlements = new EconomySettlements(scopes, NullLogger.Instance);
+        settlements.Attach(world, saves, null);
+
+        // The settlement fails (the store rejects the commit) and finalizes; the finished callback is the throwing part.
+        int called = 0;
+        world.Post(() => settlements.TryStart([], [], (_, _) =>
+        {
+            Interlocked.Exchange(ref called, 1);
+            throw probe.Fault();
+        }, Guid.NewGuid()));
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (Volatile.Read(ref called) == 0 && DateTime.UtcNow < deadline)
+        {
+            world.RunTick(1); // finalize runs inside a tick on this thread, so its catch has finished when the tick returns
+            await Task.Delay(10);
+        }
+
+        Assert.True(Volatile.Read(ref called) == 1, "the finished callback never ran");
+        probe.AssertCountedOnce("the settlement finished-callback catch");
+    }
+
+    [Fact]
     public async Task EconomyFeature_AFailedStoreRead_IsCountedOnce()
     {
         var services = new ServiceCollection();
@@ -61,7 +93,7 @@ public sealed class FeatureFaultLedgerCountTests
         IServiceScopeFactory scopes = provider.GetRequiredService<IServiceScopeFactory>();
         var saves = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
-        var feature = new EconomyFeature(provider, scopes, NullLogger<EconomyFeature>.Instance, null);
+        await using var feature = new EconomyFeature(provider, scopes, NullLogger<EconomyFeature>.Instance, null);
         feature.Options.ExpirySweepSeconds = 0;
         feature.Attach(world);
         Assert.True(feature.Enabled);

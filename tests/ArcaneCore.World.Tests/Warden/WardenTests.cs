@@ -1373,7 +1373,7 @@ public sealed class WardenTests
             WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
             feature.PendingBanStopWait = TimeSpan.FromMilliseconds(200);
             // The stop bound's message is built by Warden ("... (account(s) N) ..."): count the one that names this test's account.
-            var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.ban-stop", $"account(s) {session.AccountId}");
+            var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.ban-stop", $"account(s) {session.AccountId})");
             try
             {
                 await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
