@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Game.Tests.Pets;
+using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -60,11 +61,15 @@ public sealed class CurseOfDoomTests
         },
     ];
 
-    private static (PetTestKit Kit, Player Warlock, Player Victim) Kit(int roll, uint victimHealth)
+    private static (PetTestKit Kit, Player Warlock, Creature Victim) Kit(int roll, uint victimHealth)
     {
         var kit = new PetTestKit(Spells());
         (Player warlock, _) = kit.AddPlayer(1, 7, 8);
-        (Player victim, _) = kit.AddPlayer(2, 12, 8);
+        // Curse of Doom never lands on a player or a unit a player controls (Spell::CheckTargetCreatureType), so the victim is a hostile creature.
+        Creature victim = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 12, 8, 83.5f, 0);
+        var relations = new FakeRelations();
+        relations.Hostile.Add(victim.Guid);
+        kit.Spells.System.Relations = relations;
         warlock.Level = 40;
         victim.MaxHealth = 10_000;
         victim.Health = victimHealth;
@@ -76,7 +81,7 @@ public sealed class CurseOfDoomTests
     [Fact]
     public void ATickThatKills_SummonsTheDoomguard_OneTimeInTen()
     {
-        (PetTestKit kit, Player warlock, Player victim) = Kit(roll: 0, victimHealth: 500);
+        (PetTestKit kit, Player warlock, Creature victim) = Kit(roll: 0, victimHealth: 500);
         using PetTestKit owned = kit;
 
         kit.Spells.Advance(60_000, step: 1000);
@@ -137,7 +142,7 @@ public sealed class CurseOfDoomTests
     [InlineData(9)]
     public void ATickThatKills_OtherwiseSummonsNothing(int roll)
     {
-        (PetTestKit kit, _, Player victim) = Kit(roll, victimHealth: 500);
+        (PetTestKit kit, _, Creature victim) = Kit(roll, victimHealth: 500);
         using PetTestKit owned = kit;
 
         kit.Spells.Advance(60_000, step: 1000);
@@ -149,7 +154,7 @@ public sealed class CurseOfDoomTests
     [Fact]
     public void ATickThatDoesNotKill_DoesNotRollAtAll()
     {
-        (PetTestKit kit, _, Player victim) = Kit(roll: 0, victimHealth: 9_000);
+        (PetTestKit kit, _, Creature victim) = Kit(roll: 0, victimHealth: 9_000);
         using PetTestKit owned = kit;
 
         kit.Spells.Advance(60_000, step: 1000);
