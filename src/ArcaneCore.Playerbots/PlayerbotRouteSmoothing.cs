@@ -438,7 +438,7 @@ internal static class PlayerbotRouteSmoothing
         return (u * u * p0) + (2f * u * t * p1) + (t * t * p2);
     }
 
-    private static bool TrySnapHeight(Map map, Vector3 candidate, out Vector3 snapped)
+    internal static bool TrySnapHeight(Map map, Vector3 candidate, out Vector3 snapped)
     {
         snapped = candidate;
         float terrain = map.Terrain.GetHeight(candidate.X, candidate.Y, candidate.Z);
@@ -455,7 +455,7 @@ internal static class PlayerbotRouteSmoothing
         return true;
     }
 
-    private static bool IsChordSafe(Map map, Vector3 from, Vector3 to)
+    internal static bool IsChordSafe(Map map, Vector3 from, Vector3 to)
     {
         if (MathF.Abs(to.Z - from.Z) > MaxFloorDeltaYards * 3f)
             return false;

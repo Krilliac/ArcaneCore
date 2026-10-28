@@ -974,8 +974,8 @@ internal static class PlayerbotNavigation
         {
             if (!trial && !chase && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
             {
-                PlayerbotRoute smoothed = PlayerbotRouteSmoothing.VaryAndSmooth(
-                    player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player));
+                PlayerbotRoute smoothed = PlayerbotPathShaping.Shape(smoothMap, PlayerbotRouteSmoothing.VaryAndSmooth(
+                    player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player)), options);
                 if (!ReferenceEquals(smoothed, route)
                     && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
                 {

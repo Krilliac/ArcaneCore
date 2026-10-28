@@ -121,7 +121,19 @@ whatever the think interval. Brain, goals and scripted controllers only choose r
 and gentle sinusoidal weave (`±0.85` yards) along outdoor corridors at least 18 yards long (tapered at start and
 destination, skipped on combat chases) so multiple bots walking the same road spread naturally instead of marching single-file,
 and replaces sharp interior polygon turns with 4-point quadratic Bezier arcs verified against floor height, doodad-aware
-line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. `PlayerbotMotion` also gives up navigation loops. A mesh
+line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. After that,
+`PlayerbotPathShaping.Shape` shapes the corners (`World:Playerbots:PathShaping`, on by default). The mesh is built with a 0.2 yard
+agent radius, so a string-pulled corner sits against the post or wall it goes around. Shaping probes the mesh on both sides of
+a corner and moves it away from the obstacle on the inside of the turn until `CornerClearanceYards` (2) are kept, moves it toward the
+middle of a corridor bounded on both sides by at most `CornerCentringMaxYards` (4, 0 = off), and replaces a turn sharper than about
+35 degrees by an arc that starts `CornerTurnLeadYards` (2.5, 0 = off) before the corner. A corner moves only when the push fits the room
+on its outer side less half a yard (a doorway or bridge keeps its mesh position). When the full push's legs or ground fail, smaller
+pushes are tried down to half the clearance (counted as partial pushes), and every arc point keeps the clearance achieved at the corner.
+Every new leg must pass the chord check above and the motion's own on-mesh check; where the mesh's own leg already fails that check
+(stepped city ground), a new leg is accepted only if it is no worse than the leg it replaces (floor mismatch and height step within
+a quarter yard of the original's, line of sight clear, back on the mesh). Otherwise the corner keeps its mesh position. The start and the destination never move. Cost is bounded per plan: at most 12
+corners, within 120 yards of the start, about 192 estimated collision and mesh queries; a path with no sharp corner costs nothing.
+`PlayerbotMotion` also gives up navigation loops. A mesh
 route's proof covers its own legs only: a bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed it
 again walks a straight line from where it stands to the next point, and when it starts more than `OffLegYards` (5) off the leg
 that line is checked as a stepped one (floor and line of sight), so it no longer runs through hills and rocks at its own height
