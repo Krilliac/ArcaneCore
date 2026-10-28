@@ -131,6 +131,9 @@ public sealed partial class DuelService
         flag.SetUInt32(UpdateFields.GameobjectFaction, caster.FactionTemplate);
         flag.SetUInt32(UpdateFields.GameobjectLevel, (uint)caster.Level + 1);
         flag.SetUInt64(UpdateFields.ObjectFieldCreatedBy, caster.Guid.Value);
+
+        // vmangos Map::Add(pGameObj) shows the flag to everyone near it and sends the create before SMSG_DUEL_REQUESTED names its guid.
+        map.AnnounceObject(flag);
         Begin(caster, target, flag);
         return null;
     }

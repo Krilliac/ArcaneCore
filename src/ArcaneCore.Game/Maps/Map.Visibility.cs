@@ -54,6 +54,23 @@ public sealed partial class Map
     }
 
     /// <summary>
+    /// Show a non-player object just placed in this map to everyone near it, and send each of them the create packet before this returns
+    /// (vmangos <c>Map::Add</c> runs <c>UpdateObjectVisibility</c> at once and <c>Player::UpdateVisibilityOf</c> sends the create then and there).
+    /// A packet the caller sends afterwards that names the object (SMSG_DUEL_REQUESTED) then reaches a client that already knows it. World thread.
+    /// </summary>
+    public void AnnounceObject(WorldObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        EnsureWorldThread();
+        if (obj is Player || !ReferenceEquals(obj.Map, this))
+        {
+            return;
+        }
+
+        UpdateObjectVisibility(obj, flushViewers: true);
+    }
+
+    /// <summary>
     /// One viewer/target visibility evaluation in detect mode (vmangos <c>IsVisibleForOrDetect(.., detect = true)</c> as run by
     /// <c>Player::HandleStealthedUnitsDetection</c>): the rules may now reveal a unit the regular movement-driven updates keep hidden.
     /// </summary>
@@ -463,7 +480,7 @@ public sealed partial class Map
     }
 
     /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>
-    private void UpdateObjectVisibility(WorldObject obj)
+    private void UpdateObjectVisibility(WorldObject obj, bool flushViewers = false)
     {
         List<Player> viewers = ObjectVisibilityViewers(obj);
         ObjectVisibilityCandidates += viewers.Count;
@@ -476,6 +493,10 @@ public sealed partial class Map
                 if (ReferenceEquals(viewer.Map, this))
                 {
                     UpdateVisibilityOf(viewer, obj);
+                    if (flushViewers)
+                    {
+                        FlushPlayer(viewer);
+                    }
                 }
             }
         }
