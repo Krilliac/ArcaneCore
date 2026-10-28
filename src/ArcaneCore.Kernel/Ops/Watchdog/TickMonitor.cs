@@ -104,8 +104,6 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     private readonly Counter _overrunCounter;
     private readonly Counter _hangCounter;
     private readonly Counter _actionCounter;
-    private readonly Counter _frameP99;
-    private readonly Counter _frameMax;
     private readonly CounterRegistry _counters;
     private LatencyHistogram _frameLatency = new();
     private bool _frameLatencyExternal;
@@ -154,10 +152,8 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         _overrunCounter = counters.GetOrAdd("watchdog.tick.overruns");
         _hangCounter = counters.GetOrAdd("watchdog.tick.hangs");
         _actionCounter = counters.GetOrAdd("watchdog.tick.actions");
-        _frameP99 = counters.GetOrAdd("watchdog.tick.frame_p99_us", CounterKind.Gauge);
-        _frameMax = counters.GetOrAdd("watchdog.tick.frame_max_us", CounterKind.Gauge);
         _counters = counters;
-        _frameGauges = new LatencyGauges(counters, "watchdog.tick.frame_", includeTail: false);
+        _frameGauges = new LatencyGauges(counters, "watchdog.tick.frame_", includeTail: true); // p99 and max from the same minute as p50..p99.9, not the ring
         _overrunLimiter = new LogRateLimiter(Micros.FromSeconds(options.WarnIntervalSeconds));
         _hangLimiter = new LogRateLimiter(Micros.FromSeconds(options.WarnIntervalSeconds));
     }
@@ -491,8 +487,6 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
         buffer = ArrayPool<long>.Shared.Rent(_ring.Capacity);
         int count = _ring.Snapshot(buffer.AsSpan(0, _ring.Capacity));
         RingStats stats = RingStats.Compute(buffer.AsSpan(0, count));
-        _frameP99.Set(stats.P99);
-        _frameMax.Set(stats.Max);
         return stats;
     }
 
@@ -676,7 +670,7 @@ public sealed class TickMonitor : IWatchdogMonitor, ILivenessSource
     }
 }
 
-/// <summary>The gauges of one <see cref="LatencySnapshot"/>: <c>{prefix}p50_us</c>, p75, p90, p95, p999, mean, stddev, and with <c>includeTail</c> also p99 and max (the frame ring already publishes those two).</summary>
+/// <summary>The gauges of one <see cref="LatencySnapshot"/>: <c>{prefix}p50_us</c>, p75, p90, p95, p999, mean, stddev, and with <c>includeTail</c> also p99 and max.</summary>
 internal sealed class LatencyGauges
 {
     private readonly Counter _p50;

@@ -267,26 +267,81 @@ internal static class PlayerbotCombatView
         if (s_lastTameScan.TryGetValue(player.Guid.Value, out uint last) && unchecked(now - last) < TameScanIntervalMs)
             return null;
         s_lastTameScan[player.Guid.Value] = now;
+        SweepTameScans(now);
+        return ScanForTameCandidate(player, map);
+    }
+
+    [ThreadStatic] private static List<Creature>? t_tameNear;
+    private static long TameExamined; // Interlocked only
+    private static uint LastTameSweepMs; // written only on the world thread
+
+    /// <summary>The creatures within reach (after the 2D radius filter of the cell read) the tame scan has run its filter over, since the process started (test seam).</summary>
+    internal static long TameCreaturesExamined => Interlocked.Read(ref TameExamined);
+
+    /// <summary>Whether a bot has a tame scan clock on record (test seam).</summary>
+    internal static bool HasTameScan(ulong botGuid) => s_lastTameScan.ContainsKey(botGuid);
+
+    /// <summary>Record a scan clock without scanning (test seam for the table's bounds).</summary>
+    internal static void NoteTameScanForTest(ulong botGuid, uint atMs) => s_lastTameScan[botGuid] = atMs;
+
+    /// <summary>Forget the scan clock of a bot that left the world, so the table holds only bots that scanned lately.</summary>
+    internal static void ForgetTameScan(ulong botGuid) => s_lastTameScan.TryRemove(botGuid, out _);
+
+    /// <summary>
+    /// Drop the scan clocks that have run out (older than <see cref="TameScanIntervalMs"/>): such a bot scans at once on its next ask either way, so
+    /// dropping the clock changes no answer, and a bot that logged out stops refreshing its clock and leaves the table within one interval. Runs at
+    /// most once per interval.
+    /// </summary>
+    internal static void SweepTameScans(uint now, bool force = false)
+    {
+        if (!force && unchecked(now - LastTameSweepMs) < TameScanIntervalMs)
+            return;
+        LastTameSweepMs = now;
+        foreach (KeyValuePair<ulong, uint> entry in s_lastTameScan)
+        {
+            if (unchecked(now - entry.Value) >= TameScanIntervalMs)
+                s_lastTameScan.TryRemove(entry);
+        }
+    }
+
+    /// <summary>
+    /// The scan itself, with no per-bot clock. Reads the grid cells within <see cref="TameReach"/> of the bot (2D radius; the 3D test below only
+    /// narrows it), so the cost follows the creatures near the bot, not the creatures of the continent. The nearest wins; equal distances go to the
+    /// lower guid, so the choice does not depend on enumeration order. World thread only.
+    /// </summary>
+    internal static Creature? ScanForTameCandidate(Player player, Map map)
+    {
         if (map.FindUpdater<CreatureMapSystem>() is not { } creatures)
             return null;
 
-        Creature? best = null;
-        float bestSq = TameReach * TameReach;
-        foreach (Creature c in creatures.Creatures)
+        List<Creature> near = t_tameNear ??= [];
+        near.Clear();
+        try
         {
-            if (!c.IsInWorld || !c.IsAlive || c.Level > player.Level || c.Template.Rank != 0 || !c.OwnerGuid.IsEmpty || !c.CharmerGuid.IsEmpty
-                || c.Combat.IsInCombat || !Game.Pets.SummonService.IsTameable(c))
-                continue;
-            float dx = c.X - player.X, dy = c.Y - player.Y, dz = c.Z - player.Z;
-            float sq = (dx * dx) + (dy * dy) + (dz * dz);
-            if (sq < bestSq)
+            creatures.CollectCreaturesNear(player.X, player.Y, TameReach, near);
+            Interlocked.Add(ref TameExamined, near.Count);
+            Creature? best = null;
+            float bestSq = TameReach * TameReach;
+            foreach (Creature c in near)
             {
-                best = c;
-                bestSq = sq;
+                if (!c.IsInWorld || !c.IsAlive || c.Level > player.Level || c.Template.Rank != 0 || !c.OwnerGuid.IsEmpty || !c.CharmerGuid.IsEmpty
+                    || c.Combat.IsInCombat || !Game.Pets.SummonService.IsTameable(c))
+                    continue;
+                float dx = c.X - player.X, dy = c.Y - player.Y, dz = c.Z - player.Z;
+                float sq = (dx * dx) + (dy * dy) + (dz * dz);
+                if (sq < bestSq || (sq == bestSq && best is not null && c.Guid.Value < best.Guid.Value))
+                {
+                    best = c;
+                    bestSq = sq;
+                }
             }
-        }
 
-        return best;
+            return best;
+        }
+        finally
+        {
+            near.Clear();
+        }
     }
 
     /// <summary>A snapshot of <paramref name="unit"/> as <paramref name="bot"/> sees it.</summary>

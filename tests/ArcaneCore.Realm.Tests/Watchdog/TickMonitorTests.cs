@@ -230,6 +230,43 @@ public sealed class TickMonitorTests
         Assert.Equal(50_000, _counters.Find("watchdog.tick.frame_max_us")!.Value);
     }
 
+    /// <summary>
+    /// The frame percentile gauges come from one window: p50..p99.9 from the minute's latency snapshot, and p99 and max too. Live 2026-10-27 the ring
+    /// (its newest frames only) published p99 under the minute's p95. Here the 16-frame ring holds only fast frames while the minute still has the slow ones.
+    /// </summary>
+    [Fact]
+    public void PublishedFramePercentiles_ComeFromOneWindow_AndAreOrdered()
+    {
+        TickMonitor monitor = Create(o => o.RingCapacity = TickRing.MinCapacity);
+        Tick(monitor, 100, 150); // slow frames, all inside the last minute
+        Tick(monitor, 40, 50); // fast frames, the only ones left in the ring
+        monitor.Check(_clock.NowMicros);
+
+        long p50 = _counters.Find("watchdog.tick.frame_p50_us")!.Value;
+        long p95 = _counters.Find("watchdog.tick.frame_p95_us")!.Value;
+        long p99 = _counters.Find("watchdog.tick.frame_p99_us")!.Value;
+        long max = _counters.Find("watchdog.tick.frame_max_us")!.Value;
+        Assert.True(p50 <= p95 && p95 <= p99 && p99 <= max, $"p50 {p50} p95 {p95} p99 {p99} max {max}");
+        // 139 frames: 100 of 150 ms, 39 of 50 ms. Rank 138 of 139 is a slow frame, and its bucket bound is clamped to the exact max.
+        Assert.Equal(150_000, p99);
+        Assert.Equal(150_000, max);
+    }
+
+    /// <summary>A tick that hangs among the very first ones is reported by the first check, still in progress, like any later hang.</summary>
+    [Fact]
+    public void AHangInTheFirstTicks_IsReportedByTheFirstCheck()
+    {
+        TickMonitor monitor = Create(o => o.HangMs = 1000);
+        var alerts = new List<TickAlert>();
+        monitor.Alerted = alerts.Add;
+        Tick(monitor, 1, 50);
+        monitor.OnTick(_clock.NowMicros); // the second tick never ends
+        _clock.AdvanceMs(2_500);
+        monitor.Check(_clock.NowMicros);
+
+        Assert.Contains(alerts, a => a.Kind == TickAlertKind.Hang && a.InProgress);
+    }
+
     [Fact]
     public void AttachedBodyAndPhaseHistograms_AppearInTheSummaryAndTheGauges()
     {

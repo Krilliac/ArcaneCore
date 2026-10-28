@@ -47,8 +47,12 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.HotCode.HotCodeMetadataHandler.s_active"] = "Volatile/Interlocked reference",
         ["ArcaneCore.World.Ops.MapFeed.MapFeedConnection.s_lastConnectionId"] = "connection id counter, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafety.s_nextLogin"] = "login sequence, Interlocked.Increment",
+        ["ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.LastTameSweepMs"] = "tame scan clock sweep stamp, written and read only on the world thread (PlayerbotCombatView.Build runs there)",
+        ["ArcaneCore.World.Playerbots.Combat.PlayerbotCombatView.TameExamined"] = "process-wide counter, Interlocked",
+
         ["ArcaneCore.World.Playerbots.Control.BotController.s_sequence"] = "control event sequence, Interlocked.Increment and Interlocked.Read",
         ["ArcaneCore.World.Playerbots.Groups.PlayerbotWorldBossMeters._active"] = "gauge value, Volatile.Write by the coordinator and Volatile.Read by the meter callback",
+        ["ArcaneCore.World.Playerbots.PlayerbotShip.DockComputeCount"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",
         ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam, set by tests before the world runs",
         ["ArcaneCore.World.Playerbots.PlayerbotRegionRoutes.s_syncFallbacks"] = "telemetry counter, Interlocked.Increment and Interlocked.Read only",

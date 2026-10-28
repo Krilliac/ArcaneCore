@@ -4,13 +4,15 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Kernel.Logging;
 
 namespace ArcaneCore.Atlas.Host;
 
 /// <summary>
 /// One authenticated UI WebSocket. Control messages (hello, results, capture requests) are sent directly; event pushes go
 /// through a bounded queue that drops the oldest entry when the browser reads slowly, because every view event carries
-/// the complete view and live frames are superseded by the next frame.
+/// the complete view and live frames are superseded by the next frame. Dropped entries are counted and the event pump logs
+/// the count, so a lost lifecycle or presence event leaves a warning rather than vanishing silently.
 /// </summary>
 public sealed class UiConnection
 {
@@ -21,15 +23,25 @@ public sealed class UiConnection
     private string _name;
     private UiPresence? _presence;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
-    private readonly Channel<string> _events = Channel.CreateBounded<string>(new BoundedChannelOptions(EventQueueCapacity)
-    {
-        FullMode = BoundedChannelFullMode.DropOldest,
-        SingleReader = true,
-        SingleWriter = false,
-    });
+    private readonly Channel<string> _events;
+    private long _droppedEvents;
+    private readonly LogGate _droppedEventsLog;
+    private int _refusalSendPending;
+    private long _droppedRefusals;
 
-    internal UiConnection(WebSocket socket, string id, long sequence)
+    internal static readonly TimeSpan DroppedEventsLogInterval = TimeSpan.FromSeconds(10);
+
+    internal UiConnection(WebSocket socket, string id, long sequence, Func<long>? clock = null)
     {
+        _events = Channel.CreateBounded<string>(
+            new BoundedChannelOptions(EventQueueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false,
+            },
+            _ => Interlocked.Increment(ref _droppedEvents));
+        _droppedEventsLog = new LogGate(DroppedEventsLogInterval, clock);
         _socket = socket;
         Id = id;
         Sequence = sequence;
@@ -69,11 +81,56 @@ public sealed class UiConnection
     /// <summary>Answers left in the invalid-presence bucket (refilled by elapsed time); only the receive loop touches it.</summary>
     internal double PresenceErrorTokens { get; set; } = AtlasServer.PresenceErrorBurst;
 
+    /// <summary><see cref="TimeProvider.GetTimestamp"/> of the last bad message seen (the bucket's last update), null before the first; only the receive loop touches it.</summary>
+    internal long? LastMessageErrorStamp { get; set; }
+
+    /// <summary>Answers left in the bad-message bucket (refilled by elapsed time); only the receive loop touches it.</summary>
+    internal double MessageErrorTokens { get; set; } = AtlasServer.MessageErrorBurst;
+
+    /// <summary>Refusal replies (a command past the in-flight cap) currently waiting on or in a send: 0 or 1.</summary>
+    internal int PendingRefusalSends => Volatile.Read(ref _refusalSendPending);
+
+    /// <summary>Refusal replies dropped because the previous one was still being sent, over the connection's life.</summary>
+    internal long DroppedRefusals => Interlocked.Read(ref _droppedRefusals);
+
+    /// <summary>Takes the connection's single refusal slot; false when a refusal send is still outstanding.</summary>
+    internal bool TryBeginRefusalSend() => Interlocked.CompareExchange(ref _refusalSendPending, 1, 0) == 0;
+
+    /// <summary>Frees the refusal slot taken by <see cref="TryBeginRefusalSend"/>.</summary>
+    internal void EndRefusalSend() => Volatile.Write(ref _refusalSendPending, 0);
+
+    /// <summary>Counts a refusal reply that was dropped instead of queued.</summary>
+    internal void CountDroppedRefusal() => Interlocked.Increment(ref _droppedRefusals);
+
+    /// <summary>The gate every frame is sent under; tests hold it to stall the connection's sends.</summary>
+    internal SemaphoreSlim SendGate => _sendGate;
+
     internal ChannelReader<string> PendingEvents => _events.Reader;
 
     internal void EnqueueEvent(string json) => _events.Writer.TryWrite(json);
 
     internal void CompleteEvents() => _events.Writer.TryComplete();
+
+    /// <summary>Events dropped from the full queue since the last call (the queue drops the oldest), then resets the count; the event pump logs it.</summary>
+    internal long TakeDroppedEvents() => Interlocked.Exchange(ref _droppedEvents, 0);
+
+    /// <summary>
+    /// True at most once per <see cref="DroppedEventsLogInterval"/> when events were dropped; <paramref name="dropped"/> is every drop since the
+    /// previous admitted line. The count is taken only when the gate admits, so drops in between accumulate instead of being lost.
+    /// The pump asks only after a successful send, so drops at the end of a burst (no further event follows) are reported on the next
+    /// successful send, not when the burst ends.
+    /// </summary>
+    internal bool TryReportDroppedEvents(out long dropped)
+    {
+        dropped = 0;
+        if (Interlocked.Read(ref _droppedEvents) == 0 || !_droppedEventsLog.TryEnter(out _))
+        {
+            return false;
+        }
+
+        dropped = TakeDroppedEvents();
+        return dropped > 0;
+    }
 
     /// <summary>Sends one text frame; only one frame is in flight at a time.</summary>
     internal async Task SendAsync(string json, CancellationToken cancellationToken)
@@ -329,6 +386,9 @@ public sealed class UiHub
 
         public long LastActiveStamp { get; set; } = activeStamp;
     }
+
+    /// <summary>The registered connection with this id, or null.</summary>
+    internal UiConnection? Find(string id) => _connections.GetValueOrDefault(id);
 
     internal UiConnection Add(WebSocket socket, string id)
     {

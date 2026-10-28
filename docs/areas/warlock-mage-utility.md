@@ -72,11 +72,18 @@ Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/PetTargetTests.cs` (9 tests, 
 * no room: `SendEquipError` is sent whenever the store is not fully ok (also for a partial fit), the part that fits is stored, nothing when
   nothing fits; the item push (`created`) goes to the caster.
 
-Limits, recorded: (1) there is no tap list in the combat system (the threat-and-aggro lane owns it), so `ISoulShardTapSource` is a seam
-(`SoulShardRules.UseTapSource`) with no shipped implementation, and without one every kill counts as tapped; the loot recipients cannot stand
-in because the loot bag only exists after the death; (2) the creature template's xp multiplier of 0 and `UNIT_STATE_NO_KILL_REWARD` are not
+Limits, recorded: (1) the tap comes from the loot tap: `LootSoulShardTapSource` (`src/ArcaneCore.Game/Loot/LootSoulShardTapSource.cs`) asks
+`LootService.IsTappedBy` (vmangos Creature::IsTappedBy, Creature.cpp:1615-1632: the tapper, their pet, their group, or a battleground group),
+and `SpellRulesSoulShardFeature` installs it with `SoulShardRules.UseTapSource`, so another player's tap gives no shard. A creature
+with no recorded tap (a scripted or GM `MapCombat.Kill` that no damage preceded, or one no damage ever tapped) is untapped and gives no shard, as
+in vmangos, except for a player in a battleground group, who counts as a tapper of any creature (vmangos Creature::IsTappedBy).
+`SpellRules:SoulShardUntappedCountsAsTapped` (default false, `SpellRuleOptions`, `world.conf.dist`) is the opt-in that keeps the shard
+for such kills. A creature on a map without a loot service counts as tapped, and a bare `SpellSystem` with no source installed counts every kill
+as tapped. Every damage route (melee, spells, DoTs, pets, totems) reaches `MapCombat.DealDamage` and so `LootService.OnCreatureDamaged`; only the
+direct `MapCombat.Kill(killer, victim)` calls (scripts, GM commands) skip the tap. Tests: `tests/ArcaneCore.Game.Tests/Loot/LootSoulShardTapSourceTests.cs`,
+`tests/ArcaneCore.World.Tests/SpellRules/SoulShardTapSourceFeatureTests.cs`; (2) the creature template's xp multiplier of 0 and `UNIT_STATE_NO_KILL_REWARD` are not
 modelled; (3) no `Spells:Warlock:SoulShards:RequireTap` switch was added: the design's switch would only have let a host skip a retail rule, and
-nothing needs it until a tap source exists.
+the tap rule is retail behaviour, so it stays the default; the one switch, `SpellRules:SoulShardUntappedCountsAsTapped`, only covers creatures nobody tapped.
 
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/SoulShardTests.cs` (10 tests; RED first: 6 failed, the 4 negative cases passed by design).
 

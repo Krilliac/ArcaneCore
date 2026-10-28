@@ -7678,6 +7678,22 @@ SpellRules.MagicHitFloorPercent = 22
 # SpellRules.ResistTablePath =
 
 #
+#    SpellRules.SoulShardUntappedCountsAsTapped
+#        Description: Whether a creature nobody tapped (no damage ever called
+#                     LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the
+#                     warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem,
+#                     SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632):
+#                     false, an untapped creature gives no shard. true keeps the shard for such
+#                     kills.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SoulShardUntappedCountsAsTapped = false
+
+#
 #    SpellRules.SpellBatchAuraExpiry
 #        Description: With SpellBatchWindowMs set: a timed aura that runs out stays until the first
 #                     update of the next batch (channel auras excepted).
