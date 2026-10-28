@@ -74,6 +74,13 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     private Vector3? _aimedAt;
     private bool _reachable = true;
     private bool _deferred;
+    private int _leashRefreshMs = LeashRefreshIntervalMs;
+
+    /// <summary>
+    /// How long (ms) a chaser may stand at its target before it refreshes its leash extension clock again (vmangos
+    /// TargetedMovementGenerator m_leashExtensionTimer, re-armed to 5000 whenever the generator moves).
+    /// </summary>
+    public const int LeashRefreshIntervalMs = 5000;
 
     public Unit Target { get; } = target;
 
@@ -87,6 +94,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         _recheckMs = 0;
         _aimedAt = null;
         _reachable = true;
+        _leashRefreshMs = LeashRefreshIntervalMs;
         if (!CannotMove(creature, mover))
         {
             Step(creature, mover);
@@ -128,6 +136,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             Step(creature, mover);
         }
 
+        TickLeashRefresh(creature, mover, diffMs);
+
         // vmangos TargetedMovementGenerator::Update: a finalized spline informs once the re-measure is done (never while the
         // creature cannot move, which returned above).
         // A chaser whose re-path was deferred has not finished anything: it must not inform on every deferred update.
@@ -137,6 +147,35 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         }
 
         return true;
+    }
+
+    /// <summary>True when standing in position at the target keeps the creature's leash extension clock fresh (a melee chaser).</summary>
+    protected virtual bool RefreshesLeashWhenInPosition => false;
+
+    /// <summary>
+    /// vmangos m_leashExtensionTimer: while the creature stands in position at its target (a melee chaser actually attacking) the clock is
+    /// refreshed every <see cref="LeashRefreshIntervalMs"/>, so a long melee fight far from home does not evade. Moving re-arms the timer.
+    /// Damage does not refresh the leash.
+    /// </summary>
+    private void TickLeashRefresh(Creature creature, ICreatureMover mover, uint diffMs)
+    {
+        if (creature.IsMoving)
+        {
+            _leashRefreshMs = LeashRefreshIntervalMs;
+            return;
+        }
+
+        if (_deferred || !RefreshesLeashWhenInPosition || !IsInPosition(creature))
+        {
+            return;
+        }
+
+        _leashRefreshMs -= (int)Math.Min(diffMs, int.MaxValue);
+        if (_leashRefreshMs <= 0)
+        {
+            _leashRefreshMs = LeashRefreshIntervalMs;
+            mover.ExtendLeash(creature);
+        }
     }
 
     /// <summary>The generator ran with the creature standing (vmangos <c>movespline->Finalized()</c> after the re-measure).</summary>
@@ -248,6 +287,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 internal sealed class ChaseMovementGenerator(Unit target) : TargetedMovementGenerator(target)
 {
     public override MovementGeneratorType Type => MovementGeneratorType.Chase;
+
+    protected override bool RefreshesLeashWhenInPosition => true;
 
     protected override bool IsInPosition(Creature creature) => MapCombat.CanReachWithMeleeAutoAttack(creature, Target);
 

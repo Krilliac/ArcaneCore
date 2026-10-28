@@ -132,6 +132,40 @@ public sealed class LeashTests
     }
 
     [Fact]
+    public void AChaserStandingInMeleeFarFromHome_RefreshesItsLeashEveryFiveSeconds_AndDoesNotEvade()
+    {
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AI!.CombatMovement = true; // the chase generator runs: the wolf stands at its victim (vmangos m_leashExtensionTimer)
+        f.System.ApplyCombatMovement(f.Wolf);
+        Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
+
+        Run(f.World, 40000); // well past the 12 s extension, both beyond the 50 yd area
+
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.Same(f.Player, f.Wolf.Combat.Victim);
+    }
+
+    [Fact]
+    public void AChaserThatIsKitedOutOfMelee_StillEvadesOnSchedule()
+    {
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AI!.CombatMovement = true;
+        f.System.ApplyCombatMovement(f.Wolf);
+
+        Run(f.World, 3000); // standing in melee: the 5 s timer has not fired
+        // The victim keeps stepping out of reach, so the chaser is always running after it and never stands long enough to refresh.
+        for (int i = 0; i < 60 && !f.Wolf.IsInEvadeMode; i++)
+        {
+            f.Player.Relocate(f.Wolf.X + 8, 0, 83.5f, 0, 0);
+            Run(f.World, 500);
+        }
+
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    [Fact]
     public void TheTemplateLeash_EvadesAtTheThreeSecondCheck_WhenTheCreatureIsFarFromWhereTheFightBegan()
     {
         // creature_template.Leash is a hard leash polled every 3000 ms (tickTime % 3000 <= diff): 30 yd from the combat start.

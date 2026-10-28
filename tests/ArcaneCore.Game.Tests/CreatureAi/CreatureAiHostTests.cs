@@ -258,6 +258,9 @@ public sealed class CreatureAiHostTests
         // victim alone, does not leash: vmangos IsOutOfThreatArea, Objects/Creature.cpp:2796-2815), and the 12 s leash extension
         // has run out since the first look outside it.
         Assert.False(system.IsOutOfThreatArea(wolf, player));
+        // A chaser standing in melee refreshes its leash every 5 s (LeashTests), so this leash case holds the creature off its victim.
+        wolf.AI!.CombatMovement = false;
+        system.ApplyCombatMovement(wolf);
         wolf.Relocate(wolf.X - 80, wolf.Y, 83.5f, 0, 0);
         player.Relocate(wolf.X - 1, wolf.Y, 83.5f, 0, 0);
         world.RunTick(100);
