@@ -18,8 +18,11 @@ namespace ArcaneCore.Data.Tests.Resilience;
 /// </summary>
 public sealed class SqliteFirstCommandTimeoutTests : IDisposable
 {
-    private static readonly TimeSpan Guard = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5); // the bound is 1 s; the unbounded base waits 30 s
+    // The write bound is 1 s; the command this guards against keeps the connection string's 30 s. The limits split the two at the middle:
+    // a loaded runner has taken over 10 s to finish a 1 s wait (thread pool and busy-handler sleeps), never anywhere near 30 s, and the
+    // 30 s command still runs into the guard (25 s, under its own timeout) and fails as "still waiting".
+    private static readonly TimeSpan Guard = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(15);
 
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcanecore-first-command-" + Guid.NewGuid().ToString("N"));
 
