@@ -167,7 +167,7 @@ public sealed class DamageShieldFastPathTests
     }
 
     [Fact]
-    public void TriggerDamageShields_TwoHoldersAppliedTheOtherWay_FireInThatOrder()
+    public void TriggerDamageShields_ThreeHolders_FireInApplicationOrder()
     {
         using Rig rig = NewRig();
         Apply(rig, ShieldA);
