@@ -6,12 +6,12 @@ namespace ArcaneCore.Game.Spells;
 /// <summary>
 /// The generic <c>Spell::CheckCast</c> rules that the warrior and rogue abilities hit (vmangos Spell.cpp:5302-5350,
 /// 5640-5649), registered through <see cref="ISpellCastCheck"/>: standing (every ability), combat-forbidden spells (Charge),
-/// stealth-only spells, and the behind/in-front rules. Rules that need terrain (indoors, outdoors, water), battlegrounds,
-/// mounts or taxis, target level limits and the other target flags are not covered.
+/// stealth-only spells, and the behind/in-front rules, the target level cap and the target creature type. Rules that need terrain (indoors, outdoors, water), battlegrounds,
+/// mounts or taxis, the minimum target level and the other target flags are not covered.
 /// </summary>
 public static class GeneralCastChecks
 {
-    /// <summary>Install the four checks on <paramref name="spells"/>.</summary>
+    /// <summary>Install the checks on <paramref name="spells"/>.</summary>
     public static void Install(SpellSystem spells)
     {
         ArgumentNullException.ThrowIfNull(spells);
@@ -20,6 +20,8 @@ public static class GeneralCastChecks
         spells.RegisterCastCheck(new CombatRestrictionCastCheck());
         spells.RegisterCastCheck(new StealthCastCheck(spells));
         spells.RegisterCastCheck(new FacingCastCheck());
+        spells.RegisterCastCheck(new TargetLevelCastCheck());
+        spells.RegisterCastCheck(new TargetCreatureTypeCastCheck());
     }
 }
 
@@ -127,5 +129,42 @@ public sealed class FacingCastCheck : ISpellCastCheck
         }
 
         return !MapCombat.HasInArc(target, caster, CombatConstants.DefaultArc);
+    }
+}
+
+/// <summary>
+/// vmangos Spell.cpp:5463-5464: a spell with a MaxTargetLevel cannot be cast on a unit above that level (HIGHLEVEL). 0 means no cap.
+/// Runs on the resolved explicit unit target, the caster included.
+/// </summary>
+public sealed class TargetLevelCastCheck : ISpellCastCheck
+{
+    public SpellCheckPhase Phase => SpellCheckPhase.Target;
+
+    public int Order => SpellCastCheckOrder.TargetLevel;
+
+    public SpellCastResult Check(in SpellCastCheckContext context)
+        => context.Target is { } target && context.Spell.MaxTargetLevel > 0 && target.Level > context.Spell.MaxTargetLevel
+            ? SpellCastResult.Highlevel
+            : SpellCastResult.CastOk;
+}
+
+/// <summary>
+/// vmangos Spell.cpp:5578-5585: a unit target other than the caster must fit the spell's TargetCreatureType mask
+/// (<see cref="SpellSystem.CheckTargetCreatureType"/>); a player answers TARGET_IS_PLAYER, anything else BAD_TARGETS.
+/// </summary>
+public sealed class TargetCreatureTypeCastCheck : ISpellCastCheck
+{
+    public SpellCheckPhase Phase => SpellCheckPhase.Target;
+
+    public int Order => SpellCastCheckOrder.TargetCreatureType;
+
+    public SpellCastResult Check(in SpellCastCheckContext context)
+    {
+        if (context.Target is not { } target || ReferenceEquals(target, context.Caster) || context.System.CheckTargetCreatureType(context.Spell, target))
+        {
+            return SpellCastResult.CastOk;
+        }
+
+        return target is Player ? SpellCastResult.TargetIsPlayer : SpellCastResult.BadTargets;
     }
 }

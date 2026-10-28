@@ -81,14 +81,8 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        // CheckTargetCreatureType (Spell.cpp:7579-7583): Grounding's 8179 holder
-        // explicitly bypasses creature type restrictions. UNIT_CASTER also skips them.
-        if (casterSelector || spell.TargetCreatureType == 0 || HasAura(magnet, 8179))
-        {
-            return true;
-        }
-
-        uint creatureType = magnet is Creature creature ? creature.Template.CreatureType : 7; // humanoid player
-        return creatureType == 0 || (creatureType <= 32 && (spell.TargetCreatureType & (1u << ((int)creatureType - 1))) != 0);
+        // CheckTargetCreatureType (Spell.cpp:7577-7605): Grounding's 8179 holder bypasses creature type restrictions.
+        // UNIT_CASTER selection also skips them.
+        return casterSelector || CheckTargetCreatureType(spell, magnet);
     }
 }

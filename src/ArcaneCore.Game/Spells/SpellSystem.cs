@@ -801,6 +801,7 @@ public sealed partial class SpellSystem
             }
             entry.Miss = objectOnly ? SpellMissInfo.None
                 : entry.EffectMask == 0 ? SpellMissInfo.Immune2
+                : !ReferenceEquals(target, caster) && !CheckTargetCreatureType(spell, target) ? SpellMissInfo.Immune // Spell.cpp:1003
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
