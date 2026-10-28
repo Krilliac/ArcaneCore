@@ -203,6 +203,7 @@ public sealed class AccountDataFeature : IWorldFeature
         KeyedStoreWriteQueue<IAccountDataStore>? writes = Writes;
         if (writes is null)
         {
+            _stopping.Dispose();
             return;
         }
 
@@ -241,7 +242,8 @@ public sealed class AccountDataFeature : IWorldFeature
     /// <summary>Under the gate: forget the account when no session is attached, no flush is scheduled and every value is confirmed written.</summary>
     private void RemoveIfIdle(int accountId, AccountState state)
     {
-        if (state.Sessions == 0 && !state.FlushScheduled && state.Latest.Count == 0 && state.LatestTutorials is null)
+        if (_accounts.TryGetValue(accountId, out AccountState? current) && ReferenceEquals(current, state)
+            && state.Sessions == 0 && !state.FlushScheduled && state.Latest.Count == 0 && state.LatestTutorials is null)
         {
             _accounts.Remove(accountId);
         }
@@ -287,6 +289,11 @@ public sealed class AccountDataFeature : IWorldFeature
             KeyedStoreWriteQueue<IAccountDataStore>? writes = Writes;
             lock (_gate)
             {
+                if (!_accounts.TryGetValue(accountId, out AccountState? current) || !ReferenceEquals(current, state))
+                {
+                    return; // a newer session's state replaced this one; its own flush owns the account
+                }
+
                 state.FlushScheduled = false;
                 state.LastWriteMs = Clock.Milliseconds();
                 if (writes is not null)

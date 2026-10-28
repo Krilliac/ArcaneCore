@@ -717,9 +717,9 @@ public sealed partial class WorldSession : IPlayerSession
             HeuristicsClientPacket(opcode, payload);
             if (opcode == WorldOpcode.CmsgPing)
             {
-                // Answered in any state (vmangos parity), but under the same netguard budget as every other packet, so an
+                // Answered in any state (vmangos parity); before authentication it is under the netguard packet budget, so an
                 // unauthenticated socket cannot draw a pong per ping until the pre-auth timeout.
-                if (ApplyPacketBudget(opcode) is { } pingVerdict)
+                if (_state == SessionState.Connected && ApplyPacketBudget(opcode) is { } pingVerdict)
                 {
                     return pingVerdict;
                 }

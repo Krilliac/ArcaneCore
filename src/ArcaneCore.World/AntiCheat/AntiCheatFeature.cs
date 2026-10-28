@@ -265,7 +265,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// </summary>
     internal static float InteractSlack(float runSpeed, int latencyMs, AntiCheatOptions options)
     {
-        int latencySlackMs = Math.Clamp(2 * Math.Max(0, latencyMs), 0, Math.Max(options.LatencySlackMs, options.MaxLatencySlackMs));
+        int latencySlackMs = (int)Math.Clamp(2L * Math.Max(0, latencyMs), 0L, Math.Max(options.LatencySlackMs, options.MaxLatencySlackMs));
         return 20f + (runSpeed * latencySlackMs / 1000f);
     }
 
