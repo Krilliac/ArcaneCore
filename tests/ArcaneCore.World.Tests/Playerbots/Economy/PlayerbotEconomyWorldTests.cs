@@ -332,7 +332,10 @@ public sealed class PlayerbotEconomyWorldTests
                 return true;
             };
             await StartVisitAsync(c, driver);
-            await c.WaitUntilAsync("visit 1 is cut off at the mail step", () => !driver.Active);
+            // Paced like FinishAsync (bounded by wall time, the world idling between checks), not by a game-time budget: the buyout settles
+            // through the character database, which the scenario clock can run far ahead of (the spell-batching CI lane spent a 30 s
+            // game budget in 0 s of wall time before the bid had settled).
+            await PaceAsync(c, "visit 1 is cut off at the mail step", () => !driver.Active);
             ScenarioContext.ExpectEqual(PlayerbotEconomyPhase.Idle, await c.ReadAsync(() => driver.Economy.Phase), "phase after the cut");
             ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after visit 1");
             ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ItemsCollected), "nothing collected yet");
