@@ -54,6 +54,26 @@ public sealed partial class Map
     }
 
     /// <summary>
+    /// Show a non-player object already placed in this map to everyone near it, and send each of them the create packet before this returns.
+    /// The ordering follows vmangos, where <c>Map::Add</c> calls <c>UpdateObjectVisibility</c> and <c>Player::UpdateVisibilityOf</c> sends the
+    /// create at once; the create block type is whatever the regular visibility pass picks (this does not mark the object new). A packet the
+    /// caller sends afterwards that names the object (SMSG_DUEL_REQUESTED) then reaches a client that already knows it.
+    /// Preconditions: world thread, outside the update phase. A player, or an object that is not in this map, is ignored.
+    /// </summary>
+    public void AnnounceObject(WorldObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        if (obj is Player || !ReferenceEquals(obj.Map, this))
+        {
+            return;
+        }
+
+        UpdateObjectVisibility(obj, flushViewers: true);
+    }
+
+    /// <summary>
     /// One viewer/target visibility evaluation in detect mode (vmangos <c>IsVisibleForOrDetect(.., detect = true)</c> as run by
     /// <c>Player::HandleStealthedUnitsDetection</c>): the rules may now reveal a unit the regular movement-driven updates keep hidden.
     /// </summary>
@@ -483,7 +503,7 @@ public sealed partial class Map
     }
 
     /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>
-    private void UpdateObjectVisibility(WorldObject obj)
+    private void UpdateObjectVisibility(WorldObject obj, bool flushViewers = false)
     {
         List<Player> viewers = ObjectVisibilityViewers(obj);
         ObjectVisibilityCandidates += viewers.Count;
@@ -496,6 +516,10 @@ public sealed partial class Map
                 if (ReferenceEquals(viewer.Map, this))
                 {
                     UpdateVisibilityOf(viewer, obj);
+                    if (flushViewers)
+                    {
+                        FlushPlayer(viewer);
+                    }
                 }
             }
         }
