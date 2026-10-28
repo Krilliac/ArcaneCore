@@ -12,7 +12,7 @@ using Xunit;
 namespace ArcaneCore.Data.Tests.Npc;
 
 /// <summary>
-/// <c>npc_text_broadcast_text</c>: gossip texts whose variants are <c>broadcast_text</c> ids (classic-db, vmangos). The store resolves
+/// <c>npc_text_broadcast_text</c>: gossip texts whose variants are <c>broadcast_text</c> ids (classic-db, mangos-classic <c>ObjectMgr.cpp:5624-5684</c>). The store resolves
 /// them into the same <see cref="NpcText"/> the inline <c>npc_text</c> rows produce.
 /// </summary>
 public sealed class NpcTextBroadcastTests : IAsyncLifetime

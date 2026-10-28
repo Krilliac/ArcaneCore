@@ -6,10 +6,13 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Npc;
 
 /// <summary>
-/// <c>npc_text_broadcast_text</c> (classic-db / mangos-classic; the table vmangos names the same way): an NPC text whose eight weighted
+/// <c>npc_text_broadcast_text</c> (classic-db / mangos-classic, <c>ObjectMgr::LoadNPCText</c>, <c>src/game/Globals/ObjectMgr.cpp:5624-5684</c>; vmangos has no such table and reads
+/// broadcast ids from <c>npc_text</c> itself): an NPC text whose eight weighted
 /// variants are <c>broadcast_text</c> ids instead of inline strings. Columns <c>Id</c>, <c>Prob0..7</c>, <c>BroadcastTextId0..7</c>.
 /// <see cref="EfNpcContentStore"/> resolves a row against <c>broadcast_text</c> into an <see cref="NpcText"/> when no inline
-/// <c>npc_text</c> row has the same id.
+/// <c>npc_text</c> row has the same id. That is a deliberate divergence: mangos-classic (<c>ObjectMgr.cpp:5653-5655</c>) overwrites the
+/// inline row with the broadcast row and logs "Overwriting."; the z2815 dump has no id in both tables, so the choice does not change
+/// shipped data.
 /// </summary>
 public sealed class NpcTextBroadcastRow
 {

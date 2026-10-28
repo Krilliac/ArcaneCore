@@ -56,7 +56,7 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
 
     /// <summary>
     /// Every inline <c>npc_text</c> row, plus a text for each <c>npc_text_broadcast_text</c> id that has no inline row (an inline row
-    /// wins, so existing content is unchanged). Ordered by id, like the inline rows were.
+    /// wins, so existing content is unchanged; mangos-classic <c>ObjectMgr.cpp:5653-5655</c> lets the broadcast row win, a deliberate divergence). Ordered by id, like the inline rows were.
     /// </summary>
     public static NpcText[] ResolveTexts(
         IReadOnlyList<NpcTextRow> inline,
@@ -86,7 +86,8 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
     /// <summary>
     /// The eight variants of a broadcast-text row. A variant whose <c>BroadcastTextId</c> is 0 or names no <c>broadcast_text</c> row has
     /// probability 0 and empty text, so it is never picked. The broadcast row's EmoteID1..3 / EmoteDelay1..3 become the three
-    /// emote/delay pairs of the variant and its LanguageID the variant language.
+    /// emote/delay pairs of the variant and its LanguageID the variant language. Divergence from mangos-classic
+    /// (<c>ObjectMgr.cpp:5659, 5674-5682</c>), which keeps the row's probability and sends empty text; zeroing it never picks a blank variant.
     /// </summary>
     public static NpcText ToNpcText(NpcTextBroadcastRow r, IReadOnlyDictionary<uint, BroadcastTextRow> broadcastTexts)
     {
