@@ -108,6 +108,8 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
   ([creature movement](creature-movement-spawns.md)) and line of sight from the vmaps ([collision and pathing](collision-pathing.md)).
 - Equipment: `creature_template.EquipmentTemplateId` -> `creature_equip_template` -> the world item store fills the three virtual item slots in
   `Creature.InitializeFields` (`Creature.Equipment.cs`; `SetVirtualItem` / `ClearVirtualItem` are the shared writers scripts use too).
+- School resistances: `creature_template.ResistanceHoly..ResistanceArcane` (world schema 57, `CreatureSchoolResistanceDataModule`) are written to
+  `UnitFieldResistances + 1..6` in `Creature.InitializeFields`, next to the armor at +0; the spell resist roll reads them.
 - Not driven yet:
   - Auras from the addon
   - Gossip, vendors, trainers (NPC area)

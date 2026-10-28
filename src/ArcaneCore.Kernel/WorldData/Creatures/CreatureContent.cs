@@ -94,6 +94,24 @@ public sealed record CreatureTemplate
 
     public uint Armor { get; init; }
 
+    /// <summary>Holy resistance written to <c>UnitFieldResistances + 1</c> (ClassicDB ResistanceHoly, vmangos holy_res; vmangos Creature.cpp:606).</summary>
+    public int ResistanceHoly { get; init; }
+
+    /// <summary>Fire resistance, <c>UnitFieldResistances + 2</c> (ClassicDB ResistanceFire, vmangos fire_res).</summary>
+    public int ResistanceFire { get; init; }
+
+    /// <summary>Nature resistance, <c>UnitFieldResistances + 3</c> (ClassicDB ResistanceNature, vmangos nature_res).</summary>
+    public int ResistanceNature { get; init; }
+
+    /// <summary>Frost resistance, <c>UnitFieldResistances + 4</c> (ClassicDB ResistanceFrost, vmangos frost_res).</summary>
+    public int ResistanceFrost { get; init; }
+
+    /// <summary>Shadow resistance, <c>UnitFieldResistances + 5</c> (ClassicDB ResistanceShadow, vmangos shadow_res).</summary>
+    public int ResistanceShadow { get; init; }
+
+    /// <summary>Arcane resistance, <c>UnitFieldResistances + 6</c> (ClassicDB ResistanceArcane, vmangos arcane_res).</summary>
+    public int ResistanceArcane { get; init; }
+
     public float MinMeleeDamage { get; init; }
 
     public float MaxMeleeDamage { get; init; }

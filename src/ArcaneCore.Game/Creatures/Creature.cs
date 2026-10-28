@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 
@@ -553,6 +554,13 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage * damageRate);
         SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
+        // School resistances (vmangos Creature.cpp:606-611 SetCreateResistance, holy..arcane at UnitFieldResistances + 1..6).
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Holy, t.ResistanceHoly);
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, t.ResistanceFire);
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Nature, t.ResistanceNature);
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Frost, t.ResistanceFrost);
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Shadow, t.ResistanceShadow);
+        SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Arcane, t.ResistanceArcane);
     }
 
     /// <summary>

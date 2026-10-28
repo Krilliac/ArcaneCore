@@ -98,6 +98,24 @@ public sealed class CreatureTemplateRow
 
     public uint Armor { get; set; }
 
+    /// <summary>ClassicDB ResistanceHoly / vmangos holy_res. Added by <see cref="CreatureSchoolResistanceDataModule"/>.</summary>
+    public int ResistanceHoly { get; set; }
+
+    /// <summary>ClassicDB ResistanceFire / vmangos fire_res.</summary>
+    public int ResistanceFire { get; set; }
+
+    /// <summary>ClassicDB ResistanceNature / vmangos nature_res.</summary>
+    public int ResistanceNature { get; set; }
+
+    /// <summary>ClassicDB ResistanceFrost / vmangos frost_res.</summary>
+    public int ResistanceFrost { get; set; }
+
+    /// <summary>ClassicDB ResistanceShadow / vmangos shadow_res.</summary>
+    public int ResistanceShadow { get; set; }
+
+    /// <summary>ClassicDB ResistanceArcane / vmangos arcane_res.</summary>
+    public int ResistanceArcane { get; set; }
+
     public float MinMeleeDamage { get; set; }
 
     public float MaxMeleeDamage { get; set; }

@@ -238,6 +238,12 @@ internal sealed class CreatureTemplateBuilder
     public float Scale { get; set; }
     public string AIName { get; set; } = string.Empty;
     public bool Civilian { get; set; }
+    public int ResistanceHoly { get; set; }
+    public int ResistanceFire { get; set; }
+    public int ResistanceNature { get; set; }
+    public int ResistanceFrost { get; set; }
+    public int ResistanceShadow { get; set; }
+    public int ResistanceArcane { get; set; }
 
     public CreatureTemplate Build() => new()
     {
@@ -266,5 +272,11 @@ internal sealed class CreatureTemplateBuilder
         Family = 1,
         AIName = AIName,
         Civilian = Civilian,
+        ResistanceHoly = ResistanceHoly,
+        ResistanceFire = ResistanceFire,
+        ResistanceNature = ResistanceNature,
+        ResistanceFrost = ResistanceFrost,
+        ResistanceShadow = ResistanceShadow,
+        ResistanceArcane = ResistanceArcane,
     };
 }
