@@ -48,7 +48,10 @@ internal static class Program
             return 2;
         }
 
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        // Outer wall-clock hang guard, deliberately above MockScenarios' 180 s inner guard so the inner, named
+        // TimeoutException fires first (passing runs on a loaded CI node measured up to ~44 s against the old 45 s/60 s
+        // limits; the step that hung is named in the error). client-fixture shares this bound.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(240));
         try
         {
             object report = fixture is not null
