@@ -35,7 +35,7 @@ public static partial class MockScenarios
     private const int NpcQuestIdField = 0x00C9;
     // Wall-clock hang guard, not a performance bound. The scenario is strictly sequential request/response, so its
     // runtime scales with host CPU load; passing runs on a loaded CI node measured up to ~44 s against the old 45 s
-    // limit. The TimeoutException names the step that was running when the guard fired.
+    // limit. The TimeoutException names the last check that passed; the hung step is the one after it.
     private static readonly TimeSpan ScenarioTimeout = TimeSpan.FromSeconds(180);
 
     public static async Task<MockScenarioReport> RunAsync(CancellationToken ct = default)
