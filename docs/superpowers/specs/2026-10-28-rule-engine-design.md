@@ -1,12 +1,12 @@
 # Shared rule engine: design
 
-Status: approved by Nathan 2026-10-28 ("integrate all the modifications"). Built in phases P0-P6.
+Status: approved by the project owner 2026-10-28 ("integrate all the modifications"). Built in phases P0-P6.
 
 ## 1. Intent
 
 ArcaneCore keeps growing new behaviour: bot goals for the auction house, holiday scripts, outdoor PvP, creature scripts imported from three dump formats. Each one is either hard-coded C# or has its own small table format with its own loader, validator and executor. The goal is one shared, database-driven rule engine, so extending behaviour is an SQL update (or, for a new primitive, one small C# class) instead of a code change in a dozen places.
 
-Owner decisions (Nathan, 2026-10-28):
+Owner decisions (project owner, 2026-10-28):
 
 - **One shared engine** for every system, not one per system.
 - **Anyone with DB access extends it** by inserting rows. Rows ship as idempotent per-provider SQL update files (the existing `sql/content` rules).
@@ -162,8 +162,8 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
 2. **Converter in the content importer.** `ContentImport` gains a step that reads the imported `creature_ai_scripts`, `creature_ai_texts`, `smart_scripts`, `dbscripts_*`, `dbscript_relay_template` and `script_waypoint` rows and writes `rule*` rows with deterministic ids. Each source row that cannot be converted is reported by id and reason in the import report. The old tables stay in the schema as **import input only** for as long as dumps arrive in those formats; no runtime code reads them after cutover.
 3. **Parity harness.** A test suite runs the same scripted scenarios through the old executor and through the engine on converted rows, and compares the effect logs: casts, texts, emotes, phase changes, summons, movement starts, despawns, timers and their order. The corpus is every creature in the test content set plus a sampled slice of the full vmangos/cmangos import. A difference fails the suite unless it has an approved `parity_exception` with a reason.
 4. **Cutover per source format:** EventAI first (largest and simplest), then DB scripts and relays, then SmartAI.
-   - **Live's world DB** (Nathan, 2026-10-28): take a verified backup, then convert in place through a schema update step, applied on a live restart. A backup of auth, characters and world was taken on 2026-10-28 before any of this work.
-   - **Deletion** (Nathan, 2026-10-28): "When a surface is ready to be deleted, do so. Don't keep dead surfaces." There is no long dual-runtime period and no config switch kept for a release.
+   - **Live's world DB** (project owner, 2026-10-28): take a verified backup, then convert in place through a schema update step, applied on a live restart. A backup of auth, characters and world was taken on 2026-10-28 before any of this work.
+   - **Deletion** (project owner, 2026-10-28): "When a surface is ready to be deleted, do so. Don't keep dead surfaces." There is no long dual-runtime period and no config switch kept for a release.
      - An old executor, its loader and its config are deleted in the same PR series once the gate parity tier (a) is green and a recorded operator run of tier (b) passes on the current dumps.
      - The old source tables stay only as import input, while dumps still arrive in that format.
 5. **Ref-core fixes after parity.** Divergences from retail found during conversion are recorded and fixed in their own PRs afterwards (pre-authorised; retail wins), so a parity diff never hides a behaviour change.
@@ -184,7 +184,7 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
 
 - Every schema and content change ships idempotent per-provider SQL update files that install on a clean DB (sqlite, mariadb, postgresql).
 - Live stays Debug; the live world DB is not edited by hand. Converted content arrives through the importer and update files.
-- Clean-room: the reference cores in D:/refs are read for behaviour only and never copied.
+- Clean-room: the reference cores (`ARCANECORE_REFS_ROOT`) are read for behaviour only and never copied.
 - Non-vanilla behaviour that rules make possible ships disabled or config-gated; shipped rule rows reproduce retail.
 - Performance: evaluation allocates nothing per call and does no string lookups; the parity harness also records evaluation cost per tick so P2 can show no tick-rate regression.
 
@@ -235,14 +235,14 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
 - The parity harness's effect-log format.
 - The order of primitives within each phase.
 
-## 11. Calls made by Claude (not decided by Nathan)
+## 11. Calls made by Claude (not decided by the project owner)
 
 - Reuse the existing `conditions` table and evaluator instead of a new predicate system.
 - The table names and the custom id range (1 000 000+).
 - Two chance kinds: a per-firing roll and a stable per-subject share.
 - The bot ladder becomes shipped rules with weights, and the policy layer remains a proposal source.
 - Old script tables stay as import input only; the runtime reads rules only.
-- (Superseded by Nathan: delete each old surface as soon as parity proves it replaced.)
+- (Superseded by the project owner: delete each old surface as soon as parity proves it replaced.)
 - Some inventory items are plain data tables, not rules.
 - Boss/instance C# scripts stay code.
 - Bot ladder semantics (builder check). Fall-through is kept:
