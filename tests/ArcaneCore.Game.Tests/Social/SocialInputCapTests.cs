@@ -58,7 +58,7 @@ public sealed class SocialInputCapTests
         Assert.Equal(0, new SocialOptions().ReadyCheckAnswerIntervalMs);
         for (int i = 0; i < 5; i++)
         {
-            f.Context.Groups.ReadyCheck(b, i % 2);
+            f.Context.Groups.ReadyCheck(b, (byte)(i % 2));
         }
 
         Assert.Equal(5, f.Sent(a, WorldOpcode.MsgRaidReadyCheck).Count());

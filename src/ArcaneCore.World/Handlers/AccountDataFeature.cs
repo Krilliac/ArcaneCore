@@ -35,6 +35,7 @@ public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeF
     private readonly CancellationTokenSource _stopping = new();
     private ILogger _logger = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
     private bool _stopped;
+    private Task? _stop;
 
     /// <summary>The write queue (tests and health reporting); null until attached, and without a store.</summary>
     public KeyedStoreWriteQueue<IAccountDataStore>? Writes { get; private set; }
@@ -133,8 +134,16 @@ public sealed class AccountDataFeature(IServiceProvider services, IServiceScopeF
         }
     }
 
-    /// <summary>The world is stopping: queue every held value, then drain the queue (throws naming the keys still not durable).</summary>
-    public async Task StopAsync()
+    /// <summary>The world is stopping: queue every held value, then drain the queue (throws naming the keys still not durable). Idempotent.</summary>
+    public Task StopAsync()
+    {
+        lock (_gate)
+        {
+            return _stop ??= StopCoreAsync();
+        }
+    }
+
+    private async Task StopCoreAsync()
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
         KeyedStoreWriteQueue<IAccountDataStore>? writes = Writes;
