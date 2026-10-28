@@ -1012,7 +1012,7 @@ public sealed class ContentImporterCliTests : IDisposable
         string dump = WriteDump("cmangos.sql", CMangosDump);
 
         (int code, string output, string err) = await RunAsync(
-            "import", dump, "--provider", "mariadb", "--connection-string", "Server=127.0.0.1;Port=1;Database=w;User Id=arcane;Password=hunter2;Connection Timeout=2");
+            "import", dump, "--provider", "mariadb", "--connection-string", $"Server=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=w;User Id=arcane;Password=hunter2;Connection Timeout=2");
 
         Assert.Equal(ExitCodes.Database, code);
         Assert.DoesNotContain("hunter2", output + err, StringComparison.Ordinal);
