@@ -114,7 +114,10 @@ internal sealed partial class PlayerbotTraceLog
     internal string FormatSnapshot(Player player, PlayerbotBrain brain)
     {
         uint nowMs = (player.Session as WorldSession)?.World.NowMs ?? 0;
-        string phase = SanitizeToken(PlayerbotThinkProbe.CurrentPhase ?? brain.LastThinkPhase);
+        // The host marks the probe "stall log" (and "settle") after the think, before it takes this snapshot: that names its own bookkeeping,
+        // not where the think's work stopped. Mid-think snapshots (exception diagnostics) keep the probe's phase.
+        string? probePhase = PlayerbotThinkProbe.CurrentPhase;
+        string phase = SanitizeToken(probePhase is null or "stall log" or "settle" ? brain.StalledWorkPhase ?? brain.LastThinkPhase : probePhase);
         uint mapId = player.Map?.MapId ?? player.MapId;
         MovementFlags moveFlags = player.Movement.Flags;
 

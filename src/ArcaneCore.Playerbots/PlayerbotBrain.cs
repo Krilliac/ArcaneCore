@@ -130,6 +130,21 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private int _roamDirection;
     private int _exploreRefusals;
 
+    /// <summary>The phase of the think before the running one (the stall watch fires at the start of a think, so this is where the stalled work was).</summary>
+    private string _previousThinkPhase = "start";
+
+    /// <summary>Set by <see cref="ReportStall"/>: the phase the stalled work was in; cleared at the next think. Read by the stall diagnostic.</summary>
+    private string? _stalledWorkPhase;
+
+    /// <summary>The phase the stall diagnostic names while the stall of this think is being reported (null otherwise).</summary>
+    internal string? StalledWorkPhase => _stalledWorkPhase;
+
+    /// <summary>"wander-refused" has been traced for the current refusal episode (cleared when a wander leg is accepted).</summary>
+    private bool _exploreRefusalTraced;
+
+    /// <summary>Picks the mesh points of the wander fallback (<see cref="TryWanderToMeshPoint"/>); seeded from the guid, think-thread only.</summary>
+    private Random? _wanderRandom;
+
     /// <summary>The last explore leg was refused for a strong creature's reach, not by the mesh: the next ray stays full length (<see cref="WanderLegEnd"/>).</summary>
     private bool _exploreRingRefused;
     private bool _exploreIslandWatchStarted;
@@ -610,6 +625,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
         PlayerbotThinkProbe.Phase("brain");
+        _stalledWorkPhase = null;
+        _previousThinkPhase = LastThinkPhase;
         LastThinkPhase = "brain";
         _trace.ObserveState(this, _session.World.NowMs);
         CheckThinkClock(player, _session.World.NowMs);
@@ -1859,6 +1876,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
                 _exploreRefusals = Math.Max(_exploreRefusals, 3);
+                _exploreRefusalTraced = false; // the refusals after the give-up are a new episode and are traced
                 if (TargetEntry != 0)
                 {
                     if (deadEndPin || _suspensions.EntryStrikeCount(TargetEntry) > 0) _suspensions.SuspendEntryEscalating(TargetEntry, now);
@@ -1880,6 +1898,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             case PlayerbotGoalKind.Escape:
             default:
                 _exploreRefusals = 3;
+                _exploreRefusalTraced = false;
                 break;
         }
 
@@ -1948,6 +1967,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private void ReportStall(Player player)
     {
+        // The stall watch runs before this think's decision, so the work that stalled is the previous think's: LastThinkPhase is already "brain".
+        _stalledWorkPhase = _previousThinkPhase;
         string detail = _stall.Report ?? "stalled (no report text)";
         bool repeated = _stall.LastGiveUpRepeated;
         PlayerbotAnomalies.Report(player, "brain", repeated ? "stall-unresolved" : "stall",
@@ -3448,18 +3469,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (ExploreMovementPaused(player, elapsedMs))
             {
                 _exploreRefusals = 0; // the plan was accepted; the pause is not the wall that refused the last ray
+                _exploreRefusalTraced = false;
                 return;
             }
             if (!PlayerbotNavigation.TryAdvance(_session, wanderRoute, _options, elapsedMs, _session.World.NowMs))
             {
                 AbandonRoute();
                 _exploreRefusals++;
-                if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
+                TraceWanderRefusal();
                 PlayerbotMovementControl.Stop(_session, player);
             }
             else
             {
                 _exploreRefusals = 0;
+                _exploreRefusalTraced = false;
                 MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
@@ -3468,9 +3491,83 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             _exploreRefusals++;
             _exploreRingRefused = Risk.StrongRefusals != strongRefusals;
-            if (_exploreRefusals == 1) _trace.Record(_session.World.NowMs, "wander-refused");
+            TraceWanderRefusal();
+            if (_exploreRefusals >= 2 && TryWanderToMeshPoint(player, elapsedMs)) return;
             PlayerbotMovementControl.Stop(_session, player);
         }
+    }
+
+    /// <summary>Records "wander-refused" once per refusal episode. A give-up presets the count (GiveUpStalledGoal), so a count test hid every later refusal.</summary>
+    private void TraceWanderRefusal()
+    {
+        if (_exploreRefusalTraced) return;
+        _exploreRefusalTraced = true;
+        _trace.Record(_session.World.NowMs, "wander-refused");
+    }
+
+    /// <summary>Mesh points sampled per think by the wander fallback.</summary>
+    private const int WanderMeshSamples = 4;
+
+    /// <summary>
+    /// The way out of ground where straight rays fail (a pocket, a canyon, a slope: the ray end is off the mesh or behind a bend). After the full
+    /// and a shortened ray were refused, a point the map's pathfinder says is reachable (<see cref="IMeshPointQuery"/>) is planned exactly;
+    /// the shortfall rule of <see cref="PlayerbotNavigation.PlanWander"/> does not apply to a point that is on the mesh. Only a leg that moves
+    /// the bot by the stall watch's own progress counts. False (the ray behaviour stays) when the map has no mesh point query or no sample is walkable.
+    /// </summary>
+    private bool TryWanderToMeshPoint(Player player, uint elapsedMs)
+    {
+        if (player.Map is not { } map || map.Collision.MeshPoints is not { } mesh) return false;
+        _wanderRandom ??= new Random((int)(player.Guid.Low & 0x7fffffff));
+        var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        float minimum = ExploreLegLength(1);
+        int searches = 0;
+        for (int sample = 0; sample < WanderMeshSamples; sample++)
+        {
+            // Each exact plan is a synchronous world-thread search (a leg's node budget is under the path-job threshold): after the first,
+            // a think that spent its optional budget takes no more (the ray plan just before this already used some).
+            if (searches > 0 && !HasOptionalThinkBudget(15.0)) break;
+            if (!mesh.TryGetRandomPointAround(map.MapId, here, ExploreLegYards, _wanderRandom, PlayerbotMoveCheck.MeshOptions, out System.Numerics.Vector3 point)
+                || !point.IsFinite()
+                || System.Numerics.Vector2.Distance(new(point.X, point.Y), new(here.X, here.Y)) < minimum
+                || PlayerbotMotion.IsBlacklisted(player, point))
+            {
+                continue;
+            }
+            ExploreWanderPlans++;
+            searches++;
+            PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, point, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? route);
+            if (outcome == PlanOutcome.Pending)
+            {
+                AbandonRoute();
+                return true; // the tile is still being read: the same fallback again next think
+            }
+            if (outcome != PlanOutcome.Route || route is not { Points.Count: > 0 } found) continue;
+            System.Numerics.Vector3 end = found.Points[^1];
+            if (System.Numerics.Vector2.Distance(new(end.X, end.Y), new(here.X, here.Y)) < PlayerbotStallWatch.ProgressYards) continue;
+            // A partial route into a wall is refused as PlanWander refuses it: the walk must end at the mesh point it was planned to.
+            if (System.Numerics.Vector2.Distance(new(end.X, end.Y), new(point.X, point.Y)) > PlayerbotNavigation.WanderMaxShortfallYards) continue;
+
+            _route = found;
+            PlayerbotThinkProbe.Phase("explore advance");
+            if (ExploreMovementPaused(player, elapsedMs))
+            {
+                _exploreRefusals = 0;
+                _exploreRefusalTraced = false;
+                return true;
+            }
+            if (!PlayerbotNavigation.TryAdvance(_session, found, _options, elapsedMs, _session.World.NowMs))
+            {
+                AbandonRoute();
+                continue;
+            }
+            _exploreRefusals = 0;
+            _exploreRefusalTraced = false;
+            _trace.Record(_session.World.NowMs, "wander-mesh-point");
+            MarkLeg(found, townWalk: false);
+            ChainWanderLeg(player, elapsedMs);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>The first wait (world ms) before the grind destinations plan again after a refused plan (<see cref="NoteGrindPlan"/>).</summary>
@@ -3571,6 +3668,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_route is { } leg && PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
         {
             _exploreRefusals = 0;
+            _exploreRefusalTraced = false;
             MarkLeg(leg, townWalk: true);
             return;
         }

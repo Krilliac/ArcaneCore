@@ -24,6 +24,46 @@ namespace ArcaneCore.World.Tests.Playerbots;
 public sealed class PlayerbotStallTests
 {
     /// <summary>
+    /// The host takes the stall diagnostic after the think, once it has marked the probe "stall log". The snapshot has to name the phase
+    /// the think's work stopped in, not the host's bookkeeping phase (live: 2114 of 2163 Explore stall lines read phase=stall-log).
+    /// </summary>
+    [Fact]
+    public async Task StallSnapshot_NamesTheThinkPhase_NotTheHostsStallLogPhase()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+        try
+        {
+            string? snapshot = null;
+            for (int think = 0; think < 100 && snapshot is null; think++)
+            {
+                await host.World.AdvanceClockAsync(100);
+                snapshot = await host.OnWorldAsync(() =>
+                {
+                    var probe = new PlayerbotThinkProbe();
+                    probe.Begin();
+                    try
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        brain.Update(100);
+                        if (brain.LastThinkPhase != "explore wander plan") return null;
+                        PlayerbotThinkProbe.Phase("settle");
+                        PlayerbotThinkProbe.Phase("stall log");
+                        return brain.FormatDiagnosticSnapshot(session.Player!);
+                    }
+                    finally { probe.End(); }
+                });
+            }
+
+            Assert.NotNull(snapshot);
+            Assert.Contains("phase=explore-wander-plan", snapshot);
+            Assert.DoesNotContain("phase=stall-log", snapshot);
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// A bot that cannot go anywhere (no terrain: every route is refused) and changes nothing reports a stall once
     /// <see cref="PlayerbotOptions.StallSeconds"/> of world time passed, with its goal and position; the report clears when it moves.
     /// </summary>

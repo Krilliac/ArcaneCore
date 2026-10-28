@@ -592,6 +592,107 @@ public sealed class PlayerbotExploreTests
         static bool IsShortenedRay(Vector3 end) => RayYards(end) is > 10f and < PlayerbotBrain.ExploreLegYards - 1f;
     }
 
+    /// <summary>
+    /// Pocket, canyon or slope: every compass ray is cut to 6 yards, so the planner refuses all of them and the bot stood
+    /// <c>moving:no dest:none</c> until the stall watch gave Explore up. When the map's pathfinder can pick mesh points
+    /// (<see cref="IMeshPointQuery"/>) the wander must fall back to a reachable one instead of turning rays forever.
+    /// </summary>
+    [Fact]
+    public async Task WanderRaysAllRefused_TakesAReachableMeshPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var origin = new Vector2(player.X, player.Y);
+                PlayerbotRoute? walked = null;
+                for (int think = 0; think < 6 && walked is null; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute route) walked = route;
+                }
+
+                Assert.NotNull(walked);
+                Vector3 end = walked!.Points[^1];
+                Assert.True(Vector2.Distance(origin, new(end.X, end.Y)) >= PlayerbotStallWatch.ProgressYards,
+                    "the leg must move the bot by the stall watch's own progress");
+                Assert.True(Vector2.Distance(new(meshPoint.X, meshPoint.Y), new(end.X, end.Y)) <= 1f,
+                    $"the leg should end at the mesh point, not at {end}");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// GiveUpStalledGoal presets the refusal count to 3 for Explore. Refusals were only traced at count 1, so after any give-up
+    /// every later refusal was silent and the stall diagnostics showed a bare <c>moving:no dest:none</c>.
+    /// </summary>
+    [Fact]
+    public async Task WanderRefusedAfterGiveUp_IsTraced()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new ShortOpenGroundPathfinder(0f));
+                typeof(PlayerbotBrain).GetField("_exploreRefusals", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(brain, 3);
+
+                session.ManagedBudget = new ManagedActionBudget(2);
+                typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(brain, [player, 500u]);
+
+                Assert.Null(typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain));
+                Assert.Contains("wander-refused", brain.FormatDiagnosticSnapshot(player));
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>Every ray is cut to <c>rayYards</c>; only a path to the mesh point is complete. The mesh point is what the query offers.</summary>
+    private sealed class BendMeshPathfinder(float rayYards, Vector3 meshPoint) : IPathfinder, IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (Vector2.Distance(new(end.X, end.Y), new(meshPoint.X, meshPoint.Y)) <= 1f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float dx = end.X - start.X, dy = end.Y - start.Y;
+            float distance = MathF.Sqrt((dx * dx) + (dy * dy));
+            if (!float.IsFinite(distance) || distance <= rayYards + 0.05f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float scale = rayYards / distance;
+            return PathResult.StraightLine(start, new Vector3(start.X + (dx * scale), start.Y + (dy * scale), end.Z), PathType.Normal | PathType.Incomplete);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        {
+            point = meshPoint;
+            return true;
+        }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => MeshRaycastResult.Unavailable(end);
+    }
+
     /// <summary>Completes a ray of at most <paramref name="openYards"/> and records each requested end.</summary>
     private sealed class RecordingShortOpenPathfinder(float openYards) : IPathfinder
     {
