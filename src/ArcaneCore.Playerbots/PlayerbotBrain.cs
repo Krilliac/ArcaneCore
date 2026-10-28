@@ -3520,12 +3520,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _wanderRandom ??= new Random((int)(player.Guid.Low & 0x7fffffff));
         var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         float minimum = ExploreLegLength(1);
-        int searches = 0;
         for (int sample = 0; sample < WanderMeshSamples; sample++)
         {
-            // Each exact plan is a synchronous world-thread search (a leg's node budget is under the path-job threshold): after the first,
-            // a think that spent its optional budget takes no more (the ray plan just before this already used some).
-            if (searches > 0 && !HasOptionalThinkBudget(15.0)) break;
+            // Each exact plan is a synchronous world-thread search (a leg's node budget is under the path-job threshold): a think that
+            // spent its optional budget takes none, the first included (the ray plans just before this already used some). The
+            // fallback is tried again at the next think.
+            if (!HasOptionalThinkBudget(15.0)) break;
             if (!mesh.TryGetRandomPointAround(map.MapId, here, ExploreLegYards, _wanderRandom, PlayerbotMoveCheck.MeshOptions, out System.Numerics.Vector3 point)
                 || !point.IsFinite()
                 || System.Numerics.Vector2.Distance(new(point.X, point.Y), new(here.X, here.Y)) < minimum
@@ -3534,7 +3534,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 continue;
             }
             ExploreWanderPlans++;
-            searches++;
             PlanOutcome outcome = PlayerbotNavigation.PlanExact(player, point, _options, ref _tileWait, _session.World.NowMs, out PlayerbotRoute? route);
             if (outcome == PlanOutcome.Pending)
             {

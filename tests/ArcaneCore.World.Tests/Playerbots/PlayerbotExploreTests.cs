@@ -637,6 +637,51 @@ public sealed class PlayerbotExploreTests
     }
 
     /// <summary>
+    /// The mesh-point plans are synchronous world-thread searches: a think that already spent its optional budget (15 ms) takes none, not even
+    /// the first. The same pocket as <see cref="WanderRaysAllRefused_TakesAReachableMeshPoint"/>, with the think's clock past the budget.
+    /// </summary>
+    [Fact]
+    public async Task WanderRaysAllRefused_WithTheThinkBudgetSpent_PlansNoMeshPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var probe = new PlayerbotThinkProbe(clock);
+                probe.Begin();
+                try
+                {
+                    clock.Advance(20); // past the 15 ms optional budget
+                    Assert.False(brain.HasOptionalThinkBudget(15.0));
+                    for (int think = 0; think < 6; think++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(2);
+                        explore.Invoke(brain, [player, 500u]);
+                    }
+
+                    Assert.Null(routeField.GetValue(brain));
+                }
+                finally { probe.End(); }
+
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// GiveUpStalledGoal presets the refusal count to 3 for Explore. Refusals were only traced at count 1, so after any give-up
     /// every later refusal was silent and the stall diagnostics showed a bare <c>moving:no dest:none</c>.
     /// </summary>

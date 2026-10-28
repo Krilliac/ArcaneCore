@@ -64,6 +64,58 @@ public sealed class PlayerbotStallTests
     }
 
     /// <summary>
+    /// A real stall (no terrain: every wander is refused, nothing changes) reported by the stall watch at the start of a think: the stalled
+    /// work is the previous think's, so <see cref="PlayerbotBrain.StalledWorkPhase"/> is the phase the previous think ended in, and the
+    /// snapshot the host takes after the stalling think (the probe already on "stall log") names that phase. The next think clears it.
+    /// </summary>
+    [Fact]
+    public async Task ARealStall_ReportsThePreviousThinksPhase_AndTheSnapshotNamesIt()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, StallSeconds = 10 });
+        try
+        {
+            string previousEnd = "start";
+            string? expected = null, work = null, snapshot = null;
+            for (int think = 0; think < 200 && work is null; think++)
+            {
+                await host.World.AdvanceClockAsync(100);
+                string previous = previousEnd;
+                (string? StalledWork, string? Snapshot, string ThisEnd) result = await host.OnWorldAsync(() =>
+                {
+                    var probe = new PlayerbotThinkProbe();
+                    probe.Begin();
+                    try
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        brain.Update(100);
+                        string thisEnd = brain.LastThinkPhase;
+                        if (brain.StalledWorkPhase is null) return ((string?)null, (string?)null, thisEnd);
+                        PlayerbotThinkProbe.Phase("settle");
+                        PlayerbotThinkProbe.Phase("stall log");
+                        return ((string?)brain.StalledWorkPhase, (string?)brain.FormatDiagnosticSnapshot(session.Player!), thisEnd);
+                    }
+                    finally { probe.End(); }
+                });
+                previousEnd = result.ThisEnd;
+                if (result.StalledWork is null) continue;
+                (expected, work, snapshot) = (previous, result.StalledWork, result.Snapshot);
+            }
+
+            Assert.NotNull(work);
+            Assert.Equal(expected, work);
+            Assert.Contains($"phase={expected!.Replace(' ', '-')}", snapshot);
+            Assert.DoesNotContain("phase=stall-log", snapshot);
+            Assert.DoesNotContain("phase=settle", snapshot);
+
+            await host.World.AdvanceClockAsync(100);
+            Assert.Null(await host.OnWorldAsync(() => { session.ManagedBudget = new ManagedActionBudget(4); brain.Update(100); return brain.StalledWorkPhase; }));
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
     /// A bot that cannot go anywhere (no terrain: every route is refused) and changes nothing reports a stall once
     /// <see cref="PlayerbotOptions.StallSeconds"/> of world time passed, with its goal and position; the report clears when it moves.
     /// </summary>
