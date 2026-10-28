@@ -54,7 +54,8 @@ run_test() {
   [ "$(basename "$target")" = Data.slnf ] && pre=("${wrap_data[@]}" "${wrap[@]}")
   local cmd=("${pre[@]}" dotnet test "$target" -c "$config" --no-build -m:1 --verbosity normal --logger trx --results-directory "$trx" --filter "$flt")
   [ "$ser" = 1 ] && cmd+=("${serial[@]}")
-  "${cmd[@]}" > "$log" 2>&1
+  # stdin from /dev/null: the rerun loop below reads failed-test names from its stdin, and a child that read it would swallow them.
+  "${cmd[@]}" > "$log" 2>&1 < /dev/null
 }
 
 # counts <log> -> "passed failed skipped" summed over every test run block in the log.
@@ -94,7 +95,7 @@ if [ "$stage" != timing ]; then
 fi
 
 if [ "$selftest" = 1 ] && [ "$stage" != timing ]; then
-  dotnet run --project tools/ArcaneCore.MockClient -c "$config" --no-build -- self-test > "$logs/selftest.log" 2>&1; rc=$?
+  "${wrap[@]}" dotnet run --project tools/ArcaneCore.MockClient -c "$config" --no-build -- self-test > "$logs/selftest.log" 2>&1 < /dev/null; rc=$?
   echo "selftest rc=$rc"; tail -3 "$logs/selftest.log"
   selftest_line="rc=$rc"
   [ $rc -ne 0 ] && fail "self-test rc=$rc"
@@ -112,13 +113,16 @@ if [ "$stage" != main ]; then
     grep -qiE 'parallel test collections = off|ParallelizeTestCollections[^a-z]*false' "$log" && serial_seen=1
     echo "timing $t rc=$rc executed $e (passed $p, failed $f), skipped $s"
     summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
+    # Every target must bring timing tests of its own (a target that lost its tags would otherwise hide behind another's).
+    [ -z "$filter" ] && [ "$e" -eq 0 ] && fail "timing stage of $t matched 0 tests"
     if grep -q 'Test Run Aborted' "$log"; then fail "timing $t: test run aborted (not every test ran)"; continue; fi
     [ $rc -eq 0 ] && [ "$f" -eq 0 ] && continue
     lines=$(failed_names "$log" | grep -c .)
     if [ "$lines" -eq 0 ] || [ "$lines" -ne "$f" ]; then
       fail "timing $t rc=$rc with $f failed but $lines attributable failure lines (crash or kill?)"; continue
     fi
-    while read -r name; do
+    want=$(failed_names "$log" | sort -u | grep -c .); before=$rerun_n
+    while read -r name <&3; do
       rerun_n=$((rerun_n + 1)); rlog=$logs/rerun-$rerun_n.log
       echo "timing: rerunning $name alone"
       run_test "$rlog" "$logs/trx-rerun" "FullyQualifiedName=$name" 1 "$t"; rrc=$?
@@ -132,12 +136,13 @@ if [ "$stage" != main ]; then
         echo "FAILED TWICE: $name (rerun rc=$rrc executed $((rp + rf)) failed $rf)"
         fail "timing $name failed its rerun too"
       fi
-    done < <(failed_names "$log" | sort -u)
+    done 3< <(failed_names "$log" | sort -u)
+    [ $((rerun_n - before)) -eq "$want" ] || fail "timing $t: $want failed tests but $((rerun_n - before)) reruns"
   done
   sline="NOT confirmed in log"; [ $serial_seen = 1 ] && sline=confirmed
   summary[$bhead]="stage timing (serial, $flt): executed $b_exec (passed $b_pass, failed $b_fail), skipped $b_skip; serial: $sline"
   summary+=("timing reruns: $rerun_n (passed on rerun $rerun_pass, failed twice $rerun_fail)")
-  if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky (passed on rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky (passed on rerun): none"); fi
+  if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky tests (passed their rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky tests (passed their rerun): none"); fi
   [ -z "$filter" ] && [ $b_exec -eq 0 ] && fail "timing stage matched 0 tests"
 fi
 

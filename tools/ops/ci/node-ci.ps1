@@ -87,7 +87,9 @@ while ($true) {
     $probe = & $ssh @opts $NodeHost 'wsl -d Ubuntu-24.04 -u root -e cat /proc/loadavg /proc/meminfo' 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $probe) { break }
     $load = [double](($probe | Select-Object -First 1) -split ' ')[0]
-    $availKb = [long]((($probe | Where-Object { $_ -match '^MemAvailable:' }) -split '\s+')[1])
+    $mem = @(($probe | Where-Object { $_ -match '^MemAvailable:' } | Select-Object -First 1) -split '\s+')
+    if ($mem.Count -lt 2) { break }
+    $availKb = [long]$mem[1]
     if ($load -lt 42 -and $availKb -gt 6GB / 1KB) { break }
     Write-Output "waiting for Node1 headroom: load $load, available $([math]::Round($availKb / 1MB, 1)) GB"
     Start-Sleep -Seconds 60
@@ -145,8 +147,11 @@ $bash = @"
 set -u
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 S=/mnt/c/NewBuild/arcanecore-ci/$runId
-# At most 2 full gates on the node at once, whichever host or shell started them: two flock slots, held until this script exits.
-if [ $full = 1 ]; then
+trap 'rm -f "`$0"' EXIT
+# At most 2 full gates on the node at once, whichever host or shell started them: two flock slots, held by this script while it runs
+# the gate as a child without the slot's descriptors (a process the gate leaves running, such as the compiler server, must not keep
+# the slot after the gate ends).
+if [ $full = 1 ] && [ -z "`${NODE_CI_INNER:-}" ]; then
   mkdir -p /root/ci; exec 8>/root/ci/full-gate-slot1.lock 9>/root/ci/full-gate-slot2.lock
   slot=; t0=`$(date +%s); last=-1
   while [ -z "`$slot" ]; do
@@ -158,6 +163,7 @@ if [ $full = 1 ]; then
     fi
   done
   echo "got full-gate slot `$slot after `$(( `$(date +%s) - t0 ))s"
+  NODE_CI_INNER=1 bash "`$0" 8>&- 9>&-; exit `$?
 fi
 $dbSetup
 W=/root/ci/$runId; rm -rf `$W; mkdir -p `$W/src `$W/logs; cd `$W/src
@@ -200,7 +206,7 @@ Remove-Item $sh, $stagesTmp
 $flaky = [Collections.Generic.List[string]]::new()
 & $ssh @opts $NodeHost "wsl -d Ubuntu-24.04 -u root -e bash /mnt/c/NewBuild/arcanecore-ci/$runId.sh" 2>&1 | ForEach-Object {
     $line = "$_" -replace "`0", ''
-    if ($line -match '^FLAKY \(passed on rerun\): (.+)$') { $flaky.Add($Matches[1].Trim()) }
+    if ($line -cmatch '^FLAKY \(passed on rerun\): (.+)$') { $flaky.Add($Matches[1].Trim()) }
     $line
 }
 $rc = $LASTEXITCODE
