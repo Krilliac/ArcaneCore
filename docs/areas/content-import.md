@@ -6,6 +6,8 @@ dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyr
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
 database or report inside a git work tree unless git ignores the path.
 
+World schema v57 adds `npc_text_broadcast_text` (`Id`, `Prob0..7`, `BroadcastTextId0..7`; `NpcTextBroadcastDataModule`), the form of an NPC greeting whose eight weighted variants are `broadcast_text` ids (classic-db, vmangos). Import reads it with the other NPC tables, and `refresh` replaces it (a dump without the table leaves it alone) and reports its count. The NPC content store turns a row into the same eight-variant text an inline `npc_text` row gives: the variant's text is the broadcast male (`Text`) and female (`Text1`) text, its language is `LanguageID`, and `EmoteID1..3` with `EmoteDelay1..3` are its three emote/delay pairs. An inline `npc_text` row with the same id wins; a variant whose broadcast id is 0 or has no `broadcast_text` row gets probability 0. An id found in neither table still answers with the default greeting.
+
 World schema v56 adds `creature_equip_template` (`Entry`, `EquipEntry1..3`, item entries for the main hand, off hand and ranged slot) and `creature_template.EquipmentTemplateId`
 (`CreatureEquipmentDataModule`). The importer reads ClassicDB/cmangos `EquipmentTemplateId` and `equipentry1..3`, and the vmangos `equipment_id` with its `item1..3` rows (patch range containing 10; of several
 probability rows of one id the most probable is kept, since one id holds one set). `refresh` replaces the table and updates the template links, and reports

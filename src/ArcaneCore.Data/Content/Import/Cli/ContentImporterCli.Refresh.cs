@@ -324,6 +324,7 @@ public static partial class ContentImporterCli
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
+        Count(NpcTextBroadcastDataModule.Table, gossip.BuildReport().TextBroadcasts, gossip.SawTextBroadcastTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
@@ -460,6 +461,7 @@ public static partial class ContentImporterCli
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
+                    await gossip.RefreshTextBroadcastsAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
                         await db.Set<SpellProcEventRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
