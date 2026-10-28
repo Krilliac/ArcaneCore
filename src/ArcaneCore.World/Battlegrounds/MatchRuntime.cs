@@ -42,6 +42,16 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
     private readonly Dictionary<int, ObjectGuid> _objects = [];
     private readonly List<(long DueMs, int Index)> _pendingObjects = [];
     private readonly List<(long DueMs, byte Event1, byte Event2)> _pendingEvents = [];
+    private readonly List<(long DueMs, int Index)> _dueObjectsScratch = [];
+    private readonly List<(long DueMs, byte Event1, byte Event2)> _dueEventsScratch = [];
+    private readonly List<Creature> _guideScratch = [];
+    private readonly List<GameObject> _trapScratch = [];
+    private readonly List<Player> _trapPlayerScratch = [];
+    private bool _dueObjectsInUse;
+    private bool _dueEventsInUse;
+    private bool _guidesInUse;
+    private bool _trapsInUse;
+    private bool _trapPlayersInUse;
     private readonly Dictionary<ObjectGuid, long> _trapCooldowns = [];
     private GameObjectMapSystem? _gameObjects;
     private CreatureMapSystem? _creatures;
@@ -168,20 +178,107 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             AttachMap(map);
         }
 
-        foreach ((long due, int index) in _pendingObjects.Where(p => p.DueMs <= _clockMs).ToArray())
-        {
-            _pendingObjects.Remove((due, index));
-            SummonMatchObject(index);
-        }
-
-        foreach ((long due, byte e1, byte e2) in _pendingEvents.Where(p => p.DueMs <= _clockMs).ToArray())
-        {
-            _pendingEvents.Remove((due, e1, e2));
-            RefreshObjects(e1, e2);
-        }
+        RunDueObjects();
+        RunDueEvents();
 
         UpdateBuffTraps();
         UpdateSpiritGuides();
+    }
+
+    // The due entries are a snapshot (summoning can RemoveAll/Add on the pending list), but a per-tick LINQ clone is not needed:
+    // nothing is copied when nothing is due, and the copy goes into a reusable scratch list. A re-entrant Update gets a fresh list.
+    private void RunDueObjects()
+    {
+        bool anyDue = false;
+        for (int i = 0; i < _pendingObjects.Count; i++)
+        {
+            if (_pendingObjects[i].DueMs <= _clockMs)
+            {
+                anyDue = true;
+                break;
+            }
+        }
+
+        if (!anyDue)
+        {
+            return;
+        }
+
+        bool owned = !_dueObjectsInUse;
+        List<(long DueMs, int Index)> due = owned ? _dueObjectsScratch : [];
+        _dueObjectsInUse |= owned;
+        try
+        {
+            foreach ((long dueMs, int index) in _pendingObjects)
+            {
+                if (dueMs <= _clockMs)
+                {
+                    due.Add((dueMs, index));
+                }
+            }
+
+            for (int i = 0; i < due.Count; i++)
+            {
+                (long dueMs, int index) = due[i];
+                _pendingObjects.Remove((dueMs, index));
+                SummonMatchObject(index);
+            }
+        }
+        finally
+        {
+            due.Clear();
+            if (owned)
+            {
+                _dueObjectsInUse = false;
+            }
+        }
+    }
+
+    private void RunDueEvents()
+    {
+        bool anyDue = false;
+        for (int i = 0; i < _pendingEvents.Count; i++)
+        {
+            if (_pendingEvents[i].DueMs <= _clockMs)
+            {
+                anyDue = true;
+                break;
+            }
+        }
+
+        if (!anyDue)
+        {
+            return;
+        }
+
+        bool owned = !_dueEventsInUse;
+        List<(long DueMs, byte Event1, byte Event2)> due = owned ? _dueEventsScratch : [];
+        _dueEventsInUse |= owned;
+        try
+        {
+            foreach ((long dueMs, byte e1, byte e2) in _pendingEvents)
+            {
+                if (dueMs <= _clockMs)
+                {
+                    due.Add((dueMs, e1, e2));
+                }
+            }
+
+            for (int i = 0; i < due.Count; i++)
+            {
+                (long dueMs, byte e1, byte e2) = due[i];
+                _pendingEvents.Remove((dueMs, e1, e2));
+                RefreshObjects(e1, e2);
+            }
+        }
+        finally
+        {
+            due.Clear();
+            if (owned)
+            {
+                _dueEventsInUse = false;
+            }
+        }
     }
 
     /// <summary>
@@ -195,11 +292,28 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             return;
         }
 
-        foreach (Creature guide in _creatures.Creatures.ToArray())
+        // A snapshot (a cast can change the creature set) in a reusable scratch list instead of a per-tick ToArray.
+        bool owned = !_guidesInUse;
+        List<Creature> guides = owned ? _guideScratch : [];
+        _guidesInUse |= owned;
+        try
         {
-            if ((guide.NpcFlags & (uint)NpcFlags.SpiritGuide) != 0 && guide.IsInWorld && guide.IsAlive && !spells.IsChanneling(guide))
+            guides.AddRange(_creatures.Creatures);
+            for (int i = 0; i < guides.Count; i++)
             {
-                spells.CastSpell(guide, BattlegroundConstants.SpellSpiritHealChannel, SpellCastTargets.ForSelf(), triggered: false);
+                Creature guide = guides[i];
+                if ((guide.NpcFlags & (uint)NpcFlags.SpiritGuide) != 0 && guide.IsInWorld && guide.IsAlive && !spells.IsChanneling(guide))
+                {
+                    spells.CastSpell(guide, BattlegroundConstants.SpellSpiritHealChannel, SpellCastTargets.ForSelf(), triggered: false);
+                }
+            }
+        }
+        finally
+        {
+            guides.Clear();
+            if (owned)
+            {
+                _guidesInUse = false;
             }
         }
     }
@@ -401,8 +515,60 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             return;
         }
 
-        foreach (GameObject go in objects.GameObjects.ToArray())
+        // A snapshot (a trap cast can spawn/despawn objects) in a reusable scratch list instead of a per-tick ToArray.
+        bool owned = !_trapsInUse;
+        List<GameObject> snapshot = owned ? _trapScratch : [];
+        _trapsInUse |= owned;
+        try
         {
+            snapshot.AddRange(objects.GameObjects);
+            UpdateBuffTraps(objects, map, snapshot);
+        }
+        finally
+        {
+            snapshot.Clear();
+            if (owned)
+            {
+                _trapsInUse = false;
+            }
+        }
+    }
+
+    /// <summary>The first living player in reach of the trap, in map enumeration order, found without allocating (players are re-read per trap, as a cast can change them).</summary>
+    private Player? FindTrapTarget(Map map, GameObject go)
+    {
+        bool owned = !_trapPlayersInUse;
+        List<Player> players = owned ? _trapPlayerScratch : [];
+        _trapPlayersInUse |= owned;
+        try
+        {
+            players.AddRange(map.Players);
+            for (int i = 0; i < players.Count; i++)
+            {
+                Player p = players[i];
+                if (p.IsAlive && Within(go, p, BattlegroundConstants.BattlegroundTrapCooldownSeconds))
+                {
+                    return p;
+                }
+            }
+
+            return null;
+        }
+        finally
+        {
+            players.Clear();
+            if (owned)
+            {
+                _trapPlayersInUse = false;
+            }
+        }
+    }
+
+    private void UpdateBuffTraps(GameObjectMapSystem objects, Map map, List<GameObject> snapshot)
+    {
+        for (int n = 0; n < snapshot.Count; n++)
+        {
+            GameObject go = snapshot[n];
             if (go.Type != GameObjectType.Trap || !go.IsSpawned || go.Template.GetData(2) != 0
                 || go.Template.GetData(5) != BattlegroundConstants.BattlegroundTrapCooldownSeconds)
             {
@@ -414,7 +580,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
                 continue;
             }
 
-            Player? target = map.Players.FirstOrDefault(p => p.IsAlive && Within(go, p, BattlegroundConstants.BattlegroundTrapCooldownSeconds));
+            Player? target = FindTrapTarget(map, go);
             if (target is null)
             {
                 continue;
@@ -435,13 +601,18 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
                 continue;
             }
 
-            int index = _objects.FirstOrDefault(o => o.Value == go.Guid, new KeyValuePair<int, ObjectGuid>(-1, default)).Key;
+            int index = IndexOfObject(go.Guid);
             if (!Battleground.HandleTriggerBuff(index, go.Entry))
             {
                 objects.Despawn(go);       // a static database buff respawns on its own timer (GO_JUST_DEACTIVATED)
             }
         }
     }
+
+    // Kept out of UpdateBuffTraps on purpose: a lambda capturing the loop variable makes the compiler allocate its closure at the top of
+    // every iteration, i.e. once per game object per tick, even for the objects that are not traps.
+    private int IndexOfObject(ObjectGuid guid)
+        => _objects.FirstOrDefault(o => o.Value == guid, new KeyValuePair<int, ObjectGuid>(-1, default)).Key;
 
     private static bool Within(WorldObject a, WorldObject b, float range)
     {

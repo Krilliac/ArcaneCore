@@ -236,7 +236,10 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
     private readonly Dictionary<(BattlegroundType Type, int Bracket), SortedSet<uint>> _clientIds = [];
     private readonly Dictionary<ObjectGuid, BattlegroundPlayerState> _states = [];
     private readonly List<(BattlegroundQueueType Queue, BattlegroundType Type, int Bracket)> _scheduled = [];
-    private readonly List<InviteEvent> _events = [];
+    // Min-heap on (DueMs, Sequence): the next due event is the smallest key, so no per-tick scan or sort.
+    private readonly PriorityQueue<InviteEvent, (uint DueMs, long Sequence)> _events = new();
+    private readonly List<Battleground> _runningScratch = [];
+    private bool _runningScratchInUse;
     private readonly BattlegroundFactory _factory;
     private readonly BattlegroundPorts _basePorts;
     private long _eventSequence;
@@ -726,19 +729,17 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
     }
 
     private void AddEvent(uint dueMs, bool remove, ObjectGuid player, uint instanceId, BattlegroundType type, uint removeTimeMs)
-        => _events.Add(new InviteEvent(_eventSequence++, dueMs, remove, player, instanceId, type, removeTimeMs));
+    {
+        InviteEvent e = new(_eventSequence++, dueMs, remove, player, instanceId, type, removeTimeMs);
+        _events.Enqueue(e, (e.DueMs, e.Sequence));
+    }
 
     private void RunInviteEvents()
     {
-        while (true)
+        // Re-peeks every iteration, so events added by a handler that are already due still run in (DueMs, Sequence) order.
+        while (_events.TryPeek(out InviteEvent? due, out (uint DueMs, long Sequence) key) && key.DueMs <= NowMs)
         {
-            InviteEvent? due = _events.Where(e => e.DueMs <= NowMs).OrderBy(e => e.DueMs).ThenBy(e => e.Sequence).FirstOrDefault();
-            if (due is null)
-            {
-                return;
-            }
-
-            _events.Remove(due);
+            _events.Dequeue();
             if (due.Remove)
             {
                 RunRemoveEvent(due);
@@ -1184,11 +1185,35 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
         RunInviteEvents();
 
-        foreach (Battleground bg in RunningBattlegrounds.ToArray())
+        // A snapshot (DeleteBattleground edits _running) in a reusable scratch list instead of a per-tick SelectMany().ToArray().
+        bool owned = !_runningScratchInUse;
+        List<Battleground> running = owned ? _runningScratch : [];
+        _runningScratchInUse |= owned;
+        try
         {
-            if (!bg.Update(diffMs))
+            foreach (SortedDictionary<uint, Battleground> set in _running.Values)
             {
-                DeleteBattleground(bg);
+                foreach (Battleground bg in set.Values)
+                {
+                    running.Add(bg);
+                }
+            }
+
+            for (int i = 0; i < running.Count; i++)
+            {
+                Battleground bg = running[i];
+                if (!bg.Update(diffMs))
+                {
+                    DeleteBattleground(bg);
+                }
+            }
+        }
+        finally
+        {
+            running.Clear();
+            if (owned)
+            {
+                _runningScratchInUse = false;
             }
         }
 
