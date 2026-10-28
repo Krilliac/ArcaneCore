@@ -9,8 +9,9 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>An item of the bot's general bags as the planner sees it (the world side fills it from the live <c>Item</c>).</summary>
 /// <param name="Transferable">The inventory lets the item leave the bot (<c>CanTransferOut</c>: not bound, conjured, timed).</param>
-/// <param name="Reserved">The bot keeps it: a consumable it uses, or an item an open quest asks for.</param>
-internal sealed record PlayerbotBagItem(ObjectGuid Guid, ItemTemplate Template, uint Count, bool Transferable, bool Reserved);
+/// <param name="Reserved">The bot keeps it: an item an open quest asks for, a reagent it needs, or an entry it bought lately.</param>
+/// <param name="KeptConsumable">Informational: a consumable the bot uses (food, drink, potion). It does not change the surplus rule, which treats every consumable alike: a stack is listed only when the bag's other stacks of the entry already reach the keep count.</param>
+internal sealed record PlayerbotBagItem(ObjectGuid Guid, ItemTemplate Template, uint Count, bool Transferable, bool Reserved, bool KeptConsumable = false);
 
 /// <summary>What the bot asks for one item: buyout, start bid and the deposit it pays now.</summary>
 internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Deposit);
@@ -74,6 +75,43 @@ internal static class PlayerbotEconomyPlanner
 {
     /// <summary>The smallest budget (copper) worth a trip for an upgrade alone.</summary>
     internal const uint MinimumUpgradeBudget = 100;
+
+    /// <summary>
+    /// Whether an item at (<paramref name="bagSlot"/>, <paramref name="slot"/>) is carried: in the backpack or in an equipped bag
+    /// (slots 19..22). Equipped gear, the bags themselves, the bank and the contents of bank bags are not.
+    /// </summary>
+    internal static bool IsCarried(byte bagSlot, byte slot)
+        => bagSlot == InventorySlots.Bag0 ? slot >= InventorySlots.ItemStart && slot < InventorySlots.ItemEnd
+            : bagSlot >= InventorySlots.BagStart && bagSlot < InventorySlots.BagEnd;
+
+    /// <summary>The listing slots a bot short of money gets on top of <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/>.</summary>
+    internal const int MoneyGoalExtraListings = 3;
+
+    /// <summary>Whether the bot is short of money: its budget reserves more than it has, or its money is below <paramref name="copperPerLevel"/> times its level.</summary>
+    internal static bool IsShortOfMoney(uint money, uint reserved, uint level, int copperPerLevel)
+        => reserved > money || (copperPerLevel > 0 && money < (ulong)copperPerLevel * level);
+
+    /// <summary>The most listings one bot may have at once: <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/> (plus the money goal's extra slots), at most the ceiling.</summary>
+    internal static int ListingCap(PlayerbotEconomyOptions options, bool moneyGoal)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.MaxListingsPerBot <= 0) return 0;
+        int extra = moneyGoal && options.MoneyGoal ? MoneyGoalExtraListings : 0;
+        return (int)Math.Min((long)PlayerbotEconomyOptions.MaxListingsCeiling, (long)options.MaxListingsPerBot + extra);
+    }
+
+    /// <summary>Whether a stack of a consumable is surplus: <paramref name="othersOfEntry"/> (the same entry in the bag's other stacks) already reaches <paramref name="keep"/>.</summary>
+    /// <remarks>
+    /// Only stacks the bot may part with qualify: transferable, not reserved, not empty, above poor quality, with a vendor price, no quest
+    /// starter. A consumable the bot uses (<see cref="PlayerbotBagItem.KeptConsumable"/>) is surplus beyond the keep count like any other.
+    /// </remarks>
+    internal static bool IsSurplusConsumable(PlayerbotBagItem item, uint othersOfEntry, int keep)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ItemTemplate template = item.Template;
+        return item.Transferable && !item.Reserved && item.Count > 0 && (ItemClass)template.Class == ItemClass.Consumable && template.Quality >= 1
+            && template.SellPrice > 0 && template.StartQuest == 0 && othersOfEntry >= keep;
+    }
 
     /// <summary>The most a reagent auction may ask per unit: twice the item's reference price; 0 (never bought) when the reference is 0.</summary>
     internal static uint ReagentUnitCap(ItemTemplate template)
@@ -161,30 +199,61 @@ internal static class PlayerbotEconomyPlanner
 
     /// <summary>The items to list, the most valuable stack first (reference price times count), the lowest GUID first among equals; given-up entries left out.</summary>
     internal static IReadOnlyList<PlayerbotBagItem> Listables(IEnumerable<PlayerbotBagItem> bag, Func<ItemTemplate, float?> upgradeGain,
-        PlayerbotRelistMemory? memory = null)
+        PlayerbotRelistMemory? memory = null, int consumableKeep = 0)
     {
         ArgumentNullException.ThrowIfNull(bag);
         ArgumentNullException.ThrowIfNull(upgradeGain);
-        return [.. bag
-            .Where(item => memory?.IsGivenUp(item.Template.Entry) != true && IsListable(item, upgradeGain(item.Template)))
+        List<PlayerbotBagItem> items = [.. bag];
+        HashSet<ulong>? surplus = consumableKeep > 0 ? SurplusConsumables(items, consumableKeep) : null;
+        return [.. items
+            .Where(item => memory?.IsGivenUp(item.Template.Entry) != true
+                && (IsListable(item, upgradeGain(item.Template)) || surplus?.Contains(item.Guid.Value) == true))
             .OrderByDescending(item => (ulong)PlayerbotAuctionPricing.ReferencePerUnit(item.Template) * item.Count)
             .ThenBy(item => item.Guid.Value)];
     }
 
-    /// <summary>The visit's one roll: lists at all this visit (0 never, 100 always).</summary>
-    internal static bool RollsToList(PlayerbotEconomyOptions options, Random random)
+    /// <summary>
+    /// The consumable stacks to list as surplus: per entry the stacks that qualify smallest first, each only while the bag's other stacks of
+    /// the entry (less what was already taken) still reach <paramref name="keep"/>, so at least <paramref name="keep"/> always stay.
+    /// </summary>
+    private static HashSet<ulong> SurplusConsumables(List<PlayerbotBagItem> items, int keep)
+    {
+        var surplus = new HashSet<ulong>();
+        var totals = new Dictionary<uint, long>();
+        foreach (PlayerbotBagItem item in items) totals[item.Template.Entry] = totals.GetValueOrDefault(item.Template.Entry) + item.Count;
+        foreach (IGrouping<uint, PlayerbotBagItem> stacks in items.Where(item => (ItemClass)item.Template.Class == ItemClass.Consumable)
+                     .GroupBy(item => item.Template.Entry))
+        {
+            long held = totals[stacks.Key];
+            foreach (PlayerbotBagItem stack in stacks.OrderBy(item => item.Count).ThenBy(item => item.Guid.Value))
+            {
+                if (!IsSurplusConsumable(stack, (uint)Math.Clamp(held - stack.Count, 0L, uint.MaxValue), keep)) continue;
+                surplus.Add(stack.Guid.Value);
+                held -= stack.Count;
+            }
+        }
+
+        return surplus;
+    }
+
+    /// <summary>
+    /// The visit's one roll: lists at all this visit (0 never, 100 always). A bot on the money goal lists without drawing, whenever listing is
+    /// allowed at all.
+    /// </summary>
+    internal static bool RollsToList(PlayerbotEconomyOptions options, Random random, bool moneyGoal = false)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(random);
         if (options.ListChancePerVisit <= 0 || options.MaxListingsPerBot <= 0) return false;
+        if (moneyGoal && options.MoneyGoal) return true;
         return options.ListChancePerVisit >= 100 || random.Next(100) < options.ListChancePerVisit;
     }
 
     /// <summary>The listings the bot may still add given what the house counts as its own (the owner list's total).</summary>
-    internal static int FreeListingSlots(PlayerbotEconomyOptions options, uint ownerTotal)
+    internal static int FreeListingSlots(PlayerbotEconomyOptions options, uint ownerTotal, bool moneyGoal = false)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return (int)Math.Max(0L, options.MaxListingsPerBot - (long)ownerTotal);
+        return (int)Math.Max(0L, ListingCap(options, moneyGoal) - (long)ownerTotal);
     }
 
     /// <summary>The listings one visit may add: the free slots when the visit's roll succeeds, else none.</summary>

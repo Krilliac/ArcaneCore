@@ -13919,6 +13919,18 @@ World.Playerbots.Economy.BuyReagents = true
 World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 
 #
+#    World.Playerbots.Economy.ConsumableKeepCount
+#        Description: Per consumable entry, the count (1..200) a bot always keeps before a stack of
+#                     it is surplus.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ConsumableKeepCount = 20
+
+#
 #    World.Playerbots.Economy.Enabled
 #        Description: Let bots list, buy and collect at the auction house (on by default). Off: no
 #                     visit starts; a running one is dropped.
@@ -13929,6 +13941,34 @@ World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.Enabled = true
+
+#
+#    World.Playerbots.Economy.HouseBuyoutsPerHour
+#        Description: The most auctions all bots together buy out at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a
+#                     buyout counts when the house confirms it, so bots with buyouts in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseBuyoutsPerHour = 200
+
+#
+#    World.Playerbots.Economy.HouseListingsPerHour
+#        Description: The most auctions all bots together list at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a
+#                     listing counts when the house confirms it, so bots with listings in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 400
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseListingsPerHour = 400
 
 #
 #    World.Playerbots.Economy.ListChancePerVisit
@@ -13944,6 +13984,30 @@ World.Playerbots.Economy.Enabled = true
 World.Playerbots.Economy.ListChancePerVisit = 50
 
 #
+#    World.Playerbots.Economy.ListSurplusConsumables
+#        Description: List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls)
+#                     beyond the keep count (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListSurplusConsumables = true
+
+#
+#    World.Playerbots.Economy.MaxBuyoutsPerHour
+#        Description: The most auctions one bot buys out, reagents and upgrades together, in any 60
+#                     minutes of world time (0..100); 0 buys nothing.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxBuyoutsPerHour = 6
+
+#
 #    World.Playerbots.Economy.MaxListingsPerBot
 #        Description: The most auctions one bot has listed at once (0..50), counted from the auction
 #                     house's own owner list; 0 lists nothing.
@@ -13954,6 +14018,44 @@ World.Playerbots.Economy.ListChancePerVisit = 50
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MaxListingsPerBot = 5
+
+#
+#    World.Playerbots.Economy.MaxListingsPerHour
+#        Description: The most auctions one bot lists in any 60 minutes of world time (0..100); 0
+#                     lists nothing.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxListingsPerHour = 10
+
+#
+#    World.Playerbots.Economy.MoneyGoal
+#        Description: A bot short of money lists every visit and gets 3 more listing slots (on by
+#                     default). Short means its budget reserves more than it has, or its money is
+#                     below MoneyGoalCopperPerLevel times its level. It only raises listing, and
+#                     never when ListChancePerVisit or MaxListingsPerBot is 0.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoal = true
+
+#
+#    World.Playerbots.Economy.MoneyGoalCopperPerLevel
+#        Description: The money floor per character level of the money goal, in copper (0..100000);
+#                     0: only what the budget reserves counts.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoalCopperPerLevel = 500
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes

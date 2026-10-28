@@ -18,10 +18,11 @@ must obey is the server's, enforced by the ordinary handlers.
 | File (`src/ArcaneCore.Playerbots/Economy/`) | What it does |
 |---|---|
 | `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
-| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`, `BuyReagents`. |
+| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`, `BuyReagents`, `MoneyGoal`, `MoneyGoalCopperPerLevel`, `MaxBuyoutsPerHour`, `MaxListingsPerHour`, `HouseBuyoutsPerHour`, `HouseListingsPerHour`, `ListSurplusConsumables`, `ConsumableKeepCount`. |
 | `PlayerbotBank.cs` (folder `Playerbots/`) | The bank errand while the bot stays at its capital home: deposit goods it does not need, buy a bank bag slot when the bank is nearly full. |
 | `PlayerbotEconomy.cs` | The world side, one per bot (owned by `PlayerbotBrain`): the visit as a state machine, one step per think. |
 | `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the reagent to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`, `PlayerbotBoughtMemory`. |
+| `PlayerbotHourlyWindow.cs`, `PlayerbotAuctionPace.cs` | The hourly limits: a bounded queue of world-time stamps (one per bot for buyouts and one for listings), and per auction house the same two windows for all bots together (one `PlayerbotAuctionPace` per world, found through its `EconomyFeature`). |
 | `PlayerbotAuctionPricing.cs` | The pure prices: reference price, vendor floor, undercut, start bid, deposit, whether a listing pays. |
 | `PlayerbotEconomyWire.cs` | The client payloads (list, owner list, sell, bid, mail commands) and the decoders of the replies (`EconomyPackets` layouts); a short reply throws `FormatException` only. |
 | `PlayerbotEconomyDestinations.cs` | Finding the faction auctioneer and the mailbox: live sightings first, then static spawn hints; the walker that goes there. |
@@ -44,10 +45,12 @@ than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and
    there with the ordinary navigation; with none in sight it walks to the nearest auctioneer spawn within 400 yards that its team may
    approach and that no live sighting covers yet. None found: the auction part is skipped and the mailbox may still be here.
 2. **Owner list** (`CMSG_AUCTION_LIST_OWNER_ITEMS`). The total the house counts as the bot's own listings decides the free slots:
-   `MaxListingsPerBot - total`. A list the bot cannot read lists nothing this visit (fail closed).
+   `MaxListingsPerBot - total` (plus 3 slots on the money goal, below). A list the bot cannot read lists nothing this visit (fail closed).
 3. **Listing.** Items in the order of reference price times count, most valuable first. For each one the bot asks the house for every
    listing of that name (`CMSG_AUCTION_LIST_ITEMS`), plans a price, and sells (`CMSG_AUCTION_SELL_ITEM`, 8 hours) only if the plan pays
    and its deposit fits the budget left. It waits for the result (at most 30 s; the deadline drops the visit) before the next request.
+   Before each sell the bot's own hourly listing window and the house's are checked (see "Hourly limits"); when either is full the listing part
+   ends and the visit goes on to the next phase, with no retry.
 4. **Reagents** (only with `BuyReagents` on, a budget of at least 100 copper and a free bag slot). The reagents of the recipes the bot wants to craft (the same
    spellbook read as the vendor supply needs, `PlayerbotVendorSupplyNeeds.Reagents`: the largest count one craft uses) that it carries
    fewer of than one craft uses are its shortfalls, except an entry it bought and has not yet collected (see below). For each, in item id
@@ -66,14 +69,45 @@ than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and
 
 Listing deposits and the buyout both count against the visit budget: `BuyUpgradeBudgetFraction` of the money held when the visit began.
 
+### The money goal
+
+A bot is short of money when its budget reserves more than it has (`PlayerbotBudget.Reserved` above its money), or its money is below
+`MoneyGoalCopperPerLevel` copper times its level (0 turns the floor off; only the reserve counts). With `MoneyGoal` on, a short bot lists on
+every visit that has something to list (the visit's roll is skipped, so it draws nothing from the random source) and gets 3 listing slots
+more than `MaxListingsPerBot`, never above the ceiling of 50. It only raises listing: with `ListChancePerVisit` or `MaxListingsPerBot` at 0
+nothing changes. The check is made when a visit is considered; `.playerbot inspect` shows the result as `moneygoal=on|off`.
+
+### Hourly limits
+
+Four limits pace the bots in any 60 minutes of world time (a window is a bounded queue of time stamps; a stamp frees exactly 3,600,000 ms
+later, and the comparison survives the 32-bit clock wrapping):
+
+* `MaxBuyoutsPerHour` (6): the auctions one bot buys out, reagents and upgrades together. A bot whose window is full starts no visit for
+  buying and does not buy in one that runs.
+* `MaxListingsPerHour` (10): the auctions one bot lists.
+* `HouseBuyoutsPerHour` (200) and `HouseListingsPerHour` (400): the same for all bots together at one auction house, counted per house
+  id by `PlayerbotAuctionPace` (one per world, world thread only). A house limit is soft: it is checked when a bot sends and noted when
+  the house confirms, so bots with an action in flight together can overshoot it by their number (in-flight actions are not counted).
+
+The limits are read live and checked before every sell and every buyout; a count is noted only when the house confirms the listing or the
+buyout. 0 allows nothing. A capped listing or buying part ends gracefully and the visit goes on (mailbox).
+
 ### What the bot lists and buys
 
 Listed: an unbound or bind-on-equip green, blue or epic weapon or armor that is no upgrade for the bot (the gain of
-`PlayerbotGearScoreSeam` is not above `MinimumGain`), and any Trade Goods item above poor quality. Never listed: poor and white items
+`PlayerbotGearScoreSeam` is not above `MinimumGain`), any Trade Goods item above poor quality, and, with `ListSurplusConsumables` on, surplus
+consumables (below). Never listed: poor and white items
 (the vendor trash goals sell those), items that cannot leave the bot (`CanTransferOut`: bound, conjured, timed), food, drink and potions
 the bot uses and items an open quest asks for, quest items and reagents, bags and ammunition, quest starters, profession tools, and
-items with no vendor price. An entry whose listings expired twice is given up (`PlayerbotRelistMemory`, 64 entries, in memory; a sale
+items with no vendor price (food, drink and potions are listed only as surplus). An entry whose listings expired twice is given up (`PlayerbotRelistMemory`, 64 entries, in memory; a sale
 forgets the entry).
+
+Surplus consumables: a stack of a Consumable class item (food, drink, potions, bandages, elixirs, scrolls) of at least common quality, with a
+vendor price, no quest start, that can leave the bot and is not reserved (an open quest asks for it, a wanted recipe uses it as a reagent,
+or the bot bought it lately). A stack is surplus when the bag's other stacks of the same entry already hold `ConsumableKeepCount` or more
+(whether or not the bot uses that consumable). When several stacks of an entry qualify, the smallest go first and what was taken is
+subtracted, so at least `ConsumableKeepCount` of every entry always stay; a single stack is never split. The bot's own use of a consumable
+(`PlayerbotConsumables`) no longer reserves it; it only counts toward the keep. With `ListSurplusConsumables` off the rule is off.
 
 Bought: only an item that is an upgrade for one of the bot's own slots, by the same score the equipment goal wears by, so it is worn
 once collected. The bot never buys to resell.
@@ -196,7 +230,10 @@ A spend of one kind may cost the bot's money less the lines of the kinds before 
 training (class outranks riding) and class training's save-ahead keeps lower priorities from spending the money its next spells will need.
 Selling greys and junk, and listing loot at the auction house, are never limited by a reserve. `.playerbot inspect` shows `BOTINSPECT budget=...`: money, the total reserved, the
 part saved and free, the repair and class costs, the riding step (`none`, `distant`, `saving`, `train`, `buymount`, `done`) with its tier,
-training and mount cost, vendor and trainer entries, and the next step.
+training and mount cost, vendor and trainer entries, and the next step. The next line, `BOTINSPECT economy=...`, is `PlayerbotEconomy.Report`:
+one line such as `phase=Idle next=812s visits=3 listed=4 bought=1 reagents=2 collected=5 copper=1234 moneygoal=on hour=buyouts:1/6,listings:2/10`
+(`next` is the seconds to the next visit, `due` when it is due, `unset` before the first is scheduled, `off` when the economy is off; `hour` is the
+bot's buyouts and listings in the last hour against its limits).
 
 ## Mounts
 
@@ -226,6 +263,14 @@ NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`
 | `BankDeposit` | `true` | Deposit goods the bot does not need at a banker while it stays at its capital home. |
 | `BuyBankSlots` | `true` | Buy the next bank bag slot when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold. |
 | `BuyReagents` | `true` | Buy the reagents of wanted recipes the bot carries fewer of than one craft uses: at most 2 auctions a visit, at most twice the reference price per unit, within the visit budget. Off: none is searched or bought. |
+| `MoneyGoal` | `true` | A bot short of money lists every visit and gets 3 more listing slots; never when `ListChancePerVisit` or `MaxListingsPerBot` is 0. |
+| `MoneyGoalCopperPerLevel` | `500` | The money floor per character level of the money goal, in copper (0..100000); 0: only the budget's reserve counts. |
+| `MaxBuyoutsPerHour` | `6` | The most auctions one bot buys out (reagents and upgrades together) in any 60 minutes of world time (0..100); 0 buys nothing. |
+| `MaxListingsPerHour` | `10` | The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing. |
+| `HouseBuyoutsPerHour` | `200` | The most auctions all bots together buy out at one auction house in any 60 minutes (0..100000); 0 lets no bot buy there. A soft limit: bots with buyouts in flight together can overshoot it by their number. |
+| `HouseListingsPerHour` | `400` | The most auctions all bots together list at one auction house in any 60 minutes (0..100000); 0 lets no bot list there. A soft limit: bots with listings in flight together can overshoot it by their number. |
+| `ListSurplusConsumables` | `true` | List stacks of consumables beyond the keep count. |
+| `ConsumableKeepCount` | `20` | Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus. |
 
 `World:Playerbots:Budget` (live):
 
@@ -252,9 +297,9 @@ every key is `docs/reference/configuration.md`.
 ## Tests
 
 `tests/ArcaneCore.World.Tests/Playerbots/Economy/`: `PlayerbotAuctionPricingTests` (reference price, undercut, floor, deposit, whether a
-listing pays), `PlayerbotEconomyPlannerTests` (what is listable, the listing slots and roll, the visit budget, the price plan, the
+listing pays), `PlayerbotEconomyPlannerTests` (what is listable, the listing slots and roll, the money goal's floor, extra slots and draw-free roll, surplus consumables across stacks, the hourly window including the clock wrap, the visit budget, the price plan, the
 upgrade choice and its tie-breaks, the reagent shortfalls and choice with its per-unit cap, the bought memory, the subject parser, the relist memory, the options' bounds), `PlayerbotEconomyWireTests` (every
 decoder against the bytes `EconomyPackets` writes, and `FormatException` on malformed replies), and `PlayerbotEconomyWorldTests` (bots in a
 real scenario world: a visit that lists up to the free slots, a sale and an expiry collected from the mailbox, COD and player letters left
 alone, a full bag leaving an item letter in the box, and two bots racing for one auction, once a seller-0 listing, with the item existing
-once and the AH bot's ledger audit clean; a visit that buys the in-cap reagent pair, passes over the over-cap pair and the single, and collects it in the same visit; none bought with `BuyReagents` off; a needed reagent never listed).
+once and the AH bot's ledger audit clean; a visit that buys the in-cap reagent pair, passes over the over-cap pair and the single, and collects it in the same visit; none bought with `BuyReagents` off; a needed reagent never listed; a saving bot listing beyond its usual cap on the money goal, and not with it off; the per-bot and per-house hourly limits for listing and buying, each freeing an hour of world time later; a surplus consumable stack listed while the keep count stays; the economy report line).
