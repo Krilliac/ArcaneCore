@@ -60,7 +60,7 @@ public static partial class ContentImporterCli
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory; Map.dbc and
                                 AreaTable.dbc (and WMOAreaTable.dbc) there also fill map_template, area_template and
                                 wmo_area_template when those are empty (as import-map-dbc would); AreaTrigger.dbc,
-                                TaxiNodes.dbc and TaxiPath.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path
+                                TaxiNodes.dbc, TaxiPath.dbc and ChrRaces.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path, race_taxi_start
           import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
@@ -85,7 +85,7 @@ public static partial class ContentImporterCli
                                 gossip_texts) in creature_ai_texts by entry and the script_waypoint/waypoint_path copies in
                                 creature_movement_template (their path namespaces only), the ships' gameobject_template rows (type 15;
                                 other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
-                                taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
+                                taxi_nodes (TaxiNodes.dbc), taxi_path (TaxiPath.dbc) and race_taxi_start (ChrRaces.dbc); WorldSafeLocs.dbc there adds the safe
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and
                                 AreaTable.dbc there (both or neither) replace map_template (every map, the dungeon columns
                                 from the dump's instance_template) and area_template (every area).
@@ -834,6 +834,7 @@ public static partial class ContentImporterCli
         IReadOnlyList<AreaTriggerTemplateRow>? triggers = ReadOptionalDbc(directory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, dbcWarnings);
         IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
         IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
+        IReadOnlyList<RaceTaxiStart>? raceTaxiStarts = ReadOptionalDbc(directory, "ChrRaces.dbc", "race_taxi_start", NpcServiceDbcReaders.LoadRaceTaxiStarts, dbcWarnings);
         var kept = new List<string>();
         var imported = new List<string>();
 
@@ -896,6 +897,19 @@ public static partial class ContentImporterCli
                     {
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
                         imported.Add($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
+                    }
+                }
+
+                if (raceTaxiStarts is not null)
+                {
+                    if (await db.Set<RaceTaxiStart>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("race_taxi_start");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, raceTaxiStarts, token).ConfigureAwait(false);
+                        imported.Add($"Imported {raceTaxiStarts.Count} race starting flight masks (race_taxi_start) from ChrRaces.dbc.");
                     }
                 }
             }, ct).ConfigureAwait(false);
