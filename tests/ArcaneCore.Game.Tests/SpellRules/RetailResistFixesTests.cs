@@ -11,7 +11,7 @@ using static ArcaneCore.Game.Tests.ItemTestData;
 namespace ArcaneCore.Game.Tests.SpellRules;
 
 /// <summary>
-/// Retail resistance rules: a resistance aura cannot push a school below 0 (Patch 1.9.0), a warlock cannot resist its own
+/// Retail resistance rules (the numbers come from the vmangos formula, not from measured retail): a resistance aura cannot push a school below 0 (Patch 1.9.0), a warlock cannot resist its own
 /// Hellfire (Patch 1.9.0), the holy resistance field stays 0, and a creature is created with its template's magic resistances.
 /// </summary>
 public sealed class RetailResistFixesTests
@@ -248,5 +248,18 @@ public sealed class RetailResistFixesTests
 
         mob.SetInt32(fire, mob.GetInt32(fire) + 75); // the curse expires
         Assert.Equal(40, mob.GetInt32(fire));
+    }
+
+    [Fact]
+    public void ACursedCreature_ThatIsKilledAndRespawned_HasItsTemplateResistanceBack()
+    {
+        int fire = UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire;
+        Creature mob = SpawnCreature(t => t with { FireRes = 100 });
+        mob.SetInt32(fire, mob.GetInt32(fire) - 75); // cursed
+
+        mob.SetInt32(fire, mob.GetInt32(fire) + 75); // death removes the aura: its handler takes the delta back
+        mob.InitializeFields();                      // the respawn re-initialises the fields
+
+        Assert.Equal(100, mob.GetInt32(fire));
     }
 }

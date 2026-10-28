@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 
@@ -559,19 +560,43 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage * damageRate);
         SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
-        // The create resistance of every magic school (vmangos Creature::UpdateEntry, Creature.cpp:606-611); holy stays 0 in the field
-        // (CreatureTemplate.ResistanceOf), and a negative template value is a vulnerability.
-        // Applied as the change from the template last written, not as an overwrite: InitializeFields also runs on a live creature (UpdateEntry,
-        // a game event override) whose resistance auras have already moved the field, and those deltas must survive (and come off on expiry).
+        ApplyCreateResistances();
+    }
+
+    /// <summary>
+    /// A hunter's tamed pet keeps none of the beast's innate resistances (Patch 1.3.0: "creatures were keeping their innate resistances after
+    /// being tamed"; vmangos Pet.cpp:1345-1357 applies the template resistances only when the pet is not a HUNTER_PET). Set by the pet spawn.
+    /// </summary>
+    internal bool IgnoreTemplateResistances { get; set; }
+
+    /// <summary>
+    /// The create resistance of every magic school (vmangos Creature::UpdateEntry, Creature.cpp:606-611); holy stays 0 in the field
+    /// (CreatureTemplate.ResistanceOf), and a negative template value is a vulnerability. Applied as the change from the value last written,
+    /// not as an overwrite: this also runs on a live creature (UpdateEntry, a game event override) whose resistance auras have already moved the
+    /// field, and those deltas must survive (and come off on expiry). The percent-aura refresh then recomputes the schools that changed.
+    /// </summary>
+    internal void ApplyCreateResistances()
+    {
+        CreatureTemplate t = Template;
+        bool changed = false;
         for (int school = 1; school <= 6; school++)
         {
-            int desired = t.ResistanceOf(school);
+            int desired = IgnoreTemplateResistances ? 0 : t.ResistanceOf(school);
             int delta = desired - _createResistance[school];
             if (delta != 0)
             {
                 int field = UpdateFields.UnitFieldResistances + school;
                 SetInt32(field, GetInt32(field) + delta);
                 _createResistance[school] = desired;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            for (int school = 2; school <= 6; school++)
+            {
+                PercentStatAuras.RefreshResistance(this, school);
             }
         }
     }
