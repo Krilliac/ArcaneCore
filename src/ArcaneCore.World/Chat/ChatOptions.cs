@@ -98,15 +98,17 @@ public sealed class ChatOptions
 
     /// <summary>
     /// ArcaneCore hardening: the longest AFK or DND reply kept on the player (characters), which is sent to every whisperer; longer text is
-    /// cut to this length. 0 = no cap. The stock client's own limit is unverified, so the default (1024) sits well above its 255-character
-    /// chat edit box and cuts nothing it can send.
+    /// cut to this length at a safe boundary (never inside a link or a surrogate pair). 0 = no cap. The stock client's own limit is
+    /// UNVERIFIED (not captured from a real client); the 255-character chat edit box is a belief, not a measurement. The default (1024)
+    /// is chosen to sit well above it. This cap, not <see cref="MaxMessageLength"/>, applies to AFK and DND text.
     /// </summary>
     public int MaxAwayMessageLength { get; set; } = 1024;
 
     /// <summary>
     /// ArcaneCore hardening: the longest CMSG_MESSAGECHAT text (characters) accepted; a longer message is dropped before any gate or
-    /// broadcast. 0 = no cap. The stock client's limit is unverified; the default (1024) is four times its 255-character chat edit box, so
-    /// nothing the stock client sends is dropped.
+    /// broadcast. 0 = no cap. Not applied to AFK and DND text (<see cref="MaxAwayMessageLength"/> cuts that instead). The stock client's
+    /// limit is UNVERIFIED (not captured from a real client); the default (1024) assumes an edit box of about 255 characters, which is
+    /// unconfirmed, and leaves a wide margin above it.
     /// </summary>
     public int MaxMessageLength { get; set; } = 1024;
 }

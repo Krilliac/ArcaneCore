@@ -24,8 +24,8 @@ public sealed class SocialOptions
 
     /// <summary>
     /// ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is
-    /// created. 0 = no cap. vmangos has none and the stock client's limit is unverified; the default (255) is the client's chat edit box
-    /// length, so no name typed into it is refused.
+    /// created. 0 = no cap. vmangos has none and the stock client's limit is UNVERIFIED (not captured from a real client). The default
+    /// (255) assumes a chat edit box of that length, which is unconfirmed; if the client allows longer names, raise it or set 0.
     /// </summary>
     public int MaxChannelNameLength { get; set; } = 255;
 

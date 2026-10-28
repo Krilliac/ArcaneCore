@@ -20,8 +20,10 @@ public static class LogSafe
     public static string Escape(string? value) => Escape(value, MaxLength);
 
     /// <summary>As <see cref="Escape(string?)"/>, truncated to <paramref name="maxLength"/> characters instead.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxLength"/> is negative (checked even for a null or empty value).</exception>
     public static string Escape(string? value, int maxLength)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
         if (string.IsNullOrEmpty(value))
         {
             return string.Empty;

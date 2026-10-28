@@ -12,7 +12,8 @@ namespace ArcaneCore.World.Handlers;
 /// MiscHandler.cpp HandleUpdateAccountData / HandleRequestAccountData, CharacterHandler.cpp
 /// HandleTutorial*). Both belong to the account, so they run on the session task, which owns
 /// <see cref="WorldSession.Settings"/>, and write through to the characters database: an unchanged value is not written, and writes
-/// go through the per-account <see cref="AccountDataWriteThrottle"/>. The warnings a client can trigger are throttled per session.
+/// go through the world-lifetime, per-account throttled <see cref="AccountDataFeature"/>, which flushes held values when the session ends
+/// and when the world stops. The warnings a client can trigger are throttled per session.
 /// </summary>
 public sealed class AccountDataHandlers : IOpcodeHandlerGroup
 {
@@ -72,9 +73,23 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
 
         var entry = new AccountDataEntry((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(), data);
         session.Settings.Data[type] = data.Length == 0 ? null : entry;
-        IAccountDataStore store = session.Services.GetRequiredService<IAccountDataStore>();
-        await AccountDataWriteThrottle.For(store, session.AccountId)
-            .SaveDataAsync(store, session.AccountId, (int)type, entry, session.World.Options.AccountDataWriteIntervalMs, session.Logger).ConfigureAwait(false);
+        await SaveDataAsync(session, (int)type, entry).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Through the world-lifetime <see cref="AccountDataFeature"/> (its own scope per write, throttled, drained at session end and world
+    /// stop). A host without the feature or a store (a bare test host) writes inline to the session's own store on the session task,
+    /// which owns that scope, so the session's context is never used from another thread.
+    /// </summary>
+    private static Task SaveDataAsync(WorldSession session, int type, AccountDataEntry entry)
+    {
+        if (session.Services.GetService<AccountDataFeature>() is { IsAttached: true } feature)
+        {
+            feature.SaveData(session.AccountId, type, entry, session.World.Options.AccountDataWriteIntervalMs);
+            return Task.CompletedTask;
+        }
+
+        return session.Services.GetRequiredService<IAccountDataStore>().SaveDataAsync(session.AccountId, type, entry);
     }
 
     /// <summary>CMSG_REQUEST_ACCOUNT_DATA: u32 type → SMSG_UPDATE_ACCOUNT_DATA with the stored blob.</summary>
@@ -134,8 +149,13 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
 
     private static Task SaveTutorialsAsync(WorldSession session)
     {
-        IAccountDataStore store = session.Services.GetRequiredService<IAccountDataStore>();
-        return AccountDataWriteThrottle.For(store, session.AccountId)
-            .SaveTutorialsAsync(store, session.AccountId, [.. session.Settings.Tutorials], session.World.Options.AccountDataWriteIntervalMs, session.Logger);
+        uint[] tutorials = [.. session.Settings.Tutorials];
+        if (session.Services.GetService<AccountDataFeature>() is { IsAttached: true } feature)
+        {
+            feature.SaveTutorials(session.AccountId, tutorials, session.World.Options.AccountDataWriteIntervalMs);
+            return Task.CompletedTask;
+        }
+
+        return session.Services.GetRequiredService<IAccountDataStore>().SaveTutorialsAsync(session.AccountId, tutorials);
     }
 }

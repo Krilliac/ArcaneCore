@@ -12214,7 +12214,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "ArcaneCore hardening: the longest AFK or DND reply kept on the player (characters), which is sent to every whisperer; longer text is cut to this length. 0 = no cap. The stock client's own limit is unverified, so the default (1024) sits well above its 255-character chat edit box and cuts nothing it can send.",
+      "meaning": "ArcaneCore hardening: the longest AFK or DND reply kept on the player (characters), which is sent to every whisperer; longer text is cut to this length at a safe boundary (never inside a link or a surrogate pair). 0 = no cap. The stock client's own limit is UNVERIFIED (not captured from a real client); the 255-character chat edit box is a belief, not a measurement. The default (1024) is chosen to sit well above it. This cap, not `MaxMessageLength`, applies to AFK and DND text.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldchat",
       "isCollection": false
@@ -12230,7 +12230,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "ArcaneCore hardening: the longest CMSG_MESSAGECHAT text (characters) accepted; a longer message is dropped before any gate or broadcast. 0 = no cap. The stock client's limit is unverified; the default (1024) is four times its 255-character chat edit box, so nothing the stock client sends is dropped.",
+      "meaning": "ArcaneCore hardening: the longest CMSG_MESSAGECHAT text (characters) accepted; a longer message is dropped before any gate or broadcast. 0 = no cap. Not applied to AFK and DND text (`MaxAwayMessageLength` cuts that instead). The stock client's limit is UNVERIFIED (not captured from a real client); the default (1024) assumes an edit box of about 255 characters, which is unconfirmed, and leaves a wide margin above it.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldchat",
       "isCollection": false
@@ -24038,7 +24038,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos has none and the stock client's limit is unverified; the default (255) is the client's chat edit box length, so no name typed into it is refused.",
+      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos has none and the stock client's limit is UNVERIFIED (not captured from a real client). The default (255) assumes a chat edit box of that length, which is unconfirmed; if the client allows longer names, raise it or set 0.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false

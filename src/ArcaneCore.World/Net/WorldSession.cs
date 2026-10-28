@@ -294,6 +294,10 @@ public sealed partial class WorldSession : IPlayerSession
         {
             Close();
             await DrainWriterAsync(writer).ConfigureAwait(false);
+
+            // The 1.12 client uploads its changed settings in a burst as it logs out: queue what the throttle still holds for this account
+            // (the feature writes it from a scope of its own, so this session's scope ending does not matter).
+            Services.GetService<AccountDataFeature>()?.FlushAccount(AccountId);
         }
     }
 

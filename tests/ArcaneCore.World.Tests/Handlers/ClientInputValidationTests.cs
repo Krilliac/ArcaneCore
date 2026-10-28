@@ -51,6 +51,91 @@ public sealed class ClientInputValidationTests
     }
 
     [Fact]
+    public void TruncateAtSafeBoundary_NeverSplitsASurrogatePairALinkOrAnEscapedPipe()
+    {
+        const string link = "|cffffffff|Hitem:1|h[Sword]|h|r"; // 31 units
+        Assert.Equal(31, link.Length);
+
+        Assert.Equal("short", ChatSanitizer.TruncateAtSafeBoundary("short", 5));
+        Assert.Equal("abc", ChatSanitizer.TruncateAtSafeBoundary("abcdef", 3));
+        Assert.Equal(string.Empty, ChatSanitizer.TruncateAtSafeBoundary("abc", 0));
+
+        // A surrogate pair ("\U0001F600") is kept whole or dropped whole.
+        Assert.Equal("ab", ChatSanitizer.TruncateAtSafeBoundary("ab\U0001F600cd", 3));
+        Assert.Equal("ab\U0001F600", ChatSanitizer.TruncateAtSafeBoundary("ab\U0001F600cd", 4));
+
+        // A colour/hyperlink sequence is kept whole or dropped whole, wherever the cut falls inside it.
+        string text = "xx" + link + "tail";
+        for (int max = 2; max < 2 + link.Length; max++)
+        {
+            Assert.Equal("xx", ChatSanitizer.TruncateAtSafeBoundary(text, max));
+        }
+
+        Assert.Equal("xx" + link, ChatSanitizer.TruncateAtSafeBoundary(text, 2 + link.Length));
+        Assert.Equal("xx" + link + "t", ChatSanitizer.TruncateAtSafeBoundary(text, 2 + link.Length + 1));
+
+        // A cut between the two pipes of an escaped pipe, or right after a lone pipe, backs off the pipe.
+        Assert.Equal("abc", ChatSanitizer.TruncateAtSafeBoundary("abc||def", 4));
+        Assert.Equal("abc||", ChatSanitizer.TruncateAtSafeBoundary("abc||def", 5));
+
+        // Whatever the cut, the result still passes the link check at the strictest grammar severity.
+        for (int max = 0; max <= text.Length; max++)
+        {
+            string cut = ChatSanitizer.TruncateAtSafeBoundary(text, max);
+            Assert.True(cut.Length <= max);
+            Assert.True(ChatSanitizer.IsValidChatMessage(cut, 2), $"cut at {max}: {cut}");
+            Assert.False(cut.Length > 0 && char.IsHighSurrogate(cut[^1]));
+        }
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChatSanitizer.TruncateAtSafeBoundary("abc", -1));
+    }
+
+    [Fact]
+    public void AwayText_CutInsideALink_DropsTheWholeLink()
+    {
+        var options = new ChatOptions { StrictLinkSeverity = 2, MaxAwayMessageLength = 12 };
+        string cut = ChatHandlers.SanitizeAwayText("back |cffffffff|Hitem:1|h[Sword]|h|r soon", options, null)!;
+        Assert.Equal("back ", cut);
+    }
+
+    [Fact]
+    public async Task AwayText_OverTheGeneralCap_IsCutByTheAwayCap_NotDropped()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("AFKCAP", "Afkcap");
+        await client.CollectAsync();
+
+        ChatOptions options = host.WorldServices.GetRequiredService<ChatFeature>().Options;
+        Assert.Equal(options.MaxMessageLength, options.MaxAwayMessageLength); // the shipped defaults: both 1024
+        await client.SendChatAsync(ChatType.Afk, Language.Universal, new string('a', options.MaxMessageLength + 400));
+
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Afkcap")!.IsAfk, "the player to go AFK");
+        string stored = await host.PlayerStateAsync("Afkcap", p => p.AfkMessage);
+        Assert.Equal(options.MaxAwayMessageLength, stored.Length);
+    }
+
+    [Theory]
+    [InlineData(ChatType.Afk)]
+    [InlineData(ChatType.Dnd)]
+    public async Task AwayText_WithABadLink_StillTogglesTheState_WithAnEmptyText(ChatType type)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("AFKLINK" + (int)type, "Afklink" + (type == ChatType.Afk ? "a" : "d"));
+        await client.CollectAsync();
+        string name = "Afklink" + (type == ChatType.Afk ? "a" : "d");
+
+        ChatOptions options = host.WorldServices.GetRequiredService<ChatFeature>().Options;
+        options.StrictLinkSeverity = 2;
+        await client.SendChatAsync(type, Language.Universal, "gone |Zbogus");
+
+        await host.WaitForWorldAsync(() => type == ChatType.Afk
+            ? host.World.FindOnlinePlayer(name)!.IsAfk
+            : host.World.FindOnlinePlayer(name)!.IsDnd, "the state to be set although the text was refused");
+        string stored = await host.PlayerStateAsync(name, p => type == ChatType.Afk ? p.AfkMessage : p.DndMessage);
+        Assert.Equal(string.Empty, stored);
+    }
+
+    [Fact]
     public async Task ChatMessage_OverTheConfiguredCap_IsDropped()
     {
         await using var host = WorldTestHost.Start();
@@ -90,7 +175,7 @@ public sealed class ClientInputValidationTests
             byte[] v1 = Encoding.ASCII.GetBytes("SET a 1"), v2 = Encoding.ASCII.GetBytes("SET a 2"), v3 = Encoding.ASCII.GetBytes("SET a 3");
             await client.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, v1));
             await RoundTripAsync(client);
-            Assert.Equal(1, store.DataWrites);
+            await WorldTestHost.WaitForAsync(() => store.DataWrites == 1, "the first change to be written at once");
 
             await client.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, v1)); // unchanged: no write
             await client.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, v2));
